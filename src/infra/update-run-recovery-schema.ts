@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
+import { RecoveryNativeManagerSchema } from "./update-run-recovery-native-schema.js";
 import {
   RecoveryPackageStateSchema,
   RecoveryPackageEffectSchema,
@@ -96,7 +97,13 @@ export const UpdateRecoveryRecordSchema = z
       .nullable(),
     // Captured at admission, before config/service mutation. Missing legacy facts
     // cannot be inferred from a later checkpoint reference.
-    source: z.strictObject({ stateDir: absolutePath, configPath: absolutePath }).optional(),
+    source: z
+      .strictObject({
+        stateDir: absolutePath,
+        configPath: absolutePath,
+        profile: exactText.nullable().optional(),
+      })
+      .optional(),
     from: runtime,
     to: runtime,
     createdAtMs: counter,
@@ -107,6 +114,7 @@ export const UpdateRecoveryRecordSchema = z
       .omit({ preimageRef: true })
       .extend({ boundAtRevision: counter })
       .optional(),
+    nativeManager: RecoveryNativeManagerSchema.optional(),
     checkpoint: checkpoint.optional(),
     // Append-only owner-reopened after-images. No defaults: preserve existing
     // publication commitments for records written before this facility existed.
@@ -147,6 +155,41 @@ export const UpdateRecoveryRecordSchema = z
     primaryFailure: z.strictObject({ code: exactText, effectId: z.uuid().nullable() }).nullable(),
   })
   .superRefine((record, ctx) => {
+    const native = record.nativeManager;
+    const nativeFinal = native?.effects.at(-1)?.after ?? native?.original;
+    if (
+      native &&
+      (!record.preimages ||
+        !record.source ||
+        native.identity.runId !== record.runId ||
+        native.identity.stateDir !== record.source.stateDir ||
+        native.identity.configPath !== record.source.configPath ||
+        native.identity.profile !== record.source.profile ||
+        native.boundAtRevision > record.revision ||
+        native.effects.some(
+          (entry) => (entry.observedRevision ?? entry.intentRevision) > record.revision,
+        ) ||
+        (native.effects.at(-1)?.state === "intent" && (record.terminal || record.verification)) ||
+        (!nativeFinal?.stopped &&
+          record.effects.some(
+            (effect) =>
+              effect.state === "intent" &&
+              (effect.kind === "package-activation" ||
+                effect.kind === "package-restore" ||
+                effect.kind === "checkpoint-restore"),
+          )) ||
+        (record.terminal &&
+          nativeFinal &&
+          (nativeFinal.exists !== native.original.exists ||
+            nativeFinal.enabled !== native.original.enabled ||
+            nativeFinal.loaded !== native.original.loaded ||
+            nativeFinal.stopped !== native.original.stopped)))
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        message: "Native manager evidence must match admitted source and revision",
+      });
+    }
     const early = record.preimages;
     if (
       (early &&
@@ -281,6 +324,12 @@ export function parseUpdateRecoveryCheckpoint(
   record: UpdateRecoveryRecord,
   input: NonNullable<UpdateRecoveryRecord["checkpoint"]>,
 ): NonNullable<UpdateRecoveryRecord["checkpoint"]> {
+  if (
+    record.nativeManager &&
+    !(record.nativeManager.effects.at(-1)?.after ?? record.nativeManager.original).stopped
+  ) {
+    throw new Error("Full checkpoint binding requires an observed native stop");
+  }
   const captured = checkpoint.parse(input);
   const { binding } = captured;
   if (

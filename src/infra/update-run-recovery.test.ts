@@ -149,7 +149,11 @@ describe("durable update recovery", () => {
     const selectedConfig = path.join(fixture.root, "selected.json");
     const selectedOptions = { env: { ...options.env, OPENCLAW_CONFIG_PATH: selectedConfig } };
     const record = beginUpdateRecovery({ runId: run.runId, from, to }, fence, selectedOptions);
-    expect(record.source).toEqual({ stateDir: fixture.root, configPath: selectedConfig });
+    expect(record.source).toEqual({
+      stateDir: fixture.root,
+      configPath: selectedConfig,
+      profile: null,
+    });
     const checkpoint = checkpointFor(fixture);
     expect(() => bindUpdateRecoveryCheckpoint(record, checkpoint, fence, options)).toThrow(
       "admitted source",

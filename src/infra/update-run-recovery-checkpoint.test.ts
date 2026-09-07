@@ -13,10 +13,22 @@ import {
 } from "./update-checkpoint-restore.js";
 import { buildCheckpointReaderRuntime } from "./update-checkpoint-runtime.test-support.js";
 import { captureUpdateCheckpoint, reopenUpdateCheckpoint } from "./update-checkpoint.js";
-import { createUpdateRun } from "./update-run-ledger.js";
+import { createUpdateRun, getUpdateRun } from "./update-run-ledger.js";
 import { createUpdateRecoveryCheckpointAdapter } from "./update-run-recovery-checkpoint.js";
 import {
+  bindUpdateRecoveryNativeManager,
+  inspectUpdateRecoveryNativeManager,
+  recordUpdateRecoveryNativeIntent,
+  recordUpdateRecoveryNativeObservation,
+  type UpdateRecoveryNativeIdentity,
+  type UpdateRecoveryNativeFacts,
+} from "./update-run-recovery-native.js";
+import { setupNativeManagerFixture } from "./update-run-recovery-native.test-support.js";
+import {
   beginUpdateRecovery,
+  prepareUpdateRecoveryHandoff,
+  acceptUpdateRecoveryHandoff,
+  recordUpdateRecoveryFailure,
   bindUpdateRecoveryCheckpoint,
   bindUpdateRecoveryAfterImage,
   recordUpdateRecoveryIntent,
@@ -354,5 +366,417 @@ describe("checkpoint to recovery claim/progress adapter", () => {
       }),
     ).toThrow();
     expect(family(f.file)).toEqual(before);
+  });
+});
+
+async function nativeFixture(platform: "darwin" | "win32" = "win32", enabled = true) {
+  return setupNativeManagerFixture(
+    fs.realpathSync(dirs.make("recovery-native-")),
+    platform,
+    enabled,
+  );
+}
+
+describe("early native manager recovery", () => {
+  it.each([
+    { platform: "win32", enabled: true },
+    { platform: "darwin", enabled: true },
+    { platform: "win32", enabled: false },
+    { platform: "darwin", enabled: false },
+  ] as const)(
+    "preserves original $platform enabled=$enabled state through ambiguous mutation, handoff, reclaim and exact replay",
+    async ({ platform, enabled }) => {
+      const f = await nativeFixture(platform, enabled);
+      let record = await f.bind();
+      const original = record.nativeManager!.original;
+      const suppressed = { ...original, enabled: false };
+      const effectId = randomUUID();
+      record = (
+        await recordUpdateRecoveryNativeIntent(
+          record,
+          { effectId, action: "suppress", target: suppressed, observe: f.observe },
+          f.fence,
+          f.options,
+        )
+      ).record;
+      expect(record.checkpoint).toBeUndefined();
+      expect(record.effects).toEqual([]);
+      f.setFacts(suppressed); // Owner effect occurred; its acknowledgement was lost.
+      const failure = { code: "native-result-lost", effectId };
+      record = recordUpdateRecoveryFailure(record, failure, f.fence, f.options);
+      const handed = prepareUpdateRecoveryHandoff(record, f.fence, f.options);
+      closeOpenClawStateDatabaseForTest();
+      const before = family(path.join(f.root, "state", "openclaw.sqlite"));
+      expect(
+        (await inspectUpdateRecoveryNativeManager(handed.record, f.observe, f.fence, f.options))
+          .status,
+      ).toBe("after");
+      expect(family(path.join(f.root, "state", "openclaw.sqlite"))).toEqual(before);
+      await expect(
+        recordUpdateRecoveryNativeObservation(
+          handed.record,
+          effectId,
+          f.observe,
+          f.fence,
+          f.options,
+        ),
+      ).rejects.toThrow();
+      record = acceptUpdateRecoveryHandoff(handed.handoff, f.runtime, f.fence, f.options);
+      record = claimUpdateRecovery(record, f.fence, f.options);
+      const retry = await recordUpdateRecoveryNativeIntent(
+        record,
+        { effectId, action: "suppress", target: suppressed, observe: f.observe },
+        f.fence,
+        f.options,
+      );
+      expect(retry.status).toBe("after");
+      expect(retry.record.revision).toBe(record.revision); // No duplicate intent or manager effect.
+      record = (
+        await recordUpdateRecoveryNativeObservation(record, effectId, f.observe, f.fence, f.options)
+      ).record;
+      const restoreId = randomUUID();
+      record = (
+        await recordUpdateRecoveryNativeIntent(
+          record,
+          { effectId: restoreId, action: "restore", target: original, observe: f.observe },
+          f.fence,
+          f.options,
+        )
+      ).record;
+      f.setFacts(original);
+      record = (
+        await recordUpdateRecoveryNativeObservation(
+          record,
+          restoreId,
+          f.observe,
+          f.fence,
+          f.options,
+        )
+      ).record;
+      expect(record.nativeManager!.original).toEqual(original);
+      expect(record.primaryFailure).toEqual(failure);
+      expect(record.effects).toEqual([]);
+      expect(JSON.stringify(getUpdateRun(record.runId, f.options))).not.toContain(
+        "native-result-lost",
+      );
+      closeOpenClawStateDatabaseForTest();
+      expect(loadUpdateRecovery(record.runId, f.options)?.nativeManager).toEqual(
+        record.nativeManager,
+      );
+    },
+  );
+
+  it.each([
+    "run",
+    "config",
+    "state",
+    "profile",
+    "task",
+    "platform",
+    "task-space",
+    "path-space",
+  ] as const)("rejects wrong %s observation without changing the binding", async (field) => {
+    const f = await nativeFixture();
+    const record = await f.bind();
+    const wrong = { ...f.identity };
+    if (field === "run") {
+      wrong.runId = randomUUID();
+    }
+    if (field === "path-space") {
+      wrong.configPath += " ";
+    }
+    if (field === "task-space" && wrong.platform === "win32") {
+      wrong.taskName += " ";
+    }
+    if (field === "config") {
+      wrong.configPath += ".wrong";
+    }
+    if (field === "state") {
+      wrong.stateDir += "-wrong";
+    }
+    if (field === "profile") {
+      wrong.profile = "different";
+    }
+    if (field === "task" && wrong.platform === "win32") {
+      wrong.taskName += "-wrong";
+    }
+    const identity: UpdateRecoveryNativeIdentity =
+      field === "platform"
+        ? { ...wrong, platform: "darwin", domain: "gui/502", label: "ai.openclaw" }
+        : wrong;
+    await expect(
+      bindUpdateRecoveryNativeManager(
+        record,
+        { identity: f.identity, observe: async () => ({ identity, facts: f.original }) },
+        f.fence,
+        f.options,
+      ),
+    ).rejects.toThrow();
+    expect(loadUpdateRecovery(record.runId, f.options)).toEqual(record);
+  });
+
+  it("refuses changed retry originals, skips, unknown intermediate outcomes, and forward work with pending intent", async () => {
+    const f = await nativeFixture();
+    let record = await f.bind();
+    const disabled = { ...f.original, enabled: false };
+    const id = randomUUID();
+    record = (
+      await recordUpdateRecoveryNativeIntent(
+        record,
+        { effectId: id, action: "suppress", target: disabled, observe: f.observe },
+        f.fence,
+        f.options,
+      )
+    ).record;
+    expect(() =>
+      recordUpdateRecoveryIntent(
+        record,
+        {
+          effectId: randomUUID(),
+          kind: "service-restart",
+          resourceId: "gateway",
+          runtime: "candidate",
+        },
+        f.fence,
+        f.options,
+      ),
+    ).toThrow();
+    expect(() =>
+      bindUpdateRecoveryCheckpoint(
+        record,
+        {
+          ref: {
+            checkpointId: randomUUID(),
+            manifestPath: path.join(f.root, "full"),
+            manifestSha256: "a".repeat(64),
+          },
+          binding: f.binding,
+          preimageRef: record.preimages!.ref,
+        },
+        f.fence,
+        f.options,
+      ),
+    ).toThrow();
+    await expect(
+      recordUpdateRecoveryNativeIntent(
+        record,
+        { effectId: randomUUID(), action: "suppress", target: disabled, observe: f.observe },
+        f.fence,
+        f.options,
+      ),
+    ).rejects.toThrow();
+    f.setFacts({ ...disabled, loaded: false, stopped: true });
+    const conflict = await recordUpdateRecoveryNativeObservation(
+      record,
+      id,
+      f.observe,
+      f.fence,
+      f.options,
+    );
+    expect(conflict.status).toBe("conflict");
+    expect(conflict.record).toEqual(record);
+    f.setFacts(disabled);
+    await expect(
+      bindUpdateRecoveryNativeManager(
+        record,
+        { identity: f.identity, observe: f.observe },
+        f.fence,
+        f.options,
+      ),
+    ).rejects.toThrow();
+    expect(loadUpdateRecovery(record.runId, f.options)).toEqual(record);
+  });
+
+  it("rechecks exact claim and exclusion after daemon observation and rolls back final fence loss", async () => {
+    const f = await nativeFixture();
+    const record = await f.bind();
+    let current = record;
+    await expect(
+      recordUpdateRecoveryNativeIntent(
+        record,
+        {
+          effectId: randomUUID(),
+          action: "stop",
+          target: { ...f.original, stopped: true },
+          observe: async () => {
+            current = claimUpdateRecovery(record, f.fence, f.options);
+            return f.observe();
+          },
+        },
+        f.fence,
+        f.options,
+      ),
+    ).rejects.toThrow();
+    let checks = 0;
+    // read/observe/read = four checks; write preflight/transaction entry/final = three.
+    const lost = {
+      assertCurrent() {
+        if (++checks === 7) {
+          throw new Error("lost fence");
+        }
+      },
+    };
+    await expect(
+      recordUpdateRecoveryNativeIntent(
+        current,
+        {
+          effectId: randomUUID(),
+          action: "stop",
+          target: { ...f.original, stopped: true },
+          observe: f.observe,
+        },
+        lost,
+        f.options,
+      ),
+    ).rejects.toThrow("lost fence");
+    expect(loadUpdateRecovery(current.runId, f.options)).toEqual(current);
+    const asyncFence = { assertCurrent: async () => {} };
+    await expect(
+      inspectUpdateRecoveryNativeManager(current, f.observe, asyncFence, f.options),
+    ).rejects.toThrow("synchronously");
+  });
+
+  it.each(["disable-and-stop", "load-while-stopping"] as const)(
+    "rejects %s as one native stop",
+    async (kind) => {
+      const f = await nativeFixture("darwin");
+      if (kind === "load-while-stopping") {
+        f.setFacts({ ...f.original, loaded: false, stopped: true });
+      }
+      const record = await f.bind();
+      const target = { ...f.original, enabled: kind !== "disable-and-stop", stopped: true };
+      await expect(
+        recordUpdateRecoveryNativeIntent(
+          record,
+          { effectId: randomUUID(), action: "stop", target, observe: f.observe },
+          f.fence,
+          f.options,
+        ),
+      ).rejects.toThrow();
+      expect(loadUpdateRecovery(record.runId, f.options)).toEqual(record);
+    },
+  );
+
+  it("restores auto-start while stopped without blessing a restart", async () => {
+    const f = await nativeFixture();
+    let record = await f.bind();
+    async function transition(
+      action: "suppress" | "stop" | "restore",
+      target: UpdateRecoveryNativeFacts,
+    ) {
+      const effectId = randomUUID();
+      record = (
+        await recordUpdateRecoveryNativeIntent(
+          record,
+          { effectId, action, target, observe: f.observe },
+          f.fence,
+          f.options,
+        )
+      ).record;
+      f.setFacts(target);
+      record = (
+        await recordUpdateRecoveryNativeObservation(record, effectId, f.observe, f.fence, f.options)
+      ).record;
+    }
+    await transition("suppress", { ...f.original, enabled: false });
+    await transition("stop", { ...f.original, enabled: false, stopped: true });
+    await transition("restore", { ...f.original, stopped: true });
+    expect(record.nativeManager!.effects.at(-1)?.after.stopped).toBe(true);
+    expect(record.nativeManager!.original.stopped).toBe(false);
+    expect(record.verification).toBeNull();
+    expect(record.effects).toEqual([]);
+  });
+
+  it("records stop separately and restores only the original state, never treating early facts as full checkpoint", async () => {
+    const f = await nativeFixture("darwin");
+    let record = await f.bind();
+    expect(() =>
+      recordUpdateRecoveryIntent(
+        record,
+        {
+          effectId: randomUUID(),
+          kind: "package-activation",
+          resourceId: "package",
+          runtime: "candidate",
+        },
+        f.fence,
+        f.options,
+      ),
+    ).toThrow("checkpoint");
+    const stopped = { ...f.original, loaded: false, stopped: true };
+    const id = randomUUID();
+    record = (
+      await recordUpdateRecoveryNativeIntent(
+        record,
+        { effectId: id, action: "stop", target: stopped, observe: f.observe },
+        f.fence,
+        f.options,
+      )
+    ).record;
+    f.setFacts(stopped);
+    record = (
+      await recordUpdateRecoveryNativeObservation(record, id, f.observe, f.fence, f.options)
+    ).record;
+    await expect(
+      recordUpdateRecoveryNativeIntent(
+        record,
+        {
+          effectId: randomUUID(),
+          action: "restore",
+          target: { ...f.original, enabled: false },
+          observe: f.observe,
+        },
+        f.fence,
+        f.options,
+      ),
+    ).rejects.toThrow();
+    record = bindUpdateRecoveryCheckpoint(
+      record,
+      {
+        ref: {
+          checkpointId: randomUUID(),
+          manifestPath: path.join(f.root, "full"),
+          manifestSha256: "a".repeat(64),
+        },
+        binding: f.binding,
+        preimageRef: record.preimages!.ref,
+      },
+      f.fence,
+      f.options,
+    );
+    await expect(
+      recordUpdateRecoveryNativeIntent(
+        record,
+        { effectId: randomUUID(), action: "stop", target: stopped, observe: f.observe },
+        f.fence,
+        f.options,
+      ),
+    ).rejects.toThrow();
+    expect(record.nativeManager!.original).toEqual(f.original);
+    expect(record.effects).toEqual([]);
+    const restoreId = randomUUID();
+    record = (
+      await recordUpdateRecoveryNativeIntent(
+        record,
+        { effectId: restoreId, action: "restore", target: f.original, observe: f.observe },
+        f.fence,
+        f.options,
+      )
+    ).record;
+    f.setFacts(f.original);
+    record = (
+      await recordUpdateRecoveryNativeObservation(record, restoreId, f.observe, f.fence, f.options)
+    ).record;
+    for (const kind of ["package-activation", "checkpoint-restore", "package-restore"] as const) {
+      expect(() =>
+        recordUpdateRecoveryIntent(
+          record,
+          { effectId: randomUUID(), kind, resourceId: "package", runtime: "candidate" },
+          f.fence,
+          f.options,
+        ),
+      ).toThrow();
+      expect(loadUpdateRecovery(record.runId, f.options)).toEqual(record);
+    }
   });
 });

@@ -13,6 +13,7 @@ import {
 } from "./package-update-recovery.js";
 import { createUpdateRun, getUpdateRun, recordUpdateRunVerification } from "./update-run-ledger.js";
 import { createUpdateRecoveryPackageHooks } from "./update-run-recovery-package.js";
+import { encodeUpdateRecovery, decodeUpdateRecovery } from "./update-run-recovery-schema.js";
 import { commitUpdateRecoveryTerminal } from "./update-run-recovery-terminal.js";
 import {
   beginUpdateRecovery,
@@ -241,6 +242,49 @@ function commit(f: Awaited<ReturnType<typeof fixture>>, observed: PackageRecover
 }
 
 describe("typed package recovery and atomic retained-pair selection", () => {
+  it("rejects a terminal record before native running state is restored", async () => {
+    const f = await fixture();
+    const observed = await f.activate();
+    f.verified();
+    const record = structuredClone(commit(f, observed));
+    const preimageRef = {
+      checkpointId: randomUUID(),
+      manifestPath: path.join(f.root, "early-manifest.json"),
+      manifestSha256: "c".repeat(64),
+    };
+    record.preimages = { ref: preimageRef, binding: f.checkpoint.binding, boundAtRevision: 0 };
+    record.checkpoint!.preimageRef = preimageRef;
+    const original = { exists: true, enabled: true, loaded: true, stopped: false };
+    record.nativeManager = {
+      identity: {
+        platform: "win32",
+        runId: record.runId,
+        stateDir: record.source!.stateDir,
+        configPath: record.source!.configPath,
+        profile: record.source!.profile ?? null,
+        taskName: "OpenClaw-test",
+      },
+      original,
+      boundAtRevision: 0,
+      effects: [
+        {
+          effectId: randomUUID(),
+          action: "stop",
+          before: original,
+          after: { ...original, stopped: true },
+          state: "observed",
+          intentRevision: 1,
+          observedRevision: 2,
+        },
+      ],
+    };
+    // Durable decoding is an admission/terminal boundary, not a substitute for daemon proof.
+    expect(() => decodeUpdateRecovery(JSON.stringify(record), record.runId)).toThrow();
+    record.nativeManager.effects[0]!.action = "restore";
+    record.nativeManager.effects[0]!.after = original;
+    expect(decodeUpdateRecovery(encodeUpdateRecovery(record), record.runId)).toEqual(record);
+  });
+
   it("persists exact typed effects across handoff/reclaim without disclosing them in history", async () => {
     const f = await fixture();
     await f.activate();

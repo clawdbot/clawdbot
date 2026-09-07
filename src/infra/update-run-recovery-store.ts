@@ -83,6 +83,7 @@ export function mutateRecovery(
   options: OpenClawStateDatabaseOptions,
   claimTransition = false,
   allowTerminal = false,
+  allowNativePending = false,
 ): UpdateRecoveryRecord {
   return writeRecovery(
     fence,
@@ -90,6 +91,13 @@ export function mutateRecovery(
       const { record, raw } = requireRevision(db, expected);
       if (!claimTransition) {
         assertExecutingClaim(record);
+      }
+      if (
+        record.nativeManager?.effects.at(-1)?.state === "intent" &&
+        !claimTransition &&
+        !allowNativePending
+      ) {
+        throw new UpdateRecoveryConflictError();
       }
       if (record.terminal && !allowTerminal) {
         throw new UpdateRecoveryConflictError();

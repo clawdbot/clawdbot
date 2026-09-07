@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
+import { normalizeProfileName } from "../cli/profile-utils.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db-contract.js";
 import { withExistingOpenClawStateDatabaseArtifactPreservingReadOnly } from "../state/openclaw-state-db-readonly.js";
@@ -117,7 +118,11 @@ export function beginUpdateRecovery(
       const stateDir = resolveStateDir(env);
       const record: UpdateRecoveryRecord = {
         ...input,
-        source: { stateDir, configPath: resolveConfigPath(env, stateDir) },
+        source: {
+          stateDir,
+          configPath: resolveConfigPath(env, stateDir),
+          profile: normalizeProfileName(env.OPENCLAW_PROFILE),
+        },
         transactionId: randomUUID(),
         revision: 0,
         claimId: randomUUID(),
@@ -253,6 +258,9 @@ export function prepareUpdateRecoveryHandoff(
       current.handoff = { handoffId, state: "prepared" };
     },
     options,
+    false,
+    false,
+    true,
   );
   return {
     record,
@@ -373,6 +381,9 @@ export function recordUpdateRecoveryFailure(
       record.verification = null;
     },
     options,
+    false,
+    false,
+    true,
   );
 }
 
