@@ -8,6 +8,7 @@ import type {
 } from "openclaw/plugin-sdk/realtime-voice";
 import { REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ } from "openclaw/plugin-sdk/realtime-voice-provider";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { projectRealtimeVoicePublicProjection } from "./provider-policy-api.js";
 import { resolveOpenAIChatGptSubscriptionAuth } from "./realtime-auth.js";
 import type { OpenAIRealtimeHost } from "./realtime-host.js";
 import { createOpenAIRealtimeClientSecret } from "./realtime-provider-shared.js";
@@ -19,7 +20,7 @@ import {
   OPENAI_QUICKSILVER_CAPABILITIES,
   isOpenAIGptLiveModel,
   isSupportedOpenAIGptLiveModel,
-  OPENAI_GPT_LIVE_DEFAULT_VOICE,
+  resolveOpenAIQuicksilverVoiceCapabilities,
 } from "./realtime-quicksilver.js";
 import { OpenAIRealtimeBridge } from "./realtime-voice-bridge.js";
 import {
@@ -62,6 +63,8 @@ type OpenAIInternalRealtimeBrowserSessionCreateRequest =
 type OpenAIInternalRealtimeVoiceCapabilities = RealtimeVoiceProviderCapabilities & {
   handlesAgentConsult?: boolean;
   supportsGatewayControl?: boolean;
+  voices?: readonly string[];
+  voiceSelectionPolicy?: "allowlist-default";
   voicesByModel?: Record<string, readonly string[]>;
 };
 
@@ -88,6 +91,16 @@ type OpenAIInternalRealtimeVoiceProviderApi = {
     providerConfig: RealtimeVoiceProviderConfig;
     model?: string;
   }) => OpenAIInternalRealtimeVoiceCapabilities;
+  projectPublicProjection?: (ctx: {
+    providerConfig: RealtimeVoiceProviderConfig;
+    config: RealtimeVoiceProviderConfig;
+  }) => {
+    config: RealtimeVoiceProviderConfig;
+    clientHints?: {
+      modelSource: "gateway";
+      gatewayRelaySupported: false;
+    };
+  };
   validateGatewayRelayLaunch?: (ctx: {
     cfg?: RealtimeVoiceBrowserSessionCreateRequest["cfg"];
     providerConfig: RealtimeVoiceProviderConfig;
@@ -181,6 +194,7 @@ async function createOpenAIRealtimeBrowserSession(
         configuredApiKey: config.apiKey,
         cfg: req.cfg,
         agentId: req.agentId,
+        model,
       },
       context,
     );
@@ -390,19 +404,14 @@ export function buildOpenAIRealtimeVoiceProvider(
       if (config.azureEndpoint || config.azureDeployment) {
         return hasOpenAIRealtimeApiKeyInput(config.apiKey);
       }
-      if (
-        hasOpenAIRealtimePlatformAuthInput(
-          {
-            configuredApiKey: config.apiKey,
-            cfg,
-            agentId,
-          },
-          context,
-        )
-      ) {
-        return true;
-      }
-      return false;
+      return hasOpenAIRealtimePlatformAuthInput(
+        {
+          configuredApiKey: config.apiKey,
+          cfg,
+          agentId,
+        },
+        context,
+      );
     },
     createBridge: (req) => {
       const config = normalizeProviderConfig(req.providerConfig);
@@ -418,7 +427,7 @@ export function buildOpenAIRealtimeVoiceProvider(
             {
               ...req,
               model,
-              voice: config.voice ?? OPENAI_GPT_LIVE_DEFAULT_VOICE,
+              voice: config.voice,
               instructions: buildOpenAIQuicksilverInstructions(req.instructions),
               logger: options?.logger ?? { debug: () => undefined, warn: () => undefined },
               resolveAuth: () =>
@@ -427,6 +436,7 @@ export function buildOpenAIRealtimeVoiceProvider(
                     configuredApiKey: config.apiKey,
                     cfg: req.cfg,
                     agentId: req.agentId,
+                    model,
                   },
                   context,
                 ),
@@ -497,20 +507,14 @@ export function buildOpenAIRealtimeVoiceProvider(
       }
       const model = config.model ?? OPENAI_REALTIME_DEFAULT_MODEL;
       if (isOpenAIGptLiveModel(model)) {
-        if (!isSupportedOpenAIGptLiveModel(model)) {
-          return false;
-        }
         return (
           options?.quicksilverBrowserSessionBroker !== undefined &&
           (hasOpenAIRealtimePlatformAuthInput(
-            {
-              configuredApiKey: config.apiKey,
-              cfg,
-              agentId,
-            },
+            { configuredApiKey: config.apiKey, cfg, agentId },
             context,
           ) ||
-            hasOpenAIChatGptSubscriptionAuthInput({ cfg, agentId }, context))
+            (isSupportedOpenAIGptLiveModel(model) &&
+              hasOpenAIChatGptSubscriptionAuthInput({ cfg, agentId }, context)))
         );
       }
       return (
@@ -528,8 +532,8 @@ export function buildOpenAIRealtimeVoiceProvider(
     },
     resolveBrowserSessionCapabilities: ({ cfg, providerConfig, agentId, model, clientControl }) => {
       const config = normalizeProviderConfig(providerConfig);
-      const effectiveModel = model ?? config.model;
-      if (isSupportedOpenAIGptLiveModel(effectiveModel)) {
+      const effectiveModel = model ?? config.model ?? "";
+      if (isOpenAIGptLiveModel(effectiveModel)) {
         // Older hosts do not prepare this control claim, even when they own native delegations.
         const supportsGatewayControl =
           clientControl?.owner === "gateway" &&
@@ -541,6 +545,7 @@ export function buildOpenAIRealtimeVoiceProvider(
         return {
           ...OPENAI_REALTIME_CAPABILITIES,
           ...OPENAI_QUICKSILVER_CAPABILITIES,
+          ...resolveOpenAIQuicksilverVoiceCapabilities(effectiveModel),
           ...(supportsGatewayControl ? { supportsGatewayControl: true } : {}),
         };
       }
@@ -564,28 +569,26 @@ export function buildOpenAIRealtimeVoiceProvider(
         return false;
       }
       return (
-        isSupportedOpenAIGptLiveModel(config.model) &&
-        (hasOpenAIRealtimePlatformAuthInput(
-          {
-            configuredApiKey: config.apiKey,
-            cfg,
-            agentId,
-          },
+        hasOpenAIRealtimePlatformAuthInput(
+          { configuredApiKey: config.apiKey, cfg, agentId },
           context,
         ) ||
+        (isSupportedOpenAIGptLiveModel(config.model) &&
           hasOpenAIChatGptSubscriptionAuthInput({ cfg, agentId }, context))
       );
     },
     resolveGatewayRelayCapabilities: ({ providerConfig, model }) => {
       const config = normalizeProviderConfig(providerConfig);
-      if (isSupportedOpenAIGptLiveModel(model ?? config.model)) {
+      if (isOpenAIGptLiveModel(model ?? config.model)) {
         return {
           ...OPENAI_REALTIME_CAPABILITIES,
           ...OPENAI_QUICKSILVER_CAPABILITIES,
+          ...resolveOpenAIQuicksilverVoiceCapabilities(model ?? config.model ?? ""),
         };
       }
       return OPENAI_REALTIME_CAPABILITIES;
     },
+    projectPublicProjection: projectRealtimeVoicePublicProjection,
     validateGatewayRelayLaunch: ({ providerConfig, model, autoRespondToAudio }) => {
       const config = normalizeProviderConfig(providerConfig);
       if (autoRespondToAudio === false && isOpenAIGptLiveModel(model ?? config.model)) {

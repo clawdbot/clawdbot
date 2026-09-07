@@ -112,7 +112,7 @@ export function sidebarPanelDefinitions(
       textKey === "conversation" || textKey === "companion"
         ? "chat"
         : textKey === "dashboard"
-          ? "review"
+          ? "board"
           : textKey,
       t("common.loading"),
     ),

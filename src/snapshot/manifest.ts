@@ -1,8 +1,9 @@
-import type { BigIntStats, Stats } from "node:fs";
+import type { Stats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { containsAsciiControlCharacter } from "@openclaw/normalization-core/string-normalization";
 import { sha256File } from "../infra/directory-durability.js";
+import { copyFileHandle, sameFileMutationFingerprint } from "../infra/file-descriptor.js";
 import { sameFileIdentity } from "../infra/fs-safe-advanced.js";
 import { root } from "../infra/fs-safe.js";
 import { isValidAgentId, normalizeAgentId } from "../routing/session-key.js";
@@ -88,45 +89,19 @@ async function hashFileHandle(
   const initialStat = await source.stat({ bigint: true });
   let sizeBytes = 0;
   if (target) {
-    const buffer = Buffer.allocUnsafe(1024 * 1024);
-    while (true) {
-      const { bytesRead } = await source.read(buffer, 0, buffer.length, sizeBytes);
-      if (bytesRead === 0) {
-        break;
-      }
-      let bytesWritten = 0;
-      while (bytesWritten < bytesRead) {
-        const result = await target.write(
-          buffer,
-          bytesWritten,
-          bytesRead - bytesWritten,
-          sizeBytes + bytesWritten,
-        );
-        if (result.bytesWritten === 0) {
-          throw new Error("Snapshot restore staging copy made no progress.");
-        }
-        bytesWritten += result.bytesWritten;
-      }
-      sizeBytes += bytesRead;
-    }
+    sizeBytes = await copyFileHandle(source, target, {
+      noProgressMessage: "Snapshot restore staging copy made no progress.",
+    });
   }
   const hashed = await sha256File(target ?? source);
   const finalStat = await source.stat({ bigint: true });
-  if (!sameMutationFingerprint(initialStat, finalStat) || (target && sizeBytes !== hashed.bytes)) {
+  if (
+    !sameFileMutationFingerprint(initialStat, finalStat) ||
+    (target && sizeBytes !== hashed.bytes)
+  ) {
     throw new Error("Snapshot artifact changed while being read.");
   }
   return { sha256: hashed.digest, sizeBytes: hashed.bytes };
-}
-
-function sameMutationFingerprint(left: BigIntStats, right: BigIntStats): boolean {
-  return (
-    left.birthtimeNs === right.birthtimeNs &&
-    left.ctimeNs === right.ctimeNs &&
-    left.dev === right.dev &&
-    left.ino === right.ino &&
-    left.mtimeNs === right.mtimeNs &&
-    left.size === right.size
-  );
 }
 
 export async function writeSnapshotManifest(

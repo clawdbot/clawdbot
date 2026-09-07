@@ -445,6 +445,21 @@ describe("resolveByteResponse", () => {
   });
 
   it.each([
+    { etag: '"opaque,tag"', header: 'W/"opaque,tag"' },
+    { etag: 'W/"opaque,tag"', header: '"opaque,tag"' },
+    { etag: 'W/"opaque,tag"', header: 'W/"opaque,tag"' },
+  ])("weakly compares complete $header against $etag", ({ etag, header }) => {
+    expect(
+      resolveByteResponse({
+        ...IMMUTABLE_FILE,
+        validators: { ...IMMUTABLE_FILE.validators, etag },
+        method: "GET",
+        request: createByteRequest({ "if-none-match": header }),
+      }),
+    ).toMatchObject({ kind: "not-modified", statusCode: 304 });
+  });
+
+  it.each([
     { label: "exact", header: (etag: string) => etag },
     { label: "weak", header: (etag: string) => `W/${etag}` },
     { label: "wildcard", header: () => "*" },

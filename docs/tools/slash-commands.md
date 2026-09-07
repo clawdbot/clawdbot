@@ -152,7 +152,8 @@ Channel plugins can enforce owner-only command access through their
 <ParamField path="commands.allowFrom" type="object">
   Per-provider allowlist for command authorization. When configured, it is the
   **only** authorization source for commands and directives. Use `"*"` for a
-  global default; provider-specific keys override it.
+  global default; provider-specific keys override it. Discord sender entries
+  accept bare user IDs or `user:<id>` and `discord:<id>` aliases.
 </ParamField>
 
 When `commands.allowFrom` is not configured, command authorization follows
@@ -201,6 +202,9 @@ plugins.
 
     Explicit `/export-session` paths replace existing files inside the
     workspace. Omit the path to generate a collision-safe filename.
+
+    HTML exports preserve inline Markdown formatting in list items, including
+    bold text, links, and inline code.
 
     HTML conversation cards omit messages marked hidden. The sidebar's **All**
     filter includes these records with a **[hidden]** label for debugging.

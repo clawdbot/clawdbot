@@ -250,9 +250,9 @@ shown:
     maintenance: {
       mode: "enforce", // "enforce" applies cleanup; "warn" only reports
       pruneAfter: "30d",
-      archiveDashboardAfter: "7d", // false or 0 disables
-      maxEntries: 500,
-      preserveRecent: "7d", // optional; false or omitted disables
+      archiveDashboardAfter: "7d", // false or 0 disables this dashboard trigger
+      maxEntries: 5000,
+      preserveRecent: false, // opt in with a duration such as "7d"
     },
   },
 }
@@ -264,13 +264,18 @@ Session store reads do not prune or cap entries during Gateway startup, so
 startup and isolated cron sessions do not pay for a full store cleanup.
 `openclaw sessions cleanup --enforce` applies the cap immediately.
 
-`maxEntries` caps unarchived session rows. Archived rows do not consume the cap.
+`maxEntries` defaults to 5000 unarchived session rows. Archived rows do not consume
+the cap. Existing explicit limits remain unchanged.
 When pressure exceeds the cap, cleanup archives the oldest eligible ordinary
 sessions instead of deleting their transcripts. Synthetic runtime sessions such
 as cron, hooks, heartbeat, ACP, and sub-agents remain disposable and may be
-removed. Pinned sessions, active or admitted work, model-locked sessions, and
+removed. Pinned root sessions, active or admitted work, model-locked sessions, and
 durable external conversation pointers are protected; the unarchived total can
 therefore remain above the cap when protected rows alone exceed it.
+
+Only root sessions can be pinned; child/subagent sessions live in their parent's
+tree and reject pin requests. Existing child pins disappear and no longer protect
+the session from maintenance.
 
 Gateway model-run probe sessions are short-lived by default. Rows matching
 `agent:*:explicit:model-run-<uuid>` use fixed `24h` retention, but cleanup is
@@ -279,9 +284,9 @@ maintenance/cap pressure is reached, and runs before the broader stale-entry
 age cutoff and entry cap. Normal direct, group, thread, cron, hook, heartbeat,
 ACP, and sub-agent sessions do not inherit this 24h retention.
 
-Maintenance preserves durable external conversation pointers, including group
-sessions and thread-scoped chat sessions, while still allowing synthetic cron,
-hook, heartbeat, ACP, and sub-agent entries to age out.
+Maintenance preserves durable external conversation pointers, including direct,
+group, and thread-scoped chat sessions, while still allowing synthetic cron, hook,
+heartbeat, ACP, and sub-agent entries to age out.
 
 Shared or high-volume installations can set `preserveRecent` to protect
 recently active interactive sessions and every SQLite history generation owned
@@ -293,10 +298,12 @@ or disk target; it expires after the configured inactivity window.
 
 Recent-session protection does not change managed-worktree garbage collection;
 durable dashboard sessions auto-archive after 7 days of inactivity by default,
-while other session types still require an explicit archive action.
+and `pruneAfter` archives other eligible durable sessions in place after 30 days
+by default, preserving their session ids and transcript generations. Disposable
+automation rows still delete at their age cutoff.
 
-Pinned sessions and manual, legacy, stale-dashboard, or recovery archives are
-user-protected and exempt from automatic maintenance. Sessions archived because
+Pinned sessions and manual, legacy, age-retention, stale-dashboard, or recovery
+archives are user-protected and exempt from automatic maintenance. Sessions archived because
 `maxEntries` was reached record that reason and remain searchable/restorable
 until physical usage exceeds `maxDiskBytes`; disk-budget cleanup may then delete
 the oldest cap archives after cheaper artifacts and unreferenced history are

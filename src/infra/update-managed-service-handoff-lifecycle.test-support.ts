@@ -231,6 +231,7 @@ export function createManagedServiceManagerFixtureScript(params: {
   parentPid: number;
   statePath: string;
   commandsPath: string;
+  configPath: string;
   options?: ManagedServiceManagerBoundaryOptions;
 }): string {
   const { commandsPath, kind, options, parentPid, statePath } = params;
@@ -250,7 +251,7 @@ if (${JSON.stringify(kind)} === "systemd") {
       try { process.kill(${parentPid}, 0); sleep(10); } catch { break; }
     }
     sleep(${options?.systemdStopDelayMs ?? 0});
-    ${options?.revokeOwner ? `fs.writeFileSync(process.env.OPENCLAW_CONFIG_PATH, JSON.stringify({ commands: { ownerAllowFrom: [] } })); state.ownerRevokedAfterExit = true;` : ""}
+    ${options?.revokeOwner ? `fs.writeFileSync(${JSON.stringify(params.configPath)}, JSON.stringify({ commands: { ownerAllowFrom: [] } })); state.ownerRevokedAfterExit = true;` : ""}
     state.stopCompleted = true;
   }
   if (action === "reset-failed") state.reset = true;
@@ -513,7 +514,7 @@ export function createManagedServiceLaunchdClockPreload(params: {
     "  }",
     "  const child = actualSpawn(command, args, options);",
     // Advance only when the exact guarded restart closes, before the helper resumes.
-    `  if (command === process.execPath && args.at(-1) === ${JSON.stringify(JSON.stringify(params.recoveryCommandArgv))}) {`,
+    `  if (command === ${JSON.stringify(params.recoveryCommandArgv[0])} && (args.at(-1) === ${JSON.stringify(JSON.stringify(params.recoveryCommandArgv))} || JSON.stringify(args.slice(-${params.recoveryCommandArgv.length - 1})) === ${JSON.stringify(JSON.stringify(params.recoveryCommandArgv.slice(1)))})) {`,
     `    child.once("close", () => { elapsed += ${params.recoveryClockAdvanceMs ?? 0}; });`,
     "  }",
     "  return child;",

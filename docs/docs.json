@@ -54,51 +54,51 @@
   "redirects": [
     {
       "source": "/cli/commitments",
-      "destination": "/en/automation#retired-inferred-commitments"
+      "destination": "/automation#retired-inferred-commitments"
     },
     {
       "source": "/concepts/commitments",
-      "destination": "/en/automation#retired-inferred-commitments"
+      "destination": "/automation#retired-inferred-commitments"
     },
     {
       "source": "/concepts/channel-docking",
-      "destination": "/en/concepts/session#retired-channel-docking"
+      "destination": "/concepts/session#retired-channel-docking"
     },
     {
       "source": "/install/clawdock",
-      "destination": "/en/install/docker#clawdock-migration"
+      "destination": "/install/docker#clawdock-migration"
     },
     {
       "source": "/plan/swarms",
-      "destination": "/en/tools/swarm"
+      "destination": "/tools/swarm"
     },
     {
       "source": "/plugins/reference/linux-canvas",
-      "destination": "/en/platforms/linux#retired-linux-canvas"
+      "destination": "/platforms/linux#retired-linux-canvas"
     },
     {
       "source": "/plugins/reference/open-prose",
-      "destination": "/en/prose"
+      "destination": "/prose"
     },
     {
       "source": "/plugins/reference/workspaces",
-      "destination": "/en/web/dashboards#retired-workspaces"
+      "destination": "/web/dashboards#retired-workspaces"
     },
     {
       "source": "/providers/qwen-oauth",
-      "destination": "/en/providers/qwen#retired-qwen-portal-authentication"
+      "destination": "/providers/qwen#retired-qwen-portal-authentication"
     },
     {
       "source": "/refactor/canvas",
-      "destination": "/en/platforms/mac/canvas"
+      "destination": "/platforms/mac/canvas"
     },
     {
       "source": "/reference/templates/TOOLS.dev",
-      "destination": "/en/reference/templates/AGENTS.dev#tools"
+      "destination": "/reference/templates/AGENTS.dev#tools"
     },
     {
       "source": "/web/workspaces",
-      "destination": "/en/web/dashboards#retired-workspaces"
+      "destination": "/web/dashboards#retired-workspaces"
     },
     {
       "source": "/concepts/message-lifecycle-refactor",
@@ -1959,7 +1959,16 @@
                       "gateway/configuration",
                       "gateway/configuration-reference",
                       "gateway/config-agents",
+                      "gateway/config-automation",
+                      "gateway/config-browser-ui-desktop",
                       "gateway/config-channels",
+                      "gateway/config-cloud-workers",
+                      "gateway/config-extensions",
+                      "gateway/config-gateway",
+                      "gateway/config-hooks",
+                      "gateway/config-observability",
+                      "gateway/config-runtime",
+                      "gateway/config-secrets-env",
                       "gateway/config-tools",
                       "gateway/configuration-examples"
                     ]
@@ -2292,13 +2301,25 @@
                 "group": "Plugin SDK reference",
                 "pages": [
                   "plugins/sdk-overview",
+                  "plugins/manifest",
+                  {
+                    "group": "Plugin manifest",
+                    "pages": [
+                      "plugins/manifest/models",
+                      "plugins/manifest/providers",
+                      "plugins/manifest/setup-and-auth",
+                      "plugins/manifest/capabilities",
+                      "plugins/manifest/surfaces",
+                      "plugins/manifest/config-and-secrets",
+                      "plugins/manifest/package-json"
+                    ]
+                  },
                   "plugins/sdk-subpaths",
                   "plugins/sdk-entrypoints",
                   "plugins/sdk-runtime",
                   "plugins/sdk-agent-harness",
                   "plugins/sdk-setup",
-                  "plugins/sdk-testing",
-                  "plugins/manifest"
+                  "plugins/sdk-testing"
                 ]
               },
               {

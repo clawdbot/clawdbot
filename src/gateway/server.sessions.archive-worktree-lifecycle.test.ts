@@ -705,45 +705,72 @@ test.each([
   },
 );
 
-test("automatic session archive snapshots the checkout after committing metadata and keeps its transcript", async () => {
-  const fixture = await createArchiveWorktreeFixture();
-  const { key, sessionId, storePath, worktree } = fixture;
-  const old = Date.now() - 31 * 24 * 60 * 60 * 1000;
-  await patchSessionEntryCore(
-    { storePath, sessionKey: key },
-    (entry) => ({
-      ...entry!,
-      updatedAt: old,
-      lastInteractionAt: old,
-      lastActivityAt: old,
-      sessionStartedAt: old,
-    }),
-    { skipMaintenance: true, replaceEntry: true },
-  );
-  expect(loadSessionEntry({ storePath, sessionKey: key })?.updatedAt).toBe(old);
-  const transcript = await loadSeededTranscriptEvents(fixture.transcriptScope);
-  await fs.writeFile(path.join(worktree.path, "draft.txt"), "automatic archive keeps work\n");
+test.each(["dashboard", "age", "count"] as const)(
+  "automatic %s archive snapshots the checkout and can restore its conversation",
+  async (pressure) => {
+    const fixture = await createArchiveWorktreeFixture();
+    const { key, sessionId, storePath, worktree } = fixture;
+    const old = Date.now() - 31 * 24 * 60 * 60 * 1000;
+    await patchSessionEntryCore(
+      { storePath, sessionKey: key },
+      (entry) => ({
+        ...entry!,
+        updatedAt: old,
+        lastInteractionAt: old,
+        lastActivityAt: old,
+        sessionStartedAt: old,
+      }),
+      { skipMaintenance: true, replaceEntry: true },
+    );
+    expect(loadSessionEntry({ storePath, sessionKey: key })?.updatedAt).toBe(old);
+    const transcript = await loadSeededTranscriptEvents(fixture.transcriptScope);
+    await fs.writeFile(path.join(worktree.path, "draft.txt"), "automatic archive keeps work\n");
 
-  const result = await applySessionEntryLifecycleMutation({
-    agentId: "main",
-    storePath,
-    removals: [],
-    maintenanceOverride: { mode: "enforce", archiveDashboardAfterMs: 1 },
-  });
+    const result = await applySessionEntryLifecycleMutation({
+      agentId: "main",
+      storePath,
+      upserts: [
+        {
+          sessionKey: "agent:main:main",
+          entry: { sessionId: "main-retention", updatedAt: Date.now() },
+        },
+      ],
+      maintenanceOverride: {
+        mode: "enforce",
+        archiveDashboardAfterMs: pressure === "dashboard" ? 1 : null,
+        pruneAfterMs: pressure === "age" ? 30 * 24 * 60 * 60 * 1000 : Number.MAX_SAFE_INTEGER,
+        maxEntries: pressure === "count" ? 1 : 5000,
+      },
+    });
 
-  expect(result.archived).toBe(1);
-  expect(loadSessionEntry({ storePath, sessionKey: key })).toMatchObject({
-    sessionId,
-    archivedAt: expect.any(Number),
-    worktree: { id: worktree.id },
-  });
-  await expect(fs.access(worktree.path)).rejects.toThrow();
-  expect(getRegistryWorktree(process.env, worktree.id)).toMatchObject({
-    removedAt: expect.any(Number),
-    snapshotRef: expect.stringMatching(/^refs\/openclaw\/snapshots\//),
-  });
-  await expect(loadSeededTranscriptEvents(fixture.transcriptScope)).resolves.toEqual(transcript);
-});
+    expect(result.archived).toBe(1);
+    expect(loadSessionEntry({ storePath, sessionKey: key })).toMatchObject({
+      sessionId,
+      archivedAt: expect.any(Number),
+      worktree: { id: worktree.id },
+    });
+    await expect(fs.access(worktree.path)).rejects.toThrow();
+    expect(getRegistryWorktree(process.env, worktree.id)).toMatchObject({
+      removedAt: expect.any(Number),
+      snapshotRef: expect.stringMatching(/^refs\/openclaw\/snapshots\//),
+    });
+    await expect(loadSeededTranscriptEvents(fixture.transcriptScope)).resolves.toEqual(transcript);
+    expect(
+      await directSessionReq("sessions.patch", {
+        key,
+        expectedSessionId: sessionId,
+        archived: false,
+      }),
+    ).toMatchObject({ ok: true });
+    expect(loadSessionEntry({ storePath, sessionKey: key })?.archivedAt).toBeUndefined();
+    await expect(fs.readFile(path.join(worktree.path, "draft.txt"), "utf8")).resolves.toBe(
+      "automatic archive keeps work\n",
+    );
+    await expect(loadSeededTranscriptEvents(fixture.transcriptScope)).resolves.toEqual(transcript);
+    const lease = await acquireWorktreeRunLease(worktree.id);
+    await lease.release();
+  },
+);
 
 test.each(["unarchived", "rearchived"] as const)(
   "automatic archive preserves a checkout whose owner was %s while cleanup awaited",

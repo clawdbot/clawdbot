@@ -15,6 +15,7 @@ import {
 import { buildGuardedModelFetch } from "./host-policy.js";
 import { emitModelTransportDebug } from "./model-transport-debug.js";
 import { formatModelTransportDebugBaseUrl } from "./model-transport-url.js";
+import { isOpenAICodexResponsesModel } from "./openai-completions-compat.js";
 import { postOpenAIResponsesCompaction } from "./openai-responses-compact-client.js";
 import { claimResponsesCompactRequest } from "./openai-responses-compact-request.js";
 import {
@@ -69,7 +70,6 @@ import {
   buildOpenAISdkClientOptions,
   buildOpenAISdkRequestOptions,
   enforceCodeModeResponsesToolSurface,
-  isOpenAICodexResponsesModel,
   resolveCodeModeResponsesVisibleToolNames,
 } from "./openai-transport-params.js";
 import {

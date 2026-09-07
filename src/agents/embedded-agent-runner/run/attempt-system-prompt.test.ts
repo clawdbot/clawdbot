@@ -145,12 +145,16 @@ async function preparePermissionPrompt(
 
 describe("buildAttemptSystemPrompt", () => {
   it.each([undefined, "agent:main:execution"])(
-    "shows only execution-owned processes with sessionKey=%s and borrowed policy",
+    "keeps the system prompt identical when execution-owned processes change: %s",
     async (sessionKey) => {
       const owned = createProcessSessionFixture({ id: "execution-owned", backgrounded: true });
       owned.scopeKey = sessionKey ?? "permission-prompt";
       const other = createProcessSessionFixture({ id: "policy-owned", backgrounded: true });
       other.scopeKey = "agent:main:policy";
+      const idle = await preparePermissionPrompt(false, undefined, undefined, {
+        sessionKey,
+        sandboxSessionKey: other.scopeKey,
+      });
       addSession(owned);
       addSession(other);
       try {
@@ -158,7 +162,8 @@ describe("buildAttemptSystemPrompt", () => {
           sessionKey,
           sandboxSessionKey: other.scopeKey,
         });
-        expect(prepared.systemPromptText).toContain(owned.id);
+        expect(prepared.systemPromptText).toBe(idle.prepared.systemPromptText);
+        expect(prepared.systemPromptText).not.toContain(owned.id);
         expect(prepared.systemPromptText).not.toContain(other.id);
       } finally {
         deleteSession(owned.id);

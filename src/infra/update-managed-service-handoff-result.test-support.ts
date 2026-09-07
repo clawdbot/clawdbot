@@ -217,7 +217,6 @@ export function registerManagedRecoveryOutcomeTests(
       expect(run?.verification.versionMatch).toBe(gatewayHealth === "throw" ? undefined : true);
       expect(run?.verification.pid).toBe(gatewayHealth === "exited" ? undefined : process.pid);
       expect(run?.verification.readyz).toBeUndefined();
-      expect(run?.verification.inferenceProbe).toBeUndefined();
       expect(run?.verification.settled).toBe(
         gatewayHealth === "throw" ? undefined : gatewayHealth === "ready",
       );

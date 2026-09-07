@@ -19,7 +19,10 @@ import {
 import { listReadOnlyChannelPluginsForConfig } from "../../channels/plugins/read-only.js";
 import { buildChannelAccountSnapshotFromAccount } from "../../channels/plugins/status.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
-import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
+import type {
+  ChannelAccountSnapshot,
+  ChannelStatusIssue,
+} from "../../channels/plugins/types.public.js";
 import { resolveUnavailableChannelAccountSnapshot } from "../../channels/status/account-state.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -39,6 +42,11 @@ import type {
   ChannelRuntimeSnapshot,
 } from "../server-channel-runtime.types.js";
 import { formatForLog } from "../ws-log.js";
+import {
+  collectGatewayChannelStatusIssues,
+  resolveDeferredChannelReloadIssue,
+} from "./channels-status-issues.js";
+import { respondUnavailableOnThrow } from "./response.js";
 import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams, type Validator } from "./validation.js";
 
@@ -54,6 +62,7 @@ type ChannelStartPayload = {
   accountId: string;
   started: boolean;
   outcome: ChannelAccountStartOutcome;
+  statusIssues?: ChannelStatusIssue[];
 };
 
 type ChannelStopPayload = {
@@ -94,11 +103,9 @@ async function respondWithChannelOperationPayload<TPayload>(params: {
   respond: RespondFn;
   run: () => Promise<TPayload>;
 }): Promise<void> {
-  try {
+  await respondUnavailableOnThrow(params.respond, async () => {
     params.respond(true, await params.run(), undefined);
-  } catch (error) {
-    params.respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(error)));
-  }
+  });
 }
 
 const CHANNEL_STATUS_MAX_TIMEOUT_MS = 30_000;
@@ -314,11 +321,17 @@ async function startChannelAccount(params: {
       channelId: params.channelId,
       accountId: resolvedAccountId,
     })?.running === true;
+  const deferredIssue = resolveDeferredChannelReloadIssue(
+    params.context,
+    params.channelId,
+    resolvedAccountId,
+  );
   return {
     channel: params.channelId,
     accountId: resolvedAccountId,
     started,
     outcome,
+    ...(deferredIssue ? { statusIssues: [deferredIssue] } : {}),
   };
 }
 
@@ -585,6 +598,13 @@ export const channelsHandlers: GatewayRequestHandlers = {
         defaultAccountIdMap[result.pluginId] = result.defaultAccountId;
       }
     }
+    payload.statusIssues = collectGatewayChannelStatusIssues({
+      payload,
+      plugins: statusPlugins,
+      defaultAccountIds: defaultAccountIdMap,
+      context,
+      warnings: statusWarnings,
+    });
     if (statusWarnings.length > 0) {
       payload.partial = true;
       payload.warnings = statusWarnings.toSorted().slice(0, 50);

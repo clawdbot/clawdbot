@@ -170,7 +170,6 @@
     <string name="native_177f3d4c06a17721" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"권한을 업데이트하지 못했습니다."</string>
     <string name="native_17ac6760df79656a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"설정 교체"</string>
     <string name="native_1810407f5ab7093c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"빠른 작업"</string>
-    <string name="native_181553f2bfe78521" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"전송 실패: 실행이 시작되기 전에 채팅에 실패했습니다; 다시 시도하세요."</string>
     <string name="native_186352a881d0550e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"마이크"</string>
     <string name="native_187cb2576a1f78c4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"채팅에서 아직 Gateway 상태를 확인하고 있습니다."</string>
     <string name="native_18b4885826c1440a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"정확한 위치"</string>
@@ -1178,6 +1177,7 @@
     <string name="native_afc56755918ad9b2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"코드 끝"</string>
     <string name="native_afc798a41a0c1b60" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Code Execution"</string>
     <string name="native_afe7b1f9c558450d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"제공업체 사용량 없음"</string>
+    <string name="native_afe91c77b317d099" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"모델을 새로고침하지 못했습니다. 이전 선택 사항은 그대로 유지됩니다. 다시 시도하려면 새로고침을 탭하세요."</string>
     <string name="native_aff0766a5290e117" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"검토"</string>
     <string name="native_b0375de83dab3599" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"마이크 권한이 필요합니다."</string>
     <string name="native_b0eeb9e9e45398b5" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s일"</string>
@@ -1631,7 +1631,6 @@
     <string name="native_f6b21a4dbcd8e593" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"선별 중"</string>
     <string name="native_f6d2b1ae590eb212" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">" · 대화: 켜짐"</string>
     <string name="native_f6e82c3f136a6c5b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"아직 사용량 데이터가 없습니다."</string>
-    <string name="native_f6e94ebc86517b65" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"실행이 시작되기 전에 채팅이 실패했습니다; 다시 시도해 주세요."</string>
     <string name="native_f6f4688ff23d50c6" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"보내기"</string>
     <string name="native_f701a65268ba6ea2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"일부 공유 이미지가 제외되었거나 추가되지 못했습니다."</string>
     <string name="native_f706757ef3473dbd" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"캘린더 쓰기"</string>

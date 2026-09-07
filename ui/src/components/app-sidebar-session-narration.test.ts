@@ -21,6 +21,7 @@ function runningRow(key: string): SidebarRecentSession {
     hasActiveRun: true,
     modelSelectionLocked: false,
     pinned: false,
+    pinnable: true,
     cloudWorkerStopAction: null,
     hasAutomation: false,
     unread: false,

@@ -267,6 +267,14 @@ export type WorkerProvider = {
       };
     },
   ) => Promise<WorkerLease>;
+  /**
+   * Prepare without allocating, renewing, enrolling, or changing a provider resource. The
+   * returned operation carries prepared facts; core records allocation intent before calling it.
+   * Replay preparation cannot attest that an earlier operation allocated nothing.
+   */
+  prepareProvision?: (
+    ...args: Parameters<WorkerProvider["provision"]>
+  ) => Promise<() => Promise<WorkerLease>>;
   /** Maximum core wait for one provision attempt, including provider-owned setup and cleanup. */
   resolveProvisionTimeoutMs?: (profile: WorkerProfile) => number;
   /**

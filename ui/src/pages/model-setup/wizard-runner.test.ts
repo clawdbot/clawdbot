@@ -843,10 +843,11 @@ describe("ModelSetupWizardRunner", () => {
       expect(request.mock.calls.map(([requestMethod]) => requestMethod)).toEqual([method]);
       expect(runner.state).toEqual({ phase: "idle" });
       if (status === "busy") {
-        expect(terminalResult).toHaveBeenCalledExactlyOnceWith(
-          expect.objectContaining({ done: true, status: "error", error: "Setup busy" }),
-          true,
-        );
+        expect(terminalResult).toHaveBeenCalledExactlyOnceWith({
+          done: true,
+          status: "not-admitted",
+          error: "Setup busy",
+        });
       } else if (lifecycle === "open") {
         expect(terminalResult).toHaveBeenCalledExactlyOnceWith(
           expect.objectContaining({ done: true, status: "done" }),

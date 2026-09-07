@@ -286,6 +286,7 @@ describe("createGatewayRequestContext", () => {
     const context = createGatewayRequestContext(params);
 
     expect(context.getConfigReloaderHotReloadStatus?.()).toBeUndefined();
+    expect(context.getDeferredChannelReloads?.()).toEqual([]);
 
     status = "active";
     expect(context.getConfigReloaderHotReloadStatus?.()).toBe("active");
@@ -295,6 +296,16 @@ describe("createGatewayRequestContext", () => {
 
     status = "disabled";
     expect(context.getConfigReloaderHotReloadStatus?.()).toBe("disabled");
+
+    const deferred = [{ channel: "discord", publicationPending: true }];
+    params.runtime.runtimeState.configReloader = {
+      isConfigReloadSettled: () => false,
+      getDeferredChannelReloads: () => deferred,
+    };
+    expect(context.getDeferredChannelReloads?.()).toEqual(deferred);
+
+    params.runtime.lifecycle.closePreludeStarted = true;
+    expect(context.getDeferredChannelReloads?.()).toEqual([]);
   });
 
   it("publishes worker services through the kernel bridge", () => {

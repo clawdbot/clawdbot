@@ -37,6 +37,7 @@ import {
   type ToolLookupErrorOptions,
 } from "./tool-search-recovery.js";
 import { readToolSearchLimit } from "./tool-search-request.js";
+import { runScheduledToolSearchCall } from "./tool-search-scheduling.js";
 import { snapshotToolSearchTargetTranscriptResult } from "./tool-search-transcript.js";
 import type {
   CatalogVisibilityOptions,
@@ -436,7 +437,6 @@ export class ToolSearchRuntime {
   call = async (id: string, input?: unknown, options?: ToolSearchCallOptions) => {
     const catalog = resolveCatalog(this.ctx);
     return await this.callEntry(
-      catalog,
       findEntry(catalog, id, { ...options, codeModeSkills: this.ctx.codeModeSkills }),
       input,
       options,
@@ -455,7 +455,6 @@ export class ToolSearchRuntime {
   ) => {
     const catalog = resolveCatalog(this.ctx);
     return await this.callEntry(
-      catalog,
       findEntryByExactId(catalog, id, { ...options, codeModeSkills: this.ctx.codeModeSkills }),
       input,
       options,
@@ -503,7 +502,20 @@ export class ToolSearchRuntime {
     return isAgentToolReplaySafe(entry.tool);
   };
 
-  private readonly callEntry = async (
+  private readonly callEntry = (
+    entry: ToolSearchCatalogEntry,
+    input?: unknown,
+    options?: ToolSearchCallOptions,
+  ) =>
+    runScheduledToolSearchCall({
+      ctx: this.ctx,
+      entry,
+      signal: options?.signal,
+      execute: (currentEntry, signal) =>
+        this.executeEntry(resolveCatalog(this.ctx), currentEntry, input, { ...options, signal }),
+    });
+
+  private readonly executeEntry = async (
     catalog: ToolSearchCatalogSession,
     entry: ToolSearchCatalogEntry,
     input?: unknown,

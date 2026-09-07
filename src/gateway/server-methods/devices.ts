@@ -26,11 +26,15 @@ import {
   getPendingDevicePairing,
   listDevicePairing,
   removePairedDevice,
-  type DeviceAuthToken,
+  type PairedDevice,
   rejectDevicePairing,
   updatePairedDeviceMetadata,
 } from "../../infra/device-pairing.js";
 import type { DiagnosticSecurityEventInput } from "../../infra/diagnostic-events.js";
+import type {
+  DevicePairingList,
+  PairedDevice as RedactedPairedDevice,
+} from "../device-pairing-list.types.js";
 import { reconcileRevokedDeviceWorker } from "../device-worker-revocation.js";
 import { GATEWAY_EVENT_DEVICE_PAIR_CHANGED } from "../events.js";
 import { clearRemovedNodeRuntimeState } from "../node-runtime-state.js";
@@ -59,9 +63,9 @@ const DEVICE_PAIR_APPROVAL_DENIED_MESSAGE = "device pairing approval denied";
 const DEVICE_PAIR_REJECTION_DENIED_MESSAGE = "device pairing rejection denied";
 
 function redactPairedDevice(
-  device: { tokens?: Record<string, DeviceAuthToken> } & Record<string, unknown>,
+  device: PairedDevice,
   opts?: { connected?: boolean },
-) {
+): RedactedPairedDevice {
   // Pairing lists are visible to operators; expose token lifecycle metadata
   // without returning raw token material or the internal approved-scope set.
   const { tokens, approvedScopes: _approvedScopes, ...rest } = device;
@@ -245,7 +249,7 @@ export const deviceHandlers: GatewayRequestHandlers = {
             connected: context.hasConnectedClientsForDevice?.(device.deviceId.trim()) ?? false,
           }),
         ),
-      },
+      } satisfies DevicePairingList,
       undefined,
     );
   },

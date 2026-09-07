@@ -188,7 +188,11 @@ async function relocateLegacyWorkshopTargets(
       continue;
     }
     try {
-      assertWorkspaceStateMigrationReady({ workspaceDirs: [workspaceDir], env });
+      assertWorkspaceStateMigrationReady({
+        workspaceDirs: [workspaceDir],
+        env,
+        operation: "doctor",
+      });
       const sourceStat = await readLegacyWorkshopSourceStat(workspaceDir, record.target.skillDir);
       if (sourceStat?.isSymbolicLink()) {
         continue;

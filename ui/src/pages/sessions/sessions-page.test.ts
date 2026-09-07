@@ -284,6 +284,25 @@ describe("sessions page lifecycle", () => {
     );
   });
 
+  it.each([
+    { key: "agent:main:dashboard:child", spawnedBy: "agent:main:parent" },
+    { key: "agent:main:dashboard:child", parentSessionKey: "agent:main:parent" },
+    { key: "agent:main:subagent:child" },
+  ])("hides pinning for a lineage child $key", async (lineage) => {
+    const row = { ...lineage, kind: "direct" } satisfies GatewaySessionRow;
+    const { gateway } = createGateway({} as GatewayBrowserClient);
+    const page = await createRenderedPage(
+      createContext(gateway, createSessions()),
+      sessionsResult([row], 1),
+    );
+    page.openSessionMenu(row, { x: 10, y: 20 }, document.createElement("button"));
+    await page.updateComplete;
+    const menu = page.querySelector<TestSessionMenu>("openclaw-session-menu");
+    expect(menu).not.toBeNull();
+    await menu?.updateComplete;
+    expect(menu?.querySelector('[value="toggle-pin"]')).toBeNull();
+  });
+
   it("disables Fork session for model-selection-locked rows", async () => {
     const row = {
       key: "agent:main:locked",

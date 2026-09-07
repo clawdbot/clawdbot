@@ -6,7 +6,11 @@ import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js
 import { clearBundledDiscoveryModeMemo } from "./bundled-discovery-state.js";
 import type { PluginCandidate } from "./discovery.js";
 import { refreshPersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
-import { isInstalledPluginEnabled, loadInstalledPluginIndex } from "./installed-plugin-index.js";
+import {
+  createInstalledPluginEnabledPredicate,
+  isInstalledPluginEnabled,
+  loadInstalledPluginIndex,
+} from "./installed-plugin-index.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
@@ -101,6 +105,36 @@ describe("bundled provider compatibility in installed plugin indexes", () => {
         env,
       ),
     ).toBe(false);
+  });
+
+  it("keeps bundled compatibility separate from external policy in each batch", () => {
+    const { candidate, env } = createFixture();
+    const config = { plugins: { allow: ["listed"] } };
+    setMode(env, "compat");
+    const index = loadInstalledPluginIndex({ candidates: [candidate], config, env });
+    const plugins = [
+      ...index.plugins,
+      ...index.plugins.map((record) =>
+        Object.assign({}, record, {
+          pluginId: "external-tool",
+          origin: "global" as const,
+        }),
+      ),
+    ];
+    const compatible = createInstalledPluginEnabledPredicate(plugins, config, env);
+    expect(compatible("external-tool")).toBe(false);
+    expect(compatible(PLUGIN_ID)).toBe(true);
+    expect(compatible("external-tool")).toBe(false);
+
+    config.plugins.allow.push("external-tool");
+    const reconfigured = createInstalledPluginEnabledPredicate(plugins, config, env);
+    expect(reconfigured("external-tool")).toBe(true);
+    expect(reconfigured(PLUGIN_ID)).toBe(true);
+
+    setMode(env, "allowlist");
+    const strict = createInstalledPluginEnabledPredicate(plugins, config, env);
+    expect(strict(PLUGIN_ID)).toBe(false);
+    expect(strict("external-tool")).toBe(true);
   });
 
   it("refreshes persisted contract-only provider policy without rebuilding source records", async () => {

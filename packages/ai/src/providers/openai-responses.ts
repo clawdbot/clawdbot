@@ -2,22 +2,17 @@
 import type { ResponseCreateParamsStreaming } from "openai/resources/responses/responses.js";
 import { getEnvApiKey } from "../env-api-keys.js";
 import type { BaseOpenAIStreamOptions } from "../provider-options.js";
+import { resolveOpenAICompletionsCompat } from "../transports/openai-completions-compat.js";
 import type { OpenAIResponsesReplayMode } from "../transports/openai-responses-compaction-replay.js";
 import type { OpenAIResponsesRequestParams } from "../transports/openai-responses-contracts.js";
 import { resolveOpencodeSessionHeaders } from "../transports/session-affinity.js";
-import type {
-  Context,
-  Model,
-  OpenAIResponsesCompat,
-  SimpleStreamOptions,
-  StreamFunction,
-} from "../types.js";
+import type { Context, Model, SimpleStreamOptions, StreamFunction } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { resolveCacheRetention } from "./cache-retention.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.js";
 import {
   clampOpenAIPromptCacheKey,
-  resolveOpenAIResponsesCacheParams,
+  resolveOpenAIPromptCacheParams,
 } from "./openai-prompt-cache.js";
 import { createOpenAIProviderClient } from "./openai-provider-client.js";
 import { supportsOpenAITemperature } from "./openai-reasoning-effort.js";
@@ -33,14 +28,10 @@ import { buildBaseOptions } from "./simple-options.js";
 
 const OPENAI_TOOL_CALL_PROVIDERS = new Set(["openai", "opencode"]);
 
-type ResolvedOpenAIResponsesCompat = Required<
-  Pick<OpenAIResponsesCompat, "sendSessionIdHeader" | "supportsLongCacheRetention">
->;
-
-function getCompat(model: Model<"openai-responses">): ResolvedOpenAIResponsesCompat {
+function getCompat(model: Model<"openai-responses">) {
   return {
+    ...resolveOpenAICompletionsCompat(model),
     sendSessionIdHeader: model.compat?.sendSessionIdHeader ?? true,
-    supportsLongCacheRetention: model.compat?.supportsLongCacheRetention ?? true,
   };
 }
 
@@ -169,10 +160,10 @@ function buildParams(
     input: messages,
     stream: true,
     prompt_cache_key:
-      cacheRetention === "none"
+      cacheRetention === "none" || !compat.supportsPromptCacheKey
         ? undefined
         : clampOpenAIPromptCacheKey(options?.promptCacheKey ?? options?.sessionId),
-    ...resolveOpenAIResponsesCacheParams(model, cacheRetention, compat.supportsLongCacheRetention),
+    ...resolveOpenAIPromptCacheParams(model, cacheRetention, compat),
     store: false,
   };
 

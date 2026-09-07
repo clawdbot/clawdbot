@@ -248,7 +248,10 @@ openclaw gateway call sessions.dispatch \
 ```
 
 The node starts the same managed, pinned Codex binary with
-`codex exec-server --listen stdio` in the placement workspace. The Gateway
+`codex exec-server --listen stdio` in the placement workspace. The node waits for
+the native process to start listening before announcing execution readiness, so
+cold disk startup does not consume Codex's initialize-handshake budget. Startup
+remains cancellable through the existing attempt lifecycle. The Gateway
 relays complete Codex JSON-RPC messages through the existing authenticated,
 approval-gated duplex node channel, with a 64 MiB limit per message. It does not
 start an OpenClaw worker child, open a reverse tunnel, or copy provider, cloud,
@@ -261,6 +264,10 @@ credential-free endpoint. The node process uses a fresh private
 environment and requested child-process environments are sanitized. Completed
 filesystem changes reconcile into the Gateway-owned managed worktree or, for
 repository-only sessions, an immutable checkpoint retained by the Gateway.
+
+Native task processes inherit the exec-server's startup `RUST_LOG` filter under
+Codex's default environment policy. Set `RUST_LOG` explicitly in a command when
+that program needs a different log level.
 
 Disconnecting the node, closing the app-server connection, cancelling the turn,
 or retiring the plugin ends that Codex attempt visibly and terminates its remote
@@ -747,6 +754,14 @@ surprising, see
 [Troubleshooting](#troubleshooting).
 
 ## Routing and model selection
+
+`openai/gpt-6-astra` defaults to `low` reasoning effort through the shared
+OpenAI provider policy. This limits routine reasoning cost and subscription
+budget use. For OpenClaw-managed turns, the resolved effort is sent in Codex `turn/start` requests,
+including `collaborationMode.settings.reasoning_effort`, so the native thread
+uses the same default as Control UI. Explicit thinking settings still win;
+an existing session or agent configured for `high` stays at `high`. Threads
+attached with native settings preserved retain their native effort.
 
 Keep provider refs and runtime policy separate:
 

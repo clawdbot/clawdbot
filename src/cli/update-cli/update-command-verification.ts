@@ -4,7 +4,6 @@ import { resolveGatewayService } from "../../daemon/service.js";
 import type { UpdateRepairValidation } from "../../infra/update-repair-protocol.js";
 import { recordUpdateRunStep, recordUpdateRunVerification } from "../../infra/update-run-ledger.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
-import { verifyUpdateServing } from "../../infra/update-serving-verification.js";
 import { defaultRuntime } from "../../runtime.js";
 import { replaceCliName, resolveCliName } from "../cli-name.js";
 import { formatCliCommand } from "../command-format.js";
@@ -121,67 +120,21 @@ export async function verifyUpdatedGateway(params: {
   }
   const serviceRunning = !params.requireRunningService || health.runtime.status === "running";
   if (health.healthy && serviceRunning && readyz) {
-    const run = params.opts.run;
-    const expectedVersion = params.expectedVersion;
-    // A healthy port does not prove this update served or persisted a turn.
-    // Missing transaction/artifact identity cannot be replaced with the observed boot.
-    const serving =
-      run && expectedVersion && health.gatewayBootId
-        ? await verifyUpdateServing({
-            runId: run.runId,
-            config: context.config,
-            env: params.serviceEnv,
-            gatewayPort: params.gatewayPort,
-            expectedVersion,
-            expectedBuildId: params.expectedBuildId,
-            expectedBootId: health.gatewayBootId,
-            ...(params.signal ? { signal: params.signal } : {}),
-          })
-        : !run || !expectedVersion
-          ? ({ status: "failed", reason: "invalid-request" } as const)
-          : ({ status: "unavailable", reason: "identity-unavailable" } as const);
-    params.signal?.throwIfAborted();
-    if (run) {
-      recordUpdateRunVerification(
-        run.runId,
-        {
-          inferenceProbe:
-            serving.status === "verified"
-              ? "passed"
-              : serving.status === "unavailable"
-                ? "unavailable"
-                : "failed",
-        },
-        { env: run.env },
-      );
+    params.onVerified?.(Date.now());
+    if (params.opts.run) {
       recordUpdateRunStep(
-        run.runId,
-        {
-          step: "gateway verification",
-          status: serving.status === "verified" ? "completed" : "failed",
-          endedAtMs: Date.now(),
-          ...(serving.status === "verified" ? {} : { detail: serving.reason }),
-        },
-        { env: run.env },
+        params.opts.run.runId,
+        { step: "gateway verification", status: "completed", endedAtMs: Date.now() },
+        { env: params.opts.run.env },
       );
     }
-    if (serving.status !== "verified") {
-      // Only public-safe producer reasons leave this boundary; the receipt is private.
-      const reason = `serving-verification-${serving.reason}`;
-      defaultRuntime.error(`Gateway serving verification failed: ${serving.reason}.`);
-      return { ok: false, score: 7, summary: reason };
-    }
-    params.onVerified?.(serving.receipt.verifiedAtMs);
     if (!params.opts.json) {
-      defaultRuntime.log(
-        theme.success("Gateway: restarted, served a turn, and verified persistence."),
-      );
+      defaultRuntime.log(theme.success("Gateway: restarted and verified."));
     }
     return {
       ok: true,
-      score: 8,
-      summary:
-        "Gateway service, version, plugins, channels, readiness, and persisted turn verified.",
+      score: 7,
+      summary: "Gateway service, version, plugins, channels, and readiness verified.",
     };
   }
   const diagnosticLines: [string, ...string[]] = [

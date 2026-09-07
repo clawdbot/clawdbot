@@ -1,26 +1,25 @@
 import type { Context, Model } from "@openclaw/llm-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
-  FunctionTool,
   ResponseFormatTextConfig,
   ResponseInput,
 } from "openai/resources/responses/responses.js";
 import { resolveCacheRetention } from "../providers/cache-retention.js";
-import { resolveOpenAIResponsesCacheParams } from "../providers/openai-prompt-cache.js";
+import { resolveOpenAIPromptCacheParams } from "../providers/openai-prompt-cache.js";
 import {
   normalizeOpenAIReasoningEffort,
   resolveOpenAIReasoningEffortForModel,
   supportsOpenAITemperature,
   type OpenAIApiReasoningEffort,
 } from "../providers/openai-reasoning-effort.js";
+import { convertProjectedResponsesTools } from "../providers/openai-responses-tools.js";
 import {
   projectOpenAITools,
   reconcileOpenAIResponsesToolChoice,
-  type OpenAIToolProjection,
 } from "../providers/openai-tool-projection.js";
-import { normalizeOpenAIStrictToolParameters } from "../providers/openai-tool-schema.js";
 import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-boundary.js";
 import { resolveOpenAIStrictToolSetting } from "./host-policy.js";
+import { usesNativeOpenAICodexResponsesBackend } from "./openai-completions-compat.js";
 import type { OpenAIResponsesReplayMode } from "./openai-responses-compaction-replay.js";
 import {
   OPENAI_CODEX_RESPONSES_DEFAULT_INSTRUCTIONS,
@@ -36,16 +35,8 @@ import {
   buildResponsesInputMessage,
   convertResponsesMessages,
 } from "./openai-responses-replay-internal.js";
-import {
-  getCompat,
-  resolveOpenAIStrictToolFlagWithDiagnostics,
-  usesNativeOpenAICodexResponsesBackend,
-} from "./openai-transport-params.js";
-import {
-  resolvePromptCacheKey,
-  sortTransportToolsByName,
-  type OpenAIModeModel,
-} from "./openai-transport-shared.js";
+import { getCompat } from "./openai-transport-params.js";
+import { resolvePromptCacheKey, type OpenAIModeModel } from "./openai-transport-shared.js";
 import { sanitizeTransportPayloadText } from "./transport-stream-shared.js";
 
 const OPENAI_RESPONSES_TOOL_CALL_PROVIDERS = new Set([
@@ -54,37 +45,6 @@ const OPENAI_RESPONSES_TOOL_CALL_PROVIDERS = new Set([
   "azure-openai-responses",
   "github-copilot",
 ]);
-
-function convertResponsesTools(
-  tools: NonNullable<Context["tools"]>,
-  model: OpenAIModeModel,
-  options?: { strict?: boolean | null },
-): { projection: OpenAIToolProjection; tools: FunctionTool[] } {
-  const projection = projectOpenAITools(tools);
-  const strict = resolveOpenAIStrictToolFlagWithDiagnostics(projection, options?.strict, {
-    transport: "responses",
-    model,
-  });
-  return {
-    projection,
-    tools: sortTransportToolsByName(projection.tools).map((tool): FunctionTool => {
-      const result = {
-        type: "function" as const,
-        name: tool.name,
-        description: tool.description,
-        parameters: normalizeOpenAIStrictToolParameters(
-          tool.parameters,
-          strict === true,
-          model.compat,
-        ),
-      } as FunctionTool;
-      if (strict !== undefined) {
-        result.strict = strict;
-      }
-      return result;
-    }),
-  };
-}
 
 function resolveOpenAIReasoningEffort(
   options: OpenAIResponsesOptions | undefined,
@@ -137,6 +97,7 @@ const OPENAI_CODEX_RESPONSES_UNSUPPORTED_PARAMS = [
   "max_output_tokens",
   "metadata",
   "prompt_cache_retention",
+  "prompt_cache_options",
   "service_tier",
   "temperature",
   "top_p",
@@ -166,6 +127,7 @@ export function sanitizeOpenAICodexResponsesParams<T extends Record<string, unkn
   for (const key of OPENAI_CODEX_RESPONSES_UNSUPPORTED_PARAMS) {
     delete params[key];
   }
+  Object.assign(params, { store: false });
   stripOpenAICodexResponsesUnsupportedTextFields(params);
   return params;
 }
@@ -298,7 +260,10 @@ export function buildOpenAIResponsesParams(
   const messages = convertOpenAIResponsesMessagesForRequest(model, context, options, replayMode);
   ensureOpenAIResponsesNonEmptyInput(messages, context);
   const cacheRetention = resolveCacheRetention(options?.cacheRetention);
-  const promptCacheKey = resolvePromptCacheKey(options, cacheRetention);
+  const compat = getCompat(model);
+  const promptCacheKey = compat.supportsPromptCacheKey
+    ? resolvePromptCacheKey(options, cacheRetention)
+    : undefined;
   const instructions = resolveOpenAIResponsesInstructions(
     model,
     context,
@@ -309,11 +274,7 @@ export function buildOpenAIResponsesParams(
     input: messages,
     stream: true,
     prompt_cache_key: promptCacheKey,
-    ...resolveOpenAIResponsesCacheParams(
-      model,
-      cacheRetention,
-      model.baseUrl?.includes("api.openai.com"),
-    ),
+    ...resolveOpenAIPromptCacheParams(model, cacheRetention, compat),
     ...(instructions ? { instructions } : {}),
     ...(metadata ? { metadata } : {}),
   };
@@ -339,22 +300,20 @@ export function buildOpenAIResponsesParams(
     params.service_tier = options.serviceTier;
   }
   if (context.tools) {
-    const converted = convertResponsesTools(context.tools, model as OpenAIModeModel, {
-      strict: resolveOpenAIStrictToolSetting(model as OpenAIModeModel, {
-        transport: "stream",
-      }),
+    const tools = context.tools;
+    const strict = resolveOpenAIStrictToolSetting(model as OpenAIModeModel, {
+      transport: "stream",
     });
+    const projection = projectOpenAITools(tools);
+    const converted = convertProjectedResponsesTools(projection, strict, model);
     if (
-      converted.tools.length > 0 ||
-      (converted.projection.inputToolCount === 0 && converted.projection.diagnostics.length === 0)
+      converted.length > 0 ||
+      (projection.inputToolCount === 0 && projection.diagnostics.length === 0)
     ) {
-      params.tools = converted.tools;
+      params.tools = converted;
     }
     if (options?.toolChoice) {
-      const toolChoice = reconcileOpenAIResponsesToolChoice(
-        options.toolChoice,
-        converted.projection,
-      );
+      const toolChoice = reconcileOpenAIResponsesToolChoice(options.toolChoice, projection);
       if (toolChoice !== undefined) {
         params.tool_choice = toolChoice;
       }

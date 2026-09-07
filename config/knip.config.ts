@@ -3,6 +3,7 @@
  */
 import fs from "node:fs";
 import path from "node:path";
+import { createManagedHandoffBuildConfig } from "../scripts/lib/managed-handoff-build-config.mts";
 import { runtimeProcessBuildEntries } from "../scripts/lib/runtime-process-build-entries.mts";
 import { controlUiSource } from "../src/plugins/package-manifest.js";
 
@@ -43,6 +44,8 @@ const repositoryScriptEntries = [
   "scripts/docker-e2e.mts!",
   // Docker and package-install harnesses invoke this verifier by path.
   "scripts/docker/verify-fs-safe-native.mjs!",
+  // Reusable Docker workflows invoke this selector from a trusted sparse checkout.
+  "scripts/resolve-fs-safe-native-contract.mjs!",
   "scripts/e2e/lib/browser-cdp-snapshot/assert-snapshot.mjs!",
   "scripts/e2e/lib/browser-cdp-snapshot/fixture-server.mjs!",
   "scripts/e2e/lib/bundled-plugin-install-uninstall/runtime-smoke.mjs!",
@@ -177,9 +180,10 @@ const rootEntries = [
   ...repositoryScriptEntries,
   ...listScriptShimEntries(),
   // Runtime launchers resolve these by URL rather than a static import edge.
-  ...Object.values(runtimeProcessBuildEntries).map(
-    (source) => `${path.relative(".", source).replaceAll("\\", "/")}!`,
-  ),
+  ...Object.values({
+    ...runtimeProcessBuildEntries,
+    ...createManagedHandoffBuildConfig().entry,
+  }).map((source) => `${path.relative(".", source).replaceAll("\\", "/")}!`),
   // Knip loads these audit configurations directly by command-line path.
   "config/knip.config.ts!",
   "config/knip.all-exports.config.ts!",

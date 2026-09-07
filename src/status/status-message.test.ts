@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
 import { SESSION_TOTAL_TOKENS_VERSION } from "../config/sessions/types.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
+import * as transcriptReaders from "../gateway/session-transcript-readers.js";
 
 vi.mock("../version.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../version.js")>();
@@ -247,6 +248,52 @@ describe("buildStatusMessage cost snapshot", () => {
     }
   });
 });
+
+describe.each(["session", "transcript", "session with unreported transcript"] as const)(
+  "buildStatusMessage %s cache usage",
+  (source) => {
+    it.each([
+      { name: "reported zero reads and writes", cacheRead: 0, cacheWrite: 0, reported: true },
+      { name: "reported zero reads", cacheRead: 0, cacheWrite: undefined, reported: true },
+      { name: "unreported usage", cacheRead: undefined, cacheWrite: undefined, reported: false },
+    ])("distinguishes $name", ({ cacheRead, cacheWrite, reported }) => {
+      const usage = { inputTokens: 10_000, outputTokens: 50, cacheRead, cacheWrite };
+      const reader = vi.spyOn(transcriptReaders, "readRecentSessionUsageFromTranscript");
+      reader.mockReturnValue(
+        source === "transcript"
+          ? usage
+          : source === "session with unreported transcript"
+            ? { inputTokens: usage.inputTokens, outputTokens: usage.outputTokens }
+            : null,
+      );
+      try {
+        const parts = buildStatusMessageParts({
+          agent: { model: "anthropic/claude-haiku-4-5" },
+          sessionEntry: {
+            sessionId: "status-cache",
+            updatedAt: 0,
+            ...(source !== "transcript" ? usage : {}),
+          },
+          includeTranscriptUsage: source !== "session",
+        });
+        const table = parts.presentation.blocks.find((block) => block.type === "table");
+        if (table?.type !== "table") {
+          throw new Error("expected table block");
+        }
+        const rows = new Map(table.rows.map((row) => [row[0], row[1]]));
+        if (reported) {
+          expect(parts.text).toContain("Cache: 0% hit · 0 cached, 0 new");
+          expect(rows.get("🗄️ Cache")).toBe("0% hit · 0 cached, 0 new");
+        } else {
+          expect(parts.text).not.toContain("Cache:");
+          expect(rows.has("🗄️ Cache")).toBe(false);
+        }
+      } finally {
+        reader.mockRestore();
+      }
+    });
+  },
+);
 
 describe("buildStatusMessage context window", () => {
   it("rejects a stale runtime window after a same-model harness change", () => {

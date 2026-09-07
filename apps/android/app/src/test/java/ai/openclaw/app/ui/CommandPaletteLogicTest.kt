@@ -8,7 +8,9 @@ import ai.openclaw.app.closeNodeRuntimeTestFixture
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.i18n.resolveNativeText
 import ai.openclaw.app.i18n.verbatimText
+import ai.openclaw.app.ui.design.assertCompleteText
 import android.content.Context
+import android.graphics.Bitmap
 import androidx.activity.OnBackPressedDispatcher
 import androidx.activity.compose.LocalOnBackPressedDispatcherOwner
 import androidx.compose.foundation.layout.width
@@ -16,12 +18,14 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.DeviceConfigurationOverride
 import androidx.compose.ui.test.FontScale
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasAnyDescendant
 import androidx.compose.ui.test.hasClickAction
@@ -32,6 +36,7 @@ import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performScrollToNode
@@ -53,6 +58,7 @@ import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import org.robolectric.util.ReflectionHelpers
+import java.io.File
 import java.util.UUID
 
 @RunWith(RobolectricTestRunner::class)
@@ -184,6 +190,70 @@ class CommandPaletteLogicTest {
       composeRule.onNodeWithText(nativeString("Licenses")).performClick()
       composeRule.onNodeWithText(nativeString("OpenClaw appreciates its partners in the open-source community.")).assertIsDisplayed()
       assertRuntimeUnchanged()
+    }
+  }
+
+  @Test
+  @GraphicsMode(GraphicsMode.Mode.NATIVE)
+  @Config(qualifiers = "fr-w320dp-h800dp-420dpi")
+  fun quickActionTitlesAndDescriptionsRemainReadableAtLargeFont() {
+    val fontScale = mutableStateOf(1f)
+    val labels =
+      listOf(
+        "Open Chat",
+        "Start or continue a conversation",
+        "Start Voice",
+        "Talk or dictate with OpenClaw",
+        "Browse Threads",
+        "Find previous conversations",
+        "Providers & Models",
+        "Connect Gateway to view providers",
+        "Settings",
+        "Gateway, voice, notifications, privacy",
+      ).map { nativeString(it) }
+    val evidence = File("build/outputs/search-action-readability", UUID.randomUUID().toString())
+    assertTrue(evidence.mkdirs())
+    withShell(HomeDestination.Settings, Modifier.width(320.dp), { fontScale.value }) { _, assertRuntimeUnchanged ->
+      val searchResults = hasScrollAction() and hasAnyDescendant(hasSetTextAction())
+      val failures = mutableListOf<String>()
+      for (scale in listOf(1f, 2f)) {
+        composeRule.runOnIdle { fontScale.value = scale }
+        composeRule.onNodeWithContentDescription(nativeString("Search settings")).performClick()
+        try {
+          composeRule.onNode(hasText("OC") and hasAnyAncestor(searchResults), useUnmergedTree = true).assertCompleteText("OC")
+        } catch (error: AssertionError) {
+          failures += "$scale: avatar OC: ${error.message}"
+        }
+        for ((index, label) in labels.withIndex()) {
+          val node = composeRule.onNode(hasText(label) and hasAnyAncestor(searchResults), useUnmergedTree = true)
+          node.performScrollTo().assertIsDisplayed()
+          File(evidence, "$scale-$index.png").outputStream().use {
+            assertTrue(
+              composeRule
+                .onRoot()
+                .captureToImage()
+                .asAndroidBitmap()
+                .compress(Bitmap.CompressFormat.PNG, 100, it),
+            )
+          }
+          try {
+            node.assertCompleteText(label)
+          } catch (error: AssertionError) {
+            failures += "$scale: $label: ${error.message}"
+          }
+          if (index % 2 == 0) {
+            val action = composeRule.onNode(hasText(label) and hasClickAction() and hasAnyAncestor(searchResults)).fetchSemanticsNode()
+            val clickLabel = if (index < 6) label else nativeString("Open \${row.title}", label)
+            assertEquals(clickLabel, action.config[SemanticsActions.OnClick].label)
+          }
+          assertRuntimeUnchanged()
+        }
+        composeRule.onNode(hasText(nativeString("Settings")) and hasClickAction() and hasAnyAncestor(searchResults)).performClick()
+        composeRule.onNode(hasSetTextAction()).assertDoesNotExist()
+        composeRule.onNodeWithTag("sidebar-open-settings").assertIsDisplayed()
+        assertRuntimeUnchanged()
+      }
+      assertTrue("Quick actions must expose their complete title and description:\n${failures.joinToString("\n")}", failures.isEmpty())
     }
   }
 

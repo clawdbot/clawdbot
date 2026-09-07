@@ -14,6 +14,10 @@ import {
 } from "../internal/discord.js";
 import { formatMention } from "../mentions.js";
 import { resolveDiscordChannelNameSafe } from "../monitor/channel-access.js";
+import {
+  createDiscordLivePolicyReader,
+  type DiscordLivePolicyReader,
+} from "../monitor/live-policy.js";
 import { resolveDiscordSenderIdentity } from "../monitor/sender-identity.js";
 import { resolveDiscordThreadLikeChannelContext } from "../monitor/thread-channel-context.js";
 import { authorizeDiscordVoiceIngress } from "./access.js";
@@ -32,6 +36,7 @@ export const DISCORD_VOICE_COMMAND_SPEC = {
 } satisfies NativeCommandSpec;
 
 type VoiceCommandContext = {
+  readPolicy?: DiscordLivePolicyReader;
   cfg: OpenClawConfig;
   discordConfig: DiscordAccountConfig;
   accountId: string;
@@ -79,13 +84,18 @@ async function authorizeVoiceCommand(
     ? interaction.rawData.member.roles.map((roleId: string) => roleId)
     : [];
   const sender = resolveDiscordSenderIdentity({ author: user, member: interaction.rawData.member });
-  const voiceAccess = resolveDiscordVoiceAccess(params);
+  const policy = await params.readPolicy?.();
+  if (policy?.isCurrent() === false) {
+    return { ok: false, message: "Access policy changed. Try this interaction again." };
+  }
+  const currentParams = { ...params, ...policy };
+  const voiceAccess = resolveDiscordVoiceAccess(currentParams);
   const access = await authorizeDiscordVoiceIngress({
-    cfg: params.cfg,
-    discordConfig: params.discordConfig,
-    accountId: params.accountId,
-    groupPolicy: params.groupPolicy,
-    useAccessGroups: params.useAccessGroups,
+    cfg: currentParams.cfg,
+    discordConfig: currentParams.discordConfig,
+    accountId: currentParams.accountId,
+    groupPolicy: currentParams.groupPolicy,
+    useAccessGroups: currentParams.useAccessGroups,
     guild: interaction.guild,
     guildId: interaction.guild.id,
     channelId,
@@ -152,7 +162,22 @@ async function ensureVoiceCommandAccess(params: {
   return false;
 }
 
-export function createDiscordVoiceCommand(params: VoiceCommandContext): CommandWithSubcommands {
+export function createDiscordVoiceCommand(
+  startupParams: VoiceCommandContext,
+): CommandWithSubcommands {
+  const params = {
+    ...startupParams,
+    readPolicy:
+      startupParams.readPolicy ??
+      createDiscordLivePolicyReader({
+        ...startupParams,
+        discordConfig: { ...startupParams.discordConfig, groupPolicy: startupParams.groupPolicy },
+        resolvedAllowlist: {
+          guildEntries: startupParams.discordConfig.guilds,
+          allowFrom: startupParams.discordConfig.allowFrom,
+        },
+      }),
+  };
   const resolveSessionChannelId = (manager: DiscordVoiceManager, guildId: string) =>
     manager.status().find((entry) => entry.guildId === guildId)?.channelId;
 

@@ -24,12 +24,12 @@ import {
 } from "./history.js";
 import {
   hasAlreadyFlushedForCurrentCompaction,
-  resolveMemoryFlushContextWindowTokens,
   resolveCompactionThreshold,
   shouldRunMemoryFlush,
   shouldRunPreflightCompaction,
 } from "./memory-flush.js";
 import { CURRENT_MESSAGE_MARKER } from "./mentions.js";
+import { resolveContextTokens } from "./model-selection-context.js";
 import { incrementCompactionCount } from "./session-updates.js";
 
 const tempDirs: string[] = [];
@@ -469,7 +469,7 @@ describe("hasAlreadyFlushedForCurrentCompaction", () => {
   });
 });
 
-describe("resolveMemoryFlushContextWindowTokens", () => {
+describe("resolveContextTokens", () => {
   it("uses provider-specific configured limits when the same model id exists on multiple providers", () => {
     const cfg = {
       models: {
@@ -480,17 +480,17 @@ describe("resolveMemoryFlushContextWindowTokens", () => {
       },
     };
     expect(
-      resolveMemoryFlushContextWindowTokens({
+      resolveContextTokens({
         cfg: cfg as never,
         provider: "provider-b",
-        modelId: "shared-model",
+        model: "shared-model",
       }),
     ).toBe(512_000);
     expect(
-      resolveMemoryFlushContextWindowTokens({
+      resolveContextTokens({
         cfg: cfg as never,
         provider: "provider-a",
-        modelId: "shared-model",
+        model: "shared-model",
       }),
     ).toBe(200_000);
   });
