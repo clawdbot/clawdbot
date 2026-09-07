@@ -1,4 +1,6 @@
+import { emitAgentAuditEvent } from "../../infra/agent-events.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
+import { buildRuntimeSkillSelectionMarker } from "../runtime-skill-selection.js";
 import type { SkillTelemetrySource } from "../types.js";
 
 const MAX_TRACKED_SKILL_USAGE_RUNS = 1024;
@@ -28,6 +30,8 @@ export function recordRunSkillUsage(params: RunSkillUsage & { runId?: string }):
   usage.set(`${record.source}\u0000${record.name}\u0000${record.activation}`, record);
   skillUsageByRun.set(runId, usage);
   pruneMapToMaxSize(skillUsageByRun, MAX_TRACKED_SKILL_USAGE_RUNS);
+  // Emit audit event for observed skill selection
+  emitSkillSelectionAudit(params);
 }
 
 /** Checks whether this run demonstrably used one writable workspace skill. */
@@ -58,4 +62,29 @@ export function consumeRunSkillUsage(runId: string | undefined): RunSkillUsage[]
   const usage = skillUsageByRun.get(runId);
   skillUsageByRun.delete(runId);
   return usage ? [...usage.values()] : [];
+}
+
+/** Emits an audit event for observed skill selection (side-effect helper). */
+function emitSkillSelectionAudit(params: RunSkillUsage & { runId?: string }): void {
+  if (!params.runId) {
+    return;
+  }
+  try {
+    emitAgentAuditEvent({
+      runId: params.runId,
+      stream: "skill_selection",
+      agentId: undefined,
+      sessionKey: undefined,
+      sessionId: undefined,
+      data: buildRuntimeSkillSelectionMarker({
+        runId: params.runId,
+        skillName: params.name,
+        skillSource: params.source,
+        activation: params.activation,
+      }),
+    });
+  } catch {
+    // Audit emission failures must not propagate — observed skill use
+    // is already recorded in the run-usage map.
+  }
 }

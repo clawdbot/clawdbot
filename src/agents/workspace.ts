@@ -1364,9 +1364,13 @@ function filterRootMemoryOnlyBootstrapFiles(
     [...ROOT_MEMORY_ONLY].map((name) => path.join(resolvedWorkspaceRoot, name)),
   );
   return files.filter((file) => {
-    if (typeof file.path !== "string") return true;
+    if (typeof file.path !== "string") {
+      return true;
+    }
     const filePath = file.path.trim();
-    if (!filePath) return true;
+    if (!filePath) {
+      return true;
+    }
     const resolvedPath = path.isAbsolute(filePath)
       ? path.resolve(filePath)
       : filePath.startsWith("~")
