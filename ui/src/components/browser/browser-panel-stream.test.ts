@@ -164,6 +164,61 @@ describe("Browser panel stream ownership", () => {
     expect(controller.view).toBe(recovered);
   });
 
+  it("keeps a pending fallback screenshot when the reconnect fails", async () => {
+    const screenshot = createDeferred<unknown>();
+    const { controller, calls } = setup(async (envelope) =>
+      envelope.path === "/screenshot" ? screenshot.promise : undefined,
+    );
+    const socket = await start(controller);
+    socket.disconnect(1006);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(calls("/screenshot")).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(calls("/screencast")).toHaveLength(2);
+    sockets[1]!.disconnect(1006);
+    await flush();
+    expect(calls("/screenshot")).toHaveLength(1);
+    screenshot.resolve({ path: "/fresh.png", targetId: "raw-a", url: PAGE_URL });
+    await flush();
+    expect(controller.view?.dataUrl).toMatch(/^data:/);
+    expect(controller.loading).toBe(false);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(calls("/screencast")).toHaveLength(3);
+    sockets[2]!.disconnect(1006);
+    await flush();
+    expect(calls("/screenshot")).toHaveLength(2);
+  });
+
+  it.each(["annotate", "inspect"] as const)(
+    "defers a resize restart until %s ends",
+    async (mode) => {
+      const { controller, host, calls } = setup();
+      let width = 500;
+      const stage = host.renderRoot.querySelector<HTMLElement>(".bp-stage")!;
+      Object.defineProperty(stage, "clientWidth", { get: () => width });
+      controller.handleViewportResize(width, 300);
+      const socket = await start(controller);
+      controller.setMode(mode);
+      const pinned = controller.view;
+      width = 800;
+      controller.handleViewportResize(width, 300);
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(socket.close).not.toHaveBeenCalled();
+      expect(calls("/screencast")).toHaveLength(1);
+      expect(controller.view).toBe(pinned);
+
+      controller.exitCaptureModes();
+      await vi.advanceTimersByTimeAsync(500);
+      expect(socket.close).toHaveBeenCalledOnce();
+      expect(calls("/screencast")).toHaveLength(2);
+      expect(calls("/screencast")[1]?.[1]).toMatchObject({ body: { maxWidth: 800 } });
+      sockets[1]!.receive(screencastFrame(PAGE_URL, 800, 300));
+      await flush();
+      expect(controller.view?.dataUrl).toBe("blob:frame-1");
+      expect(calls("/screenshot")).toHaveLength(0);
+    },
+  );
+
   it("recaptures when a late first frame closes before decoding", async () => {
     const screenshot = createDeferred<unknown>();
     let captures = 0;
