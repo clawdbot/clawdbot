@@ -80,6 +80,11 @@ Required behavior:
 5. Set `agentId` explicitly unless ACP default agent is known.
 6. Do not ask user to run slash commands or CLI when this path works directly.
 
+Runtime controls:
+
+- Pass explicit reasoning effort in `thinking`, separate from `model`. Codex ACP omits the reasoning override for `off`, maps `minimal` to `low`, and maps `low`, `medium`, `high`, and `xhigh` directly.
+- Do not retry `ACP_BACKEND_UNSUPPORTED_CONTROL` with the same fields. Remove only the rejected optional override or report that the backend cannot honor it.
+
 Example:
 
 User: "spawn a test codex ACP session in thread and tell it to say hi"
