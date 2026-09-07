@@ -351,11 +351,11 @@ describe("shouldUseEnvHttpProxyForUrl", () => {
     ["https://notexample./v1", "example.", true],
     ["https://api.example../v1", "example", true],
     ["https://api.example./v1", ".", true],
-  ])("keeps NO_PROXY DNS-dot routing aligned for %s and %s", (url, noProxy, expected) => {
+  ])("keeps proxy-bypass DNS-dot routing aligned for %s and %s", (url, noProxy, expected) => {
     expect(
       shouldUseEnvHttpProxyForUrl(url, {
-        HTTPS_PROXY: "http://proxy.test:8080",
-        NO_PROXY: noProxy,
+        https_proxy: "http://proxy.test:8080",
+        no_proxy: noProxy,
       }),
     ).toBe(expected);
   });
