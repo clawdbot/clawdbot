@@ -177,10 +177,10 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
   };
   return html`
     <details
-      ${ref((details) => syncChatModelSearch(details))}
       class="chat-controls__inline-select chat-controls__model-picker"
       data-chat-autotype-shortcuts
       ?open=${params.open === true}
+      ${ref((details) => syncChatModelSearch(details))}
       @keydown=${handleModelPickerKeydown}
       @toggle=${(event: Event) => {
         const details = event.currentTarget as HTMLDetailsElement;
