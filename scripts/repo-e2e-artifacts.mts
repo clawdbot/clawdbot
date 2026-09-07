@@ -10,6 +10,11 @@ import { listGeneratedExtensionAssetSources } from "./lib/static-extension-asset
 
 const archiveName = "repo-e2e-build.tar.gz";
 
+/** Tar parses backslashes in -C as escapes (GNU tar), so hand it forward slashes. Native and POSIX tars accept them too. */
+function toTarDirArg(dir: string): string {
+  return dir.split(path.sep).join("/");
+}
+
 /** Carry one completed build between exact-target E2E jobs, without dependency or build caches. */
 export function transferRepoE2eArtifacts(
   operation: string,
@@ -51,8 +56,10 @@ export function transferRepoE2eArtifacts(
     ];
     fs.mkdirSync(artifactRoot, { recursive: true });
     // Tar preserves hidden stamps, executable bits, and relative runtime-overlay links.
-    execFileSync("tar", ["-czf", archive, "--null", "-T", "-"], {
-      cwd: root,
+    // The archive travels as a basename under the artifact dir (cwd) while inputs resolve
+    // against the build root via -C, so no drive-letter path ever reaches tar argv.
+    execFileSync("tar", ["-czf", archiveName, "-C", toTarDirArg(root), "--null", "-T", "-"], {
+      cwd: artifactRoot,
       input: outputs.join("\0") + "\0",
     });
     fs.writeFileSync(manifest, JSON.stringify({ identity, sha256: digest(archive) }) + "\n");
@@ -65,7 +72,7 @@ export function transferRepoE2eArtifacts(
   if (recorded.sha256 !== digest(archive)) {
     throw new Error("Repo E2E artifact archive digest mismatch");
   }
-  execFileSync("tar", ["-xzf", archive], { cwd: root });
+  execFileSync("tar", ["-xzf", archiveName, "-C", toTarDirArg(root)], { cwd: artifactRoot });
   // Checkout config mtimes are newer than the producer's stamps. Refresh only
   // local freshness metadata after exact identity verification, before readers start.
   writeBuildStamp({ cwd: root });

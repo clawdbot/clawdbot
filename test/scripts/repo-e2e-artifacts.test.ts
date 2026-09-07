@@ -93,7 +93,9 @@ describe("repo E2E artifact transfer", () => {
         fs.rmSync(path.join(root, output), { recursive: true });
       }
       // Clean Git state outranks archive mtimes; restore still refreshes the local stamp.
-      execFileSync("tar", ["-xzf", path.join(artifact, "repo-e2e-build.tar.gz")], { cwd: root });
+      execFileSync("tar", ["-xzf", "repo-e2e-build.tar.gz", "-C", root.split(path.sep).join("/")], {
+        cwd: artifact,
+      });
       expect(requirement(root)).toEqual({ shouldBuild: false, reason: "clean" });
       expect(fs.statSync(path.join(root, "dist/.buildstamp")).mtimeMs).toBeLessThan(
         fs.statSync(path.join(root, "package.json")).mtimeMs,
