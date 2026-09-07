@@ -233,6 +233,29 @@ describe("session capability warm roster", () => {
     },
   );
 
+  it.each(["connect", "dispose"] as const)(
+    "releases the roster wait on %s while the cache read is still pending",
+    async (transition) => {
+      const cached = createDeferred<SessionRosterRecord | null>();
+      const h = harness({ cached: cached.promise });
+      const settled = h.sessions.whenCachedRosterSettled();
+      if (transition === "connect") {
+        h.connect();
+      } else {
+        h.sessions.dispose();
+      }
+      await expect(
+        Promise.race([
+          settled.then(() => "released"),
+          new Promise<string>((resolve) => setTimeout(() => resolve("held"), 200)),
+        ]),
+      ).resolves.toBe("released");
+      cached.resolve(roster());
+      await settled;
+      expect(h.sessions.state.resultCached).not.toBe(true);
+    },
+  );
+
   it.each(["gateway", "credentials"])(
     "retires the warm roster on a %s change and retains replacement live rows",
     async (change) => {

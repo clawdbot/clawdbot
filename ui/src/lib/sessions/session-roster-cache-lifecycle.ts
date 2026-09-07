@@ -27,7 +27,13 @@ export function createSessionRosterCacheLifecycle(
   let retired = gateway.snapshot.phase === "connected";
   let cachedProfileId = options.bootRecord?.profileId;
   let disposed = false;
-  const settled =
+  // A slow or stuck IndexedDB read must not hold the route once the Gateway can
+  // resolve it live: readiness (or disposal) releases every settle waiter.
+  let releaseSettled: () => void = () => undefined;
+  const released = new Promise<void>((resolve) => {
+    releaseSettled = resolve;
+  });
+  const hydrated =
     options.bootRecord && startupScope && !retired && host.readState().result === null
       ? Promise.allSettled([
           import("./session-roster-cache.reader.ts"),
@@ -65,12 +71,14 @@ export function createSessionRosterCacheLifecycle(
           })
           .catch(() => undefined)
       : Promise.resolve();
+  const settled = Promise.race([hydrated, released]);
 
   return {
     settled,
     synchronize(snapshot: SessionGateway["snapshot"]): void {
       if (snapshot.phase === "connected") {
         retired = true;
+        releaseSettled();
       }
       if (
         currentScope() !== cachedScope ||
@@ -114,6 +122,7 @@ export function createSessionRosterCacheLifecycle(
     },
     dispose() {
       disposed = true;
+      releaseSettled();
     },
   };
 }
