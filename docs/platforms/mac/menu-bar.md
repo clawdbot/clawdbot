@@ -11,7 +11,7 @@ title: "Menu bar"
 - Health status is hidden while work is active; it returns once all sessions are idle.
 - A root "Context" item opens a submenu with recent sessions instead of expanding them in the root menu.
 - A "Devices" block in the root menu lists paired **devices** only (from `node.list`), not client/presence entries.
-- A root "Usage" section appears below Context when provider usage snapshots are available, followed by cost details when available.
+- A root "Usage" section appears below Context when provider usage snapshots are available, followed by cost details when available. Cost totals for **Today** and the daily chart use the Mac’s local time zone.
 - When two or more Gateways are available, the first status row includes the primary Gateway name and a root "Gateways" section lists every Gateway with its health and primary marker. Select a row to open or focus that Gateway's dashboard; hold Option to reveal "Set as Primary…" for eligible saved Gateways.
 - **Quick Chat** opens the floating main-session composer; its current global shortcut appears beside the item.
 - **Settings…** (Cmd-,) opens Dashboard settings. App and device preferences live under **This Mac**, voice controls under **Talk**, and app update preferences under **Updates**.

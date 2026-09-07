@@ -51,7 +51,10 @@ import {
 import { resolveCacheRetention } from "./cache-retention.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.js";
 import { finalizeOpenAICompletionsToolCalls } from "./openai-completions-tool-calls.js";
-import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.js";
+import {
+  clampOpenAIPromptCacheKey,
+  resolveOpenAIPromptCacheParams,
+} from "./openai-prompt-cache.js";
 import { createOpenAIProviderClient } from "./openai-provider-client.js";
 import {
   resolveOpenAICompletionsResponseFormat,
@@ -336,10 +339,8 @@ function buildParams(
     providerOptions?: unknown;
   };
 
-  const supportsPromptCacheKey =
-    model.baseUrl.includes("api.openai.com") || compat.supportsPromptCacheKey;
   const promptCacheKey =
-    supportsPromptCacheKey && cacheRetention !== "none"
+    compat.supportsPromptCacheKey && cacheRetention !== "none"
       ? clampOpenAIPromptCacheKey(options?.promptCacheKey ?? options?.sessionId)
       : undefined;
   const params: ChatCompletionRequestParams = {
@@ -347,10 +348,7 @@ function buildParams(
     messages,
     stream: true,
     prompt_cache_key: promptCacheKey,
-    prompt_cache_retention:
-      supportsPromptCacheKey && cacheRetention === "long" && compat.supportsLongCacheRetention
-        ? "24h"
-        : undefined,
+    ...resolveOpenAIPromptCacheParams(model, cacheRetention, compat),
   };
 
   if (compat.supportsUsageInStreaming) {

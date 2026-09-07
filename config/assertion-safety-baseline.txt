@@ -2360,7 +2360,6 @@ src/cli/startup-metadata.ts	1
 src/cli/subprocess-exit-code.ts	1
 src/cli/test-runtime-capture.ts	1
 src/cli/update-cli.ts	2
-src/cli/update-cli/shared.ts	1
 src/cli/update-cli/update-command-config.ts	6
 src/cli/update-cli/update-command-plugins.ts	1
 src/cli/users-cli.ts	1
@@ -3811,7 +3810,6 @@ ui/src/components/settings-sidebar.ts	3
 ui/src/components/settings-ui.ts	7
 ui/src/components/terminal/terminal-connection.ts	2
 ui/src/components/terminal/terminal-controller-lifecycle.ts	1
-ui/src/components/terminal/terminal-panel-session-controller.ts	1
 ui/src/components/terminal/terminal-panel-upload.ts	2
 ui/src/components/terminal/terminal-panel.ts	2
 ui/src/components/terminal/terminal-pending-actions.ts	1

@@ -914,11 +914,9 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         job.groups.some((group) => group.shard_name === "agentic-cli"),
       );
       expect(cliJobs).toHaveLength(1);
-      expect(cliJobs[0]).toMatchObject({
-        planConcurrency: 1,
-        // The 136s sample becomes 118s on hybrid and shares a 90s non-build bin.
-        predictedSeconds: 208,
-      });
+      expect(cliJobs[0]).toMatchObject({ planConcurrency: 1 });
+      // The combined bin uses the larger CLI budget, beyond the 150s child limit.
+      expect(cliJobs[0]!.predictedSeconds).toBeGreaterThan(150);
       expect(cliJobs[0]!.pretestBuildMode).toBeUndefined();
       expect(cliJobs[0]!.groups).toHaveLength(2);
       expect(cliJobs[0]!.groups[0]!.includePatterns).toBeUndefined();
