@@ -25,6 +25,7 @@ export type TestSessionsPage = HTMLElement & {
   result: SessionsListResult | null;
   error: string | null;
   loading: boolean;
+  refreshing: boolean;
   statusFilter: "active" | "archived" | "all";
   selectedKeys: Set<string>;
   sessionMenu: { key: string; x: number; y: number } | null;

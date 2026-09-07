@@ -13,6 +13,50 @@ import {
 const suite = createSessionManagementE2eSuite();
 
 suite.define(() => {
+  it("keeps the page Refresh control stable during background roster reads", async () => {
+    const key = "agent:main:background-refresh";
+    const row = sessionRow(key, "Background refresh", 1);
+    const context = await suite.newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      methodResponses: { "sessions.list": sessionsListResponse([row]) },
+      sessionKey: key,
+    });
+    let heldRequest = false;
+    try {
+      await page.goto(`${suite.server.baseUrl}sessions`);
+      const refresh = page.locator(".settings-section__actions .btn").last();
+      await expect.poll(async () => (await refresh.textContent())?.trim()).toBe("Refresh");
+      await gateway.waitForRequest("sessions.subscribe");
+      await page.waitForTimeout(1_200);
+
+      const pageQuery = { includeUnknown: false };
+      await gateway.deferNext("sessions.list", pageQuery);
+      const before = (await gateway.getRequests("sessions.list", pageQuery)).length;
+      await gateway.emitGatewayEvent("sessions.changed", {
+        sessionKey: key,
+        reason: "update",
+        updatedAt: 2,
+      });
+      await gateway.waitForRequest("sessions.list", { after: before, match: pageQuery });
+      heldRequest = true;
+      await page.waitForTimeout(50);
+      await captureUiProof(suite, page, "sessions-background-refresh.png");
+
+      expect((await refresh.textContent())?.trim()).toBe("Refresh");
+      expect(await refresh.isEnabled()).toBe(true);
+    } finally {
+      if (heldRequest) {
+        await gateway.resolveDeferred("sessions.list");
+      }
+      await suite.closeBrowserContext(context);
+    }
+  });
+
   it("keeps the selected roster quiet during other agents' activity and refreshes its own changes", async () => {
     const key = "agent:main:weekly-report";
     const row = sessionRow(key, "Weekly report", 1);
