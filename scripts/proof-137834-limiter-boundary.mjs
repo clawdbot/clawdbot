@@ -10,10 +10,6 @@ import path from "node:path";
 import { createSentMessageCache } from "../extensions/imessage/src/monitor/echo-cache.js";
 import { createLoopRateLimiter } from "../extensions/imessage/src/monitor/loop-rate-limiter.js";
 import { resolveIMessageInboundDecision } from "../extensions/imessage/src/monitor/inbound-processing.js";
-import {
-  hasPersistedIMessageEcho,
-  rememberPersistedIMessageEcho,
-} from "../extensions/imessage/src/monitor/persisted-echo-cache.js";
 import { setIMessageRuntime } from "../extensions/imessage/src/runtime.js";
 import { createPluginStateSyncKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { createSelfChatCache } from "../extensions/imessage/src/monitor/self-chat-cache.js";
