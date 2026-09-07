@@ -144,10 +144,7 @@ vi.mock("../server-model-catalog-auth.js", () => ({
 }));
 
 import { modelsAuthOrderHandlers } from "./models-auth-order.js";
-import {
-  loadUsageStatusStaleWhileRevalidate,
-  readProviderUsageStaleWhileRevalidate,
-} from "./models-auth-status-usage-cache.js";
+import { loadUsageStatusStaleWhileRevalidate } from "./models-auth-status-usage-cache.js";
 import {
   aggregateRefreshableAuthStatus,
   invalidateModelAuthStatusCache,
@@ -155,7 +152,6 @@ import {
   type ModelAuthLogoutResult,
   type ModelAuthStatusResult,
 } from "./models-auth-status.js";
-import { getProviderUsageRuntimeSnapshot } from "./provider-usage-runtime.js";
 
 function createOptions(
   params: Record<string, unknown> = {},
@@ -791,7 +787,36 @@ describe("models.authStatus", () => {
       );
       mocks.buildAuthHealthSummary.mockImplementation(actualAuthHealth.buildAuthHealthSummary);
 
+      mocks.listProviderUsagePluginDescriptors.mockReturnValue([
+        { provider: "minimax", displayName: "MiniMax" },
+      ]);
+      mocks.loadProviderUsageSummary.mockImplementation(async (options = {}) => ({
+        updatedAt: 0,
+        providers: [
+          {
+            provider: "minimax",
+            displayName: "MiniMax",
+            windows: [
+              {
+                label: "Quota",
+                usedPercent: options.authProfile?.profileId === "minimax:cn" ? 20 : 10,
+              },
+            ],
+          },
+        ],
+      }));
+      await readAuthStatus();
+      await waitForFast(async () =>
+        expect((await readAuthStatus()).usageRefreshPending).toBeUndefined(),
+      );
       const result = await readAuthStatus();
+      const configuredProvider = result.providers.find(
+        (provider) => provider.provider === "minimax",
+      );
+      expect.soft(configuredProvider?.usageProfileId).toBe(boundProfileId);
+      expect
+        .soft(configuredProvider?.usage?.windows[0]?.usedPercent)
+        .toBe(boundProfileId === "minimax:cn" ? 20 : 10);
 
       expect(result.providers).toMatchObject([
         { provider: "anthropic", authProvider: "anthropic", profileOrderLocked: "auth-config" },
@@ -2281,77 +2306,6 @@ describe("models.authStatus", () => {
     },
   );
 
-  it("does not evict shared provider usage when auth status only needs profile usage", async () => {
-    const runtimeConfig = {};
-    mocks.getRuntimeConfig.mockReturnValue(runtimeConfig);
-    const profile = {
-      profileId: "openai:default",
-      provider: "openai",
-      type: "oauth",
-      status: "ok",
-      source: "store",
-      label: "openai:default",
-    } satisfies AuthHealthSummary["profiles"][number];
-    mocks.buildAuthHealthSummary.mockReturnValue({
-      now: 0,
-      warnAfterMs: 0,
-      profiles: [profile],
-      providers: [{ provider: "openai", status: "ok", profiles: [profile] }],
-    });
-    setPreparedAuthStore({
-      version: 1,
-      profiles: {
-        "openai:default": {
-          type: "oauth",
-          provider: "openai",
-          access: "access",
-          refresh: "refresh",
-          expires: 1_000_000,
-        },
-      },
-    });
-    mocks.loadProviderUsageSummary.mockResolvedValue({
-      updatedAt: 0,
-      providers: [
-        {
-          provider: "openai",
-          displayName: "OpenAI",
-          windows: [{ label: "week", usedPercent: 10 }],
-        },
-      ],
-    });
-    const snapshot = getProviderUsageRuntimeSnapshot({
-      config: runtimeConfig,
-      agentId: "main",
-      agentDir: "/tmp/agent",
-      store: preparedAuthStore,
-    });
-    const cacheParams = {
-      agentId: "main",
-      agentDir: "/tmp/agent",
-      authStore: preparedAuthStore,
-      configRef: runtimeConfig,
-      credentialKey: snapshot.credentialKey,
-      providerIds: ["openai" as const],
-      now: 0,
-    };
-
-    readProviderUsageStaleWhileRevalidate(cacheParams);
-    await waitForFast(() => expect(mocks.loadProviderUsageSummary).toHaveBeenCalledOnce());
-    await mocks.loadProviderUsageSummary.mock.results[0]?.value;
-    expect(
-      readProviderUsageStaleWhileRevalidate(cacheParams).usageByProvider.get("openai")?.windows[0]
-        ?.usedPercent,
-    ).toBe(10);
-
-    await readAuthStatus();
-
-    expect(
-      readProviderUsageStaleWhileRevalidate(cacheParams).usageByProvider.get("openai")?.windows[0]
-        ?.usedPercent,
-    ).toBe(10);
-  });
-
   it.each(["deepseek", "clawrouter"])("shows %s saved-key balance", async (provider) => {
     const { buildAuthHealthSummary } = await vi.importActual<
       typeof import("../../agents/auth-health.js")
@@ -2961,7 +2915,9 @@ describe("models.authOrderSet", () => {
     expect(
       warmed.providers[0]?.profiles.map((profile) => profile.usage?.windows[0]?.usedPercent),
     ).toEqual([10, 20]);
-    await loadUsageStatusStaleWhileRevalidate({ config });
+    const sharedUsage = await loadUsageStatusStaleWhileRevalidate({ config });
+    await readAuthStatus();
+    expect(await loadUsageStatusStaleWhileRevalidate({ config })).toEqual(sharedUsage);
     expect(mocks.loadProviderUsageSummary).toHaveBeenCalledTimes(3);
 
     const order = ["openai:two", "openai:one"];

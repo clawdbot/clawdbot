@@ -316,20 +316,20 @@ function mapAuthStatusProvider(params: {
     authAliasLookupParams: params.authAliasLookupParams,
   });
   // An explicit binding takes precedence over ordinary credential priority.
-  const usageProfile =
+  const usageProfileId =
     binding.kind === "profile"
-      ? provider.profiles.find((profile) => profile.profileId === binding.profileId)
+      ? binding.profileId
       : binding.kind === "profile-incompatible"
         ? undefined
-        : effectiveProfiles[0];
+        : effectiveProfiles[0]?.profileId;
   const usageKey =
     effectiveProfiles
       .map((profile) => resolveUsageProviderId(provider.provider, { credentialType: profile.type }))
       .find((id) => id !== undefined) ?? resolveUsageProviderId(provider.provider);
   const providerUsage = usageKey ? params.usageByProvider.get(usageKey) : undefined;
-  const accountUsage = usageProfile ? params.usageByProfile.get(usageProfile.profileId) : undefined;
+  const accountUsage = usageProfileId ? params.usageByProfile.get(usageProfileId) : undefined;
   const hasAccountUsageTarget =
-    usageProfile !== undefined && params.usageTargetProfileIds.has(usageProfile.profileId);
+    usageProfileId !== undefined && params.usageTargetProfileIds.has(usageProfileId);
   // The selected account owns the summary even while its quota is pending.
   // Independently fetched usage must not replace it with another credential.
   const usage = hasAccountUsageTarget ? accountUsage : providerUsage;
@@ -425,7 +425,7 @@ function mapAuthStatusProvider(params: {
     ...(apiKey ? { apiKey } : {}),
     usage: usage ? mapUsageStatus(usage, params.includeProfileDetails) : undefined,
     ...(params.includeProfileDetails && hasAccountUsageTarget && accountUsage
-      ? { usageProfileId: usageProfile.profileId }
+      ? { usageProfileId }
       : {}),
     ...(params.includeProfileDetails && hasAccountUsageTarget && providerUsage
       ? { independentUsage: mapUsageStatus(providerUsage, params.includeProfileDetails) }
