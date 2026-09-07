@@ -113,7 +113,7 @@ const SAFE_DAEMON_ENV_KEYS = [
 ];
 
 /** Keep only daemon env keys safe to print in diagnostics. */
-export function filterDaemonEnv(env: Record<string, string> | undefined): Record<string, string> {
+function filterDaemonEnv(env: Record<string, string> | undefined): Record<string, string> {
   if (!env) {
     return {};
   }
