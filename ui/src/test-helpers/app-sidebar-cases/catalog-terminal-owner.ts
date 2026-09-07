@@ -8,6 +8,11 @@ import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { TERMINAL_PANEL_TOGGLE_EVENT } from "../../components/panel-toggle-contract.ts";
 import { CATALOG_SESSION_CONTINUED_EVENT } from "../../lib/sessions/catalog-key.ts";
 import { createGatewayHarness, createSessions, mountSidebar } from "../app-sidebar.ts";
+import {
+  answerConfirmDialog,
+  installDialogPolyfill,
+  waitForConfirmDialogActions,
+} from "../modal-dialog.ts";
 import "../../components/app-sidebar.ts";
 
 const catalogList = (sessions: Array<Record<string, unknown>>): SessionsCatalogListResult => ({
@@ -38,8 +43,8 @@ const catalogList = (sessions: Array<Record<string, unknown>>): SessionsCatalogL
 async function mountWithCatalog(
   result: SessionsCatalogListResult,
   sessionKeys = ["agent:main:main"],
+  request = vi.fn().mockResolvedValue(result),
 ) {
-  const request = vi.fn().mockResolvedValue(result);
   const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
   gateway.publish({
     hello: {
@@ -187,4 +192,97 @@ describe("AppSidebar catalog terminal ownership", () => {
       vi.useRealTimers();
     }
   });
+});
+
+describe("AppSidebar catalog deletion", () => {
+  it.each([
+    { canArchive: true, archive: true, visible: true },
+    { canArchive: false, archive: true, visible: false },
+    { canArchive: true, archive: false, visible: false },
+  ])(
+    "gates Delete on row and catalog capabilities: %j",
+    async ({ canArchive, archive, visible }) => {
+      vi.useFakeTimers();
+      try {
+        const result = catalogList([{ threadId: "thread-1", name: "Shared session", canArchive }]);
+        result.catalogs[0]!.capabilities.archive = archive;
+        const sidebar = await mountWithCatalog(result);
+        sidebar
+          .querySelector('[data-session-key*="thread-1"]')!
+          .dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+        await vi.advanceTimersByTimeAsync(0);
+        expect(Boolean(sidebar.querySelector('wa-dropdown-item[value="delete"]'))).toBe(visible);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it.each([true, false])(
+    "confirms catalog deletion and refreshes rows (open: %s)",
+    async (open) => {
+      vi.useFakeTimers();
+      const restoreDialog = installDialogPolyfill();
+      try {
+        const result = catalogList([{ threadId: "thread-1", name: "Shared session" }]);
+        const request = vi.fn().mockResolvedValue(result);
+        const sidebar = await mountWithCatalog(result, undefined, request);
+        sidebar.sessionKey = open
+          ? "agent:main:catalog:codex:gateway%3Alocal:thread-1"
+          : "agent:main:main";
+        sidebar.activeRouteId = "chat";
+        sidebar.onNavigate = vi.fn();
+        await sidebar.updateComplete;
+        const selectDelete = async () => {
+          sidebar
+            .querySelector('[data-session-key*="thread-1"]')!
+            .dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+          await vi.advanceTimersByTimeAsync(0);
+          const item = sidebar.querySelector('wa-dropdown-item[value="delete"]');
+          expect(item).not.toBeNull();
+          item!.dispatchEvent(
+            new CustomEvent("wa-select", {
+              bubbles: true,
+              detail: { item: { value: "delete" } },
+            }),
+          );
+          return waitForConfirmDialogActions();
+        };
+        const cancelled = await selectDelete();
+        expect(request).not.toHaveBeenCalledWith("sessions.catalog.archive", expect.anything());
+        answerConfirmDialog(cancelled, "cancel");
+        await vi.advanceTimersByTimeAsync(0);
+        expect(request).not.toHaveBeenCalledWith("sessions.catalog.archive", expect.anything());
+        request.mockClear();
+        request.mockResolvedValue(catalogList([]));
+        const actions = await selectDelete();
+        answerConfirmDialog(actions, "confirm");
+        await vi.advanceTimersByTimeAsync(0);
+        expect(request).toHaveBeenCalledWith("sessions.catalog.archive", {
+          catalogId: "codex",
+          hostId: "gateway:local",
+          threadId: "thread-1",
+          agentId: "main",
+          confirmNoOtherRunner: true,
+        });
+        expect(request.mock.calls.map(([method]) => method)).toEqual([
+          "sessions.catalog.archive",
+          "sessions.catalog.list",
+        ]);
+        expect(sidebar.querySelector('[data-session-key*="thread-1"]')).toBeNull();
+        if (open) {
+          expect(sidebar.onNavigate).toHaveBeenCalledWith("chat", {
+            pathname: "/chat",
+            search: "",
+            hash: "",
+          });
+        } else {
+          expect(sidebar.onNavigate).not.toHaveBeenCalled();
+        }
+      } finally {
+        restoreDialog();
+        vi.useRealTimers();
+      }
+    },
+  );
 });

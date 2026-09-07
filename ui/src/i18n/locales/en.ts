@@ -4899,6 +4899,9 @@ export const en: TranslationMap & {
       sessionMenu: "External session actions",
       openInOpenClaw: "Open in OpenClaw",
       openInTerminal: "Open in terminal",
+      deleteSession: "Delete",
+      deleteSessionConfirm:
+        "Delete this external session? Make sure no other runner is using it. This cannot be undone.",
       terminalUnavailable: "Terminal opening is unavailable for this session.",
     },
     taskSuggestions: {
