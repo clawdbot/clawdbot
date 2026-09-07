@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -11,9 +12,11 @@ import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import * as openClawTmp from "../../infra/tmp-openclaw-dir.js";
 import { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } from "../../infra/update-control-plane-sentinel.js";
 import { createManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
+import { createUpdateRun } from "../../infra/update-run-ledger.js";
 import { makeTempWorkspace } from "../../test-helpers/workspace.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
+import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import { maybeStopManagedServiceBeforeMutableUpdate } from "./update-command-service-maintenance.js";
 
 const mocks = vi.hoisted(() => ({
@@ -358,3 +361,70 @@ it("refuses owned Linux admission without a native manager UID", () =>
     });
     expect(stop).not.toHaveBeenCalled();
   }));
+
+it.each(["before stop", "after stop"] as const)(
+  "refuses a rebound live executor %s without a new native effect",
+  (when) =>
+    withServiceHome(async (home) => {
+      vi.spyOn(openClawTmp, "resolvePreferredOpenClawTmpDir").mockReturnValue(
+        path.join(home, "private-tmp"),
+      );
+      const root = process.cwd();
+      const runId = randomUUID();
+      createUpdateRun({ runId, trigger: "cli" }, { env: process.env });
+      let reads = 0;
+      const store = createManagedHandoffLeaseStore();
+      const revoke = () => {
+        const found = store.read(root);
+        if (found.kind !== "current") {
+          throw new Error("missing actual executor");
+        }
+        expect(store.bind(found.lease, process.pid)).not.toBeNull();
+      };
+      const stop = vi.fn(async () => {
+        if (when === "after stop") {
+          revoke();
+        }
+      });
+      mocks.service.mockReturnValue(
+        createMockGatewayService({
+          readCommand: async () => ({
+            programArguments: [process.execPath, path.join(root, "openclaw.mjs"), "gateway"],
+            environment: { HOME: home },
+          }),
+          readRuntime: async () => {
+            reads += 1;
+            await Promise.resolve();
+            if (reads === 2 && when === "before stop") {
+              revoke();
+            }
+            return { status: "running", systemd: { managerUid: process.getuid?.() ?? 2001 } };
+          },
+          isLoaded: async () => true,
+          isEnabled: async () => true,
+          stop,
+        }),
+      );
+      let nativeFailure: unknown;
+      await expect(
+        withUpdateCommandExecutor(runId, async (executor) => {
+          const executorFence = await executor.enter(root);
+          try {
+            await maybeStopManagedServiceBeforeMutableUpdate({
+              updateRun: { runId, env: { ...process.env }, executorFence },
+              updateInstallKind: "package",
+              root,
+              shouldRestart: true,
+              jsonMode: true,
+              phase: "prepare",
+            });
+          } catch (error) {
+            nativeFailure = error;
+          }
+        }),
+      ).rejects.toThrow(/executor/);
+      expect(String(nativeFailure)).toMatch(/executor/);
+      expect(stop).toHaveBeenCalledTimes(when === "before stop" ? 0 : 1);
+      expect(store.read(root).kind).toBe("current");
+    }),
+);

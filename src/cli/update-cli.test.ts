@@ -1869,6 +1869,10 @@ describe("update-cli", () => {
     restartHealthTestControl.snapshot = undefined;
     vi.resetAllMocks();
     vi.spyOn(updateTempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(executorTmp);
+    // Cache the real host process identity before cases spoof the native service
+    // platform. Lease ownership still uses the production PID/start checks.
+    const { getFileLockProcessStartTime } = await import("../shared/pid-alive.js");
+    expect(getFileLockProcessStartTime(process.pid)).not.toBeNull();
     pluginAvailabilityPreflight.mockResolvedValue(undefined);
     triageAfterFailure.mockResolvedValue(undefined);
     managedUpdateHandoff.activate.mockResolvedValue(false);

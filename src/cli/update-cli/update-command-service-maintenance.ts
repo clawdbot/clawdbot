@@ -341,6 +341,11 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
   activatedInstall?: { packageUpdateNodeRunner?: string; invocationCwd?: string };
   timeoutMs?: number;
 }): Promise<PreManagedServiceStop> {
+  // Retain the invocation's original live owner across daemon awaits. History
+  // status and a later replacement fence are not authority for native effects.
+  const executorFence = params.updateRun?.executorFence;
+  const assertCurrent = () => executorFence?.assertCurrent();
+  assertCurrent();
   const uninspected = { stopped: false, inspected: false, runtimeInspected: false, running: false };
   const markInspectionUnavailable = (
     base: PreManagedServiceStop,
@@ -369,16 +374,19 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
       timeoutMs: params.timeoutMs,
     });
   } catch (err) {
+    assertCurrent();
     if (err instanceof GatewayServiceUpdateOwnershipError) {
       return { ...uninspected, serviceMutationAllowed: false, blockMessage: err.message };
     }
     return markInspectionUnavailable(uninspected, GATEWAY_SERVICE_INSPECTION_UNAVAILABLE_MESSAGE);
   }
+  assertCurrent();
   const serviceUpdateVerdict = await revalidateManagedGatewayServiceAfterUpdate({
     root: params.root,
     state: serviceState,
     preManagedServiceStop: params.expectedService,
   });
+  assertCurrent();
   if (params.phase) {
     // Explicit admission phases pin the pre-update definition. Post-update
     // maintenance retains the canonical owner check above, which permits the
@@ -414,6 +422,7 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
       : {}),
     serviceUpdateVerdict,
   };
+  assertCurrent();
   if (serviceUpdateVerdict.kind === "unavailable") {
     return markInspectionUnavailable(inspected, serviceUpdateVerdict.message);
   }
@@ -471,6 +480,7 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
       }),
       assertCurrent: updateRun
         ? () => {
+            assertCurrent();
             if (getUpdateRun(updateRun.runId, { env: updateRun.env })?.status !== "running") {
               throw new Error("Update run no longer owns Windows task activation.");
             }
@@ -485,6 +495,7 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
     (process.platform === "darwin"
       ? (await service.isEnabled?.({ env: serviceState.env })) === true
       : process.env.OPENCLAW_UPDATE_RUN_HANDOFF === "1");
+  assertCurrent();
   if (!params.shouldRestart || (!serviceState.running && !supervisorMayRespawn)) {
     if (!params.shouldRestart && !params.jsonMode && serviceState.running) {
       const warning = `--no-restart is set while the managed gateway service is running; the ${params.updateInstallKind} update will not stop or restart that process.`;
@@ -530,6 +541,7 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
             : serviceUpdateVerdict,
       },
     });
+    assertCurrent();
     const currentBlockMessage = gatewayMaintenanceBlockMessage(currentState, params.root);
     if (currentBlockMessage) {
       throw new UpdatePreMutationError("managed-service-preflight", currentBlockMessage);
@@ -552,6 +564,7 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
           timeoutMs: params.timeoutMs,
           nodeRunner: params.activatedInstall.packageUpdateNodeRunner,
           invocationCwd: params.activatedInstall.invocationCwd,
+          assertCurrent,
         },
         "stop",
       );
@@ -566,10 +579,18 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
         stdout: params.jsonMode ? JSON_MODE_SERVICE_STDOUT : process.stdout,
       });
     }
+    assertCurrent();
     if (windowsTaskAutoStartRecovery) {
       await abortWindowsTaskUpdateIfInterrupted(windowsTaskAutoStartRecovery);
     }
   } catch (err) {
+    try {
+      assertCurrent();
+    } catch (cause) {
+      throw new AggregateError([err, cause], "Update executor was lost during native preparation", {
+        cause,
+      });
+    }
     if (err instanceof UpdateCommandAbort) {
       throw err;
     }
