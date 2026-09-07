@@ -99,6 +99,14 @@ export type PluginCommandContext = {
   accountId?: string;
   /** Thread/topic id if available */
   messageThreadId?: string | number;
+  /** Channel-provided reply target id, after context visibility checks. */
+  replyToId?: string;
+  /** Reply target text, or the selected quote when supplied by the channel. */
+  replyToBody?: string;
+  /** Display name of the reply target's sender, not the command invoker. */
+  replyToSender?: string;
+  /** True when the channel identifies a selected quote rather than a full reply. */
+  replyToIsQuote?: boolean;
   /** Parent conversation id for thread-capable channels */
   threadParentId?: string;
   /** Sensitive diagnostics-only session inventory for owner-gated commands. */

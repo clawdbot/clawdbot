@@ -222,6 +222,10 @@ export async function executeRegisteredPluginCommand(
     messageThreadId: params.messageThreadId,
     threadParentId: params.threadParentId,
     diagnosticsSessions: params.diagnosticsSessions,
+    replyToId: params.replyToId,
+    replyToBody: params.replyToBody,
+    replyToSender: params.replyToSender,
+    replyToIsQuote: params.replyToIsQuote,
     runtimeContext: buildRuntimeContext(command, params, commandInvocationAbort.signal),
     ...(trustedReservedOwner && params.diagnosticsUploadApproved !== undefined
       ? { diagnosticsUploadApproved: params.diagnosticsUploadApproved }

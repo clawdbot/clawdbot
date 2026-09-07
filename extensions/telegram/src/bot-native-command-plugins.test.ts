@@ -600,7 +600,81 @@ describe("registerTelegramNativeCommands", () => {
     expect(commandParams.from).toBe("telegram:100");
     expect(commandParams.to).toBe("telegram:100");
     expect(commandParams.messageThreadId).toBeUndefined();
+    expect(commandParams.replyToId).toBeUndefined();
+    expect(commandParams.replyToBody).toBeUndefined();
+    expect(commandParams.replyToSender).toBeUndefined();
+    expect(commandParams.replyToIsQuote).toBeUndefined();
   });
+
+  it.each([false, true])(
+    "passes normalized reply context to the plugin handler (quote=%s)",
+    async (quoted) => {
+      const { handler } = registerPlugCommand();
+      const ctx = createPrivateCommandContext({ chatId: 100, userId: 200, match: "summarize" });
+      await handler({
+        ...ctx,
+        message: {
+          ...ctx.message,
+          reply_to_message: {
+            message_id: 41,
+            date: 1,
+            chat: ctx.message.chat,
+            from: { id: 300, is_bot: false, first_name: "Alice" },
+            text: "Original message with selected words",
+          },
+          ...(quoted ? { quote: { text: "selected words", position: 22, is_manual: true } } : {}),
+        },
+      });
+      expect(firstExecutePluginCommandParams()).toMatchObject({
+        senderId: "200",
+        args: "summarize",
+        commandBody: "/plug summarize",
+        replyToId: "41",
+        replyToBody: quoted ? "selected words" : "Original message with selected words",
+        replyToSender: "Alice",
+        replyToIsQuote: quoted ? true : undefined,
+      });
+      expect(replyAt(firstDeliverRepliesParams())).toEqual({ text: "ok" });
+    },
+  );
+
+  it.each([
+    { mode: "allowlist", sender: 300, visible: false },
+    { mode: "allowlist", sender: 200, visible: true },
+    { mode: "allowlist_quote", sender: 300, visible: true },
+    { mode: "all", sender: 300, visible: true },
+  ] as const)(
+    "preserves group reply visibility ($mode, sender=$sender)",
+    async ({ mode, sender, visible }) => {
+      const { handler } = registerPlugCommand({
+        cfg: {
+          channels: {
+            telegram: { groupPolicy: "open", groupAllowFrom: ["200"], contextVisibility: mode },
+          },
+        },
+        registerOverrides: { opts: { token: "token", groupAllowFrom: ["200"] } },
+      });
+      const ctx = createTelegramTopicCommandContext({ chatId: BOUND_FORUM_CHAT_ID, threadId: 42 });
+      await handler({
+        ...ctx,
+        message: {
+          ...ctx.message,
+          reply_to_message: {
+            message_id: 41,
+            date: 1,
+            chat: ctx.message.chat,
+            from: { id: sender, is_bot: false, first_name: "Reply author" },
+            text: "Group reply content",
+          },
+        },
+      });
+      const commandParams = firstExecutePluginCommandParams();
+      expect(commandParams.replyToId).toBe(visible ? "41" : undefined);
+      expect(commandParams.replyToBody).toBe(visible ? "Group reply content" : undefined);
+      expect(commandParams.replyToSender).toBe(visible ? "Reply author" : undefined);
+      expect(replyAt(firstDeliverRepliesParams())).toEqual({ text: "ok" });
+    },
+  );
 
   it("suppresses the fallback reply when a plugin command returns suppressReply: true", async () => {
     const { handler } = registerPlugCommand({

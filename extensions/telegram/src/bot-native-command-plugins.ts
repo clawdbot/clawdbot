@@ -2,6 +2,10 @@
 import { randomUUID } from "node:crypto";
 import type { Bot, Context } from "grammy";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import {
+  resolveChannelContextVisibilityMode,
+  shouldIncludeSupplementalContext,
+} from "openclaw/plugin-sdk/context-visibility-runtime";
 import type { PluginCommandNativeCandidate } from "openclaw/plugin-sdk/plugin-command-runtime";
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import {
@@ -11,6 +15,7 @@ import {
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
+import { isSenderAllowed } from "./bot-access.js";
 import {
   prepareTelegramCommandDispatch,
   type TelegramCommandExecutorParams,
@@ -20,6 +25,7 @@ import {
   buildTelegramGroupFrom,
   buildTelegramThreadParams,
   extractTelegramForumFlag,
+  describeReplyTarget,
   resolveTelegramForumFlag,
   resolveTelegramMessageThreadSpec,
 } from "./bot/helpers.js";
@@ -177,6 +183,25 @@ export async function executeTelegramPluginCommand(
   if (!dispatch) {
     return;
   }
+  let replyTarget = describeReplyTarget(params.msg);
+  if (replyTarget && dispatch.isGroup) {
+    // Native commands must honor the same quoted-context visibility as message turns.
+    const senderAllowed =
+      !dispatch.effectiveGroupAllow?.hasEntries ||
+      isSenderAllowed({
+        allow: dispatch.effectiveGroupAllow,
+        senderId: replyTarget.senderId,
+        senderUsername: replyTarget.senderUsername,
+      });
+    const mode = resolveChannelContextVisibilityMode({
+      cfg: dispatch.runtimeCfg,
+      channel: "telegram",
+      accountId: dispatch.route.accountId,
+    });
+    if (!shouldIncludeSupplementalContext({ mode, kind: "quote", senderAllowed })) {
+      replyTarget = null;
+    }
+  }
   const targetSessionEntry = dispatch.nativeCommandRuntime.getSessionEntry({
     agentId: dispatch.route.agentId,
     sessionKey: dispatch.targetSessionKey,
@@ -232,6 +257,10 @@ export async function executeTelegramPluginCommand(
       to,
       accountId: dispatch.accountId,
       messageThreadId: dispatch.threadSpec.id,
+      replyToId: replyTarget?.id,
+      replyToBody: replyTarget?.body,
+      replyToSender: replyTarget?.sender,
+      replyToIsQuote: replyTarget?.kind === "quote" ? true : undefined,
     }),
   );
   const suppressReply =
