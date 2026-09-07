@@ -31,7 +31,7 @@ it("creates, restores, and verifies a 256 MiB Git backup with a 256 MiB heap", a
           TEMP: tmp,
           TMP: tmp,
           OPENCLAW_STATE_DIR: path.join(root, "state"),
-          GIT_CONFIG_GLOBAL: os.devNull,
+          GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : os.devNull,
           GIT_CONFIG_NOSYSTEM: "1",
           GIT_TERMINAL_PROMPT: "0",
         },

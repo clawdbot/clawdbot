@@ -189,8 +189,8 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
     identity = await refreshIdentity();
     const baseTransportEnv = {
       ...identity.env,
-      GIT_CONFIG_GLOBAL: os.devNull,
-      GIT_CONFIG_SYSTEM: os.devNull,
+      GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : os.devNull,
+      GIT_CONFIG_SYSTEM: process.platform === "win32" ? "NUL" : os.devNull,
     };
     const baseFetched = await run(githubPublicationBaseFetchArgs(repository, remoteBaseSha), {
       cwd: worktree.path,
@@ -350,8 +350,8 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
     identity = await refreshIdentity();
     let transportEnv = {
       ...identity.env,
-      GIT_CONFIG_GLOBAL: os.devNull,
-      GIT_CONFIG_SYSTEM: os.devNull,
+      GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : os.devNull,
+      GIT_CONFIG_SYSTEM: process.platform === "win32" ? "NUL" : os.devNull,
     };
     const pushArgs = githubPublicationPushArgs(httpsRemote, headCommit, branch);
     const observeRemoteHead = async () => {
@@ -372,8 +372,8 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
       identity = await refreshIdentity();
       transportEnv = {
         ...identity.env,
-        GIT_CONFIG_GLOBAL: os.devNull,
-        GIT_CONFIG_SYSTEM: os.devNull,
+        GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : os.devNull,
+        GIT_CONFIG_SYSTEM: process.platform === "win32" ? "NUL" : os.devNull,
       };
       remoteHead = await step(observeRemoteHead);
       if (remoteHead !== headCommit) {

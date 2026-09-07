@@ -37,8 +37,8 @@ export async function createRepositoryPublicationFixture(
       encoding: "utf8",
       env: {
         ...process.env,
-        GIT_CONFIG_GLOBAL: os.devNull,
-        GIT_CONFIG_SYSTEM: os.devNull,
+        GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : os.devNull,
+        GIT_CONFIG_SYSTEM: process.platform === "win32" ? "NUL" : os.devNull,
         GIT_CONFIG_COUNT: "0",
         GIT_AUTHOR_NAME: "Publication Fixture",
         GIT_AUTHOR_EMAIL: "publication@example.test",

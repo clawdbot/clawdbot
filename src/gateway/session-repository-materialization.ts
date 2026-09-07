@@ -180,7 +180,10 @@ export async function materializeSessionRepositoryWorkspaceOnGateway(params: {
   const git = (args: string[]) =>
     command(["git", "-c", `core.hooksPath=${os.devNull}`, "-c", "core.fsmonitor=false", ...args], {
       cwd: root,
-      env: { GIT_CONFIG_GLOBAL: os.devNull, GIT_CONFIG_SYSTEM: os.devNull },
+      env: {
+        GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : os.devNull,
+        GIT_CONFIG_SYSTEM: process.platform === "win32" ? "NUL" : os.devNull,
+      },
     });
   const alignPublication = async () => {
     if (published?.pushed_head_commit) {

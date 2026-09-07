@@ -48,7 +48,10 @@ async function fixture(runSetupScript = false) {
   state = await createOpenClawTestState({
     label: "repository-startup",
     layout: "state-only",
-    env: { GIT_CONFIG_GLOBAL: os.devNull, GIT_CONFIG_NOSYSTEM: "1" },
+    env: {
+      GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : os.devNull,
+      GIT_CONFIG_NOSYSTEM: "1",
+    },
   });
   const remote = state.path("worker-checkout");
   await fs.mkdir(remote);

@@ -27,7 +27,7 @@ function cloneCommandEnv(token: string | undefined, env: NodeJS.ProcessEnv): Nod
     ...env,
     GIT_TERMINAL_PROMPT: "0",
     GIT_CONFIG_NOSYSTEM: "1",
-    GIT_CONFIG_GLOBAL: os.devNull,
+    GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : os.devNull,
     GIT_TEMPLATE_DIR: "",
     GIT_EDITOR: "",
     GIT_SEQUENCE_EDITOR: "",
