@@ -1,6 +1,9 @@
+import { execFile } from "node:child_process";
+import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -58,6 +61,8 @@ import { listPiSummaryPage } from "./pi-session-store.js";
 const PI_SESSIONS_LIST_COMMAND = "acpx.pi.sessions.list.v1";
 const PI_SESSION_READ_COMMAND = "acpx.pi.sessions.read.v1";
 const PI_TERMINAL_RESUME_COMMAND = "acpx.pi.terminal.resume.v1";
+const PI_SESSION_READ_LIMIT_BYTES = 32 * 1024 * 1024;
+const execFileAsync = promisify(execFile);
 
 const temporaryDirectories: string[] = [];
 const originalSessionDir = process.env.PI_CODING_AGENT_SESSION_DIR;
@@ -80,6 +85,37 @@ const createPiStore = (
     acpResolvable,
   );
 const installFakePi = () => installFakePiFixture(temporaryDirectories, originalPath);
+
+async function readLegacyPiSessionById(
+  file: string,
+  threadId: string,
+): Promise<{ entries: Record<string, unknown>[]; bytes: number }> {
+  const stats = await fs.stat(file);
+  if (!stats.isFile()) {
+    throw new Error("Pi session is not a file");
+  }
+  if (stats.size > PI_SESSION_READ_LIMIT_BYTES) {
+    throw new RangeError("Pi session exceeds the 32 MiB read safety limit");
+  }
+  const text = await fs.readFile(file, "utf8");
+  const entries = text.split(/\r?\n/u).flatMap((line) => {
+    if (!line.trim()) {
+      return [];
+    }
+    try {
+      const value = JSON.parse(line) as unknown;
+      return value && typeof value === "object" && !Array.isArray(value)
+        ? [value as Record<string, unknown>]
+        : [];
+    } catch {
+      return [];
+    }
+  });
+  if (entries[0]?.type !== "session" || entries[0].id !== threadId) {
+    throw new Error("Pi session changed during read");
+  }
+  return { entries, bytes: Buffer.byteLength(text) };
+}
 
 function usePiCandidateCacheClock(): () => void {
   let now = Date.now();
@@ -639,6 +675,116 @@ describe("Pi session catalog", () => {
     );
     expireCandidates();
     expect((await listLocalPiSessionPage({ limit: 20 })).sessions[0]?.name).toBeUndefined();
+  });
+
+  it("reads the opened snapshot when an active session grows after preflight", async () => {
+    const directory = await createPiStore();
+    const file = path.join(directory, "session.jsonl");
+    await listLocalPiSessionPage({ limit: 20 });
+
+    const content = await fs.readFile(file);
+    const growth = Buffer.alloc(PI_SESSION_READ_LIMIT_BYTES - content.length + 1);
+    const actualStat = fs.stat.bind(fs);
+    const legacyStatSpy = vi.spyOn(fs, "stat").mockImplementationOnce(async (target) => {
+      if (target !== file) {
+        return await actualStat(target);
+      }
+      await fs.appendFile(file, growth);
+      const stats = await actualStat(file);
+      Object.assign(stats, { size: content.length });
+      return stats;
+    });
+    try {
+      const legacy = await readLegacyPiSessionById(file, "pi-session");
+      expect(legacy.entries.find((entry) => entry.type === "message")).toBeDefined();
+      expect(legacy.bytes).toBeGreaterThan(PI_SESSION_READ_LIMIT_BYTES);
+      console.log(
+        `[acpx-runtime-proof] legacy-reader ${JSON.stringify({
+          snapshotBytes: content.length,
+          readBytes: legacy.bytes,
+          capBytes: PI_SESSION_READ_LIMIT_BYTES,
+        })}`,
+      );
+    } finally {
+      legacyStatSpy.mockRestore();
+      await fs.writeFile(file, content);
+    }
+
+    const buffers: Buffer[] = [];
+    const actualOpen = fs.open.bind(fs);
+    const openSpy = vi.spyOn(fs, "open").mockImplementation(async (target, flags) => {
+      if (target !== file) {
+        return await actualOpen(target, flags);
+      }
+      const actualHandle = await actualOpen(target, flags);
+      return {
+        stat: async () => {
+          await fs.appendFile(file, growth);
+          return { isFile: () => true, size: content.length };
+        },
+        read: async (buffer: Buffer, offset: number, length: number) => {
+          buffers.push(buffer);
+          return await actualHandle.read(buffer, offset, length, offset);
+        },
+        close: async () => await actualHandle.close(),
+      } as Awaited<ReturnType<typeof fs.open>>;
+    });
+    try {
+      const transcript = await readLocalPiTranscriptPage({ threadId: "pi-session", limit: 20 });
+      expect(transcript.items.map((item) => [item.type, item.text])).toContainEqual([
+        "agentMessage",
+        "hi",
+      ]);
+      expect(new Set(buffers).size).toBe(1);
+      expect(buffers[0]?.length).toBe(content.length);
+      const finalSize = (await fs.stat(file)).size;
+      expect(finalSize).toBeGreaterThan(PI_SESSION_READ_LIMIT_BYTES);
+      const message = transcript.items.find((item) => item.type === "agentMessage");
+      console.log(
+        `[acpx-runtime-proof] growth ${JSON.stringify({
+          type: message?.type ?? "none",
+          text: message?.text ?? "",
+          snapshotBytes: content.length,
+          finalBytes: finalSize,
+          capBytes: PI_SESSION_READ_LIMIT_BYTES,
+        })}`,
+      );
+    } finally {
+      openSpy.mockRestore();
+    }
+  });
+
+  it("rejects a cached Pi FIFO without blocking the session read", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const directory = await createPiStore();
+    const file = path.join(directory, "session.jsonl");
+    await listLocalPiSessionPage({ limit: 20 });
+    await fs.rm(file);
+    await execFileAsync("mkfifo", [file]);
+
+    const openFlags: number[] = [];
+    const actualOpen = fs.open.bind(fs);
+    const openSpy = vi.spyOn(fs, "open").mockImplementation(async (target, flags) => {
+      if (target === file) {
+        openFlags.push(flags as number);
+      }
+      return await actualOpen(target, flags);
+    });
+    try {
+      await expect(
+        readLocalPiTranscriptPage({ threadId: "pi-session", limit: 20 }),
+      ).rejects.toThrow("Pi session is unavailable");
+      expect(openFlags).not.toStrictEqual([]);
+      const nonBlocking = openFlags.some((flags) => (flags & fsConstants.O_NONBLOCK) !== 0);
+      expect(nonBlocking).toBe(true);
+      console.log(
+        `[acpx-runtime-proof] fifo result=Pi session is unavailable nonblocking=${nonBlocking}`,
+      );
+    } finally {
+      openSpy.mockRestore();
+    }
   });
 
   it("auto-detects the store and honors the node-local Web UI switch", async () => {

@@ -1,4 +1,4 @@
-import { createReadStream } from "node:fs";
+import { constants as fsConstants, createReadStream } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { runTasksWithConcurrency } from "openclaw/plugin-sdk/concurrency-runtime";
@@ -15,6 +15,12 @@ const MAX_DISCOVERY_FILES = 10_000;
 const SUMMARY_SCAN_BATCH_SIZE = 100;
 const MAX_SUMMARY_CACHE_ENTRIES = 256;
 const MAX_SESSION_BYTES = 32 * 1024 * 1024;
+// SAFETY: Node may omit O_NONBLOCK from the typed constants surface, but the runtime bitmask is safe.
+const FS_CONSTANTS_WITH_OPTIONAL_NONBLOCK = fsConstants as typeof fsConstants & {
+  O_NONBLOCK?: number;
+};
+const PI_SESSION_OPEN_FLAGS =
+  fsConstants.O_RDONLY | (FS_CONSTANTS_WITH_OPTIONAL_NONBLOCK.O_NONBLOCK ?? 0);
 const MAX_SUMMARY_LINE_BYTES = 1024 * 1024;
 const APPEND_PROOF_EDGE_BYTES = 64 * 1024;
 const IO_CONCURRENCY = 8;
@@ -329,6 +335,40 @@ async function readAppendProof(
   }
 }
 
+async function readPiSessionFileWithinLimit(file: string): Promise<string> {
+  const handle = await fs.open(file, PI_SESSION_OPEN_FLAGS);
+  try {
+    const stats = await handle.stat();
+    if (!stats.isFile()) {
+      throw new Error("Pi session is not a file");
+    }
+    if (stats.size > MAX_SESSION_BYTES) {
+      throw new RangeError("Pi session exceeds the 32 MiB read safety limit");
+    }
+    const observedSize = stats.size;
+    // Read only the opened handle's bounded snapshot; active Pi sessions may append while read.
+    const storage = Buffer.allocUnsafe(observedSize);
+    let totalBytes = 0;
+    let position = 0;
+    while (totalBytes < observedSize) {
+      const { bytesRead } = await handle.read(
+        storage,
+        totalBytes,
+        storage.length - totalBytes,
+        position,
+      );
+      if (bytesRead === 0) {
+        break;
+      }
+      totalBytes += bytesRead;
+      position += bytesRead;
+    }
+    return storage.subarray(0, totalBytes).toString("utf8");
+  } finally {
+    await handle.close();
+  }
+}
+
 async function cachedPrefixIsUnchanged(candidate: PiFileCandidate, cached: CachedSummary) {
   if (cached.identity !== candidate.identity || cached.size >= candidate.size) {
     return false;
@@ -524,14 +564,7 @@ export async function readPiSessionById(
       throw new Error("Pi session was not found");
     }
     try {
-      const stats = await fs.stat(file);
-      if (!stats.isFile()) {
-        throw new Error("Pi session is not a file");
-      }
-      if (stats.size > MAX_SESSION_BYTES) {
-        throw new RangeError("Pi session exceeds the 32 MiB read safety limit");
-      }
-      const entries = parsePiJsonLines(await fs.readFile(file, "utf8"));
+      const entries = parsePiJsonLines(await readPiSessionFileWithinLimit(file));
       if (entries[0]?.type === "session" && entries[0].id === threadId) {
         return entries;
       }
