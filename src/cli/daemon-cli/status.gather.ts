@@ -27,6 +27,7 @@ import type {
 } from "../../daemon/service-types.js";
 import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
 import { gatewaySecretInputPathCanWin } from "../../gateway/credentials-secret-inputs.js";
+import { trimToUndefined } from "../../gateway/credentials.js";
 import type { HostDesktopStatus } from "../../gateway/desktop/host-source.js";
 import { resolveGatewayRequiredListenHosts } from "../../gateway/net.js";
 import { resolveGatewayProbeCredentialConfig } from "../../gateway/probe-auth.js";
@@ -58,6 +59,7 @@ import { parseTimeoutMsWithFallback } from "../parse-timeout.js";
 import { normalizeListenerAddress } from "./shared.js";
 import {
   inspectDaemonPortStatuses,
+  resolveGatewayStatusProbeConfig,
   resolveGatewayStatusSummary,
   type GatewayStatusSummary,
   type PortStatusSummary,
@@ -425,10 +427,9 @@ export async function gatherDaemonStatus(
       rpcUrlOverride: opts.rpc.url,
       localPortOverride,
     });
-  const probeMode =
-    localPortOverride === undefined && daemonCfg.gateway?.mode === "remote" ? "remote" : "local";
-  const serviceTargetsProbe = useNativeServiceTargetContext && !probeUrlOverride;
-  const shouldInspectLocalGateway = probeMode === "local" && !probeUrlOverride;
+  const hasUrlOverride = Boolean(probeUrlOverride);
+  const serviceTargetsProbe = useNativeServiceTargetContext && !hasUrlOverride;
+  const shouldInspectLocalGateway = !hasUrlOverride;
   const windowsFirewall =
     opts.deep === true && shouldInspectLocalGateway
       ? await inspectWindowsGatewayFirewall({
@@ -446,7 +447,7 @@ export async function gatherDaemonStatus(
   const establishedClients = await inspectEstablishedGatewayClients({
     daemonPort,
     deep: opts.deep,
-    gatewayMode: probeMode,
+    gatewayMode: shouldInspectLocalGateway ? "local" : "remote",
   });
 
   const extraServices = opts.deep
@@ -480,8 +481,8 @@ export async function gatherDaemonStatus(
   let skippedProbeAuthForDisabledExecSecretRef = false;
   if (opts.probe) {
     const explicitAuth = {
-      token: opts.rpc.token,
-      password: opts.rpc.password,
+      token: trimToUndefined(opts.rpc.token),
+      password: trimToUndefined(opts.rpc.password),
     };
     const canResolveProbeAuth =
       opts.allowExecSecretRefs !== false ||
@@ -489,14 +490,21 @@ export async function gatherDaemonStatus(
         cfg: daemonCfg,
         env: mergedDaemonEnv,
         explicitAuth,
-        mode: probeMode,
+        mode: "local",
       });
-    if (canResolveProbeAuth) {
+    if (probeUrlOverride || explicitAuth.token || explicitAuth.password) {
+      daemonProbeAuth = explicitAuth;
+    } else if (
+      daemonCfg.gateway?.auth?.mode === "none" ||
+      daemonCfg.gateway?.auth?.mode === "trusted-proxy"
+    ) {
+      daemonProbeAuth = {};
+    } else if (canResolveProbeAuth) {
       const probeAuthResolution = await loadGatewayProbeAuthModule().then(
         ({ resolveGatewayProbeAuthSafeWithSecretInputs }) =>
           resolveGatewayProbeAuthSafeWithSecretInputs({
             cfg: daemonCfg,
-            mode: probeMode,
+            mode: "local",
             env: mergedDaemonEnv,
             explicitAuth,
           }),
@@ -515,10 +523,11 @@ export async function gatherDaemonStatus(
     ? await loadDaemonProbeModule().then(({ probeGatewayStatus }) =>
         probeGatewayStatus({
           url: probeUrl,
+          ...(probeUrlOverride ? { urlOverride: probeUrlOverride } : {}),
           localPortOverride,
           token: daemonProbeAuth?.token,
           password: daemonProbeAuth?.password,
-          config: daemonCfg,
+          config: resolveGatewayStatusProbeConfig({ config: daemonCfg, hasUrlOverride }),
           tlsFingerprint: localCertificate?.ok
             ? localCertificate.value.fingerprintSha256
             : undefined,
@@ -580,6 +589,7 @@ export async function gatherDaemonStatus(
     const loadInstallRecords = () =>
       loadInstalledPluginIndexInstallRecords({
         env: mergedDaemonEnv,
+        artifactPreservingReadOnly: true,
       });
     try {
       if (opts.pluginVersionTarget === "restart") {

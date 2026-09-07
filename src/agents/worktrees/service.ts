@@ -265,7 +265,9 @@ async function resolveRepositoryFromRealPath(
   const sourceRoot = await fs.realpath(normalizeGitPathForFilesystem(rootResult.stdout.trim()));
   const headResult = await runGit(sourceRoot, ["rev-parse", "--verify", "HEAD^{commit}"]);
   if (headResult.code !== 0) {
-    throw new WorktreeRepositoryError(`git checkout has no commits: ${requestedLabel}`);
+    throw new WorktreeRepositoryError(
+      `git checkout has no commits: ${requestedLabel}. Create an initial commit, then retry.`,
+    );
   }
   const commonRaw = normalizeGitPathForFilesystem(
     await requireGit(sourceRoot, ["rev-parse", "--git-common-dir"]),

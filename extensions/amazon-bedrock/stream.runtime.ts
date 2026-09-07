@@ -57,6 +57,7 @@ import {
 } from "openclaw/plugin-sdk/llm";
 import { canonicalizeBase64 } from "openclaw/plugin-sdk/media-runtime";
 import {
+  bindsClaudeThinkingPrefix,
   resolveClaudeFable5ModelIdentity,
   resolveClaudeModelIdentity,
   resolveClaudeMythos5ModelIdentity,
@@ -76,9 +77,11 @@ import {
   failTransportStream,
   finalizeTerminalToolCallArguments,
   notifyProviderHttpMetadata,
+  splitSystemPromptCacheBoundary,
+  stripSystemPromptCacheBoundary,
 } from "openclaw/plugin-sdk/provider-transport-runtime";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { supportsBedrockPromptCaching, type BedrockOptions } from "./bedrock-options.js";
+import { supportsBedrockModelPromptCaching, type BedrockOptions } from "./bedrock-options.js";
 import { supportsBedrockNativeMaxEffort } from "./thinking-policy.js";
 
 type Block = (TextContent | ThinkingContent | ToolCall) & {
@@ -907,14 +910,6 @@ function isAnthropicClaudeModel(model: Model<"bedrock-converse-stream">): boolea
   );
 }
 
-function supportsPromptCaching(model: Model<"bedrock-converse-stream">): boolean {
-  return (
-    usesClaudeFable5BedrockContract(model) ||
-    supportsBedrockPromptCaching(model.id, model.name) ||
-    supportsBedrockPromptCaching(resolveClaudeModelIdentity(model), model.name)
-  );
-}
-
 /**
  * Check if the model supports thinking signatures in reasoningContent.
  * Only Anthropic Claude models support the signature field.
@@ -936,10 +931,17 @@ function buildSystemPrompt(
     return undefined;
   }
 
-  const blocks: SystemContentBlock[] = [{ text: sanitizeSurrogates(systemPrompt) }];
+  if (cacheRetention === "none") {
+    return [{ text: sanitizeSurrogates(stripSystemPromptCacheBoundary(systemPrompt)) }];
+  }
+  const split = splitSystemPromptCacheBoundary(systemPrompt);
+  const stablePrefix = split?.stablePrefix ?? systemPrompt;
+  const blocks: SystemContentBlock[] = stablePrefix
+    ? [{ text: sanitizeSurrogates(stablePrefix) }]
+    : [];
 
   // Add cache point for supported Claude models when caching is enabled
-  if (cacheRetention !== "none" && supportsPromptCaching(model)) {
+  if (stablePrefix && supportsBedrockModelPromptCaching(model)) {
     blocks.push({
       cachePoint: {
         type: CachePointType.DEFAULT,
@@ -948,7 +950,10 @@ function buildSystemPrompt(
     });
   }
 
-  return blocks;
+  if (split?.dynamicSuffix) {
+    blocks.push({ text: sanitizeSurrogates(stripSystemPromptCacheBoundary(split.dynamicSuffix)) });
+  }
+  return blocks.length > 0 ? blocks : undefined;
 }
 
 function normalizeToolCallId(id: string): string {
@@ -1014,7 +1019,11 @@ function convertMessages(
         if (content.length === 0) {
           continue;
         }
-        if (m.runtimeContextCarrier === true && firstVolatileMessageIndex === undefined) {
+        if (
+          m.runtimeContextCarrier === true &&
+          !bindsClaudeThinkingPrefix(model) &&
+          firstVolatileMessageIndex === undefined
+        ) {
           firstVolatileMessageIndex = result.length;
         }
         result.push({
@@ -1154,7 +1163,7 @@ function convertMessages(
   // context would still cache volatile bytes even when those anchors are stable.
   if (
     cacheRetention !== "none" &&
-    supportsPromptCaching(model) &&
+    supportsBedrockModelPromptCaching(model) &&
     result.at(-1)?.role === ConversationRole.USER
   ) {
     const cacheAnchor = result.findLast(

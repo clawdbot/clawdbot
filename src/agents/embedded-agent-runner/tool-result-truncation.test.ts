@@ -114,6 +114,7 @@ function preparePromptProjectionStateForTest(params: {
 }) {
   const prompt = params.raw ? "raw probe" : "continue";
   prepareEmbeddedAttemptPromptContext({
+    capabilityToolNames: new Set(),
     attempt: {
       config: {},
       contextTokenBudget: 128_000,

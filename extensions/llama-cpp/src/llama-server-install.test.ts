@@ -540,6 +540,31 @@ describe("ensureLlamaServerInstalled", () => {
 });
 
 describe("CUDA runtime selection", () => {
+  it("pins the verified archives and extraction limit", () => {
+    const asset = selectLlamaServerAsset("win32", "x64", {
+      kind: "cuda",
+      devices: [{ driverVersion: "551.78", computeCapability: 8.6 }],
+    });
+    const mebibyte = 1024 * 1024;
+
+    expect(asset).toMatchObject({
+      name: "llama-b10809-bin-win-cuda-12.4-x64.zip",
+      sha256: "c77bfcd9ed8d91e8721a2d6a290b907fddd4fa5412a47b21c6fa1709116b85f9",
+      limits: {
+        maxArchiveBytes: 400 * mebibyte,
+        maxExtractedBytes: 600 * mebibyte,
+        maxEntryBytes: 521 * mebibyte,
+      },
+      dependencies: [
+        {
+          name: "cudart-llama-bin-win-cuda-12.4-x64.zip",
+          sha256: "8c79a9b226de4b3cacfd1f83d24f962d0773be79f1e7b75c6af4ded7e32ae1d6",
+          limits: { maxEntries: 3, maxEntryBytes: 521 * mebibyte },
+        },
+      ],
+    });
+  });
+
   it.each([
     ["551.78", 5, true],
     ["580.1", 8.9, true],

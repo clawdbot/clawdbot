@@ -1,7 +1,11 @@
 // Verifies canonical group scope precedence and sender policy resolution.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "./config.js";
-import { resolveChannelGroupRequireMention, resolveToolsBySender } from "./group-policy.js";
+import {
+  resolveChannelGroupRequireMention,
+  resolveChannelGroupToolsPolicy,
+  resolveToolsBySender,
+} from "./group-policy.js";
 import {
   resolveScopeKeyCaseInsensitive,
   resolveScopeIntroHint,
@@ -90,52 +94,60 @@ describe("resolveScopeRequireMention", () => {
   it.each([
     {
       name: "no override",
+      expected: false,
       configured: false,
       override: undefined,
       overrideOrder: undefined,
     },
     {
       name: "before-config override",
+      expected: true,
       configured: false,
       override: true,
       overrideOrder: "before-config" as const,
     },
     {
       name: "after-config override",
+      expected: false,
       configured: false,
       override: true,
       overrideOrder: "after-config" as const,
     },
     {
       name: "after-config fallback override",
+      expected: false,
       configured: undefined,
       override: false,
       overrideOrder: "after-config" as const,
     },
-  ])("matches flat group-policy behavior: $name", ({ configured, override, overrideOrder }) => {
-    const node = typeof configured === "boolean" ? { requireMention: configured } : {};
-    const tree: ScopeTree = { scopes: { room: node } };
-    const cfg = {
-      channels: { whatsapp: { groups: { room: node } } },
-    } as OpenClawConfig;
+  ])(
+    "matches flat group-policy behavior: $name",
+    ({ configured, override, overrideOrder, expected }) => {
+      const node = typeof configured === "boolean" ? { requireMention: configured } : {};
+      const tree: ScopeTree = { scopes: { room: node } };
+      const cfg = {
+        channels: { whatsapp: { groups: { room: node } } },
+      } as OpenClawConfig;
 
-    expect(
-      resolveScopeRequireMention({
-        tree,
-        path: ["room"],
-        requireMentionOverride: override,
-        overrideOrder,
-      }),
-    ).toBe(
-      resolveChannelGroupRequireMention({
-        cfg,
-        channel: "whatsapp",
-        groupId: "room",
-        requireMentionOverride: override,
-        overrideOrder,
-      }),
-    );
-  });
+      expect(
+        resolveScopeRequireMention({
+          tree,
+          path: ["room"],
+          requireMentionOverride: override,
+          overrideOrder,
+        }),
+      ).toBe(expected);
+      expect(
+        resolveChannelGroupRequireMention({
+          cfg,
+          channel: "whatsapp",
+          groupId: "room",
+          requireMentionOverride: override,
+          overrideOrder,
+        }),
+      ).toBe(expected);
+    },
+  );
 
   it("defaults configured-but-unset scopes to no mention only when requested", () => {
     const tree: ScopeTree = { scopes: { configured: {} } };
@@ -327,5 +339,103 @@ describe("resolveScopeIntroHint", () => {
 
     expect(resolveScopeIntroHint({ tree, path: ["team", "channel", "thread"] })).toBe("thread");
     expect(resolveScopeIntroHint({ tree, path: ["missing"] })).toBe("default");
+  });
+});
+
+describe("flat group policy adapters", () => {
+  it("preserves flat fallback for unvalidated values without changing scope resolution", () => {
+    const room = { requireMention: true, tools: { allow: ["read"] } };
+    Object.assign(room, { requireMention: "invalid", tools: false });
+    const defaults = { requireMention: false, tools: { deny: ["exec"] } };
+    const cfg = {
+      channels: { signal: { groups: { room, "*": defaults } } },
+    } satisfies OpenClawConfig;
+    expect(resolveChannelGroupRequireMention({ cfg, channel: "signal", groupId: "room" })).toBe(
+      false,
+    );
+    expect(resolveChannelGroupToolsPolicy({ cfg, channel: "signal", groupId: "room" })).toEqual(
+      defaults.tools,
+    );
+    const scope = { tree: { scopes: { room }, defaults }, path: ["room"] };
+    expect(resolveScopeRequireMention(scope)).toBe(true);
+    expect(resolveScopeToolsPolicy(scope)).toBe(false);
+  });
+
+  it.each([
+    { groupId: " * ", expected: false },
+    { groupId: " Room ", expected: false },
+    { groupId: " ROOM ", expected: false },
+    { groupId: "missing", expected: true },
+  ])("preserves configured-group identity for $groupId", ({ groupId, expected }) => {
+    const cfg = {
+      channels: { signal: { groups: { "*": {}, Room: {} } } },
+    } satisfies OpenClawConfig;
+    expect(
+      resolveChannelGroupRequireMention({
+        cfg,
+        channel: "signal",
+        groupId,
+        groupIdCaseInsensitive: true,
+        configuredGroupDefaultsToNoMention: true,
+      }),
+    ).toBe(expected);
+  });
+
+  it.each([
+    { groupId: " room ", expected: "fallback" },
+    { groupId: " ROOM ", expected: "fallback" },
+    { groupId: "missing", expected: "later" },
+    { groupId: " * ", expected: "fallback" },
+  ])("selects one group before resolving tools for $groupId", ({ groupId, expected }) => {
+    const cfg = {
+      channels: {
+        signal: {
+          groups: {
+            room: {},
+            later: { tools: { allow: ["later"] } },
+            "*": { tools: { allow: ["fallback"] } },
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+    expect(
+      resolveChannelGroupToolsPolicy({
+        cfg,
+        channel: "signal",
+        groupId,
+        groupIdCandidates: ["later"],
+        groupIdCaseInsensitive: true,
+      }),
+    ).toEqual({ allow: [expected] });
+  });
+
+  it.each([
+    { messageProvider: undefined, expected: "channel" },
+    { messageProvider: null, expected: "channel" },
+    { messageProvider: "", expected: "id" },
+  ])("preserves provider defaulting for $messageProvider", ({ messageProvider, expected }) => {
+    const cfg = {
+      channels: {
+        signal: {
+          groups: {
+            room: {
+              toolsBySender: {
+                "channel:signal:alice": { allow: ["channel"] },
+                "id:alice": { allow: ["id"] },
+              },
+            },
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+    expect(
+      resolveChannelGroupToolsPolicy({
+        cfg,
+        channel: "signal",
+        groupId: "room",
+        senderId: "alice",
+        messageProvider,
+      }),
+    ).toEqual({ allow: [expected] });
   });
 });

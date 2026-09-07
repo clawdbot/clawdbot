@@ -105,12 +105,14 @@ describe("Workshop current collection", () => {
         const displayed = await reader
           .locator("details[open] .chat-diff__row:not(.chat-diff__row--del) .chat-diff__text")
           .allTextContents();
-        const rowHeights = await reader.locator(".chat-diff__row").evaluateAll((rows) => ({
-          first: rows[0]!.getBoundingClientRect().height,
-          blank: rows
-            .filter((row) => row.querySelector(".chat-diff__text")?.textContent === "")
-            .map((row) => row.getBoundingClientRect().height),
-        }));
+        const rowHeights = await reader
+          .locator(".chat-diff__row")
+          .evaluateAll((rows: HTMLElement[]) => ({
+            first: rows[0]!.offsetHeight,
+            blank: rows
+              .filter((row) => row.querySelector(".chat-diff__text")?.textContent === "")
+              .map((row) => row.offsetHeight),
+          }));
         writeFileSync(
           path.join(proof, "document.json"),
           JSON.stringify(

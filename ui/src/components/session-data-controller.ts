@@ -42,7 +42,7 @@ import {
   scheduleSessionCatalogRefresh,
   type SessionCatalogDataOwner,
   type SessionDataControllerHost,
-  updateSessionCatalogData as updateSessionCatalogDataForHost,
+  updateSessionCatalogData,
 } from "./session-data-controller-catalog.ts";
 import {
   hasSidebarListFilter,
@@ -191,9 +191,13 @@ export class SessionDataController implements ReactiveController, SessionCatalog
   }
 
   hostUpdated(): void {
-    this.synchronizeSessionScope();
-    this.scroll.synchronize(this.host);
-    this.updateSessionCatalogData(true);
+    // Lit can finish a queued update after disconnect. Keep retired timers and
+    // observers closed until the host reconnects.
+    if (this.host.isConnected) {
+      this.synchronizeSessionScope();
+      this.scroll.synchronize(this.host);
+      updateSessionCatalogData(this, true);
+    }
   }
 
   hostDisconnected(): void {
@@ -313,10 +317,6 @@ export class SessionDataController implements ReactiveController, SessionCatalog
     ) {
       void this.refreshSidebarSessions();
     }
-  }
-
-  updateSessionCatalogData(defer = false): void {
-    updateSessionCatalogDataForHost(this, defer);
   }
 
   handleSessionCatalogHostEvent(payload: unknown): void {

@@ -190,7 +190,15 @@ export async function normalizeEmbeddedRunAttempt(input: {
   const attemptUsage = attempt.attemptUsage ?? callUsage.currentAttempt;
   mergeUsageIntoAccumulator(input.usageAccumulator, attemptUsage);
   mergeAttemptRunStatsIntoAccumulator(input.usageAccumulator, attempt);
-  const lastRunPromptUsage = callUsage.latest;
+  // A real mid-turn truncation rewrites the context after earlier usage observations.
+  // Keep billing accumulated, but do not carry that pre-mutation context into the retry.
+  const contextMutatedByMidTurnTruncation =
+    preflightRecovery?.handled === true &&
+    preflightRecovery.source === "mid-turn" &&
+    (preflightRecovery.truncatedCount ?? 0) > 0;
+  const lastRunPromptUsage = contextMutatedByMidTurnTruncation
+    ? { contextUsage: { state: "unavailable" as const } }
+    : callUsage.latest;
   const breakerStep = stepIdleTimeoutBreaker(input.idleTimeoutBreakerState, {
     idleTimedOut: terminalTimedOut && idleTimedOut,
     completedModelProgress: hasCompletedModelProgressForIdleBreaker(attempt),

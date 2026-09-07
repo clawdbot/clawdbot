@@ -23,6 +23,7 @@ import {
   createAdmittedGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
 } from "../../tools/gateway-caller-context.js";
+import { resolveAttemptWorkspaceSandbox } from "../../workspace-sandbox.js";
 import type { EmbeddedRunReplayState } from "../replay-state.js";
 import {
   resolveSandboxSkillRuntimeInputs,
@@ -32,7 +33,6 @@ import {
 import { mapThinkingLevelForProvider } from "../utils.js";
 import { prepareExecApprovalContinuationForAttempt } from "./attempt-exec-approval-continuation.js";
 import { applyResolvedToolPromptFinalizer } from "./attempt-prompt-support.js";
-import { resolveAttemptWorkspaceSandbox } from "./attempt-setup.js";
 import { EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE } from "./attempt-stage-timing.js";
 import { resolveAttemptDispatchApiKey } from "./auth-store.js";
 import { runEmbeddedAttemptWithBackend } from "./backend.js";

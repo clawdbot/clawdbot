@@ -1,4 +1,5 @@
 // Subagent formatting helpers expose compact durations and status text.
+import { formatCompactTokenCount } from "@openclaw/normalization-core";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 
 /** Formats token counts using compact k/m suffixes for subagent summaries. */
@@ -7,21 +8,10 @@ function formatTokenShort(value?: number) {
     return undefined;
   }
   const n = Math.floor(value);
-  if (n < 1_000) {
-    return `${n}`;
-  }
-  if (n < 10_000) {
-    return `${(n / 1_000).toFixed(1).replace(/\.0$/, "")}k`;
-  }
-  if (n < 1_000_000) {
-    const thousands = Math.round(n / 1_000);
-    // Rounding can reach 1000 (e.g. 999_500 -> 1000); fall through to the
-    // million branch instead of emitting an out-of-scheme "1000k".
-    if (thousands < 1_000) {
-      return `${thousands}k`;
-    }
-  }
-  return `${(n / 1_000_000).toFixed(1).replace(/\.0$/, "")}m`;
+  return formatCompactTokenCount(n, {
+    thousandsPrecision: n >= 10_000 ? 0 : 1,
+    trimTrailingZero: true,
+  });
 }
 
 /** Truncates a single-line display string without preserving trailing whitespace. */

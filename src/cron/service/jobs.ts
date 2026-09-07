@@ -184,7 +184,11 @@ function validateFullJob(
   if (context.kind !== "declarative") {
     validateCapabilities();
   }
-  assertMainSessionAgentId(job, context.defaultAgentId);
+  assertMainSessionAgentId(
+    job,
+    context.defaultAgentId,
+    context.kind === "patch" ? context.patch : undefined,
+  );
   assertDeliverySupport(job);
   assertAnnounceDeliveryChannelSupport(
     job,

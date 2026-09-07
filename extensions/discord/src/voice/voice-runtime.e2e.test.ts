@@ -9,6 +9,7 @@ defineDiscordVoiceTests(
     expect,
     it,
     vi,
+    ChannelType,
     createDefaultVoiceStates,
     createConnectionMock,
     joinVoiceChannelMock,
@@ -227,7 +228,7 @@ defineDiscordVoiceTests(
       expect(getLastAudioPlayer().play).toHaveBeenCalledTimes(1);
     });
 
-    it("passes configured model override to agent command in voice flow", async () => {
+    it("passes configured model override to agent command in STT/TTS voice flow", async () => {
       const client = createClient();
       client.fetchMember.mockResolvedValue({
         nickname: "Guest Nick",
@@ -243,6 +244,7 @@ defineDiscordVoiceTests(
           groupPolicy: "open",
           allowFrom: ["discord:u-guest"],
           voice: {
+            mode: "stt-tts",
             model: "openai/gpt-5.4-mini",
           },
         },
@@ -494,64 +496,6 @@ defineDiscordVoiceTests(
       );
     });
 
-    it("persists full speaker context in cache writes", async () => {
-      const client = createClient();
-      client.fetchMember.mockResolvedValue({
-        nickname: "Role Speaker",
-        roles: ["role-voice"],
-        user: {
-          id: "u-role",
-          username: "role",
-          globalName: "Role",
-          discriminator: "2222",
-        },
-      });
-      const manager = createManager(
-        {
-          voice: { enabled: true, mode: "stt-tts" },
-          groupPolicy: "allowlist",
-          guilds: {
-            g1: {
-              channels: {
-                "1001": {
-                  roles: ["role:role-voice"],
-                },
-              },
-            },
-          },
-        },
-        client,
-      );
-
-      await receiveVoiceUtterance(manager, "u-role");
-
-      const cache = (
-        manager as unknown as {
-          speakerContext: {
-            cache: Map<
-              string,
-              {
-                id?: string;
-                label: string;
-                name?: string;
-                tag?: string;
-                senderIsOwner: boolean;
-                expiresAt: number;
-              }
-            >;
-          };
-        }
-      ).speakerContext.cache;
-      const cached = cache.get("g1:u-role");
-
-      expect(cached?.id).toBe("u-role");
-      expect(cached?.label).toBe("Role Speaker");
-      expect(agentCommandMock).toHaveBeenCalledWith(
-        expect.objectContaining({ senderIsOwner: false }),
-        expect.anything(),
-      );
-    });
-
     it("re-fetches member roles for repeated voice auth checks", async () => {
       const client = createClient();
       const member = {
@@ -579,15 +523,30 @@ defineDiscordVoiceTests(
 
       await receiveVoiceUtterance(manager, "u-role");
       expect(agentCommandMock).toHaveBeenCalledTimes(1);
+      const expectedSpeaker = {
+        senderIsOwner: false,
+        message: expect.stringContaining('speaker "Role Speaker"'),
+      };
+      expect(lastAgentCommandArgs()).toMatchObject(expectedSpeaker);
       client.fetchMember.mockResolvedValue({ ...member, roles: [] });
       await receiveVoiceUtterance(manager, "u-role");
 
       expect(agentCommandMock).toHaveBeenCalledTimes(1);
       expect(client.fetchMember).toHaveBeenLastCalledWith("g1", "u-role");
+      client.fetchMember.mockResolvedValue(member);
+      await receiveVoiceUtterance(manager, "u-role");
+      expect(agentCommandMock).toHaveBeenCalledTimes(2);
+      expect(lastAgentCommandArgs()).toMatchObject(expectedSpeaker);
     });
 
     it("fetches guild metadata before allowlist checks when the session lacks a guild name", async () => {
       const client = createClient();
+      client.fetchChannel.mockResolvedValue({
+        id: "1001",
+        guildId: "g1",
+        guild: { id: "g1", name: "" },
+        type: ChannelType.GuildVoice,
+      });
       client.fetchGuild.mockResolvedValue({ id: "g1", name: "Guild One" });
       client.fetchMember.mockResolvedValue({
         nickname: "Owner Nick",

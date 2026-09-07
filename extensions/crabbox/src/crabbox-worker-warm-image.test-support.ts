@@ -50,7 +50,7 @@ export function commandResult(overrides: Partial<SpawnResult> = {}): SpawnResult
 export function checkpointResult(
   checkpointId: string,
   leaseId: string,
-  nativeState: "pending" | "available",
+  nativeState: "available" | "completed",
 ): SpawnResult {
   return commandResult({
     stdout: JSON.stringify({
@@ -100,7 +100,7 @@ export function createWarmProvider(
         });
       }
       if (argv[1] === "checkpoint" && argv[2] === "create") {
-        return checkpointResult(CHECKPOINT_ID, argv[argv.indexOf("--id") + 1]!, "pending");
+        return checkpointResult(CHECKPOINT_ID, argv[argv.indexOf("--id") + 1]!, "completed");
       }
       if (argv[1] === "checkpoint" && argv[2] === "inspect") {
         return commandResult({
