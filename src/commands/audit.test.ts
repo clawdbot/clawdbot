@@ -73,6 +73,8 @@ describe("audit command parsing", () => {
     { flag: "--after", options: { after: "-1" } },
     { flag: "--before", options: { before: "July 1, 2026" } },
     { flag: "--after", options: { after: "not-a-date" } },
+    { flag: "--after", options: { after: "" } },
+    { flag: "--before", options: { before: " \t" } },
   ])("rejects invalid $flag before calling the Gateway", async ({ flag, options }) => {
     await expect(auditListCommand(options, runtime)).rejects.toThrow(flag);
     expect(callGateway).not.toHaveBeenCalled();
@@ -112,6 +114,11 @@ describe("audit command parsing", () => {
 
     callGateway.mockClear();
     await expect(auditListCommand({ limit: "501" }, runtime)).rejects.toThrow("1 and 500");
+    expect(callGateway).not.toHaveBeenCalled();
+  });
+
+  it.each(["", " \t"])("rejects an explicit empty list limit %#", async (limit) => {
+    await expect(auditListCommand({ limit }, runtime)).rejects.toThrow("1 and 500");
     expect(callGateway).not.toHaveBeenCalled();
   });
 
@@ -450,6 +457,13 @@ describe("audit run explanation", () => {
     callGateway.mockClear();
     await expect(
       auditListCommand({ explain: true, executionId: "execution-1", limit: "101" }, runtime),
+    ).rejects.toThrow("with --explain");
+    expect(callGateway).not.toHaveBeenCalled();
+  });
+
+  it.each(["", " \t"])("rejects an explicit empty decision limit %#", async (limit) => {
+    await expect(
+      auditListCommand({ explain: true, runId: "run-1", limit }, runtime),
     ).rejects.toThrow("with --explain");
     expect(callGateway).not.toHaveBeenCalled();
   });

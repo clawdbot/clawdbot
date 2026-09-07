@@ -67,7 +67,7 @@ type AuditCliEvent = {
 
 function parseAuditTimestamp(value: string | undefined, flag: string): number | undefined {
   const trimmed = value?.trim();
-  if (!trimmed) {
+  if (trimmed === undefined) {
     return undefined;
   }
   if (/^\d+$/.test(trimmed)) {
@@ -84,7 +84,7 @@ function parseAuditTimestamp(value: string | undefined, flag: string): number | 
 }
 
 function parseAuditLimit(value: string | undefined): number {
-  if (!value) {
+  if (value === undefined) {
     return DEFAULT_AUDIT_LIMIT;
   }
   const parsed = parseStrictPositiveInteger(value);
@@ -95,7 +95,7 @@ function parseAuditLimit(value: string | undefined): number {
 }
 
 function parseAuditDecisionLimit(value: string | undefined): number {
-  if (!value) {
+  if (value === undefined) {
     return DEFAULT_AUDIT_DECISION_LIMIT;
   }
   const parsed = parseStrictPositiveInteger(value);
