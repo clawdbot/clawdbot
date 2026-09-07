@@ -2234,5 +2234,57 @@
   {
     "source": "Release channels",
     "target": "发布渠道"
+  },
+  {
+    "source": "Slack setup",
+    "target": "Slack 设置"
+  },
+  {
+    "source": "Slack transports",
+    "target": "Slack 传输方式"
+  },
+  {
+    "source": "Slack Enterprise Grid",
+    "target": "Slack Enterprise Grid"
+  },
+  {
+    "source": "Slack manifest and scopes",
+    "target": "Slack 清单与权限范围"
+  },
+  {
+    "source": "Slack access control",
+    "target": "Slack 访问控制"
+  },
+  {
+    "source": "Slack threads and sessions",
+    "target": "Slack 话题与会话"
+  },
+  {
+    "source": "Slack message behavior",
+    "target": "Slack 消息行为"
+  },
+  {
+    "source": "Slack media and attachments",
+    "target": "Slack 媒体与附件"
+  },
+  {
+    "source": "Slack charts, tables, and approvals",
+    "target": "Slack 图表、表格与审批"
+  },
+  {
+    "source": "Slack events and operations",
+    "target": "Slack 事件与运维"
+  },
+  {
+    "source": "Slack troubleshooting",
+    "target": "Slack 故障排查"
+  },
+  {
+    "source": "Media understanding pipeline",
+    "target": "媒体理解流程"
+  },
+  {
+    "source": "PDF tool",
+    "target": "PDF 工具"
   }
 ]

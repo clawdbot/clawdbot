@@ -1496,7 +1496,23 @@
                   },
                   "channels/msteams",
                   "channels/signal",
-                  "channels/slack",
+                  {
+                    "group": "Slack",
+                    "pages": [
+                      "channels/slack",
+                      "channels/slack/setup",
+                      "channels/slack/transports",
+                      "channels/slack/enterprise-grid",
+                      "channels/slack/manifest-and-scopes",
+                      "channels/slack/access-control",
+                      "channels/slack/threads-and-sessions",
+                      "channels/slack/messaging",
+                      "channels/slack/media",
+                      "channels/slack/rich-messages",
+                      "channels/slack/events",
+                      "channels/slack/troubleshooting"
+                    ]
+                  },
                   "channels/sms",
                   "channels/telegram",
                   "channels/whatsapp"
