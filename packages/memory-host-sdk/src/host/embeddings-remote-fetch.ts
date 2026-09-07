@@ -1,4 +1,5 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { resolveAzureApiVersionRequestTarget } from "./azure-api-version-request.js";
 import { readEmbeddingVectors } from "./embedding-vectors.js";
 import type { SsrFPolicy } from "./openclaw-runtime-network.js";
 import { postJson } from "./post-json.js";
@@ -15,9 +16,15 @@ export async function fetchRemoteEmbeddingVectors(params: {
   body: unknown;
   errorPrefix: string;
 }): Promise<number[][]> {
-  return await postJson({
+  // Azure OpenAI accepts api-version only as a URL query parameter; move a
+  // configured api-version header into the URL for recognized Azure hosts.
+  const target = resolveAzureApiVersionRequestTarget({
     url: params.url,
     headers: params.headers,
+  });
+  return await postJson({
+    url: target.url,
+    headers: target.headers,
     ssrfPolicy: params.ssrfPolicy,
     fetchImpl: params.fetchImpl,
     signal: params.signal,

@@ -2,6 +2,7 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { resolveAzureApiVersionRequestTarget } from "../../packages/memory-host-sdk/src/host/azure-api-version-request.js";
 import { readEmbeddingVectors } from "../../packages/memory-host-sdk/src/host/embedding-vectors.js";
 import { withRemoteHttpResponse } from "../../packages/memory-host-sdk/src/host/remote-http.js";
 import { readProviderJsonArrayFieldResponse } from "../agents/provider-http-errors.js";
@@ -327,11 +328,17 @@ async function postEmbeddingRequest(params: {
       ? await client.acquireLocalService(client.localServiceTarget, params.signal)
       : undefined;
   try {
-    return await withRemoteHttpResponse({
+    // Azure OpenAI accepts api-version only as a URL query parameter; move a
+    // configured api-version header into the URL for recognized Azure hosts.
+    const target = resolveAzureApiVersionRequestTarget({
       url: client.endpointUrl,
+      headers: client.headers,
+    });
+    return await withRemoteHttpResponse({
+      url: target.url,
       init: {
         method: "POST",
-        headers: client.headers,
+        headers: target.headers,
         body: JSON.stringify(body),
       },
       signal: params.signal,

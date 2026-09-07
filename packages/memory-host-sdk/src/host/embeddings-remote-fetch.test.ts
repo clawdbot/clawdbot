@@ -53,6 +53,28 @@ describe("fetchRemoteEmbeddingVectors", () => {
     expect(postJsonParams.errorPrefix).toBe("embedding fetch failed");
   });
 
+  it("moves Azure api-version headers into the URL query before posting", async () => {
+    postJsonMock.mockImplementationOnce(async (params) => {
+      return await params.parse({
+        data: [{ embedding: [0.1] }],
+      });
+    });
+
+    await fetchRemoteEmbeddingVectors({
+      url: "https://example.openai.azure.com/openai/deployments/embed/embeddings?existing=1",
+      headers: { "api-key": "azure-key", "api-version": "2024-10-21" },
+      body: { input: ["one"] },
+      errorPrefix: "azure embedding fetch failed",
+    });
+
+    const postJsonParams = requirePostJsonParams();
+    expect(postJsonParams.url).toBe(
+      "https://example.openai.azure.com/openai/deployments/embed/embeddings?existing=1&api-version=2024-10-21",
+    );
+    expect(postJsonParams.headers).toEqual({ "api-key": "azure-key" });
+    expect(postJsonParams.headers).not.toHaveProperty("api-version");
+  });
+
   it("passes abort signals to the JSON request", async () => {
     const controller = new AbortController();
     postJsonMock.mockImplementationOnce(async (params) => {
