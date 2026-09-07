@@ -17,6 +17,43 @@ describe("buildMemoryFlushPlan", () => {
     expect(plan?.relativePath).toBe("memory/2026-05-30.md");
   });
 
+  it("carries declared flush fallbacks and keeps the exact override by default", () => {
+    const withFallbacks = buildMemoryFlushPlan({
+      cfg: {
+        agents: {
+          defaults: {
+            compaction: {
+              memoryFlush: {
+                model: {
+                  primary: "ollama/qwen3:8b",
+                  fallbacks: ["anthropic/claude-haiku-4-5", "  ", "openai/gpt-5.4"],
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+    // Blank refs are dropped; order is preserved.
+    expect(withFallbacks?.fallbacks).toEqual(["anthropic/claude-haiku-4-5", "openai/gpt-5.4"]);
+
+    // A bare string keeps the exact-override default, and so do empty or
+    // all-blank lists, so an unreachable maintenance model never silently
+    // bills the paid conversation model.
+    for (const model of [
+      "ollama/qwen3:8b",
+      { primary: "ollama/qwen3:8b" },
+      { primary: "ollama/qwen3:8b", fallbacks: [] },
+      { primary: "ollama/qwen3:8b", fallbacks: ["", "   "] },
+    ]) {
+      const plan = buildMemoryFlushPlan({
+        cfg: { agents: { defaults: { compaction: { memoryFlush: { model } } } } },
+      });
+      expect(plan?.model).toBe("ollama/qwen3:8b");
+      expect(plan?.fallbacks).toBeUndefined();
+    }
+  });
+
   it.each([
     [8_000, 2_000, 3_000],
     [16_000, 4_000, 4_000],

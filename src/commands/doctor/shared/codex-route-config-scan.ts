@@ -119,7 +119,7 @@ function collectAgentModelRefs(params: {
     value: compaction?.model,
     blockedModelIdentities: params.blockedModelIdentities,
   });
-  collectStringModelSlot({
+  collectModelConfigSlot({
     hits: params.hits,
     path: `${params.path}.compaction.memoryFlush.model`,
     value: asMutableRecord(compaction?.memoryFlush)?.model,

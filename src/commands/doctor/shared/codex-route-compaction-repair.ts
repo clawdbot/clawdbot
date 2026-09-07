@@ -20,6 +20,7 @@ import { rewriteStringModelSlot } from "./codex-route-model-slots.js";
 import {
   agentIdFromAgentPath,
   ensureCodexRuntimePolicy,
+  rewriteModelConfigSlotIfCanonicalCodexRuntime,
   rewriteStringModelSlotIfCanonicalCodexRuntime,
 } from "./codex-route-runtime-policy.js";
 import type {
@@ -179,7 +180,9 @@ function rewriteCompactionMemoryFlushModel(
   params: Parameters<typeof rewriteAgentCompactionRefs>[0],
   compaction: MutableRecord | undefined,
 ): void {
-  rewriteStringModelSlotIfCanonicalCodexRuntime({
+  // The flush override is the canonical selector, so a retired route hiding in
+  // its fallbacks is repaired the same way every other selector's is.
+  rewriteModelConfigSlotIfCanonicalCodexRuntime({
     cfg: params.cfg,
     agentId: params.agentId,
     hits: params.hits,
