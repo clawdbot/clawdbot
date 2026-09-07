@@ -352,6 +352,38 @@ exit "$status"`,
   }
 });
 
+releasePolicyIt(
+  "hydrates a frozen target through its branch when detached wants cannot deepen",
+  () => {
+    const fixture = createAncestryFixture({
+      sourceDistance: 8,
+      targetDistance: 220,
+      related: true,
+    });
+    const proxy = writeGitProxy(
+      fixture,
+      "detached-target-no-deepen-git",
+      `if [[ " $* " == *" fetch "* && " $* " == *" --deepen=128 "* && " $* " == *" +${fixture.target}:refs/remotes/origin/main "* ]]; then
+  exit 0
+fi
+exec "$REAL_GIT" "$@"`,
+    );
+    try {
+      const checkout = cloneAncestrySource(fixture, "checkout");
+      expectPolicySuccess(
+        runReleaseAncestry(checkout, "merge-base", {
+          PATH: `${proxy.binDir}:${process.env.PATH ?? ""}`,
+          REAL_GIT: proxy.realGit,
+        }),
+        "merge-base",
+      );
+      expect(fixtureGit(checkout, ["rev-parse", "refs/remotes/origin/main"])).toBe(fixture.target);
+    } finally {
+      rmSync(fixture.root, { force: true, recursive: true });
+    }
+  },
+);
+
 releasePolicyIt("rejects fully hydrated disconnected release histories", () => {
   const fixture = createAncestryFixture({
     sourceDistance: 8,
