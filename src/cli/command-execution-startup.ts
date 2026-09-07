@@ -1,10 +1,9 @@
-// CLI startup context, banner/log presentation, and bootstrap orchestration.
+// CLI startup presentation and config-before-plugin bootstrap.
 import type { ConfigFileSnapshot } from "../config/types.js";
 import { routeLogsToStderr } from "../logging/console.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
-import { resolveCliArgvInvocation } from "./argv-invocation.js";
-import { resolveCliStartupPolicy } from "./command-startup-policy.js";
+import type { resolveCliStartupPolicy } from "./command-startup-policy.js";
 import { measureCliCommandStartup } from "./command-startup-timing.js";
 import { ensureCliPluginRegistryLoaded } from "./plugin-registry-loader.js";
 
@@ -17,30 +16,6 @@ const hasJsonFlag = (argv: readonly string[]) =>
 
 const hasVersionFlag = (argv: readonly string[]) =>
   argv.some((arg) => arg === "--version" || arg === "-V");
-
-export function resolveCliExecutionStartupContext(params: {
-  argv: string[];
-  commandPath?: string[];
-  jsonOutputMode: boolean;
-  machineOutputMode?: boolean;
-  env?: NodeJS.ProcessEnv;
-}) {
-  const invocation = resolveCliArgvInvocation(params.argv);
-  // Commander owns the action path after parsing option values. Route-first
-  // callers omit it and keep using raw argv discovery.
-  const commandPath = params.commandPath ?? invocation.commandPath;
-  return {
-    invocation,
-    commandPath,
-    startupPolicy: resolveCliStartupPolicy({
-      argv: params.argv,
-      commandPath,
-      jsonOutputMode: params.jsonOutputMode,
-      machineOutputMode: params.machineOutputMode,
-      env: params.env,
-    }),
-  };
-}
 
 export async function applyCliExecutionStartupPresentation(params: {
   argv?: string[];

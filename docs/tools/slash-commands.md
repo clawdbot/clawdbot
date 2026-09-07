@@ -152,7 +152,8 @@ Channel plugins can enforce owner-only command access through their
 <ParamField path="commands.allowFrom" type="object">
   Per-provider allowlist for command authorization. When configured, it is the
   **only** authorization source for commands and directives. Use `"*"` for a
-  global default; provider-specific keys override it.
+  global default; provider-specific keys override it. Discord sender entries
+  accept bare user IDs or `user:<id>` and `discord:<id>` aliases.
 </ParamField>
 
 When `commands.allowFrom` is not configured, command authorization follows

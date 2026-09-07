@@ -124,16 +124,11 @@ const policyTestWatches = [
   })),
 ] satisfies readonly PolicyTestWatch[];
 
-function normalizeChangedPath(changedPath: string): string {
-  return changedPath.replaceAll("\\", "/").replace(/^\.\//u, "");
-}
-
 /** Resolve policy tests whose scanned source surface intersects this diff. */
 export function resolvePolicyTestTargets(changedPaths: readonly string[]): string[] {
-  const normalizedPaths = changedPaths.map(normalizeChangedPath);
   return policyTestWatches
     .filter(({ watchGlobs }) =>
-      normalizedPaths.some((changedPath) =>
+      changedPaths.some((changedPath) =>
         watchGlobs.some((watchGlob) => matchesGlob(changedPath, watchGlob)),
       ),
     )
@@ -142,9 +137,8 @@ export function resolvePolicyTestTargets(changedPaths: readonly string[]): strin
 
 /** True when the policy tests are the complete bounded owner for this path. */
 export function isPolicyTestOwnedPath(changedPath: string): boolean {
-  const normalizedPath = normalizeChangedPath(changedPath);
   return policyTestWatches.some(({ ownerGlobs }) =>
-    ownerGlobs?.some((ownerGlob) => matchesGlob(normalizedPath, ownerGlob)),
+    ownerGlobs?.some((ownerGlob) => matchesGlob(changedPath, ownerGlob)),
   );
 }
 
@@ -2005,7 +1999,6 @@ export function createNodeTestShards(options: NodeTestPlanOptions = {}): NodeTes
   const changedTestPlans = includeReleaseOnlyPluginShards
     ? []
     : (options.changedPaths ?? [])
-        .map(normalizeChangedPath)
         .filter(
           (file) =>
             isTestFileTarget(file) &&

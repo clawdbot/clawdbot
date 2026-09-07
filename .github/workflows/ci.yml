@@ -1307,6 +1307,8 @@ jobs:
           const releaseGate = parseBoolean(process.env.OPENCLAW_CI_RELEASE_GATE);
           const releaseScope = process.env.OPENCLAW_CI_RELEASE_SCOPE ?? "full";
           const npmQualification = releaseScope === "npm-beta" || releaseScope === "npm-stable";
+          const fullNativeValidation =
+            eventName === "workflow_dispatch" && !releaseGate && releaseScope === "full";
           if (releaseScope !== "full" && !npmQualification) {
             throw new Error("release_scope must be full, npm-beta, or npm-stable");
           }
@@ -1439,6 +1441,16 @@ jobs:
           const supportsCurrentAndroidCi = targetWorkflow.includes("android-ci-contract-v2");
           const supportsDockerSeedE2e = targetWorkflow.includes("docker-seed-e2e-contract-v1");
           const useCompatibleAndroidCi = compatibilityTarget && !supportsCurrentAndroidCi;
+          const androidTestTier = !fullNativeValidation && !useCompatibleAndroidCi;
+          // Unit tests do not compile the benchmark. Keep its build when inputs
+          // change, or when the existing changed-path manifest cannot narrow scope.
+          const androidBenchmarkChanged = !changedPaths?.length || changedPaths.some((path) =>
+            !path.trim() ||
+            matchesGlob(path, "apps/android/{benchmark,buildSrc,build-logic,gradle,Config}/**") ||
+            matchesGlob(path, "apps/android/**/*.gradle{,.kts}") ||
+            matchesGlob(path, "apps/android/**/gradle.properties") ||
+            matchesGlob(path, "apps/android/gradlew{,.bat}"),
+          );
           const supportsFormatCheck =
             targetWorkflow.split("pnpm format:check").length - 1 >= 2;
           const runFormatCheck = !frozenTarget || supportsFormatCheck;
@@ -1810,19 +1822,34 @@ jobs:
                     {
                       check_name: "android-test-play",
                       task: useCompatibleAndroidCi ? "test-play-compat" : "test-play",
+                      ...(androidTestTier ? { lint: true } : {}),
                     },
-                    { check_name: "android-test-third-party", task: "test-third-party" },
-                    ...(!useCompatibleAndroidCi
-                      ? [{ check_name: "android-test-wear", task: "test-wear" }]
-                      : []),
                     {
-                      check_name: "android-build-play",
-                      task: useCompatibleAndroidCi ? "build-play-compat" : "build-play",
+                      check_name: "android-test-third-party",
+                      task: "test-third-party",
+                      ...(androidTestTier ? { lint: true } : {}),
                     },
+                    ...(!useCompatibleAndroidCi
+                      ? [{
+                          check_name: "android-test-wear",
+                          task: "test-wear",
+                          ...(androidTestTier ? { lint: true } : {}),
+                        }]
+                      : []),
+                    ...(!androidTestTier
+                      ? [{
+                          check_name: "android-build-play",
+                          task: useCompatibleAndroidCi ? "build-play-compat" : "build-play",
+                        }]
+                      : []),
                     ...(!useCompatibleAndroidCi
                       ? [
-                          { check_name: "android-build-wear", task: "build-wear" },
-                          { check_name: "android-ktlint", task: "ktlint" },
+                          ...(!androidTestTier ? [{ check_name: "android-build-wear", task: "build-wear" }] : []),
+                          {
+                            check_name: "android-ktlint",
+                            task: "ktlint",
+                            ...(androidTestTier && androidBenchmarkChanged ? { build_benchmark: true } : {}),
+                          },
                         ]
                       : []),
                   ]
@@ -4539,19 +4566,20 @@ jobs:
     name: ${{ format('macos-swift ({0})', matrix.phase) }}
     needs: [preflight]
     if: needs.preflight.outputs.run_macos_swift == 'true'
-    # Release products are not inputs to the debug/coverage test graph. Keep
-    # both cold builds mandatory without charging one worker their combined time.
+    # Debug/coverage tests remain required; full validation adds an independent
+    # optimized build whose products are not inputs to the test graph.
     strategy:
       fail-fast: false
       max-parallel: 2
       matrix:
-        phase: [release, tests]
+        phase: ${{ fromJSON(github.event_name == 'workflow_dispatch' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && '["release","tests"]' || '["tests"]') }}
     # Unassigned Blacksmith Mac jobs can hold both non-canceling main slots.
     # Use the existing hosted image and budget from the first attempt.
     runs-on: macos-26
     timeout-minutes: 30
     env:
       HISTORICAL_TARGET: ${{ needs.preflight.outputs.compatibility_target }}
+      MACOS_PRIMARY_PHASE: ${{ github.event_name == 'workflow_dispatch' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && 'release' || 'tests' }}
       OPENCLAWKIT_TEST_EXECUTION: ${{ (github.event_name == 'workflow_dispatch' || github.run_attempt > 1) && 'serial' || 'parallel' }}
     steps:
       - *platform_checkout_step
@@ -4587,7 +4615,7 @@ jobs:
           fi
 
       - name: Install XcodeGen / SwiftLint / SwiftFormat
-        if: matrix.phase == 'release'
+        if: matrix.phase == env.MACOS_PRIMARY_PHASE
         run: |
           if [[ -x ./scripts/install-xcodegen.sh && -x ./scripts/install-swift-tools.sh ]]; then
             swift_tools_dir="$RUNNER_TEMP/openclaw-swift-tools"
@@ -4693,7 +4721,7 @@ jobs:
           swift --version
 
       - name: Native state schema version contract
-        if: matrix.phase == 'release'
+        if: matrix.phase == env.MACOS_PRIMARY_PHASE
         run: |
           if [[ -f scripts/check-native-state-schema-version.mjs ]]; then
             node scripts/check-native-state-schema-version.mjs
@@ -4705,7 +4733,7 @@ jobs:
           fi
 
       - name: Swift lint
-        if: matrix.phase == 'release'
+        if: matrix.phase == env.MACOS_PRIMARY_PHASE
         run: |
           if [[ -x ./scripts/lint-swift.sh && -x ./scripts/format-swift.sh ]]; then
             ./scripts/lint-swift.sh macos
@@ -4813,7 +4841,7 @@ jobs:
 
       - name: Render isolated macOS health fixtures
         id: health-render
-        if: ${{ !cancelled() && steps.swift-test.outputs.debug-tests-built == 'true' && hashFiles('scripts/test-macos-health-render.sh') != '' }}
+        if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && steps.swift-test.outputs.debug-tests-built == 'true' && hashFiles('scripts/test-macos-health-render.sh') != '' }}
         run: bash scripts/test-macos-health-render.sh
 
       - name: Upload macOS health component renders
@@ -4831,7 +4859,7 @@ jobs:
           retention-days: 7
 
       - name: Save SwiftPM cache
-        if: matrix.phase == 'release' && needs.preflight.outputs.cache_write_allowed == 'true' && steps.swiftpm-cache.outputs.cache-hit != 'true'
+        if: matrix.phase == env.MACOS_PRIMARY_PHASE && needs.preflight.outputs.cache_write_allowed == 'true' && steps.swiftpm-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/Library/Caches/org.swift.swiftpm
@@ -5481,6 +5509,8 @@ jobs:
         env:
           CI_RUNNER_BACKEND: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.run_attempt > 1) || github.event_name == 'workflow_dispatch' || github.repository != 'openclaw/openclaw' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != 'openclaw/openclaw')) && 'github' || 'blacksmith' }}
           TASK: ${{ matrix.task }}
+          RUN_LINT: ${{ matrix.lint && 'true' || 'false' }}
+          BUILD_BENCHMARK: ${{ matrix.build_benchmark && 'true' || 'false' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -5489,6 +5519,9 @@ jobs:
               ./gradlew --no-daemon --build-cache --init-script "$OPENCLAW_ROBOLECTRIC_INIT" \
                 :app:testPlayDebugUnitTest \
                 :wear-shared:testDebugUnitTest
+              if [ "$RUN_LINT" = "true" ]; then
+                ./gradlew --no-daemon --build-cache :app:lintPlayDebug :wear-shared:lintDebug
+              fi
               ;;
             test-play-compat)
               # Frozen targets predate the Wear shared project. Keep their app-owned
@@ -5499,10 +5532,16 @@ jobs:
             test-third-party)
               ./gradlew --no-daemon --build-cache --init-script "$OPENCLAW_ROBOLECTRIC_INIT" \
                 :app:testThirdPartyDebugUnitTest
+              if [ "$RUN_LINT" = "true" ]; then
+                ./gradlew --no-daemon --build-cache :app:lintThirdPartyDebug
+              fi
               ;;
             test-wear)
               ./gradlew --no-daemon --build-cache --init-script "$OPENCLAW_ROBOLECTRIC_INIT" \
                 :wear:testDebugUnitTest
+              if [ "$RUN_LINT" = "true" ]; then
+                ./gradlew --no-daemon --build-cache :wear:lintDebug
+              fi
               ;;
             build-play)
               if [ "$CI_RUNNER_BACKEND" = "github" ] || [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
@@ -5546,6 +5585,9 @@ jobs:
                 :benchmark:ktlintCheck \
                 :wear:ktlintCheck \
                 :wear-shared:ktlintCheck
+              if [ "$BUILD_BENCHMARK" = "true" ]; then
+                ./gradlew --no-daemon --build-cache :benchmark:assembleDebug
+              fi
               ;;
             *)
               echo "Unsupported Android task: $TASK" >&2

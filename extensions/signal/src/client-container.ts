@@ -22,7 +22,7 @@ import {
   readResponseWithLimit,
 } from "openclaw/plugin-sdk/response-limit-runtime";
 import { readRegularFile } from "openclaw/plugin-sdk/security-runtime";
-import WebSocket from "ws";
+import { WebSocket } from "./ws-runtime.js";
 
 type ContainerRpcOptions = {
   baseUrl: string;

@@ -771,7 +771,6 @@ extensions/memory-wiki/src/compiled-cache.ts	1
 extensions/memory-wiki/src/gateway.ts	3
 extensions/memory-wiki/src/ingest.ts	2
 extensions/memory-wiki/src/log.ts	1
-extensions/memory-wiki/src/markdown.ts	1
 extensions/memory-wiki/src/mutation-coordinator.ts	1
 extensions/memory-wiki/src/okf.ts	1
 extensions/memory-wiki/src/source-sync-state.ts	1
@@ -1483,7 +1482,7 @@ packages/ai/src/transports/openai-responses-compact-request.ts	2
 packages/ai/src/transports/openai-responses-continuation.ts	2
 packages/ai/src/transports/openai-responses-contracts.ts	1
 packages/ai/src/transports/openai-responses-debug.ts	12
-packages/ai/src/transports/openai-responses-params-internal.ts	10
+packages/ai/src/transports/openai-responses-params-internal.ts	9
 packages/ai/src/transports/openai-responses-payload-policy.ts	3
 packages/ai/src/transports/openai-responses-prompt-observer-internal.ts	2
 packages/ai/src/transports/openai-responses-replay-internal.ts	11
@@ -2350,7 +2349,6 @@ src/cli/program/register.migrate.ts	12
 src/cli/program/register.onboard.ts	27
 src/cli/program/register.setup.ts	2
 src/cli/program/register.status-health-sessions.ts	29
-src/cli/program/route-specs.ts	1
 src/cli/run-main.ts	1
 src/cli/sandbox-cli.ts	4
 src/cli/secrets-cli.ts	2
@@ -2460,7 +2458,6 @@ src/commands/doctor/shared/codex-route-session-repair.ts	1
 src/commands/doctor/shared/configured-channel-ids.ts	1
 src/commands/doctor/shared/empty-allowlist-policy.ts	14
 src/commands/doctor/shared/empty-allowlist-scan.ts	17
-src/commands/doctor/shared/include-migration-ownership.ts	2
 src/commands/doctor/shared/legacy-config-compat.ts	1
 src/commands/doctor/shared/legacy-config-core-migrate.ts	1
 src/commands/doctor/shared/legacy-config-core-normalizers.ts	18
@@ -2565,7 +2562,7 @@ src/config/mcp-config.ts	1
 src/config/merge-patch.ts	1
 src/config/model-input-normalization.ts	2
 src/config/model-input.ts	1
-src/config/mutate.ts	6
+src/config/mutate.ts	4
 src/config/normalize-exec-safe-bin.ts	2
 src/config/official-external-channel-secret-schema.ts	4
 src/config/plugin-auto-enable.apply.ts	1
@@ -3065,7 +3062,6 @@ src/infra/package-dist-inventory.ts	2
 src/infra/package-json.ts	1
 src/infra/pairing-files.ts	1
 src/infra/path-case.ts	3
-src/infra/ports-inspect.ts	1
 src/infra/ports.ts	2
 src/infra/private-mode.ts	2
 src/infra/provider-usage.auth.ts	2
@@ -3097,7 +3093,6 @@ src/infra/sqlite-file-generation.ts	9
 src/infra/sqlite-files.ts	1
 src/infra/sqlite-index-schema.ts	2
 src/infra/sqlite-integrity.ts	2
-src/infra/sqlite-private-directory.ts	2
 src/infra/sqlite-readonly-location.ts	4
 src/infra/sqlite-schema-contract.ts	9
 src/infra/sqlite-snapshot.ts	2

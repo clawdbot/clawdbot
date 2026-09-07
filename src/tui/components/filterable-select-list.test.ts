@@ -1,6 +1,7 @@
 // Filterable select list tests cover keyboard filtering and cursor behavior.
 import { CURSOR_MARKER, visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, it } from "vitest";
+import { stripAnsi } from "../../../packages/terminal-core/src/ansi.js";
 import { FilterableSelectList, type FilterableSelectItem } from "./filterable-select-list.js";
 
 type FilterableSelectListTheme = ConstructorParameters<typeof FilterableSelectList>[2];
@@ -92,7 +93,7 @@ describe("FilterableSelectList", () => {
 
     list.handleInput(query);
 
-    expect(list.getFilterText()).toBe(query);
+    expect(stripAnsi(list.render(80)[0] ?? "").trimEnd()).toBe(`>Filter: <> ${query}`);
     expect(list.getSelectedItem()?.value).toBe(expectedValue);
   });
 
@@ -125,13 +126,13 @@ describe("FilterableSelectList", () => {
     };
 
     typeInput(list, "beta");
-    expect(list.getFilterText()).toBe("beta");
+    expect(stripAnsi(list.render(80)[0] ?? "").trimEnd()).toBe(">Filter: <> beta");
     expect(list.getSelectedItem()?.value).toBe("session-2");
 
     list.handleInput(key);
 
     expect(cancelled).toBe(false);
-    expect(list.getFilterText()).toBe("");
+    expect(stripAnsi(list.render(80)[0] ?? "").trimEnd()).toBe(">Filter: <>");
     expect(list.getSelectedItem()?.value).toBe("session-1");
     expect(list.render(80).join("\n")).toContain("first session");
     expect(list.render(80).join("\n")).toContain("second session");

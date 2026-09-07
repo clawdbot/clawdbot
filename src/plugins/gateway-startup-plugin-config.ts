@@ -37,8 +37,11 @@ import {
   collectConfiguredWebSearchProviderIds,
 } from "./gateway-startup-plugin-providers.js";
 import { collectConfiguredSpeechProviderIds } from "./gateway-startup-speech-providers.js";
-import type { InstalledPluginIndexScopeLookup } from "./installed-plugin-index-scope-lookup.js";
-import type { InstalledPluginIndex, InstalledPluginIndexRecord } from "./installed-plugin-index.js";
+import type {
+  InstalledPluginIndex,
+  InstalledPluginIndexRecord,
+  InstalledPluginIndexScopeLookup,
+} from "./installed-plugin-index-types.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
 import { normalizePluginsConfigWithRegistry } from "./plugin-registry-contributions.js";
 
