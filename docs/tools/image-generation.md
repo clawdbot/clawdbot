@@ -352,7 +352,7 @@ and ComfyUI support 1.
 
     To route OpenAI image generation through an Azure OpenAI deployment
     instead of `api.openai.com`, see
-    [Azure OpenAI endpoints](/providers/openai#azure-openai-endpoints).
+    [Azure OpenAI endpoints](/providers/openai/azure#azure-openai-endpoints).
 
   </Accordion>
   <Accordion title="Microsoft Foundry MAI image models">

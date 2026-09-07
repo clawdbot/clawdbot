@@ -2482,5 +2482,37 @@
   {
     "source": "Codex harness troubleshooting",
     "target": "Codex harness 故障排查"
+  },
+  {
+    "source": "OpenAI setup",
+    "target": "OpenAI 设置"
+  },
+  {
+    "source": "OpenAI models",
+    "target": "OpenAI 模型"
+  },
+  {
+    "source": "OpenAI runtimes and Codex auth",
+    "target": "OpenAI 运行时与 Codex 认证"
+  },
+  {
+    "source": "OpenAI coverage and cost",
+    "target": "OpenAI 覆盖范围与费用"
+  },
+  {
+    "source": "OpenAI image and video generation",
+    "target": "OpenAI 图像与视频生成"
+  },
+  {
+    "source": "OpenAI voice and speech",
+    "target": "OpenAI 语音与语音合成"
+  },
+  {
+    "source": "Azure OpenAI endpoints",
+    "target": "Azure OpenAI 端点"
+  },
+  {
+    "source": "OpenAI advanced configuration",
+    "target": "OpenAI 高级配置"
   }
 ]

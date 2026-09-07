@@ -89,7 +89,7 @@ publish a `1050000` token total window, but OpenClaw defaults their active
 runtime budget to `272000` tokens. The opt-in `922000` input budget reserves the
 full `128000` output allowance, and OpenAI applies higher long-context pricing
 to the entire request once input exceeds `272000` tokens. See
-[OpenAI context window defaults](/providers/openai#context-window-defaults-and-long-context-opt-in).
+[OpenAI context window defaults](/providers/openai/setup#context-window-defaults-and-long-context-opt-in).
 
 For images, OpenClaw downscales transcript/tool image payloads before
 provider calls. Tune with `agents.defaults.imageMaxDimensionPx` (default:
