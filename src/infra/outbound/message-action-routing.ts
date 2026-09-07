@@ -54,6 +54,7 @@ async function resolveChannel(
     channel,
     fallbackChannel,
     agentId,
+    action,
   });
   if (selection.source === "tool-context-fallback") {
     params.channel = selection.channel;

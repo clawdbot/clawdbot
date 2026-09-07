@@ -7,6 +7,7 @@ import type { AgentToolResult } from "../../agents/runtime/index.js";
 import { normalizeOptionalAccountId, normalizeAccountId } from "../../routing/account-id.js";
 import { normalizeChatType, type ChatType } from "../chat-type.js";
 import { normalizeConversationReadInvocationOrigin } from "./conversation-read-origin.js";
+import { supportsChannelMessageAction } from "./helpers.js";
 import { resolveChannelPluginRegistration } from "./registry.js";
 import type {
   ChannelMessageActionContext,
@@ -700,10 +701,7 @@ export async function dispatchChannelMessageAction(
   }
   // `handleAction` may be broad; `supportsAction` lets plugins cheaply decline
   // action names before the dispatcher enters channel-specific behavior.
-  if (
-    actions.supportsAction &&
-    !actions.supportsAction({ action: authorizedActionContext.action })
-  ) {
+  if (!supportsChannelMessageAction(actions, authorizedActionContext.action)) {
     return null;
   }
   return await actions.handleAction(authorizedActionContext);
