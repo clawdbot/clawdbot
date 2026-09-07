@@ -91,6 +91,12 @@ catalog discovery. Configured subscription modes remain attached to direct
 credentials, and successful OAuth preparation supplies the resolved current token
 to its catalog consumer rather than the captured store's older token.
 
+Static profile SecretRefs, including custom environment refs, use the activated
+secret snapshot. An unavailable selected ref reports `unavailable` before catalog
+HTTP; its reference name is never sent as a credential or replaced with another
+profile's credential. Restore the secret and run `openclaw secrets reload` before
+retrying discovery.
+
 When every eligible OAuth candidate fails preparation, discovery reports
 `unavailable` with the attempted profile identities instead of treating the
 provider as unconfigured. Compatible prior inventory remains available. A usable

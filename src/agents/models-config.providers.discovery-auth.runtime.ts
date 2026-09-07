@@ -55,12 +55,12 @@ export async function prepareProviderDiscoveryAuth(
           : undefined,
       config?.secrets?.defaults,
     );
-    if (!ref || ref.source === "env") {
+    if (!ref) {
       continue;
     }
     try {
       // Only the canonical owner may redeem this exact profile's published ref.
-      // OAuth/env/plain profiles retain their existing discovery semantics.
+      // Env ref names must not bypass activation and become credential material.
       const resolved = await resolveApiKeyForProfile({
         cfg: config,
         store: authStore,
