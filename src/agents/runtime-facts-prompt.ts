@@ -3,6 +3,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { listActiveProcessSessionReferences } from "./bash-process-references.js";
 import { resolveProcessToolScopeKey } from "./bash-process-scope.js";
+import type { RuntimeContextFragment } from "./internal-runtime-context.js";
 import {
   buildActiveImageGenerationTaskPromptContextForSession,
   buildActiveMusicGenerationTaskPromptContextForSession,
@@ -34,7 +35,7 @@ export function buildMediaTaskRuntimeContext(
   return facts.length ? ["## Media Generation Tasks", ...facts].join("\n") : undefined;
 }
 
-export function buildRuntimeFactsPrompt(params: RuntimeFactsParams): string | undefined {
+export function buildRuntimeFactsContext(params: RuntimeFactsParams): RuntimeContextFragment[] {
   const sections: string[] = [];
   if (params.capabilityToolNames.has("process")) {
     const sessions = listActiveProcessSessionReferences({
@@ -68,5 +69,5 @@ export function buildRuntimeFactsPrompt(params: RuntimeFactsParams): string | un
   if (media) {
     sections.push(media);
   }
-  return sections.join("\n\n") || undefined;
+  return sections.map((text) => ({ kind: "conversation-data", text }));
 }

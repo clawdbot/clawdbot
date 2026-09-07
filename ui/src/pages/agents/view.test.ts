@@ -9,40 +9,10 @@ import { zh_CN } from "../../i18n/locales/zh-CN.ts";
 import { createInitialCronState, loadCronJobsPage } from "../../lib/cron/index.ts";
 import { formatNextRun } from "../../lib/presenter.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
+import { createSkill } from "../skills/view.test-support.ts";
 import { createAgentViewTestProps as createProps } from "./agents-view.test-helpers.ts";
 import { renderAgentChannels, renderAgentFiles } from "./panels-status-files.ts";
 import { renderAgents } from "./view.ts";
-
-function createSkill() {
-  return {
-    name: "Repo Skill",
-    description: "Skill description",
-    source: "workspace",
-    filePath: "/tmp/skill",
-    baseDir: "/tmp",
-    skillKey: "repo-skill",
-    always: false,
-    disabled: false,
-    blockedByAllowlist: false,
-    eligible: true,
-    requirements: {
-      anyBins: [],
-      bins: [],
-      env: [],
-      config: [],
-      os: [],
-    },
-    missing: {
-      anyBins: [],
-      bins: [],
-      env: [],
-      config: [],
-      os: [],
-    },
-    configChecks: [],
-    install: [],
-  };
-}
 
 function createCronJob(id: string, overrides: Partial<CronJob> = {}): CronJob {
   return {
