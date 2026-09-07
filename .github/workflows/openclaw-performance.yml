@@ -151,33 +151,119 @@ jobs:
           [[ "$kova_config_contract" != *$'\n'* && "$kova_config_contract" != *$'\r'* ]] ||
             { echo "::error::kova_config_contract must be a single line."; exit 1; }
           if [[ -z "$kova_ref" || -z "$kova_config_contract" ]]; then
-            contract_status="$(gh api \
-              "repos/${GITHUB_REPOSITORY}/compare/${OPENCLAW_CANONICAL_CONFIG_SINCE}...${resolved_sha}" \
-              --jq .status)"
-            case "$contract_status" in
-              ahead | identical)
-                detected_contract=canonical
+            detected_contract="$(node - "$GITHUB_REPOSITORY" "$resolved_sha" <<'NODE'
+          const assert = require("node:assert/strict");
+          const { createHash } = require("node:crypto");
+          const https = require("node:https");
+          const [repository, ref] = process.argv.slice(2);
+          const schemaPath = "src/config/zod-schema.agent-defaults.ts";
+          const name = "zod-schema.agent-defaults.ts";
+          const facts = { path: schemaPath, ref, status: null, transport: "failed", receivedBytes: 0 };
+          let stage = "request";
+          async function main() {
+            assert(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository) && /^[a-f0-9]{40}$/.test(ref));
+            const body = await new Promise((resolve, reject) => {
+              const chunks = [];
+              let settled = false, timer;
+              const finish = (error, value) => {
+                if (settled) return;
+                settled = true;
+                clearTimeout(timer);
+                if (error) { request.destroy(); reject(error); } else resolve(value);
+              };
+              const request = https.get({
+                hostname: "api.github.com", method: "GET", agent: false, maxHeaderSize: 64 * 1024,
+                path: `/repos/${repository}/contents/${schemaPath}?ref=${ref}`,
+                headers: { Accept: "application/vnd.github.object+json", "User-Agent": "openclaw-performance",
+                  ...(process.env.GH_TOKEN ? { Authorization: `Bearer ${process.env.GH_TOKEN}` } : {}) },
+              }, (response) => {
+                facts.status = response.statusCode;
+                facts.media = String(response.headers["content-type"] ?? "").split(";")[0];
+                response.on("data", (chunk) => {
+                  facts.receivedBytes += chunk.length;
+                  if (facts.receivedBytes > 2 * 1024 * 1024) {
+                    stage = "receive limit";
+                    finish(new Error());
+                  } else if (!settled) chunks.push(chunk);
+                });
+                response.once("error", () => finish(new Error()));
+                response.once("aborted", () => finish(new Error()));
+                response.once("end", () => finish(response.complete ? null : new Error(), Buffer.concat(chunks)));
+              });
+              request.once("error", () => finish(new Error()));
+              timer = setTimeout(() => { stage = "deadline"; finish(new Error()); }, 30_000);
+            });
+            facts.transport = "complete";
+            stage = "HTTP status";
+            assert(facts.status === 200 || facts.status === 404);
+            let contract = "";
+            if (facts.status === 200) {
+              stage = "metadata";
+              assert(["application/json", "application/vnd.github.object+json"].includes(facts.media));
+              const value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(body));
+              const object = (entry) => entry !== null && typeof entry === "object" && !Array.isArray(entry);
+              const entryMetadata = (entry) => object(entry) &&
+                ["file", "dir", "symlink", "submodule"].includes(entry.type) &&
+                typeof entry.name === "string" && !["", ".", ".."].includes(entry.name) && !/[/\\\0]/.test(entry.name) &&
+                typeof entry.sha === "string" && /^[a-f0-9]{40}$/.test(entry.sha) &&
+                Number.isSafeInteger(entry.size) && entry.size >= 0;
+              assert(object(value));
+              if (Object.hasOwn(value, "entries")) {
+                assert((value.type === undefined || value.type === "dir") &&
+                  (value.path === undefined || value.path === schemaPath) &&
+                  (value.name === undefined || value.name === name) &&
+                  Array.isArray(value.entries) && value.entries.length <= 1000 &&
+                  value.entries.every((entry) => entryMetadata(entry) && entry.path === `${schemaPath}/${entry.name}`));
+              } else {
+                assert(entryMetadata(value) && value.path === schemaPath && value.name === name);
+                if (value.type === "symlink") {
+                  assert(typeof value.target === "string" && value.target.length > 0);
+                } else if (value.type === "submodule" || Object.hasOwn(value, "submodule_git_url")) {
+                  assert(["file", "submodule"].includes(value.type) &&
+                    typeof value.submodule_git_url === "string" && value.submodule_git_url.length > 0);
+                } else {
+                  assert(value.type === "file" && value.size <= 1_000_000 &&
+                    value.encoding === "base64" && typeof value.content === "string");
+                  stage = "base64";
+                  const encoded = value.content.replace(/\r?\n/g, "");
+                  assert(encoded.length % 4 === 0 && /^[A-Za-z0-9+/]*={0,2}$/.test(encoded));
+                  const decoded = Buffer.from(encoded, "base64");
+                  assert(decoded.length === value.size && decoded.toString("base64") === encoded);
+                  // Latin-1 preserves every byte; only literal LF-delimited whole lines classify.
+                  const lines = decoded.toString("latin1").split("\n");
+                  contract = lines.includes("    mediaModels: z") ? "canonical" :
+                    lines.includes("    imageGenerationModel: AgentToolModelSchema.optional(),") ? "legacy-list" : "";
+                  Object.assign(facts, { encoding: value.encoding, declaredBytes: value.size,
+                    decodedBytes: decoded.length, blob: value.sha, sha256: createHash("sha256").update(decoded).digest("hex") });
+                }
+              }
+            }
+            facts.contract = contract;
+            process.stdout.write(contract);
+          }
+          main().catch(() => {
+            console.error(`::error::Contents acquisition failed at ${stage}`);
+            process.exitCode = 1;
+          }).finally(() => {
+            // Never emit source, error bodies, authorization headers, or arbitrary response headers.
+            if (!["application/json", "application/vnd.github.object+json"].includes(facts.media)) delete facts.media;
+            console.error("performance-contract " + JSON.stringify(facts));
+          });
+          NODE
+            )"
+            default_kova_ref=""
+            case "$detected_contract" in
+              canonical)
                 default_kova_ref="$KOVA_CANONICAL_CONFIG_REF"
                 ;;
-              behind)
-                detected_contract=legacy-list
+              legacy-list)
                 default_kova_ref="$KOVA_LEGACY_LIST_CONFIG_REF"
                 ;;
-              diverged)
-                # Ancestry alone cannot classify a backported schema.
-                case "$kova_config_contract" in
-                  canonical) default_kova_ref="$KOVA_CANONICAL_CONFIG_REF" ;;
-                  legacy-list) default_kova_ref="$KOVA_LEGACY_LIST_CONFIG_REF" ;;
-                  *)
-                    echo "::error::Diverged target; set kova_config_contract explicitly to canonical or legacy-list." >&2
-                    exit 1
-                    ;;
-                esac
-                detected_contract="$kova_config_contract"
-                ;;
               *)
-                echo "::error::Unable to classify the Kova config contract for target ${resolved_sha}."
-                exit 1
+                [[ -n "$kova_ref" ]] || {
+                  echo "::error::Target has no recognized Kova config-fixture contract. Supply kova_ref explicitly and optionally kova_config_contract."
+                  exit 1
+                }
                 ;;
             esac
             kova_ref="${kova_ref:-$default_kova_ref}"
@@ -1077,6 +1163,7 @@ jobs:
     timeout-minutes: 240
     strategy:
       fail-fast: false
+      max-parallel: 1
       matrix:
         include:
           - lane: mock-provider
@@ -1168,6 +1255,7 @@ jobs:
           [[ "$("${RUNNER_TEMP}/crabbox" version)" == "$CRABBOX_VERSION" ]]
 
       - name: Attest and run candidate in disposable Crabbox
+        id: execution
         if: steps.lane.outputs.run == 'true'
         env:
           CRABBOX_CONFIG: ${{ github.workspace }}/.github/crabbox/openclaw-performance-untrusted.yaml
@@ -1182,15 +1270,17 @@ jobs:
           [[ "$repeat" =~ ^[1-9][0-9]*$ ]] || { echo "::error::repeat must be positive"; exit 1; }
           downloads="${RUNNER_TEMP}/performance-${lane}"
           timing_log="${RUNNER_TEMP}/crabbox-${lane}.stderr" crabbox="${RUNNER_TEMP}/crabbox"
+          collection_log="${RUNNER_TEMP}/crabbox-${lane}-collection.stderr"
           mkdir -p "$downloads"
           unset CRABBOX_AWS_INSTANCE_PROFILE "${!CRABBOX_TAILSCALE@}"
           export CRABBOX_ENV_ALLOW=CI
           lease_id="cbx_$(printf '%s' "$GITHUB_RUN_ID:$GITHUB_RUN_ATTEMPT:$lane" | sha256sum | cut -c1-12)"
           cleanup_attempted=false cleanup_confirmed=false command_status=1
+          collection_status=not-run
           write_diagnostics() {
-            node - "$timing_log" "$lane" "$lease_id" "$command_status" "$cleanup_confirmed" <<'NODE'
+            node - "$timing_log" "$lane" "$lease_id" "$command_status" "$cleanup_confirmed" "$collection_status" "$downloads" <<'NODE'
           const fs = require("node:fs");
-          const [log, lane, leaseId, exitCode, stopped] = process.argv.slice(2);
+          const [log, lane, leaseId, exitCode, stopped, collectionStatus, downloads] = process.argv.slice(2);
           let tail = "";
           if (fs.existsSync(log)) {
             const fd = fs.openSync(log, "r");
@@ -1230,9 +1320,17 @@ jobs:
           }
           const directory = ".artifacts/performance-crabbox/diagnostics";
           fs.mkdirSync(directory, { recursive: true });
+          const timing = (name) => {
+            try {
+              const value = JSON.parse(fs.readFileSync(`${downloads}/${name}.json`, "utf8"));
+              return { runId:value.runId, exitCode:value.exitCode, commandMs:value.commandMs };
+            } catch { return null; }
+          };
           fs.writeFileSync(`${directory}/${lane}.json`, JSON.stringify({
             provider: "aws", leaseId, lane, exitCode: Number(exitCode),
             explicitStopConfirmed: stopped === "true", metadata, kova: kova.slice(-1),
+            workloadTiming: timing("timing"),
+            collection: { exitCode:collectionStatus === "not-run" ? null : Number(collectionStatus), timing:timing("collection-timing") },
           }, null, 2) + "\n");
           NODE
           }
@@ -1254,6 +1352,16 @@ jobs:
             exit "$status"
           }
           trap cleanup_on_exit EXIT
+          parse_timing() {
+            jq -Rrc 'fromjson? | select(type == "object") | select(has("runId"))' "$1" |
+              tail -n 1 > "$2" || return $?
+            [[ -s "$2" ]] || return 1
+            jq -e --arg id "$lease_id" --arg cwd "$PWD" --argjson code "$3" \
+              '.provider == "aws" and .leaseId == $id and .repoPath == $cwd and
+                .workdir == ("/work/crabbox/" + $id + "/openclaw") and
+                (.runId | type == "string" and startswith("run_")) and
+                .exitCode == $code and (.commandMs | type == "number" and . >= 0)' "$2" >/dev/null
+          }
           "$crabbox" config show --json | jq -e '.aws.instanceProfile == ""' >/dev/null ||
             { echo "::error::resolved AWS instance profile is not empty"; exit 1; }
           "$crabbox" warmup \
@@ -1265,14 +1373,13 @@ jobs:
             '.id == $id and .provider == "aws" and .network == "public" and .tailscale == null and .providerMetadata.instanceProfileAttached == false' \
             >/dev/null || { echo "::error::AWS lease failed pre-execution capability attestation"; exit 1; }
           echo "lease attested provider=aws network=public tailscale_requested=false tailscale_metadata=none instance_profile=absent"
-          args=(
+          common_args=(
             run --provider aws --id "$lease_id" --network public
             --stop-after never --timing-json --no-hydrate --allow-env CI
-            --script scripts/openclaw-performance-crabbox.sh
           )
           if [[ "$lane" != cleanup-probe ]]; then
             remote=".artifacts/performance-crabbox/${lane}"
-            args+=(
+            common_args+=(
               --require-artifact "${remote}/payload.tar.gz"
               --require-artifact "${remote}/remote-evidence.json"
               --require-artifact-schema "${remote}/remote-evidence.json=.github/crabbox/openclaw-performance-evidence.schema.json"
@@ -1280,6 +1387,7 @@ jobs:
               --download "${remote}/remote-evidence.json=${downloads}/remote-evidence.json"
             )
           fi
+          args=("${common_args[@]}" --script scripts/openclaw-performance-crabbox.sh)
           set +e
           require_instrumented=false
           if [[ "$KOVA_SHA" == "$KOVA_CANONICAL_CONFIG_REF" || "$KOVA_SHA" == "$KOVA_LEGACY_LIST_CONFIG_REF" ]]; then
@@ -1294,25 +1402,66 @@ jobs:
             2>&1 | tee "$timing_log"
           status=${PIPESTATUS[0]}
           command_status="$status"
+          readonly command_status
           set -e
-          confirm_cleanup
-          write_diagnostics
-          trap - EXIT
-          jq -Rrc --arg id "$lease_id" \
-            'fromjson? | select(type == "object") | select(.provider == "aws" and .leaseId == $id and
-              (.runId | type == "string") and (.exitCode | type == "number"))' "$timing_log" |
-            tail -n 1 > "$downloads/timing.json"
-          [[ -s "$downloads/timing.json" ]] &&
-            jq -e --arg id "$lease_id" '.leaseId == $id' "$downloads/timing.json" >/dev/null ||
-            { echo "::error::Crabbox timing did not bind the expected lease"; exit 1; }
+          parse_timing "$timing_log" "$downloads/timing.json" "$command_status" ||
+            { echo "::error::Crabbox workload timing identity is invalid"; exit 1; }
           if [[ "$lane" == cleanup-probe ]]; then
-            [[ "$status" == 42 ]] || { echo "::error::cleanup probe did not exit 42"; exit 1; }
+            confirm_cleanup
+            [[ "$command_status" == 42 ]] || { echo "::error::cleanup probe did not exit 42"; exit 1; }
             exit 0
           fi
-          [[ "$status" == 0 ]] || exit "$status"
+          receipt_status=0
+          jq -Rrc 'select(startswith("performance-result ")) | ltrimstr("performance-result ") |
+            fromjson' "$timing_log" | tail -n 1 > "$downloads/workload.json" ||
+            receipt_status=$?
+          if [[ "$receipt_status" != 0 || ! -s "$downloads/workload.json" ]] || ! jq -e --slurpfile timing "$downloads/timing.json" \
+            --argjson status "$command_status" \
+            '.noHydration == true and .workspace == $timing[0].workdir and .runId == $timing[0].runId and
+              .exitCode == $status and .exportExitCode == 0 and
+              (.startedAt | type == "string") and (.finishedAt | type == "string")' \
+            "$downloads/workload.json" >/dev/null; then
+            echo "::error::No sealed workload export; refusing collection"
+            [[ "$command_status" != 0 ]] || exit 1
+            exit "$command_status"
+          fi
+          if [[ "$command_status" != 0 ]]; then
+            jq -e '.errorKind == "command-exit" and .runStatus == "failed"' \
+              "$downloads/timing.json" >/dev/null ||
+              { echo "::error::Workload termination is uncertain"; exit 1; }
+            set +e
+            "$crabbox" "${common_args[@]}" --no-sync -- /usr/bin/true \
+              2>&1 | tee "$collection_log"
+            collection_status=${PIPESTATUS[0]}
+            set -e
+            parse_timing "$collection_log" "$downloads/collection-timing.json" "$collection_status" ||
+              { echo "::error::Crabbox collection timing identity is invalid"; exit 1; }
+            jq -e --slurpfile original "$downloads/timing.json" \
+              '.workdir == $original[0].workdir and .runId != $original[0].runId and .syncSkipped == true' \
+              "$downloads/collection-timing.json" >/dev/null ||
+              { echo "::error::Crabbox collection did not preserve the workspace"; exit 1; }
+          fi
+          confirm_cleanup
+          [[ "$collection_status" == not-run || "$collection_status" == 0 ]] || exit "$collection_status"
+          jq -n --arg lane "$lane" --arg testedRef "$TESTED_REF" --arg openclawSha "$OPENCLAW_SHA" \
+            --arg kovaSha "$KOVA_SHA" --arg workflowSha "$WORKFLOW_SHA" \
+            --arg runId "$GITHUB_RUN_ID" --arg runAttempt "$GITHUB_RUN_ATTEMPT" \
+            --arg commit "$CRABBOX_COMMIT" --arg version "$CRABBOX_VERSION" \
+            --arg profile "$PROFILE" --arg repeat "$repeat" --arg contract "$KOVA_CONFIG_CONTRACT" \
+            --arg include "${{ matrix.include_filters }}" --arg gated "${{ inputs.fail_on_regression || 'false' }}" \
+            --slurpfile workload "$downloads/workload.json" --slurpfile timing "$downloads/timing.json" \
+            '{lane:$lane,testedRef:$testedRef,openclawSha:$openclawSha,kovaSha:$kovaSha,
+              workflow:{sha:$workflowSha,runId:$runId,runAttempt:$runAttempt},
+              crabbox:{commit:$commit,version:$version},stopped:true,timing:$timing[0],
+              command:{name:$lane,argv:["profile="+$profile,"repeat="+$repeat,"contract="+$contract,
+                "include="+$include,"failOnRegression="+$gated],exitCode:$workload[0].exitCode,
+                startedAt:$workload[0].startedAt,finishedAt:$workload[0].finishedAt}}' > "$downloads/expected.json"
           scripts/openclaw-performance-crabbox.sh verify \
             "$lane" "$downloads/timing.json" "$lease_id" "$downloads/remote-evidence.json" \
-            "$downloads/payload.tar.gz" ".artifacts/performance-crabbox/evidence/${lane}.json"
+            "$downloads/payload.tar.gz" ".artifacts/performance-crabbox/evidence/${lane}.json" \
+            "$downloads/expected.json"
+          echo "artifacts_available=true" >> "$GITHUB_OUTPUT"
+          exit "$command_status"
 
       - name: Upload external performance diagnostics
         if: ${{ always() && steps.lane.outputs.run == 'true' }}
@@ -1324,7 +1473,7 @@ jobs:
           retention-days: 30
 
       - name: Upload external performance artifacts
-        if: ${{ success() && steps.lane.outputs.run == 'true' && matrix.lane != 'cleanup-probe' }}
+        if: ${{ always() && steps.execution.outputs.artifacts_available == 'true' && matrix.lane != 'cleanup-probe' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: ${{ matrix.lane == 'source' && format('openclaw-performance-source-{0}-{1}', github.run_id, github.run_attempt) || format('openclaw-performance-{0}-{1}-{2}', matrix.lane, github.run_id, github.run_attempt) }}

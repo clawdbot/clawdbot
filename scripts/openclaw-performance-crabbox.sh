@@ -14,7 +14,8 @@ readonly MAX_ARTIFACT_FILE_BYTES=50000000
 VERIFY_TMP=""
 
 build_helpers() {
-  local version
+  local version output=".github/crabbox/performance-control/helpers"
+  [[ ! -e "$output" && ! -L "$output" ]] || die "helper output must be fresh"
   version="$(node -p 'require("./package.json").devDependencies.esbuild')"
   [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "esbuild must be pinned"
   npm exec --yes --package="esbuild@$version" -- esbuild \
@@ -22,8 +23,13 @@ build_helpers() {
     scripts/lib/kova-report-gate.mts scripts/kova-ci-summary.mts \
     scripts/bench-cli-startup.ts scripts/openclaw-performance-source-summary.mts \
     --bundle --platform=node --format=esm --target=node24 --outbase=scripts \
-    --outdir=.artifacts/performance-control/helpers --out-extension:.js=.mjs \
+    --outdir="$output" --out-extension:.js=.mjs \
     --alias:@openclaw/normalization-core/record-coerce=./packages/normalization-core/src/record-coerce.ts
+  [[ "$(find "$output" -type f | LC_ALL=C sort)" == "$(printf '%s\n' \
+    "$output/bench-cli-startup.mjs" "$output/kova-ci-summary.mjs" \
+    "$output/lib/kova-report-gate.mjs" "$output/lib/kova-report-selector.mjs" \
+    "$output/lib/kova-workflow-evidence.mjs" "$output/openclaw-performance-source-summary.mjs")" ]] ||
+    die "unexpected helper bundle set"
 }
 
 die() {
@@ -157,6 +163,7 @@ run_sut() {
   fi
 
   npm --prefix "$HOME/.local" install --no-audit --no-fund "pnpm@${PNPM_VERSION}"
+  export PATH="$HOME/.local/node_modules/.bin:$PATH"
   pnpm install --frozen-lockfile
 
   if [[ "$lane" == "source" ]]; then
@@ -420,7 +427,7 @@ write_payload() {
   local run_id="$8" run_attempt="$9" crabbox_commit="${10}" crabbox_version="${11}"
   local started_at="${12}" finished_at="${13}"
   local profile="${14}" repeat="${15}" contract="${16}" include_filters="${17}"
-  local fail_on_regression="${18}"
+  local fail_on_regression="${18}" workload_status="${19}"
   local output="$control_workspace/.artifacts/performance-crabbox/$lane"
   local manifest="$output/artifacts.jsonl" payload="$output/payload.tar.gz"
   local paths=()
@@ -474,6 +481,7 @@ write_payload() {
     --arg startedAt "$started_at" --arg finishedAt "$finished_at" \
     --arg profile "$profile" --arg repeat "$repeat" --arg contract "$contract" \
     --arg includeFilters "$include_filters" --arg failOnRegression "$fail_on_regression" \
+    --argjson exitCode "$workload_status" \
     --slurpfile artifacts "$output/artifacts.json" \
     '{
       schemaVersion:1,lane:$lane,testedRef:$testedRef,openclawSha:$openclawSha,kovaSha:$kovaSha,
@@ -483,7 +491,7 @@ write_payload() {
         name:$lane,
         argv:["profile="+$profile,"repeat="+$repeat,"contract="+$contract,
           "include="+$includeFilters,"failOnRegression="+$failOnRegression],
-        exitCode:0,startedAt:$startedAt,finishedAt:$finishedAt
+        exitCode:$exitCode,startedAt:$startedAt,finishedAt:$finishedAt
       },
       isolation:{
         sutUser:"openclaw-sut",trustedHarnessRootOwned:true,noSudo:true,
@@ -525,17 +533,33 @@ remote_main() {
     root_script="/usr/local/libexec/openclaw-performance-${self_sha}.sh"
     control_workspace="$(dirname "$(dirname "$(dirname "$(realpath "$0")")")")"
     [[ -d "$control_workspace/.crabbox/scripts" ]] || die "Crabbox workspace is invalid"
+    [[ "${CRABBOX_LEASE_ID:-}" =~ ^cbx_[0-9a-f]{12}$ &&
+      "$control_workspace" == "/work/crabbox/$CRABBOX_LEASE_ID/openclaw" ]] ||
+      die "expected dedicated raw workspace"
+    local hydration="$HOME/.crabbox/actions/$CRABBOX_LEASE_ID.env"
+    [[ ! -e "$hydration" && ! -L "$hydration" ]] || die "hydrated workspace is forbidden"
     # The SSH collector must own each private ancestor before root writes the payload.
     local path status=0
     for path in .artifacts .artifacts/performance-crabbox ".artifacts/performance-crabbox/$lane"; do
       [[ ! -L "$control_workspace/$path" ]] || die "collector export path is a symlink"
       install -d -m 0700 "$control_workspace/$path"
     done
+    [[ ! -e "$control_workspace/.artifacts/performance-crabbox/$lane/workload-result.json" ]] ||
+      die "workload receipt already exists"
     artifact_metadata collector-before "$control_workspace" "$lane"
     sudo /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin /bin/bash -c \
       'install -D -o root -g root -m 0755 "$1" "$2"; workspace=$3; shift 3; cd "$workspace"; exec "$0" "$@"' \
       "$root_script" "$0" "$root_script" "$control_workspace" remote "$@" || status=$?
     artifact_metadata collector-after "$control_workspace" "$lane"
+    # Always terminate candidate output with the collector's own result, including null on failure.
+    local receipt="$control_workspace/.artifacts/performance-crabbox/$lane/workload-result.json" result=null
+    if [[ -f "$receipt" && ! -L "$receipt" &&
+      "$(stat -c '%u:%g:%a' "$receipt")" == "0:0:644" &&
+      ! -e "$hydration" && ! -L "$hydration" ]]; then
+      result="$(jq -c --arg workspace "$control_workspace" --arg runId "$CRABBOX_RUN_ID" \
+        '. + {workspace:$workspace,runId:$runId,noHydration:true}' "$receipt")"
+    fi
+    printf 'performance-result %s\n' "$result"
     return "$status"
   fi
   [[ "$0" == /usr/local/libexec/openclaw-performance-*.sh ]] || die "root harness is not installed"
@@ -545,7 +569,6 @@ remote_main() {
   [[ "$(sha256sum "$0" | cut -d' ' -f1)" == "$installed_hash" ]] || die "root harness hash is invalid"
 
   local control_workspace="$PWD" root="/srv/openclaw-performance" started_at finished_at status
-  started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   rm -rf "$root"
   install -d -m 0755 "$root"
   install_toolchain
@@ -555,44 +578,70 @@ remote_main() {
     lib/kova-report-gate.mjs kova-ci-summary.mjs bench-cli-startup.mjs \
     openclaw-performance-source-summary.mjs; do
     install -D -o root -g root -m 0644 \
-      "$control_workspace/.artifacts/performance-control/helpers/$helper" "$helpers/$helper"
+      "$control_workspace/.github/crabbox/performance-control/helpers/$helper" "$helpers/$helper"
   done
   prepare_sut
   clone_exact openclaw/openclaw "$openclaw_sha" "$root/openclaw"
   clone_exact openclaw/Kova "$kova_sha" "$root/kova"
 
+  started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   set +e
   as_sut "$(realpath "$0")" __sut \
     "$lane" "$root" "$profile" "$repeat" "$contract" "$include_filters" \
     "$expected_entries" "$fail_on_regression" "$helpers" "$model" "$require_instrumented"
   status=$?
   set -e
+  finished_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   quiesce_sut
   [[ "$(as_sut git -C "$root/openclaw" rev-parse HEAD)" == "$openclaw_sha" ]] ||
     die "OpenClaw HEAD changed during SUT execution"
   [[ "$(as_sut git -C "$root/kova" rev-parse HEAD)" == "$kova_sha" ]] ||
     die "Kova HEAD changed during SUT execution"
-  ((status == 0)) || return "$status"
+  [[ "$lane" != cleanup-probe ]] || return "$status"
 
-  finished_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  write_payload "$lane" "$root" "$control_workspace" "$tested_ref" "$openclaw_sha" "$kova_sha" \
+  local export_status
+  set +e
+  (
+    set -e
+    write_payload "$lane" "$root" "$control_workspace" "$tested_ref" "$openclaw_sha" "$kova_sha" \
     "$workflow_sha" "$run_id" "$run_attempt" "$CRABBOX_COMMIT" "$crabbox_version" \
     "$started_at" "$finished_at" "$profile" "$repeat" "$contract" "$include_filters" \
-    "$fail_on_regression"
+    "$fail_on_regression" "$status"
+  )
+  export_status=$?
+  set -e
+  local receipt="$control_workspace/.artifacts/performance-crabbox/$lane/workload-result.json"
+  jq -n --argjson exitCode "$status" --argjson exportExitCode "$export_status" \
+    --arg startedAt "$started_at" --arg finishedAt "$finished_at" \
+    '{exitCode:$exitCode,exportExitCode:$exportExitCode,startedAt:$startedAt,finishedAt:$finishedAt}' > "$receipt"
+  chmod 0644 "$receipt"
+  ((status == 0)) || return "$status"
+  return "$export_status"
 }
 
 verify_payload() {
-  (($# == 6)) || die "verify mode requires lane, timing, lease, evidence, payload, and output"
+  (($# == 7)) || die "verify mode requires lane, timing, lease, evidence, payload, output, and expectations"
   local lane="$1" timing="$2" lease_id="$3" evidence="$4" payload="$5" output="$6"
+  local expected="$7"
   local tmp
   tmp="$(mktemp -d)"
   VERIFY_TMP="$tmp"
   trap 'rm -rf -- "$VERIFY_TMP"' EXIT
 
-  jq -e --arg id "$lease_id" '.leaseId == $id' "$timing" >/dev/null ||
+  jq -e --arg id "$lease_id" --slurpfile expected "$expected" \
+    '.provider == "aws" and .leaseId == $id and . == $expected[0].timing and
+      $expected[0].stopped == true' "$timing" >/dev/null ||
     die "Crabbox timing did not bind the expected lease"
-  jq -e --arg lane "$lane" \
-    '.schemaVersion == 1 and .lane == $lane and (.artifacts | length > 0 and length <= 256)' \
+  jq -e --arg lane "$lane" --slurpfile expected "$expected" \
+    '. as $e | $expected[0] as $x |
+      .schemaVersion == 1 and .lane == $lane and
+      all(["testedRef","openclawSha","kovaSha","workflow","crabbox","command"][]; $e[.] == $x[.]) and
+      (.artifacts | length > 0 and length <= 256) and
+      (.artifacts | map(.path) | length == (unique | length)) and
+      all(.artifacts[]; (.size > 0 and .size <= 50000000) and
+        (.path | test("^\\.artifacts/[A-Za-z0-9._/-]+$")) and
+        (.path | split("/") | all(. != ".." and . != "."))) and
+      ([.artifacts[].size] | add <= 250000000)' \
     "$evidence" >/dev/null || die "remote evidence is invalid"
 
   tar -tzf "$payload" > "$tmp/tar-paths"

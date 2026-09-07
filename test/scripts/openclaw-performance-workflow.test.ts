@@ -1,5 +1,5 @@
 // Openclaw Performance Workflow tests cover openclaw performance workflow script behavior.
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import {
   chmodSync,
   existsSync,
@@ -10,6 +10,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -135,59 +136,197 @@ function createGitHubResolutionStub(root: string) {
   writeFileSync(
     gh,
     `#!/bin/sh
+[ "\${API_ERROR:-}" != "$2" ] || exit 71
 case "$2" in
   repos/openclaw/openclaw/compare/*) printf '%s\\n' "$CONTRACT_STATUS" ;;
   repos/openclaw/openclaw/commits/*) printf '%s\\n' "$TARGET_SHA" ;;
-  repos/openclaw/Kova/commits/*) printf '%s\\n' "\${2##*/}" ;;
+  repos/openclaw/Kova/commits/*) printf '%s\\n' "\${KOVA_SHA_OVERRIDE:-\${2##*/}}" ;;
   *) exit 64 ;;
 esac
 `,
   );
   chmodSync(gh, 0o755);
+  writeFileSync(join(bin, "git"), '#!/bin/sh\nprintf invoked > "$GIT_POISON"\nexit 99\n', {
+    mode: 0o755,
+  });
   return bin;
 }
 
-function runTargetResolution(
-  contractStatus: "ahead" | "behind" | "diverged",
-  contractOverride = "",
-) {
+const CANONICAL_SCHEMA = "    mediaModels: z\n";
+const LEGACY_SCHEMA = "    imageGenerationModel: AgentToolModelSchema.optional(),\n";
+const SCHEMA_PATH = "src/config/zod-schema.agent-defaults.ts";
+
+type ResolutionOptions = {
+  schema?: string | Buffer;
+  contractStatus?: "ahead" | "behind" | "diverged";
+  contractOverride?: string;
+  kovaRef?: string;
+  overrides?: {
+    TARGET_SHA?: string;
+    TARGET_REF_INPUT?: string;
+    KOVA_SHA_OVERRIDE?: string;
+    API_ERROR?: string;
+  };
+  status?: number;
+  metadata?: unknown;
+  body?: string;
+  headers?: Record<string, string>;
+  fault?: "reset" | "truncate" | "timeout";
+};
+
+async function runTargetResolution(options: ResolutionOptions = {}) {
   const step = findStep("Resolve OpenClaw target ref", "resolve_target");
   const root = tempDirs.make("openclaw-performance-resolve-");
   const bin = createGitHubResolutionStub(root);
   const output = join(root, "output");
   const canonicalRef = "a".repeat(40);
   const legacyRef = "b".repeat(40);
-  const result = spawnSync("bash", ["-c", step.run ?? ""], {
-    encoding: "utf8",
+  const schema = Buffer.from(options.schema ?? CANONICAL_SCHEMA);
+  const metadata = options.metadata ?? {
+    type: "file",
+    name: "zod-schema.agent-defaults.ts",
+    path: SCHEMA_PATH,
+    sha: "f".repeat(40),
+    size: schema.length,
+    encoding: "base64",
+    content: schema.toString("base64"),
+  };
+  let requests = 0;
+  let responseClosed = false;
+  const server = createServer((request, response) => {
+    requests += 1;
+    expect(request.method).toBe("GET");
+    expect(request.url).toBe(
+      `/repos/openclaw/openclaw/contents/${SCHEMA_PATH}?ref=${"c".repeat(40)}`,
+    );
+    expect(request.headers.accept).toBe("application/vnd.github.object+json");
+    response.on("close", () => {
+      responseClosed = true;
+    });
+    if (options.fault === "reset") {
+      request.socket.destroy();
+      return;
+    }
+    if (options.fault === "timeout") {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.flushHeaders();
+      return;
+    }
+    response.writeHead(options.status ?? 200, {
+      "content-type": "application/json; charset=utf-8",
+      ...options.headers,
+    });
+    if (options.fault === "truncate") {
+      response.flushHeaders();
+      response.write('{"type":');
+      setImmediate(() => response.destroy());
+      return;
+    }
+    response.end(options.body ?? JSON.stringify(metadata));
+  });
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("Contents fixture did not bind");
+  }
+  const preload = join(root, "contents.cjs");
+  writeFileSync(
+    preload,
+    `
+const fs = require("node:fs");
+const http = require("node:http");
+const https = require("node:https");
+const assert = require("node:assert/strict");
+let deadline;
+https.get = (options, callback) => {
+  assert.equal(options.hostname, "api.github.com");
+  assert.equal(options.method, "GET");
+  assert.equal(options.maxHeaderSize, 64 * 1024);
+  fs.appendFileSync(process.env.CONTENTS_CALLS, JSON.stringify({
+    hostname: options.hostname, method: options.method, path: options.path
+  }) + "\\n");
+  return http.get({...options, hostname:"127.0.0.1", port:${address.port}}, (response) => {
+    callback(response);
+    if (process.env.CONTENTS_TIMEOUT === "true") {
+      assert.equal(typeof deadline, "function");
+      setImmediate(deadline);
+    }
+  });
+};
+if (process.env.CONTENTS_TIMEOUT === "true") {
+  const timer = global.setTimeout;
+  global.setTimeout = (callback, delay, ...args) => {
+    assert.equal(delay, 30000);
+    deadline = callback;
+    return timer(callback, delay, ...args);
+  };
+}
+`,
+  );
+  const child = spawn("bash", ["-c", step.run ?? ""], {
+    cwd: root,
     env: {
       ...process.env,
-      CONTRACT_STATUS: contractStatus,
+      CONTRACT_STATUS: options.contractStatus ?? "ahead",
       GH_TOKEN: "test",
       GITHUB_OUTPUT: output,
       GITHUB_REF_NAME: "main",
       GITHUB_REPOSITORY: "openclaw/openclaw",
       KOVA_CANONICAL_CONFIG_REF: canonicalRef,
-      KOVA_CONFIG_CONTRACT_INPUT: contractOverride,
+      KOVA_CONFIG_CONTRACT_INPUT: options.contractOverride ?? "",
       KOVA_LEGACY_LIST_CONFIG_REF: legacyRef,
       KOVA_TRUSTED_LIVE_REF: canonicalRef,
-      KOVA_REF_INPUT: "",
+      KOVA_REF_INPUT: options.kovaRef ?? "",
       KOVA_REPOSITORY: "openclaw/Kova",
       OPENCLAW_CANONICAL_CONFIG_SINCE: "d".repeat(40),
       PATH: `${bin}:${process.env.PATH ?? ""}`,
       TARGET_REF_INPUT: "candidate",
       TARGET_SHA: "c".repeat(40),
       WORKFLOW_SHA: "e".repeat(40),
+      GIT_POISON: join(root, "git-called"),
+      NODE_OPTIONS: `--require=${JSON.stringify(preload)}`,
+      CONTENTS_CALLS: join(root, "contents-calls"),
+      CONTENTS_TIMEOUT: String(options.fault === "timeout"),
+      ...options.overrides,
     },
+    stdio: ["ignore", "pipe", "pipe"],
   });
+  let stdout = "";
+  let stderr = "";
+  child.stdout.on("data", (chunk: Buffer) => {
+    stdout += chunk.toString();
+  });
+  child.stderr.on("data", (chunk: Buffer) => {
+    stderr += chunk.toString();
+  });
+  let status: number | null;
+  try {
+    status = await new Promise<number | null>((resolve, reject) => {
+      child.once("error", reject);
+      child.once("close", resolve);
+    });
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => {
+      server.close(() => resolve());
+    });
+  }
+  const result = { status, stdout, stderr };
   const outputs = Object.fromEntries(
     existsSync(output)
       ? readFileSync(output, "utf8")
           .trim()
           .split("\n")
-          .map((line) => line.split("=", 2))
+          .map((line) => {
+            const separator = line.indexOf("=");
+            return [line.slice(0, separator), line.slice(separator + 1)];
+          })
       : [],
   );
-  return { canonicalRef, legacyRef, outputs, result };
+  expect(existsSync(join(root, "git-called"))).toBe(false);
+  return { canonicalRef, legacyRef, outputs, result, requests, responseClosed, root };
 }
 
 describe("OpenClaw performance workflow", () => {
@@ -339,9 +478,7 @@ describe("OpenClaw performance workflow", () => {
     );
     expect(resolveTarget.run).toContain("KOVA_CANONICAL_CONFIG_REF");
     expect(resolveTarget.run).toContain('kova_ref="${KOVA_REF_INPUT:-}"');
-    expect(resolveTarget.run).toContain("OPENCLAW_CANONICAL_CONFIG_SINCE");
-    expect(resolveTarget.run).toContain("detected_contract=canonical");
-    expect(resolveTarget.run).toContain("detected_contract=legacy-list");
+    expect(resolveTarget.run).not.toContain("OPENCLAW_CANONICAL_CONFIG_SINCE");
     expect(resolveTarget.run).toContain(
       'kova_sha="$(gh api "repos/${KOVA_REPOSITORY}/commits/${encoded_kova_ref}" --jq .sha)"',
     );
@@ -383,38 +520,327 @@ describe("OpenClaw performance workflow", () => {
     expect(workflow).toContain("Kova live OpenAI GPT 5.6 agent turn");
   });
 
-  it("selects canonical Kova metadata for targets containing the config transition", () => {
-    const { canonicalRef, outputs, result } = runTargetResolution("ahead");
+  it("selects canonical Kova metadata for targets containing the config transition", async () => {
+    const { canonicalRef, outputs, result } = await runTargetResolution();
     expect(result.status, result.stderr).toBe(0);
     expect(outputs.kova_ref).toBe(canonicalRef);
     expect(outputs.kova_config_contract).toBe("canonical");
+    expect(outputs.tested_sha).toBe("c".repeat(40));
+    expect(outputs.tested_ref).toBe("candidate");
   });
 
-  it("selects legacy-list Kova metadata for targets before the config transition", () => {
-    const { legacyRef, outputs, result } = runTargetResolution("behind");
+  it.each([
+    { TARGET_SHA: "invalid" },
+    { KOVA_SHA_OVERRIDE: "invalid" },
+    { API_ERROR: "repos/openclaw/openclaw/commits/candidate" },
+    { API_ERROR: `repos/openclaw/Kova/commits/${"a".repeat(40)}` },
+  ])("fails API resolution without Git or partial outputs: %j", async (overrides) => {
+    const { result, outputs } = await runTargetResolution({ overrides });
+    expect(result.status).not.toBe(0);
+    expect(outputs).toEqual({});
+  });
+
+  it.each([{ TARGET_SHA: "invalid" }, { KOVA_SHA_OVERRIDE: "invalid" }])(
+    "validates immutable refs even when both overrides skip acquisition: %j",
+    async (overrides) => {
+      const { result, outputs, requests } = await runTargetResolution({
+        overrides,
+        kovaRef: "9".repeat(40),
+        contractOverride: "producer=v2",
+      });
+      expect(result.status).not.toBe(0);
+      expect(outputs).toEqual({});
+      expect(requests).toBe(0);
+    },
+  );
+
+  it.each([
+    { overrides: { TARGET_REF_INPUT: "candidate\nother" } },
+    { overrides: { TARGET_REF_INPUT: "candidate\rother" } },
+    { kovaRef: "ref\nother" },
+    { kovaRef: "ref\rother" },
+    { contractOverride: "producer\nother" },
+    { contractOverride: "producer\rother" },
+  ])("rejects multiline inputs before acquisition: %j", async (options) => {
+    const { result, outputs, requests } = await runTargetResolution(options);
+    expect(result.status).not.toBe(0);
+    expect(result.stdout + result.stderr).toContain("must be a single line");
+    expect(outputs).toEqual({});
+    expect(requests).toBe(0);
+  });
+
+  it("selects legacy-list Kova metadata for targets before the config transition", async () => {
+    const { legacyRef, outputs, result } = await runTargetResolution({
+      schema: LEGACY_SCHEMA,
+      contractStatus: "behind",
+    });
     expect(result.status, result.stderr).toBe(0);
     expect(outputs.kova_ref).toBe(legacyRef);
     expect(outputs.kova_config_contract).toBe("legacy-list");
   });
 
-  it.each(["", "canonical", "legacy-list"])(
-    "requires explicit contract evidence for divergent targets (override: %s)",
-    (override) => {
-      const { canonicalRef, legacyRef, outputs, result } = runTargetResolution(
-        "diverged",
-        override,
-      );
-      if (!override) {
-        expect(result.status).toBe(1);
-        expect(result.stderr).toContain("set kova_config_contract explicitly");
-        expect(outputs).toEqual({});
-      } else {
-        expect(result.status, result.stderr).toBe(0);
-        expect(outputs.kova_config_contract).toBe(override);
-        expect(outputs.kova_ref).toBe(override === "canonical" ? canonicalRef : legacyRef);
-      }
+  it.each(["", "legacy-list", "producer-specific"])(
+    "preserves explicit contracts while inspecting divergent target bytes (override: %s)",
+    async (override) => {
+      const { canonicalRef, outputs, result } = await runTargetResolution({
+        contractStatus: "diverged",
+        contractOverride: override,
+      });
+      expect(result.status, result.stderr).toBe(0);
+      expect(outputs.kova_config_contract).toBe(override || "canonical");
+      expect(outputs.kova_ref).toBe(canonicalRef);
     },
   );
+
+  it.each([
+    {
+      name: "reverted descendant",
+      contractStatus: "ahead" as const,
+      schema: LEGACY_SCHEMA,
+      expected: "legacy-list",
+    },
+    {
+      name: "no-marker descendant",
+      contractStatus: "ahead" as const,
+      schema: "// unknown\n",
+      expected: null,
+    },
+    {
+      name: "canonical backport",
+      contractStatus: "diverged" as const,
+      schema: CANONICAL_SCHEMA,
+      expected: "canonical",
+    },
+  ])("infers the contract from actual schema bytes: $name", async ({ expected, ...options }) => {
+    const { result, outputs } = await runTargetResolution(options);
+    if (expected === null) {
+      expect(result.status).not.toBe(0);
+      expect(outputs).toEqual({});
+    } else {
+      expect(result.status, result.stderr).toBe(0);
+      expect(outputs.kova_config_contract).toBe(expected);
+    }
+  });
+
+  it.each([
+    { name: "canonical", schema: CANONICAL_SCHEMA, contract: "canonical", ref: "a" },
+    { name: "legacy", schema: LEGACY_SCHEMA, contract: "legacy-list", ref: "b" },
+    {
+      name: "canonical precedence",
+      schema: LEGACY_SCHEMA + CANONICAL_SCHEMA,
+      contract: "canonical",
+      ref: "a",
+    },
+    {
+      name: "custom ref",
+      schema: LEGACY_SCHEMA,
+      kovaRef: "9".repeat(40),
+      contract: "legacy-list",
+      ref: "9",
+    },
+    {
+      name: "contract-only override",
+      schema: LEGACY_SCHEMA,
+      contractOverride: "producer=v2",
+      contract: "producer=v2",
+      ref: "b",
+    },
+    {
+      name: "both overrides",
+      kovaRef: "9".repeat(40),
+      contractOverride: "producer-v2",
+      status: 403,
+      contract: "producer-v2",
+      ref: "9",
+      requests: 0,
+    },
+    {
+      name: "unknown with custom ref",
+      schema: "// unknown",
+      kovaRef: "9".repeat(40),
+      contract: "",
+      ref: "9",
+    },
+    { name: "empty with custom ref", schema: "", kovaRef: "9".repeat(40), contract: "", ref: "9" },
+    {
+      name: "404 with custom ref",
+      status: 404,
+      body: '{"message":"Not Found"}',
+      kovaRef: "9".repeat(40),
+      contract: "",
+      ref: "9",
+    },
+    {
+      name: "maximum file",
+      schema: CANONICAL_SCHEMA + " ".repeat(1_000_000 - CANONICAL_SCHEMA.length),
+      contract: "canonical",
+      ref: "a",
+    },
+  ])(
+    "preserves the complete Kova override table: $name",
+    async ({ contract, ref, requests = 1, ...options }) => {
+      const run = await runTargetResolution(options);
+      expect(run.result.status, run.result.stderr).toBe(0);
+      expect(run.outputs.kova_ref).toBe(ref.repeat(40));
+      expect(run.outputs.kova_config_contract).toBe(contract);
+      expect(run.requests).toBe(requests);
+    },
+  );
+
+  it.each([
+    { schema: "" },
+    { schema: "// unknown" },
+    { schema: "// unknown", contractOverride: "canonical" },
+    { status: 404 },
+    { status: 404, contractOverride: "producer-v2" },
+  ])("requires an explicit ref for unusable schema: %j", async (options) => {
+    const { result, outputs } = await runTargetResolution(options);
+    expect(result.status).not.toBe(0);
+    expect(result.stdout + result.stderr).toContain("Supply kova_ref explicitly");
+    expect(outputs).toEqual({});
+  });
+
+  it.each([
+    { name: "object directory", metadata: { entries: [] } },
+    {
+      name: "named directory",
+      metadata: {
+        type: "dir",
+        path: SCHEMA_PATH,
+        name: "zod-schema.agent-defaults.ts",
+        entries: [],
+      },
+    },
+    { name: "symlink descriptor", metadata: { type: "symlink", target: "../schema.ts" } },
+    {
+      name: "submodule descriptor",
+      metadata: { type: "submodule", submodule_git_url: "https://example.invalid/module.git" },
+    },
+    {
+      name: "legacy submodule descriptor",
+      metadata: { type: "file", submodule_git_url: "https://example.invalid/module.git" },
+    },
+  ])("does not traverse a valid non-file response: $name", async ({ metadata }) => {
+    const response =
+      "entries" in metadata
+        ? metadata
+        : {
+            name: "zod-schema.agent-defaults.ts",
+            path: SCHEMA_PATH,
+            sha: "f".repeat(40),
+            size: 0,
+            ...metadata,
+          };
+    for (const kovaRef of ["", "9".repeat(40)]) {
+      const { result, outputs, requests } = await runTargetResolution({
+        metadata: response,
+        kovaRef,
+      });
+      expect(requests).toBe(1);
+      if (kovaRef) {
+        expect(result.status, result.stderr).toBe(0);
+        expect(outputs.kova_config_contract).toBe("");
+      } else {
+        expect(result.status).not.toBe(0);
+        expect(outputs).toEqual({});
+      }
+    }
+  });
+
+  it.each<ResolutionOptions & { name: string; patch?: Record<string, unknown> }>([
+    { name: "missing metadata", metadata: {} },
+    { name: "array metadata", metadata: [] },
+    { name: "null metadata", body: "null" },
+    { name: "invalid JSON", body: "not json" },
+    { name: "wrong path", patch: { path: "other.ts" } },
+    { name: "wrong name", patch: { name: "other.ts" } },
+    { name: "wrong SHA type", patch: { sha: 1 } },
+    { name: "unknown type", patch: { type: "unknown" } },
+    { name: "missing symlink target", patch: { type: "symlink" } },
+    { name: "invalid submodule descriptor", patch: { submodule_git_url: null } },
+    { name: "directory path mismatch", metadata: { entries: [], path: "other" } },
+    { name: "malformed directory child", metadata: { entries: [null] } },
+    { name: "negative size", patch: { size: -1 } },
+    { name: "fractional size", patch: { size: 1.5 } },
+    { name: "non-number size", patch: { size: "24" } },
+    { name: "oversize file", patch: { size: 1_000_001 } },
+    { name: "size mismatch", patch: { size: 1 } },
+    { name: "encoding none", patch: { encoding: "none" } },
+    { name: "non-string content", patch: { content: [] } },
+    { name: "base64 tab", patch: { content: "YQ==\t", size: 1 } },
+    { name: "base64 spaces", patch: { content: "Y Q==", size: 1 } },
+    { name: "base64 alphabet", patch: { content: "YQ-_", size: 3 } },
+    { name: "base64 nonzero pad bits", patch: { content: "YR==", size: 1 } },
+    { name: "base64 missing padding", patch: { content: "YQ", size: 1 } },
+    { name: "body limit", body: " ".repeat(2 * 1024 * 1024 + 1) },
+    { name: "header limit", headers: { "x-overflow": "x".repeat(64 * 1024) } },
+    { name: "wrong media", headers: { "content-type": "text/html" } },
+    { name: "redirect", status: 302, headers: { location: "https://example.invalid/credentials" } },
+    { name: "unusable cached response", status: 304 },
+    { name: "unauthorized", status: 401 },
+    { name: "forbidden", status: 403 },
+    { name: "rate limited", status: 429 },
+    { name: "server failure", status: 500 },
+    { name: "reset", fault: "reset" as const },
+    { name: "truncated body", fault: "truncate" as const },
+    { name: "deadline", fault: "timeout" as const },
+  ])("rejects Contents acquisition failure without partial outputs: $name", async (entry) => {
+    const { patch, ...options } = entry;
+    const metadata = patch
+      ? {
+          type: "file",
+          name: "zod-schema.agent-defaults.ts",
+          path: SCHEMA_PATH,
+          sha: "f".repeat(40),
+          size: Buffer.byteLength(CANONICAL_SCHEMA),
+          encoding: "base64",
+          content: Buffer.from(CANONICAL_SCHEMA).toString("base64"),
+          ...patch,
+        }
+      : options.metadata;
+    const run = await runTargetResolution({ ...options, metadata, kovaRef: "9".repeat(40) });
+    expect(run.result.status, run.result.stderr).not.toBe(0);
+    expect(run.outputs).toEqual({});
+    expect(run.requests).toBe(1);
+    expect(run.responseClosed).toBe(true);
+    expect(run.result.stderr).not.toContain("Bearer");
+    expect(run.result.stderr).not.toContain("credentials");
+  });
+
+  it("decodes line-folded base64 and never evaluates schema bytes", async () => {
+    const schema = Buffer.from("$(touch should-not-exist)\n`exit 31`\n" + CANONICAL_SCHEMA);
+    const run = await runTargetResolution({
+      metadata: {
+        type: "file",
+        name: "zod-schema.agent-defaults.ts",
+        path: SCHEMA_PATH,
+        sha: "f".repeat(40),
+        size: schema.length,
+        encoding: "base64",
+        content:
+          schema
+            .toString("base64")
+            .match(/.{1,12}/g)
+            ?.join("\r\n") + "\n",
+      },
+    });
+    expect(run.result.status, run.result.stderr).toBe(0);
+    expect(run.outputs.kova_config_contract).toBe("canonical");
+    expect(existsSync(join(run.root, "should-not-exist"))).toBe(false);
+    expect(run.result.stderr).not.toContain("touch");
+  });
+
+  it.each([
+    Buffer.from("prefix    mediaModels: z\n"),
+    Buffer.from("    mediaModels: z\r\n"),
+    Buffer.from("    mediaModels: z\0\n"),
+    Buffer.concat([Buffer.from([0xff]), Buffer.from("    mediaModels: z\n")]),
+    Buffer.from("   mediaModels: z\n"),
+  ])("does not invent a marker by normalizing bytes: %j", async (schema) => {
+    const { result, outputs } = await runTargetResolution({ schema, kovaRef: "9".repeat(40) });
+    expect(result.status, result.stderr).toBe(0);
+    expect(outputs.kova_config_contract).toBe("");
+  });
 
   it("keeps live credentials away from custom Kova refs", () => {
     const resolveTarget = findStep("Resolve OpenClaw target ref", "resolve_target");
@@ -700,12 +1126,8 @@ describe("OpenClaw performance workflow", () => {
     expect(resolveTarget.run).toContain(
       'resolved_sha="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${encoded_ref}" --jq .sha)"',
     );
-    expect(resolveTarget.run).toContain(
-      '"repos/${GITHUB_REPOSITORY}/compare/${OPENCLAW_CANONICAL_CONFIG_SINCE}...${resolved_sha}"',
-    );
     expect(resolveTarget.run).not.toContain("git clone");
     expect(resolveTarget.run).not.toContain("actions/checkout");
-    expect(resolveTarget.run).not.toContain("/contents/");
     expect(resolveTarget.run).toContain("checkout_ref=$resolved_sha");
     expect(resolveTarget.run).toContain("tested_sha=$resolved_sha");
     expect(checkout.with?.ref).toBe("${{ needs.resolve_target.outputs.checkout_ref }}");

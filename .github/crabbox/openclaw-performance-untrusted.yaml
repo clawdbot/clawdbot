@@ -23,7 +23,12 @@ sync:
   include:
     - .github/crabbox/openclaw-performance-evidence.schema.json
     - scripts/openclaw-performance-crabbox.sh
-    - .artifacts/performance-control/helpers
+    - .github/crabbox/performance-control/helpers/bench-cli-startup.mjs
+    - .github/crabbox/performance-control/helpers/kova-ci-summary.mjs
+    - .github/crabbox/performance-control/helpers/lib/kova-report-gate.mjs
+    - .github/crabbox/performance-control/helpers/lib/kova-report-selector.mjs
+    - .github/crabbox/performance-control/helpers/lib/kova-workflow-evidence.mjs
+    - .github/crabbox/performance-control/helpers/openclaw-performance-source-summary.mjs
 env:
   allow:
     - OPENCLAW_PERFORMANCE_NO_ENV
