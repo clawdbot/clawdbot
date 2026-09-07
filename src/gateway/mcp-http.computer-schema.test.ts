@@ -54,6 +54,21 @@ function readComputerActions(
 }
 
 describe("MCP loopback Computer Use schema", () => {
+  it("does not query node inventory when the grant excludes computer", async () => {
+    const resolved = await new McpLoopbackToolCache().resolve({
+      cfg: {} as OpenClawConfig,
+      context: {
+        sessionKey: "agent:main:main",
+        senderIsOwner: true,
+        modelHasVision: true,
+        toolsAllow: ["memory_search"],
+      },
+    });
+
+    expect(resolved.toolSchema.some((tool) => tool.name === "computer")).toBe(false);
+    expect(callGatewayTool).not.toHaveBeenCalled();
+  });
+
   it("serializes paired-node v2 actions before the first tool execution", async () => {
     const cache = new McpLoopbackToolCache();
     const resolved = await cache.resolve({

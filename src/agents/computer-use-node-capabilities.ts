@@ -7,7 +7,11 @@ import {
   COMPUTER_USE_V1_ACTION_NAMES,
   COMPUTER_USE_V2_ACTION_NAMES,
 } from "../plugins/computer-use-contract.js";
-import { COMPUTER_ACT_COMMAND, SCREEN_SNAPSHOT_COMMAND } from "./tools/computer-tool-shared.js";
+import {
+  COMPUTER_ACT_COMMAND,
+  type ComputerToolTransport,
+  SCREEN_SNAPSHOT_COMMAND,
+} from "./tools/computer-tool-shared.js";
 import { listNodes, type NodeListNode } from "./tools/nodes-utils.js";
 
 export type PreparedPairedComputerUse = {
@@ -19,6 +23,19 @@ export type PairedComputerUseAvailability = {
   cacheKey: string;
   prepared?: PreparedPairedComputerUse;
 };
+
+/** Avoids node inventory unless the model will receive an ordinary paired computer tool. */
+export function shouldLoadPairedComputerUseAvailability(params: {
+  computerAllowed: boolean;
+  modelHasVision?: boolean;
+  computerTransport?: ComputerToolTransport | null;
+}): boolean {
+  return (
+    params.computerAllowed &&
+    params.modelHasVision !== false &&
+    params.computerTransport === undefined
+  );
+}
 
 /** A paired target must support both observation and input to enter the computer tool pool. */
 export function isEligibleComputerNode(node: NodeListNode): boolean {

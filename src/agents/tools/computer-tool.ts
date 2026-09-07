@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { ComputerUseV2ActionName } from "../../plugins/computer-use-contract.js";
+import { COMPUTER_USE_V2_ACTION_NAMES } from "../../plugins/computer-use-contract.js";
 import { sleep } from "../../utils/sleep.js";
 import type { PreparedPairedComputerUse } from "../computer-use-node-capabilities.js";
 import { resolveImageSanitizationLimits } from "../image-sanitization.js";
@@ -62,12 +63,14 @@ export function createComputerTool(options?: {
   const initialCapabilities =
     options?.transport?.computerUse ?? options?.pairedNodeComputerUse?.guidanceCapabilities;
   const preparedPairedActions = options?.transport ? undefined : options?.pairedNodeComputerUse;
+  const initialPairedActions = preparedPairedActions
+    ? COMPUTER_USE_V2_ACTION_NAMES.filter(
+        (action) =>
+          COMPUTER_TOOL_ACTIONS.includes(action) || preparedPairedActions.actions.includes(action),
+      )
+    : COMPUTER_TOOL_ACTIONS;
   const parameterSchema = createComputerToolSchema(
-    availableActions(
-      options?.transport?.computerUse?.actions ??
-        preparedPairedActions?.actions ??
-        COMPUTER_TOOL_ACTIONS,
-    ),
+    availableActions(options?.transport?.computerUse?.actions ?? initialPairedActions),
     targetScope,
   );
   const replaceParameterSchema = (actions: readonly ComputerUseV2ActionName[]) => {
@@ -101,9 +104,6 @@ export function createComputerTool(options?: {
     availableActions,
     defaultActions: COMPUTER_TOOL_ACTIONS,
     onCapabilitiesChanged: (capabilities) => {
-      if (preparedPairedActions) {
-        return;
-      }
       replaceParameterSchema(availableActions(capabilities?.actions ?? COMPUTER_TOOL_ACTIONS));
       tool.description = buildComputerToolDescription(capabilities, targetScope);
     },

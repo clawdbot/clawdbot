@@ -37,6 +37,35 @@ describe("createComputerTool v2 execution", () => {
     expect(tool.description).toContain("Observe first with `get_window_state`");
   });
 
+  it("refreshes a prepared schema from the Gateway override target", async () => {
+    const remoteCapabilities = v2Descriptor(["screenshot", "launch_app"]);
+    listNodesMock.mockResolvedValue([macComputerNode({ computerUse: remoteCapabilities })]);
+    const tool = createVisionComputerTool({
+      pairedNodeComputerUse: {
+        actions: ["screenshot", "list_windows"],
+        guidanceCapabilities: v2Descriptor(["screenshot", "list_windows"]),
+      },
+    });
+
+    expect(readActionEnum(tool)).toContain("list_windows");
+    expect(readActionEnum(tool)).not.toContain("launch_app");
+
+    await tool.execute("remote-observe", {
+      action: "screenshot",
+      gatewayUrl: "wss://gateway.example",
+      gatewayToken: "remote-token",
+    });
+
+    expect(listNodesMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        gatewayUrl: "wss://gateway.example",
+        gatewayToken: "remote-token",
+      }),
+      undefined,
+    );
+    expect(readActionEnum(tool)).toEqual(["screenshot", "launch_app", "wait"]);
+  });
+
   it("advertises execution-owned actions only with an attempt cleanup owner", async () => {
     const actions: ComputerUseV2ActionName[] = [
       "screenshot",

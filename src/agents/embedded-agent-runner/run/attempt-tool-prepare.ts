@@ -19,8 +19,12 @@ import { createSkillInstructionDeliveryCache } from "../../agent-tools.read.js";
 import { getChannelAgentToolMeta } from "../../channel-tools.js";
 import { createCodeModePermissionChangeReason } from "../../code-mode-permission-change.js";
 import type { CodeModeSkill } from "../../code-mode-skills.js";
-import { loadPairedComputerUseAvailability } from "../../computer-use-node-capabilities.js";
+import {
+  loadPairedComputerUseAvailability,
+  shouldLoadPairedComputerUseAvailability,
+} from "../../computer-use-node-capabilities.js";
 import { resolveConversationCapabilityProfile } from "../../conversation-capability-profile.js";
+import { projectConversationToolNames } from "../../conversation-tool-policy-pipeline.js";
 import {
   isLocalModelLeanEnabled,
   resolveLocalModelLeanPreserveToolNames,
@@ -28,6 +32,7 @@ import {
 import { resolveModelAuthMode } from "../../model-auth.js";
 import { supportsModelTools } from "../../model-tool-support.js";
 import { recordAgentCleanupFailure } from "../../run-cleanup-timeout.js";
+import { resolveSessionPlacementComputer } from "../../session-placement-computer.js";
 import {
   resolveSessionPermissionExecMode,
   type PreparedSessionPermissionPolicy,
@@ -134,10 +139,6 @@ export async function prepareEmbeddedAttemptToolBase(params: {
     toolConstructionPlan.constructTools ||
     toolSearchControlsEnabledForRun ||
     codeModeControlsEnabledForRun;
-  const pairedNodeComputerUse =
-    shouldConstructTools && (attempt.model.input?.includes("image") ?? true)
-      ? (await loadPairedComputerUseAvailability(params.runAbortController.signal)).prepared
-      : undefined;
   // Compaction summaries omit screenshot image blocks. Frames are bound to this
   // generation so retained tool-result text cannot authorize stale coordinates.
   const computerContextEpoch: ComputerContextEpoch = { value: 0 };
@@ -212,6 +213,23 @@ export async function prepareEmbeddedAttemptToolBase(params: {
     trustedInternalHandoff: attempt.trustedInternalHandoff,
     pluginMetadataSnapshot: attempt.preparedModelRuntime?.metadataSnapshot,
   });
+  const computerTransport = resolveSessionPlacementComputer(
+    attempt.admittedRunContext.operationalRunInstance,
+  );
+  const computerAllowed =
+    shouldConstructTools &&
+    projectConversationToolNames({
+      capabilityProfile: runtimeCapabilityProfile,
+      toolNames: ["computer"],
+      warn: () => undefined,
+    }).length === 1;
+  const pairedNodeComputerUse = shouldLoadPairedComputerUseAvailability({
+    computerAllowed,
+    modelHasVision: attempt.model.input?.includes("image") ?? true,
+    computerTransport,
+  })
+    ? (await loadPairedComputerUseAvailability(params.runAbortController.signal)).prepared
+    : undefined;
   const localModelLeanEnabled = isLocalModelLeanEnabled({
     config: attempt.config,
     agentId: params.setup.sessionAgentId,
@@ -264,6 +282,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
             channelContext: attempt.channelContext,
             allowGatewaySubagentBinding: attempt.allowGatewaySubagentBinding,
             operationalRunInstance: attempt.admittedRunContext.operationalRunInstance,
+            computerTransport,
             pairedNodeComputerUse,
             conversationRecall: attempt.conversationRecall,
             oneShotCliRun: attempt.oneShotCliRun,

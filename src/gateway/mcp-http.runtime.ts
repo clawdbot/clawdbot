@@ -4,6 +4,7 @@ import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import {
   loadPairedComputerUseAvailability,
+  shouldLoadPairedComputerUseAvailability,
   type PairedComputerUseAvailability,
 } from "../agents/computer-use-node-capabilities.js";
 import {
@@ -90,7 +91,7 @@ function resolveMediatedNativeTools(
   );
 }
 
-async function resolveNodeScope(
+async function resolveNodeExecScope(
   params: McpLoopbackScopeParams,
   mode: LoopbackToolsAllowMode,
 ): Promise<McpLoopbackScopeParams> {
@@ -98,15 +99,44 @@ async function resolveNodeScope(
     !params.rootedExecution &&
     params.context.nodeExecAllowed === true &&
     resolveMediatedNativeTools(params.context.toolsAllow, mode).size === 0;
-  const shouldResolveComputer = !params.rootedExecution && params.context.modelHasVision !== false;
-  if (!shouldResolveExec && !shouldResolveComputer) {
+  if (!shouldResolveExec) {
     return params;
   }
-  const [nodeExecAvailability, pairedComputerUseAvailability] = await Promise.all([
-    shouldResolveExec ? loadNodeExecAvailability(params.signal) : undefined,
-    shouldResolveComputer ? loadPairedComputerUseAvailability(params.signal) : undefined,
-  ]);
-  return { ...params, nodeExecAvailability, pairedComputerUseAvailability };
+  return { ...params, nodeExecAvailability: await loadNodeExecAvailability(params.signal) };
+}
+
+function isComputerAllowedByMcpScope(
+  params: McpLoopbackScopeParams,
+  mode: LoopbackToolsAllowMode,
+): boolean {
+  const { toolsAllow } = params.context;
+  if (mode === "exact") {
+    return (
+      toolsAllow === undefined ||
+      toolsAllow.some((name) => normalizeToolPolicyName(name) === "computer")
+    );
+  }
+  return applyEmbeddedAttemptToolsAllow([{ name: "computer" }], toolsAllow).length === 1;
+}
+
+async function resolveNodeScope(
+  input: McpLoopbackScopeParams,
+  mode: LoopbackToolsAllowMode,
+): Promise<McpLoopbackScopeParams> {
+  const params = await resolveNodeExecScope(input, mode);
+  if (
+    !shouldLoadPairedComputerUseAvailability({
+      computerAllowed: isComputerAllowedByMcpScope(params, mode),
+      modelHasVision: params.context.modelHasVision,
+      computerTransport: params.rootedExecution ? null : undefined,
+    })
+  ) {
+    return params;
+  }
+  return {
+    ...params,
+    pairedComputerUseAvailability: await loadPairedComputerUseAvailability(params.signal),
+  };
 }
 
 function resolveMcpLoopbackTools(
