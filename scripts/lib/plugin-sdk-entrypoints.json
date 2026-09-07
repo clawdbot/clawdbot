@@ -274,6 +274,7 @@
   "memory-core-host-engine-embeddings",
   "memory-core-host-engine-curated",
   "memory-core-host-engine-foundation",
+  "memory-core-host-engine-knn",
   "memory-core-host-engine-fs",
   "memory-core-host-engine-sessions",
   "memory-core-host-engine-schema",

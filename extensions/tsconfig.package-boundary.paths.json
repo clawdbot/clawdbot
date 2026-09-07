@@ -927,6 +927,9 @@
       ],
       "openclaw/plugin-sdk/provider-model-metadata": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/provider-model-metadata.d.ts"
+      ],
+      "openclaw/plugin-sdk/memory-core-host-engine-knn": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/memory-core-host-engine-knn.d.ts"
       ]
     }
   }
