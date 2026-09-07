@@ -16,14 +16,14 @@ jobs:
     timeout-minutes: 150
     env:
       HISTORICAL_TARGET: "false"
-      F26_TARGET_SHA: c78e6aea330f58982252c15348341d34645a0ed5
-      F26_DISPATCH_ID: f26-read-notice-baseline-v3
+      F26_TARGET_SHA: ${{ github.workflow_sha }}
+      F26_DISPATCH_ID: f26-read-notice-candidate-v1
     steps:
       - name: Checkout
         env:
           CHECKOUT_REPO: ${{ github.repository }}
           CHECKOUT_TOKEN: ${{ github.token }}
-          CHECKOUT_SHA: c78e6aea330f58982252c15348341d34645a0ed5
+          CHECKOUT_SHA: ${{ github.workflow_sha }}
           WORKFLOW_SHA: ${{ github.workflow_sha }}
           CHECKOUT_KIND: platform
         run: |
@@ -773,7 +773,7 @@ jobs:
         run: |
           set -euo pipefail
           pnpm ios:gen 2>&1 | tee apps/ios/build/F26Prebuild/public/project-generation.log
-      - name: Run F26 exact-target native baseline proof
+      - name: Run F26 exact-target native candidate proof
         id: f26_native
         run: node .ci-harness/scripts/proof/f26-read-notice/run-hosted.mjs
       - name: Encrypt F26 complete available evidence

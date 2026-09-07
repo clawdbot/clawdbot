@@ -1,6 +1,10 @@
 import Foundation
 
 extension OpenClawChatViewModel {
+    private static var modelCatalogReadFailureNotice: String {
+        String(localized: "Could not refresh models. Previous choices are unchanged. Refresh to retry.")
+    }
+
     func fetchModels(sessionSnapshot: SessionSnapshot? = nil) async {
         self.nextModelCatalogRequestID &+= 1
         let requestID = self.nextModelCatalogRequestID
@@ -21,10 +25,23 @@ extension OpenClawChatViewModel {
                self.inFlightSettingsPatchCountsByTarget[target] == nil
             {
                 self.syncSelectedModel()
+                if !Task.isCancelled, self.errorText == Self.modelCatalogReadFailureNotice {
+                    self.errorText = nil
+                }
             }
             syncThinkingLevelOptions()
+        } catch is CancellationError {
+            return
         } catch {
-            // Best-effort.
+            guard !Task.isCancelled,
+                  self.isCurrentSession(session), requestID == self.nextModelCatalogRequestID,
+                  target == self.currentModelPatchTarget(),
+                  settingsRevision == self.settingsPatchRevisionsByTarget[target, default: 0],
+                  self.inFlightSettingsPatchCountsByTarget[target] == nil
+            else { return }
+            if self.errorText == nil {
+                self.errorText = Self.modelCatalogReadFailureNotice
+            }
         }
     }
 

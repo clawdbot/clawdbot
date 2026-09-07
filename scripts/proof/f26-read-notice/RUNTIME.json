@@ -1,7 +1,8 @@
 {
   "version": 1,
   "baselineMain": "c78e6aea330f58982252c15348341d34645a0ed5",
-  "purpose": "Temporary targeted baseline proof with approved task-resident accounting; no product repair",
+  "proofMode": "candidate",
+  "purpose": "Temporary candidate proof; product and harness use the same reviewed workflow commit",
   "files": [
     {
       "path": "app-identity.mjs",
@@ -35,8 +36,8 @@
     },
     {
       "path": "export-evidence.mjs",
-      "bytes": 8536,
-      "sha256": "7541db5cec9b8ee2c98090ac963856e485f89d1931b49af56e06f7c83eaf19e1"
+      "bytes": 8014,
+      "sha256": "9fb999936a7bc4e8a6ee11ea0529b2c43fba192e1a7a0addca073a4f451d2508"
     },
     {
       "path": "fixture.mjs",
@@ -65,8 +66,8 @@
     },
     {
       "path": "run-hosted.mjs",
-      "bytes": 24864,
-      "sha256": "2abc1b4fe1c9a72dc167a01828cfbbc31576f1fd0879328db8923a62456cb0a8"
+      "bytes": 25229,
+      "sha256": "efc1de0be63ccecf638ca20402a852fe164a720db193ce929bcfc4927d9df605"
     },
     {
       "path": "ui-case.swift",

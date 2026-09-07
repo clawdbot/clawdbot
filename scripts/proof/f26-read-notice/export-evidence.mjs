@@ -14,7 +14,6 @@ import {
 } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { captureAppIdentity } from "./app-identity.mjs";
 import { exportEvidenceArchive } from "./evidence-archive.mjs";
 
 assert.equal(process.platform, "darwin");
@@ -85,36 +84,16 @@ try {
     buildAdmission.sourceVerified &&
     buildAdmission.state === "admitted" &&
     nativeBuildLaunch &&
-    existsSync(path.join(process.cwd(), "apps/ios/OpenClaw.xcodeproj"))
+    existsSync(path.join(root, "public/built-app-product.json"))
   ) {
     const captureDeadline = Date.now() + 60000;
-    try {
-      await captureAppIdentity({
-        root: process.cwd(),
-        output: path.join(root, "public"),
-        destination: "generic/platform=iOS Simulator",
-        phase: "exit-existing",
-        baseline: preflight.baseline,
-        buildStepOutcome: outcomes.build,
-      });
-    } catch (error) {
-      writeFileSync(
-        path.join(root, "public/exit-app-capture-failure.json"),
-        JSON.stringify(
-          {
-            error: String(error),
-            note: "Admission/proof failure remains primary; available partial identity is retained. No build or sign operation ran.",
-          },
-          null,
-          2,
-        ) + "\n",
-      );
-    }
     // Archive the existing Products tree directly into encryption. No rebuild or plaintext copy.
-    const product = JSON.parse(
-      readFileSync(path.join(root, "public/exit-existing-app-product.json")),
-    );
+    const product = JSON.parse(readFileSync(path.join(root, "public/built-app-product.json")));
+    for (const key of ["baseline", "harness", "run", "attempt"])
+      assert.equal(product[key], preflight[key]);
+    assert.equal(product.phase, "built");
     if (product.app) {
+      assert(path.isAbsolute(product.app) && path.basename(product.app) === "OpenClaw.app");
       const directory = path.dirname(path.dirname(product.app));
       assert.equal(path.basename(directory), "Products");
       assert.equal(path.basename(path.dirname(directory)), "Build");
@@ -124,7 +103,7 @@ try {
         ...outcomes,
         directory,
         archivePath: "Products",
-        appIdentity: "public/exit-existing-app-product.json",
+        appIdentity: "public/built-app-product.json",
         runtimeManifestSha256: createHash("sha256")
           .update(readFileSync(path.join(input, "RUNTIME.json")))
           .digest("hex"),

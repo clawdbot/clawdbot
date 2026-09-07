@@ -138,8 +138,9 @@ if __name__ == "__main__":
     raise SystemExit(0 if result["complete"] else 1)
 `;
 
-const baseline = "c78e6aea330f58982252c15348341d34645a0ed5";
-const dispatch = "f26-read-notice-baseline-v3";
+const baselineMain = "c78e6aea330f58982252c15348341d34645a0ed5";
+const baseline = process.env.GITHUB_WORKFLOW_SHA;
+const dispatch = "f26-read-notice-candidate-v1";
 const input = path.dirname(fileURLToPath(import.meta.url));
 const root = process.cwd();
 assert(
@@ -191,7 +192,6 @@ function measure(recorder = record) {
   try {
     raw.physicalMemory = read("sysctl", ["-n", "hw.memsize"]);
     raw.vmStat = read("vm_stat", []);
-    raw.processes = read("ps", ["-axo", "uid=,pid=,ppid=,rss=,comm="]);
     raw.bootSession = read("sysctl", ["-n", "kern.bootsessionuuid"]);
     let origin;
     if (!memoryScope && !admissionOnly) {
@@ -263,6 +263,7 @@ const admitted = admitProof({
   root: output,
   identity: {
     baseline,
+    baselineMain,
     harness: process.env.GITHUB_WORKFLOW_SHA,
     run: process.env.GITHUB_RUN_ID,
     attempt: process.env.GITHUB_RUN_ATTEMPT,
@@ -277,7 +278,8 @@ const admitted = admitProof({
     assert.equal(read("git", ["status", "--porcelain"]), "");
     const manifestBytes = readFileSync(path.join(input, "RUNTIME.json"));
     const manifest = JSON.parse(manifestBytes);
-    assert.equal(manifest.baselineMain, baseline);
+    assert.equal(manifest.baselineMain, baselineMain);
+    assert.equal(manifest.proofMode, "candidate");
     assert.deepEqual(manifest.files.map((file) => file.path).sort(), [
       "app-identity.mjs",
       "artifact-recipient.pem",
@@ -469,6 +471,7 @@ try {
   const swift = read("swift", ["--version"]);
   record("identity", {
     baseline,
+    baselineMain,
     harnessCommit: process.env.GITHUB_WORKFLOW_SHA,
     run: process.env.GITHUB_RUN_ID,
     attempt: process.env.GITHUB_RUN_ATTEMPT,
@@ -500,7 +503,7 @@ try {
     "2",
     "--no-parallel",
     "--filter",
-    "ChatViewModelTests.f26",
+    "ChatViewModelTests.(f26|progress upgrade hint survives bootstrap and clears only its own error)",
   ]).result;
   record("shared-unit-terminal", unit);
   const build = await start("native-build", "xcodebuild", [
@@ -520,6 +523,14 @@ try {
   ]).result;
   record("native-build-terminal", build);
   assert.equal(build.code, 0, "App/UI-test build failed; retained exact exit and output");
+  await captureAppIdentity({
+    root,
+    output: publicOutput,
+    destination: "generic/platform=iOS Simulator",
+    phase: "built",
+    baseline,
+    buildStepOutcome: `build-for-testing-exit-${build.code}`,
+  });
   const available = JSON.parse(read("xcrun", ["simctl", "list", "devices", "available", "--json"]));
   const runtimes = Object.entries(available.devices).filter(([runtime]) =>
     runtime.includes("iOS-26"),

@@ -985,11 +985,6 @@ extension OpenClawChatViewModel {
                 fallbackEntry: activationEntry)
             guard self.isCurrentBootstrap(context) else { return }
             await self.fetchModels(sessionSnapshot: context.session)
-            guard self.isCurrentBootstrap(context) else { return }
-            // An optional progress fetch may already have reported a required Gateway update.
-            if self.errorText != OpenClawChatTransportUpgradeMessage.progressCardAgentScope {
-                self.errorText = nil
-            }
         } catch {
             guard self.isCurrentBootstrap(context) else { return }
             self.errorText = error.localizedDescription
