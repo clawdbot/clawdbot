@@ -170,7 +170,6 @@
     <string name="native_177f3d4c06a17721" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"无法更新权限。"</string>
     <string name="native_17ac6760df79656a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"替换配置"</string>
     <string name="native_1810407f5ab7093c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"快捷操作"</string>
-    <string name="native_181553f2bfe78521" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"发送失败: 聊天在运行开始前失败; 请重试。"</string>
     <string name="native_186352a881d0550e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"麦克风"</string>
     <string name="native_187cb2576a1f78c4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"聊天仍在检查 Gateway 的健康状态。"</string>
     <string name="native_18b4885826c1440a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"精确位置"</string>
@@ -1631,7 +1630,6 @@
     <string name="native_f6b21a4dbcd8e593" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"正在筛选"</string>
     <string name="native_f6d2b1ae590eb212" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">" · 语音对话: 已开启"</string>
     <string name="native_f6e82c3f136a6c5b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"暂无用量数据。"</string>
-    <string name="native_f6e94ebc86517b65" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"聊天在运行开始前失败；请重试。"</string>
     <string name="native_f6f4688ff23d50c6" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"发送"</string>
     <string name="native_f701a65268ba6ea2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"部分共享图片已被省略或无法添加。"</string>
     <string name="native_f706757ef3473dbd" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"写入日历"</string>
