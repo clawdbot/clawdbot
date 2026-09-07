@@ -216,7 +216,7 @@ export function verifyStableMainCloseout(params) {
     // extend it, but must never rewrite recorded assets or release evidence.
     for (const recorded of releaseAssets) {
       const observed = observedAssets.find((asset) => asset.name === recorded.name);
-      if (!observed || (recorded.digest != null && observed.digest !== recorded.digest)) {
+      if (!observed || observed.digest !== recorded.digest) {
         errors.push(`Recorded release asset changed or disappeared: ${recorded.name}.`);
       }
     }

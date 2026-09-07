@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
   extractStableChangelogSection,
@@ -41,6 +42,72 @@ const validCloseoutParams = {
   rollbackDrillId: "rollback-drill-2026-q2",
   rollbackDrillDate: "2026-06-01",
 };
+
+function sha256(value: string) {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function shippedReplayFixture(version: string, mainVersion: string, complete: boolean) {
+  const tag = `v${version}`;
+  const changelogSection = `## ${version}\n\n- Shipped release.`;
+  const replayChangelog = `# Changelog\n\n${changelogSection}`;
+  const mainAppcast = `https://github.com/openclaw/openclaw/releases/download/${tag}/OpenClaw-${version}.zip\n`;
+  const githubReleaseAssets = [
+    `OpenClaw-${version}.zip`,
+    `OpenClaw-${version}.dmg`,
+    `OpenClaw-${version}.dSYM.zip`,
+    ...(complete ? remainingAppAssets : []),
+  ].map((name, index) => ({
+    name,
+    digest: `sha256:${index.toString(16).repeat(64)}`,
+  }));
+  const manifest = {
+    version: 2,
+    releaseTag: tag,
+    releaseVersion: version,
+    releaseTagSha: "tag-sha",
+    mainSha: "main-sha",
+    mainPackageVersion: mainVersion,
+    releaseTagPackageVersion: version,
+    changelogSha256: sha256(changelogSection),
+    ...(complete
+      ? { appcastSha256: sha256(mainAppcast) }
+      : {
+          apps: "pending",
+          appPlatforms: { macos: "attached", android: "pending", windows: "pending" },
+          appcast: "verified",
+          appcastSha256: sha256(mainAppcast),
+        }),
+    fullReleaseValidationRunId: "11",
+    fullReleaseValidationRunAttempt: "2",
+    releasePublishRunId: "12",
+    ...(complete ? { releasePublishRecovery: { completePlatformAssetsRequired: true } } : {}),
+    rollbackDrill: { id: "rollback-drill-2026-q2", date: "2026-06-01" },
+    githubReleaseAssets,
+  };
+  return {
+    label: `v${version} ${complete ? "omitted app-state fields" : "explicit pending app state"}`,
+    manifest,
+    params: {
+      ...validCloseoutParams,
+      tag,
+      mainPackageJson: { version: mainVersion },
+      tagPackageJson: { version },
+      mainChangelog: replayChangelog,
+      tagChangelog: replayChangelog,
+      mainAppcast,
+      release: { tagName: tag, isDraft: false, isPrerelease: false, assets: githubReleaseAssets },
+      existingManifest: manifest,
+      allowStaleRollbackDrill: true,
+      nowMs: Date.parse("2026-10-01T00:00:00Z"),
+    },
+  };
+}
+
+const shippedReplayFixtures = [
+  shippedReplayFixture("2026.7.1", "2026.7.2", true),
+  shippedReplayFixture("2026.9.2", "2026.9.2", false),
+];
 
 describe("stable release closeout", () => {
   it("parses stable and correction tags", () => {
@@ -145,69 +212,10 @@ describe("stable release closeout", () => {
     expect(replay.manifest).toEqual(first.manifest);
   });
 
-  it("replays attached v2 name-only evidence byte-for-byte", () => {
-    const existingManifest = {
-      version: 2,
-      releaseTag: "v2026.6.8",
-      releaseVersion: "2026.6.8",
-      releaseTagSha: "tag-sha",
-      mainSha: "main-sha",
-      mainPackageVersion: "2026.6.8",
-      releaseTagPackageVersion: "2026.6.8",
-      changelogSha256: "875652a5958d47a993117e9ecf2cd40e9b0426a88d08a068f10890bad3db7809",
-      apps: "attached",
-      appPlatforms: {
-        macos: "attached",
-        android: "attached",
-        windows: "attached",
-      },
-      appcast: "verified",
-      appcastSha256: "f".repeat(64),
-      fullReleaseValidationRunId: "11",
-      fullReleaseValidationRunAttempt: "2",
-      releasePublishRunId: "12",
-      releasePublishRecovery: {
-        completePlatformAssetsRequired: true,
-        windowsNodeReleaseRunId: "42",
-        windowsNodeInstallerDigests: {
-          "OpenClawCompanion-Setup-arm64.exe": `sha256:${"1".repeat(64)}`,
-          "OpenClawCompanion-Setup-x64.exe": `sha256:${"2".repeat(64)}`,
-        },
-      },
-      rollbackDrill: {
-        id: "rollback-drill-2026-q2",
-        date: "2026-06-01",
-      },
-      githubReleaseAssets: [
-        { name: "OpenClaw-2026.6.8.zip", digest: null },
-        { name: "OpenClaw-2026.6.8.dmg", digest: null },
-        { name: "OpenClaw-2026.6.8.dSYM.zip", digest: null },
-        { name: "OpenClaw-Android-SHA256SUMS.txt", digest: null },
-        { name: "OpenClaw-Android.apk", digest: null },
-        { name: "OpenClawCompanion-SHA256SUMS.txt", digest: null },
-        { name: "OpenClawCompanion-Setup-arm64.exe", digest: null },
-        { name: "OpenClawCompanion-Setup-x64.exe", digest: null },
-      ],
-    };
-    const result = verifyStableMainCloseout({
-      ...validCloseoutParams,
-      release: {
-        ...release,
-        assets: [
-          ...release.assets,
-          ...remainingAppAssets.map((name) => ({
-            name,
-            digest: `sha256:${"d".repeat(64)}`,
-          })),
-        ],
-      },
-      existingManifest,
-      allowStaleRollbackDrill: true,
-      nowMs: Date.parse("2026-10-01T00:00:00Z"),
-    });
-
+  it.each(shippedReplayFixtures)("replays $label byte-for-byte", ({ manifest, params }) => {
+    const result = verifyStableMainCloseout(params);
     expect(result.errors).toEqual([]);
-    expect(JSON.stringify(result.manifest)).toBe(JSON.stringify(existingManifest));
+    expect(JSON.stringify(result.manifest)).toBe(JSON.stringify(manifest));
   });
 
   it("records pending apps and appcast before app publication", () => {
@@ -296,28 +304,10 @@ describe("stable release closeout", () => {
   });
 
   it.each([
-    {
-      label: "missing macOS digest",
-      assetName: "OpenClaw-2026.6.8.zip",
-      digest: null,
-      platform: "macos",
-      appcast: "pending",
-    },
-    {
-      label: "uppercase Android",
-      assetName: "OpenClaw-Android.apk",
-      digest: `sha256:${"D".repeat(64)}`,
-      platform: "android",
-      appcast: "verified",
-    },
-    {
-      label: "short Windows",
-      assetName: "OpenClawCompanion-Setup-x64.exe",
-      digest: `sha256:${"d".repeat(63)}`,
-      platform: "windows",
-      appcast: "verified",
-    },
-  ])("keeps $label artifact evidence pending", ({ assetName, digest, platform, appcast }) => {
+    ["OpenClaw-2026.6.8.zip", null, "macos", "pending"],
+    ["OpenClaw-Android.apk", `sha256:${"D".repeat(64)}`, "android", "verified"],
+    ["OpenClawCompanion-Setup-x64.exe", `sha256:${"d".repeat(63)}`, "windows", "verified"],
+  ])("keeps noncanonical %s evidence pending", (assetName, digest, platform, appcast) => {
     const assets = [
       ...release.assets,
       ...remainingAppAssets.map((name) => ({
