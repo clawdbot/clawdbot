@@ -3131,7 +3131,6 @@ src/infra/system-presence.ts	2
 src/infra/system-run-approval-binding.ts	3
 src/infra/system-run-approval-context.ts	6
 src/infra/tailscale.ts	9
-src/infra/terminal-file-upload.ts	2
 src/infra/tmp-openclaw-dir.ts	3
 src/infra/unhandled-rejections.ts	6
 src/infra/update-check-package-target.ts	3
