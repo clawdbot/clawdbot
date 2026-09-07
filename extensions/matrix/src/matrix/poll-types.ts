@@ -7,6 +7,10 @@
  * - m.poll.end - Closes a poll
  */
 
+import {
+  M_POLL_KIND_DISCLOSED,
+  type PollKind as MatrixPollKind,
+} from "matrix-js-sdk/lib/@types/polls.js";
 import { normalizePollInput, type PollInput } from "openclaw/plugin-sdk/poll-runtime";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
@@ -50,7 +54,7 @@ type PollParsedAnswer = {
 
 type PollStartSubtype = {
   question: TextContent;
-  kind?: PollKind;
+  kind?: MatrixPollKind;
   max_selections?: number;
   answers: PollAnswer[];
 };
@@ -164,7 +168,9 @@ export function parsePollStart(content: PollStartContent): ParsedPollStart | nul
   return {
     question,
     answers,
-    kind: poll.kind ?? "m.poll.disclosed",
+    kind: M_POLL_KIND_DISCLOSED.matches(poll.kind ?? "m.poll.disclosed")
+      ? "m.poll.disclosed"
+      : "m.poll.undisclosed",
     maxSelections: Math.min(Math.max(maxSelections, 1), answers.length),
   };
 }
