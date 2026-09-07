@@ -73,10 +73,6 @@ type ImageToolTestApi = {
   decodeDataUrl: typeof decodeDataUrl;
   coerceImageAssistantText: typeof coerceImageAssistantText;
   hasImageReasoningOnlyResponse: typeof hasImageReasoningOnlyResponse;
-  resolveImageToolMaxTokens(
-    modelMaxTokens: number | undefined,
-    requestedMaxTokens?: number,
-  ): number;
   resolveImageCompressionPolicy: ResolveImageCompressionPolicy;
   setProviderDepsForTest(overrides?: Partial<ImageToolProviderDeps>): void;
   resolveImageModelConfigForTool(params: {

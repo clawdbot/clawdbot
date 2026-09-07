@@ -40,7 +40,7 @@ function resolveImageToolMaxTokens(modelMaxTokens: number | undefined, requested
   ) {
     return requestedMaxTokens;
   }
-  return Math.min(requestedMaxTokens, modelMaxTokens);
+  return modelMaxTokens;
 }
 
 function isNativeResponsesReasoningPayload(model: Model): boolean {
@@ -516,7 +516,7 @@ async function describeImagesWithModelInternal(
       promptInUserContent: shouldPlaceImagePromptInUserContent(model),
     });
 
-    const maxTokens = resolveImageToolMaxTokens(model.maxTokens, params.maxTokens);
+    const maxTokens = resolveImageToolMaxTokens(model.maxTokens);
     const completeImage = async (onPayload?: ProviderStreamOptions["onPayload"]) => {
       params.signal?.throwIfAborted();
       const payloadHandler = composeImageDescriptionPayloadHandlers(onPayload, options.onPayload);
@@ -587,7 +587,6 @@ function toImagesDescriptionRequest(params: ImageDescriptionRequest): ImagesDesc
     model: params.model,
     provider: params.provider,
     prompt: params.prompt,
-    maxTokens: params.maxTokens,
     timeoutMs: params.timeoutMs,
     ...(params.signal ? { signal: params.signal } : {}),
     profile: params.profile,

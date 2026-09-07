@@ -3017,26 +3017,6 @@ describe("image tool response validation", () => {
 
   it.each([
     {
-      name: "caps image-tool max tokens by model capability",
-      maxOutputTokens: 4000,
-      expected: 4000,
-    },
-    {
-      name: "keeps requested image-tool max tokens when model capability is higher",
-      maxOutputTokens: 8192,
-      expected: 4096,
-    },
-    {
-      name: "falls back to requested image-tool max tokens when model capability is missing",
-      maxOutputTokens: undefined,
-      expected: 4096,
-    },
-  ])("$name", ({ maxOutputTokens, expected }) => {
-    expect(testing.resolveImageToolMaxTokens(maxOutputTokens)).toBe(expected);
-  });
-
-  it.each([
-    {
       name: "rejects image-model responses with no final text",
       message: createAssistantMessage({
         content: [{ type: "thinking", thinking: "hmm" }],
