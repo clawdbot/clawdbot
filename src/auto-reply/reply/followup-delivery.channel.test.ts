@@ -315,6 +315,31 @@ describe("follow-up delivery channel boundary", () => {
     ).toEqual([{ text: "first answer", replyToId: "111.000" }]);
   });
 
+  it("delivers an unsent BTW question when its answer was already tool-sent", async () => {
+    const text = "The image is ready for review";
+    const payloads = resolveFollowupDeliveryPayloads({
+      cfg: {},
+      payloads: [{ text, btw: { question: "What changed?" } }],
+      originatingChannel: "slack",
+      originatingTo: "channel:C1",
+      sentTexts: [text],
+      sentTargets: [{ tool: "message", provider: "slack", to: "channel:C1", text }],
+    });
+
+    await deliverBatch({
+      messageProvider: "discord",
+      originatingChannel: "slack",
+      outcomes: ["delivered"],
+      payloads,
+    });
+
+    expect(channelState.deliver).toHaveBeenCalledOnce();
+    expect(channelState.deliver.mock.calls[0]?.[0]).toMatchObject({
+      channel: "slack",
+      payloads: [{ text: "BTW\nQuestion: What changed?\n\nThe image is ready for review" }],
+    });
+  });
+
   it("emits one safe cross-channel error when a terminal payload fails after status delivery", async () => {
     const onBlockReply = await deliverBatch({
       messageProvider: "discord",

@@ -155,6 +155,43 @@ describe("resolveFollowupDeliveryPayloads", () => {
     ).toStrictEqual([]);
   });
 
+  it.each([
+    {
+      name: "keeps an unsent BTW question when its answer is most of the rendered reply",
+      text: "The image is ready for review",
+      sentText: "The image is ready for review",
+      delivered: true,
+    },
+    {
+      name: "keeps a short BTW question even when its long answer was already sent",
+      text: "The image is ready for review and the complete report is attached.",
+      sentText: "The image is ready for review and the complete report is attached.",
+      delivered: true,
+    },
+    {
+      name: "drops an already-delivered rendered BTW reply",
+      text: "The image is ready for review",
+      sentText: "BTW\nQuestion: What changed?\n\nThe image is ready for review",
+      delivered: false,
+    },
+    {
+      name: "preserves fuzzy matching for rendered BTW replies",
+      text: "The image is ready for review",
+      sentText: "btw\nquestion: WHAT CHANGED?\n\nThe image is ready for review 🌍",
+      delivered: false,
+    },
+  ])("$name", ({ text, sentText, delivered }) => {
+    const payload = { text, btw: { question: "What changed?" } };
+
+    expect(
+      resolveFollowupDeliveryPayloads({
+        cfg: baseConfig,
+        payloads: [payload],
+        sentTexts: [sentText],
+      }),
+    ).toEqual(delivered ? [payload] : []);
+  });
+
   it("drops media payloads already sent via messaging tool", () => {
     expect(
       resolveFollowupDeliveryPayloads({

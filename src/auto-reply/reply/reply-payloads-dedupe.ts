@@ -3,7 +3,10 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { isMessagingToolDuplicate } from "../../agents/embedded-agent-helpers.js";
+import {
+  isMessagingToolDuplicate,
+  normalizeTextForComparison,
+} from "../../agents/embedded-agent-helpers.js";
 import type { MessagingToolSend } from "../../agents/embedded-agent-messaging.types.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import { getLoadedChannelPluginForRead } from "../../channels/plugins/registry-loaded.js";
@@ -23,6 +26,7 @@ import {
   type ReplyDeliveryContext,
 } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
+import { formatBtwTextForExternalDelivery } from "./reply-payloads-base.js";
 
 type MessagingToolDedupeRouteParams = {
   config?: OpenClawConfig;
@@ -417,14 +421,22 @@ export function filterMessagingToolReplyPayload(
     });
     return sentTexts.length === 0
       ? payloads
-      : payloads.filter(
-          (payload) =>
-            !isMessagingToolDuplicate(payload.text ?? "", sentTexts) ||
+      : payloads.filter((payload) => {
+          const duplicate = payload.btw?.question
+            ? sentTexts.some(
+                (sentText) =>
+                  normalizeTextForComparison(sentText) ===
+                  normalizeTextForComparison(formatBtwTextForExternalDelivery(payload) ?? ""),
+              )
+            : isMessagingToolDuplicate(payload.text ?? "", sentTexts);
+          return (
+            !duplicate ||
             hasReplyPayloadContent(
               { ...payload, text: undefined },
               { extraContent: hasEnabledDeliveryOperation(payload) || payload.location != null },
-            ),
-        );
+            )
+          );
+        });
   };
   return params.normalizeSentMediaUrls
     ? params.normalizeSentMediaUrls(sentMediaUrls).then(filterPayload)
