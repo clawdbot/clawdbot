@@ -48,6 +48,15 @@ struct StatusMenuSummariesTests {
         }
     }
 
+    @Test func `cost requests use the Mac time zone`() async throws {
+        try await self.withFixture { fixture in
+            try await fixture.populate()
+            let request = try #require(fixture.requests.value.first { $0.method == "usage.cost" })
+            #expect(request.dateMode == "specific")
+            #expect(request.timeZone == TimeZone.current.identifier)
+        }
+    }
+
     @Test
     func `retiring a Gateway invalidates the observed usage cache`() async throws {
         try await self.withFixture { fixture in
@@ -171,6 +180,8 @@ private final class UsageGatewayFixture {
     struct Request: Sendable {
         let owner: String
         let method: String
+        let dateMode: String?
+        let timeZone: String?
     }
 
     let revision = LockIsolated<UInt64>(1)
@@ -199,7 +210,14 @@ private final class UsageGatewayFixture {
                 }
                 guard let frame = try JSONSerialization.jsonObject(with: data) as? [String: Any],
                       let method = frame["method"] as? String else { return }
-                requests.withValue { $0.append(Request(owner: owner, method: method)) }
+                let requestParams = frame["params"] as? [String: Any]
+                requests.withValue {
+                    $0.append(Request(
+                        owner: owner,
+                        method: method,
+                        dateMode: requestParams?["mode"] as? String,
+                        timeZone: requestParams?["timeZone"] as? String))
+                }
                 let payload: String
                 switch method {
                 case "usage.status":
