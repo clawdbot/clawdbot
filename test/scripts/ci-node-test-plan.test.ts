@@ -2103,6 +2103,8 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     const extraInventories = [
       ["test/scripts/npm-package-locks-report.test.ts"],
       Array.from({ length: 10 }, (_, index) => `test/scripts/zz-growth-probe-${index}.test.ts`),
+      ["test/scripts/openclaw-performance-crabbox.test.ts"],
+      ["test/scripts/install-smoke-ref-admission.test.ts"],
     ];
     const growthFiles = new Set([inventoryGrowthFile, ...extraInventories.flat()]);
     const isHostedToolingGroup = (group: { shard_name: string }) =>
@@ -2148,8 +2150,14 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
             const files = actual
               .listTrackedTestFiles(rootDir, suffix)
               .filter((file) => !growthFiles.has(file));
-            return rootDir === "test" && includeGrowthFile
-              ? [...files, inventoryGrowthFile, ...extraFiles].toSorted()
+            return rootDir === "test" && (includeGrowthFile || extraFiles.length > 0)
+              ? [
+                  ...new Set([
+                    ...files,
+                    ...extraFiles,
+                    ...(includeGrowthFile ? [inventoryGrowthFile] : []),
+                  ]),
+                ].toSorted()
               : files;
           },
         };
@@ -2213,11 +2221,12 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     expect(crossRunnerHostedJobs[0]?.groups.map((group) => group.shard_name)).toEqual([
       "core-tooling-15-hosted-3",
       "core-tooling-6-hosted-2",
-      "core-tooling-2-hosted-2",
-      "core-tooling-3-hosted-2",
+      "core-tooling-10-hosted-3",
+      "core-tooling-8-hosted-3",
     ]);
 
     for (const extraFiles of extraInventories) {
+      const extraBaseline = await createPlanWithInventory(false, extraFiles);
       const expanded = await createPlanWithInventory(true, extraFiles);
       const expandedToolingFiles = expanded
         .flatMap((job) => job.groups)
@@ -2228,11 +2237,8 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       expect(expandedToolingFiles.toSorted()).toEqual(
         [...new Set([...baselineToolingFiles, inventoryGrowthFile, ...extraFiles])].toSorted(),
       );
-      const nonToolingPolicies = (plan: CompactNodeTestShard[]) =>
-        nonToolingPlacement(plan)
-          .flatMap(({ groups, ...policy }) => groups.map((group) => ({ group, ...policy })))
-          .toSorted((a, b) => a.group.localeCompare(b.group));
-      expect(nonToolingPolicies(expanded)).toEqual(nonToolingPolicies(baseline));
+      expect(nonToolingPlacement(extraBaseline)).toEqual(nonToolingPlacement(baseline));
+      expect(nonToolingPlacement(expanded)).toEqual(nonToolingPlacement(extraBaseline));
       for (const job of expanded.filter((candidate) =>
         candidate.groups.some(isHostedToolingGroup),
       )) {

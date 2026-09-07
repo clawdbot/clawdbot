@@ -2731,6 +2731,7 @@ function createCompactNodeTestShardBundles(
       [DEFAULT_NODE_TEST_RUNNER, BUNDLED_NODE_TEST_RUNNER, EXTRA_LARGE_NODE_TEST_RUNNER].includes(
         runner,
       ));
+  const hostedToolingGroups: NodeTestShardGroup[] = [];
   let packedBins = [...groupsByRunner.values()].flatMap((groups) => {
     const usesBlacksmithRunner = usesBlacksmithCapacity(groups[0].runner);
     // Admit the final groups with their shared prerequisite. Rebalancing after
@@ -2742,7 +2743,14 @@ function createCompactNodeTestShardBundles(
           estimateBinSeconds([b]) - estimateBinSeconds([a]) ||
           a.shard_name.localeCompare(b.shard_name),
       );
-    const bins = packNodeTestGroups(sortedGroups, (candidate, group) => {
+    // Hosted inventory must not influence non-hosted anchor membership.
+    const anchorGroups = packsHostedTooling
+      ? sortedGroups.filter((group) => !isHostedToolingGroup(group))
+      : sortedGroups;
+    if (packsHostedTooling) {
+      hostedToolingGroups.push(...sortedGroups.filter(isHostedToolingGroup));
+    }
+    const bins = packNodeTestGroups(anchorGroups, (candidate, group) => {
       const exclusive = isExclusiveCompactGroup(group);
       // Keep ordinary work off serial runtime hosts. Hybrid exclusive/dist bins
       // retain their existing prerequisite sharing and admission policy.
@@ -2789,17 +2797,13 @@ function createCompactNodeTestShardBundles(
     return bins;
   });
   if (packsHostedTooling) {
-    const anchors = packedBins
-      .map((bin) => bin.filter((group) => !isHostedToolingGroup(group)))
-      .filter((bin): bin is [NodeTestShardGroup, ...NodeTestShardGroup[]] => bin.length > 0);
-    const hostedGroups = packedBins
-      .flatMap((bin) => bin.filter(isHostedToolingGroup))
-      .toSorted(
-        (a, b) =>
-          runnerRank(b) - runnerRank(a) ||
-          estimateBinSeconds([b]) - estimateBinSeconds([a]) ||
-          a.shard_name.localeCompare(b.shard_name),
-      );
+    const anchors = packedBins;
+    const hostedGroups = hostedToolingGroups.toSorted(
+      (a, b) =>
+        runnerRank(b) - runnerRank(a) ||
+        estimateBinSeconds([b]) - estimateBinSeconds([a]) ||
+        a.shard_name.localeCompare(b.shard_name),
+    );
     const strongestGroupCount =
       hostedGroups.findLastIndex((group) => group.runner === hostedGroups[0]!.runner) + 1;
     const units = [
