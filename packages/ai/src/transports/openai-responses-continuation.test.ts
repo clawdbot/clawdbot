@@ -7,6 +7,18 @@ import {
   type ResponsesContinuationState,
 } from "./openai-responses-continuation.js";
 
+// Must track MAX_HTTP_CONTINUATION_READY_ENTRIES in
+// openai-responses-continuation.ts (a private module constant, not exported
+// -- nothing outside this module or its own test needs it) -- keep this
+// number in sync with the real cap for the eviction tests below to actually
+// exercise the capacity boundary.
+const READY_ENTRY_CAPACITY = 1000;
+// Must track MAX_HTTP_CONTINUATION_RETAINED_BYTES in
+// openai-responses-continuation.ts (a private module constant, not exported)
+// -- keep this number in sync with the real budget for the tests below to
+// actually exercise the byte-budget boundary.
+const RETAINED_BYTES_BUDGET = 64 * 1024 * 1024;
+
 const firstUser = {
   type: "message",
   role: "user",
@@ -36,6 +48,18 @@ const assistantOutput = {
   ],
 } satisfies ResponsesContinuationState["lastResponseItems"][number];
 
+/** Builds response.output content whose serialized size is at least `bytes`
+ * -- used to exercise the byte-budget boundary without depending on the
+ * production estimator's exact formula. */
+function oversizedResponseItems(bytes: number): unknown[] {
+  return [
+    {
+      ...assistantOutput,
+      content: [{ type: "output_text", text: "x".repeat(bytes), annotations: [], logprobs: [] }],
+    },
+  ];
+}
+
 function continuationState(): ResponsesContinuationState {
   return {
     lastRequest: {
@@ -59,6 +83,31 @@ function nextRequest(phase = "final_answer"): ResponsesContinuationRequest {
         role: "assistant",
         phase,
         content: [{ type: "output_text", text: "answer", annotations: [] }],
+      },
+      { type: "message", role: "user", content: [{ type: "input_text", text: "second" }] },
+    ] as never,
+    metadata: { openclaw_turn_attempt: "2", openclaw_turn_id: "turn-2", stable: "yes" },
+    store: true,
+    model: "gpt-5.6-luna",
+  };
+}
+
+/** Like nextRequest(), but echoes back the same oversized assistant reply
+ * text oversizedResponseItems(bytes) committed -- resolveResponsesContinuationRequest
+ * requires the replayed assistant turn to match the retained baseline
+ * verbatim, so a plain nextRequest() (hardcoded small "answer" text) would
+ * correctly report history_changed against an oversized baseline, not
+ * "continued" -- that's the resolver working, not the eviction bug this
+ * test targets. */
+function nextRequestAfterOversized(bytes: number): ResponsesContinuationRequest {
+  return {
+    input: [
+      firstUser,
+      {
+        type: "message",
+        role: "assistant",
+        phase: "final_answer",
+        content: [{ type: "output_text", text: "x".repeat(bytes), annotations: [] }],
       },
       { type: "message", role: "user", content: [{ type: "input_text", text: "second" }] },
     ] as never,
@@ -429,6 +478,45 @@ describe("OpenAI Responses continuation", () => {
     next?.release();
   });
 
+  it("does not let a commit-time serialization callback resurrect or clobber a replacement claim", () => {
+    // estimateRetainedBytes JSON.stringifies the committed request/response --
+    // a caller-supplied toJSON can run reentrant cleanup and claim a
+    // replacement between commit's initial ownership check and its actual
+    // map writes (eviction/set), unlike the sibling "keeps preparation
+    // exclusive..." test above which covers the same concern on the claim
+    // path via resolveResponsesContinuationRequest's own JSON.stringify.
+    const stale = claim({});
+    let replacement: ReturnType<typeof claim>;
+    const staleEffectiveRequest = {
+      ...continuationState().lastRequest,
+      metadata: {
+        value: {
+          toJSON() {
+            cleanupSessionResources("session-1");
+            replacement = claim({ request: nextRequest() });
+            return "opaque";
+          },
+        },
+      },
+    };
+    stale?.commit(staleEffectiveRequest, {
+      id: "resp_stale",
+      output: continuationState().lastResponseItems,
+    });
+
+    expect(replacement).toBeDefined();
+    replacement?.commit(continuationState().lastRequest, {
+      id: "resp_replacement",
+      output: continuationState().lastResponseItems,
+    });
+
+    // The stale commit must not have overwritten the replacement's own ready
+    // entry with its own (now ownerless) state.
+    const next = claim({ request: nextRequest() });
+    expect(next?.request.previous_response_id).toBe("resp_replacement");
+    next?.release();
+  });
+
   it("expires completed continuation state after the bounded idle TTL", () => {
     vi.useFakeTimers();
     const first = claim({});
@@ -436,10 +524,213 @@ describe("OpenAI Responses continuation", () => {
       id: "resp_expiring",
       output: continuationState().lastResponseItems,
     });
-    vi.advanceTimersByTime(5 * 60 * 1000 + 1);
+    // Must track HTTP_CONTINUATION_IDLE_TTL_MS in openai-responses-continuation.ts
+    // (a private module constant, not exported) -- this advance needs to
+    // exceed the real idle TTL for the expiry to actually fire.
+    vi.advanceTimersByTime(90 * 60 * 1000 + 1);
 
     const next = claim({ request: nextRequest() });
     expect(next?.request.previous_response_id).toBeUndefined();
     next?.release();
+  });
+
+  it("evicts the oldest ready entry once the process-wide capacity is reached", () => {
+    // Fill the cache to capacity with distinct sessions, oldest first, so
+    // the default 90-minute idle TTL alone can't be relied on to bound
+    // memory during a burst of concurrent sessions.
+    for (let i = 0; i < READY_ENTRY_CAPACITY; i++) {
+      const c = claim({ sessionId: `session-${i}` });
+      c?.commit(continuationState().lastRequest, {
+        id: `resp-${i}`,
+        output: continuationState().lastResponseItems,
+      });
+    }
+
+    // One more commit pushes the map over capacity; the oldest-committed
+    // entry (session-0) should be evicted to make room.
+    const overflow = claim({ sessionId: "session-overflow" });
+    overflow?.commit(continuationState().lastRequest, {
+      id: "resp-overflow",
+      output: continuationState().lastResponseItems,
+    });
+
+    const evicted = claim({ sessionId: "session-0", request: nextRequest() });
+    expect(evicted?.request.previous_response_id).toBeUndefined();
+    evicted?.release();
+
+    const survivorId = `session-${READY_ENTRY_CAPACITY - 1}`;
+    const survivor = claim({ sessionId: survivorId, request: nextRequest() });
+    expect(survivor?.request.previous_response_id).toBe(`resp-${READY_ENTRY_CAPACITY - 1}`);
+    survivor?.release();
+  });
+
+  it("evicts by true commit order, not Map iteration position, when a reclaim lands in the same millisecond", () => {
+    // Date.now() is not a unique completion order: a Map re-set on an
+    // existing key keeps that key's original iteration position, so a
+    // session reclaimed (claimed again, then re-committed) in the same
+    // millisecond as the rest of a full cache still iterates first --
+    // exactly where a strict `<` timestamp comparison would keep it as
+    // "oldest" even though it just became the freshest entry. Freeze time
+    // so every commit below shares one timestamp, isolating the ordering
+    // fix from real wall-clock progression.
+    vi.useFakeTimers();
+    try {
+      for (let i = 0; i < READY_ENTRY_CAPACITY; i++) {
+        const c = claim({ sessionId: `reclaim-session-${i}` });
+        c?.commit(continuationState().lastRequest, {
+          id: `reclaim-resp-${i}`,
+          output: continuationState().lastResponseItems,
+        });
+      }
+
+      // Reclaim session-0: consumes its ready entry (claim), then commits a
+      // fresh one -- Map.set on the existing key keeps it at iteration
+      // position 0, but it is now the most-recently-committed entry.
+      const reclaimed = claim({ sessionId: "reclaim-session-0", request: nextRequest() });
+      expect(reclaimed?.request.previous_response_id).toBe("reclaim-resp-0");
+      reclaimed?.commit(continuationState().lastRequest, {
+        id: "reclaim-resp-0-refreshed",
+        output: continuationState().lastResponseItems,
+      });
+
+      // One more commit pushes the map over capacity again.
+      const overflow = claim({ sessionId: "reclaim-session-overflow" });
+      overflow?.commit(continuationState().lastRequest, {
+        id: "reclaim-resp-overflow",
+        output: continuationState().lastResponseItems,
+      });
+
+      // The just-reclaimed entry must survive -- it is the newest by true
+      // commit order, regardless of its Map position or tied timestamp.
+      const stillReady = claim({ sessionId: "reclaim-session-0", request: nextRequest() });
+      expect(stillReady?.request.previous_response_id).toBe("reclaim-resp-0-refreshed");
+      stillReady?.release();
+
+      // The entry actually oldest by commit order (never reclaimed) is the
+      // one that gets evicted instead.
+      const evicted = claim({ sessionId: "reclaim-session-1", request: nextRequest() });
+      expect(evicted?.request.previous_response_id).toBeUndefined();
+      evicted?.release();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("evicts by ready-only order even with many claimed (in-flight, never-committed) entries present", () => {
+    // ClawSweeper P1 finding on the original eviction scan: it walked the
+    // WHOLE httpContinuationEntries map (claimed + ready) and skipped
+    // non-ready entries after visiting them, so its cost scaled with total
+    // entries, not the configured ready-entry cap -- claimed entries aren't
+    // capped at all, so a burst of concurrent in-flight requests could grow
+    // that cost unbounded. This doesn't assert the scan cost directly (a
+    // flaky thing to time); it asserts the actual behavior the ready-only
+    // bookkeeping must get right: claimed entries never count toward the
+    // ready cap, are never evicted, and never displace which ready entry is
+    // "oldest" -- exactly what a naive fix that filtered a still-shared
+    // structure differently could still get wrong.
+    const claimedOnly: Array<ReturnType<typeof claim>> = [];
+    for (let i = 0; i < 5000; i++) {
+      claimedOnly.push(claim({ sessionId: `claimed-only-${i}` }));
+    }
+    expect(claimedOnly.every((c) => c !== undefined)).toBe(true);
+
+    for (let i = 0; i < READY_ENTRY_CAPACITY; i++) {
+      const c = claim({ sessionId: `mixed-session-${i}` });
+      c?.commit(continuationState().lastRequest, {
+        id: `mixed-resp-${i}`,
+        output: continuationState().lastResponseItems,
+      });
+    }
+
+    // The overflow commit must evict the oldest READY entry (mixed-session-0),
+    // not anything claimed-only -- claimed entries were never candidates.
+    const overflow = claim({ sessionId: "mixed-session-overflow" });
+    overflow?.commit(continuationState().lastRequest, {
+      id: "mixed-resp-overflow",
+      output: continuationState().lastResponseItems,
+    });
+
+    const evicted = claim({ sessionId: "mixed-session-0", request: nextRequest() });
+    expect(evicted?.request.previous_response_id).toBeUndefined();
+    evicted?.release();
+
+    const survivor = claim({
+      sessionId: `mixed-session-${READY_ENTRY_CAPACITY - 1}`,
+      request: nextRequest(),
+    });
+    expect(survivor?.request.previous_response_id).toBe(`mixed-resp-${READY_ENTRY_CAPACITY - 1}`);
+    survivor?.release();
+
+    // None of the 5000 claimed-only entries were touched by eviction -- each
+    // key is still exclusively claimed (a second claim attempt on the same
+    // key returns undefined, matching the "already claimed" contract).
+    const stillClaimed = claim({ sessionId: "claimed-only-0" });
+    expect(stillClaimed).toBeUndefined();
+  });
+
+  it("skips caching a single entry that alone exceeds the retained-byte budget", () => {
+    const first = claim({});
+    // Evicting every other entry still wouldn't make this one fit, so the
+    // commit must be a no-op for caching purposes rather than trying to make
+    // room for it.
+    first?.commit(continuationState().lastRequest, {
+      id: "resp_oversized",
+      output: oversizedResponseItems(RETAINED_BYTES_BUDGET + 1) as never,
+    });
+
+    // Not cached: the next claim for the same session sees no baseline.
+    const afterOversized = claim({ request: nextRequest() });
+    expect(afterOversized?.request.previous_response_id).toBeUndefined();
+
+    // The oversized commit must not leave the entry stuck "claimed" forever
+    // -- a normal-sized commit right after succeeds and is retained.
+    afterOversized?.commit(continuationState().lastRequest, {
+      id: "resp_normal",
+      output: continuationState().lastResponseItems,
+    });
+    const afterNormal = claim({ request: nextRequest() });
+    expect(afterNormal?.request.previous_response_id).toBe("resp_normal");
+    afterNormal?.release();
+  });
+
+  it("evicts the oldest ready entries once the aggregate retained-byte budget is reached, well below the count cap", () => {
+    // Each entry is sized well under a quarter of the budget (leaving slack
+    // for the surrounding JSON structure's own bytes, on top of the raw
+    // text run sized here) so 4 entries stay comfortably under budget and
+    // the 5th genuinely pushes the running total over it -- the budget, not
+    // the 1000-entry count cap, is what forces eviction here.
+    const entryBytes = Math.floor(RETAINED_BYTES_BUDGET / 5);
+    const fillEntries = 4;
+    for (let i = 0; i < fillEntries; i++) {
+      const c = claim({ sessionId: `budget-session-${i}` });
+      c?.commit(continuationState().lastRequest, {
+        id: `budget-resp-${i}`,
+        output: oversizedResponseItems(entryBytes) as never,
+      });
+    }
+
+    // One more commit of the same size pushes the running total over budget;
+    // the oldest entry (budget-session-0) must be evicted to make room, well
+    // short of the 1000-entry count cap.
+    const overflow = claim({ sessionId: "budget-session-overflow" });
+    overflow?.commit(continuationState().lastRequest, {
+      id: "budget-resp-overflow",
+      output: oversizedResponseItems(entryBytes) as never,
+    });
+
+    const evicted = claim({
+      sessionId: "budget-session-0",
+      request: nextRequestAfterOversized(entryBytes),
+    });
+    expect(evicted?.request.previous_response_id).toBeUndefined();
+    evicted?.release();
+
+    const survivorId = `budget-session-${fillEntries - 1}`;
+    const survivor = claim({
+      sessionId: survivorId,
+      request: nextRequestAfterOversized(entryBytes),
+    });
+    expect(survivor?.request.previous_response_id).toBe(`budget-resp-${fillEntries - 1}`);
+    survivor?.release();
   });
 });
