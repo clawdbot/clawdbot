@@ -60,6 +60,7 @@ const summary: SummaryDocument = {
   globalSummary: "Collected **one contribution**.",
   highlights: ["A recorded commit."],
   fingerprint: "fixture",
+  warnings: ["Model summary unavailable: completion failed"],
 };
 
 type HttpResult = { status: number; headers: IncomingHttpHeaders; body: string };
@@ -160,6 +161,9 @@ describe("Team Reports HTTP responses", () => {
     expect(response.body).toContain('href="/reports/people/alice/"');
     expect(response.body).toContain("Deterministic summary");
     expect(response.body).toContain("Fixture coverage warning");
+    expect(response.body).toContain(
+      '<p class="notice">Model summary unavailable: completion failed</p>',
+    );
   });
 
   it("supports HEAD without a body and rejects writes", async () => {
@@ -206,6 +210,7 @@ describe("Team Reports HTTP responses", () => {
     expect(markdown.headers["content-type"]).toBe("text/markdown; charset=utf-8");
     expect(markdown.body).toContain(key);
     expect(markdown.body).not.toContain(maliciousTitle);
+    expect(markdown.body).toContain("> Model summary unavailable: completion failed\n");
     const json = await fetchPath(`/reports/${period}/${key}/data.json`);
     expect(json.status).toBe(200);
     expect(json.headers["content-type"]).toBe("application/json; charset=utf-8");

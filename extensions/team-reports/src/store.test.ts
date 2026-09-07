@@ -52,6 +52,7 @@ const summary: SummaryDocument = {
   globalSummary: "Two contributors were active.",
   highlights: ["Changes in example/project."],
   fingerprint: "fixture-fingerprint",
+  warnings: ["Model summary unavailable: completion failed"],
 };
 
 afterEach(() => {
@@ -62,7 +63,7 @@ afterEach(() => {
 });
 
 describe("Team Reports storage", () => {
-  it("creates private STRICT tables and reopens durable reports in WAL mode", () => {
+  it("creates private STRICT tables and reopens durable reports with summary warnings in WAL mode", () => {
     const { store, dbPath } = openStore();
     store.upsertPeriod({ report: report(), summary, markdown: "# Daily report" });
     const database = openNodeSqliteDatabase(dbPath);

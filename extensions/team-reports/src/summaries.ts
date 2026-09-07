@@ -6,11 +6,13 @@ import type {
   GithubItem,
   PersonReport,
   ReportDocument,
+  SourceRuntime,
   SummaryDocument,
 } from "./types.js";
 
 type SummaryLlm = Pick<OpenClawPluginApi["runtime"]["llm"], "complete">;
 type CompletionParams = Parameters<SummaryLlm["complete"]>[0];
+type SummaryLogger = Pick<SourceRuntime["logger"], "warn">;
 
 type SummaryOptions = {
   enabled: boolean;
@@ -27,6 +29,21 @@ type SummaryResult = {
 
 const MAX_RESPONSE_CHARS = 128 * 1024;
 const MAX_DIGEST_BYTES = 2 * 1024 * 1024;
+
+function summaryOutputBudget(report: ReportDocument): number {
+  // Reserve overview space plus per-member prose for the complete roster on either attempt.
+  return Math.min(32_000, 4_000 + 300 * report.members.length);
+}
+
+class SummaryResponseError extends Error {
+  constructor(
+    message: string,
+    readonly truncated = false,
+  ) {
+    super(message);
+  }
+}
+
 const summaryResponseSchema = z.strictObject({
   globalSummary: z.string().trim().min(1).max(16_000),
   highlights: z.array(z.string().trim().min(1).max(800)).min(4).max(7),
@@ -199,38 +216,40 @@ function buildEvidenceDigest(report: ReportDocument): string {
 
 function parseResponse(raw: string, report: ReportDocument): SummaryResponse {
   if (raw.length > MAX_RESPONSE_CHARS) {
-    throw new Error("Summary response exceeded 128 KiB.");
+    throw new SummaryResponseError("Summary response exceeded the response size limit.");
   }
   const json = raw.trim().replace(/^```(?:json)?\s*\n?([\s\S]*?)\n?```$/i, "$1");
   let value: unknown;
   try {
     value = JSON.parse(json);
   } catch {
-    throw new Error("Response must contain one valid JSON object.");
+    throw new SummaryResponseError(
+      "Response must contain one valid JSON object.",
+      !json.trimEnd().endsWith("}"),
+    );
   }
   const parsed = summaryResponseSchema.safeParse(value);
   if (!parsed.success) {
-    throw new Error(
-      parsed.error.issues
-        .slice(0, 12)
-        .map((issue) => `${issue.path.join(".")}: ${issue.message}`)
-        .join("; "),
+    const issue = parsed.error.issues[0];
+    // Schema paths/codes are safe; issue messages can echo response keys or values.
+    throw new SummaryResponseError(
+      issue ? `${issue.path.join(".") || "response"}: ${issue.code}` : "Invalid response shape.",
     );
   }
   const expected = new Set(report.members.map((member) => member.login));
   const seen = new Set<string>();
   for (const member of parsed.data.members) {
     if (!expected.has(member.login)) {
-      throw new Error(`Unexpected member login: ${member.login}`);
+      throw new SummaryResponseError("Unexpected member login.");
     }
     if (seen.has(member.login)) {
-      throw new Error(`Duplicate member login: ${member.login}`);
+      throw new SummaryResponseError("Duplicate member login.");
     }
     seen.add(member.login);
   }
   const missing = [...expected].filter((login) => !seen.has(login));
   if (missing.length > 0) {
-    throw new Error(`Missing member logins: ${missing.join(", ")}`);
+    throw new SummaryResponseError("Missing member logins.");
   }
   return parsed.data;
 }
@@ -239,7 +258,13 @@ function fallbackResult(
   report: ReportDocument,
   fingerprint: string,
   generatedAtMs: number,
+  reason?: string,
+  logger?: SummaryLogger,
 ): SummaryResult {
+  const warning = reason?.slice(0, 300);
+  if (warning) {
+    logger?.warn(warning);
+  }
   const github = report.totals.github;
   const discord = report.totals.discord.messages;
   const caveat =
@@ -273,6 +298,7 @@ function fallbackResult(
     reused: false,
     summary: {
       source: "fallback",
+      ...(warning ? { warnings: [warning] } : {}),
       generatedAtMs,
       fingerprint,
       globalSummary: `${report.activeMembers} of ${report.memberCount} roster members have visible activity in this ${report.status} ${report.period.period} report. ${caveat}\n\n${highlights.map(([label, text]) => `- **${label}:** ${text}`).join("\n")}`,
@@ -301,6 +327,7 @@ export async function generateSummaries(params: {
   llm: SummaryLlm;
   previous?: { report: ReportDocument; summary: SummaryDocument };
   signal?: AbortSignal;
+  logger?: SummaryLogger;
 }): Promise<SummaryResult> {
   const { report, options, previous, signal } = params;
   signal?.throwIfAborted();
@@ -311,7 +338,8 @@ export async function generateSummaries(params: {
     previous?.summary.fingerprint === fingerprint &&
     previous.report.period.period === report.period.period &&
     previous.report.period.key === report.period.key &&
-    (options.enabled || previous.summary.source === "fallback")
+    (options.enabled ||
+      (previous.summary.source === "fallback" && !previous.summary.warnings?.length))
   ) {
     const storedMembers = new Map(previous.report.members.map((member) => [member.login, member]));
     if (report.members.every((member) => storedMembers.get(member.login)?.summary)) {
@@ -335,6 +363,8 @@ export async function generateSummaries(params: {
     { role: "system", content: SYSTEM_PROMPT },
     { role: "user", content: digest },
   ];
+  const maxTokens = summaryOutputBudget(report);
+  let failureReason = "Model summary unavailable: invalid JSON after repair";
   for (let attempt = 0; attempt < 2; attempt += 1) {
     signal?.throwIfAborted();
     let result: Awaited<ReturnType<SummaryLlm["complete"]>>;
@@ -344,13 +374,19 @@ export async function generateSummaries(params: {
         model: options.model,
         reasoning: options.reasoning,
         agentId: options.agentId,
-        maxTokens: 6000,
+        maxTokens,
         purpose: "team-reports summary",
         signal,
       });
     } catch {
       signal?.throwIfAborted();
-      return fallbackResult(report, fingerprint, generatedAtMs);
+      return fallbackResult(
+        report,
+        fingerprint,
+        generatedAtMs,
+        "Model summary unavailable: completion failed",
+        params.logger,
+      );
     }
     signal?.throwIfAborted();
     try {
@@ -381,16 +417,21 @@ export async function generateSummaries(params: {
         },
       };
     } catch (error) {
+      const issue = error instanceof SummaryResponseError ? error.message : "Invalid response.";
+      failureReason =
+        error instanceof SummaryResponseError && error.truncated
+          ? "Model summary unavailable: response appears truncated (output budget may have been exceeded)"
+          : `Model summary unavailable: invalid JSON after repair: ${issue}`;
       if (attempt === 0) {
         messages.push(
           { role: "assistant", content: result.text.slice(0, MAX_RESPONSE_CHARS) },
           {
             role: "user",
-            content: `Repair the response and return the complete JSON object, including every member. Validation errors: ${error instanceof Error ? error.message.slice(0, 2000) : "Invalid response"}`,
+            content: `Repair the response and return the complete JSON object, including every member. Validation errors: ${issue}`,
           },
         );
       }
     }
   }
-  return fallbackResult(report, fingerprint, generatedAtMs);
+  return fallbackResult(report, fingerprint, generatedAtMs, failureReason, params.logger);
 }

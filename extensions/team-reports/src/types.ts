@@ -160,6 +160,7 @@ export type ReportDocument = {
 
 export type SummaryDocument = {
   source: "model" | "fallback";
+  warnings?: string[];
   model?: string;
   generatedAtMs: number;
   /** Markdown: 2-3 sentence overview followed by 4-6 "- **Workstream:** ..." bullets. */

@@ -130,6 +130,7 @@ export async function generateReportPeriods(params: {
         report,
         options: config.summaries,
         llm: params.llm,
+        logger: runtime.logger,
         previous: previous?.summary
           ? { report: previous.report, summary: previous.summary }
           : undefined,

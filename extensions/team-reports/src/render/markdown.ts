@@ -30,6 +30,9 @@ export function renderMarkdown(report: ReportDocument, summary?: SummaryDocument
     );
   }
   if (summary) {
+    for (const warning of summary.warnings ?? []) {
+      lines.push(`> ${text(warning)}`, "");
+    }
     lines.push(
       modelText(summary.globalSummary),
       "",

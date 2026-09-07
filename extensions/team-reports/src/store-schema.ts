@@ -148,6 +148,7 @@ export const reportDocumentSchema: z.ZodType<ReportDocument> = z.object({
 
 export const summaryDocumentSchema: z.ZodType<SummaryDocument> = z.object({
   source: summarySourceSchema,
+  warnings: z.array(z.string().max(300)).max(3).optional(),
   model: z.string().optional(),
   generatedAtMs: z.number(),
   globalSummary: z.string(),

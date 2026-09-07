@@ -122,6 +122,9 @@ export function renderReportPage(
   if (report.truncated) {
     warnings.push("Item lists were truncated; aggregate counts are preserved.");
   }
+  const summaryNotices = (summary?.warnings ?? [])
+    .map((warning) => `<p class="notice">${escapeHtml(warning)}</p>`)
+    .join("");
   const notices = `${report.status === "partial" ? '<p class="notice">This period is still open. Activity and summaries may change as new reports are generated.</p>' : ""}${!summary || summary.source === "fallback" ? '<p class="notice">Deterministic summary: model summaries are disabled, pending, or unavailable.</p>' : ""}${warnings.length ? `<section class="notice"><h2>Coverage notes</h2><ul>${warnings.map((warning) => `<li>${escapeHtml(warning)}</li>`).join("")}</ul></section>` : ""}`;
   const members = report.members
     .map(
@@ -145,7 +148,7 @@ export function renderReportPage(
   return shell(
     ctx,
     report.period.title,
-    `<h1>${escapeHtml(report.period.title)} <span class="badge">${report.status}</span></h1><p class="muted">${escapeHtml(report.orgs.join(", "))} · Generated ${escapeHtml(date(report.generatedAtMs, ctx.displayTimezone))}</p><p class="details">UTC window: ${escapeHtml(new Date(report.period.sinceMs).toISOString())} – ${escapeHtml(new Date(report.period.untilMs).toISOString())} (exclusive)</p><p><a href="${escapeHtml(path)}report.md">Markdown</a> · <a href="${escapeHtml(path)}data.json">JSON</a></p>${notices}<div class="cards"><div class="card"><strong>${report.totals.github.total}</strong>GitHub events</div><div class="card"><strong>${report.totals.discord.messages}</strong>Discord messages</div><div class="card"><strong>${report.activeMembers} / ${report.memberCount}</strong>Active members</div></div>${summary ? `<section><h2>Summary</h2>${markdownBlocks(summary.globalSummary)}<h2>Highlights</h2><ul>${summary.highlights.map((highlight) => `<li>${escapeHtml(highlight)}</li>`).join("")}</ul></section>` : ""}<h2>Members</h2>${members || "<p>No members are configured for this period.</p>"}${other}${unmatched}`,
+    `<h1>${escapeHtml(report.period.title)} <span class="badge">${report.status}</span></h1><p class="muted">${escapeHtml(report.orgs.join(", "))} · Generated ${escapeHtml(date(report.generatedAtMs, ctx.displayTimezone))}</p><p class="details">UTC window: ${escapeHtml(new Date(report.period.sinceMs).toISOString())} – ${escapeHtml(new Date(report.period.untilMs).toISOString())} (exclusive)</p><p><a href="${escapeHtml(path)}report.md">Markdown</a> · <a href="${escapeHtml(path)}data.json">JSON</a></p>${notices}<div class="cards"><div class="card"><strong>${report.totals.github.total}</strong>GitHub events</div><div class="card"><strong>${report.totals.discord.messages}</strong>Discord messages</div><div class="card"><strong>${report.activeMembers} / ${report.memberCount}</strong>Active members</div></div>${summary ? `<section><h2>Summary</h2>${summaryNotices}${markdownBlocks(summary.globalSummary)}<h2>Highlights</h2><ul>${summary.highlights.map((highlight) => `<li>${escapeHtml(highlight)}</li>`).join("")}</ul></section>` : ""}<h2>Members</h2>${members || "<p>No members are configured for this period.</p>"}${other}${unmatched}`,
   );
 }
 

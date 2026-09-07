@@ -384,6 +384,28 @@ describe("Team Reports scheduler lifecycle", () => {
     expect(store.listRuns().find((run) => run.id === id)?.status).toBe("ok");
   });
 
+  it("surfaces the latest day's model fallback in status, storage, Markdown, and logs", async () => {
+    const { scheduler, store, context, complete, github } = setup({ summaries: true });
+    github.loadRoster.mockResolvedValue({
+      people: [{ github: ["alex"] }],
+      status: { ...healthy, warnings: ["Roster coverage warning"] },
+    });
+    complete.mockRejectedValue(new Error("private-provider-error-marker"));
+    scheduler.start();
+    scheduler.generate();
+    await vi.advanceTimersByTimeAsync(0);
+    const reason = "Model summary unavailable: completion failed";
+    const stored = store.getPeriod("day", "2026-08-19");
+    expect(stored?.summary?.warnings).toEqual([reason]);
+    expect(stored?.markdown).toContain(`> ${reason}`);
+    expect(scheduler.status().sourceWarnings).toEqual(["Roster coverage warning", reason]);
+    expect(context.logger.warn.mock.calls).toEqual([[reason]]);
+    complete.mockResolvedValue(modelResponse());
+    scheduler.generate({ intraday: true });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(scheduler.status().sourceWarnings).toEqual(["Roster coverage warning"]);
+  });
+
   it("reports source failures with redacted errors and clears health on the next successful run", async () => {
     const { scheduler, store, github, context } = setup();
     github.collect.mockRejectedValueOnce(new Error("Access failed for fixture-github-token"));

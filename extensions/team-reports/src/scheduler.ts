@@ -111,9 +111,12 @@ export class TeamReportsScheduler {
       sourceWarnings: this.options.store
         .listPeriods({ period: "day", limit: 1 })
         .flatMap((entry) => {
-          const report = this.options.store.getPeriod("day", entry.key)?.report;
-          return report
-            ? report.sources.github.warnings.concat(report.sources.discord?.warnings ?? [])
+          const stored = this.options.store.getPeriod("day", entry.key);
+          return stored
+            ? stored.report.sources.github.warnings.concat(
+                stored.report.sources.discord?.warnings ?? [],
+                stored.summary?.warnings ?? [],
+              )
             : [];
         }),
     };

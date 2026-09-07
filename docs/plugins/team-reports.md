@@ -252,6 +252,7 @@ or private facts. Quiet members remain in the report with a low-activity note.
 The plugin validates the model's JSON response and retries once to repair
 invalid output or missing members. If the retry fails, it keeps the collected
 report and shows deterministic summaries with a visible fallback banner.
+The output budget scales with roster size; failed model attempts include a bounded, credential-free reason in the report, Markdown export, latest-day status, and Gateway logs.
 Unchanged evidence reuses the stored summary instead of making another model
 call. Collection is stored before summarization, which may take several minutes.
 
