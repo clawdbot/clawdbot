@@ -6205,13 +6205,14 @@ source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
         name: "@openclaw/fs-safe",
         type: "module",
         exports: {
-          ".": "./index.js",
+          ".": "./dist/index.js",
           "./config": "./config.js",
           "./durability": "./durability.js",
         },
       }),
     );
-    writeFileSync(join(fsSafe, "index.js"), "export {};\n");
+    mkdirSync(join(fsSafe, "dist"), { recursive: true });
+    writeFileSync(join(fsSafe, "dist/index.js"), "export {};\n");
     writeFileSync(
       join(fsSafe, "config.js"),
       'export function configureFsSafeNative({ mode }) { if (mode !== "off") throw new Error("fixture requires fallback mode"); }',
@@ -6229,7 +6230,7 @@ export async function sha256File(file) {
     symlinkSync(physicalRoot, logicalRoot, process.platform === "win32" ? "junction" : "dir");
     expect(
       execFileSync(process.execPath, [join(logicalRoot, "cli.cjs")], { encoding: "utf8" }),
-    ).toBe(join(fsSafe, "index.js"));
+    ).toBe(join(fsSafe, "dist/index.js"));
     for (const packageRoot of [physicalRoot, logicalRoot]) {
       const result = spawnSync(
         process.execPath,
