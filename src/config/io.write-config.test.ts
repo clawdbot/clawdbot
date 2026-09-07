@@ -455,24 +455,36 @@ describe("config io write", () => {
     );
   });
 
-  itWithHome("refuses direct config writes in Nix mode without changing the file", async (home) => {
-    const { configPath, raw: initialRaw } = await writeConfigFixture(home, {
-      gateway: { mode: "local" },
-    });
-    const io = createHomeConfigIO(home, {
-      configPath,
-      env: {
-        OPENCLAW_NIX_MODE: "1",
-        OPENCLAW_TEST_FAST: "1",
-      } as NodeJS.ProcessEnv,
-    });
-
-    await expect(io.writeConfigFile({ gateway: { mode: "local", port: 19001 } })).rejects.toThrow(
+  for (const [mode, message] of [
+    [
+      "OPENCLAW_NIX_MODE",
       "Agent-first Nix setup: https://github.com/openclaw/nix-openclaw#quick-start",
-    );
+    ],
+    ["OPENCLAW_CONFIG_READONLY", "Config is externally managed (`OPENCLAW_CONFIG_READONLY=1`)"],
+  ] as const) {
+    itWithHome(
+      `refuses direct config writes in ${mode} without changing the file`,
+      async (home) => {
+        const { configPath, raw: initialRaw } = await writeConfigFixture(home, {
+          gateway: { mode: "local" },
+        });
+        const io = createHomeConfigIO(home, {
+          configPath,
+          env: {
+            [mode]: "1",
+            OPENCLAW_TEST_FAST: "1",
+          } as NodeJS.ProcessEnv,
+        });
 
-    await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(initialRaw);
-  });
+        await expect(
+          io.writeConfigFile({ gateway: { mode: "local", port: 19001 } }),
+        ).rejects.toThrow(message);
+
+        await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(initialRaw);
+        expect((await io.readConfigFileSnapshot()).config.gateway?.mode).toBe("local");
+      },
+    );
+  }
 
   itWithHome(
     "dedupes validation warnings across writes and reloads until config becomes clean",

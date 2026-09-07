@@ -362,6 +362,9 @@ export function buildServiceEnvironment(params: {
       wrapperPath ? undefined : params.runtime,
     ),
     OPENCLAW_PROFILE: profile,
+    ...(env.OPENCLAW_CONFIG_READONLY !== undefined
+      ? { OPENCLAW_CONFIG_READONLY: env.OPENCLAW_CONFIG_READONLY }
+      : {}),
     OPENCLAW_WRAPPER: wrapperPath,
     OPENCLAW_GATEWAY_PORT: String(port),
     OPENCLAW_LAUNCHD_LABEL: resolvedLaunchdLabel,

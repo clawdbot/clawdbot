@@ -20,6 +20,7 @@ import {
   applyUnsetPathsForWrite,
   resolveManagedUnsetPathsForWrite,
 } from "./config-path-mutation.js";
+import { assertConfigWriteAllowedInCurrentMode } from "./config-write-guard.js";
 import {
   EnvRefArrayMutationError,
   restoreEnvRefsFromMap,
@@ -74,7 +75,6 @@ import { prepareConfigWriteTopology } from "./io.write-topology.js";
 import { formatConfigIssueLines } from "./issue-format.js";
 import { warnIfJSON5CommentsWillBeStripped } from "./json5-comments.js";
 import { applyMergePatch, createMergePatch } from "./merge-patch.js";
-import { assertConfigWriteAllowedInCurrentMode } from "./nix-mode-write-guard.js";
 import { resolveIncludeRoots } from "./paths.js";
 import { preflightRuntimeSnapshotWrite } from "./runtime-snapshot.js";
 import type { OpenClawConfig } from "./types.js";

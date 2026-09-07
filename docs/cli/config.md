@@ -2,6 +2,7 @@
 summary: "CLI reference for `openclaw config` (get/set/patch/unset/file/schema/validate)"
 read_when:
   - You want to read or edit config non-interactively
+  - You manage config externally and want OpenClaw to leave it unchanged
 title: "Config"
 sidebarTitle: "Config"
 ---
@@ -9,8 +10,34 @@ sidebarTitle: "Config"
 Non-interactive helpers for `openclaw.json`: get/set/patch/unset a value by path, print the schema, validate, or print the active file path. Run `openclaw config` with no subcommand to open the same guided wizard as `openclaw configure`.
 
 <Note>
-When `OPENCLAW_NIX_MODE=1`, OpenClaw treats `openclaw.json` as immutable. Read-only commands (`config get`, `config file`, `config schema`, `config validate`) still work; config writers refuse. Edit the Nix source for the install instead; for the first-party nix-openclaw distribution, use the [nix-openclaw Quick Start](https://github.com/openclaw/nix-openclaw#quick-start) and set values under `programs.openclaw.config` or `instances.<name>.config`.
+When `OPENCLAW_CONFIG_READONLY=1` or `OPENCLAW_NIX_MODE=1`, OpenClaw treats `openclaw.json` as immutable. Read-only commands (`config get`, `config file`, `config schema`, `config validate`) still work; config writers refuse.
 </Note>
+
+## Externally managed config
+
+Set `OPENCLAW_CONFIG_READONLY=1` in the environment of both the Gateway and any
+OpenClaw CLI processes when a deployment system manages your config:
+
+```bash
+export OPENCLAW_CONFIG_READONLY=1
+openclaw config validate
+openclaw gateway run
+```
+
+For a service or container, set the variable in its service environment or
+container definition. This is an environment switch, not an `openclaw.json` field.
+Only the value `1` enables it.
+
+Config writes are blocked, including setup, onboarding, doctor repairs, plugin
+install/update/uninstall/enable/disable, and mutating `openclaw update` flows.
+Startup-derived defaults stay runtime-only. Change the config through your
+external deployment system, then let the Gateway reload it or restart the Gateway
+as needed. Runtime state still needs a writable `OPENCLAW_STATE_DIR`.
+
+`OPENCLAW_CONFIG_READONLY=1` uses generic externally managed config messages and
+does not enable Nix-specific installation or service behavior. `OPENCLAW_NIX_MODE=1`
+continues to imply immutable config, even if `OPENCLAW_CONFIG_READONLY` is unset or
+`0`. For Nix installs, edit the Nix source instead; see [Nix](/install/nix).
 
 ## Root options
 

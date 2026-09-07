@@ -22,6 +22,7 @@ import {
   applyUnsetPathsForWrite,
   resolveManagedUnsetPathsForWrite,
 } from "./config-path-mutation.js";
+import { assertConfigWriteAllowedInCurrentMode } from "./config-write-guard.js";
 import { restoreEnvVarRefs, resolveWriteEnvSnapshotForPath } from "./env-preserve.js";
 import { resolveConfigEnvVars } from "./env-substitution.js";
 import { GATEWAY_CONFIG_SELECTION_ENV_KEYS } from "./gateway-env-selection.js";
@@ -48,7 +49,6 @@ import {
   GUARDED_CONFIG_INCLUDE_WRITE_ERROR,
 } from "./mutation-conflict.js";
 import type { ConfigMutationBase } from "./mutation-types.js";
-import { assertConfigWriteAllowedInCurrentMode } from "./nix-mode-write-guard.js";
 import { resolveConfigPath } from "./paths.js";
 import {
   createRuntimeConfigWriteNotification,

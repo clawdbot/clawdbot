@@ -1,6 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { mutateConfigFileWithRetry } from "../config/config.js";
-import { resolveIsNixMode } from "../config/paths.js";
+import { resolveIsConfigReadOnly, resolveIsNixMode } from "../config/paths.js";
 import type { ModelSelectionScope } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -72,13 +72,16 @@ export function persistStickyModelSelectionBestEffort(params: {
   model: string;
   target: AgentModelPrimaryWriteTarget | "effective";
 }): StickyModelSelectionDispatchOutcome {
-  if (resolveIsNixMode()) {
-    // A Nix-managed gateway can switch models but can never persist this preference.
+  if (resolveIsConfigReadOnly()) {
+    // A gateway with immutable config can switch models but can never persist this preference.
     // Warn once per process so repeated switches do not flood the operator log.
     if (!warnedImmutableConfig) {
       warnedImmutableConfig = true;
+      const reason = resolveIsNixMode()
+        ? "config is immutable in OPENCLAW_NIX_MODE"
+        : "config is externally managed and immutable";
       log.warn(
-        `skipped sticky model persistence agentId=${params.agentId} model=${params.model} reason=config is immutable in OPENCLAW_NIX_MODE`,
+        `skipped sticky model persistence agentId=${params.agentId} model=${params.model} reason=${reason}`,
       );
     }
     return "skipped-immutable";

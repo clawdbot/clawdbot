@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { isNixMode } from "../config/paths.js";
+import { isNixMode, resolveIsConfigReadOnly } from "../config/paths.js";
 import { clearGatewayAgentCliShim } from "../infra/openclaw-cli-shim.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { createSubsystemLogger, runtimeForLogger } from "../logging/subsystem.js";
@@ -107,6 +107,9 @@ registerGatewayModelCatalogPrivateAccess(loadGatewayModelCatalogSnapshot, {
 function formatRuntimeGatewayAuthTokenWarning(): string {
   const base =
     "Gateway auth token was missing. Generated a runtime token for this startup without changing config; restart will generate a different token.";
+  if (!isNixMode && resolveIsConfigReadOnly()) {
+    return `${base} Set gateway.auth.token in your external config source and redeploy.`;
+  }
   if (!isNixMode) {
     return `${base} Persist one with \`openclaw config set gateway.auth.mode token\` and \`openclaw config set gateway.auth.token <token>\`.`;
   }

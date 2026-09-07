@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { resolveAutoNodeExtraCaCerts } from "../bootstrap/node-extra-ca-certs.js";
+import { resolveIsConfigReadOnly, resolveIsNixMode } from "../config/paths.js";
 import { buildLaunchAgentPlist } from "./launchd-plist.js";
 import { resolveGatewayStateDir } from "./paths.js";
 import {
@@ -513,6 +514,19 @@ describe("getMinimalServicePathParts - Nix Home Manager", () => {
 });
 
 describe("buildServiceEnvironment", () => {
+  it.each(["darwin", "linux", "win32"] as const)(
+    "preserves config write protection in %s services without enabling Nix mode",
+    (platform) => {
+      const env = buildServiceEnvironment({
+        env: { HOME: "/home/user", OPENCLAW_CONFIG_READONLY: "1" },
+        port: 18789,
+        platform,
+      });
+      expect(resolveIsConfigReadOnly(env)).toBe(true);
+      expect(resolveIsNixMode(env)).toBe(false);
+    },
+  );
+
   it("sets minimal PATH and gateway vars", () => {
     const env = buildServiceEnvironment({
       env: { HOME: "/home/user" },

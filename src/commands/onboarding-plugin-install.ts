@@ -12,7 +12,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { resolveBundledInstallPlanForCatalogEntry } from "../cli/plugin-install-plan.js";
-import { assertConfigWriteAllowedInCurrentMode } from "../config/nix-mode-write-guard.js";
+import { assertConfigWriteAllowedInCurrentMode } from "../config/config-write-guard.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
 import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";

@@ -556,6 +556,7 @@ function mergeServicePath(
 // service definition that the install/repair flow should not silently revert.
 const PRESERVED_OPENCLAW_OPERATOR_OPT_IN_ENV_KEYS = new Set([
   "OPENCLAW_CLI_CONTAINER_BYPASS",
+  "OPENCLAW_CONFIG_READONLY",
   "OPENCLAW_CONTAINER_HINT",
 ]);
 

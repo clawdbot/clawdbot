@@ -6,7 +6,7 @@ import type {
   PluginsInspectResult,
 } from "../../packages/gateway-protocol/src/schema/plugins.js";
 import { resolveConfigWidePluginMetadataSnapshot } from "../config/io.plugin-metadata.js";
-import { resolveIsNixMode } from "../config/paths.js";
+import { resolveIsConfigReadOnly } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolvePendingPluginCapabilityReview } from "./capability-consent.js";
 import {
@@ -435,7 +435,7 @@ export const listManagedPlugins = withManagedPluginCache(
     return {
       plugins: plugins.toSorted(compareCatalogEntries),
       diagnostics,
-      mutationAllowed: !resolveIsNixMode(env),
+      mutationAllowed: !resolveIsConfigReadOnly(env),
     };
   },
 );

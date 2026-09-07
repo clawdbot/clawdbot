@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import nodePath from "node:path";
 import { UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV } from "../commands/doctor/shared/update-phase.js";
-import { resolveIsNixMode } from "../config/paths.js";
+import { resolveIsConfigReadOnly, resolveIsNixMode } from "../config/paths.js";
 import type { DoctorHealthFlowContext } from "./doctor-health-contribution-types.js";
 import {
   isUpdateDoctorRun,
@@ -234,15 +234,19 @@ export async function collectWriteConfigHealthFindings(
 ): Promise<readonly HealthFinding[]> {
   const findings: HealthFinding[] = [];
   const configPath = ctx.configPath;
-  if (resolveIsNixMode(process.env)) {
+  const isNixMode = resolveIsNixMode(process.env);
+  if (resolveIsConfigReadOnly(process.env)) {
     findings.push({
       checkId: "core/doctor/write-config",
       severity: "warning",
-      message: "Doctor config writes are disabled because OpenClaw is running in Nix mode.",
+      message: isNixMode
+        ? "Doctor config writes are disabled because OpenClaw is running in Nix mode."
+        : "Doctor config writes are disabled because config is externally managed.",
       ...(configPath ? { path: configPath } : {}),
       requirement: "mutable-config-write-path",
-      fixHint:
-        "Edit the Nix source for this install and rebuild; do not run doctor --fix against this config file.",
+      fixHint: isNixMode
+        ? "Edit the Nix source for this install and rebuild; do not run doctor --fix against this config file."
+        : "Edit the config in your external deployment source and redeploy; do not run doctor --fix against this config file.",
     });
   }
   if (!configPath) {

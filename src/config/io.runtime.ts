@@ -3,6 +3,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { formatErrorMessage } from "../infra/errors.js";
 import { cloneEnvWithPlatformSemantics, createConfigRuntimeEnvBase } from "./config-env-vars.js";
 import { resolveManagedUnsetPathsForWrite } from "./config-path-mutation.js";
+import { assertConfigWriteAllowedInCurrentMode } from "./config-write-guard.js";
 import { resolveWriteEnvSnapshotForPath } from "./env-preserve.js";
 import { GATEWAY_CONFIG_SELECTION_ENV_KEYS } from "./gateway-env-selection.js";
 import { createConfigIO } from "./io.factory.js";
@@ -28,7 +29,6 @@ import { rollbackConfigFileWriteIfUnchanged } from "./io.write-safety.js";
 import { formatConfigIssueSummary } from "./issue-format.js";
 import { applyMergePatch, createMergePatch } from "./merge-patch.js";
 import { ConfigMutationConflictError } from "./mutation-conflict.js";
-import { assertConfigWriteAllowedInCurrentMode } from "./nix-mode-write-guard.js";
 import {
   createRuntimeConfigWriteNotification,
   finalizeRuntimeSnapshotWrite,

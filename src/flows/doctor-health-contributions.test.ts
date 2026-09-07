@@ -3995,6 +3995,34 @@ describe("doctor health contributions", () => {
         findings: [
           expect.objectContaining({
             checkId: "core/doctor/write-config",
+            message: "Doctor config writes are disabled because OpenClaw is running in Nix mode.",
+            path: "/tmp/fake-openclaw.json",
+            requirement: "mutable-config-write-path",
+          }),
+        ],
+      });
+    });
+
+    it("reports externally managed immutable config mode when selected", async () => {
+      vi.stubEnv("OPENCLAW_CONFIG_READONLY", "1");
+
+      await expect(
+        runDoctorLintChecks(
+          {
+            cfg: {},
+            mode: "lint" as const,
+            runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+            configPath: "/tmp/fake-openclaw.json",
+          },
+          { checks: [check], onlyIds: ["core/doctor/write-config"] },
+        ),
+      ).resolves.toMatchObject({
+        checksRun: 1,
+        checksSkipped: 0,
+        findings: [
+          expect.objectContaining({
+            checkId: "core/doctor/write-config",
+            message: "Doctor config writes are disabled because config is externally managed.",
             path: "/tmp/fake-openclaw.json",
             requirement: "mutable-config-write-path",
           }),

@@ -334,6 +334,7 @@ vi.mock("../config/paths.js", async (importOriginal) => {
   return {
     ...actual,
     resolveIsNixMode: () => false,
+    resolveIsConfigReadOnly: () => false,
     resolveStateDir: () => resolveStateDir(),
   };
 });

@@ -52,6 +52,11 @@ See the [nix-openclaw README](https://github.com/openclaw/nix-openclaw) for full
 
 When `OPENCLAW_NIX_MODE=1` is set (automatic with nix-openclaw), OpenClaw enters a deterministic mode for Nix-managed installs. Other Nix packages can set the same mode; nix-openclaw is the first-party reference.
 
+For externally managed config without Nix, use
+[`OPENCLAW_CONFIG_READONLY=1`](/cli/config#externally-managed-config). It applies
+the same immutable-config enforcement with generic messaging, without enabling
+Nix-specific behavior. Existing `OPENCLAW_NIX_MODE=1` installs need no changes.
+
 You can also set it manually:
 
 ```bash

@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { assertConfigWriteAllowedInCurrentMode } from "../config/config-write-guard.js";
 import {
   configSnapshot,
   emptyMetadataSnapshot,
@@ -34,9 +35,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../config/config.js", () => ({
   assertConfigWriteAllowedInCurrentMode: (params?: { env?: NodeJS.ProcessEnv }) => {
-    if (params?.env?.OPENCLAW_NIX_MODE === "1") {
-      throw new Error("Config is managed by Nix");
-    }
+    assertConfigWriteAllowedInCurrentMode(params);
   },
   readConfigFileSnapshotForWrite: () => mocks.readConfig(),
   replaceConfigFile: (params: unknown) => mocks.replaceConfig(params),
@@ -436,17 +435,27 @@ describe("plugin management service", () => {
     expect(resolved).toBeUndefined();
   });
 
-  it("refuses mutation in Nix mode before reading or writing config", async () => {
-    await expect(
-      setManagedPluginEnabled({
-        pluginId: "workboard",
-        enabled: true,
-        env: { OPENCLAW_NIX_MODE: "1" },
-      }),
-    ).rejects.toThrow("managed by Nix");
-    expect(mocks.readConfig).not.toHaveBeenCalled();
-    expect(mocks.replaceConfig).not.toHaveBeenCalled();
-  });
+  it.each(["OPENCLAW_NIX_MODE", "OPENCLAW_CONFIG_READONLY"])(
+    "refuses mutation in %s before reading or writing config",
+    async (mode) => {
+      await expect(
+        setManagedPluginEnabled({
+          pluginId: "workboard",
+          enabled: true,
+          env: { [mode]: "1" },
+        }),
+      ).rejects.toThrow(`${mode}=1`);
+      expect(mocks.readConfig).not.toHaveBeenCalled();
+      expect(mocks.replaceConfig).not.toHaveBeenCalled();
+      mocks.metadata.mockReturnValue(emptyMetadataSnapshot());
+      const catalog = await listManagedPlugins({
+        config: {},
+        env: { [mode]: "1" },
+        officialCatalog: { entries: [] },
+      });
+      expect(catalog.mutationAllowed).toBe(false);
+    },
+  );
 
   it("blocks unsupported plugin includes before config mutation", async () => {
     mocks.readConfig.mockResolvedValue(configSnapshot());

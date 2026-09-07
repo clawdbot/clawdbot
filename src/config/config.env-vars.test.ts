@@ -348,14 +348,14 @@ describe("config env vars", () => {
     });
   });
 
-  it("rejects process-stable Gateway selector changes during reload", () => {
-    expect(() =>
-      assertGatewayConfigEnvSelectionUnchanged(
-        {},
-        { env: { vars: { OPENCLAW_CONFIG_PATH: "/tmp/other.json" } } },
-      ),
-    ).toThrow("process-stable Gateway selector OPENCLAW_CONFIG_PATH");
-  });
+  it.each(["OPENCLAW_CONFIG_PATH", "OPENCLAW_CONFIG_READONLY"])(
+    "rejects process-stable Gateway selector %s changes during reload",
+    (key) => {
+      expect(() =>
+        assertGatewayConfigEnvSelectionUnchanged({}, { env: { vars: { [key]: "1" } } }),
+      ).toThrow(`process-stable Gateway selector ${key}`);
+    },
+  );
 
   it("preserves Windows case-insensitive env precedence in merged runtime env", () => {
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");

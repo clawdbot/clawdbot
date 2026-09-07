@@ -14,6 +14,7 @@ const applyPluginAutoEnable = vi.hoisted(() =>
 );
 const configMocks = vi.hoisted(() => ({
   isNixMode: { value: false },
+  isConfigReadOnly: false,
 }));
 const pluginManifestRegistry = vi.hoisted(() => ({ plugins: [], diagnostics: [] }));
 const pluginMetadataSnapshot = vi.hoisted((): PluginMetadataSnapshot => {
@@ -68,6 +69,7 @@ vi.mock("../config/io.js", () => ({
 }));
 
 vi.mock("../config/paths.js", () => ({
+  resolveIsConfigReadOnly: () => configMocks.isNixMode.value || configMocks.isConfigReadOnly,
   get isNixMode() {
     return configMocks.isNixMode.value;
   },
@@ -321,6 +323,7 @@ describe("gateway startup config validation", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     configMocks.isNixMode.value = false;
+    configMocks.isConfigReadOnly = false;
     installConfigIoMockDefaults();
   });
 
@@ -571,7 +574,7 @@ describe("gateway startup config validation", () => {
     await expectStartupRejects('Run "openclaw doctor --fix" to repair, then retry.');
   });
 
-  it("rejects legacy config entries in Nix mode", async () => {
+  it.each(["Nix", "read-only"])("rejects legacy config entries in %s mode", async (mode) => {
     const legacySnapshot = buildInvalidConfigSnapshot({
       rawConfig: {
         heartbeat: { model: "anthropic/claude-3-5-haiku-20241022", every: "30m" },
@@ -593,10 +596,13 @@ describe("gateway startup config validation", () => {
       ],
     });
     mockStartupSnapshot(legacySnapshot);
-    configMocks.isNixMode.value = true;
+    configMocks.isNixMode.value = mode === "Nix";
+    configMocks.isConfigReadOnly = true;
 
     await expectStartupRejects(
-      "Legacy config entries detected while running in Nix mode. Update your Nix config to the latest schema and restart.",
+      mode === "Nix"
+        ? "Legacy config entries detected while running in Nix mode. Update your Nix config to the latest schema and restart."
+        : "Legacy config entries detected in read-only config. Update your external config source to the latest schema and restart.",
     );
   });
 

@@ -14,7 +14,7 @@ import {
   tryGetLegacyDefaultAgentId,
 } from "../config/legacy.default-agent-owner.js";
 import { materializeLegacyDefaultAgentRoles } from "../config/legacy.default-agent-roles.js";
-import { isNixMode } from "../config/paths.js";
+import { isNixMode, resolveIsConfigReadOnly } from "../config/paths.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { isPluginPackagingRuntimeOutputInvalidConfigSnapshot } from "../config/recovery-policy.js";
 import {
@@ -101,10 +101,12 @@ export async function loadGatewayStartupConfigSnapshot(params: {
   const configSnapshot = snapshotRead.snapshot;
   const pluginMetadataSnapshot = snapshotRead.pluginMetadataSnapshot;
   const wroteConfig = false;
-  if (configSnapshot.legacyIssues.length > 0 && isNixMode) {
+  if (configSnapshot.legacyIssues.length > 0 && resolveIsConfigReadOnly()) {
     throw createInvalidConfigError(
       configSnapshot.path,
-      "Legacy config entries detected while running in Nix mode. Update your Nix config to the latest schema and restart.",
+      isNixMode
+        ? "Legacy config entries detected while running in Nix mode. Update your Nix config to the latest schema and restart."
+        : "Legacy config entries detected in read-only config. Update your external config source to the latest schema and restart.",
       { recovery: "manual" },
     );
   }

@@ -122,6 +122,7 @@ describe("ensureConfigReady", () => {
     tempRoots.push(root);
     setTestEnvValue("OPENCLAW_HOME", root);
     deleteTestEnvValue("OPENCLAW_NIX_MODE");
+    deleteTestEnvValue("OPENCLAW_CONFIG_READONLY");
     deleteTestEnvValue("OPENCLAW_PROFILE");
     deleteTestEnvValue("OPENCLAW_STATE_DIR");
     return root;
@@ -154,6 +155,7 @@ describe("ensureConfigReady", () => {
       "HOME",
       "OPENCLAW_HOME",
       "OPENCLAW_NIX_MODE",
+      "OPENCLAW_CONFIG_READONLY",
       "OPENCLAW_PROFILE",
       "OPENCLAW_STATE_DIR",
     ]);
@@ -922,21 +924,24 @@ describe("ensureConfigReady", () => {
     },
   );
 
-  it("keeps invalid Nix-managed config on the manual recovery path", async () => {
-    setInvalidSnapshot();
-    setTestEnvValue("OPENCLAW_NIX_MODE", "1");
-    const runtime = makeRuntime();
-    const confirm = vi.fn(async () => true);
+  it.each(["OPENCLAW_NIX_MODE", "OPENCLAW_CONFIG_READONLY"])(
+    "keeps invalid %s config on the manual recovery path",
+    async (mode) => {
+      setInvalidSnapshot();
+      setTestEnvValue(mode, "1");
+      const runtime = makeRuntime();
+      const confirm = vi.fn(async () => true);
 
-    await ensureConfigReady(
-      { runtime: runtime as never, commandPath: ["gateway", "run"] },
-      { confirm, isInteractive: () => true },
-    );
+      await ensureConfigReady(
+        { runtime: runtime as never, commandPath: ["gateway", "run"] },
+        { confirm, isInteractive: () => true },
+      );
 
-    expect(confirm).not.toHaveBeenCalled();
-    expect(plainErrorCalls(runtime).join("\n")).toContain("Config is managed by Nix");
-    expect(runtime.exit).toHaveBeenCalledWith(78);
-  });
+      expect(confirm).not.toHaveBeenCalled();
+      expect(plainErrorCalls(runtime).join("\n")).toContain(`${mode}=1`);
+      expect(runtime.exit).toHaveBeenCalledWith(78);
+    },
+  );
 
   it("replaces doctor fix advice for plugin packaging-only invalid config", async () => {
     setInvalidSnapshot({
