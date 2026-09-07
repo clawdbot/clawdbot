@@ -1,5 +1,5 @@
-// Tests provider usage aggregation and formatting.
 import { beforeEach, describe, expect, it } from "vitest";
+// Tests provider usage aggregation and formatting.
 import { createProviderUsageFetch } from "../test-utils/provider-usage-fetch.js";
 import {
   getProviderUsageSnapshotWithPluginMock,

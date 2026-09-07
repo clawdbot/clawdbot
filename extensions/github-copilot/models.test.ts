@@ -243,6 +243,23 @@ describe("fetchCopilotUsage", () => {
     expect(canceled).toBe(true);
   });
 
+  it("returns a stable error snapshot for malformed successful JSON responses", async () => {
+    const mockFetch = createProviderUsageFetch(
+      async () =>
+        new Response("{", {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+    );
+
+    await expect(fetchCopilotUsage("token", 5000, mockFetch)).resolves.toEqual({
+      provider: "github-copilot",
+      displayName: "Copilot",
+      windows: [],
+      error: "Malformed usage response",
+    });
+  });
+
   it("parses premium/chat usage from remaining percentages", async () => {
     const mockFetch = createProviderUsageFetch(async (_url, init) => {
       const headers = (init?.headers as Record<string, string> | undefined) ?? {};

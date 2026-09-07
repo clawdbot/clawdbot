@@ -359,6 +359,14 @@ export class ProviderHttpError extends Error {
   }
 }
 
+/** Error raised when a bounded provider JSON response cannot be decoded or parsed. */
+export class ProviderJsonParseError extends Error {
+  constructor(label: string, cause: unknown, options?: { omitCause?: boolean }) {
+    super(`${label}: malformed JSON response`, options?.omitCause ? undefined : { cause });
+    this.name = "ProviderJsonParseError";
+  }
+}
+
 /** Builds the human-facing provider HTTP error message from normalized metadata. */
 export function formatProviderHttpErrorMessage(params: {
   label: string;
@@ -439,11 +447,10 @@ export async function readProviderJsonResponse<T>(
   try {
     return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as T;
   } catch (cause) {
-    // oxlint-disable-next-line preserve-caught-error -- Parser causes can quote partial credentials; header-bearing failures must omit them.
-    throw new Error(
-      `${label}: malformed JSON response`,
-      opts?.requestHeaders ? undefined : { cause },
-    );
+    // Parser causes can quote partial credentials; header-bearing failures must omit them.
+    throw new ProviderJsonParseError(label, cause, {
+      omitCause: Boolean(opts?.requestHeaders),
+    });
   }
 }
 

@@ -6,6 +6,7 @@ import {
   createProviderHttpError,
   extractProviderErrorDetail,
   extractProviderRequestId,
+  ProviderJsonParseError,
   ProviderHttpError,
   readProviderBinaryResponse,
   readProviderJsonResponse,
@@ -390,9 +391,12 @@ describe("provider error utils", () => {
       headers: { "content-type": "application/json" },
     });
 
-    await expect(readProviderJsonResponse(response, "Provider catalog failed")).rejects.toThrow(
-      "Provider catalog failed: malformed JSON response",
-    );
+    await expect(
+      readProviderJsonResponse(response, "Provider catalog failed"),
+    ).rejects.toMatchObject({
+      message: "Provider catalog failed: malformed JSON response",
+      name: "ProviderJsonParseError",
+    } satisfies Partial<ProviderJsonParseError>);
   });
 
   it("does not retain reflected credentials in malformed JSON causes", async () => {
