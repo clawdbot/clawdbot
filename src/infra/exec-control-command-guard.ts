@@ -372,14 +372,14 @@ function scanHeredocOperators(line: string): HeredocFrame[] {
 function joinEolPair(line: string, nextLine: string): string {
   return line.replace(
     /^(?!\s*#)([^#\n]*?)([^\s;|&()<>"'`#$\n\\])(\\+)$/g,
-    (match, prefix, before, run) => {
-      if ((run as string).length % 2 === 0) {
+    (match: string, prefix: string, before: string, run: string) => {
+      if (run.length % 2 === 0) {
         return match;
       }
       if (!/^[^\s;|&()<>"'`#$\n\\]/.test(nextLine)) {
         return match;
       }
-      return (prefix as string) + (before as string) + "\\".repeat(((run as string).length - 1) / 2);
+      return prefix + before + "\\".repeat((run.length - 1) / 2);
     },
   );
 }
