@@ -97,7 +97,9 @@ function mockGeneratedPngResponse() {
   postMultipartRequestMock.mockResolvedValue(generatedPngRequest);
 }
 
-function mockCodexImageStream(params: { imageData?: string; revisedPrompt?: string } = {}) {
+function mockCodexImageStream(
+  params: { imageData?: string; revisedPrompt?: string; size?: string; quality?: string } = {},
+) {
   const image = Buffer.from(params.imageData ?? "codex-png-bytes").toString("base64");
   const events = [
     {
@@ -106,6 +108,8 @@ function mockCodexImageStream(params: { imageData?: string; revisedPrompt?: stri
         type: "image_generation_call",
         result: image,
         ...(params.revisedPrompt ? { revised_prompt: params.revisedPrompt } : {}),
+        ...(params.size !== undefined ? { size: params.size } : {}),
+        ...(params.quality !== undefined ? { quality: params.quality } : {}),
       },
     },
     {
@@ -127,6 +131,8 @@ function mockCodexCompletedImageStream(
   params: {
     imageData?: string;
     revisedPrompt?: string;
+    size?: string;
+    quality?: string;
   } = {},
 ) {
   const image = Buffer.from(params.imageData ?? "codex-completed-png-bytes").toString("base64");
@@ -139,6 +145,8 @@ function mockCodexCompletedImageStream(
             type: "image_generation_call",
             result: image,
             ...(params.revisedPrompt ? { revised_prompt: params.revisedPrompt } : {}),
+            ...(params.size !== undefined ? { size: params.size } : {}),
+            ...(params.quality !== undefined ? { quality: params.quality } : {}),
           },
         ],
         usage: { input_tokens: 11, output_tokens: 22, total_tokens: 33 },
@@ -380,6 +388,18 @@ describe("openai image generation provider", () => {
       qualities: ["low", "medium", "high", "auto"],
       backgrounds: ["transparent", "opaque", "auto"],
     });
+  });
+
+  it("preserves provider-returned size and quality metadata", async () => {
+    mockCodexAuthOnly();
+    mockCodexImageStream({ size: "941x1672", quality: "medium" });
+    const result = await generateOpenAIImage("A cat wearing sunglasses", {
+      authStore: { version: 1, profiles: {} },
+      size: "2160x3840",
+      quality: "high",
+      outputFormat: "png",
+    });
+    expect(result.images[0]?.metadata).toEqual({ size: "941x1672", quality: "medium" });
   });
 
   it("reports configured when either OpenAI API key auth or Codex OAuth auth is available", () => {
