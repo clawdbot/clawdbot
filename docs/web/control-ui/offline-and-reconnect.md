@@ -11,17 +11,25 @@ What survives a dropped connection, and how the Control UI recovers when it retu
 
 ## Warm reload
 
-After a successful connection, OpenClaw keeps a small agent roster, the session list
-without live run state, and custom groups in browser storage. Recent transcripts
-use the existing chat cache. On reload, the shell, sidebar, and cached conversation
-can appear while the Gateway is still connecting. Live state replaces the cached
-roster on connect, and chat requests changes from its saved transcript cursor.
+Warm reload applies only after token or device-token authentication. The browser
+must still hold the Gateway token that authenticated the previous connection, or
+the paired device token retained from that connection, and present that same
+credential again. After that connection, OpenClaw keeps a small agent roster, the
+session list without live run state, and custom groups in browser storage. Recent
+transcripts use the existing chat cache. On reload, the shell, sidebar, and cached
+conversation can appear while the Gateway is still connecting. Live state replaces
+the cached roster on connect, and chat requests changes from its saved transcript cursor.
 The first chat request waits up to 300 ms after connecting for the stored transcript,
 then falls back to live history if it is not ready.
 
+Trusted-proxy and Tailscale identities always show the initial connection screen
+and save no warm boot or roster records. Password and one-time bootstrap-token
+connections follow the same rule. Cached transcript content stays hidden until
+the Gateway connects; the normal transcript cache keeps its existing behavior.
+
 Warm reload records belong to the Gateway credential scope and signed-in profile.
-Changing credentials or clearing site data clears the cached boot state. Agent and
-session roster records expire after 30 days. A different profile reported on connect
+Changing or removing the browser credential, or clearing site data, clears the cached
+boot state. Agent and session roster records expire after 30 days. A different profile reported on connect
 clears the cached boot state and transcripts before loading live data. Recent transcripts
 keep their existing cache limits. If browser storage is unavailable or no usable record exists, the
 initial connection screen appears as usual.
