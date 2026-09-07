@@ -1,11 +1,15 @@
 /** Sandboxed guest globals and host bridge for Code Mode QuickJS cells. */
 import { CODE_MODE_SWARM_CONTROLLER_SOURCE } from "./code-mode-swarm-controller-source.js";
+import { MAX_CODE_MODE_PENDING_TOOL_CALLS } from "./code-mode-worker-types.js";
 
 export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
 (() => {
   const output = [];
   const pending = new Map();
-  const queued = [];
+  const queued = new Map();
+  // Reuse the accepted bridge ceiling, not an unbounded queue or a new setting.
+  const maxQueued = ${MAX_CODE_MODE_PENDING_TOOL_CALLS};
+  let admissionError;
   const maxPending = globalThis.__openclawMaxPendingToolCalls;
   delete globalThis.__openclawMaxPendingToolCalls;
   const catalogBindings = Array.isArray(globalThis.__openclawCatalog) ? globalThis.__openclawCatalog : [];
@@ -48,28 +52,44 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
     return typeof encoded === "string" ? encoded : String(value);
   }
 
+  function assertQueueCapacity(queue) {
+    if (!admissionError && (queue || pending.size >= maxPending) && queued.size >= maxQueued) {
+      admissionError = "code mode bridge queue limit exceeded (" + maxQueued + " queued; " + maxPending + " in-flight slots). Await smaller batches before creating more tool calls or timers.";
+    }
+    // Sticky even if guest code catches the immediate error: the worker refuses
+    // this entire synchronous frontier before dispatching any admitted prefix.
+    if (admissionError) throw new Error(admissionError);
+  }
+
   function beginRequest(method, args, { queue = false } = {}) {
+    assertQueueCapacity(queue);
     const methodName = String(method);
     const sequence = (bridgeSequences.get(methodName) ?? 0) + 1;
     bridgeSequences.set(methodName, sequence);
     const id = "bridge:" + methodName + ":" + String(sequence);
     const argsJson = JSON.stringify(safe(args ?? []));
+    // Guest toJSON/getters can create requests while serializing this input.
+    assertQueueCapacity(queue);
     let callbacks;
     const promise = new Promise((resolve, reject) => { callbacks = { resolve, reject }; });
     const admit = () => {
       hostRequest(methodName, argsJson, id);
       pending.set(id, callbacks);
     };
-    if (queue) queued.push(admit);
+    if (queue || pending.size >= maxPending) queued.set(id, { admit, callbacks });
     else admit();
     return { id, promise };
   }
 
-  // Refill after guest continuations run so collector results can trigger ordinary
-  // tools before queued Swarm work takes their released slots.
-  // Closures and stable IDs live in the bounded VM snapshot, never a second host queue.
+  // Refill after guest continuations run so dependent ordinary calls retain
+  // first use of released slots. Waiting requests refill in insertion order.
+  // Closures, copied inputs, and stable IDs live only in the bounded VM snapshot.
   function drainQueuedRequests() {
-    while (queued.length > 0 && pending.size < maxPending) queued.shift()();
+    while (queued.size > 0 && pending.size < maxPending) {
+      const [id, entry] = queued.entries().next().value;
+      queued.delete(id);
+      entry.admit();
+    }
   }
 
   function request(method, args, options) {
@@ -96,6 +116,12 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
     const requestId = timers.get(Number(timerId));
     if (!requestId) return;
     timers.delete(Number(timerId));
+    const queuedEntry = queued.get(requestId);
+    if (queuedEntry) {
+      queued.delete(requestId);
+      queuedEntry.callbacks.resolve(null);
+      return;
+    }
     hostCancelRequest(requestId);
     const entry = pending.get(requestId);
     if (!entry) return;
@@ -342,6 +368,7 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
     yield_control: { value: (reason) => request("yield", [reason]), enumerable: true },
     __openclawSettleBridge: { value: settle },
     __openclawDrainQueuedRequests: { value: drainQueuedRequests },
+    __openclawAdmissionError: { value: () => admissionError },
     __openclawSerializeCatalogHandles: { value: serializeOutputValue },
     __openclawTakeOutput: { value: () => output.splice(0) },
     __openclawTrackRejection: {

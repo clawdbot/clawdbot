@@ -1201,10 +1201,22 @@ accepted. Parallel-capable calls can overlap before the next sequential call.
 Scheduling is shared across cells using the same run catalog; separate catalogs
 remain independent. Queued calls are canceled when their caller or catalog closes.
 
-Parallel nested calls are allowed up to `maxPendingToolCalls`. An oversized raw
-tool batch fails before any call in that batch is dispatched. [Swarm](/tools/swarm)
-launches, notes, and result waits instead queue for available bridge slots;
-they do not raise that limit or bypass the run's cancellation and policy checks.
+`maxPendingToolCalls` caps in-flight bridge requests, not the size of an ordinary
+`Promise.all` batch. Calls and timers beyond that cap wait in the guest alongside
+[Swarm](/tools/swarm) requests. The queue holds at most 128 requests, independently
+of the configured in-flight cap, using the existing accepted bridge-limit ceiling.
+Queued inputs and request identities survive snapshot/resume; `clearTimeout`
+removes a queued timer without starting a host timer. A queued timer's delay begins
+when it gets a bridge slot. Guest continuations run before waiting requests refill
+available slots, and fast requests still drain within the same `exec` or `wait`.
+
+Creating more requests than the queue can hold fails the worker leg with
+`invalid_input` and guidance to await smaller batches. Catching the immediate
+JavaScript error does not admit a partial batch: no new calls from that
+synchronous frontier are dispatched. Earlier worker legs may already have run
+tools; inspect their effects rather than replaying the cell. Queueing does not
+raise memory, snapshot, time, or headless total tool-call limits, or bypass
+cancellation and policy checks.
 
 ## Run and snapshot lifecycle
 
