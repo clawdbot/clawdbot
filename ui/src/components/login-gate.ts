@@ -10,15 +10,18 @@ import { registerLoginEnglish } from "../i18n/locales/en-login.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import { renderConnectCommand } from "./connect-command.ts";
-import { icons } from "./icons.ts";
 import {
   type CredentialMode,
+  renderCredentialModeSwitch,
+  resolveCredentialMode,
+} from "./credential-mode.ts";
+import { icons } from "./icons.ts";
+import {
   formatGatewayHost,
   type LoginFailureFeedback,
   type LoginFailureFeedbackParams,
   type LoginFailureStep,
   type LoginFailureTone,
-  PASSWORD_MODE_CODES,
   resolveLoginFailureFeedback,
 } from "./login-gate-feedback.ts";
 
@@ -123,21 +126,6 @@ function renderRefreshAction(feedback: LoginFailureFeedback) {
   `;
 }
 
-function resolveCredentialMode(props: LoginGateProps, override: CredentialMode | null) {
-  if (override) {
-    return override;
-  }
-  // A password-mode rejection outranks a saved token: the Gateway just said which
-  // credential it wants, and the stale token is what got rejected.
-  if (props.lastErrorCode && PASSWORD_MODE_CODES.has(props.lastErrorCode)) {
-    return "password";
-  }
-  if (props.token.trim()) {
-    return "token";
-  }
-  return props.password.trim() ? "password" : "token";
-}
-
 function renderSecretToggle(
   revealed: boolean,
   labels: [string, string, string],
@@ -201,28 +189,11 @@ function renderForm(params: {
       <div class="field">
         <div class="login-gate__field-head">
           <label for="login-gate-credential">${t("login.credential")}</label>
-          <div
-            class="login-gate__segmented"
-            role="radiogroup"
-            aria-label=${t("login.credentialType")}
-          >
-            <button
-              type="button"
-              role="radio"
-              aria-checked=${!isPassword}
-              @click=${() => params.onCredentialMode("token")}
-            >
-              ${t("login.modeToken")}
-            </button>
-            <button
-              type="button"
-              role="radio"
-              aria-checked=${isPassword}
-              @click=${() => params.onCredentialMode("password")}
-            >
-              ${t("login.modePassword")}
-            </button>
-          </div>
+          ${renderCredentialModeSwitch({
+            mode: credentialMode,
+            onChange: params.onCredentialMode,
+            variant: "login",
+          })}
         </div>
         <span class="settings-secret">
           <input
@@ -420,7 +391,10 @@ function renderLoginGate(
   const resourceBasePath = normalizeBasePath(props.resourceBasePath);
   const faviconSrc = controlUiPublicAssetPath("favicon.svg", resourceBasePath);
   const feedback = resolveLoginFailureFeedback(props);
-  const credentialMode = resolveCredentialMode(props, credentialModeOverride);
+  const credentialMode = resolveCredentialMode(
+    { token: props.token, password: props.password, lastErrorCode: props.lastErrorCode },
+    credentialModeOverride,
+  );
   const body =
     feedback?.placement === "status"
       ? renderStatusBody({ props, feedback, credentialMode, onCredentialMode })

@@ -456,6 +456,8 @@ export class OpenClawApp extends OpenClawLightDomElement {
           <openclaw-gateway-url-confirmation
             .props=${{
               pendingGatewayUrl: this.pendingGatewayUrl,
+              currentGatewayUrl: runtime.context.gateway.connection.gatewayUrl,
+              linkCarriesToken: Boolean(runtime.pendingGatewayConnection?.token),
               onConfirm: () => {
                 runtime.confirmPendingGatewayConnection();
                 this.pendingGatewayUrl = null;

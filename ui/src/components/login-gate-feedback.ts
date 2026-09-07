@@ -8,6 +8,7 @@ import {
   resolvePairingHint,
   shouldShowInsecureContextHint,
 } from "../lib/connection-hints.ts";
+import { isPasswordModeErrorCode } from "./credential-mode.ts";
 
 type LoginFailureKind =
   | "auth-required"
@@ -35,8 +36,6 @@ type LoginFailurePlacement = "form" | "status";
 export type LoginFailureTone = "pending" | "warn" | "danger";
 
 type LoginFormField = "url" | "credential";
-
-export type CredentialMode = "token" | "password";
 
 export type LoginFailureStep = {
   text: string;
@@ -69,12 +68,6 @@ export type LoginFailureFeedbackParams = Parameters<typeof resolveAuthHintKind>[
   gatewayUrl?: string;
   reconnectPending?: boolean;
 };
-
-export const PASSWORD_MODE_CODES = new Set<string>([
-  ConnectErrorDetailCodes.AUTH_PASSWORD_MISSING,
-  ConnectErrorDetailCodes.AUTH_PASSWORD_MISMATCH,
-  ConnectErrorDetailCodes.AUTH_PASSWORD_NOT_CONFIGURED,
-]);
 
 export function formatGatewayHost(gatewayUrl: string | undefined): string {
   const raw = gatewayUrl?.trim() ?? "";
@@ -298,10 +291,9 @@ export function resolveLoginFailureFeedback(
       tone: "warn",
       field: "credential",
       rawError,
-      titleKey:
-        lastErrorCode && PASSWORD_MODE_CODES.has(lastErrorCode)
-          ? "login.failure.authRequired.passwordTitle"
-          : "login.failure.authRequired.title",
+      titleKey: isPasswordModeErrorCode(lastErrorCode)
+        ? "login.failure.authRequired.passwordTitle"
+        : "login.failure.authRequired.title",
       summaryKey: "login.failure.authRequired.summary",
       stepKeys: [
         {
