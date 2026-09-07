@@ -3,19 +3,9 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { resolveUsageProviderId } from "../../../src/infra/provider-usage.shared.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ModelAuthStatusProvider, ModelAuthStatusResult } from "../api/types.ts";
+import { getModelAuthRequestState } from "./model-auth-request-state.ts";
 
 const EMPTY_AUTH_STATUS: ModelAuthStatusResult = { ts: 0, providers: [] };
-// Consumers project shared responses without mutation; settled replies are never retained.
-const authReads = new WeakMap<
-  GatewayBrowserClient,
-  { pending: Map<string, Promise<ModelAuthStatusResult>>; refreshes: number }
->();
-
-/** Retire sharing eligibility without cancelling existing consumers' own reads. */
-export function invalidateModelAuthStatusRequests(client: GatewayBrowserClient): void {
-  authReads.get(client)?.pending.clear();
-}
-
 /** Map credential-runtime aliases onto the provider card/attention identity. */
 export function canonicalModelAuthProviderId(provider: string): string {
   const normalized = normalizeProviderId(provider);
@@ -90,11 +80,7 @@ export async function loadModelAuthStatus(
   if (opts.signal && !opts.refresh) {
     return await request(opts.signal);
   }
-  let state = authReads.get(client);
-  if (!state) {
-    state = { pending: new Map(), refreshes: 0 };
-    authReads.set(client, state);
-  }
+  const state = getModelAuthRequestState(client);
   if (opts.refresh) {
     // Explicit refresh can change shared auth without a config event. Keep every
     // refresh independent, and suspend ordinary sharing until all refreshes settle.
@@ -109,6 +95,7 @@ export async function loadModelAuthStatus(
   if (state.refreshes > 0) {
     return await request(opts.signal);
   }
+  // Consumers project shared responses without mutation; settled replies are never retained.
   const requests = state.pending;
   const agentId = opts.agentId;
   let pending = requests.get(agentId);
