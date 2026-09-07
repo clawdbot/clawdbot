@@ -1,22 +1,12 @@
 // Container target tests cover CLI container target parsing and validation.
 import type { spawnSync as nodeSpawnSync } from "node:child_process";
 import { describe, expect, it, vi } from "vitest";
+import { mockCall } from "../test-utils/mock-call-assertions.js";
 import {
   maybeRunCliInContainer,
   parseCliContainerArgs,
   resolveCliContainerTarget,
 } from "./container-target.js";
-
-function requireSpawnCall(
-  spawnSync: ReturnType<typeof vi.fn>,
-  index: number,
-): [string, string[], unknown?] {
-  const call = spawnSync.mock.calls[index];
-  if (!call) {
-    throw new Error(`Expected spawnSync call ${index}`);
-  }
-  return call as [string, string[], unknown?];
-}
 
 type SpawnResult = {
   status: number | null;
@@ -354,7 +344,7 @@ describe("maybeRunCliInContainer", () => {
       spawnSync,
     });
 
-    const podmanCall = requireSpawnCall(spawnSync, 2);
+    const podmanCall = mockCall(spawnSync, 2);
     expect(podmanCall[0]).toBe("podman");
     expect(podmanCall[1]).toContain("OPENCLAW_PROXY_URL=http://127.0.0.1:3128");
     if (podmanCall[2] === undefined) {
