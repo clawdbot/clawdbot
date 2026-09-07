@@ -2,7 +2,7 @@
 import path from "node:path";
 import { resolveExecApprovalsPath } from "./exec-approvals-config.js";
 import { pathMayExistSync } from "./path-existence.js";
-import { formatStateRepairRequired } from "./state-repair-message.js";
+import { formatDoctorStateRepairFailure } from "./state-repair-message.js";
 
 const DOCTOR_CLAIM_SUFFIX = ".doctor-importing";
 // Doctor usually runs in another process, so cache only the steady-state absence;
@@ -26,10 +26,9 @@ export class ExecApprovalsMigrationRequiredError extends Error {
   constructor(filePath: string, operation?: "doctor", problem = "Legacy exec approvals exist") {
     super(
       operation === "doctor"
-        ? formatStateRepairRequired(
+        ? formatDoctorStateRepairFailure(
             `${problem} at ${filePath}`,
             "Stop the Gateway and node hosts, then reconcile this file with a verified copy of the intended exec policy; preserve existing SQLite policy.",
-            operation,
           )
         : `${problem} at ${filePath}. ${doctorFixInstruction(filePath)} before using exec approvals.`,
     );
@@ -52,7 +51,9 @@ export function assertNoPendingLegacyExecApprovals(
   const sourceAfter = probe(sourcePath);
   if (sourceBefore || claim || sourceAfter) {
     throw new ExecApprovalsMigrationRequiredError(
-      sourceBefore || sourceAfter ? sourcePath : `${sourcePath}${DOCTOR_CLAIM_SUFFIX}`,
+      options.operation === "doctor" && !sourceBefore && !sourceAfter
+        ? `${sourcePath}${DOCTOR_CLAIM_SUFFIX}`
+        : sourcePath,
       options.operation,
     );
   }

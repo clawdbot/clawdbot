@@ -7,7 +7,7 @@ import {
 } from "../infra/kysely-sync.js";
 import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
-import { formatStateRepairRequired } from "../infra/state-repair-message.js";
+import { formatDoctorStateRepairFailure } from "../infra/state-repair-message.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
@@ -252,10 +252,9 @@ function readSnapshotFromDatabase(params: {
   }
   if (setupRow?.version != null && setupRow.version !== WORKSPACE_SETUP_STATE_VERSION) {
     throw new Error(
-      formatStateRepairRequired(
+      formatDoctorStateRepairFailure(
         `unsupported workspace setup version ${setupRow.version} in ${params.database.path} for ${identity.workspacePath}`,
         "Use a compatible OpenClaw build that supports this workspace version; preserve the database unchanged.",
-        "doctor",
       ),
     );
   }

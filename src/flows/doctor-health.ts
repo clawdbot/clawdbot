@@ -6,7 +6,7 @@ import type { DoctorOptions } from "../commands/doctor-prompter.js";
 import { guardUpdateDoctorSchemaUpgrade } from "../commands/doctor-update-schema-guard.js";
 import { resolveStateDir } from "../config/paths.js";
 import { DoctorStateMigrationRefusalError } from "../infra/state-migrations.messages.js";
-import { formatStateRepairRequired } from "../infra/state-repair-message.js";
+import { formatDoctorStateRepairFailure } from "../infra/state-repair-message.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import type { DoctorHealthFlowContext } from "./doctor-health-contributions.js";
@@ -40,10 +40,9 @@ async function assertDoctorDatabaseSchemasCompatible() {
   );
   if (unreadableStateDatabase) {
     throw new Error(
-      formatStateRepairRequired(
+      formatDoctorStateRepairFailure(
         `shared state database is unreadable at ${unreadableStateDatabase.path}: ${unreadableStateDatabase.reason}`,
         "Stop OpenClaw processes, then restore this file from a verified backup; the unreadable database was left unchanged.",
-        "doctor",
       ),
     );
   }

@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
-import { formatStateRepairRequired } from "../../infra/state-repair-message.js";
+import { formatCliCommand } from "../../cli/command-format.js";
+import { formatDoctorStateRepairFailure } from "../../infra/state-repair-message.js";
 import { listOpenClawRegisteredAgentDatabases } from "../../state/openclaw-agent-db-registry.js";
 import {
   closeOpenClawAgentDatabaseByPath,
@@ -37,12 +38,12 @@ export function assertSessionStoreMigrationComplete(params: {
   ].find((storePath) => !storePath.endsWith(".sqlite") && fs.existsSync(storePath));
   if (legacyStore) {
     throw new SessionStoreMigrationRequiredError(
-      formatStateRepairRequired(
-        `Legacy session store requires migration at ${legacyStore}`,
-        "Repair the retained source using the migration report's named file and validation error, preserving the original history.",
-        params.operation,
-        env,
-      ),
+      params.operation === "doctor"
+        ? formatDoctorStateRepairFailure(
+            `Legacy session store requires migration at ${legacyStore}`,
+            "Repair the retained source using the migration report's named file and validation error, preserving the original history.",
+          )
+        : `Legacy session store requires migration: ${legacyStore}. Run "${formatCliCommand("openclaw doctor --fix", env)}" against the same state/config before starting OpenClaw.`,
     );
   }
 }

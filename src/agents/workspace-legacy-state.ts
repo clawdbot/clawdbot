@@ -3,10 +3,11 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { formatCliCommand } from "../cli/command-format.js";
 import { resolveLegacyStateDirs, resolveStateDir } from "../config/paths.js";
 import { root } from "../infra/fs-safe.js";
 import { pathMayExistSync } from "../infra/path-existence.js";
-import { formatStateRepairRequired } from "../infra/state-repair-message.js";
+import { formatDoctorStateRepairFailure } from "../infra/state-repair-message.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveWorkspaceStateIdentity } from "./workspace-state-identity.js";
 
@@ -153,17 +154,17 @@ function findUnmigratedWorkspaceSource(sources: LegacyWorkspaceSourcePaths): str
 }
 
 function workspaceMigrationError(
-  sourcePaths: string[],
+  blockedPaths: string[],
   env?: NodeJS.ProcessEnv,
   operation?: "doctor",
 ): Error {
   return new Error(
-    formatStateRepairRequired(
-      `Legacy workspace setup state requires migration at ${sourcePaths.join(", ")}`,
-      "Stop the Gateway, then restore the retained setup file or claim from a verified backup.",
-      operation,
-      env,
-    ),
+    operation === "doctor"
+      ? formatDoctorStateRepairFailure(
+          `Legacy workspace setup state requires migration at ${blockedPaths.join(", ")}`,
+          "Stop the Gateway, then restore the retained setup file or claim from a verified backup.",
+        )
+      : `Legacy workspace setup state requires migration for ${blockedPaths.join(", ")}; run ${formatCliCommand("openclaw doctor --fix", env)}.`,
   );
 }
 
@@ -178,7 +179,7 @@ export function assertWorkspaceStateMigrationReady(params: {
     const sourcePath = findUnmigratedWorkspaceSource(
       resolveLegacyWorkspaceSourcePaths(workspaceDir, params),
     );
-    return sourcePath ? [sourcePath] : [];
+    return sourcePath ? [params.operation === "doctor" ? sourcePath : workspaceDir] : [];
   });
   if (blocked.length > 0) {
     throw workspaceMigrationError(blocked, params.env, params.operation);
@@ -200,7 +201,7 @@ export function assertNoUnmigratedWorkspaceState(params: { workspaceDir: string 
   }
   const sourcePath = findUnmigratedWorkspaceSource(sources);
   if (sourcePath) {
-    throw workspaceMigrationError([sourcePath]);
+    throw workspaceMigrationError([identity.workspacePath]);
   }
   checkedWorkspaceSourceSets.add(sourceSetKey);
 }
