@@ -176,7 +176,16 @@ describe("Reef setup wizard identity binding", () => {
       agents: {
         defaults: {
           models: {
-            "openai/gpt-5.6-terra": { agentRuntime: { id: "openclaw" } },
+            "openai/*": { agentRuntime: { id: "openclaw" } },
+          },
+        },
+      },
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            agentRuntime: { id: "codex" },
+            models: [],
           },
         },
       },

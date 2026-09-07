@@ -230,11 +230,7 @@ export async function resolveApiKeyForProviderCore(params: {
       profileId,
       agentDir,
       forceRefresh: params.forceRefresh,
-<<<<<<< HEAD
       allowProfileFallback: !params.lockedProfile,
-=======
-      ...(params.lockedProfile ? { allowProfileFallback: false } : {}),
->>>>>>> e5585eba48 (fix(reef): harden OAuth guard evidence)
     });
     if (!resolved) {
       throw new Error(`No credentials found for profile "${profileId}".`);

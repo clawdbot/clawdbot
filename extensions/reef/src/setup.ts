@@ -1,4 +1,5 @@
 import { defineChannelSetupContract } from "openclaw/plugin-sdk/channel-setup";
+import { resolveModelRuntimePolicy } from "openclaw/plugin-sdk/core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
 import { fingerprint } from "../protocol/index.js";
 import {
@@ -298,8 +299,11 @@ async function confirmReefOAuthAgentRuntime(params: {
   prompter: Prompt;
 }): Promise<void> {
   const modelRef = `openai/${params.pinnedModel}`;
-  const configuredRuntimeId =
-    params.cfg.agents?.defaults?.models?.[modelRef]?.agentRuntime?.id?.trim();
+  const configuredRuntimeId = resolveModelRuntimePolicy({
+    config: params.cfg,
+    provider: "openai",
+    modelId: params.pinnedModel,
+  }).policy?.id?.trim();
   if (!configuredRuntimeId || configuredRuntimeId === "codex") {
     return;
   }

@@ -411,18 +411,10 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
               suppressOpenAIResponsesCompaction(output, model, responsesOptions, checkpoint),
             canRetryStream: () => output.content.length === 0,
             wrapStream: ({ stream: rawResponseStream, response, attempt }) => {
-<<<<<<< HEAD
               continuationBaseline = attempt.request.previous_response_id
                 ? (params as ResponsesContinuationRequest)
                 : (attempt.request as ResponsesContinuationRequest);
-=======
-              if (continuationClaim) {
-                continuationBaseline = attempt.request.previous_response_id
-                  ? (params as ResponsesContinuationRequest)
-                  : (attempt.request as ResponsesContinuationRequest);
-              }
               const trackedResponseStream = responseModelTracker.track(response, rawResponseStream);
->>>>>>> f332037b34 (fix(reef): preserve managed OAuth model identity)
               return withProviderResponseHook({
                 stream: observeResponsesStream(trackedResponseStream, model, requestStartedAt),
                 signal: firstEvent.signal,

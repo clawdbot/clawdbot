@@ -165,6 +165,7 @@ export type {
   PluginHookReplyDispatchResult,
 } from "../plugins/types.js";
 export type { OpenClawConfig } from "../config/config.js";
+export { resolveModelRuntimePolicy } from "../agents/model-runtime-policy.js";
 export type { OutboundIdentity } from "../infra/outbound/identity.js";
 export type { HistoryEntry } from "../auto-reply/reply/history.types.js";
 export type { ReplyPayload } from "./reply-payload.js";
