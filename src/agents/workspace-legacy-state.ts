@@ -3,10 +3,10 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { formatCliCommand } from "../cli/command-format.js";
 import { resolveLegacyStateDirs, resolveStateDir } from "../config/paths.js";
 import { root } from "../infra/fs-safe.js";
 import { pathMayExistSync } from "../infra/path-existence.js";
+import { formatStateRepairRequired } from "../infra/state-repair-message.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveWorkspaceStateIdentity } from "./workspace-state-identity.js";
 
@@ -108,12 +108,6 @@ export function resolveLegacyWorkspaceSourcePaths(
   };
 }
 
-function pathOrClaimExists(filePath: string): boolean {
-  return (
-    pathMayExistSync(filePath) || pathMayExistSync(`${filePath}${WORKSPACE_DOCTOR_CLAIM_SUFFIX}`)
-  );
-}
-
 /** Share presence-only sibling ownership checks between runtime and Doctor. */
 export function legacyWorkspaceSiblingAttestationMayExist(filePath: string): boolean {
   try {
@@ -148,22 +142,28 @@ export function legacyWorkspaceSiblingAttestationMayExist(filePath: string): boo
   }
 }
 
-function hasUnmigratedWorkspaceSources(sources: LegacyWorkspaceSourcePaths): boolean {
+function findUnmigratedWorkspaceSource(sources: LegacyWorkspaceSourcePaths): string | undefined {
+  const withClaims = (paths: string[]) =>
+    paths.flatMap((filePath) => [filePath, `${filePath}${WORKSPACE_DOCTOR_CLAIM_SUFFIX}`]);
   return (
-    sources.setupStatePaths.some(pathOrClaimExists) ||
-    sources.stateDirAttestationPaths.some(pathOrClaimExists) ||
-    sources.siblingAttestationPaths.some(
-      (sourcePath) =>
-        legacyWorkspaceSiblingAttestationMayExist(
-          `${sourcePath}${WORKSPACE_DOCTOR_CLAIM_SUFFIX}`,
-        ) || legacyWorkspaceSiblingAttestationMayExist(sourcePath),
-    )
+    withClaims([...sources.setupStatePaths, ...sources.stateDirAttestationPaths]).find(
+      pathMayExistSync,
+    ) ?? withClaims(sources.siblingAttestationPaths).find(legacyWorkspaceSiblingAttestationMayExist)
   );
 }
 
-function workspaceMigrationError(workspaceDirs: string[], env?: NodeJS.ProcessEnv): Error {
+function workspaceMigrationError(
+  sourcePaths: string[],
+  env?: NodeJS.ProcessEnv,
+  operation?: "doctor",
+): Error {
   return new Error(
-    `Legacy workspace setup state requires migration for ${workspaceDirs.join(", ")}; run ${formatCliCommand("openclaw doctor --fix", env)}.`,
+    formatStateRepairRequired(
+      `Legacy workspace setup state requires migration at ${sourcePaths.join(", ")}`,
+      "Stop the Gateway, then restore the retained setup file or claim from a verified backup.",
+      operation,
+      env,
+    ),
   );
 }
 
@@ -172,12 +172,16 @@ export function assertWorkspaceStateMigrationReady(params: {
   workspaceDirs: readonly string[];
   env?: NodeJS.ProcessEnv;
   homedir?: () => string;
+  operation?: "doctor";
 }): void {
-  const blocked = params.workspaceDirs.filter((workspaceDir) =>
-    hasUnmigratedWorkspaceSources(resolveLegacyWorkspaceSourcePaths(workspaceDir, params)),
-  );
+  const blocked = params.workspaceDirs.flatMap((workspaceDir) => {
+    const sourcePath = findUnmigratedWorkspaceSource(
+      resolveLegacyWorkspaceSourcePaths(workspaceDir, params),
+    );
+    return sourcePath ? [sourcePath] : [];
+  });
   if (blocked.length > 0) {
-    throw workspaceMigrationError(blocked, params.env);
+    throw workspaceMigrationError(blocked, params.env, params.operation);
   }
 }
 
@@ -194,8 +198,9 @@ export function assertNoUnmigratedWorkspaceState(params: { workspaceDir: string 
   if (checkedWorkspaceSourceSets.has(sourceSetKey)) {
     return;
   }
-  if (hasUnmigratedWorkspaceSources(sources)) {
-    throw workspaceMigrationError([identity.workspacePath]);
+  const sourcePath = findUnmigratedWorkspaceSource(sources);
+  if (sourcePath) {
+    throw workspaceMigrationError([sourcePath]);
   }
   checkedWorkspaceSourceSets.add(sourceSetKey);
 }

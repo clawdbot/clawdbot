@@ -465,7 +465,7 @@ describe("exec approvals SQLite store", () => {
       }
       expect(caught).toBeInstanceOf(ExecApprovalsMigrationRequiredError);
       expect(caught).toMatchObject({
-        message: `Legacy exec approvals exist at ${sourcePath}. Run \`openclaw doctor --fix\` with OPENCLAW_STATE_DIR set to ${stateDir} before using exec approvals.`,
+        message: `Legacy exec approvals exist at ${legacyPath}. Run \`openclaw doctor --fix\` with OPENCLAW_STATE_DIR set to ${stateDir} before using exec approvals.`,
       });
 
       fs.rmSync(legacyPath);
