@@ -823,8 +823,9 @@ const normalizeAllowFrom = (values?: Array<string | number>): string[] =>
   normalizeStringEntries(values);
 
 /**
- * Closed set of sender-policy/allowFrom dependency violations. Both cases drop
- * every inbound DM at runtime, so callers surface them as config problems.
+ * Closed set of sender-policy/allowFrom dependency violations. Open without a wildcard
+ * admits only explicit entries (and none when empty); allowlist without entries admits none.
+ * Callers surface both restrictive states as config problems.
  */
 export type DmPolicyAllowFromViolation = "open_requires_wildcard" | "allowlist_requires_entries";
 

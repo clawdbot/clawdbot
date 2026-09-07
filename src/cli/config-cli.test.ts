@@ -1671,7 +1671,7 @@ describe("config cli", () => {
           {
             path: "channels.mattermost.allowFrom",
             message:
-              'channels.mattermost.dmPolicy="open" but channels.mattermost.allowFrom does not include "*"; all DMs will be dropped.',
+              'channels.mattermost.dmPolicy="open" but channels.mattermost.allowFrom does not include "*"; public DMs remain blocked.',
           },
         ],
         legacyIssues: [],
@@ -1683,7 +1683,7 @@ describe("config cli", () => {
       expect(mockError).not.toHaveBeenCalled();
       expectLogIncludes("Config valid:");
       expectLogIncludes("channels.mattermost.allowFrom");
-      expectLogIncludes("all DMs will be dropped");
+      expectLogIncludes("public DMs remain blocked");
     });
 
     it("prints issues and exits 1 when config is invalid", async () => {

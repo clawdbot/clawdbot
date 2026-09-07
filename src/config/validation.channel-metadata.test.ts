@@ -223,6 +223,20 @@ function createDmPolicyRegistry(params: {
   };
 }
 
+function validateNestedMatrixConfig(config: Record<string, unknown>) {
+  return validateConfigObjectWithPlugins(
+    { channels: { matrix: config } },
+    {
+      pluginMetadataSnapshot: {
+        manifestRegistry: createDmPolicyRegistry({
+          channelId: "matrix",
+          dmAllowFromMode: "nestedOnly",
+        }),
+      },
+    },
+  );
+}
+
 function createPluginManifestRecord(
   overrides: Partial<PluginManifestRecord> & Pick<PluginManifestRecord, "id">,
 ): PluginManifestRecord {
@@ -494,33 +508,42 @@ describe("validateConfigObjectWithPlugins channel metadata (applyDefaults: true)
 });
 
 describe("validateConfigObjectWithPlugins DM policy warnings", () => {
-  it("uses manifest metadata to skip nested-only DM config shapes", () => {
-    const result = validateConfigObjectWithPlugins(
-      {
-        channels: {
-          matrix: {
-            dm: {
-              policy: "open",
-            },
-          },
-        },
-      },
-      {
-        pluginMetadataSnapshot: {
-          manifestRegistry: createDmPolicyRegistry({
-            channelId: "matrix",
-            dmAllowFromMode: "nestedOnly",
-          }),
-        },
-      },
-    );
+  it("uses manifest metadata to warn on nested-only DM config shapes", () => {
+    const result = validateNestedMatrixConfig({ dm: { policy: "open" } });
 
     expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(
-        result.warnings.filter((warning) => warning.path.startsWith("channels.matrix")),
-      ).toEqual([]);
-    }
+    expect(result.warnings).toContainEqual(
+      expect.objectContaining({
+        path: "channels.matrix.dm.allowFrom",
+        message: expect.stringContaining('channels.matrix.dm.policy="open"'),
+      }),
+    );
+  });
+
+  it("warns on account-scoped nested-only DM config shapes", () => {
+    const result = validateNestedMatrixConfig({
+      accounts: { work: { dm: { policy: "open" } } },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.warnings).toContainEqual(
+      expect.objectContaining({
+        path: "channels.matrix.accounts.work.dm.allowFrom",
+        message: expect.stringContaining('channels.matrix.accounts.work.dm.policy="open"'),
+      }),
+    );
+  });
+
+  it("does not warn when a nested-only account inherits a wildcard allowFrom", () => {
+    const result = validateNestedMatrixConfig({
+      dm: { allowFrom: ["*"] },
+      accounts: { work: { dm: { policy: "open" } } },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.warnings.some((warning) => warning.path.startsWith("channels.matrix"))).toBe(
+      false,
+    );
   });
 
   it("does not warn for disabled channels or accounts", () => {

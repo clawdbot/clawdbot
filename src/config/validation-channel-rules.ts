@@ -57,24 +57,29 @@ function buildDmPolicyDependencyWarning(params: {
   channelId: string;
   accountId?: string;
   allowFromSource?: "explicit" | "inherited";
+  mode: ChannelDmAllowFromMode;
   violation: DmPolicyAllowFromViolation;
 }): ConfigValidationIssue {
   const channelBase = `channels.${params.channelId}`;
   const scope = params.accountId ? `${channelBase}.accounts.${params.accountId}` : channelBase;
-  const allowFromPath = `${scope}.allowFrom`;
+  const policyField = params.mode === "nestedOnly" ? "dm.policy" : "dmPolicy";
+  const allowFromField = params.mode === "nestedOnly" ? "dm.allowFrom" : "allowFrom";
+  const policyPath = `${scope}.${policyField}`;
+  const allowFromPath = `${scope}.${allowFromField}`;
+  const channelAllowFromPath = `${channelBase}.${allowFromField}`;
   const inherited = params.accountId && params.allowFromSource === "inherited";
   const allowFromSubject = inherited
-    ? `${allowFromPath} is unset and ${channelBase}.allowFrom`
+    ? `${allowFromPath} is unset and ${channelAllowFromPath}`
     : allowFromPath;
-  const accountInheritedTarget = inherited ? ` or ${channelBase}.allowFrom` : "";
+  const accountInheritedTarget = inherited ? ` or ${channelAllowFromPath}` : "";
   const accountOverrideFix =
     params.accountId && !inherited
-      ? `, remove ${allowFromPath} to inherit ${channelBase}.allowFrom,`
+      ? `, remove ${allowFromPath} to inherit ${channelAllowFromPath},`
       : "";
   const message =
     params.violation === "open_requires_wildcard"
-      ? `${scope}.dmPolicy="open" but ${allowFromSubject} does not include "*"; all DMs will be dropped. Add "*" to ${allowFromPath}${accountInheritedTarget}${accountOverrideFix} or set ${scope}.dmPolicy to "pairing"/"allowlist".`
-      : `${scope}.dmPolicy="allowlist" but ${allowFromSubject} is empty; all DMs will be dropped. Add at least one sender ID to ${allowFromPath}${accountInheritedTarget}${accountOverrideFix} or change ${scope}.dmPolicy.`;
+      ? `${policyPath}="open" but ${allowFromSubject} does not include "*"; public DMs remain blocked. Add "*" to ${allowFromPath}${accountInheritedTarget}${accountOverrideFix} or set ${policyPath} to "pairing"/"allowlist".`
+      : `${policyPath}="allowlist" but ${allowFromSubject} is empty; all DMs will be dropped. Add at least one sender ID to ${allowFromPath}${accountInheritedTarget}${accountOverrideFix} or change ${policyPath}.`;
   return { path: allowFromPath, message };
 }
 
@@ -119,16 +124,14 @@ export function hasChannelDmPolicyDependencyWarningCandidates(config: OpenClawCo
 }
 
 /**
- * Surface dmPolicy/allowFrom dependency problems generically for every channel that
- * exposes DM policy via the canonical top-level `dmPolicy`/`allowFrom` fields. These
- * configs parse fine but drop every DM at runtime, so we warn (rather than reject) to
- * stay consistent with `security audit`/`doctor` and avoid breaking existing-but-usable
- * configs on upgrade.
+ * Surface DM policy/allowFrom dependency problems generically for every channel. These
+ * configs parse fine but leave DM access more restrictive than the policy implies, so we
+ * warn (rather than reject) to stay consistent with `security audit`/`doctor` and avoid
+ * breaking existing-but-usable configs on upgrade.
  *
  * Resolution goes through the shared DM-access helpers so the warning matches the
- * effective policy/allowFrom the runtime sees, including the legacy `dm.*` aliases and
- * account->channel inheritance. `nestedOnly` channels (canonical fields under `dm.*`)
- * are skipped because their config shape does not match this warning's top-level paths.
+ * effective policy/allowFrom across canonical and legacy field locations, plus
+ * account->channel inheritance. Channel metadata selects the actionable canonical paths.
  */
 export function collectChannelDmPolicyDependencyWarnings(
   config: OpenClawConfig,
@@ -147,15 +150,14 @@ export function collectChannelDmPolicyDependencyWarnings(
       continue;
     }
     const mode = options.dmAllowFromModes?.get(channelId) ?? "topOnly";
-    if (mode === "nestedOnly") {
-      continue;
-    }
     const channelViolation = evaluateDmPolicyAllowFromDependency({
       policy: resolveChannelDmPolicy({ account: channelValue, mode }),
       allowFrom: resolveChannelDmAllowFrom({ account: channelValue, mode }),
     });
     if (channelViolation) {
-      warnings.push(buildDmPolicyDependencyWarning({ channelId, violation: channelViolation }));
+      warnings.push(
+        buildDmPolicyDependencyWarning({ channelId, mode, violation: channelViolation }),
+      );
     }
     if (!isRecord(channelValue.accounts)) {
       continue;
@@ -177,6 +179,7 @@ export function collectChannelDmPolicyDependencyWarnings(
             channelId,
             accountId,
             allowFromSource,
+            mode,
             violation: accountViolation,
           }),
         );

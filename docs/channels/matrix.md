@@ -916,7 +916,7 @@ Room allowlist keys (`groups`, legacy `rooms`) should be room IDs or aliases. Pl
 - `mentionPatterns`: scoped regex patterns for room mentions. Object with `{ mode: "allow"|"deny", allowIn: [roomId, ...], denyIn: [roomId, ...] }`. Controls whether configured `agents.entries.*.groupChat.mentionPatterns` apply per-room.
 - `dm.enabled`: when `false`, ignore all DMs. Default: `true`.
 - `dm.policy`: `"pairing"` (default), `"allowlist"`, `"open"`, or `"disabled"`. Applies after the bot has joined and classified the room as a DM; it does not affect invite handling.
-- `dm.allowFrom`: allowlist of user IDs for DM traffic.
+- `dm.allowFrom`: allowlist of user IDs for DM traffic. Public DMs require `dm.policy: "open"` together with `dm.allowFrom: ["*"]`. Without the wildcard, only users explicitly listed in `dm.allowFrom` are admitted; an empty list drops all DMs.
 - `dm.sessionScope`: `"per-user"` (default) or `"per-room"`.
 - `dm.threadReplies`: DM-only override for reply threading (`"off"`, `"inbound"`, `"always"`).
 - `allowBots`: accept messages from other configured Matrix bot accounts (`true` or `"mentions"`).
