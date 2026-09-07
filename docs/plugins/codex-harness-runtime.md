@@ -60,7 +60,9 @@ instructions. Active `BOOTSTRAP.md` and, when memory tools are unavailable,
 bounded `MEMORY.md` content travel as plain turn input references. They are
 introduced on a new native thread, after a cold resume or native compaction,
 and when their rendered content changes. Consecutive warm turns omit unchanged
-references; process-local tracking resets when the Gateway restarts.
+references once the complete block has been submitted. References dropped or
+truncated by prompt fitting are introduced again on a later turn. Process-local
+tracking resets when the Gateway restarts.
 
 Delivery mode and the current message target requirement arrive as compact
 application context before each user turn. They explicitly supersede earlier
