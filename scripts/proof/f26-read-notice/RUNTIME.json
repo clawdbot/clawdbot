@@ -16,8 +16,8 @@
     },
     {
       "path": "command-read.mjs",
-      "bytes": 592,
-      "sha256": "013352c591f9853f0914d0452d652633a01d4383559c8b075cf5ef3094da075e"
+      "bytes": 1542,
+      "sha256": "ccc113a7f402c4f06e72b357f233c86d843ddd33efdc77b43beece069b683e07"
     },
     {
       "path": "command-read.test.mjs",
@@ -66,8 +66,8 @@
     },
     {
       "path": "run-hosted.mjs",
-      "bytes": 25565,
-      "sha256": "d1153b36907862976d1108ee01cfdc7a324620f0bd94fff4425f7903ea0be7c3"
+      "bytes": 27448,
+      "sha256": "3c304b83281ae892580069de159d6de2d171254a9f15126cc6fac1022fbf880d"
     },
     {
       "path": "ui-case.swift",

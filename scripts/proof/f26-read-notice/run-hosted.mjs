@@ -13,15 +13,26 @@ import path from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import { captureAppIdentity } from "./app-identity.mjs";
-import { readCommand } from "./command-read.mjs";
+import { readCommand, readDiagnosticCommand } from "./command-read.mjs";
 import { admitProof, ProofMemoryScope, recordStoppedProof } from "./proof-admission.mjs";
 
-const processCensusSource = String.raw`import ctypes
-import errno
-import json
-import os
-import sys
+const processCensusSource = String.raw`import sys
 import time
+import json
+
+
+def trace_stage(stage, **fields):
+    print(json.dumps({"stage": stage, "monotonic": time.monotonic(), **fields},
+                     separators=(",", ":")), file=sys.stderr, flush=True)
+
+
+diagnostic = __name__ == "__main__" and sys.argv[2:] == ["--diagnostic"]
+if diagnostic:
+    trace_stage("python-enter")
+
+import ctypes
+import errno
+import os
 
 
 class UsageInfo(ctypes.Structure):
@@ -122,6 +133,8 @@ def census(reader, boot_session, clock=time.monotonic):
             pending = current - rows.keys()
             rows = {pid: row for pid, row in rows.items() if pid in current}
         result["processes"] = list(rows.values())
+        if clock() >= deadline:
+            raise RuntimeError("Process census collection deadline; no partial admission")
         result["complete"] = True
     except Exception as error:
         result["processes"] = list(rows.values())
@@ -129,12 +142,41 @@ def census(reader, boot_session, clock=time.monotonic):
     return result
 
 
+class TracedProcesses(DarwinProcesses):
+    def __init__(self):
+        trace_stage("libproc-load-start", pid=os.getpid())
+        super().__init__()
+        trace_stage("libproc-load-returned")
+
+    def pids(self):
+        trace_stage("enumeration-start")
+        result = super().pids()
+        trace_stage("enumeration-returned", count=len(result))
+        return result
+
+    def sample(self, pid):
+        trace_stage("rusage-start", pid=pid)
+        result = super().sample(pid)
+        trace_stage("rusage-returned", pid=pid)
+        return result
+
+
 if __name__ == "__main__":
     try:
-        result = census(DarwinProcesses(), sys.argv[1])
+        if diagnostic:
+            trace_stage("census-start")
+        result = census(TracedProcesses() if diagnostic else DarwinProcesses(), sys.argv[1])
     except Exception as error:
         result = {"complete": False, "error": {"type": type(error).__name__, "message": str(error)}}
-    print(json.dumps(result, separators=(",", ":")), flush=True)
+    if diagnostic:
+        trace_stage("census-returned", complete=result["complete"])
+        trace_stage("serialize-start")
+    encoded = json.dumps(result, separators=(",", ":"))
+    if diagnostic:
+        trace_stage("serialize-returned", characters=len(encoded))
+    print(encoded, flush=True)
+    if diagnostic:
+        trace_stage("stdout-flushed")
     raise SystemExit(0 if result["complete"] else 1)
 `;
 
@@ -145,9 +187,11 @@ const input = path.dirname(fileURLToPath(import.meta.url));
 const root = process.cwd();
 assert(
   process.argv.length === 2 ||
-    (process.argv.length === 3 && process.argv[2] === "--admission-only"),
+    (process.argv.length === 3 &&
+      ["--admission-only", "--census-diagnostic-only"].includes(process.argv[2])),
 );
-const admissionOnly = process.argv[2] === "--admission-only";
+const censusDiagnosticOnly = process.argv[2] === "--census-diagnostic-only";
+const admissionOnly = process.argv[2] === "--admission-only" || censusDiagnosticOnly;
 const output = path.join(root, "apps/ios/build", admissionOnly ? "F26Prebuild" : "F26Evidence");
 const publicOutput = path.join(output, "public");
 const privateOutput = path.join(output, "private");
@@ -216,16 +260,21 @@ function measure(recorder = record) {
       origin = previous.measurement.taskMemory.origin;
     }
     raw.processCensus = JSON.parse(
-      read("sudo", [
-        "-n",
-        "--",
-        "/usr/bin/python3",
-        "-I",
-        "-S",
-        "-c",
-        processCensusSource,
-        raw.bootSession,
-      ]),
+      (censusDiagnosticOnly ? readDiagnosticCommand : readCommand)(
+        "sudo",
+        [
+          "-n",
+          "--",
+          "/usr/bin/python3",
+          "-I",
+          "-S",
+          "-c",
+          processCensusSource,
+          raw.bootSession,
+          ...(censusDiagnosticOnly ? ["--diagnostic"] : []),
+        ],
+        recorder,
+      ),
     );
     if (!memoryScope) {
       memoryScope = new ProofMemoryScope({
@@ -269,6 +318,7 @@ const admitted = admitProof({
     attempt: process.env.GITHUB_RUN_ATTEMPT,
     node: process.version,
     phase: admissionOnly ? "prebuild" : "runtime",
+    operation: censusDiagnosticOnly ? "census-diagnostic-only" : "native-proof",
   },
   redact: clean,
   verifySource: (recorder) => {
@@ -313,11 +363,14 @@ const preflight = admitted.preflight;
 record = admitted.record;
 originFree = preflight.measurement.freeDisk;
 if (admissionOnly) {
-  record("prebuild-admission-complete", {
-    productStarted: false,
-    processGroups: [],
-    taskMemoryOrigin: memoryScope.origin,
-  });
+  record(
+    censusDiagnosticOnly ? "census-diagnostic-complete" : "prebuild-admission-complete",
+    {
+      productStarted: false,
+      processGroups: [],
+      taskMemoryOrigin: memoryScope.origin,
+    },
+  );
   process.exit(0);
 }
 const environment = {
