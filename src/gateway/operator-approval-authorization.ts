@@ -21,6 +21,19 @@ function normalizeIdentities(values: readonly string[] | null | undefined): stri
   return [...normalized];
 }
 
+/** Whether one device identity satisfies an approval's optional reviewer binding. */
+export function isOperatorApprovalReviewerAuthorized(params: {
+  reviewerDeviceId?: string | null;
+  reviewerDeviceIds?: readonly string[] | null;
+}): boolean {
+  const reviewerDeviceIds = normalizeIdentities(params.reviewerDeviceIds);
+  if (reviewerDeviceIds.length === 0) {
+    return true;
+  }
+  const reviewerDeviceId = normalizeIdentity(params.reviewerDeviceId);
+  return Boolean(reviewerDeviceId && reviewerDeviceIds.includes(reviewerDeviceId));
+}
+
 /** Whether a client may inspect safe approval projections. */
 export function canReviewOperatorApproval(client: GatewayClient | null): boolean {
   const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
@@ -64,10 +77,13 @@ export function canAccessOperatorApproval(params: {
     return true;
   }
 
-  const clientDeviceId = normalizeIdentity(params.client?.connect?.device?.id);
-  const reviewerDeviceIds = normalizeIdentities(params.binding.reviewerDeviceIds);
-  if (reviewerDeviceIds.length > 0) {
-    return Boolean(clientDeviceId && reviewerDeviceIds.includes(clientDeviceId));
+  if (
+    !isOperatorApprovalReviewerAuthorized({
+      reviewerDeviceId: params.client?.connect?.device?.id,
+      reviewerDeviceIds: params.binding.reviewerDeviceIds,
+    })
+  ) {
+    return false;
   }
 
   // No explicit reviewer binding: the operator.approvals scope tier is the
