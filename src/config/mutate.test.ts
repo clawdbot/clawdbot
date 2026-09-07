@@ -6,6 +6,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import { FILE_LOCK_TIMEOUT_ERROR_CODE } from "../infra/file-lock.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { initializePublishedConfigRuntimeEnv, prepareConfigRuntimeEnv } from "./config-env-vars.js";
+import { setConfigValueAtPath } from "./config-paths.js";
 import {
   collectChangedConfigPaths,
   resolveIncludeWriteBoundary,
@@ -748,9 +749,8 @@ describe("config mutate helpers", () => {
         pluginValidation: "skip",
       });
       const { snapshot, writeOptions } = await configIO.readConfigFileSnapshotForWrite();
-      const nextConfig = {
-        plugins: { entries: { alpha: { enabled: true }, beta: { enabled: false } } },
-      };
+      const nextConfig = structuredClone(snapshot.sourceConfig);
+      setConfigValueAtPath(nextConfig, ["plugins", "entries", "alpha", "enabled"], true);
       expect(configWriteTargetsIncludeBoundary({ snapshot, nextConfig })).toBe(false);
       await expect(
         replaceConfigFile({
@@ -1300,7 +1300,8 @@ describe("config mutate helpers", () => {
         pluginValidation: "skip",
       });
       const { snapshot, writeOptions } = await configIO.readConfigFileSnapshotForWrite();
-      const nextConfig = { plugins: { entries: { demo: { enabled: true } } } };
+      const nextConfig = structuredClone(snapshot.sourceConfig);
+      setConfigValueAtPath(nextConfig, ["plugins", "entries", "demo", "enabled"], true);
       const write = replaceConfigFile({
         snapshot,
         baseHash: snapshot.hash,
