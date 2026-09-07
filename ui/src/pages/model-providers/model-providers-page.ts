@@ -9,6 +9,7 @@ import { titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { renderAgentScopeControl } from "../../components/agent-scope-control.ts";
+import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { icons } from "../../components/icons.ts";
 import { renderLearnMoreLink, renderSettingsPageHeader } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
@@ -76,7 +77,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
   @state() private probeUnsupported = false;
   @state() private keyEditorProvider: string | null = null;
   @state() private keyDraft = "";
-  @state() private pendingLogout: ModelProviderPendingLogout | null = null;
+  private logoutConfirmation: AbortController | null = null;
   @state() private profileOrders: Record<string, string[]> = {};
   @state() private addProviderOpen = false;
   @state() private addProviderId = "";
@@ -164,24 +165,21 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     getData: () => this.data,
     getOrders: () => this.profileOrders,
     setData: (data) => (this.data = data),
-    setError: (cardId, error) => {
-      const text = modelProviderErrorMessage(error);
-      if (this.pendingLogout?.cardId === cardId) {
-        this.setMessage(cardId, { kind: "error", text });
-      } else {
-        showProfileToast({ message: text, icon: icons.alertTriangle, durationMs: 12_000 });
-      }
-    },
+    setError: (_cardId, error) =>
+      showProfileToast({
+        message: modelProviderErrorMessage(error),
+        icon: icons.alertTriangle,
+        durationMs: 12_000,
+      }),
     setOrders: (orders) => (this.profileOrders = orders),
     clearMessage: (cardId) => this.setMessage(cardId, null),
     canMutate: () => this.canMutate(),
     cancelRefresh: () => this.cancelCoreRefresh(),
     refresh: () => this.refresh({ force: true }),
-    isCurrentClient: (client, epoch) => this.isCurrentClient(client, epoch),
+    isCurrentClient: (client, epoch) => this.gateway.isCurrent({ client, epoch }),
     isBusy: (key) => Boolean(this.busy[key]),
     setBusy: (key, value) => this.setBusy(key, value),
     clearProbe: (cardId) => this.clearProbe(cardId),
-    clearPendingLogout: (cardId) => this.clearPendingLogout(cardId),
     setLogoutSuccess: () =>
       showProfileToast({ message: t("modelProviders.logout.done"), icon: icons.check }),
   });
@@ -272,6 +270,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
   }
 
   private invalidateRequests() {
+    this.logoutConfirmation?.abort();
     this.cancelCoreRefresh();
     this.supplemental.invalidate();
   }
@@ -293,15 +292,11 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     this.messages = {};
     this.probeResults = {};
     this.closeKeyEditor();
-    this.pendingLogout = null;
+    this.logoutConfirmation?.abort();
     this.profileActions.resetOrders();
     this.addProviderOpen = false;
     this.addProviderId = "";
     this.addProviderKey = "";
-  }
-
-  private isCurrentClient(client: GatewayBrowserClient, epoch: number): boolean {
-    return this.gateway.isCurrent({ client, epoch });
   }
 
   private resolveSelectedAgentId(): string {
@@ -408,7 +403,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       {
         runtimeConfig: this.context.runtimeConfig,
         agentEpoch,
-        isCurrentClient: () => this.isCurrentClient(client, clientEpoch),
+        isCurrentClient: () => this.gateway.isCurrent({ client, epoch: clientEpoch }),
         isCurrentAgent: () => this.agentEpoch === agentEpoch,
         refreshProviders: () => this.refresh({ force: true }),
         setBusy: (busy) => this.setBusy(params.key, busy),
@@ -491,7 +486,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     const probeEpoch = (this.probeEpochs.get(cardId) ?? 0) + 1;
     this.probeEpochs.set(cardId, probeEpoch);
     const ownsProbe = () =>
-      this.isCurrentClient(client, clientEpoch) &&
+      this.gateway.isCurrent({ client, epoch: clientEpoch }) &&
       this.agentEpoch === agentEpoch &&
       this.selectedAgentId === agentId &&
       this.probeEpochs.get(cardId) === probeEpoch;
@@ -533,10 +528,25 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     }
   }
 
-  private clearPendingLogout(cardId = this.pendingLogout?.cardId) {
-    if (this.pendingLogout && this.pendingLogout.cardId === cardId) {
-      this.setMessage(this.pendingLogout.cardId, null);
-      this.pendingLogout = null;
+  private async requestLogout(pending: ModelProviderPendingLogout) {
+    if (this.logoutConfirmation || !this.canMutate() || this.busy[`logout:${pending.cardId}`]) {
+      return;
+    }
+    // Agent changes, reconnects and navigation abort this decision before it can
+    // authorize a logout under a different scope.
+    const controller = new AbortController();
+    this.logoutConfirmation = controller;
+    const confirmed = await showConfirmDialog({
+      title: t("modelProviders.logout.actionFor", { account: pending.label }),
+      message: t("modelProviders.logout.confirm", { provider: pending.label }),
+      confirmLabel: t("modelProviders.logout.action"),
+      danger: true,
+      signal: controller.signal,
+    }).finally(() => {
+      this.logoutConfirmation = null;
+    });
+    if (confirmed && !controller.signal.aborted && this.canMutate()) {
+      await this.profileActions.logout(pending.cardId, pending.target);
     }
   }
 
@@ -602,8 +612,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     const selectedAgentLabel = selected ? normalizeAgentLabel(selected) : this.selectedAgentId;
     const data = this.data ?? EMPTY_MODEL_PROVIDERS_DATA;
     const config = readModelProviderConfig(data.config);
-    const runtimeConfig = this.context.runtimeConfig;
-    const runtimeState = runtimeConfig.state;
+    const runtimeState = this.context.runtimeConfig.state;
     const configObject =
       asConfigRecord(runtimeState.configForm ?? runtimeState.configSnapshot?.config) ??
       asConfigRecord(data.config) ??
@@ -670,7 +679,6 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       probeResults: this.probeResults,
       keyEditorProvider: this.keyEditorProvider,
       keyDraft: this.keyDraft,
-      pendingLogout: this.pendingLogout,
       profileOrders: this.profileOrders,
       addProviderOpen: this.addProviderOpen,
       addProviderId: this.addProviderId,
@@ -683,12 +691,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       onSaveKey: (provider, configKey) => void this.saveKey(provider, configKey),
       onRemoveKey: (provider, configKey) => void this.removeKey(provider, configKey),
       onProbe: (cardId, providers) => void this.probe(cardId, providers),
-      onRequestLogout: (pending) => {
-        this.setMessage(pending.cardId, null);
-        this.pendingLogout = pending;
-      },
-      onCancelLogout: () => this.clearPendingLogout(),
-      onLogout: (cardId, target) => void this.profileActions.logout(cardId, target),
+      onRequestLogout: (pending) => void this.requestLogout(pending),
       onProfileOrderChange: (cardId, provider, profileIds) =>
         this.profileActions.setOrder(cardId, provider, profileIds),
       onAddProviderToggle: () => {

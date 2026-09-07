@@ -173,9 +173,7 @@ function profileGroups(card: ModelProviderCard, drafts: Record<string, string[]>
               ? "modelProviders.profiles.partialStoredOrder"
               : "modelProviders.profiles.partialOrder",
           )
-        : !explicit
-          ? t("modelProviders.profiles.automaticOrder")
-          : undefined;
+        : undefined;
     const profileById = new Map(profiles.map((profile) => [profile.profileId, profile]));
     return {
       provider,
@@ -266,9 +264,11 @@ function startPointerDrag(params: {
           pointerY >= bounds.top &&
           pointerY <= bounds.bottom,
       );
-    const centerY = source.bounds.top + source.bounds.height / 2 + deltaY;
+    // Swap as the leading edge crosses a neighbor's center, without requiring
+    // the dragged row to travel a full slot before the neighbor makes room.
+    const leadingY = (deltaY > 0 ? source.bounds.bottom : source.bounds.top) + deltaY;
     target = inside
-      ? others.find(({ bounds }) => centerY < bounds.top + bounds.height / 2)
+      ? others.find(({ bounds }) => leadingY < bounds.top + bounds.height / 2)
       : undefined;
     position = target ? "before" : "after";
     if (inside && !target) {
@@ -338,7 +338,6 @@ export function renderProviderProfiles(card: ModelProviderCard, props: ProviderP
     ...new Set(groups.flatMap((group) => (group.explanation ? [group.explanation] : []))),
   ];
   const additionalCredentialSource = apiKeySource(card);
-  const saving = groups.some((group) => props.profileOrders[group.provider] !== undefined);
   return html`
     <section class="model-providers__profiles" aria-label=${t("modelProviders.profiles.title")}>
       <div class="model-providers__profiles-heading">
@@ -358,7 +357,6 @@ export function renderProviderProfiles(card: ModelProviderCard, props: ProviderP
               : nothing
           }
           ${explanations.map((explanation) => html`<span>${explanation}</span>`)}
-          ${saving ? html`<span role="status">${t("modelProviders.saving")}</span>` : nothing}
         </div>
         <div class="model-providers__profiles-heading-actions">
           ${card.profileOrderStoredProviders.map(
@@ -366,7 +364,7 @@ export function renderProviderProfiles(card: ModelProviderCard, props: ProviderP
               type="button"
               class="btn btn--sm btn--ghost"
               ?disabled=${!props.canMutate}
-              title=${!props.canMutate ? (props.mutationBlockedReason ?? "") : ""}
+              title=${!props.canMutate ? (props.mutationBlockedReason ?? "") : t("modelProviders.profiles.resetOrderHint")}
               @click=${() => props.onProfileOrderChange(card.id, provider, null)}
             >
               ${t("modelProviders.profiles.resetOrder")}

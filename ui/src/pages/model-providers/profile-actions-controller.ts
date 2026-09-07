@@ -23,7 +23,6 @@ type ProfileActionsControllerOptions = {
   setBusy: (key: string, value: boolean) => void;
   clearProbe: (cardId: string) => void;
   clearMessage: (cardId: string) => void;
-  clearPendingLogout: (cardId: string) => void;
   setError: (cardId: string, error: unknown) => void;
   setLogoutSuccess: (cardId: string) => void;
   cancelRefresh: () => void;
@@ -96,7 +95,6 @@ export class ModelProviderProfileActionsController {
         this.options.setError(cardId, logoutError);
         return;
       }
-      this.options.clearPendingLogout(cardId);
       this.options.setLogoutSuccess(cardId);
     } catch (error) {
       if (isCurrentScope()) {

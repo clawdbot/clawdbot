@@ -7,6 +7,7 @@ import type { DefaultModelSelection } from "./data.ts";
 import { EMPTY_MODEL_PROVIDERS_DATA, type ModelProvidersData } from "./load.ts";
 import {
   appendPage,
+  createAuthStatus,
   createEmptyModelProvidersRouteData,
   createHarness,
   deferred,
@@ -270,21 +271,11 @@ describe("ModelProvidersPage agent scope", () => {
     request.mockImplementation(async (method: string) => {
       if (method === "models.authStatus") {
         return {
-          ts: 1,
-          providers: [
+          ...createAuthStatus([
             {
-              provider: "openai",
-              displayName: "OpenAI",
-              status: "ok",
-              profiles: [
-                {
-                  profileId: "openai:owner@example.com",
-                  type: "oauth",
-                  status: "ok",
-                },
-              ],
+              profiles: [{ profileId: "openai:owner@example.com", type: "oauth", status: "ok" }],
             },
-          ],
+          ]),
           providerCapabilities: [],
         };
       }
@@ -650,21 +641,7 @@ describe("ModelProvidersPage agent scope", () => {
       const originalRequest = request.getMockImplementation()!;
       request.mockImplementation(async (method: string, params?: unknown) => {
         if (method === "models.authStatus") {
-          return {
-            ts: 2,
-            providers: [
-              {
-                provider: "openai",
-                displayName: "OpenAI",
-                status: "ok",
-                profiles: [
-                  { profileId: "openai:one", type: "oauth", status: "ok" },
-                  { profileId: "openai:two", type: "oauth", status: "ok" },
-                ],
-                profileOrder: order,
-              },
-            ],
-          };
+          return createAuthStatus([{ profileOrder: order }], 2);
         }
         void params;
         return originalRequest(method);
@@ -695,7 +672,6 @@ describe("ModelProvidersPage agent scope", () => {
       expect(page.querySelectorAll(".model-providers__profile-position")).toHaveLength(
         order ? 2 : 0,
       );
-      expect(page.textContent?.includes("Account selection is automatic.")).toBe(!order);
     },
   );
 
@@ -746,20 +722,7 @@ describe("ModelProvidersPage agent scope", () => {
     page.data = {
       ...EMPTY_MODEL_PROVIDERS_DATA,
       config: {},
-      authStatus: {
-        ts: 1,
-        providers: [
-          {
-            provider: "openai",
-            displayName: "OpenAI",
-            status: "ok",
-            profiles: [
-              { profileId: "openai:one", type: "oauth", status: "ok" },
-              { profileId: "openai:two", type: "oauth", status: "ok" },
-            ],
-          },
-        ],
-      },
+      authStatus: createAuthStatus(),
       updatedAt: 1,
     };
     page.requestUpdate();
@@ -817,11 +780,6 @@ describe("ModelProvidersPage agent scope", () => {
     page.addProviderId = "anthropic";
     page.addProviderKey = "synthetic-route-provider-key";
     page.defaultsDraft = defaultsDraft;
-    page.pendingLogout = {
-      cardId: "openai",
-      label: "OpenAI",
-      target: { provider: "openai", profileIds: ["openai:first"] },
-    };
     page.messages = { openai: { kind: "error", text: "Previous agent failure" } };
     page.probeResults = {
       openai: { provider: "openai", status: "ok", results: [] },
@@ -838,7 +796,6 @@ describe("ModelProvidersPage agent scope", () => {
     await page.updateComplete;
     expect(page.selectedAgentId).toBe("writer");
     expect(page.busy).toEqual({});
-    expect(page.pendingLogout).toBeNull();
     expect(page.messages).toEqual({});
     expect(page.probeResults).toEqual({});
     expect(page.keyEditorProvider).toBeNull();

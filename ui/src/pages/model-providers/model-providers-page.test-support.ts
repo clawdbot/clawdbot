@@ -1,8 +1,12 @@
 import { vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { ModelsProbeResult } from "../../api/types.ts";
+import type {
+  ModelAuthStatusProvider,
+  ModelAuthStatusResult,
+  ModelsProbeResult,
+} from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
-import type { DefaultModelSelection, ModelProviderPendingLogout } from "./data.ts";
+import type { DefaultModelSelection } from "./data.ts";
 import { EMPTY_MODEL_PROVIDERS_DATA, type ModelProvidersData } from "./load.ts";
 import type { ModelBehaviorConfig } from "./model-behavior.ts";
 import type { ModelProviderProfileActionsController } from "./profile-actions-controller.ts";
@@ -23,7 +27,6 @@ export type ModelProvidersPageTestElement = HTMLElement & {
   keyEditorProvider: string | null;
   profileActions: Pick<ModelProviderProfileActionsController, "logout" | "setOrder">;
   messages: Record<string, { kind: "success" | "error"; text: string; warning?: string }>;
-  pendingLogout: ModelProviderPendingLogout | null;
   profileOrders: Record<string, string[]>;
   probe: (cardId: string, providers: string[]) => Promise<void>;
   probeResults: Record<string, ModelsProbeResult>;
@@ -38,6 +41,25 @@ export type ModelProvidersPageTestElement = HTMLElement & {
 export type AgentSelectElement = HTMLElement & {
   onSelect: (value: string) => void;
 };
+
+export function createAuthStatus(
+  providers: Partial<ModelAuthStatusProvider>[] = [{}],
+  ts = 1,
+): ModelAuthStatusResult {
+  return {
+    ts,
+    providers: providers.map((overrides): ModelAuthStatusProvider => ({
+      provider: "openai",
+      displayName: "OpenAI",
+      status: "ok",
+      profiles: [
+        { profileId: "openai:one", type: "oauth", status: "ok" },
+        { profileId: "openai:two", type: "oauth", status: "ok" },
+      ],
+      ...overrides,
+    })),
+  };
+}
 
 export function deferred<T>() {
   let resolve!: (value: T) => void;

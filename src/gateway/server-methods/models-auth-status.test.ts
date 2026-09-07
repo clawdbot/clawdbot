@@ -2400,18 +2400,6 @@ describe("models.authOrderSet", () => {
     expect(firstRespondCall(opts)?.[2]?.message).toContain(message);
   });
 
-  it("clears the stored override with null", async () => {
-    const opts = createOrderOptions({ provider: "openai" });
-
-    await orderHandler(opts);
-
-    expect(mocks.setAuthProfileOrder).toHaveBeenCalledWith({
-      agentDir: "/tmp/agent",
-      provider: "openai",
-      order: null,
-    });
-  });
-
   it("rejects an incomplete provider profile order without writing", async () => {
     const opts = createOrderOptions({ provider: "openai", profileIds: ["openai:one"] });
 

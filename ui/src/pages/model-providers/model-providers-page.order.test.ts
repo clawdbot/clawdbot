@@ -5,12 +5,17 @@ import type {
   ModelsAuthLogoutParams,
   ModelsAuthOrderSetParams,
 } from "../../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
-import type { ModelAuthStatusProfile, ModelAuthStatusResult } from "../../api/types.ts";
-import { getRenderedModalDialog, installDialogPolyfill } from "../../test-helpers/modal-dialog.ts";
+import type { ModelAuthStatusProfile } from "../../api/types.ts";
+import {
+  getRenderedModalDialog,
+  installDialogPolyfill,
+  nextFrame,
+} from "../../test-helpers/modal-dialog.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { EMPTY_MODEL_PROVIDERS_DATA } from "./load.ts";
 import {
   appendPage,
+  createAuthStatus,
   createHarness,
   deferred,
   requestCount,
@@ -54,23 +59,12 @@ describe("ModelProvidersPage profile actions", () => {
                 message: "Account status unavailable",
               },
             }
-          : {
-              ts: 1,
-              providers: [
-                {
-                  provider: "openai",
-                  displayName: "OpenAI",
-                  status: "ok",
-                  profiles: ["openai:one", "openai:two"].map((profileId) => ({
-                    profileId,
-                    type: "oauth",
-                    status: "ok",
-                  })),
-                  profileOrder: ["openai:one", "openai:two"],
-                  profileOrderStored: true,
-                },
-              ],
-            };
+          : createAuthStatus([
+              {
+                profileOrder: ["openai:one", "openai:two"],
+                profileOrderStored: true,
+              },
+            ]);
       }
       return originalRequest(method);
     });
@@ -146,23 +140,17 @@ describe("ModelProvidersPage profile actions", () => {
         return requestCount(request, method) === 1 ? firstSave.promise : {};
       }
       if (method === "models.authStatus") {
-        return {
-          ts: 1,
-          providers: [
-            {
-              provider: "openai",
-              displayName: "OpenAI",
+        return createAuthStatus([
+          {
+            profiles: ["openai:one", "openai:two", "openai:three"].map((profileId) => ({
+              profileId,
+              type: "oauth",
               status: "ok",
-              profiles: ["openai:one", "openai:two", "openai:three"].map((profileId) => ({
-                profileId,
-                type: "oauth",
-                status: "ok",
-              })),
-              profileOrder: [...savedOrder],
-              profileOrderStored: true,
-            },
-          ],
-        } satisfies ModelAuthStatusResult;
+            })),
+            profileOrder: [...savedOrder],
+            profileOrderStored: true,
+          },
+        ]);
       }
       return originalRequest(method);
     });
@@ -219,30 +207,38 @@ describe("ModelProvidersPage profile actions", () => {
     page.data = {
       ...EMPTY_MODEL_PROVIDERS_DATA,
       config: {},
-      authStatus: {
-        ts: 1,
-        providers: [
-          {
-            provider: "claude-cli",
-            authProvider: "anthropic",
-            displayName: "Claude",
-            status: "ok",
-            profiles: [
-              { profileId: "claude:one", type: "oauth", status: "ok" },
-              { profileId: "claude:two", type: "oauth", status: "ok" },
-            ],
-            profileOrder: ["claude:one", "claude:two"],
-          },
-        ],
-      },
+      authStatus: createAuthStatus([
+        ...["claude-cli", "anthropic"].map((provider) => ({
+          provider,
+          authProvider: "anthropic",
+          displayName: "Claude",
+          profiles: [
+            { profileId: "claude:one", type: "oauth" as const, status: "ok" as const },
+            { profileId: "claude:two", type: "oauth" as const, status: "ok" as const },
+          ],
+          profileOrder: ["claude:one", "claude:two"],
+        })),
+        { profileOrder: ["openai:one", "openai:two"] },
+      ]),
       updatedAt: 1,
     };
+    const unrelatedProvider = structuredClone(page.data.authStatus?.providers[2]);
 
     page.profileActions.setOrder("anthropic", "anthropic", ["claude:two", "claude:one"]);
 
     await vi.waitFor(() => expect(requestCount(request, "models.authOrderSet")).toBe(1));
     await vi.waitFor(() => expect(page.profileOrders.anthropic).toBeUndefined());
-    expect(page.data.authStatus?.providers[0]?.profileOrder).toEqual(["claude:two", "claude:one"]);
+    expect(
+      page.data.authStatus?.providers.map(({ provider, profileOrder }) => ({
+        provider,
+        profileOrder,
+      })),
+    ).toEqual([
+      { provider: "claude-cli", profileOrder: ["claude:two", "claude:one"] },
+      { provider: "anthropic", profileOrder: ["claude:two", "claude:one"] },
+      { provider: "openai", profileOrder: ["openai:one", "openai:two"] },
+    ]);
+    expect(page.data.authStatus?.providers[2]).toEqual(unrelatedProvider);
   });
 
   it("keeps a saved profile order when an older refresh finishes afterward", async () => {
@@ -251,21 +247,11 @@ describe("ModelProvidersPage profile actions", () => {
     await waitForFast(() => expect(page.data?.config).toEqual({}));
     const originalRequest = request.getMockImplementation()!;
     const staleStatus = deferred<unknown>();
-    const authStatus = {
-      ts: 1,
-      providers: [
-        {
-          provider: "openai",
-          displayName: "OpenAI",
-          status: "ok" as const,
-          profiles: [
-            { profileId: "openai:one", type: "oauth" as const, status: "ok" as const },
-            { profileId: "openai:two", type: "oauth" as const, status: "ok" as const },
-          ],
-          profileOrder: ["openai:one", "openai:two"],
-        },
-      ],
-    };
+    const authStatus = createAuthStatus([
+      {
+        profileOrder: ["openai:one", "openai:two"],
+      },
+    ]);
     const refreshedStatus = {
       ...authStatus,
       ts: 2,
@@ -312,7 +298,8 @@ describe("ModelProvidersPage profile actions", () => {
 
   it("cancels safely and logs out only the confirmed account's credential owner", async () => {
     const restoreDialogPolyfill = installDialogPolyfill();
-    const { context, request, snapshot } = createHarness("writer");
+    const { agentSelection, context, notifySelection, publishPhase, request, snapshot } =
+      createHarness("writer");
     snapshot.hello = {
       type: "hello-ok",
       protocol: 3,
@@ -339,18 +326,14 @@ describe("ModelProvidersPage profile actions", () => {
     ];
     request.mockImplementation(async (method: string, params?: unknown) => {
       if (method === "models.authStatus") {
-        return {
-          ts: 1,
-          providers: [
-            {
-              provider: "claude-cli",
-              authProvider: "anthropic",
-              displayName: "Claude",
-              status: "ok",
-              profiles,
-            },
-          ],
-        };
+        return createAuthStatus([
+          {
+            provider: "claude-cli",
+            authProvider: "anthropic",
+            displayName: "Claude",
+            profiles,
+          },
+        ]);
       }
       if (method === "models.authLogout") {
         if (failLogout) {
@@ -369,65 +352,83 @@ describe("ModelProvidersPage profile actions", () => {
     const toast = shell.appendChild(document.createElement("openclaw-toast-host"));
     const page = appendPage(context);
     try {
-      await waitForFast(() =>
-        expect(page.querySelectorAll(".model-providers__profile")).toHaveLength(2),
-      );
       const openConfirmation = async () => {
+        // Separate user clicks so the previous confirmation can settle.
+        await nextFrame();
+        await waitForFast(() =>
+          expect(page.querySelectorAll(".model-providers__profile")).toHaveLength(2),
+        );
         page.querySelector<HTMLButtonElement>('[aria-label="Log out work@example.com"]')!.click();
         await page.updateComplete;
-        return getRenderedModalDialog(page);
+        return getRenderedModalDialog(document.body);
       };
       const { modal: initialModal, dialog } = await openConfirmation();
       let modal = initialModal;
+      expect(page.contains(modal)).toBe(false);
       expect(dialog.getAttribute("aria-label")).toBe("Log out work@example.com");
       expect(modal.textContent).toContain("work@example.com");
       expect(requestCount(request, "models.authLogout")).toBe(0);
       modal.querySelector<HTMLButtonElement>("button[autofocus]")!.click();
       await page.updateComplete;
-      expect(page.querySelector("openclaw-modal-dialog")).toBeNull();
+      expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
       expect(requestCount(request, "models.authLogout")).toBe(0);
 
-      ({ modal } = await openConfirmation());
-      modal.dispatchEvent(new CustomEvent("modal-cancel", { cancelable: true }));
-      await page.updateComplete;
-      expect(page.querySelector("openclaw-modal-dialog")).toBeNull();
-      expect(requestCount(request, "models.authLogout")).toBe(0);
+      for (const invalidate of [
+        () => {
+          agentSelection.state.selectedId = "main";
+          notifySelection();
+        },
+        () => publishPhase("connecting"),
+        () => page.remove(),
+      ]) {
+        ({ modal } = await openConfirmation());
+        const confirm = modal.querySelector<HTMLButtonElement>("button.danger")!;
+        invalidate();
+        await waitForFast(() =>
+          expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull(),
+        );
+        confirm.click();
+        expect(requestCount(request, "models.authLogout")).toBe(0);
+        agentSelection.state.selectedId = "writer";
+        notifySelection();
+        publishPhase("connected");
+        if (!page.isConnected) {
+          document.body.append(page);
+        }
+        await page.updateComplete;
+      }
 
       ({ modal } = await openConfirmation());
       modal.querySelector<HTMLButtonElement>("button.danger")!.click();
       await waitForFast(() =>
-        expect(modal.querySelector('[role="alert"]')?.textContent).toContain(
-          "The account could not be logged out",
-        ),
+        expect(toast.textContent).toContain("The account could not be logged out"),
       );
       expect(page.querySelectorAll(".model-providers__profile")).toHaveLength(2);
-      expect(modal.querySelector<HTMLButtonElement>("button.danger")!.disabled).toBe(false);
-      await toast.updateComplete;
-      expect(toast.querySelector('[role="status"]')).toBeNull();
+      expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
       expect(page.querySelector(".model-providers__row > .callout")).toBeNull();
-
-      modal.querySelector<HTMLButtonElement>("button[autofocus]")!.click();
-      await page.updateComplete;
-      expect(page.querySelector("openclaw-modal-dialog")).toBeNull();
-      expect(page.querySelector('[role="alert"]')).toBeNull();
       expect(page.messages.anthropic).toBeUndefined();
       expect(requestCount(request, "models.authLogout")).toBe(1);
 
       ({ modal } = await openConfirmation());
       expect(modal.querySelector('[role="alert"]')).toBeNull();
       modal.querySelector<HTMLButtonElement>("button.danger")!.click();
+      await waitForFast(() => expect(requestCount(request, "models.authLogout")).toBe(2));
       await page.updateComplete;
       expect(request).toHaveBeenCalledWith("models.authLogout", {
         provider: "claude-cli",
         profileIds: ["work"],
         agentId: "writer",
       });
-      expect([...modal.querySelectorAll("button")].every((button) => button.disabled)).toBe(true);
-      const dismissal = new CustomEvent("modal-cancel", { cancelable: true });
-      modal.dispatchEvent(dismissal);
-      expect(dismissal.defaultPrevented).toBe(true);
+      expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
+      expect(
+        [...page.querySelectorAll<HTMLButtonElement>(".model-providers__profile-logout")].every(
+          (button) => button.disabled,
+        ),
+      ).toBe(true);
       logout.resolve();
-      await waitForFast(() => expect(page.querySelector("openclaw-modal-dialog")).toBeNull());
+      await waitForFast(() =>
+        expect(page.querySelectorAll(".model-providers__profile")).toHaveLength(1),
+      );
       expect(requestCount(request, "models.authLogout")).toBe(2);
       expect(
         [...page.querySelectorAll<HTMLElement>(".model-providers__profile")].map(

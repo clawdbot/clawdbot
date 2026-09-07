@@ -187,7 +187,7 @@
 
 .model-providers__profiles--sorting
   .model-providers__profile:not(.model-providers__profile--dragging) {
-  transition: translate 160ms ease-out;
+  transition: translate 100ms ease-out;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -221,12 +221,6 @@
 .model-providers__profile-logout:hover:not(:disabled),
 .model-providers__profile-logout:focus-visible {
   color: var(--danger);
-}
-
-.model-providers__logout-confirm {
-  max-height: calc(100dvh - 48px);
-  overflow-y: auto;
-  overflow-wrap: anywhere;
 }
 
 @container provider-profiles (max-width: 640px) {

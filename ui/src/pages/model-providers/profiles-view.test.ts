@@ -178,7 +178,7 @@ describe("renderProviderProfiles", () => {
     expect(document.body.textContent).toContain("Priority is managed by provider configuration");
     expect(
       [...document.querySelectorAll("button")].map((button) => button.textContent),
-    ).not.toContain("Reset");
+    ).not.toContain("Clear custom order");
     expect(onProfileOrderChange).not.toHaveBeenCalled();
   });
 
@@ -247,7 +247,7 @@ describe("renderProviderProfiles", () => {
     const grips = container.querySelectorAll<HTMLButtonElement>(".model-providers__profile-grip");
     expect(grips).toHaveLength(2);
     expect([...grips].every((grip) => grip.disabled)).toBe(true);
-    expect(container.textContent).toContain("Reset");
+    expect(container.textContent).toContain("Clear custom order");
     pointer(grips[0]!, "pointerdown");
     grips[0]!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
     expect(onProfileOrderChange).not.toHaveBeenCalled();
@@ -287,6 +287,9 @@ describe("renderProviderProfiles", () => {
     const { grip, row, rows, hitTest, container } = pointerFixture(props({ onProfileOrderChange }));
 
     pointer(grip, "pointerdown");
+    pointer(grip, "pointermove", { x: 20, y: 140 });
+    expect(rows[1]!.style.translate).toBe("0px -80px");
+    expect(rows[2]!.style.translate).toBe("0px 0px");
     pointer(grip, "pointermove", { x: 40, y: 285 });
     expect(row.style.translate).toBe("20px 210px");
     expect(rows[1]!.style.translate).toBe("0px -80px");
@@ -313,6 +316,9 @@ describe("renderProviderProfiles", () => {
 
     const lastGrip = rows[2]!.querySelector<HTMLButtonElement>(".model-providers__profile-grip")!;
     pointer(lastGrip, "pointerdown", { x: 20, y: 250 });
+    pointer(lastGrip, "pointermove", { x: 20, y: 185 });
+    expect(rows[0]!.style.translate).toBe("0px 0px");
+    expect(rows[1]!.style.translate).toBe("0px 100px");
     pointer(lastGrip, "pointermove", { x: 20, y: 20 });
     expect(rows[0]!.style.translate).toBe("0px 100px");
     expect(rows[1]!.style.translate).toBe("0px 100px");
@@ -405,7 +411,6 @@ describe("renderProviderProfiles", () => {
     const grip = container.querySelector<HTMLButtonElement>(".model-providers__profile-grip")!;
     grip.focus();
     expect(container.querySelectorAll(".model-providers__profile-position")).toHaveLength(0);
-    expect(container.textContent).toContain("Account selection is automatic.");
     expect(grip.getAttribute("aria-keyshortcuts")).toBe("ArrowUp ArrowDown");
 
     for (const order of [

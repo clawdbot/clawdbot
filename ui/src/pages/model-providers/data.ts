@@ -291,9 +291,7 @@ export function buildModelProviderCards(input: ModelProviderCardsInput): ModelPr
       profileOrdersByAuthProvider.set(authProvider, [
         ...new Set([...(profileOrdersByAuthProvider.get(authProvider) ?? []), ...order]),
       ]);
-      draft.card.profileOrders[authProvider] = [
-        ...new Set([...(draft.card.profileOrders[authProvider] ?? []), ...order]),
-      ];
+      draft.card.profileOrders[authProvider] = order;
       if (
         provider.profileOrderStored === true &&
         !draft.card.profileOrderStoredProviders.includes(authProvider)
