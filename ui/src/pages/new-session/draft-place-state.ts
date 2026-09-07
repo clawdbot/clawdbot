@@ -408,9 +408,7 @@ export class DraftPlaceState {
       this.folderValidation.validate(this.folderValue);
     } else {
       this.folderValidation.cancel();
-      if (!this.repositoryState.matchesCurrentRepo()) {
-        this.repositoryState.load();
-      }
+      this.repositoryState.synchronize();
     }
     this.callbacks.requestUpdate();
   }
@@ -629,9 +627,7 @@ export class DraftPlaceState {
       worktree: Boolean(deviceId || autoDevice) || this.worktree,
     });
     this.browser.close();
-    if (!this.repositoryState.matchesCurrentRepo()) {
-      this.repositoryState.load();
-    }
+    this.repositoryState.synchronize();
     this.callbacks.requestUpdate();
   }
 
@@ -661,9 +657,7 @@ export class DraftPlaceState {
       worktree: true,
     });
     this.browser.close();
-    if (!this.repositoryState.matchesCurrentRepo()) {
-      this.repositoryState.load();
-    }
+    this.repositoryState.synchronize();
     this.callbacks.requestUpdate();
   }
 
@@ -747,9 +741,7 @@ export class DraftPlaceState {
     if (!changed) {
       return;
     }
-    if (!this.repositoryState.matchesCurrentRepo()) {
-      this.repositoryState.load();
-    }
+    this.repositoryState.synchronize();
     this.callbacks.requestUpdate();
   }
 
