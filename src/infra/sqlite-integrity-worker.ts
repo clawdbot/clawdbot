@@ -28,6 +28,12 @@ export type SqliteIntegrityWorkerResult =
       };
     };
 
+export type SqliteIntegrityWorkerPhase = "opening" | "checking" | "closing";
+
+export type SqliteIntegrityWorkerMessage =
+  | SqliteIntegrityWorkerResult
+  | { type: "phase"; phase: SqliteIntegrityWorkerPhase };
+
 export function readSqliteIntegrityFileIdentity(
   pathname: string,
   expected?: FileIdentityStat,
@@ -61,8 +67,21 @@ export function assertSqliteIntegrityInWorker(
   return new Promise((resolve, reject) => {
     let result: SqliteIntegrityWorkerResult | undefined;
     let failure: Error | undefined;
-    worker.on("message", (message: SqliteIntegrityWorkerResult) => {
-      result = message;
+    let lastObservedPhase: SqliteIntegrityWorkerPhase | "starting" | "result-received" = "starting";
+    worker.on("message", (message: SqliteIntegrityWorkerMessage) => {
+      if ("type" in message && message.type === "phase") {
+        if (
+          !result &&
+          (message.phase === "opening" ||
+            message.phase === "checking" ||
+            message.phase === "closing")
+        ) {
+          lastObservedPhase = message.phase;
+        }
+      } else if ("ok" in message) {
+        result = message;
+        lastObservedPhase = "result-received";
+      }
     });
     worker.on("error", (error) => {
       failure = toStringifiedError(error);
@@ -75,10 +94,14 @@ export function assertSqliteIntegrityInWorker(
           throw failure;
         }
         if (worker.killed && closeSignal === "SIGKILL") {
-          throw sqliteInspectionTimeoutError("integrity check", pathname);
+          const error = sqliteInspectionTimeoutError("integrity check", pathname);
+          error.message += ` (lastObservedPhase=${lastObservedPhase})`;
+          throw error;
         }
         if (code !== 0 || !result) {
-          throw new Error(`SQLite integrity worker exited ${code} without a completed check`);
+          throw new Error(
+            `SQLite integrity worker exited ${code} without a completed check (lastObservedPhase=${lastObservedPhase})`,
+          );
         }
         readSqliteIntegrityFileIdentity(pathname, identity);
         if (!result.ok) {
