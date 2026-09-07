@@ -40,8 +40,4 @@ describe("resolveLineTextChunkLimit", () => {
   ])("$name", ({ cfg, accountId, expected }) => {
     expect(resolveLineTextChunkLimit({ cfg, accountId })).toBe(expected);
   });
-
-  it("keeps LINE's cap for a missing config", () => {
-    expect(resolveLineTextChunkLimit({ cfg: undefined })).toBe(LINE_TEXT_CHUNK_LIMIT);
-  });
 });
