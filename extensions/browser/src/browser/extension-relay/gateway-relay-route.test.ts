@@ -90,6 +90,10 @@ function fakeSocket() {
       writes.push(chunk);
       return true;
     },
+    end: (chunk: string, callback: () => void) => {
+      writes.push(chunk);
+      callback();
+    },
     destroy: () => {
       destroyed = true;
     },
