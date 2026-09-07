@@ -21,10 +21,16 @@ const getUserProfileMock = vi.hoisted(() =>
   vi.fn(async (_userId: string) => null as { displayName: string } | null),
 );
 const getLineGroupNameMock = vi.hoisted(() => vi.fn(async () => undefined as string | undefined));
+const logVerboseMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./send.js", () => ({
   getUserProfile: getUserProfileMock,
   getLineGroupName: getLineGroupNameMock,
+}));
+
+vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>()),
+  logVerbose: logVerboseMock,
 }));
 
 type MessageEvent = webhook.MessageEvent;
@@ -171,6 +177,30 @@ describe("buildLineMessageContext quotes", () => {
     expect(context?.ctxPayload.RawBody).toBe("what about this?");
     expect(context?.ctxPayload.ReplyToBody).toBeUndefined();
     expect(context?.ctxPayload.ReplyToId).toBeUndefined();
+  });
+
+  it("says so when the visibility policy is what dropped the quote", async () => {
+    // Core filters silently, so without this line an operator cannot tell a policy
+    // decision apart from a quote this account no longer remembers.
+    recordLineAgentVisibleMessage(account.accountId, {
+      id: "m-quoted",
+      conversationId: "group-quote",
+      body: "staging is on 10.0.0.5",
+      senderId: "U-teammate",
+    });
+    logVerboseMock.mockClear();
+
+    await buildLineMessageContext({
+      groupPolicy: "allowlist",
+      groupAllowFrom: ["user-asking"],
+      event: quotingEvent("m-quoted", "what about this?"),
+      allMedia: [],
+      cfg: { ...cfg, channels: { defaults: { contextVisibility: "allowlist" } } },
+      account,
+      commandAuthorized: true,
+    });
+
+    expect(logVerboseMock).toHaveBeenCalledWith("line: drop quoted context (mode=allowlist)");
   });
 
   it("keeps a quote from a sender named only through a static access group", async () => {

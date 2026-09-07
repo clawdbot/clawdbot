@@ -30,6 +30,7 @@ import {
 import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import { resolveAgentRoute, resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { evaluateSupplementalContextVisibility } from "openclaw/plugin-sdk/security-runtime";
 import {
   normalizeOptionalString,
   normalizeStringEntries,
@@ -445,6 +446,26 @@ async function finalizeLineInboundContext(params: {
     envelope: envelopeOptions,
   });
 
+  const contextVisibilityMode = resolveChannelContextVisibilityMode({
+    cfg: params.cfg,
+    channel: "line",
+    accountId: params.account.accountId,
+  });
+  // A quote the policy drops leaves no trace of its own: core filters silently, and an
+  // operator cannot otherwise tell a policy decision apart from a quote this account no
+  // longer remembers. Ask the owner of the rule rather than re-deriving it here, so the
+  // `allowlist_quote` exception cannot drift out of this log line.
+  if (
+    quoteFacts &&
+    !evaluateSupplementalContextVisibility({
+      mode: contextVisibilityMode,
+      kind: "quote",
+      senderAllowed: quoteFacts.senderAllowed,
+    }).include
+  ) {
+    logVerbose(`line: drop quoted context (mode=${contextVisibilityMode})`);
+  }
+
   const ctxPayload = (params.buildContext ?? buildChannelInboundEventContext)({
     channelIngress: params.channelIngress,
     channel: "line",
@@ -474,11 +495,7 @@ async function finalizeLineInboundContext(params: {
     },
     access: { commands: { authorized: params.commandAuthorized }, mentions: params.mentions },
     media,
-    contextVisibility: resolveChannelContextVisibilityMode({
-      cfg: params.cfg,
-      channel: "line",
-      accountId: params.account.accountId,
-    }),
+    contextVisibility: contextVisibilityMode,
     supplemental: quoteFacts ? { quote: quoteFacts } : undefined,
     extra: {
       ...params.locationContext,
