@@ -323,7 +323,7 @@ function appendHeadingSeparator(state: RenderState, nextBlockStart: number | und
     state.headingLineEnd,
   );
   if (newlineCount === undefined) {
-    appendParagraphSeparator(state);
+    appendParagraphSeparator(state, undefined, nextBlockStart);
     return;
   }
   if (newlineCount > 0) {
@@ -643,22 +643,32 @@ function closeStyle(
   }
 }
 
-function appendParagraphSeparator(state: RenderState, token?: MarkdownToken) {
+function appendParagraphSeparator(
+  state: RenderState,
+  token?: MarkdownToken,
+  nextBlockStart?: number,
+) {
   if (state.table) {
     return;
   } // Don't add paragraph separators inside tables
   if (state.env.listStack.length > 0) {
     const currentList = state.env.listStack[state.env.listStack.length - 1];
     const directListParagraphLevel = (currentList?.openLevel ?? 0) + 2;
+    const itemEnd = state.openListItems.at(-1)?.sourceEndLine;
+    // Tight wrappers still separate sibling blocks inside their owning item.
+    // Item transitions keep their existing spacing at list_item_close.
+    const hasFollowingBlock =
+      nextBlockStart !== undefined && itemEnd !== undefined && nextBlockStart < itemEnd;
     if (
-      token?.type !== "paragraph_close" ||
-      token.hidden ||
-      token.level !== directListParagraphLevel
+      !hasFollowingBlock &&
+      (token?.type !== "paragraph_close" ||
+        token.hidden ||
+        token.level !== directListParagraphLevel)
     ) {
       return;
     }
   }
-  state.text += "\n\n";
+  state.text += token?.hidden ? "\n" : "\n\n";
 }
 
 function appendTopLevelListSeparator(state: RenderState) {
@@ -999,9 +1009,7 @@ function renderTableAsCode(state: RenderState) {
 }
 
 function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
-  const nextMappedBlockStarts = state.preserveSourceBlockSpacing
-    ? computeNextMappedBlockStarts(tokens)
-    : [];
+  const nextMappedBlockStarts = computeNextMappedBlockStarts(tokens);
   for (const [tokenIndex, token] of tokens.entries()) {
     const inlineStyle = INLINE_STYLE_BY_TOKEN.get(token.type);
     if (inlineStyle) {
@@ -1068,7 +1076,7 @@ function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
         appendText(state, "\n");
         break;
       case "paragraph_close":
-        appendParagraphSeparator(state, token);
+        appendParagraphSeparator(state, token, nextMappedBlockStarts[tokenIndex]);
         break;
       case "heading_open":
         state.headingLineEnd = token.map?.[1];

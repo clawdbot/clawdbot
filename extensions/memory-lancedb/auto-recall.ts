@@ -5,7 +5,6 @@ import {
   type Embeddings,
   isMemoryRecallTimeoutError,
   MemoryRecallEmbeddingError,
-  runWithTimeout,
 } from "./embeddings.js";
 import type { MemoryDB } from "./lancedb-store.js";
 import { dropMediaNoteLines } from "./memory-capture-sanitization.js";
@@ -15,6 +14,7 @@ import {
   formatRelevantMemoriesContext,
   normalizeRecallQuery,
 } from "./memory-policy.js";
+import { startMemoryRecall } from "./recall-service.js";
 
 const AUTO_RECALL_TIMEOUT_MS = 15_000;
 const AUTO_RECALL_OVERFETCH_LIMIT = 10;
@@ -84,34 +84,19 @@ export function createAutoRecallHook(params: {
       if (!recallQuery) {
         return undefined;
       }
-      let recallPhase: "embedding" | "search" = "embedding";
       toolAuthority.assertActive();
-      const recall = await runWithTimeout({
+      const recallOperation = startMemoryRecall({
         timeoutMs: AUTO_RECALL_TIMEOUT_MS,
-        task: async (deadlineAtMs) => {
-          let vector: number[];
-          try {
-            vector = await params.embeddings.embed(
-              agentId,
-              recallQuery,
-              currentCfg.embedding,
-              Math.max(1, deadlineAtMs - Date.now()),
-            );
-          } catch (error) {
-            throw new MemoryRecallEmbeddingError(error);
-          }
-          toolAuthority.assertActive();
-          // Keep one end-to-end deadline, but only let embedding timeouts trip
-          // the shared breaker. LanceDB stalls remain retryable next turn.
-          recallPhase = "search";
-          return await params.db.search(agentId, vector, AUTO_RECALL_OVERFETCH_LIMIT, 0.3, {
-            timeoutMs: Math.max(0, deadlineAtMs - Date.now()),
-          });
-        },
+        embed: (timeoutMs) =>
+          params.embeddings.embed(agentId, recallQuery, currentCfg.embedding, timeoutMs()),
+        beforeSearch: () => toolAuthority.assertActive(),
+        search: (vector, timeoutMs) =>
+          params.db.search(agentId, vector, AUTO_RECALL_OVERFETCH_LIMIT, 0.3, { timeoutMs }),
       });
+      const recall = await recallOperation.result;
       toolAuthority.assertActive();
       if (recall.status === "timeout") {
-        if (recallPhase === "embedding") {
+        if (recallOperation.phase === "embedding") {
           params.recordCooldown(
             agentId,
             `auto-recall timed out after ${Math.round(AUTO_RECALL_TIMEOUT_MS / 1000)}s`,

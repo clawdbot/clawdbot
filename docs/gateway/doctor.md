@@ -78,6 +78,29 @@ To review changes before writing, open the config file first:
 cat ~/.openclaw/openclaw.json
 ```
 
+## Schema publication during a 2026.9.2 update
+
+When OpenClaw 2026.9.2 drives an update that needs a newer shared-state schema,
+Doctor applies the migration content and reports
+`schema content applied; version publication deferred until update run <id> finishes`.
+The old updater can finish its ledger access, while the new Gateway uses the
+migrated content. Publication waits until all affected terminal runs are at least
+five minutes old; a running row unchanged for more than 30 minutes counts as
+abandoned. Every writable database open follows this rule, and the Gateway
+watcher schedules publication after the deadline.
+
+Ordinary CLI commands, including Doctor, remain usable while that Gateway runs.
+Applied content counts as ready; only the owning Gateway, or a writable opener
+when no Gateway owns the state directory, publishes the version after the grace.
+
+Deferral does not cover agent-database migrations. Doctor reports
+`update-schema-bump-unfenced` if one is pending, if the required shared-state
+metadata table is missing, or if the content migration fails. Follow the
+[manual update sequence](/install/updating#updating-from-2026.9.2-across-a-schema-bump)
+from the refusal. See [Database schemas](/reference/database-schemas#schema-bumps-and-older-updaters)
+for the publication contract and the remaining risk for an old CLI stalled
+beyond the grace period.
+
 ## Read-only lint mode
 
 `openclaw doctor --lint` is the automation-friendly sibling of
@@ -260,6 +283,8 @@ That stages grounded durable candidates into the short-term dreaming store while
     When a readable active config can be fully migrated, Doctor preserves it before considering last-known-good recovery. This includes legacy multi-agent rosters with a `default: true` owner: unrelated settings and the original agent ownership survive the migration.
 
     Per-agent migrations apply to both keyed `agents.entries` and legacy `agents.list` rosters, including rosters that already set `agents.ownership: "explicit"`. For example, Doctor preserves an agent's legacy `memorySearch` settings under `memory.search` and converts `sandbox.perSession` to `sandbox.scope`. Existing values at the current config paths take precedence.
+
+    For legacy rosters with multiple agents and no resolvable ambient owner, Doctor seeds `agents.defaults.systemAgent.agentId` from a uniquely marked `default: true` agent, or `main` when present. Sole-agent rosters and legacy default markers already honored by the runtime need no owner repair and produce no missing-owner advice. Explicit fleet ownership disables the legacy default-marker fallback, so those rosters may still need repair. Doctor also pins `agents.defaults.heartbeat.agentId` only when heartbeat enrollment would otherwise be unresolved; existing heartbeat owners, shared defaults, and per-agent enrollment are preserved. These changes are reported and saved by `doctor --fix`, including the update-time doctor pass. If no default can be identified, configure the system-agent owner explicitly.
 
     <Note>
       Doctor only carries automatic migrations for roughly two months after a

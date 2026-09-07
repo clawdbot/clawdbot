@@ -13,6 +13,8 @@ export interface Skill {
   readContent?: string;
   filePath: string;
   baseDir: string;
+  /** @deprecated Ignored; retained for API compatibility until the next Plugin SDK major. */
+  promptVersion?: string;
   sourceInfo: SourceInfo;
   disableModelInvocation: boolean;
   // Preserve legacy source reads while keeping the canonical upstream shape.

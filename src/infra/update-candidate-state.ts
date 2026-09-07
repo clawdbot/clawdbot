@@ -5,9 +5,11 @@ import type { DatabaseSync } from "node:sqlite";
 import { z } from "zod";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runCommandBuffered } from "../process/exec.js";
+import type { OpenClawSchemaVersions } from "../state/openclaw-schema-versions.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import { resolveOpenClawRegisteredAgentDatabasePath } from "../state/openclaw-state-db.paths.js";
+import { readStateSchemaContentVersion } from "../state/openclaw-state-schema-publication.js";
 import { sha256Hex } from "./crypto-digest.js";
 import { resolveUserPath } from "./home-dir.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
@@ -19,7 +21,11 @@ import { prepareSqliteReadOnlyLocationSyncInProcess } from "./sqlite-readonly-lo
 import { readSqliteUserVersion } from "./sqlite-user-version.js";
 
 export const UpdateStateSchemaVersionsSchema = z.array(
-  z.object({ path: z.string(), userVersion: z.number().nullable() }),
+  z.object({
+    path: z.string(),
+    userVersion: z.number().nullable(),
+    contentVersion: z.number().optional(),
+  }),
 );
 export type UpdateStateSchemaVersion = z.infer<typeof UpdateStateSchemaVersionsSchema>[number];
 type StateInput = { stateDir: string; config: OpenClawConfig; env?: NodeJS.ProcessEnv };
@@ -28,14 +34,45 @@ type CandidateStateDatabase = Pick<
   "agent_databases" | "agent_database_leases" | "state_leases"
 >;
 
+/** Older inspection workers report only the published version; agent stores never defer it. */
+export function resolveUpdateStateContentVersion(entry: UpdateStateSchemaVersion): number | null {
+  return entry.contentVersion ?? entry.userVersion;
+}
+
 export function updateStateSchemaVersionsMatch(
   before: readonly UpdateStateSchemaVersion[],
   after: readonly UpdateStateSchemaVersion[],
+  params: { sharedPath: string; candidateSchemaVersions?: OpenClawSchemaVersions },
 ): boolean {
-  const versions = new Map(after.map((entry) => [entry.path, entry.userVersion]));
+  const versions = new Map(
+    after.map((entry) => [entry.path, resolveUpdateStateContentVersion(entry)]),
+  );
+  const candidate = params.candidateSchemaVersions;
+  if (!candidate) {
+    return (
+      before.length === after.length &&
+      before.every((entry) => versions.get(entry.path) === resolveUpdateStateContentVersion(entry))
+    );
+  }
+  const baseline = new Map(
+    before.map((entry) => [entry.path, resolveUpdateStateContentVersion(entry)]),
+  );
   return (
-    before.length === after.length &&
-    before.every((entry) => versions.get(entry.path) === entry.userVersion)
+    before.every(
+      (entry) =>
+        resolveUpdateStateContentVersion(entry) === null ||
+        versions.get(entry.path) === resolveUpdateStateContentVersion(entry),
+    ) &&
+    after.every((entry) => {
+      const version = resolveUpdateStateContentVersion(entry);
+      if (version === null || baseline.get(entry.path) === version) {
+        return true;
+      }
+      // Verification can create a store for the first time. All collected paths
+      // except the shared database are configured or registered agent stores.
+      const supported = entry.path === params.sharedPath ? candidate.state : candidate.agent;
+      return baseline.get(entry.path) == null && version === supported;
+    })
   );
 }
 
@@ -117,7 +154,7 @@ async function collectStateDatabasePaths(input: StateInput): Promise<string[]> {
   return [...files].toSorted();
 }
 
-/** Missing databases stay explicit so creation or loss cannot authorize rollback. */
+/** Missing databases stay explicit so creation is schema-checked and loss blocks rollback. */
 export async function readUpdateStateSchemaVersionsInProcess(
   input: StateInput,
 ): Promise<UpdateStateSchemaVersion[]> {
@@ -127,19 +164,22 @@ export async function readUpdateStateSchemaVersionsInProcess(
   for (const file of files) {
     versions.push({
       path: file,
-      userVersion: (await fileExists(file))
+      ...((await fileExists(file))
         ? await withStateDatabaseSnapshot(file, (location) => {
             const db = openNodeSqliteDatabase(location, { readOnly: true });
             try {
               if (file === shared) {
                 collectRegisteredPaths(db, shared, files);
               }
-              return readSqliteUserVersion(db);
+              return {
+                userVersion: readSqliteUserVersion(db),
+                ...(file === shared ? { contentVersion: readStateSchemaContentVersion(db) } : {}),
+              };
             } finally {
               db.close();
             }
           })
-        : null,
+        : { userVersion: null }),
     });
   }
   return versions;
@@ -229,6 +269,7 @@ export async function snapshotUpdateCandidateState(
       continue;
     }
     const target = targetPath(file);
+    let contentVersion: number | undefined;
     await fs.mkdir(path.dirname(target), { recursive: true, mode: 0o700 });
     const snapshot = await withStateDatabaseSnapshot(file, (sourcePath) =>
       createVerifiedSqliteSnapshot({
@@ -237,6 +278,7 @@ export async function snapshotUpdateCandidateState(
         ...(file === shared
           ? {
               transform: (db: DatabaseSync) => {
+                contentVersion = readStateSchemaContentVersion(db);
                 const queries = getNodeSqliteKysely<CandidateStateDatabase>(db);
                 // Source process leases cannot own the independently opened rehearsal copy.
                 for (const table of ["agent_database_leases", "state_leases"] as const) {
@@ -281,7 +323,11 @@ export async function snapshotUpdateCandidateState(
           : {}),
       }),
     );
-    versions.push({ path: file, userVersion: snapshot.userVersion });
+    versions.push({
+      path: file,
+      userVersion: snapshot.userVersion,
+      ...(contentVersion === undefined ? {} : { contentVersion }),
+    });
   }
   return versions;
 }

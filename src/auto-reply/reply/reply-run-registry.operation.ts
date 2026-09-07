@@ -36,16 +36,17 @@ import {
   markReplyRunDiagnosticProgress,
   notifyReplyRunEnded,
   operationsByUpstreamAbortSignal,
+  prepareReplyRunKeyUpdate,
   registerFollowupAdmissionBarrier,
   registerWaitSessionId,
   replyRunState,
+  resolveReplyOperationAgentId,
   retainStateUntilCompleteOperations,
   type ReplyRunAdmissionBarrier,
   runAfterReplyOperationClear,
   startReplyOperationSuccessorBarriers,
   updateFollowupAdmissionSessionId,
   updateSuccessorAdmissionSessionId,
-  waitForReplyBarrierSettlement,
 } from "./reply-run-registry.state.js";
 
 type ReplyBackendCancelReason = "user_abort" | "restart" | "superseded";
@@ -55,6 +56,7 @@ type ReplyOperationAbortCode = Extract<ReplyOperationResult, { kind: "aborted" }
 export function createReplyOperation(params: {
   sessionKey: string;
   sessionId: string;
+  agentId?: string;
   turnKind?: ReplyTurnKind;
   resetTriggered: boolean;
   routeThreadId?: string | number;
@@ -88,12 +90,12 @@ export function createReplyOperation(params: {
   // adoption); every closure below must read this, never params.sessionKey.
   let currentSessionKey = sessionKey;
   let currentSessionId = sessionId;
+  let currentAgentId = resolveReplyOperationAgentId(sessionKey, params.agentId);
   let phase: ReplyOperationPhase = "queued";
   let phaseBeforeGlobalLaneWait: "queued" | "running" | undefined;
   let staleExpiryReason: replyRunSettle.ReplyOperationStaleReason | undefined;
   let result: ReplyOperationResult | null = null;
   let stateCleared = false;
-  let clearBarrierSettlement: Promise<void> | undefined;
   let pendingClearBarrier: ReplyRunAdmissionBarrier | undefined;
   let retainFailureUntilComplete = false;
   let terminalRecovery = false;
@@ -102,7 +104,17 @@ export function createReplyOperation(params: {
   let toolAuthoritySnapshot: ReplyToolAuthoritySnapshot | undefined;
   let toolAuthorityRoute: { provider: string; model: string } | undefined;
   const ownerSettlement = createDeferredCore();
-  const settleOwner = () => ownerSettlement.resolve(undefined);
+  let ownerCompletionBarrier: Promise<void> | undefined;
+  const settleOwner = (): void => {
+    const pending = ownerCompletionBarrier;
+    if (!pending) {
+      ownerSettlement.resolve(undefined);
+      return;
+    }
+    void pending.then(() =>
+      pending === ownerCompletionBarrier ? ownerSettlement.resolve(undefined) : settleOwner(),
+    );
+  };
   const startedAtMs = Date.now();
   const lifecycleGeneration = getAgentEventLifecycleGeneration();
   let lastActivityAtMs = startedAtMs;
@@ -167,7 +179,6 @@ export function createReplyOperation(params: {
     void registeredBarrier.settled.then(() =>
       flushReplyOperationAfterClear(operation, registeredBarrier.sessionId),
     );
-    clearBarrierSettlement = registeredBarrier.settled;
   };
 
   const abortInternally = (reason?: unknown) => {
@@ -217,6 +228,9 @@ export function createReplyOperation(params: {
     },
     get sessionId() {
       return currentSessionId;
+    },
+    get agentId() {
+      return currentAgentId;
     },
     turnKind: params.turnKind ?? "visible",
     lifecycleGeneration,
@@ -400,30 +414,20 @@ export function createReplyOperation(params: {
         reason: "reply_operation:session_updated",
       });
     },
-    updateSessionKey(nextSessionKey) {
-      const normalizedNextKey = normalizeOptionalString(nextSessionKey);
-      if (!normalizedNextKey) {
-        throw new Error("Reply operations require a canonical sessionKey");
-      }
-      if (normalizedNextKey === currentSessionKey) {
+    updateSessionKey(nextSessionKey, agentId) {
+      const update = prepareReplyRunKeyUpdate(operation, nextSessionKey, agentId, stateCleared);
+      if (!update) {
         return;
       }
-      // Only a queued reservation may move slots: once the run started (or the
-      // operation settled), abort/steer/wait paths already resolved this key.
-      if (result || stateCleared || phase !== "queued") {
-        throw new Error(`Cannot rekey reply operation ${currentSessionKey} in phase ${phase}`);
-      }
-      if (replyRunState.activeRunsByKey.has(normalizedNextKey)) {
-        throw new ReplyRunAlreadyActiveError(normalizedNextKey);
-      }
-      if (replyRunState.successorAdmissionBarriersByKey.has(normalizedNextKey)) {
-        throw new ReplyRunSuccessorAdmissionBlockedError(normalizedNextKey);
-      }
       recordActivity();
+      currentAgentId = update.agentId;
+      if (update.sessionKey === currentSessionKey) {
+        return;
+      }
       const previousKey = currentSessionKey;
       replyRunState.activeRunsByKey.delete(previousKey);
       replyRunState.activeSessionIdsByKey.delete(previousKey);
-      currentSessionKey = normalizedNextKey;
+      currentSessionKey = update.sessionKey;
       replyRunState.activeRunsByKey.set(currentSessionKey, operation);
       replyRunState.activeSessionIdsByKey.set(currentSessionKey, currentSessionId);
       replyRunState.activeKeysBySessionId.set(currentSessionId, currentSessionKey);
@@ -494,26 +498,24 @@ export function createReplyOperation(params: {
       operation.complete();
     },
     completeWithAfterClearBarrier(barrier, timeoutMs) {
+      // Admission may time out to free a slot; the old writer settles only when
+      // its actual delivery/persistence barrier finishes, including repeated complete().
+      const completed = Promise.resolve(barrier).then(
+        () => {},
+        () => {},
+      );
+      ownerCompletionBarrier = ownerCompletionBarrier
+        ? Promise.all([ownerCompletionBarrier, completed]).then(() => {})
+        : completed;
       if (!result) {
         setResult({ kind: "completed" });
         phase = "completed";
       }
-      const wasAlreadyCleared = stateCleared;
-      const ownerCompletionSettlement = pendingClearBarrier
-        ? waitForReplyBarrierSettlement(barrier, timeoutMs)
-        : undefined;
       clearState(barrier, timeoutMs);
       // This barrier owns dispatch delivery and terminal persistence. Stale
       // expiry may have already cleared the slot, but recovery must still wait
       // for that old owner's durable work before admitting a queued turn.
-      const completionSettlement = wasAlreadyCleared
-        ? waitForReplyBarrierSettlement(barrier, timeoutMs)
-        : (ownerCompletionSettlement ?? clearBarrierSettlement);
-      if (completionSettlement) {
-        void completionSettlement.then(settleOwner);
-      } else {
-        settleOwner();
-      }
+      settleOwner();
     },
     fail(code, cause) {
       abortFrozenOperations.add(operation);

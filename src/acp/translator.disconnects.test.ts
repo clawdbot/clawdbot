@@ -1,18 +1,21 @@
 import { createInMemorySessionStore } from "@openclaw/acp-core/session";
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayClient } from "../gateway/client.js";
-import { createInMemoryAcpEventLedger } from "./event-ledger.js";
-import { AcpGatewayAgent } from "./translator.js";
+import { createTestAcpEventLedger } from "./event-ledger.test-support.js";
 import { createChatEvent, promptAgent } from "./translator.prompt-harness.test-support.js";
 import type { AcpAgentWaitResult } from "./translator.prompt-state.js";
-import { createAcpConnection, createAcpGateway } from "./translator.test-helpers.js";
+import {
+  createAcpConnection,
+  createAcpGateway,
+  createAcpGatewayAgent,
+} from "./translator.test-helpers.js";
 
 async function createReconnectHarness(result: AcpAgentWaitResult) {
   const sessionId = "session-1";
   const sessionKey = "agent:main:main";
   const sessionStore = createInMemorySessionStore();
   sessionStore.createSession({ sessionId, sessionKey, cwd: "/tmp" });
-  const eventLedger = createInMemoryAcpEventLedger();
+  const eventLedger = createTestAcpEventLedger();
   await eventLedger.startSession({ sessionId, sessionKey, cwd: "/tmp", complete: true });
   const connection = createAcpConnection();
   let runId: string | undefined;
@@ -22,7 +25,7 @@ async function createReconnectHarness(result: AcpAgentWaitResult) {
     }
     return method === "agent.wait" ? result : {};
   }) as GatewayClient["request"];
-  const agent = new AcpGatewayAgent(connection, createAcpGateway(request), {
+  const agent = createAcpGatewayAgent(connection, createAcpGateway(request), {
     eventLedger,
     sessionStore,
   });

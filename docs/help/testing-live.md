@@ -666,6 +666,7 @@ Live tests discover credentials the same way the CLI does. Practical implication
 
 - If the CLI works, live tests should find the same keys.
 - If a live test says "no creds", debug the same way you'd debug `openclaw models list` / model selection.
+- An OpenClaw live suite that cannot resolve its credentials must skip visibly in the reporter with Vitest test-context `skip(reason)` or fail; it must never pass green without reaching the provider, because a green run that did not reach the provider is not live evidence.
 
 - Per-agent auth profiles: SQLite credential rows in `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite` (this is what "profile keys" means in the live tests)
 - Config: `~/.openclaw/openclaw.json` (or `OPENCLAW_CONFIG_PATH`)

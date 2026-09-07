@@ -1,6 +1,10 @@
 import { listAgentWorkspaceDirs } from "../agents/workspace-dirs.js";
 import { getGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
-import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { loadInstalledPluginIndexInstallRecordsSync } from "../plugins/installed-plugin-index-record-reader.js";
+import {
+  loadPluginManifestRegistryCore,
+  type PluginManifestRegistry,
+} from "../plugins/manifest-registry.js";
 import { createPluginCache, getPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { resolvePluginControlPlaneFingerprint } from "../plugins/plugin-control-plane-context.js";
 import {
@@ -43,6 +47,31 @@ function mergeRegistries(registries: readonly PluginManifestRegistry[]): PluginM
   // Registry order carries origin precedence for channel schema ownership.
   // Preserve first discovery order while deduplicating repeated workspace views.
   return { plugins, diagnostics };
+}
+
+/** Read complete installed ownership for maintenance, including older partial index caches. */
+export function discoverConfigWidePluginManifestRegistry(params: {
+  config?: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+  workspaceDir?: string;
+  artifactPreservingReadOnly?: boolean;
+}): PluginManifestRegistry {
+  const env = params.env ?? process.env;
+  const workspaceDirs =
+    params.workspaceDir !== undefined
+      ? [params.workspaceDir]
+      : params.config
+        ? listAgentWorkspaceDirs(params.config, env)
+        : [];
+  const installRecords = loadInstalledPluginIndexInstallRecordsSync({
+    env,
+    artifactPreservingReadOnly: params.artifactPreservingReadOnly,
+  });
+  return mergeRegistries(
+    (workspaceDirs.length > 0 ? workspaceDirs : [undefined]).map((workspaceDir) =>
+      loadPluginManifestRegistryCore({ config: params.config, env, workspaceDir, installRecords }),
+    ),
+  );
 }
 
 type ResolveConfigWidePluginMetadataParams = {

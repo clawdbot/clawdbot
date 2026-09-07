@@ -164,6 +164,9 @@ output warns that matches may be incomplete. With `--json`, the response adds
 `stale: true`, plus `warning` and `action` fields. Treat an empty `results`
 array as authoritative only when `stale` is absent.
 
+The Control UI's Memories tab shows the same warning and recovery guidance
+alongside stale search results, and clears them after a fresh search.
+
 ## `memory forget`
 
 Remove identifiable memory artifacts derived from selected sessions and record
@@ -362,6 +365,10 @@ openclaw memory promote [--agent <id>] [--limit <n>] [--min-score <n>] \
 
 The CLI and scheduled dreaming sweep share the deep-phase defaults below.
 Explicit CLI flags override them for a one-off manual run.
+
+Entries with `untrusted` or `system` provenance are excluded before ranking, so
+they do not occupy preview limits or appear in `promote-explain`. Promotion still
+rechecks current provenance before writing.
 
 Ranking signals: recall frequency, retrieval relevance, query diversity,
 temporal recency, cross-day consolidation, and derived concept richness, drawn

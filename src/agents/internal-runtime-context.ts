@@ -21,6 +21,12 @@ export const OPENCLAW_RUNTIME_EVENT_HEADER = "OpenClaw runtime event.";
 /** Custom message type used for structured runtime-context messages. */
 export const OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE = "openclaw.runtime-context";
 
+/** Provenance assigned by the context producer, never inferred from its text. */
+export type RuntimeContextFragment = {
+  kind: "runtime-instruction" | "conversation-data" | "heartbeat-outcome";
+  text: string;
+};
+
 const LEGACY_INTERNAL_CONTEXT_HEADER =
   ["OpenClaw runtime context (internal):", OPENCLAW_RUNTIME_CONTEXT_NOTICE, ""].join("\n") + "\n";
 
@@ -69,18 +75,17 @@ function findDelimitedTokenLinePrefixStart(text: string, tokenIndex: number): nu
   return text[lineStart - 2] === "\r" ? lineStart - 2 : lineStart - 1;
 }
 
-function extractDelimitedBlocks(
+function stripDelimitedBlocks(
   text: string,
   options: { preserveSurroundingWhitespace?: boolean; separator?: string } = {},
-): { text: string; blocks: string[] } {
+): string {
   const begin = BEGIN_DELIMITER;
   const end = END_DELIMITER;
   let next = text;
-  const blocks: string[] = [];
   for (;;) {
     const start = findDelimitedTokenIndex(next, begin, 0);
     if (start === -1) {
-      return { text: next, blocks };
+      return next;
     }
 
     let cursor = start + begin.token.length;
@@ -109,13 +114,12 @@ function extractDelimitedBlocks(
       ? next.slice(0, blockStart)
       : next.slice(0, start).trimEnd();
     if (finish === -1 || depth !== 0) {
-      return { text: before, blocks };
+      return before;
     }
     let blockEnd = finish + end.token.length;
     while (next[blockEnd] === " " || next[blockEnd] === "\t") {
       blockEnd += 1;
     }
-    blocks.push(next.slice(start, blockEnd).trim());
     const after = options.preserveSurroundingWhitespace
       ? next.slice(blockEnd)
       : next.slice(blockEnd).trimStart();
@@ -258,25 +262,13 @@ export function stripInternalRuntimeContext(
   ) {
     return text;
   }
-  const withoutDelimitedBlocks = extractDelimitedBlocks(text, options).text.replace(
+  const withoutDelimitedBlocks = stripDelimitedBlocks(text, options).replace(
     END_DELIMITER.pattern,
     "",
   );
   return stripRuntimeContextPromptPreface(
     stripLegacyInternalRuntimeContext(withoutDelimitedBlocks),
   );
-}
-
-/** Extract protected runtime-context blocks while returning remaining visible text. */
-export function extractInternalRuntimeContext(text: string): {
-  text: string;
-  runtimeContext?: string;
-} {
-  const extracted = extractDelimitedBlocks(text);
-  return {
-    text: extracted.text,
-    ...(extracted.blocks.length > 0 ? { runtimeContext: extracted.blocks.join("\n\n") } : {}),
-  };
 }
 
 /** Return true when text contains current or legacy runtime-context markers. */
@@ -294,7 +286,7 @@ export function hasInternalRuntimeContext(text: string): boolean {
 }
 
 /** Identifies hidden runtime context independently of its queue or transcript owner. */
-export function isOpenClawRuntimeContextCustomMessage(message: unknown): boolean {
+function isOpenClawRuntimeContextCustomMessage(message: unknown): boolean {
   if (!message || typeof message !== "object") {
     return false;
   }
@@ -312,10 +304,34 @@ export function stripRuntimeContextCustomMessages<T>(messages: T[]): T[] {
   return messages.filter((message) => !isOpenClawRuntimeContextCustomMessage(message));
 }
 
-function isUserMessage(message: unknown): boolean {
+function isUserMessage(message: unknown): message is { role: "user"; idempotencyKey?: unknown } {
   return Boolean(
     message && typeof message === "object" && (message as { role?: unknown }).role === "user",
   );
+}
+
+/** Budget and submission share the carrier projection for the exact recorded turn. */
+export function resolvePendingRuntimeContextReplay<T>(params: {
+  messages: readonly unknown[];
+  pendingContextMessages: T[];
+  persistedUserIdempotencyKey?: string;
+}) {
+  const persistedUserIndex = params.persistedUserIdempotencyKey
+    ? params.messages.findLastIndex(
+        (message) =>
+          isUserMessage(message) && message.idempotencyKey === params.persistedUserIdempotencyKey,
+      )
+    : -1;
+  const replayPersistedCarrier =
+    persistedUserIndex >= 0 &&
+    isOpenClawRuntimeContextCustomMessage(params.messages[persistedUserIndex + 1]);
+  return {
+    persistedUserIndex,
+    replayPersistedCarrier,
+    pendingContextMessages: replayPersistedCarrier
+      ? stripRuntimeContextCustomMessages(params.pendingContextMessages)
+      : params.pendingContextMessages,
+  };
 }
 
 type RuntimeContextPromptOwner = { user?: unknown; transcriptUser?: unknown; release: () => void };

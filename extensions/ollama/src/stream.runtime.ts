@@ -32,6 +32,7 @@ import {
   MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE,
   notifyProviderHttpResponse,
   parseTerminalToolCallArguments,
+  sortPromptCacheToolsByName,
 } from "openclaw/plugin-sdk/provider-transport-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
@@ -427,6 +428,7 @@ interface OllamaChatResponse extends Record<string, unknown> {
   total_duration?: number;
   load_duration?: number;
   prompt_eval_count?: number;
+  prompt_eval_cached_count?: number;
   prompt_eval_duration?: number;
   eval_count?: number;
   eval_duration?: number;
@@ -501,6 +503,10 @@ function resolveUsageCount(
     return estimate;
   }
   return 0;
+}
+
+function resolveOptionalUsageCount(value: number | undefined): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
 type InputContentPart =
@@ -794,7 +800,7 @@ function extractOllamaTools(tools: Tool[] | undefined): OllamaTool[] {
     return [];
   }
   const result: OllamaTool[] = [];
-  for (const tool of tools) {
+  for (const tool of sortPromptCacheToolsByName(tools)) {
     if (typeof tool.name !== "string" || !tool.name) {
       continue;
     }
@@ -848,13 +854,27 @@ export function buildAssistantMessage(
     }
   }
 
+  const promptTokens = resolveUsageCount(response.prompt_eval_count, usageFallback?.input);
+  const outputTokens = resolveUsageCount(response.eval_count, usageFallback?.output);
+  const reportedCacheRead = resolveOptionalUsageCount(response.prompt_eval_cached_count);
+  // Ollama includes cached tokens in prompt_eval_count; OpenClaw records input as uncached.
+  const cacheRead =
+    reportedCacheRead === undefined ? undefined : Math.min(reportedCacheRead, promptTokens);
+
   return buildStreamAssistantMessage({
     model: modelInfo,
     content,
     stopReason: resolveOllamaStopReason(response),
     usage: buildUsageWithNoCost({
-      input: resolveUsageCount(response.prompt_eval_count, usageFallback?.input),
-      output: resolveUsageCount(response.eval_count, usageFallback?.output),
+      input: promptTokens - (cacheRead ?? 0),
+      output: outputTokens,
+      ...(cacheRead === undefined
+        ? {}
+        : {
+            cacheRead,
+            cacheWrite: 0,
+            totalTokens: promptTokens + outputTokens,
+          }),
     }),
   });
 }
@@ -953,6 +973,13 @@ function resolveOllamaRequestTimeoutMs(
   return typeof raw === "number" && Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : undefined;
 }
 
+type OllamaStreamOptions = NonNullable<Parameters<StreamFn>[2]> & {
+  topP?: number;
+  frequencyPenalty?: number;
+  presencePenalty?: number;
+  seed?: number;
+};
+
 function createRawOllamaStreamFn(
   baseUrl: string,
   defaultHeaders?: Record<string, string>,
@@ -961,7 +988,7 @@ function createRawOllamaStreamFn(
   const chatUrl = resolveOllamaChatUrl(baseUrl);
   const ssrfPolicy = buildOllamaBaseUrlSsrFPolicy(chatUrl);
 
-  return (model, context, options) => {
+  return (model, context, options?: OllamaStreamOptions) => {
     const stream = createAssistantMessageEventStream();
 
     const run = async () => {
@@ -983,6 +1010,18 @@ function createRawOllamaStreamFn(
         }
         if (typeof options?.maxTokens === "number") {
           ollamaOptions.num_predict = options.maxTokens;
+        }
+        if (typeof options?.topP === "number") {
+          ollamaOptions.top_p = options.topP;
+        }
+        if (typeof options?.frequencyPenalty === "number") {
+          ollamaOptions.frequency_penalty = options.frequencyPenalty;
+        }
+        if (typeof options?.presencePenalty === "number") {
+          ollamaOptions.presence_penalty = options.presencePenalty;
+        }
+        if (typeof options?.seed === "number") {
+          ollamaOptions.seed = options.seed;
         }
         if (options?.stop && options.stop.length > 0) {
           ollamaOptions.stop = options.stop;

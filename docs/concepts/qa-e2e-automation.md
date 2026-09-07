@@ -823,7 +823,7 @@ The SUT manifest below intentionally narrows the bundled Slack plugin's
 production install (`extensions/slack/src/setup-shared.ts:12`) to the
 permissions and events covered by the live Slack QA suite. For the
 production-channel setup as users see it, see
-[Slack channel quick setup](/channels/slack#quick-setup); the QA Driver/SUT
+[Slack channel quick setup](/channels/slack/setup#quick-setup); the QA Driver/SUT
 pair is intentionally separate because the lane needs two distinct bot user
 ids in one workspace.
 
@@ -1418,6 +1418,10 @@ the suite output and whose artifact paths are resolved relative to that
 producer `qa-evidence.json`. When `qa suite` is reached through `qa run
 --qa-profile`, the same `qa-evidence.json` also includes the profile
 scorecard summary for the selected taxonomy categories.
+
+`qa confidence-report` keeps `productImpact` and `qaImpact` annotations in their
+own Markdown table cells, collapsing whitespace for display. The JSON summary
+preserves the annotation values, including internal line breaks.
 
 Treat coverage output as a discovery aid, not a gate replacement; the
 selected scenario still needs the right provider mode, live transport,

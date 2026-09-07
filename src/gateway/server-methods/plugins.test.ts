@@ -27,6 +27,9 @@ vi.mock("../../plugins/management-service.js", () => ({
 vi.mock("../../plugins/management-mutations.js", () => ({
   installManagedPlugin: (...args: unknown[]) => managementMocks.install(...args),
   setManagedPluginEnabled: (...args: unknown[]) => managementMocks.setEnabled(...args),
+}));
+
+vi.mock("../../plugins/management-uninstall.js", () => ({
   uninstallManagedPlugin: (...args: unknown[]) => managementMocks.uninstall(...args),
 }));
 

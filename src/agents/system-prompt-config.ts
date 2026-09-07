@@ -8,7 +8,6 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildTtsSystemPromptHint } from "../tts/tts-settings.js";
 import { resolveMainSessionDelegationMode } from "./delegation-guidance.js";
-import { resolveOwnerDisplaySetting } from "./owner-display.js";
 import { buildAgentSystemPrompt } from "./system-prompt.js";
 import { resolveEffectiveToolFsWorkspaceOnly } from "./tool-fs-policy.js";
 
@@ -53,10 +52,9 @@ function resolveAgentSystemPromptConfig(params: {
   sourceReplyDeliveryMode?: AgentSystemPromptRenderParams["sourceReplyDeliveryMode"];
 }): ResolvedAgentSystemPromptConfig {
   const { config, agentId, sessionKey, sourceReplyDeliveryMode } = params;
-  const ownerDisplay = resolveOwnerDisplaySetting(config);
   return {
-    ownerDisplay: ownerDisplay.ownerDisplay,
-    ownerDisplaySecret: ownerDisplay.ownerDisplaySecret,
+    ownerDisplay: "raw",
+    ownerDisplaySecret: undefined,
     subagentDelegationMode: resolveMainSessionDelegationMode({ config, agentId, sessionKey }),
     ttsHint: config
       ? buildTtsSystemPromptHint(config, agentId, {

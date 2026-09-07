@@ -12,6 +12,7 @@ import {
 import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import { VERSION } from "../../version.js";
 import { runDaemonRestart } from "../daemon-cli/lifecycle.js";
+import { readUpdateConfigSnapshot } from "./update-command-config-snapshot.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-managed-context.js";
 import { finishUpdate } from "./update-command-post-update.js";
 import { UpdateCommandFailure } from "./update-command-result.js";
@@ -121,6 +122,11 @@ export function registerGenerationRecoveryTests(
       );
       const candidateConfig = JSON.parse(await fs.readFile(configPath, "utf8"));
       candidateConfig.meta.lastTouchedVersion = "9999.1.1";
+      await fs.writeFile(configPath, JSON.stringify(candidateConfig));
+      const activationConfig = {
+        ...(await readUpdateConfigSnapshot(configPath)),
+        raw: configSnapshot.raw,
+      };
       if (contentChanged) {
         candidateConfig.gateway.port = 19306;
       }
@@ -175,9 +181,11 @@ export function registerGenerationRecoveryTests(
       };
       let completedStatus: string | undefined;
       const error = await finishUpdate({
+        mutationStarted: true,
         result,
         root,
         configSnapshot,
+        activationConfig,
         installKindChanged: false,
         requestedChannel: null,
         storedChannel: "stable",

@@ -33,6 +33,8 @@ const mockState = vi.hoisted(() => ({
   gateways: [] as MockGatewayClient[],
   gatewayAuth: [] as GatewayClientAuth[],
   gatewayOptions: [] as GatewayClientOptions[],
+  sqliteEventLedgers: [] as unknown[],
+  agentOptions: [] as unknown[],
   agentSideConnectionCtor: vi.fn(),
   closeAgentSideConnection: null as (() => void) | null,
   closeAcpInput: null as (() => void) | null,
@@ -212,7 +214,11 @@ vi.mock("../state/openclaw-state-db.js", () => ({
 }));
 
 vi.mock("./event-ledger.js", () => ({
-  createSqliteAcpEventLedger: vi.fn(() => ({})),
+  createSqliteAcpEventLedger: vi.fn(() => {
+    const ledger = { kind: "sqlite-acp-event-ledger" };
+    mockState.sqliteEventLedgers.push(ledger);
+    return ledger;
+  }),
 }));
 
 vi.mock("../infra/net/proxy/proxy-lifecycle.js", () => ({
@@ -222,6 +228,10 @@ vi.mock("../infra/net/proxy/proxy-lifecycle.js", () => ({
 
 vi.mock("./translator.js", () => ({
   AcpGatewayAgent: class {
+    constructor(_connection: unknown, _gateway: unknown, opts: unknown) {
+      mockState.agentOptions.push(opts);
+    }
+
     start(): void {
       mockState.agentStart();
     }
@@ -368,6 +378,8 @@ describe("serveAcpGateway startup", () => {
     mockState.gateways.length = 0;
     mockState.gatewayAuth.length = 0;
     mockState.gatewayOptions.length = 0;
+    mockState.sqliteEventLedgers.length = 0;
+    mockState.agentOptions.length = 0;
     mockState.agentSideConnectionCtor.mockReset();
     mockState.closeAgentSideConnection = null;
     mockState.closeAcpInput = null;
@@ -414,6 +426,24 @@ describe("serveAcpGateway startup", () => {
 
       expect(mockState.agentSideConnectionCtor).not.toHaveBeenCalled();
       await emitHelloAndWaitForAgentSideConnection();
+      await stopServeWithSigint(signalHandlers, servePromise);
+    } finally {
+      onceSpy.mockRestore();
+    }
+  });
+
+  it("injects the server-owned SQLite event ledger into the ACP agent", async () => {
+    const { signalHandlers, onceSpy } = captureProcessSignalHandlers();
+
+    try {
+      const servePromise = serveAcpGateway({});
+      await emitHelloAndWaitForAgentSideConnection();
+
+      expect(mockState.sqliteEventLedgers).toHaveLength(1);
+      expect((mockState.agentOptions[0] as { eventLedger?: unknown }).eventLedger).toBe(
+        mockState.sqliteEventLedgers[0],
+      );
+
       await stopServeWithSigint(signalHandlers, servePromise);
     } finally {
       onceSpy.mockRestore();

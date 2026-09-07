@@ -15,7 +15,6 @@ import {
   type GatewayRestartSnapshot,
 } from "../daemon-cli/restart-health.js";
 import type { UpdateCommandOptions } from "./shared.js";
-import { runUpdateInferenceProbe } from "./update-command-inference.js";
 import type { PostUpdateLaunchAgentRecoveryResult } from "./update-command-launch-agent-recovery.js";
 import {
   formatPostUpdateGatewayRecoveryInstructions,
@@ -122,28 +121,11 @@ export async function verifyUpdatedGateway(params: {
   const serviceRunning = !params.requireRunningService || health.runtime.status === "running";
   if (health.healthy && serviceRunning && readyz) {
     params.onVerified?.(Date.now());
-    const inference = await runUpdateInferenceProbe({
-      root: params.result.root,
-      env: params.serviceEnv,
-      nodeRunner: params.nodeRunner,
-      ...(params.signal ? { signal: params.signal } : {}),
-    });
-    params.signal?.throwIfAborted();
     if (params.opts.run) {
-      recordUpdateRunVerification(
-        params.opts.run.runId,
-        { inferenceProbe: inference ? "passed" : "unavailable" },
-        { env: params.opts.run.env },
-      );
       recordUpdateRunStep(
         params.opts.run.runId,
         { step: "gateway verification", status: "completed", endedAtMs: Date.now() },
         { env: params.opts.run.env },
-      );
-    }
-    if (!inference && !params.opts.json) {
-      defaultRuntime.log(
-        theme.warn("Inference: unavailable (advisory; Gateway verification passed)."),
       );
     }
     if (!params.opts.json) {

@@ -1,11 +1,47 @@
 // Discord tests cover access plugin behavior.
 import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
+import { createDiscordLivePolicyReader } from "../monitor/live-policy.js";
 import { authorizeDiscordVoiceIngress } from "./access.js";
 
 const baseCfg = { commands: { useAccessGroups: true } } as OpenClawConfig;
 
 describe("authorizeDiscordVoiceIngress", () => {
+  it("applies published guild policy over retained voice startup settings", async () => {
+    let cfg: OpenClawConfig = {
+      channels: { discord: { groupPolicy: "allowlist", guilds: {} } },
+    };
+    const readPolicy = createDiscordLivePolicyReader({
+      cfg,
+      accountId: "default",
+      token: "synthetic-token",
+      readConfig: () => cfg,
+    });
+    const params = {
+      readPolicy,
+      cfg,
+      discordConfig: {},
+      accountId: "default",
+      guildId: "111",
+      channelId: "222",
+      channelSlug: "",
+      memberRoleIds: [],
+      sender: { id: "333" },
+    };
+    expect((await authorizeDiscordVoiceIngress(params)).ok).toBe(false);
+    cfg = {
+      channels: {
+        discord: {
+          groupPolicy: "allowlist",
+          guilds: { "111": { channels: { "222": { users: ["333"] } } } },
+        },
+      },
+    };
+    expect((await authorizeDiscordVoiceIngress(params)).ok).toBe(true);
+    cfg = { channels: { discord: { groupPolicy: "disabled", guilds: {} } } };
+    expect((await authorizeDiscordVoiceIngress(params)).ok).toBe(false);
+  });
+
   it("blocks speakers outside the configured channel user allowlist", async () => {
     const access = await authorizeDiscordVoiceIngress({
       cfg: baseCfg,

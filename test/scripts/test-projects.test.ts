@@ -1412,7 +1412,12 @@ describe("scripts/test-projects changed-target routing", () => {
       [".github/workflows/mantis-slack-desktop-smoke.yml", packageAcceptanceTargets],
       [
         ".github/workflows/mantis-web-ui-chat-proof.yml",
-        ["test/scripts/mantis-web-ui-chat-proof-workflow.test.ts", ...packageAcceptanceTargets],
+        [
+          "test/scripts/mantis-web-ui-chat-proof-workflow.test.ts",
+          ...packageAcceptanceTargets,
+          "test/scripts/mantis-request-proof.test.ts",
+          "test/scripts/mantis-telegram-proof.test.ts",
+        ],
       ],
     ]);
 
@@ -3014,6 +3019,23 @@ describe("scripts/test-projects changed-target routing", () => {
         "unknown/file.txt",
       ]),
     ).toStrictEqual([]);
+  });
+
+  it("fails safe for raw Git paths that explicit-path normalization would rewrite", () => {
+    for (const changedPath of [
+      " scripts/changed-lanes.mts",
+      String.raw`scripts\changed-lanes.mts`,
+    ]) {
+      expect(
+        resolveChangedTestTargetPlanForArgs(
+          ["--changed", "origin/main"],
+          process.cwd(),
+          () => [changedPath],
+          { broad: true },
+        ),
+        changedPath,
+      ).toEqual({ mode: "broad", targets: [] });
+    }
   });
 
   it("keeps unknown root surface skip reasons available to changed-mode callers", () => {

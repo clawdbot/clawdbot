@@ -66,12 +66,22 @@ async function createContext(
   };
 }
 
-function createLiveSession(): CliBackendLiveSessionCapability {
+function createLiveSession(cleanup?: () => Promise<void>): CliBackendLiveSessionCapability {
   let current: CliBackendLiveSessionHandle | undefined;
+  let retiredCleanup: Promise<void> | undefined;
   return {
     fingerprint: "synthetic-process-policy",
     current: () => current,
+    restart: async () => {
+      const previous = current;
+      previous?.close("restart");
+      await previous?.waitForExit();
+      await retiredCleanup;
+    },
     register: (handle) => {
+      if (retiredCleanup) {
+        throw new Error("Previous CLI live session cleanup has not settled.");
+      }
       current = handle;
       handles.add(handle);
     },
@@ -79,6 +89,14 @@ function createLiveSession(): CliBackendLiveSessionCapability {
     remove: (handle) => {
       if (current === handle) {
         current = undefined;
+        if (cleanup) {
+          retiredCleanup = handle
+            .waitForExit()
+            .then(cleanup)
+            .then(() => {
+              retiredCleanup = undefined;
+            });
+        }
       }
     },
   };
@@ -148,24 +166,33 @@ describe("Claude native stdio boundary", () => {
     },
   );
 
-  it("starts a fresh process when the host execution fingerprint changes", async () => {
-    const liveSession = createLiveSession();
+  it("starts a fresh process after host cleanup when the execution fingerprint changes", async () => {
+    const gate = createDeferred<void>();
+    const cleanup = vi.fn(() => gate.promise);
+    const liveSession = createLiveSession(cleanup);
     const context = await createContext("normal", { liveSession });
     const first = resultDetail(await collect(context));
     liveSession.fingerprint = "changed-authoritative-prompt";
-    const second = resultDetail(
-      await collect({
-        ...context,
-        useResume: true,
-        systemPrompt: "changed authoritative instructions",
-      }),
-    );
-    expect(second.pid).not.toBe(first.pid);
-    expect(second.turn).toBe(1);
-    expect(second.initialize).toMatchObject({
-      appendSystemPrompt: "changed authoritative instructions",
+    const pending = collect({
+      ...context,
+      useResume: true,
+      systemPrompt: "changed authoritative instructions",
     });
-    expect(() => process.kill(Number(first.pid), 0)).toThrow();
+    void pending.catch(() => {});
+    try {
+      await vi.waitFor(() => expect(cleanup).toHaveBeenCalledOnce());
+      expect(liveSession.current()).toBeUndefined();
+      gate.resolve();
+      const second = resultDetail(await pending);
+      expect(second.pid).not.toBe(first.pid);
+      expect(second.turn).toBe(1);
+      expect(second.initialize).toMatchObject({
+        appendSystemPrompt: "changed authoritative instructions",
+      });
+      expect(() => process.kill(Number(first.pid), 0)).toThrow();
+    } finally {
+      gate.resolve();
+    }
   });
 
   it("refuses process startup when the admitted owner rejects capture activation", async () => {

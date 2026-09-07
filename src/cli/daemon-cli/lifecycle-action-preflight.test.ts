@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resetConfigRuntimeState } from "../../config/config.js";
+import { readConfigFileSnapshot, resetConfigRuntimeState } from "../../config/config.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { getServiceActionPreflightFailure } from "./lifecycle-action-preflight.js";
 
@@ -45,6 +45,60 @@ describe("getServiceActionPreflightFailure", () => {
     },
   );
 
+  it("allows stopping before plugin config migration while retaining the newer-writer guard", async () => {
+    await withIsolatedLifecycleState(async ({ configPath }) => {
+      const pluginRoot = path.join(path.dirname(configPath), "migration-fixture");
+      await fs.mkdir(pluginRoot);
+      await fs.writeFile(path.join(pluginRoot, "index.js"), "export default {};\n");
+      await fs.writeFile(
+        path.join(pluginRoot, "package.json"),
+        JSON.stringify({
+          name: "migration-fixture",
+          version: "2.0.0",
+          openclaw: { extensions: ["./index.js"] },
+        }),
+      );
+      await fs.writeFile(
+        path.join(pluginRoot, "openclaw.plugin.json"),
+        JSON.stringify({
+          id: "migration-fixture",
+          configSchema: {
+            type: "object",
+            required: ["current"],
+            properties: { current: { type: "boolean" } },
+            additionalProperties: false,
+          },
+        }),
+      );
+      const config = {
+        plugins: {
+          allow: ["migration-fixture"],
+          load: { paths: [pluginRoot] },
+          entries: { "migration-fixture": { enabled: true, config: { legacy: true } } },
+        },
+      };
+      await fs.writeFile(configPath, JSON.stringify(config));
+      resetConfigRuntimeState();
+      const snapshot = await readConfigFileSnapshot({ observe: false });
+      expect(snapshot.valid).toBe(false);
+      expect(
+        snapshot.issues.some((issue) => issue.path.startsWith("plugins.entries.migration-fixture")),
+      ).toBe(true);
+      expect(await getServiceActionPreflightFailure("start")).not.toBeNull();
+      expect(await getServiceActionPreflightFailure("restart")).not.toBeNull();
+      expect(await getServiceActionPreflightFailure("stop")).toBeNull();
+
+      await fs.writeFile(
+        configPath,
+        JSON.stringify({ ...config, meta: { lastTouchedVersion: "9999.1.1" } }),
+      );
+      resetConfigRuntimeState();
+      expect((await getServiceActionPreflightFailure("stop"))?.message).toContain(
+        "older than the config",
+      );
+    });
+  });
+
   it.each(["start", "restart"] as const)(
     "allows %s when no legacy credential files exist",
     async (action) => {
@@ -54,7 +108,7 @@ describe("getServiceActionPreflightFailure", () => {
     },
   );
 
-  it.each(["start", "restart"] as const)(
+  it.each(["start", "restart", "stop"] as const)(
     "renders actionable invalid-config diagnostics before %s",
     async (action) => {
       await withIsolatedLifecycleState(async ({ configPath }) => {

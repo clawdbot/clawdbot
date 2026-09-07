@@ -1,5 +1,4 @@
 import type {
-  AssistantMessage,
   AssistantMessageEvent,
   Context,
   Model,
@@ -23,7 +22,6 @@ import {
 } from "../providers/anthropic-auth-headers.js";
 import {
   applyClaudeRequestContract,
-  ANTHROPIC_CLAUDE_CODE_BILLING_SYSTEM_BLOCK,
   ANTHROPIC_CLAUDE_CODE_VERSION,
   defaultsClaudeAdaptiveThinking,
   prepareClaudeNoPrefillRequestContext,
@@ -57,27 +55,28 @@ import {
   buildAnthropicGenerationParams,
 } from "./anthropic-messages.js";
 import {
-  applyAnthropicPayloadPolicyToParams,
+  applyAnthropicRequestCacheControl,
+  buildAnthropicSystemBlocks,
   applyAnthropicContextManagementToRequest,
   isDirectAnthropicModel,
   resolveAnthropicContextManagementBetaHeader,
-  resolveAnthropicPayloadPolicy,
+  resolveAnthropicCacheOptions,
 } from "./anthropic-payload-policy.js";
 import { consumeAnthropicStream, type AnthropicStreamBlock } from "./anthropic-stream-reducer.js";
+import { createAssistantOutput } from "./assistant-output.js";
 import {
   buildGuardedModelFetch,
   resolveProviderEndpoint,
   transformTransportMessages,
 } from "./host-policy.js";
+import { resolveOpencodeSessionHeaders } from "./session-affinity.js";
 import {
   copyProviderAcceptanceObserver,
-  createEmptyTransportUsage,
   createWritableTransportEventStream,
   failTransportStream,
   finalizeTransportStream,
   mergeTransportHeaders,
   notifyProviderHttpResponse,
-  sanitizeTransportPayloadText,
 } from "./transport-stream-shared.js";
 import {
   createAbortError as createNamedAbortError,
@@ -440,6 +439,7 @@ function createAnthropicTransportClient(params: {
   options: AnthropicTransportOptions | undefined;
 }) {
   const { model, context, apiKey, options } = params;
+  const optionHeaders = resolveOpencodeSessionHeaders(model, options);
   const needsInterleavedBeta =
     (options?.interleavedThinking ?? true) && !supportsClaudeAdaptiveThinking(model);
   // Kimi's Anthropic thinking SSE is already well-formed for this parser, but
@@ -463,7 +463,7 @@ function createAnthropicTransportClient(params: {
           },
           model.headers,
           getAiTransportHost().buildCopilotDynamicHeaders(context.messages),
-          options?.headers,
+          optionHeaders,
         ),
         fetch,
       }),
@@ -484,7 +484,7 @@ function createAnthropicTransportClient(params: {
             ...(betaFeatures.length > 0 ? { "anthropic-beta": betaFeatures.join(",") } : {}),
           },
           omitFoundryBearerCredentialHeaders(model.headers),
-          options?.headers,
+          optionHeaders,
         ),
         fetch,
       }),
@@ -511,7 +511,7 @@ function createAnthropicTransportClient(params: {
             "x-app": "cli",
           },
           model.headers,
-          options?.headers,
+          optionHeaders,
         ),
         fetch,
       }),
@@ -529,7 +529,7 @@ function createAnthropicTransportClient(params: {
       ...(betaHeader ? { "anthropic-beta": betaHeader } : {}),
     },
     model.headers,
-    options?.headers,
+    optionHeaders,
   );
   return {
     client: createAnthropicMessagesClient({
@@ -568,15 +568,9 @@ async function buildAnthropicParams(
       `Anthropic Messages transport requires a positive maxTokens value for ${model.provider}/${model.id}`,
     );
   }
-  const payloadPolicy = resolveAnthropicPayloadPolicy(
-    {
-      provider: model.provider,
-      api: model.api,
-      baseUrl: model.baseUrl,
-      cacheRetention: options?.cacheRetention,
-      enableCacheControl: true,
-    },
+  const { cacheControl, supportsCacheControlOnTools } = resolveAnthropicCacheOptions(
     model,
+    options?.cacheRetention,
   );
   const replayPlan = buildAnthropicReplayPlan(context.messages, model, {
     enabled: !isOAuthToken && options?.anthropicServerCompaction === true,
@@ -606,33 +600,9 @@ async function buildAnthropicParams(
   if (!isOAuthToken && useAnthropicServerSideFallback(model)) {
     params.fallbacks = ANTHROPIC_SERVER_SIDE_FALLBACKS;
   }
-  if (isOAuthToken) {
-    params.system = [
-      // Anthropic requires this first block to route Claude subscription OAuth billing.
-      {
-        type: "text",
-        text: ANTHROPIC_CLAUDE_CODE_BILLING_SYSTEM_BLOCK,
-      },
-      {
-        type: "text",
-        text: "You are Claude Code, Anthropic's official CLI for Claude.",
-      },
-      ...(context.systemPrompt
-        ? [
-            {
-              type: "text",
-              text: sanitizeTransportPayloadText(context.systemPrompt),
-            },
-          ]
-        : []),
-    ];
-  } else if (context.systemPrompt) {
-    params.system = [
-      {
-        type: "text",
-        text: sanitizeTransportPayloadText(context.systemPrompt),
-      },
-    ];
+  const system = buildAnthropicSystemBlocks(context.systemPrompt, isOAuthToken, cacheControl);
+  if (system) {
+    params.system = system;
   }
   const convertedTools = context.tools
     ? convertAnthropicTools(context.tools, isOAuthToken)
@@ -649,7 +619,7 @@ async function buildAnthropicParams(
     }),
   );
   // Anthropic-family carriers are append-only, so they are stable cache anchors too.
-  applyAnthropicPayloadPolicyToParams(params, payloadPolicy, new Set());
+  applyAnthropicRequestCacheControl(params, cacheControl, supportsCacheControlOnTools);
   return { params, toolProjection, usedCompactionReplay: replayPlan.compaction !== undefined };
 }
 
@@ -738,16 +708,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
     const options = rawOptions as AnthropicTransportOptions | undefined;
     const { eventStream, stream } = createWritableTransportEventStream();
     void (async () => {
-      const output: AssistantMessage = {
-        role: "assistant",
-        content: [],
-        api: "anthropic-messages",
-        provider: model.provider,
-        model: model.id,
-        usage: createEmptyTransportUsage(),
-        stopReason: "stop",
-        timestamp: Date.now(),
-      };
+      const output = createAssistantOutput(model, "anthropic-messages");
       // Classifier refusals can invalidate partial output, so no event is safe
       // to expose until the terminal stop reason is known.
       const refusalBuffer = usesClaudeStreamingRefusalContract(model)

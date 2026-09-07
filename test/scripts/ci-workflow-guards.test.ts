@@ -175,7 +175,14 @@ function evaluateWorkflowExpression(
   if (source === undefined) {
     throw new Error(`workflow expression has no body: ${expression}`);
   }
-  return runInNewContext(source, {
+  // Actions permits dashes in property names; preserve quoted literals while
+  // translating those accesses for the JavaScript fixture evaluator.
+  const evaluableSource = source.replace(
+    /'(?:[^']|'')*'|\.([A-Za-z_][\w-]*)/gu,
+    (token: string, property: string | undefined) =>
+      property?.includes("-") ? `[${JSON.stringify(property)}]` : token,
+  );
+  return runInNewContext(evaluableSource, {
     always: () => true,
     failure: () => context.failed ?? false,
     cancelled: () => context.cancelled ?? false,
@@ -2464,24 +2471,31 @@ NODE
   });
 
   it.each([
-    ["macos-swift", false],
-    ["ios-build", false],
-    ["ios-build", true],
+    ["macos-swift", false, "workflow_dispatch", false, ["release", "tests"]],
+    ["ios-build", false, "workflow_dispatch", false, ["release", "tests"]],
+    ["ios-build", true, "workflow_dispatch", false, ["tests"]],
+    ["ios-build", false, "pull_request", false, ["smoke"]],
+    ["ios-build", false, "push", false, ["smoke"]],
+    ["ios-build", false, "workflow_dispatch", true, ["smoke"]],
+    ["ios-build", true, "workflow_dispatch", true, ["smoke"]],
   ] as const)(
-    "runs %s compilation independently of its native tests (historical=%s)",
-    (jobName, historical) => {
+    "runs %s native phases (historical=%s, event=%s, release_gate=%s)",
+    (jobName, historical, eventName, releaseGate, phases) => {
       const workflow = readCiWorkflow();
       const job = workflow.jobs[jobName];
       const context = {
-        eventName: "workflow_dispatch" as const,
+        eventName,
+        releaseGate,
         repository: "openclaw/openclaw",
         runAttempt: 1,
+        env: { HISTORICAL_TARGET: String(historical), MACOS_PRIMARY_PHASE: "release" },
+        fileHashes: { "apps/shared/OpenClawWatchRTC/Cargo.toml": "present" },
         preflightOutputs: {
           compatibility_target: String(historical),
           run_openclawkit_tests: "true",
+          release_scope: "full",
         },
       };
-      const phases = historical ? (["tests"] as const) : (["release", "tests"] as const);
       const matrixPhases = job.strategy.matrix.phase;
       expect(
         Array.isArray(matrixPhases)
@@ -2495,6 +2509,7 @@ NODE
       const workloads =
         jobName === "macos-swift"
           ? {
+              smoke: [],
               release: [
                 "Native state schema version contract",
                 "Swift lint",
@@ -2503,12 +2518,15 @@ NODE
               tests: [
                 "OpenClawKit Talk-trait opt-out (no ElevenLabsKit when default traits disabled)",
                 "OpenClawKit tests",
+                "Swabble tests",
                 "Swift test",
               ],
             }
           : {
+              smoke: ["Swift lint", "Build iOS app"],
               release: ["Build iOS app (Release)"],
               tests: [
+                "Test Watch RTC engine",
                 "Swift lint",
                 "Build iOS app",
                 "Run focused iOS lifecycle simulator tests",
@@ -2518,7 +2536,10 @@ NODE
       const names = [];
       for (const phase of phases) {
         const phaseContext = { ...context, matrix: { phase } };
-        const expected = historical ? ["Swift lint", "Build iOS app"] : workloads[phase];
+        const expected =
+          historical && phase === "tests"
+            ? ["Test Watch RTC engine", "Swift lint", "Build iOS app"]
+            : workloads[phase];
         names.push(evaluateWorkflowExpression(job.name, phaseContext));
         const selected = job.steps
           .filter((step: WorkflowStep) =>
@@ -2532,6 +2553,22 @@ NODE
           )
           .map((step: WorkflowStep) => step.name);
         expect(selected, phase).toEqual(expected);
+        if (jobName === "ios-build") {
+          for (const name of [
+            "Select Xcode 26",
+            "Setup Node environment",
+            "Install Watch Rust toolchain",
+            "Install iOS Swift tooling",
+          ]) {
+            const setup = expectDefined(
+              job.steps.find((step: WorkflowStep) => step.name === name),
+              name,
+            );
+            expect(
+              !setup.if || evaluateWorkflowExpression(`\${{ ${setup.if} }}`, phaseContext),
+            ).toBe(true);
+          }
+        }
       }
       // The release collector keys retained/rerun evidence by the displayed job name.
       expect(new Set(names).size).toBe(phases.length);
@@ -2540,9 +2577,116 @@ NODE
         (step: WorkflowStep) => step.name === "Verify selected CI lanes",
       );
       expect(gateStep.env.JOB_RESULTS).toContain(`${jobName}=\${{ needs.${jobName}.result }}`);
-      for (const conclusion of ["failure", "cancelled"]) {
+      for (const conclusion of ["failure", "cancelled", "skipped"]) {
         expect(
           runCiGateFixture(`preflight=success|true\n${jobName}=${conclusion}|true`).status,
+        ).toBe(1);
+      }
+    },
+  );
+
+  it.each([
+    { eventName: "pull_request", releaseGate: false, full: false },
+    { eventName: "push", releaseGate: false, full: false },
+    { eventName: "workflow_dispatch", releaseGate: true, full: false },
+    { eventName: "workflow_dispatch", releaseGate: false, full: true },
+    { eventName: "workflow_dispatch", releaseGate: false, full: true, historical: true },
+  ] as const)(
+    "retains macOS tests and one guard/cache owner for %j",
+    ({ eventName, releaseGate, full, ...target }) => {
+      const historical = "historical" in target && target.historical;
+      const job = readCiWorkflow().jobs["macos-swift"];
+      const manifest = runCiManifestFixture({
+        bundledPlanner: true,
+        eventName,
+        releaseGate,
+        runNode: false,
+        historicalCompatibility: historical,
+      });
+      expect(manifest.status, manifest.output).toBe(0);
+      expect(manifest.outputs.release_scope).toBe("full");
+      const context: Parameters<typeof evaluateWorkflowExpression>[1] = {
+        eventName,
+        releaseGate,
+        releaseScope: "",
+        repository: "openclaw/openclaw",
+        runAttempt: 1,
+        preflightOutputs: {
+          ...manifest.outputs,
+          cache_write_allowed: "true",
+        },
+        fileHashes: { "scripts/test-macos-health-render.sh": "present" },
+      };
+      const phases: string[] = Array.isArray(job.strategy.matrix.phase)
+        ? job.strategy.matrix.phase
+        : evaluateWorkflowExpression(job.strategy.matrix.phase, context);
+      expect(phases).toEqual(full ? ["release", "tests"] : ["tests"]);
+      const env = Object.fromEntries(
+        Object.entries(job.env).map(([key, value]) => [
+          key,
+          String(evaluateWorkflowExpression(value, context)),
+        ]),
+      );
+      const selectedPhases = (name: string, overrides: Partial<typeof context> = {}) => {
+        const step: WorkflowStep = expectDefined(
+          job.steps.find((candidate: WorkflowStep) => candidate.name === name),
+          name,
+        );
+        expect(step["continue-on-error"], name).not.toBe(true);
+        return phases.filter((phase) =>
+          evaluateWorkflowExpression(
+            step.if?.startsWith("${{") ? step.if : `\${{ ${step.if ?? "true"} }}`,
+            {
+              ...context,
+              env,
+              matrix: { phase },
+              steps: {
+                "swift-test": {
+                  outputs: { "debug-tests-built": phase === "tests" ? "true" : "" },
+                },
+                "swiftpm-cache": { outputs: { "cache-hit": "false" } },
+              },
+              ...overrides,
+            },
+          ),
+        );
+      };
+      for (const name of [
+        "Install XcodeGen / SwiftLint / SwiftFormat",
+        "Native state schema version contract",
+        "Swift lint",
+        "Save SwiftPM cache",
+      ]) {
+        expect(selectedPhases(name), name).toEqual([full ? "release" : "tests"]);
+      }
+      for (const name of [
+        "OpenClawKit Talk-trait opt-out (no ElevenLabsKit when default traits disabled)",
+        "OpenClawKit tests",
+        "Swift test",
+      ]) {
+        expect(selectedPhases(name), name).toEqual(["tests"]);
+      }
+      expect(selectedPhases("Swabble tests")).toEqual(historical ? [] : ["tests"]);
+      expect(selectedPhases("Swift build (release)")).toEqual(full ? ["release"] : []);
+      expect(selectedPhases("Render isolated macOS health fixtures")).toEqual(
+        full ? ["tests"] : [],
+      );
+      expect(selectedPhases("Render isolated macOS health fixtures", { cancelled: true })).toEqual(
+        [],
+      );
+      expect(
+        selectedPhases("Save SwiftPM cache", {
+          preflightOutputs: { ...context.preflightOutputs, cache_write_allowed: "false" },
+        }),
+      ).toEqual([]);
+      expect(
+        selectedPhases("Save SwiftPM cache", {
+          steps: { "swiftpm-cache": { outputs: { "cache-hit": "true" } } },
+        }),
+      ).toEqual([]);
+      for (const result of ["failure", "cancelled", "skipped"]) {
+        expect(
+          runCiGateFixture(renderCiGateEnvironment(context, { "macos-swift": result })).status,
         ).toBe(1);
       }
     },
@@ -4280,9 +4424,7 @@ NODE
     const blacksmithTasks = readTasks(blacksmithBuild);
 
     expect(source).toContain('task: useCompatibleAndroidCi ? "test-play-compat" : "test-play"');
-    expect(source).toContain(
-      '{ check_name: "android-test-third-party", task: "test-third-party" }',
-    );
+    expect(source).toContain('task: "test-third-party"');
     expect(source.match(/check_name: "android-build-play"/gu)).toHaveLength(1);
     expect(source).toContain('task: useCompatibleAndroidCi ? "build-play-compat" : "build-play"');
     expect(androidJob.name).toBe("${{ matrix.check_name || 'android' }}");
@@ -4317,6 +4459,213 @@ NODE
       "needs.preflight.outputs.use_compatible_android_ci != 'true'",
     );
     expect(nativeResourcesSetup.with).toMatchObject({ "install-bun": "false" });
+  });
+
+  describe("Android validation tiers", () => {
+    function runAndroidTask(
+      row: Record<string, unknown>,
+      context: Parameters<typeof evaluateWorkflowExpression>[1],
+      failTask = "",
+    ) {
+      const step: WorkflowStep = expectDefined(
+        readCiWorkflow().jobs.android.steps.find(
+          (candidate: WorkflowStep) => candidate.name === "Run Android ${{ matrix.task }}",
+        ),
+        "Android task runner",
+      );
+      const root = tempDirs.make("openclaw-android-tier-");
+      const callsPath = path.join(root, "gradle-calls.jsonl");
+      writeExecutable(path.join(root, "gradlew"), [
+        "#!/usr/bin/env node",
+        'require("node:fs").appendFileSync(process.env.GRADLE_CALLS, JSON.stringify(process.argv.slice(2)) + "\\n");',
+        "if (process.argv.includes(process.env.FAIL_GRADLE_TASK)) process.exit(23);",
+      ]);
+      const result = runWorkflowShellScript(expectDefined(step.run, "Android commands"), {
+        cwd: root,
+        env: {
+          ...process.env,
+          ...Object.fromEntries(
+            Object.entries(step.env ?? {}).map(([key, value]) => [
+              key,
+              String(evaluateWorkflowExpression(value, { ...context, matrix: row })),
+            ]),
+          ),
+          GITHUB_EVENT_NAME: context.eventName,
+          OPENCLAW_ROBOLECTRIC_INIT: "robolectric.gradle",
+          GRADLE_CALLS: callsPath,
+          FAIL_GRADLE_TASK: failTask,
+        },
+      });
+      const calls: string[][] = existsSync(callsPath)
+        ? readFileSync(callsPath, "utf8")
+            .trim()
+            .split("\n")
+            .map((line) => JSON.parse(line))
+        : [];
+      return { ...result, calls, tasks: calls.flat().filter((arg) => arg.startsWith(":")) };
+    }
+
+    it.each([
+      { eventName: "pull_request", releaseGate: false, full: false, legacy: false },
+      { eventName: "push", releaseGate: false, full: false, legacy: false },
+      { eventName: "workflow_dispatch", releaseGate: true, full: false, legacy: false },
+      { eventName: "workflow_dispatch", releaseGate: false, full: true, legacy: false },
+      { eventName: "workflow_dispatch", releaseGate: false, full: true, legacy: true },
+    ] as const)(
+      "executes Android test/lint and retained full-tier commands for %j",
+      ({ eventName, releaseGate, full, legacy }) => {
+        const manifest = runCiManifestFixture({
+          bundledPlanner: !legacy,
+          eventName,
+          releaseGate,
+          historicalCompatibility: true,
+          changedPaths: ["apps/android/app/src/main/java/ai/openclaw/app/Example.kt"],
+        });
+        expect(manifest.status, manifest.output).toBe(0);
+        const rows: Record<string, unknown>[] = JSON.parse(
+          expectDefined(manifest.outputs.android_matrix, "Android matrix"),
+        ).include;
+        expect(rows.map(({ task }) => task)).toEqual(
+          legacy
+            ? ["test-play-compat", "test-third-party", "build-play-compat"]
+            : [
+                "test-play",
+                "test-third-party",
+                "test-wear",
+                ...(full ? ["build-play", "build-wear"] : []),
+                "ktlint",
+              ],
+        );
+        const context = {
+          eventName,
+          releaseGate,
+          repository: "openclaw/openclaw",
+          runAttempt: 1,
+          preflightOutputs: manifest.outputs,
+        };
+        const tasks = rows.flatMap((row) => {
+          const result = runAndroidTask(row, context);
+          expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+          for (const call of result.calls) {
+            expect(call).toContain("--no-daemon");
+            expect(call).toContain("--build-cache");
+            const testCall = call.some((arg) => arg.endsWith("UnitTest"));
+            expect(call.includes("--init-script")).toBe(testCall);
+          }
+          if (row.task === "build-play") {
+            expect(result.calls.map((call) => call.filter((arg) => arg.startsWith(":")))).toEqual([
+              [":app:assemblePlayDebug", ":app:lintPlayDebug"],
+              [":app:assembleThirdPartyDebug", ":app:lintThirdPartyDebug"],
+              [":benchmark:assembleDebug", ":wear-shared:assembleDebug", ":wear-shared:lintDebug"],
+            ]);
+          }
+          return result.tasks;
+        });
+        expect(tasks.toSorted()).toEqual(
+          (legacy
+            ? [
+                ":app:testPlayDebugUnitTest",
+                ":app:testThirdPartyDebugUnitTest",
+                ":app:assemblePlayDebug",
+              ]
+            : [
+                ":app:testPlayDebugUnitTest",
+                ":wear-shared:testDebugUnitTest",
+                ":app:testThirdPartyDebugUnitTest",
+                ":wear:testDebugUnitTest",
+                ":app:lintPlayDebug",
+                ":app:lintThirdPartyDebug",
+                ":wear-shared:lintDebug",
+                ":wear:lintDebug",
+                ":app:ktlintCheck",
+                ":benchmark:ktlintCheck",
+                ":wear:ktlintCheck",
+                ":wear-shared:ktlintCheck",
+                ...(full
+                  ? [
+                      ":app:assemblePlayDebug",
+                      ":app:assembleThirdPartyDebug",
+                      ":benchmark:assembleDebug",
+                      ":wear-shared:assembleDebug",
+                      ":wear:assembleDebug",
+                    ]
+                  : []),
+              ]
+          ).toSorted(),
+        );
+        expect(new Set(tasks).size, "no duplicate lint or build invocations").toBe(tasks.length);
+        for (const result of ["failure", "cancelled", "skipped"]) {
+          expect(
+            runCiGateFixture(renderCiGateEnvironment(context, { android: result })).status,
+          ).toBe(1);
+        }
+      },
+    );
+
+    it.each([
+      { paths: ["apps/android/benchmark/src/main/Example.kt"], build: true },
+      { paths: ["apps/android/build.gradle.kts"], build: true },
+      { paths: ["apps/android/app/build.gradle.kts"], build: true },
+      { paths: ["apps/android/settings.gradle.kts"], build: true },
+      { paths: ["apps/android/gradle.properties"], build: true },
+      { paths: ["apps/android/gradle/libs.versions.toml"], build: true },
+      { paths: ["apps/android/gradle/wrapper/gradle-wrapper.properties"], build: true },
+      { paths: ["apps/android/gradlew"], build: true },
+      { paths: ["apps/android/Config/Version.properties"], build: true },
+      { paths: ["apps/android/app/src/main/java/ai/openclaw/app/Example.kt"], build: false },
+      { paths: ["apps/android/wear/src/main/Example.kt"], build: false },
+      { paths: ["docs/ci.md"], build: false },
+      { paths: [], build: true },
+      { paths: [""], build: true },
+      { paths: null, build: true },
+      { paths: undefined, build: true },
+      { paths: undefined, json: "{", build: true },
+      { paths: undefined, json: "[42]", build: true },
+    ])("retains benchmark assembly for changed or unknown inputs: %j", ({ paths, json, build }) => {
+      const manifest = runCiManifestFixture({
+        bundledPlanner: true,
+        eventName: "pull_request",
+        runNode: false,
+        changedPaths: paths,
+        ...(json ? { scopeEnv: { OPENCLAW_CI_CHANGED_PATHS_JSON: json } } : {}),
+      });
+      expect(manifest.status, manifest.output).toBe(0);
+      const rows: Record<string, unknown>[] = JSON.parse(
+        expectDefined(manifest.outputs.android_matrix, "Android matrix"),
+      ).include;
+      expect(rows).toHaveLength(4);
+      const result = runAndroidTask(
+        expectDefined(
+          rows.find(({ task }) => task === "ktlint"),
+          "Kotlin lint row",
+        ),
+        {
+          eventName: "pull_request",
+          repository: "openclaw/openclaw",
+          runAttempt: 1,
+        },
+      );
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.tasks.includes(":benchmark:assembleDebug")).toBe(build);
+    });
+
+    it.each([
+      ["test-play", ":app:testPlayDebugUnitTest"],
+      ["test-play", ":app:lintPlayDebug"],
+      ["test-third-party", ":app:lintThirdPartyDebug"],
+      ["test-wear", ":wear:lintDebug"],
+      ["ktlint", ":benchmark:assembleDebug"],
+    ])("propagates %s failure from %s", (task, failTask) => {
+      const result = runAndroidTask(
+        { task, lint: true, build_benchmark: true },
+        { eventName: "pull_request", repository: "openclaw/openclaw", runAttempt: 1 },
+        failTask,
+      );
+      expect(result.status).toBe(23);
+      if (failTask.endsWith("UnitTest")) {
+        expect(result.calls).toHaveLength(1);
+      }
+    });
   });
 
   describe("CI workflow admission", () => {
@@ -9464,7 +9813,7 @@ server.listen(0, "127.0.0.1", () => {
       const engine = workflow.jobs["ios-build"].steps.find(
         (step: WorkflowStep) => step.name === "Test Watch RTC engine",
       );
-      for (const phase of ["tests", "release"]) {
+      for (const phase of ["smoke", "tests", "release"]) {
         const context: Parameters<typeof evaluateWorkflowExpression>[1] = {
           eventName: "workflow_dispatch",
           repository: "openclaw/openclaw",
@@ -9547,15 +9896,6 @@ server.listen(0, "127.0.0.1", () => {
     expect(macosLintStep.run).toContain("swiftlint lint --config config/swiftlint.yml");
     expect(macosLintStep.run).toContain("swiftformat --lint apps/macos/Sources");
     expect(iosLintStep.run).toContain("skipping iOS lint for this frozen target");
-    expect(buildStep.run).not.toContain("for attempt in");
-    expect(buildStep.run.match(/swift build /gu)).toHaveLength(2);
-    expect(buildStep.run).toContain(
-      '[[ -d "$sparkle_framework" && ! -f "$sparkle_framework/Info.plist" ]]',
-    );
-    expect(buildStep.run).toContain("swift package --package-path apps/macos reset");
-    expect(buildStep.run.indexOf("swift package --package-path apps/macos reset")).toBeGreaterThan(
-      buildStep.run.indexOf("sparkle_framework="),
-    );
 
     const runCacheFixture = (artifactState: "no-build" | "absent" | "incomplete" | "complete") => {
       const root = tempDirs.make(`openclaw-swift-cache-${artifactState}-`);
@@ -9666,36 +10006,40 @@ exit 1
       };
     };
 
+    const releaseBuildCommand =
+      "build --package-path apps/macos --product OpenClaw --configuration release";
+    const packageResetCommand = "package --package-path apps/macos reset";
+
     const absentFramework = runBuildFixture("absent", "fail");
     expect(absentFramework.status).toBe(1);
-    expect(absentFramework.calls).toEqual([
-      "build --package-path apps/macos --product OpenClaw --configuration release",
-    ]);
+    expect(absentFramework.calls).toEqual([releaseBuildCommand]);
 
     const recovered = runBuildFixture("incomplete", "recover");
     expect(recovered.status).toBe(0);
-    expect(recovered.calls.filter((call) => call.startsWith("build "))).toHaveLength(2);
-    expect(recovered.calls.filter((call) => call.startsWith("package "))).toHaveLength(1);
+    expect(recovered.calls).toEqual([
+      releaseBuildCommand,
+      packageResetCommand,
+      releaseBuildCommand,
+    ]);
     expect(recovered.output).toContain("did not produce complete Sparkle metadata");
 
     const completeFramework = runBuildFixture("complete", "fail");
     expect(completeFramework.status).toBe(1);
-    expect(completeFramework.calls.filter((call) => call.startsWith("build "))).toHaveLength(1);
-    expect(completeFramework.calls.filter((call) => call.startsWith("package "))).toHaveLength(0);
+    expect(completeFramework.calls).toEqual([releaseBuildCommand]);
 
     const secondFailure = runBuildFixture("incomplete", "fail");
     expect(secondFailure.status).toBe(1);
-    expect(secondFailure.calls.filter((call) => call.startsWith("build "))).toHaveLength(2);
-    expect(secondFailure.calls.filter((call) => call.startsWith("package "))).toHaveLength(1);
+    expect(secondFailure.calls).toEqual([
+      releaseBuildCommand,
+      packageResetCommand,
+      releaseBuildCommand,
+    ]);
   });
 
   it("uses native macOS Swift tests and preserves the first failure", () => {
     const workflow = readCiWorkflow();
     const macosSwift = workflow.jobs["macos-swift"];
     const testStep = macosSwift.steps.find((step: WorkflowStep) => step.name === "Swift test");
-    const renderStep = macosSwift.steps.find(
-      (step: WorkflowStep) => step.name === "Render isolated macOS health fixtures",
-    );
     const buildCache = macosSwift.steps.find(
       (step: WorkflowStep) => step.id === "swift-build-cache",
     );
@@ -9707,11 +10051,6 @@ exit 1
       key: expect.stringContaining(nativeCachePrefix),
       "restore-keys": `${nativeCachePrefix}\n`,
     });
-    expect(
-      macosSwift.steps.find((step: WorkflowStep) => step.name === "Save SwiftPM cache").if,
-    ).toBe(
-      "matrix.phase == 'release' && needs.preflight.outputs.cache_write_allowed == 'true' && steps.swiftpm-cache.outputs.cache-hit != 'true'",
-    );
     const restoreMetadata = macosSwift.steps.find(
       (step: WorkflowStep) => step.name === "Restore Swift build input timestamps",
     );
@@ -9738,9 +10077,6 @@ exit 1
     );
     expect(macosSwift.env).not.toHaveProperty("SWIFT_TEST_EXECUTION");
     expect(testStep.id).toBe("swift-test");
-    expect(renderStep.if).toBe(
-      "${{ !cancelled() && steps.swift-test.outputs.debug-tests-built == 'true' && hashFiles('scripts/test-macos-health-render.sh') != '' }}",
-    );
     const currentTargetBranch = testStep.run.split('elif [[ "$HISTORICAL_TARGET" == "true" ]]')[0];
     expect(currentTargetBranch).toContain('logical_cpu="$(sysctl -n hw.logicalcpu)"');
     expect(currentTargetBranch).toContain('[[ ! "$logical_cpu" =~ ^[1-9][0-9]*$ ]]');
@@ -11333,7 +11669,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
   it.each<{
     label: string;
     changedPath: string;
-    eventName?: "pull_request" | "workflow_dispatch";
+    eventName?: "pull_request" | "push" | "workflow_dispatch";
     releaseGate?: boolean;
     legacyOutput?: boolean;
     selectedJobs: string[];
@@ -11377,6 +11713,24 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       label: "Mac artifact proof",
       changedPath: "test/scripts/mac-elevation-artifact.test.ts",
       selectedJobs: ["macos-node", "macos-swift"],
+    },
+    {
+      label: "iOS app pull request",
+      changedPath: "apps/ios/Sources/Foo.swift",
+      selectedJobs: ["ios-build"],
+    },
+    {
+      label: "iOS app main push",
+      changedPath: "apps/ios/Sources/Foo.swift",
+      eventName: "push",
+      selectedJobs: ["ios-build"],
+    },
+    {
+      label: "iOS app exact-head release gate",
+      changedPath: "apps/ios/Sources/Foo.swift",
+      eventName: "workflow_dispatch",
+      releaseGate: true,
+      selectedJobs: ["checks-windows", "ios-build", "android"],
     },
     {
       label: "shared native",
@@ -11899,11 +12253,9 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         ),
       ).include,
     ).toEqual([
-      { check_name: "android-test-play", task: "test-play" },
-      { check_name: "android-test-third-party", task: "test-third-party" },
-      { check_name: "android-test-wear", task: "test-wear" },
-      { check_name: "android-build-play", task: "build-play" },
-      { check_name: "android-build-wear", task: "build-wear" },
+      { check_name: "android-test-play", task: "test-play", lint: true },
+      { check_name: "android-test-third-party", task: "test-third-party", lint: true },
+      { check_name: "android-test-wear", task: "test-wear", lint: true },
       { check_name: "android-ktlint", task: "ktlint" },
     ]);
 
@@ -14567,7 +14919,8 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       expected: {
         "pnpm-store-warmup": false,
         "checks-node-compat": false,
-        "ios-screenshot-shard": true,
+        "ios-build": true,
+        "ios-screenshot-shard": false,
       },
     },
     {
@@ -14591,6 +14944,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       expected: {
         "pnpm-store-warmup": false,
         "checks-node-compat": false,
+        "ios-build": true,
         "ios-screenshot-shard": false,
       },
     },
@@ -14716,14 +15070,14 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       expected: { "ios-screenshot-shard": true },
     },
     {
-      label: "release gate respects screenshot scope",
+      label: "release gate without screenshot scope",
       context: { releaseGate: true, preflightOutputs: { run_ios_screenshots: "false" } },
       expected: { "ios-screenshot-shard": false },
     },
     {
-      label: "release gate selects screenshots",
+      label: "release gate keeps smoke without screenshots",
       context: { releaseGate: true },
-      expected: { "ios-screenshot-shard": true },
+      expected: { "ios-build": true, "ios-screenshot-shard": false },
     },
     {
       label: "npm-beta excludes manual screenshots",
@@ -14773,6 +15127,14 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     );
     const outcome = runCiGateFixture(renderCiGateEnvironment(context, results));
     expect(outcome.status, `${outcome.stdout}\n${outcome.stderr}`).toBe(0);
+    if (expected["ios-build"]) {
+      for (const terminal of ["failure", "cancelled", "skipped"]) {
+        const missingSmoke = runCiGateFixture(
+          renderCiGateEnvironment(context, { ...results, "ios-build": terminal }),
+        );
+        expect(missingSmoke.status, missingSmoke.stdout).toBe(1);
+      }
+    }
     if (context.preflightOutputs?.changed_core_test_paths_json) {
       for (const terminal of ["failure", "skipped"]) {
         const missingOwner = runCiGateFixture(
@@ -16799,6 +17161,84 @@ it("pins generated publisher and maturity owners before credentials and selected
     expect(publishers, file).toHaveLength(1);
     expect(publishers[0]?.index, file).toBe(publishers[0]!.length - 1);
   }
+});
+
+describe("Linux App validation routing", () => {
+  const workflow = parse(readFileSync(".github/workflows/linux-app.yml", "utf8"));
+  const linuxSteps: WorkflowStep[] = workflow.jobs.build.steps;
+  const macosSteps: WorkflowStep[] = workflow.jobs["test-macos"].steps;
+  const packagingSteps = [
+    "Stage AppImage GStreamer plugins",
+    "Prepare pinned AppImage tools",
+    "Build Linux companion bundles",
+    "Finalize AppImage",
+    "Test native first-run setup and failed Gateway startup",
+    "Test packaged AppImage runtime",
+    "Upload bundles",
+  ];
+
+  it.each(["pull_request", "workflow_dispatch"] as const)(
+    "keeps native tests required and selects packaging only for manual validation: %s",
+    (eventName) => {
+      const selected = (steps: WorkflowStep[]) =>
+        steps.filter(
+          (step) =>
+            !step.if ||
+            evaluateWorkflowExpression(`\${{ ${step.if} }}`, {
+              eventName,
+              repository: "openclaw/openclaw",
+              runAttempt: 1,
+            }),
+        );
+      const linux = selected(linuxSteps);
+      const macos = selected(macosSteps);
+      expect(workflow.jobs.build.if).toBeUndefined();
+      expect(workflow.jobs["test-macos"].if).toBeUndefined();
+      expect(workflow.jobs.build["continue-on-error"]).toBeUndefined();
+      expect(workflow.jobs["test-macos"]["continue-on-error"]).toBeUndefined();
+      for (const step of [...linuxSteps, ...macosSteps]) {
+        expect(step["continue-on-error"], step.name).toBeUndefined();
+      }
+      expect(linux.map((step) => step.run)).toContain("cargo +stable fmt --check");
+      for (const steps of [linux, macos]) {
+        expect(steps.map((step) => step.run)).toContain(
+          "cargo +stable test --locked --all-targets",
+        );
+      }
+      expect(
+        linux.find((step) => step.name === "Test packaged runtime ABI scanner")?.run,
+      ).toContain("-s apps/linux/tests -p 'test_packaged_runtime_smoke.py'");
+      for (const name of packagingSteps) {
+        expect(
+          linuxSteps.some((step) => step.name === name),
+          name,
+        ).toBe(true);
+        expect(
+          linux.some((step) => step.name === name),
+          name,
+        ).toBe(eventName === "workflow_dispatch");
+      }
+      if (eventName === "pull_request") {
+        expect(linux.some((step) => step.uses?.startsWith("actions/upload-artifact@"))).toBe(false);
+      }
+    },
+  );
+
+  it("retains both first-run cases and failure evidence for manual validation", () => {
+    const firstRun = linuxSteps.find(
+      (step) => step.name === "Test native first-run setup and failed Gateway startup",
+    );
+    expect(firstRun?.run?.match(/python3 apps\/linux\/tests\/first_run\.py/gu)).toHaveLength(2);
+    expect(firstRun?.run).toContain("--local-start-failure");
+    for (const [name, id] of [
+      ["Upload first-run failure log", "first-run"],
+      ["Upload packaged runtime failure evidence", "packaged-runtime"],
+    ]) {
+      expect(linuxSteps.find((step) => step.name === name)?.if).toBe(
+        `github.event_name == 'workflow_dispatch' && failure() && steps.${id}.outcome == 'failure'`,
+      );
+    }
+  });
 });
 
 it("reports stale Linux release requests before selected code runs", () => {

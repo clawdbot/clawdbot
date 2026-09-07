@@ -43,6 +43,7 @@ export async function convergeUpdatePlugins(params: {
   resultWithPostUpdate: UpdateRunResult;
   postUpdateConfigSnapshot?: Awaited<ReturnType<typeof readConfigFileSnapshot>>;
   detail?: string;
+  cancelled?: boolean;
 }> {
   const postUpdateRoot = params.result.root ?? params.root;
   const preUpdateConfig = params.configSnapshot.valid
@@ -125,6 +126,7 @@ export async function convergeUpdatePlugins(params: {
               reason: "post-core-update-failed",
             },
             detail: freshProcessResult.error,
+            cancelled: freshProcessResult.exitCode === 130 || freshProcessResult.exitCode === 143,
           };
         }
         pluginsUpdatedInFreshProcess = freshProcessResult.resumed;

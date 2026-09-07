@@ -5,6 +5,7 @@ import { normalizeStructuredPromptSection } from "@openclaw/ai/internal/shared";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { joinPresentTextSegments } from "../../../shared/text/join-segments.js";
 import {
+  hashToolResultProjectionSnapshot,
   serializeCacheTtlToolResultProjections,
   type ToolResultPromptProjectionState,
 } from "../session-prompt-state.js";
@@ -100,12 +101,17 @@ export function appendAttemptCacheTtlIfNeeded(params: {
   if (!shouldAppendAttemptCacheTtl(params)) {
     return false;
   }
-  params.sessionManager.appendCustomEntry?.(ATTEMPT_CACHE_TTL_CUSTOM_TYPE, {
-    timestamp: params.now ?? Date.now(),
-    provider: params.provider,
-    modelId: params.modelId,
-    ...serializeCacheTtlToolResultProjections(params.toolResultPromptProjectionState),
-  });
+  if (params.sessionManager.appendCustomEntry) {
+    const snapshot = serializeCacheTtlToolResultProjections(params.toolResultPromptProjectionState);
+    const hash = hashToolResultProjectionSnapshot(snapshot);
+    params.sessionManager.appendCustomEntry(ATTEMPT_CACHE_TTL_CUSTOM_TYPE, {
+      timestamp: params.now ?? Date.now(),
+      provider: params.provider,
+      modelId: params.modelId,
+      ...(hash !== params.toolResultPromptProjectionState.lastWrittenSnapshotHash ? snapshot : {}),
+    });
+    params.toolResultPromptProjectionState.lastWrittenSnapshotHash = hash;
+  }
   return true;
 }
 

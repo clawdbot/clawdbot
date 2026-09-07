@@ -1,5 +1,6 @@
 // Public SDK data contracts for Gateway transport, runs, sessions, tools,
 // artifacts, tasks, environments, and normalized event streams.
+import type { GatewayClientRequestOptions } from "@openclaw/gateway-client";
 import type {
   ArtifactSummary as GatewayArtifactSummaryType,
   ArtifactsDownloadResult as GatewayArtifactsDownloadResultType,
@@ -39,11 +40,8 @@ export type {
 
 export type JsonObject = Record<string, unknown>;
 
-/** Per-request options accepted by SDK transports. */
-export type GatewayRequestOptions = {
-  expectFinal?: boolean;
-  timeoutMs?: number | null;
-};
+/** SDK request projection; additional GatewayClient lifecycle hooks stay client-owned. */
+export type GatewayRequestOptions = Pick<GatewayClientRequestOptions, "expectFinal" | "timeoutMs">;
 
 /** Raw event payload emitted by the Gateway transport. */
 export type GatewayEvent = {

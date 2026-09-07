@@ -7,6 +7,7 @@ import {
   prepareSystemAgentRunAdmission,
   type AdmittedRunContext,
 } from "../../admitted-run-context.js";
+import { resolveAgentRunSessionTarget } from "../../run-session-target.js";
 import {
   buildEmbeddedRunnerAssistant,
   makeEmbeddedRunnerAttempt,
@@ -15,7 +16,11 @@ import type { EmbeddedRunAttemptWithReceiptEvidence } from "./attempt-result.js"
 import { EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS } from "./lane-runtime.js";
 import { buildEmbeddedRunPayloads } from "./payloads.js";
 import { prepareTerminalWithSettledTurnFinalization } from "./settled-turn-finalization.js";
-import { createSettledFinalizationTestInput } from "./settled-turn-finalization.test-support.js";
+import {
+  createSettledFinalizationTestInput,
+  createSettledProviderFailureAttempt,
+  projectSettledProviderFailureAttempt,
+} from "./settled-turn-finalization.test-support.js";
 import { resolveEmbeddedRunAttemptTerminalState } from "./terminal-outcome.js";
 import { resolveSettledTurnFinalizationRequest } from "./terminal-resolution.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
@@ -54,6 +59,23 @@ vi.mock("./backend.js", () => ({
 }));
 vi.mock("../../../plugin-sdk/session-transcript-runtime.js", () => ({
   appendAssistantMirrorMessageByIdentity: transcriptMocks.appendAssistantMirrorMessageByIdentity,
+}));
+// This suite stubs persistence; resolve its synthetic paths without opening a
+// host database. The runner boundary suite uses the real resolver and SQLite.
+vi.mock("../../run-session-target.js", () => ({
+  resolveAgentRunSessionTarget: vi.fn(
+    async (params: {
+      agentId?: string;
+      sessionId: string;
+      sessionKey?: string;
+      sessionTarget?: EmbeddedRunAttemptParams["sessionTarget"];
+    }) => ({
+      agentId: params.sessionTarget?.agentId ?? params.agentId ?? "main",
+      sessionId: params.sessionTarget?.sessionId ?? params.sessionId,
+      sessionKey: params.sessionTarget?.sessionKey ?? params.sessionKey ?? "agent:main:settled",
+      storePath: params.sessionTarget?.storePath ?? "/synthetic/sessions.json",
+    }),
+  ),
 }));
 
 function settledFailedAttempt(): EmbeddedRunAttemptWithReceiptEvidence {
@@ -344,6 +366,69 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
           expect.objectContaining({ text: "The tool run finished." }),
         ]);
       }
+    },
+  );
+
+  it.each([
+    { reported: false, outcome: "answered" },
+    { reported: true, outcome: "answered" },
+    { reported: false, outcome: "empty" },
+    { reported: true, outcome: "empty" },
+  ] as const)(
+    "recovers truncated completions after commentary (reported: $reported, finalizer: $outcome)",
+    async ({ reported, outcome }) => {
+      const commentary = "I am saving the note.";
+      const base = createSettledProviderFailureAttempt({ assistantTexts: [commentary] });
+      const toolAssistant = base.messagesSnapshot[1];
+      if (toolAssistant?.role !== "assistant" || !base.currentAttemptCompletedAssistant) {
+        throw new Error("Missing assistant fixture");
+      }
+      toolAssistant.content.unshift({ type: "text", text: commentary });
+      base.currentAttemptCompletedAssistant.errorMessage = "Stream ended without finish_reason";
+      base.terminal = reported
+        ? { kind: "ok" }
+        : {
+            kind: "failed",
+            source: "prompt",
+            error: new Error("Stream ended without finish_reason"),
+          };
+      const attempt = projectSettledProviderFailureAttempt(base);
+      expect(attempt.settledTurnFinalizationContext).toBeDefined();
+      const finalText = "The note was saved.";
+      backendMocks.runSettledFinalization.mockResolvedValue({
+        outcome,
+        result: {
+          assistant: buildEmbeddedRunnerAssistant({
+            content: outcome === "answered" ? [{ type: "text", text: finalText }] : [],
+          }),
+        },
+      });
+      const input = finalizationInput(attempt);
+      input.terminalBase.runParams.trigger = "user";
+      input.finalization.modelApi = "openai-completions";
+
+      const result = await prepareTerminalWithSettledTurnFinalization(input);
+
+      expect(result.finalizationOutcome).toBe(
+        outcome === "answered" ? "answered" : "completed-empty",
+      );
+      expect(backendMocks.runSettledFinalization).toHaveBeenCalledTimes(
+        outcome === "answered" ? 1 : 2,
+      );
+      for (const [preparedAttempt, settledAttempt] of backendMocks.runSettledFinalization.mock
+        .calls) {
+        expect(preparedAttempt).toMatchObject({
+          operation: "settled-tool-finalization",
+          disableTools: true,
+        });
+        expect(settledAttempt).toBe(attempt);
+      }
+      expect(result.prepared.payloadsWithToolMedia).toEqual([
+        expect.objectContaining({
+          text: outcome === "answered" ? finalText : SETTLED_TOOL_FINALIZATION_FALLBACK_TEXT,
+        }),
+      ]);
+      expect(result.prepared.payloadsWithToolMedia?.[0]?.isError).not.toBe(true);
     },
   );
 
@@ -816,6 +901,20 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
     ]);
   });
 
+  it("keeps the honest fallback when its transcript target cannot be resolved", async () => {
+    const input = finalizationInput(settledSuccessfulAttempt());
+    input.finalization.preparedAttempt.sessionKey = "agent:main:settled";
+    backendMocks.runSettledFinalization.mockRejectedValueOnce(new Error("summary unavailable"));
+    vi.mocked(resolveAgentRunSessionTarget).mockRejectedValueOnce(new Error("store unavailable"));
+
+    const result = await prepareTerminalWithSettledTurnFinalization(input);
+
+    expect(result.prepared.payloadsWithToolMedia).toEqual([
+      expect.objectContaining({ text: SETTLED_TOOL_FINALIZATION_FALLBACK_TEXT }),
+    ]);
+    expect(transcriptMocks.appendAssistantMirrorMessageByIdentity).not.toHaveBeenCalled();
+  });
+
   it("does not construct a fallback after its transcript writer is superseded", async () => {
     const attempt = settledSuccessfulAttempt();
     const input = finalizationInput(attempt);
@@ -878,6 +977,16 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
 
     await expect(prepareTerminalWithSettledTurnFinalization(input)).rejects.toBeInstanceOf(
       SessionTranscriptWriterClaimReboundError,
+    );
+    expect(backendMocks.runSettledFinalization).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionTarget: expect.objectContaining({
+          expectedLifecycleRevision: "revision-committed",
+          expectedWriterRunId: "run-settled",
+        }),
+      }),
+      attempt,
+      input.finalization.harness,
     );
     expect(transcriptMocks.appendAssistantMirrorMessageByIdentity).toHaveBeenCalledWith(
       expect.objectContaining({

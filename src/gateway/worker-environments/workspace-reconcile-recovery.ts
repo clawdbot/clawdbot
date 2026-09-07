@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { FsSafeError, root as openFsSafeRoot } from "../../infra/fs-safe.js";
+import { root as openFsSafeRoot } from "../../infra/fs-safe.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import {
   createStagedInputPathMatcher,
@@ -34,6 +34,7 @@ import {
   entryMatches,
   localPath,
   readWorkspaceTreeFile,
+  removeEmptyWorkspaceDirectory,
 } from "./workspace-reconcile-fs.js";
 
 const PATCH_TIMEOUT_MS = 10 * 60_000;
@@ -190,11 +191,7 @@ export async function createWorkspacePatch(params: {
     if (packed.stdout.byteLength > MAX_RECONCILIATION_TOTAL_BYTES) {
       throw new Error("Cloud workspace recovery snapshot exceeds its byte limit");
     }
-    for (const name of await fs.readdir(temporary)) {
-      if (name !== ".git") {
-        await fs.rm(path.join(temporary, name), { recursive: true, force: true });
-      }
-    }
+    await clearTemporaryWorkspace(temporary);
     for (const entry of params.appliedEntries) {
       await materializeSnapshotEntry({
         root: temporary,
@@ -248,7 +245,8 @@ export async function applyWorkspacePatch(params: {
     return;
   }
   // Run no-index with discovery disabled so workspace .gitattributes and
-  // repository filter config cannot reinterpret authenticated patch bytes.
+  // repository filters cannot reinterpret authenticated bytes. Disable inherited
+  // autocrlf too: no-index still runs Git's working-tree newline conversion.
   const temporary = await fs.mkdtemp(
     path.join(resolvePreferredOpenClawTmpDir(), "openclaw-no-git-"),
   );
@@ -256,6 +254,8 @@ export async function applyWorkspacePatch(params: {
     await requireGit(
       params.root,
       [
+        "-c",
+        "core.autocrlf=false",
         "apply",
         "--no-index",
         "--binary",
@@ -552,30 +552,7 @@ async function restoreWorkspaceJournalDirectories(params: WorkspaceRecoveryConte
     if (baseDirectoryPaths.has(entryPath) || baseEntryPaths.has(entryPath)) {
       continue;
     }
-    let children: string[];
-    try {
-      children = await workspaceRoot.list(entryPath);
-    } catch (error) {
-      if (error instanceof FsSafeError && ["not-found", "path-alias"].includes(error.code)) {
-        continue;
-      }
-      throw error;
-    }
-    if (children.length > 0) {
-      continue;
-    }
-    try {
-      await workspaceRoot.remove(entryPath);
-    } catch (error) {
-      if (error instanceof FsSafeError && ["not-found", "path-alias"].includes(error.code)) {
-        continue;
-      }
-      const racedChildren = await workspaceRoot.list(entryPath).catch(() => undefined);
-      if (racedChildren?.length) {
-        continue;
-      }
-      throw error;
-    }
+    await removeEmptyWorkspaceDirectory(workspaceRoot, entryPath);
   }
 }
 

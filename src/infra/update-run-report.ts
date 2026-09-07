@@ -154,9 +154,6 @@ export function renderUpdateRunReport(
   if (facts.readyz !== undefined) {
     verification.push(facts.readyz ? "HTTP ready" : "HTTP not ready");
   }
-  if (facts.inferenceProbe) {
-    verification.push(`inference ${facts.inferenceProbe}`);
-  }
   if (facts.pluginErrors?.length) {
     verification.push(`${facts.pluginErrors.length} plugin activation error(s)`);
   }

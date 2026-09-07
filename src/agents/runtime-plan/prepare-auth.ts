@@ -13,6 +13,7 @@ import {
   resolveAuthProfileOrderWithMetadata,
 } from "../auth-profiles/order.js";
 import { resolveStoredCredentialReadOnlyAvailability } from "../auth-profiles/read-only-availability.js";
+import { createSelectedAuthProfileUnavailableError } from "../auth-profiles/selection-error.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { isProfileInCooldown } from "../auth-profiles/usage-state.js";
 import { resolveProviderDirectAuthPlanningEvidence } from "../model-auth-env.js";
@@ -240,6 +241,16 @@ export function prepareAgentRuntimeAuth(
         })
       : { eligible: false };
     if (!eligibility.eligible) {
+      if (
+        !store?.profiles[userPinnedProfileId] &&
+        params.config?.auth?.profiles?.[userPinnedProfileId]?.mode !== "aws-sdk"
+      ) {
+        throw createSelectedAuthProfileUnavailableError({
+          profileId: userPinnedProfileId,
+          provider: authProfileSelectionProvider,
+          modelId: params.modelId,
+        });
+      }
       throw new Error(
         `Auth profile "${userPinnedProfileId}" is not configured for ${authProfileSelectionProvider}.`,
       );

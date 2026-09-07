@@ -23,22 +23,6 @@ enum AppAppearancePreference: String, CaseIterable, Identifiable {
         self.rawValue
     }
 
-    var label: String {
-        switch self {
-        case .system: "System"
-        case .light: "Light"
-        case .dark: "Dark"
-        }
-    }
-
-    var systemImage: String {
-        switch self {
-        case .system: "circle.lefthalf.filled"
-        case .light: "sun.max"
-        case .dark: "moon.stars"
-        }
-    }
-
     var colorScheme: ColorScheme? {
         switch self {
         case .system: nil

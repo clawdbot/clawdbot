@@ -25,6 +25,110 @@ function monitorJob(agentId: string, id = `job-${agentId}`): CronJob {
 }
 
 describe("reconcileHeartbeatMonitorJobs", () => {
+  it.each(["add", "remove"] as const)(
+    "lets the event loop progress between %s attempts, including a failed attempt",
+    async (mutation) => {
+      let progressed = false;
+      let checkpoint: Promise<void> | undefined;
+      const observed: Array<{ id: string; progressed: boolean }> = [];
+      const recordAttempt = (id: string) => {
+        observed.push({ id, progressed });
+        if (observed.length === 1) {
+          checkpoint = new Promise((resolve) => {
+            setImmediate(() => {
+              progressed = true;
+              resolve();
+            });
+          });
+          throw new Error("first mutation failed");
+        }
+      };
+      const add = vi.fn(async (input: { agentId: string }) => {
+        if (mutation === "add") {
+          recordAttempt(input.agentId);
+        }
+        return monitorJob(input.agentId);
+      });
+      const remove = vi.fn(async (id: string) => {
+        if (mutation === "remove") {
+          recordAttempt(id);
+        }
+        return { ok: true, removed: true };
+      });
+      const cfg: OpenClawConfig = {
+        agents: {
+          ownership: "explicit",
+          defaults: { heartbeat: { every: "30m" } },
+          entries: mutation === "add" ? { a: {}, b: {}, c: {} } : { main: {} },
+        },
+      };
+      try {
+        const result = await reconcileHeartbeatMonitorJobs({
+          cron: {
+            add,
+            remove,
+            list: vi.fn(async () =>
+              mutation === "remove" ? [monitorJob("a"), monitorJob("b"), monitorJob("c")] : [],
+            ),
+          } as never,
+          cfg,
+          logger,
+        });
+        expect(result).toEqual({ ok: false });
+        expect(observed).toEqual(
+          (mutation === "add" ? ["a", "b", "c"] : ["job-a", "job-b", "job-c"]).map((id, index) => ({
+            id,
+            progressed: index > 0,
+          })),
+        );
+      } finally {
+        await checkpoint;
+      }
+    },
+  );
+
+  it("rejects stale authority after yielding before another mutation is invoked", async () => {
+    const revoked = new Error("reconciliation revoked");
+    let current = true;
+    let checkpoint: Promise<void> | undefined;
+    const commitGuard = () => {
+      if (!current) {
+        throw revoked;
+      }
+    };
+    const add = vi.fn(
+      async (input: { agentId: string }, options?: { commitGuard?: () => void }) => {
+        options?.commitGuard?.();
+        checkpoint ??= new Promise((resolve) => {
+          setImmediate(() => {
+            current = false;
+            resolve();
+          });
+        });
+        return monitorJob(input.agentId);
+      },
+    );
+    try {
+      await expect(
+        reconcileHeartbeatMonitorJobs({
+          cron: { add, remove: vi.fn(), list: vi.fn(async () => []) } as never,
+          cfg: {
+            agents: {
+              ownership: "explicit",
+              defaults: { heartbeat: { every: "30m" } },
+              entries: { a: {}, b: {} },
+            },
+          },
+          logger,
+          commitGuard,
+        }),
+      ).rejects.toBe(revoked);
+      expect(add).toHaveBeenCalledTimes(1);
+    } finally {
+      await checkpoint;
+    }
+  });
+
   it("converges one monitor per heartbeat agent and prunes unconfigured ones", async () => {
     const add = vi.fn(async (input: { declarationKey?: string }, _options?: AddOptions) => ({
       job: input,

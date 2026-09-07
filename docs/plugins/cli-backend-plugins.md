@@ -280,6 +280,14 @@ authority. OpenClaw retains cancellation, watchdogs, session policy, and MCP
 grant ownership. Paired-node execution and
 manual compaction continue through the existing host-managed process path.
 
+Reusable transports receive a run-bound `liveSession` capability. Before creating
+an initial or replacement process, await `liveSession.restart()` unless the
+current process is reusable. This joins the previous process exit and its
+host-owned resource cleanup; waiting for the child exit alone is insufficient.
+The host rejects restart when the caller is revoked or an exact live generation
+must be preserved. `register()` remains a synchronous admission check and refuses
+replacement while cleanup is unresolved.
+
 `runtimeArtifact` is plugin-owned. It is consulted
 only when a live inference turn mints or revalidates verified setup authority;
 normal CLI runs do not require it. A backend without this declaration cannot
@@ -325,6 +333,20 @@ Declare how the backend enforces that contract:
 Runtime caps such as cron `toolsAllow` are normalized and group-expanded by
 OpenClaw before this contract is built. Native tools are disabled, and a
 backend without a complete declared enforcement path fails before execution.
+
+Rooted runs such as [Skill Workshop reviews](/tools/skill-workshop) also require
+`isolatesInstructionsWithExactTools: true` on the backend registration. Declare
+this optional capability only when exact-tool execution suppresses ambient
+instruction files, skills, hooks, and plugins for both fresh and resumed runs.
+The host-prepared instruction snapshot must remain authoritative. OpenClaw
+rejects rooted runs when this declaration is absent, even if the backend can
+enforce exact tools. Existing non-rooted runs do not require this field.
+
+The bundled Claude CLI backend declares this capability. Rooted execution
+disables its native tools and serves the selected OpenClaw tools through the
+host-owned MCP grant, which retains the root, filesystem policy, and configured
+sandbox. The declaration does not grant filesystem or approval authority to
+the backend.
 
 A backend whose native tools are model-callable may declare
 `projectNativeToolAuthority(nativeTools)` so that automations created from its

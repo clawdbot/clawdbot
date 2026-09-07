@@ -29,6 +29,7 @@ import {
 import type { PreparedModelRuntimeLeaseOptions } from "./prepared-model-runtime.types.js";
 
 type PreparedModelRuntimeLeaseContext = {
+  captureLifetime(): () => void;
   owners: Map<string, PreparedModelRuntimeOwner>;
   agentBuildCompletions: Map<string, Promise<void>>;
   retainedDirectRunOwners: PreparedModelRuntimeOwnerRetention;
@@ -38,14 +39,6 @@ type PreparedModelRuntimeLeaseContext = {
   getPendingReplacement(): PreparedModelRuntimeReplacement | undefined;
   prepareSnapshot(input: PreparedModelRuntimeInput): Promise<PreparedModelRuntimeSnapshot>;
 };
-
-function throwIfLeaseAdmissionAborted(signal?: AbortSignal): void {
-  if (signal?.aborted) {
-    throw createAbortError("Prepared model runtime lease admission aborted", {
-      cause: signal.reason,
-    });
-  }
-}
 
 function createPreparedModelRuntimeAdmissionClaim(context: PreparedModelRuntimeLeaseContext) {
   let claimed: { key: string; owner: PreparedModelRuntimeOwner } | undefined;
@@ -89,6 +82,15 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
   context: PreparedModelRuntimeLeaseContext,
   options: PreparedModelRuntimeLeaseOptions = {},
 ): Promise<PreparedModelRuntimeLease> {
+  const assertLifetime = context.captureLifetime();
+  const assertAdmission = () => {
+    assertLifetime();
+    if (options.abortSignal?.aborted) {
+      throw createAbortError("Prepared model runtime lease admission aborted", {
+        cause: options.abortSignal.reason,
+      });
+    }
+  };
   const deriveSelections = options.deriveRuntimePluginSelections;
   // Caller choices belong to this invocation; only config-derived choices may change after a wait.
   const requestedSelections = deriveSelections
@@ -105,7 +107,7 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
   const admission = createPreparedModelRuntimeAdmissionClaim(context);
   for (;;) {
     admission.release();
-    throwIfLeaseAdmissionAborted(options.abortSignal);
+    assertAdmission();
     // Replacement owns publication from synchronous staling through atomic generation commit.
     // Dynamic work arriving inside that window must retry after the new owners become visible.
     const replacement = context.getPendingReplacement();
@@ -114,7 +116,7 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
       if (context.getPendingReplacement()) {
         continue;
       }
-      throwIfLeaseAdmissionAborted(options.abortSignal);
+      assertAdmission();
     }
     if (
       provenance === "run" &&
@@ -209,7 +211,7 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
         ) {
           // A turn may finish under its still-open parent lease after reload. Its historic
           // generation must never publish over the configured owner for newly admitted work.
-          throwIfLeaseAdmissionAborted(options.abortSignal);
+          assertAdmission();
           return {
             snapshot: borrowed,
             pluginGeneration: options.pluginGeneration,
@@ -305,12 +307,12 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
     break;
   }
   try {
-    throwIfLeaseAdmissionAborted(options.abortSignal);
+    assertAdmission();
     const pluginGeneration = owner.pluginGeneration!;
     if (owner.provenance !== provenance) {
       return { snapshot, pluginGeneration, release: () => {} };
     }
-    throwIfLeaseAdmissionAborted(options.abortSignal);
+    assertAdmission();
     if (provenance === "run" && options.retainIdleRunOwner) {
       context.retainedDirectRunOwners.retain(key, owner, context.owners);
     } else if (provenance === "run" && context.getGatewayLifecycleActive()) {

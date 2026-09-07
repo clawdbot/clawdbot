@@ -7,8 +7,16 @@ import {
   normalizeControlUiBasePath,
   parseShortSessionRef,
 } from "./grammar.js";
+import { parseAgentSessionKeyParts } from "./session-key.js";
 
 export { controlUiSessionSlug, normalizeControlUiBasePath };
+export {
+  buildAgentMainSessionKey,
+  DEFAULT_MAIN_KEY,
+  normalizeMainKey,
+  parseAgentSessionKeyParts,
+  type ParsedAgentSessionKey,
+} from "./session-key.js";
 export * from "./focus.js";
 export {
   CONTROL_UI_RESERVED_ROUTE_SEGMENTS,
@@ -46,16 +54,11 @@ export const SESSION_UUID_SUFFIX_RE =
 export const SHORT_SESSION_ID_RE = /^[0-9a-f]{8,32}$/iu;
 
 function agentSessionKeyParts(sessionKey: string): { agentId: string; rest: string } | null {
-  const parts = sessionKey.split(":");
-  if (parts.length < 3 || parts[0]?.toLowerCase() !== "agent") {
+  const parsed = parseAgentSessionKeyParts(sessionKey);
+  if (!parsed || parsed.rest.split(":").some((segment) => !segment)) {
     return null;
   }
-  const agentId = normalizeNullableString(parts[1]);
-  const restSegments = parts.slice(2);
-  if (!agentId || restSegments.some((segment) => !segment)) {
-    return null;
-  }
-  return { agentId: normalizeAgentId(agentId), rest: restSegments.join(":") };
+  return { agentId: normalizeAgentId(parsed.agentId), rest: parsed.rest };
 }
 
 function encodePathSegment(segment: string): string {

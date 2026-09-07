@@ -9,6 +9,7 @@ import {
 } from "@openclaw/normalization-core/agent-run-terminal-outcome";
 import { asFiniteNumber as asFiniteTimestamp } from "@openclaw/normalization-core/number-coercion";
 import { readNonBlankString as asNonEmptyString } from "@openclaw/normalization-core/string-coerce";
+import { formatErrorMessage } from "../infra/errors.js";
 import {
   formatAbandonedLivenessError,
   formatBlockedLivenessError,
@@ -436,7 +437,8 @@ function formatAgentRunTerminalOutcome(
   input: Pick<AgentRunTerminalInput, "error" | "startedAt" | "endedAt">,
 ): AgentRunTerminalOutcome {
   const { reason, status, ...metadata } = facts;
-  const rawError = asNonEmptyString(input.error);
+  const rawError =
+    input.error == null ? undefined : asNonEmptyString(formatErrorMessage(input.error));
   const error =
     reason === "hard_timeout"
       ? rawError

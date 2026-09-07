@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 // Memory Core integration tests exercise the real SQLite search manager through tools.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
@@ -27,6 +29,107 @@ describe("memory_search real manager", () => {
 
   beforeEach(() => {
     testing.resetMemorySearchToolCooldowns();
+  });
+
+  it.each([
+    {
+      label: "space-indented citations on",
+      mode: "on",
+      sessionKey: "agent:main:main",
+      query: "CitationIndentSpaces",
+      text: "    CitationIndentSpaces()\n    preserveIndentation()",
+      expected:
+        "    CitationIndentSpaces()\n    preserveIndentation()\n\nSource: memory/citation-indent.md#L1-L2",
+    },
+    {
+      label: "tab-indented direct auto citations",
+      mode: "auto",
+      sessionKey: "agent:main:telegram:direct:fixture",
+      query: "CitationIndentTabs",
+      text: "\tCitationIndentTabs()\n\tpreserveIndentation()",
+      expected:
+        "\tCitationIndentTabs()\n\tpreserveIndentation()\n\nSource: memory/citation-indent.md#L1-L2",
+    },
+    {
+      label: "space-indented citations off",
+      mode: "off",
+      sessionKey: "agent:main:main",
+      query: "CitationIndentOff",
+      text: "    CitationIndentOff()\n    preserveIndentation()",
+      expected: "    CitationIndentOff()\n    preserveIndentation()",
+    },
+    {
+      label: "tab-indented group auto citations",
+      mode: "auto",
+      sessionKey: "agent:main:telegram:group:fixture",
+      query: "CitationIndentGroup",
+      text: "\tCitationIndentGroup()\n\tpreserveIndentation()",
+      expected: "\tCitationIndentGroup()\n\tpreserveIndentation()",
+    },
+    {
+      label: "ordinary citation suffix whitespace",
+      mode: "on",
+      sessionKey: "agent:main:main",
+      query: "CitationPlainControl",
+      text: "CitationPlainControl()\nfinish()\n \t",
+      expected: "CitationPlainControl()\nfinish()\n\nSource: memory/citation-indent.md#L1-L3",
+    },
+  ] as const)("preserves indexed snippet layout for $label", async (testCase) => {
+    const filePath = path.join(fixture.paths.memory, "citation-indent.md");
+    await fs.writeFile(filePath, testCase.text);
+    const baseConfig = fixture.createConfig({
+      provider: "none",
+      sources: ["memory"],
+      vectorEnabled: false,
+      minScore: 0,
+    });
+    const cfg = {
+      ...baseConfig,
+      memory: { ...baseConfig.memory, citations: testCase.mode },
+      plugins: {
+        ...baseConfig.plugins,
+        entries: { "memory-core": { config: { dreaming: { enabled: false } } } },
+      },
+    } satisfies OpenClawConfig;
+    const manager = await fixture.getFreshManager(cfg, "cli");
+    await manager.sync({ reason: "cli", force: true });
+    const raw = await manager.search(testCase.query, { sources: ["memory"] });
+    expect(raw).toHaveLength(1);
+    expect(raw[0]).toMatchObject({
+      path: "memory/citation-indent.md",
+      snippet: testCase.text,
+    });
+    await manager.close();
+
+    const tool = createMemorySearchTool({
+      config: cfg,
+      agentId: "main",
+      agentSessionKey: testCase.sessionKey,
+      oneShotCliRun: true,
+    });
+    if (!tool) {
+      throw new Error("memory_search tool missing");
+    }
+    const result = await tool.execute("citation-indentation", {
+      query: testCase.query,
+      corpus: "memory",
+    });
+    const expected = {
+      results: [{ path: "memory/citation-indent.md", snippet: testCase.expected }],
+    };
+    expect
+      .soft(result.details, "tool result details preserve snippet layout")
+      .toMatchObject(expected);
+    const content = result.content[0];
+    if (!content || content.type !== "text") {
+      throw new Error("memory_search returned no model-visible JSON");
+    }
+    expect
+      .soft(JSON.parse(content.text), "model-visible JSON preserves snippet layout")
+      .toMatchObject(expected);
+    expect(await fs.readFile(filePath, "utf8")).toBe(testCase.text);
+    expect(fixture.provider.embedBatchCalls).toBe(0);
+    expect(fixture.provider.embedQueryCalls).toBe(0);
   });
 
   it("reports current invalid config after replacing the config of a retained tool", async () => {

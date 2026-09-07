@@ -688,6 +688,7 @@ describe("SQLite session message cuts", () => {
       sessionId: result.entry.sessionId,
       sessionKey: targetKey,
     });
+    expect(forkEvents[0]).toMatchObject({ type: "session", version: 3 });
     expect(
       forkEvents.flatMap((event) =>
         event && typeof event === "object" && "id" in event ? [event.id] : [],

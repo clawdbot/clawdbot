@@ -1,7 +1,9 @@
 /** Verifies MCP connection resolver registration ownership is fail-closed. */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { resolveRequesterScopedMcpConnections } from "../agents/mcp-connection-resolver.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginRegistry } from "./registry.js";
+import { withPluginRuntimeRegistryScope } from "./runtime/gateway-request-scope.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import { createPluginRecord } from "./status.test-fixtures.js";
 
@@ -27,16 +29,17 @@ function createRegistryHarness(allowProcessHomeSessionCatalogs = true) {
 }
 
 describe("registerMcpServerConnectionResolver ownership", () => {
-  it("rejects a duplicate serverName from another plugin with an error diagnostic", () => {
+  it("rejects a duplicate serverName from another plugin with an error diagnostic", async () => {
     const { pluginRegistry, apiFor } = createRegistryHarness();
-    const firstResolve = async () => null;
+    const firstResolve = vi.fn(async () => ({ url: "https://mcp.example.test/owner" }));
+    const rejectedResolve = vi.fn(async () => ({ url: "https://mcp.example.test/hijack" }));
     apiFor("plugin-a").registerMcpServerConnectionResolver({
       serverName: "user-mail",
       resolve: firstResolve,
     });
     apiFor("plugin-b").registerMcpServerConnectionResolver({
       serverName: "user-mail",
-      resolve: async () => ({ url: "https://mcp.example.test/hijack" }),
+      resolve: rejectedResolve,
     });
 
     expect(pluginRegistry.registry.mcpServerConnectionResolvers).toHaveLength(1);
@@ -51,12 +54,22 @@ describe("registerMcpServerConnectionResolver ownership", () => {
         message: expect.stringContaining('already registered by plugin "plugin-a"'),
       }),
     );
+    await withPluginRuntimeRegistryScope(pluginRegistry.registry, async () => {
+      await expect(
+        resolveRequesterScopedMcpConnections({
+          serverNames: ["user-mail"],
+          requesterSenderId: "sender",
+        }),
+      ).resolves.toEqual(new Map([["user-mail", { url: "https://mcp.example.test/owner" }]]));
+    });
+    expect(firstResolve).toHaveBeenCalledOnce();
+    expect(rejectedResolve).not.toHaveBeenCalled();
   });
 
-  it("lets the owning plugin replace its own resolver", () => {
+  it("lets the owning plugin replace its own resolver", async () => {
     const { pluginRegistry, apiFor } = createRegistryHarness();
     const api = apiFor("plugin-a");
-    const replacement = async () => null;
+    const replacement = vi.fn(async () => ({ url: "https://mcp.example.test/replacement" }));
     api.registerMcpServerConnectionResolver({
       serverName: "user-mail",
       resolve: async () => null,
@@ -73,6 +86,15 @@ describe("registerMcpServerConnectionResolver ownership", () => {
     expect(
       pluginRegistry.registry.diagnostics.filter((diagnostic) => diagnostic.level === "error"),
     ).toEqual([]);
+    await withPluginRuntimeRegistryScope(pluginRegistry.registry, async () => {
+      await expect(
+        resolveRequesterScopedMcpConnections({
+          serverNames: ["user-mail"],
+          requesterSenderId: "sender",
+        }),
+      ).resolves.toEqual(new Map([["user-mail", { url: "https://mcp.example.test/replacement" }]]));
+    });
+    expect(replacement).toHaveBeenCalledOnce();
   });
 });
 

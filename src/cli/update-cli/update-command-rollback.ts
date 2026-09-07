@@ -1,20 +1,35 @@
+import fs from "node:fs/promises";
 import { isDeepStrictEqual } from "node:util";
-import { readConfigFileSnapshot, mutateConfigFile } from "../../config/config.js";
 import { ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS_ENV } from "../../config/future-version-guard.js";
+import {
+  hashConfigRaw,
+  normalizeConfigIoDeps,
+  resolveConfigForRead,
+  resolveConfigIncludesForRead,
+} from "../../config/io.read-helpers.js";
+import { withConfigMutationLock } from "../../config/mutate.js";
 import { resolveStateDir } from "../../config/paths.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { ConfigFileSnapshot } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { PackageUpdateTransaction } from "../../infra/package-update-steps.js";
+import { replaceFileAtomic } from "../../infra/replace-file.js";
 import {
   readUpdateStateSchemaVersions,
+  resolveUpdateStateContentVersion,
   updateStateSchemaVersionsMatch,
   type UpdateStateSchemaVersion,
 } from "../../infra/update-candidate-state.js";
 import { NativePackageRollbackError } from "../../infra/update-native-package-stage.js";
 import { recordUpdateRunStep } from "../../infra/update-run-ledger.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
+import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { confirmGatewayReachable } from "../daemon-cli/restart-health-probe.js";
 import type { UpdateCommandOptions } from "./shared.js";
+import {
+  readUpdateConfigSnapshot,
+  type UpdateConfigSnapshot,
+} from "./update-command-config-snapshot.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-managed-context.js";
 import { readPackageUpdateIdentity } from "./update-command-package.js";
 import { runUpdatedInstallGatewayCommand } from "./update-command-service-command.js";
@@ -27,27 +42,18 @@ import {
   type PreManagedServiceStop,
 } from "./update-command-service.js";
 
-function withoutWriterStamp(config: OpenClawConfig): OpenClawConfig {
-  const result = structuredClone(config);
-  if (result.meta) {
-    delete result.meta.lastTouchedVersion;
-    if (Object.keys(result.meta).length === 0) {
-      delete result.meta;
-    }
-  }
-  return result;
-}
-
-/** Owns the previous generation: package/shims, config stamp, and service definition/start.
- * Only stamp-neutral config and unchanged schemas permit restoring its prior service proof. */
+/** Restores the previous generation only while schemas and activation-owned config stay intact. */
 export async function rollbackFailedUpdate(params: {
   result: UpdateRunResult;
   previousRoot: string;
   packageTransaction?: PackageUpdateTransaction;
   rollbackBlockedReason?: "state-migrated-no-rollback" | "rollback-state-unverified";
   schemaVersions?: UpdateStateSchemaVersion[];
+  candidateSchemaVersions?: OpenClawSchemaVersions;
+  previousSchemaVersions?: OpenClawSchemaVersions;
   previousVerified?: boolean;
-  config: OpenClawConfig;
+  configSnapshot: ConfigFileSnapshot;
+  activationConfig?: UpdateConfigSnapshot;
   opts: UpdateCommandOptions;
   preManagedServiceStop?: PreManagedServiceStop;
   timeoutMs: number;
@@ -61,54 +67,110 @@ export async function rollbackFailedUpdate(params: {
 }> {
   const { preManagedServiceStop: before, packageTransaction, opts } = params;
   let result = params.result;
+  const config =
+    params.configSnapshot.sourceConfigBeforeMigrations ?? params.configSnapshot.sourceConfig;
+  const configSnapshot = params.activationConfig ?? {
+    path: params.configSnapshot.path,
+    raw: params.configSnapshot.raw,
+    hash: hashConfigRaw(params.configSnapshot.raw),
+  };
   const env = before?.serviceEnv ?? opts.run?.env ?? process.env;
   const recoveryEnv = { ...env, [ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS_ENV]: "1" };
   const port = before?.stopped
-    ? await resolveUpdatedGatewayRestartPort({ config: params.config, serviceEnv: env })
+    ? await resolveUpdatedGatewayRestartPort({ config, serviceEnv: env })
     : undefined;
-  const failed = (reason: string) => {
-    return {
-      result: {
-        ...result,
-        status: "error" as const,
-        reason:
-          result.recovery?.serviceRestartSafe === true && result.recovery.packageRollbackVerified
-            ? (params.result.reason ?? reason)
-            : reason,
-      },
-      rolledBack: false,
-      stoppedForRollback,
-    };
-  };
+  const failed = (reason: string) => ({
+    result: {
+      ...result,
+      status: "error" as const,
+      reason:
+        result.recovery?.serviceRestartSafe === true && result.recovery.packageRollbackVerified
+          ? (params.result.reason ?? reason)
+          : reason,
+    },
+    rolledBack: false,
+    stoppedForRollback,
+  });
   const stateUnchanged = async () => {
     const baseline = params.schemaVersions;
     const current = await readUpdateStateSchemaVersions({
       stateDir: resolveStateDir(env),
-      config: params.config,
+      config,
       env,
       root: result.root ?? null,
       nodeRunner: params.nodeRunner,
     });
-    if (baseline === undefined || !updateStateSchemaVersionsMatch(baseline, current)) {
+    const sharedPath = resolveOpenClawStateSqlitePath(env);
+    if (
+      baseline === undefined ||
+      !updateStateSchemaVersionsMatch(baseline, current, {
+        sharedPath,
+        candidateSchemaVersions: params.candidateSchemaVersions,
+      })
+    ) {
       return false;
     }
-    const snapshot = await withOwnedManagedUpdateEnv(env, () =>
-      readConfigFileSnapshot({
-        skipPluginValidation: true,
-        observe: false,
-        suppressFutureVersionWarning: true,
-      }),
+    const baselineVersions = new Map(
+      baseline.map((entry) => [entry.path, resolveUpdateStateContentVersion(entry)]),
     );
-    if (!snapshot.valid) {
-      throw new Error("Config could not be verified before rollback.");
+    for (const entry of current) {
+      const version = resolveUpdateStateContentVersion(entry);
+      if (version === null || baselineVersions.get(entry.path) != null) {
+        continue;
+      }
+      // First-use creation is not migration, but the retained runtime must still
+      // support that new store before replacing a reachable candidate.
+      const kind = entry.path === sharedPath ? "state" : "agent";
+      const supported = params.previousSchemaVersions?.[kind];
+      if (supported === undefined || version > supported) {
+        throw new Error(
+          `Automatic rollback refused: newly created ${kind} database ${entry.path} uses schema ${version}; retained previous package support is ${supported ?? "unknown"}. Keep the candidate installed.`,
+        );
+      }
     }
-    return isDeepStrictEqual(
-      withoutWriterStamp(snapshot.sourceConfigBeforeMigrations ?? snapshot.sourceConfig),
-      withoutWriterStamp(params.config),
-    );
+    await assertConfigUnchanged();
+    return true;
   };
   let stoppedForRollback: PreManagedServiceStop | undefined;
   let failureReason = "rollback-state-unverified";
+  const assertConfigUnchanged = async () => {
+    let unchanged =
+      params.activationConfig?.doctorOwned !== false &&
+      (await readUpdateConfigSnapshot(configSnapshot.path)).hash === configSnapshot.hash;
+    if (unchanged && params.configSnapshot.includedPaths?.length) {
+      // Only the root file is restored. Resolve its captured include graph so
+      // edits to separate config files cannot escape the original state guard.
+      const deps = normalizeConfigIoDeps({ env: { ...env } });
+      const included = resolveConfigIncludesForRead(
+        params.configSnapshot.parsed,
+        params.configSnapshot.path,
+        deps,
+      );
+      unchanged = isDeepStrictEqual(
+        config,
+        resolveConfigForRead(included, deps.env).resolvedConfigRaw,
+      );
+    }
+    if (!unchanged) {
+      failureReason = "state-migrated-no-rollback";
+      const detail = `Configuration ${configSnapshot.path} or its included files changed after activation; automatic rollback was refused to preserve those edits.`;
+      result = {
+        ...result,
+        steps: [
+          ...result.steps,
+          {
+            name: "config rollback",
+            command: "restore pre-update config",
+            cwd: params.previousRoot,
+            durationMs: 0,
+            exitCode: 1,
+            stderrTail: detail,
+          },
+        ],
+      };
+      throw new Error(detail);
+    }
+  };
   const stop = async () => {
     failureReason = "service-revalidation-failed";
     // The parent binary can be older than the candidate's stamp even before bytes are restored.
@@ -179,16 +241,17 @@ export async function rollbackFailedUpdate(params: {
       after: undefined,
       steps: [...result.steps, restored],
     };
-    if (activePackageRoot) {
-      result.after = await readPackageUpdateIdentity(activePackageRoot);
-    }
     if (restored.exitCode === 0) {
+      // The transaction verified the previous package. Do not gate its restart
+      // on an extra diagnostic read whose result would be discarded.
       result.after = result.before;
       result.recovery = {
         serviceRestartSafe: false,
         packageRollbackVerified: true,
         reason: "runtime-verification-failed",
       };
+    } else if (activePackageRoot) {
+      result.after = await readPackageUpdateIdentity(activePackageRoot);
     }
     if (opts.run) {
       recordUpdateRunStep(
@@ -206,37 +269,26 @@ export async function rollbackFailedUpdate(params: {
       return failed(restored.reason ?? "source-rollback-failed");
     }
     failureReason = "rollback-state-unverified";
-    await withOwnedManagedUpdateEnv(env, async () => {
-      const snapshot = await readConfigFileSnapshot({
-        skipPluginValidation: true,
-        observe: false,
-        suppressFutureVersionWarning: true,
-      });
-      if (
-        snapshot.exists &&
-        result.before?.version &&
-        snapshot.sourceConfig.meta?.lastTouchedVersion &&
-        snapshot.sourceConfig.meta?.lastTouchedVersion !== result.before.version
-      ) {
-        await mutateConfigFile({
-          baseHash: snapshot.hash,
-          writeOptions: {
-            lastTouchedVersionOverride: result.before.version,
-            skipPluginValidation: true,
-          },
-          mutate: (_draft, { snapshot: current }) => {
-            if (
-              !isDeepStrictEqual(
-                withoutWriterStamp(current.sourceConfigBeforeMigrations ?? current.sourceConfig),
-                withoutWriterStamp(params.config),
-              )
-            ) {
-              throw new Error("Config changed during previous-generation restoration.");
-            }
-          },
-        });
-      }
-    });
+    if (configSnapshot.hash === hashConfigRaw(configSnapshot.raw)) {
+      await assertConfigUnchanged();
+    } else {
+      await withOwnedManagedUpdateEnv(env, () =>
+        withConfigMutationLock({ lockPath: configSnapshot.path }, async () => {
+          await assertConfigUnchanged();
+          if (configSnapshot.raw === null) {
+            await fs.rm(configSnapshot.path, { force: true });
+          } else {
+            await replaceFileAtomic({
+              filePath: configSnapshot.path,
+              content: configSnapshot.raw,
+              mode: 0o600,
+              preserveExistingMode: false,
+              beforeRename: assertConfigUnchanged,
+            });
+          }
+        }),
+      );
+    }
     // A no-service or --no-restart update owns file restoration only. Preserve
     // its original failure without claiming or changing a Gateway generation.
     if (!stopped || port === undefined) {
@@ -330,6 +382,7 @@ export async function rollbackFailedUpdate(params: {
     }
     if (
       failureReason === "rollback-state-unverified" ||
+      failureReason === "state-migrated-no-rollback" ||
       error instanceof NativePackageRollbackError
     ) {
       const reason = failureReason;

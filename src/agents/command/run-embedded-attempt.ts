@@ -364,7 +364,7 @@ export async function runEmbeddedAgentAttempt(params: {
           fallbackTrajectoryRecorder?.recordEvent("model.fallback_step", step);
         },
         runCandidate: async (providerOverride, modelOverride, runOptions) => {
-          const candidateAccounting = compactionAccounting.beginCandidate();
+          const candidateAccounting = compactionAccounting.beginCandidate(deferredLifecycle.signal);
           maintenanceAuthProfile = undefined;
           attemptMediaTaskIds = sessionKey
             ? getGeneratedMediaTaskIdsForSessionKey(sessionKey)
@@ -549,6 +549,7 @@ export async function runEmbeddedAgentAttempt(params: {
               onContextEngineTurnCandidate: runOptions.onContextEngineTurnCandidate,
               onUserMessagePersisted: attemptLifecycleCallbacks.onUserMessagePersisted,
               onCompactionAccounting: candidateAccounting.observe,
+              onCompactionRequestBudget: candidateAccounting.observeRequestBudget,
               onSuccessfulAuthProfile: (selection) => {
                 // Absence is a valid ambient-auth result; only an uncalled observer is unknown.
                 maintenanceAuthProfile = selection;
@@ -643,8 +644,6 @@ export async function runEmbeddedAgentAttempt(params: {
         }
         provider = err.provider;
         model = err.model;
-        fallbackProvider = err.provider;
-        fallbackModel = err.model;
         providerForAuthProfileValidation = err.provider;
         if (sessionEntry) {
           sessionEntry = { ...sessionEntry };
@@ -693,6 +692,7 @@ export async function runEmbeddedAgentAttempt(params: {
     effectiveTurnThinkLevel,
     maintenanceAuthProfile,
     compactionAccounting: compactionAccounting.fact,
+    compactionRequestBudget: compactionAccounting.requestBudget,
     internalSessionTarget,
     attemptExecutionRuntime,
     messageChannel,

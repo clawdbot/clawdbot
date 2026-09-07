@@ -810,6 +810,8 @@ const SkillProposalManifestEntrySchema = closedObject({
   createdAt: NonEmptyString,
   updatedAt: NonEmptyString,
   scanState: SkillProposalScanStateSchema,
+  revisionHash: Type.Optional(Sha256String),
+  degradedState: Type.Optional(Type.Literal("draft-missing")),
 });
 
 /** Lists skill-workshop proposals for the selected agent scope. */
@@ -1049,6 +1051,7 @@ const SkillCollectionReviewStatusSchema = closedObject({
 const SkillExperienceReviewStatusSchema = closedObject({
   attemptedAtMs: Type.Number(),
   outcome: Type.Union([
+    Type.Literal("completed"),
     Type.Literal("applied"),
     Type.Literal("proposed"),
     Type.Literal("nothing"),

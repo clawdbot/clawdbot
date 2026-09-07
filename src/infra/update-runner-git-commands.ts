@@ -42,8 +42,20 @@ export function resolveBuildEnv(
   };
 }
 
-export function gitCleanCheckArgs(gitRoot: string): string[] {
-  return ["git", "-C", gitRoot, "status", "--porcelain", "--", ":!dist/control-ui/"];
+export function gitCleanCheckArgs(
+  gitRoot: string,
+  sourceTreeStagingPaths: readonly string[] = [],
+): string[] {
+  return [
+    "git",
+    "-C",
+    gitRoot,
+    "status",
+    "--porcelain",
+    "--",
+    ":!dist/control-ui/",
+    ...sourceTreeStagingPaths.map((relative) => `:(top,exclude,literal)${relative}`),
+  ];
 }
 
 async function hasExplicitPnpmPreferOfflineConfig(params: {
