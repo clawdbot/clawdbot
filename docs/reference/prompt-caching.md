@@ -91,6 +91,7 @@ agents:
 
 ### Anthropic (direct API and Vertex AI)
 
+- When caching is enabled and the route supports tool cache control, the tool prefix is checkpointed separately from the system prompt.
 - `cacheRetention` is supported for `anthropic` and `anthropic-vertex` providers, and for Claude models on `amazon-bedrock` and custom `anthropic-messages`-compatible endpoints when `cacheRetention` is set explicitly.
 - When unset, OpenClaw seeds `cacheRetention: "short"` for direct Anthropic (`anthropic` and `anthropic-vertex` providers only; other Anthropic-family routes require an explicit value).
 - Native Anthropic Messages responses expose `cache_read_input_tokens` and `cache_creation_input_tokens`, mapped to `cacheRead` and `cacheWrite`.
@@ -98,18 +99,27 @@ agents:
 
 Source: `packages/ai/src/transports/anthropic-payload-policy.ts` (`resolveAnthropicEphemeralCacheControl`, `isLongTtlEligibleEndpoint`).
 
+### DeepInfra
+
+For `anthropic/*` models, the managed and SDK Chat Completions paths use the
+[shared marker layout](#chat-completions-cache-markers). `cacheRetention: "none"`
+disables these markers. By default, both `"short"` and `"long"` use ephemeral markers without
+a TTL override; OpenClaw does not assume one-hour support for this route.
+
 ### Model Studio / DashScope (Qwen)
 
-OpenClaw's direct-provider adapter enables explicit prompt caching by default on
-native or default Model Studio / DashScope OpenAI-compatible routes, using
-`compat.cacheControlFormat: "anthropic"` and the
-existing system, last-tool, and last-conversation cache markers. Explicit model
-compat settings take precedence over detected defaults. Custom proxy endpoints
-receive no automatic format default; set `compat.cacheControlFormat: "anthropic"`
-explicitly only when the proxy supports these markers.
+Both Chat Completions builders enable the [shared marker layout](#chat-completions-cache-markers)
+on native or default Model Studio / DashScope routes through
+`compat.cacheControlFormat: "anthropic"`. Explicit model compat settings take
+precedence over detected defaults. Custom proxy endpoints receive no automatic
+format default; set `compat.cacheControlFormat: "anthropic"` explicitly only when
+the proxy supports these markers.
 
-The embedded runner's boundary-aware Chat Completions transport does not yet apply
-these markers; detecting the format alone does not enable explicit caching there.
+Model Studio includes tool definitions in the system cache and ignores markers on
+tools themselves, so OpenClaw omits that marker on detected native routes.
+Qwen3.5 and later support message-level checkpoints only: splitting the stable and
+volatile system content into blocks does not guarantee independent reuse of the
+stable block. See [Model Studio explicit cache guidance](https://docs.modelstudio.console.alibabacloud.com/en/model-studio/explicit-cache-guide).
 
 Explicit `cacheRetention` values reach this transport without enabling
 `compat.supportsPromptCacheKey`; leave that flag unset because this route does not
@@ -142,7 +152,7 @@ cache billing are described in [Model Studio context caching](https://www.alibab
 
 ### OpenRouter
 
-For `openrouter/anthropic/*` model refs, OpenClaw injects Anthropic `cache_control` markers on system/developer prompt blocks, but only when the request still targets a verified OpenRouter route (`openrouter` on its default endpoint, or any provider/base URL that resolves to `openrouter.ai`). Repointing the model at an arbitrary OpenAI-compatible proxy URL stops this injection.
+For `openrouter/anthropic/*` model refs, both Chat Completions builders apply the [shared marker layout](#chat-completions-cache-markers), but only when the request still targets a verified OpenRouter route (`openrouter` on its default endpoint, or any provider/base URL that resolves to `openrouter.ai`). Repointing the model at an arbitrary OpenAI-compatible proxy URL stops automatic marker injection. `cacheRetention: "long"` requests `ttl: "1h"` on these verified routes; `"none"` disables markers. See [OpenRouter prompt caching](https://openrouter.ai/docs/guides/best-practices/prompt-caching).
 
 `contextPruning.mode: "cache-ttl"` is allowed for `openrouter/anthropic/*`, `openrouter/deepseek/*`, `openrouter/moonshot/*`, `openrouter/moonshotai/*`, and `openrouter/zai/*` model refs, because these routes handle provider-side prompt caching without needing OpenClaw's injected markers.
 
@@ -171,6 +181,33 @@ Source: `src/agents/cli-output.ts` (`toCliUsage`).
 ### Other providers
 
 If a provider does not support any of the above cache modes, `cacheRetention` has no effect.
+
+## Chat Completions cache markers
+
+OpenAI-compatible routes with `compat.cacheControlFormat: "anthropic"` share one
+marker policy across the managed transport, SDK builder, and provider wrappers:
+
+- The last tool definition is marked when the route supports tool markers; tools remain sorted by name.
+- The stable system/developer block is marked, with the volatile suffix in a separate unmarked block.
+- The latest eligible user text or tool result is marked, advancing through tool loops and new turns while skipping transient runtime-context carriers.
+
+The layout normally uses three markers and stays within the four-breakpoint
+budget. `cacheRetention: "none"` emits none. A conversation checkpoint covers
+all preceding tools, system content, and messages, so changing the volatile
+system suffix still invalidates that later checkpoint; the earlier stable-system
+checkpoint remains reusable where the backend supports block-level caching.
+Backend token minimums and cache lifetimes still apply.
+
+With `compat.requiresStringContent: true`, managed requests keep message content
+as strings and omit message-block markers, including through provider wrappers.
+The tool-definition marker remains where supported.
+
+Detected defaults request `ttl: "1h"` only on verified OpenRouter routes. For a
+custom endpoint that supports one-hour Anthropic caching, explicitly set
+`compat.cacheControlFormat: "anthropic"`, `compat.supportsLongCacheRetention: true`,
+and `cacheRetention: "long"` to send that TTL. Omitting the capability override
+keeps custom-endpoint markers without a TTL; setting it to `false` disables
+the one-hour TTL even on OpenRouter.
 
 ## System-prompt cache boundary
 
