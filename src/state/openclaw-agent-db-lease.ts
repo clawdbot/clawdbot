@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import type { DatabaseSync } from "node:sqlite";
 import { hasErrnoCode } from "../infra/errno.js";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../infra/kysely-sync-cache-state.js";
 import {
@@ -174,6 +175,16 @@ export function assertOpenClawAgentDatabaseLease(
   }
 }
 
+function readAgentDatabaseLeases(database: DatabaseSync) {
+  const db = getNodeSqliteKysely<AgentDatabaseLeaseDatabase>(database);
+  return executeSqliteQuerySync(
+    database,
+    db
+      .selectFrom("agent_database_leases")
+      .select(["agent_id", "lease_id", "owner_pid", "owner_start_time", "path"]),
+  ).rows;
+}
+
 function isAgentDatabaseLeaseStale(row: {
   owner_pid: number;
   owner_start_time: number | null;
@@ -213,14 +224,7 @@ export function assertNoOpenClawAgentDatabaseLeasesReadOnly(
       if (!tableExists(db, "agent_database_leases")) {
         return;
       }
-      const query = getNodeSqliteKysely<AgentDatabaseLeaseDatabase>(db);
-      const rows = executeSqliteQuerySync(
-        db,
-        query
-          .selectFrom("agent_database_leases")
-          .select(["agent_id", "owner_pid", "owner_start_time"]),
-      ).rows;
-      const owner = rows.find((row) => !isAgentDatabaseLeaseStale(row));
+      const owner = readAgentDatabaseLeases(db).find((row) => !isAgentDatabaseLeaseStale(row));
       if (owner) {
         throw new OpenClawAgentDatabaseLeaseActiveError(
           `Agent ${owner.agent_id} database is still open in process ${owner.owner_pid}; stop that process before Doctor repair.`,
@@ -244,13 +248,7 @@ export function assertNoOpenClawAgentDatabaseLeases(
   const rows = runOpenClawStateWriteTransaction((database) => {
     maintenance?.assertOwnedInTransaction(database.db);
     ensureAgentDatabaseLeaseSchema(database.db);
-    const db = getNodeSqliteKysely<AgentDatabaseLeaseDatabase>(database.db);
-    return executeSqliteQuerySync(
-      database.db,
-      db
-        .selectFrom("agent_database_leases")
-        .select(["agent_id", "lease_id", "owner_pid", "owner_start_time", "path"]),
-    ).rows;
+    return readAgentDatabaseLeases(database.db);
   }, options);
 
   const staleLeaseIds = rows.filter(isAgentDatabaseLeaseStale).map((row) => row.lease_id);

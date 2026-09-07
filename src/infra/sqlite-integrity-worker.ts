@@ -54,33 +54,28 @@ export function assertSqliteIntegrityInWorker(
     execArgv: resolveRuntimeWorkerArgv(entry).slice(0, -1),
     serialization: "advanced",
     stdio: ["ignore", "ignore", "ignore", "ipc"],
+    timeout: SQLITE_INSPECTION_TIMEOUT_MS,
+    killSignal: "SIGKILL",
+    signal,
   });
   return new Promise((resolve, reject) => {
     let result: SqliteIntegrityWorkerResult | undefined;
     let failure: Error | undefined;
-    // Kill the process to interrupt native SQLite; join close before releasing
-    // the caller's lease, including on cancellation and timeout.
-    const abort = () => {
-      worker.kill("SIGKILL");
-    };
-    const timeout = setTimeout(() => {
-      failure = sqliteInspectionTimeoutError("integrity check", pathname);
-      abort();
-    }, SQLITE_INSPECTION_TIMEOUT_MS);
-    signal.addEventListener("abort", abort, { once: true });
     worker.on("message", (message: SqliteIntegrityWorkerResult) => {
       result = message;
     });
     worker.on("error", (error) => {
       failure = toStringifiedError(error);
     });
-    worker.once("close", (code) => {
-      clearTimeout(timeout);
-      signal.removeEventListener("abort", abort);
+    // Native cancellation/timeout kills the child; ownership ends only at close.
+    worker.once("close", (code, closeSignal) => {
       try {
         signal.throwIfAborted();
         if (failure) {
           throw failure;
+        }
+        if (worker.killed && closeSignal === "SIGKILL") {
+          throw sqliteInspectionTimeoutError("integrity check", pathname);
         }
         if (code !== 0 || !result) {
           throw new Error(`SQLite integrity worker exited ${code} without a completed check`);
@@ -101,15 +96,13 @@ export function assertSqliteIntegrityInWorker(
         reject(toStringifiedError(error));
       }
     });
-    if (signal.aborted) {
-      abort();
-    } else {
+    if (!signal.aborted) {
       worker.send(
         { pathname, identity, busyTimeoutMs } satisfies SqliteIntegrityWorkerInput,
         (error) => {
           if (error) {
             failure = error;
-            abort();
+            worker.kill("SIGKILL");
           }
         },
       );
