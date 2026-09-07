@@ -33,6 +33,7 @@ import {
   type SessionBindingAdapter,
 } from "../../../infra/outbound/session-binding-service.js";
 import { flushLogger, resetLogger } from "../../../logging/logger.js";
+import { loadActivatedBundledPluginPublicSurfaceModule } from "../../../plugin-sdk/facade-runtime.js";
 import {
   bindGatewayContextResolver,
   getPluginRuntimeGatewayRequestScope,
@@ -103,6 +104,11 @@ beforeEach(async () => {
   );
   clearConfigCache();
   clearRuntimeConfigSnapshot();
+  // Prepare the real browser cleanup surface outside the provisional-session RPC deadline.
+  await loadActivatedBundledPluginPublicSurfaceModule({
+    dirName: "browser",
+    artifactBasename: "browser-maintenance.js",
+  });
   managerTesting.resetAcpSessionManagerForTests();
   resetSubagentRegistryForTests({ persist: false });
   resetTaskRegistryForTests({ persist: false });
