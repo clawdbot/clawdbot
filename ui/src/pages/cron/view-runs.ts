@@ -368,16 +368,16 @@ function formatRunNextLabel(nextRunAtMs: number, nowMs = Date.now()) {
   return nextRunAtMs > nowMs ? t("cron.runEntry.next", { rel }) : t("cron.runEntry.due", { rel });
 }
 
-export function runStatusLabel(value: string): string {
-  switch (value) {
+export function runStatusLabel(value: string, completion?: string): string {
+  switch (value === "failed" ? "error" : value) {
     case "ok":
-      return t("cron.runs.runStatusOk");
+      return completion && completion !== "succeeded"
+        ? `${t("cron.runs.runStatusOk")} · ${runStatusLabel(completion)}`
+        : t("cron.runs.runStatusOk");
     case "error":
       return t("cron.runs.runStatusError");
-    case "skipped":
-      return t("cron.runs.runStatusSkipped");
     default:
-      return t("cron.runs.runStatusUnknown");
+      return t(value === "skipped" ? "cron.runs.runStatusSkipped" : "cron.runs.runStatusUnknown");
   }
 }
 
@@ -410,7 +410,7 @@ function renderRun(
           basePath,
         }).href
       : null;
-  const status = runStatusLabel(entry.status ?? "unknown");
+  const status = runStatusLabel(entry.status ?? "unknown", entry.completionStatus);
   const delivery = runDeliveryLabel(entry.deliveryStatus ?? "not-requested");
   const usage = entry.usage;
   const usageSummary =

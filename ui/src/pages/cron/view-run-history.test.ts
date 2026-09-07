@@ -61,6 +61,81 @@ describe("cron view run history", () => {
     expect(onRunsFiltersChange).toHaveBeenCalledWith({ cronRunsStatuses: [] });
   });
 
+  it("distinguishes run completion from execution status without changing status filters", () => {
+    const onRunsFiltersChange = vi.fn();
+    const cases = [
+      {
+        jobId: "required-failed",
+        status: "ok",
+        completionStatus: "failed",
+        deliveryStatus: "not-delivered",
+        deliveryError: "chat unavailable",
+        expected: "required-failed · OK · Error",
+      },
+      {
+        jobId: "completion-unknown",
+        status: "ok",
+        completionStatus: "unknown",
+        deliveryStatus: "unknown",
+        expected: "completion-unknown · OK · Unknown",
+      },
+      {
+        jobId: "completion-succeeded",
+        status: "ok",
+        completionStatus: "succeeded",
+        deliveryStatus: "delivered",
+        expected: "completion-succeeded · OK",
+      },
+      {
+        jobId: "legacy-run",
+        status: "ok",
+        expected: "legacy-run · OK",
+      },
+      {
+        jobId: "execution-error",
+        status: "error",
+        completionStatus: "failed",
+        expected: "execution-error · Error",
+      },
+      {
+        jobId: "execution-skipped",
+        status: "skipped",
+        completionStatus: "unknown",
+        expected: "execution-skipped · Skipped",
+      },
+      {
+        jobId: "best-effort",
+        status: "ok",
+        completionStatus: "succeeded",
+        deliveryStatus: "not-delivered",
+        expected: "best-effort · OK",
+      },
+    ] as const;
+    const container = renderView({
+      listTab: "activity",
+      onRunsFiltersChange,
+      runs: cases.map(({ expected: _expected, ...entry }, index) => ({
+        ts: index,
+        action: "finished",
+        ...entry,
+      })),
+    });
+
+    const titles = Array.from(container.querySelectorAll(".cron-run-entry__title"), (title) =>
+      title.textContent?.replace(/\s+/g, " ").trim(),
+    );
+    expect(titles).toEqual(cases.toReversed().map(({ expected }) => expected));
+
+    const okOption = container.querySelector<HTMLElement>(
+      '[data-filter="status"] wa-dropdown-item[value="option:ok"]',
+    );
+    expect(okOption).not.toBeNull();
+    okOption
+      ?.closest("wa-dropdown")
+      ?.dispatchEvent(new CustomEvent("wa-select", { detail: { item: okOption }, bubbles: true }));
+    expect(onRunsFiltersChange).toHaveBeenCalledWith({ cronRunsStatuses: ["ok"] });
+  });
+
   it("formats run token counts and durations in the rendered entry", () => {
     const container = renderView({
       listTab: "activity",
