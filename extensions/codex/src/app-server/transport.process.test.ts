@@ -367,8 +367,8 @@ process.stdin.on("end", () => process.exit(0));
       };
       const snapshotSpy = vi
         .spyOn(processSnapshot, "readCodexAppServerProcessSnapshot")
-        .mockImplementation((inspectionDeadline = Date.now() + 2_000, pids) =>
-          readSnapshot(inspectionDeadline, pids),
+        .mockImplementation((inspectionDeadline, pids) =>
+          readSnapshot(inspectionDeadline ?? Date.now() + 2_000, pids),
         );
       const processSpy = vi
         .spyOn(processSnapshot, "readCodexAppServerProcess")
