@@ -12,23 +12,31 @@ import { defaultRuntime } from "../../runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import * as updateShared from "./shared.js";
+import { interruptReplayAgentFamily } from "./update-command-agent-family.test-support.js";
 import { completeUpdateCommandCandidate } from "./update-command-candidate-completion.js";
 import { resumePendingUpdateCommand } from "./update-command-pending-replay.js";
 import type { FinishUpdateParams } from "./update-command-post-update.js";
 import { UpdateCommandFinalizedRecoveryFailure } from "./update-command-result.js";
 import { updateCommand } from "./update-command.js";
 
-export const packageGapReplayModes = [
+export const successfulPackageGapReplayModes: readonly string[] = [
+  "replay-package-gap-agent-wal",
+  "replay-package-gap-agent-empty-wal",
+  "replay-package-gap-agent-writer",
+  "replay-package-gap-agent-reader",
   "replay-package-gap",
   "replay-package-gap-slow-checkpoint",
   "replay-package-gap-checkpoint-intent",
   "replay-package-gap-preparing",
+];
+export const packageGapReplayModes = [
+  ...successfulPackageGapReplayModes,
   "replay-package-gap-config",
   "replay-package-gap-package",
   "replay-package-gap-command",
   "replay-package-gap-manager",
   "replay-package-gap-profile",
-] as const;
+];
 
 /** Lose the process after its journaled candidate displacement, with the actual
  * original package, checkpoint and failed-Doctor after-image still retained. */
@@ -192,17 +200,12 @@ export async function interruptPackageGapReplay(
       });
       closeOpenClawStateDatabaseForTest();
     }
-    const outcome = await invoke();
+    const outcome = mode.startsWith("replay-package-gap-agent-")
+      ? await interruptReplayAgentFamily({ env, mode, invoke, runId: record.runId })
+      : await invoke();
     root.mockRestore();
     exit.mockRestore();
-    if (
-      ![
-        "replay-package-gap",
-        "replay-package-gap-slow-checkpoint",
-        "replay-package-gap-checkpoint-intent",
-        "replay-package-gap-preparing",
-      ].includes(mode)
-    ) {
+    if (!successfulPackageGapReplayModes.includes(mode)) {
       expect(outcome).toBeInstanceOf(Error);
       expect(outcome).not.toBeInstanceOf(UpdateCommandFinalizedRecoveryFailure);
       await expect(fs.lstat(descriptor.liveRoot)).rejects.toMatchObject({ code: "ENOENT" });

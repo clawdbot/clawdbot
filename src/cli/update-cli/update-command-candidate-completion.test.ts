@@ -36,6 +36,7 @@ import {
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import * as healthProbe from "../daemon-cli/restart-health.js";
+import { seedReplayAgentDatabase } from "./update-command-agent-family.test-support.js";
 import { completeUpdateCommandCandidate } from "./update-command-candidate-completion.js";
 import { captureStoppedState } from "./update-command-checkpoint.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
@@ -44,6 +45,7 @@ import { withUpdateCommandNativePreparation } from "./update-command-native-prep
 import {
   interruptPackageGapReplay,
   packageGapReplayModes,
+  successfulPackageGapReplayModes,
 } from "./update-command-package-gap.test-support.js";
 import {
   interruptSealedReplay,
@@ -117,6 +119,7 @@ it.each([
     if (rollback || lateRollback) {
       await buildCheckpointReaderRuntime(pkg.packageRoot, false, false, {
         selfContained: true,
+        agentReader: mode.startsWith("replay-package-gap-agent-"),
         preWorkshop: older,
       });
     }
@@ -195,6 +198,9 @@ it.each([
         async () => {
           const env = { ...process.env };
           const options = { env };
+          if (mode.startsWith("replay-package-gap-agent-")) {
+            await seedReplayAgentDatabase(env);
+          }
           const run = createUpdateRun({ trigger: "cli" }, options);
           const config = env.OPENCLAW_CONFIG_PATH!;
           await fs.writeFile(
@@ -724,13 +730,7 @@ it.each([
             expect(start).toHaveBeenCalledTimes(
               mode === "replay-conflict" ||
                 mode === "replay-shadowed" ||
-                (packageGap &&
-                  ![
-                    "replay-package-gap",
-                    "replay-package-gap-slow-checkpoint",
-                    "replay-package-gap-checkpoint-intent",
-                    "replay-package-gap-preparing",
-                  ].includes(mode))
+                (packageGap && !successfulPackageGapReplayModes.includes(mode))
                 ? 0
                 : 1,
             );

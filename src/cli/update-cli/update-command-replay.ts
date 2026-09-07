@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { reopenPackageUpdateTransaction } from "../../infra/package-update-recovery.js";
+import { reopenUpdateCheckpoint } from "../../infra/update-checkpoint.js";
 import { currentUpdateRecoveryNativeFacts } from "../../infra/update-run-recovery-native-schema.js";
 import { createUpdateRecoveryPackageHooks } from "../../infra/update-run-recovery-package.js";
 import {
@@ -11,6 +12,7 @@ import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.pa
 import { withOpenClawStateReplayPublication } from "../../state/openclaw-state-publication.js";
 import { assertOpenClawStateReplayWritersStopped } from "../../state/openclaw-state-replay-drain.js";
 import type { UpdateCommandOptions } from "./shared.js";
+import { withUpdateCommandAgentPublication } from "./update-command-agent-publication.js";
 import { createUpdateCommandCheckpointReplayAccess } from "./update-command-checkpoint-replay.js";
 import { readUpdateCommandNativeObservation } from "./update-command-native-observation.js";
 import {
@@ -98,6 +100,14 @@ export async function resumeUpdateCommandRestorePublication(
           "Sealed replay has not retained the restored previous package.",
         );
       }
+      const checkpoint =
+        !sealed && expected.checkpoint
+          ? await reopenUpdateCheckpoint(expected.checkpoint.ref, {
+              artifactRoot: source.artifactRoot,
+              binding: expected.checkpoint.binding,
+            })
+          : undefined;
+      assertCurrent();
       owned.checkpointReplay = {
         withDatabaseFilePublication: (operation) =>
           withOpenClawStateReplayPublication(
@@ -117,7 +127,27 @@ export async function resumeUpdateCommandRestorePublication(
                 assertCurrent();
               },
             },
-            operation,
+            (assertPublication, bindPublishedRecord) => {
+              const assertOwned = () => {
+                assertCurrent();
+                assertPublication();
+              };
+              const publish = () => operation(assertOwned, bindPublishedRecord);
+              if (sealed) {
+                return publish();
+              }
+              if (!checkpoint) {
+                throw new Error("Unsealed replay has no original checkpoint");
+              }
+              return withUpdateCommandAgentPublication(
+                {
+                  original: checkpoint,
+                  current: source.current,
+                  assertCurrent: assertOwned,
+                },
+                publish,
+              );
+            },
           ),
         access: createUpdateCommandCheckpointReplayAccess({
           databasePath: initial.databasePath,
