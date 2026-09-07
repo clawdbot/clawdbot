@@ -259,6 +259,15 @@ history, verify that Codex unloaded the previous configuration, then append a
 complete superseding policy message before admitting the turn. Historical policy
 text can remain in the transcript; the later policy explicitly supersedes it.
 
+Nonempty generic policies use an OpenClaw-labeled frame that identifies their
+replacement and withdrawal lifetime without changing the policy body. Native
+configuration and the injected refresh use the same framed text, including for
+side conversations. An empty policy remains an exactly empty native configuration
+with a separate withdrawal notice. Framing applies to new policy messages; it
+does not rewrite or retroactively label older history, and it does not replace
+independently supplied native instructions or tool and approval enforcement.
+Model instruction following remains separate from those enforced boundaries.
+
 If another client lease, subscriber, or failed native unload prevents configuration
 proof, the turn stops before inference. A prewrite ownership refusal keeps the
 healthy shared client and its other conversations available. External WebSocket,

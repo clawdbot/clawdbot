@@ -35,6 +35,7 @@ import {
   codexDynamicToolsFingerprint,
   codexLegacyDynamicToolsFingerprint,
 } from "./thread-lifecycle.js";
+import { frameCodexGenericPolicy } from "./thread-policy.js";
 import { hasCodexMirrorOrigin } from "./transcript-mirror-attestation.js";
 import { readMirrorIdentity } from "./upstream-prompt-provenance.js";
 
@@ -368,7 +369,12 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
   };
   const buildRenderedCodexDeveloperInstructions = () =>
     joinPresentSections(
-      turnState.promptBuild.developerInstructions,
+      frameCodexGenericPolicy(
+        joinPresentSections(
+          turnState.promptBuild.developerInstructions,
+          attemptTools.configuredMcp?.diagnosticNotice,
+        ),
+      ),
       buildTurnCollaborationMode(params, {
         turnScopedDeveloperInstructions: workspaceBootstrapContext.turnScopedDeveloperInstructions,
         skillsCollaborationInstructions,

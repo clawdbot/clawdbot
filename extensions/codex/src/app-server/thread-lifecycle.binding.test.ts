@@ -164,6 +164,14 @@ const DEFAULT_CODEX_WEB_SEARCH_THREAD_CONFIG_FINGERPRINT = JSON.stringify({
   web_search: "cached",
 });
 
+const GENERIC_POLICY_NOTICE =
+  "The following is the complete current OpenClaw-supplied generic instruction policy. It replaces earlier OpenClaw-supplied generic policy, including OpenClaw-carried workspace text and sections now absent. Independently supplied native managed, guardian, security, collaboration, and project instructions retain their authority. User requests retain their own authority.\n\n";
+const GENERIC_POLICY_FRAME_PREFIX =
+  "<openclaw_generic_policy>\n" +
+  GENERIC_POLICY_NOTICE +
+  "This policy applies only until a later OpenClaw generic policy replaces or withdraws it, even if this block remains in history. Independently supplied native child-role instructions retain their authority.\n\n";
+const GENERIC_POLICY_FRAME_SUFFIX = "\n</openclaw_generic_policy>";
+
 function writeCodexAppServerBinding(...args: Parameters<typeof writeRawCodexAppServerBinding>) {
   const [sessionFile, binding] = args;
   registerCodexTestSessionIdentity(sessionFile, "session-1", "agent:main:session-1");
@@ -885,6 +893,11 @@ describe("Codex app-server thread lifecycle bindings", () => {
   });
   it.each([
     { developerInstructions: "replacement policy", fault: "none" },
+    {
+      developerInstructions: " \tPolicy café é 漢字\r\n\n  Preserve <literal> & whitespace.\t\n",
+      fault: "none",
+    },
+    { developerInstructions: " \t\r\n ", fault: "none" },
     { developerInstructions: "", fault: "none" },
     { developerInstructions: "replacement policy", fault: "unload" },
     { developerInstructions: "replacement policy", fault: "client retired" },
@@ -995,11 +1008,37 @@ describe("Codex app-server thread lifecycle bindings", () => {
           "thread/resume",
           "thread/inject_items",
         ]);
-        const policy = JSON.stringify(requests.at(-1)?.params);
-        expect(policy).toContain(
-          developerInstructions || "earlier OpenClaw generic policy is withdrawn",
-        );
-        expect(policy).toContain("It replaces earlier OpenClaw-supplied generic policy");
+        const resumeParams = requests.find(({ method }) => method === "thread/resume")?.params;
+        if (!isJsonObject(resumeParams) || typeof resumeParams.developerInstructions !== "string") {
+          throw new Error("Expected the native resume request's complete generic policy");
+        }
+        const configuredPolicy = resumeParams.developerInstructions;
+        if (developerInstructions === "") {
+          expect(configuredPolicy).toBe("");
+        } else {
+          expect(configuredPolicy).toBe(
+            GENERIC_POLICY_FRAME_PREFIX + developerInstructions + GENERIC_POLICY_FRAME_SUFFIX,
+          );
+          expect(configuredPolicy.match(/<openclaw_generic_policy>/g)).toHaveLength(1);
+          expect(
+            Buffer.byteLength(configuredPolicy) - Buffer.byteLength(developerInstructions),
+          ).toBeLessThan(768);
+        }
+        const injectedPolicy =
+          developerInstructions === ""
+            ? GENERIC_POLICY_NOTICE +
+              "The current OpenClaw generic policy is empty; earlier OpenClaw generic policy is withdrawn."
+            : configuredPolicy;
+        expect(requests.at(-1)?.params).toEqual({
+          threadId,
+          items: [
+            {
+              type: "message",
+              role: "developer",
+              content: [{ type: "input_text", text: injectedPolicy }],
+            },
+          ],
+        });
         expect((await readCodexAppServerBinding(sessionFile))?.threadId).toBe(threadId);
       } finally {
         releaseLeasedSharedCodexAppServerClient(wire.client);
@@ -2731,6 +2770,122 @@ describe("Codex app-server thread lifecycle bindings", () => {
       "thread/unsubscribe",
     ]);
   });
+
+  it.each([
+    { initiallyEmpty: false, replacement: "replacement policy" },
+    { initiallyEmpty: false, replacement: "" },
+    { initiallyEmpty: true, replacement: "replacement policy" },
+  ])(
+    "preserves incognito creation policy through refusal and restoration (initially empty: $initiallyEmpty, replacement: $replacement)",
+    async ({ initiallyEmpty, replacement }) => {
+      const sessionFile = path.join(tempDir, "incognito-policy-restoration.jsonl");
+      const workspaceDir = path.join(tempDir, "incognito-policy-workspace");
+      const params = createParams(sessionFile, workspaceDir);
+      params.sessionKey = "agent:main:dashboard:incognito-policy-restoration";
+      const original = initiallyEmpty ? "" : " \tOriginal café 漢字\r\n  Keep these bytes.\n ";
+      const fixture = await createLeasedCodexLifecycleHarness({
+        agentDir: path.join(tempDir, "agent"),
+        respond: async (method) => {
+          if (method === "config/read") {
+            return { config: {}, origins: {}, layers: [] };
+          }
+          if (method === "configRequirements/read") {
+            return { requirements: null };
+          }
+          if (method === "thread/start") {
+            return threadStartResult("incognito-policy-thread");
+          }
+          throw new Error(`unexpected method: ${method}`);
+        },
+      });
+      const { client, request } = fixture;
+      const abandonClient = vi.fn(async () => {});
+      const common = {
+        client,
+        abandonClient,
+        params,
+        cwd: workspaceDir,
+        dynamicTools: [],
+        appServer: createThreadLifecycleAppServerOptions(),
+        userMcpServersEnabled: false,
+        developerInstructions: original,
+      };
+      const retain = async (binding: Awaited<ReturnType<typeof startOrResumeThread>>) => {
+        expect(
+          await retainCodexAppServerLiveThread(
+            client,
+            binding.threadId,
+            binding.liveThreadOwnership?.release,
+            binding.liveThreadConfigFingerprint,
+            null,
+            binding.liveThreadEphemeralPolicy,
+          ),
+        ).toBe(true);
+      };
+      try {
+        const created = await startOrResumeThread(common);
+        const creationRequest = request.mock.calls.find(
+          ([method]) => method === "thread/start",
+        )?.[1];
+        if (
+          !isJsonObject(creationRequest) ||
+          typeof creationRequest.developerInstructions !== "string"
+        ) {
+          throw new Error("Expected the native incognito creation policy");
+        }
+        expect(created.liveThreadEphemeralPolicy).toBe(creationRequest.developerInstructions);
+        expect(creationRequest).toMatchObject({
+          ephemeral: true,
+          developerInstructions: initiallyEmpty
+            ? ""
+            : GENERIC_POLICY_FRAME_PREFIX + original + GENERIC_POLICY_FRAME_SUFFIX,
+        });
+        await retain(created);
+        const saved = await readCodexAppServerBinding(sessionFile);
+        const unchanged = await startOrResumeThread(common);
+        expect(unchanged).toMatchObject({
+          threadId: created.threadId,
+          liveThreadEphemeralPolicy: created.liveThreadEphemeralPolicy,
+          lifecycle: { action: "resumed" },
+        });
+        await retain(unchanged);
+        const beforeRefusal = request.mock.calls.length;
+        await expect(
+          startOrResumeThread({ ...common, developerInstructions: replacement }),
+        ).rejects.toMatchObject({
+          name: "CodexIncognitoPolicyChangeError",
+          scope: undefined,
+          message: expect.stringContaining("Restore the previous instructions"),
+        });
+        expect(
+          request.mock.calls
+            .slice(beforeRefusal)
+            .filter(([method]) => method.startsWith("thread/") || method.startsWith("turn/")),
+        ).toEqual([]);
+        await expect(readCodexAppServerBinding(sessionFile)).resolves.toEqual(saved);
+        expect(abandonClient).not.toHaveBeenCalled();
+        expect(client.getCloseError()).toBeUndefined();
+
+        const restored = await startOrResumeThread(common);
+        expect(restored).toMatchObject({
+          threadId: created.threadId,
+          clientId: created.clientId,
+          liveThreadEphemeralPolicy: creationRequest.developerInstructions,
+          lifecycle: { action: "resumed" },
+        });
+        expect(restored.liveThreadOwnership).toBeDefined();
+        expect(() => restored.liveThreadOwnership!.assertCurrent()).not.toThrow();
+        await expect(readCodexAppServerBinding(sessionFile)).resolves.toEqual(saved);
+        expect(
+          request.mock.calls
+            .filter(([method]) => method.startsWith("thread/"))
+            .map(([method]) => method),
+        ).toEqual(["thread/start"]);
+      } finally {
+        client.close();
+      }
+    },
+  );
 
   it.each([
     { restricted: false, mcpDrift: false },

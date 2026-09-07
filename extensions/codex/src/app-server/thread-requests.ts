@@ -36,6 +36,7 @@ import {
   resolveCodexAppServerModelProvider,
   resolveCodexAppServerRequestModelSelection,
 } from "./thread-model-selection.js";
+import { frameCodexGenericPolicy } from "./thread-policy.js";
 import { buildDeveloperInstructions, type CodexThreadPromptContext } from "./thread-prompt.js";
 import { applyCodexManagedShellEnvironment } from "./thread-shell-environment.js";
 import { resolveCodexWebSearchPlan, type CodexNativeWebSearchSupport } from "./web-search.js";
@@ -212,9 +213,10 @@ export function buildCodexThreadConfiguration(
       shellEnvironment: options.shellEnvironment,
       disableLoginShell: options.disableLoginShell,
     }),
-    developerInstructions:
+    developerInstructions: frameCodexGenericPolicy(
       options.developerInstructions ??
-      buildDeveloperInstructions(params, { dynamicTools: options.dynamicTools }),
+        buildDeveloperInstructions(params, { dynamicTools: options.dynamicTools }),
+    ),
   };
 }
 

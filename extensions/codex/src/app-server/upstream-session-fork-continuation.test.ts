@@ -25,6 +25,7 @@ import {
 import { createCodexTestBindingStateStore } from "./session-binding.test-helpers.js";
 import { createCodexTestModel } from "./test-support.js";
 import { startOrResumeThread } from "./thread-lifecycle.js";
+import { frameCodexGenericPolicy } from "./thread-policy.js";
 import { importCodexThreadHistoryToTranscript } from "./transcript-mirror.js";
 import {
   createForkTestRuntime,
@@ -327,7 +328,7 @@ describe("persistent upstream fork continuation", () => {
           model: nativeModel,
           modelProvider: "openai",
           dynamicTools,
-          developerInstructions,
+          developerInstructions: frameCodexGenericPolicy(developerInstructions),
         }),
         expect.anything(),
       );

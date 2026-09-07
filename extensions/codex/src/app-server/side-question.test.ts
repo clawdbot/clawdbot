@@ -905,6 +905,17 @@ describe("runCodexAppServerSideQuestion", () => {
       | { content?: Array<{ text?: string }> }
       | undefined;
     const injectedText = injectedItem?.content?.[0]?.text;
+    expect(injectedText).toBe(forkParams?.developerInstructions);
+    expect(injectedText).toMatch(/^<openclaw_generic_policy>\n/);
+    expect(injectedText).toMatch(/\n<\/openclaw_generic_policy>$/);
+    expect(injectedText?.match(/<openclaw_generic_policy>/g)).toHaveLength(1);
+    expect(injectParams?.items).toEqual([
+      {
+        type: "message",
+        role: "developer",
+        content: [{ type: "input_text", text: forkParams?.developerInstructions }],
+      },
+    ]);
     expect(injectedText).toContain(
       "External tools may be available according to this thread's current permissions",
     );
