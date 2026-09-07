@@ -325,7 +325,7 @@ export async function collectSecurityWarnings(
     findings.push(...collectDurableExecApprovalWarnings(approvals));
   }
 
-  // Network exposure needs auth proof before doctor can treat non-loopback bind as intentional.
+  // Network exposure needs an explicit auth mechanism before Doctor treats it as intentional.
   const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";
   const gatewayBind = (cfg.gateway?.bind ?? "loopback") as string;
   const customBindHost = cfg.gateway?.customBindHost?.trim();
@@ -362,7 +362,7 @@ export async function collectSecurityWarnings(
   ];
 
   if (isExposed) {
-    if (!hasSharedSecret) {
+    if (!hasSharedSecret && resolvedAuth.mode !== "trusted-proxy") {
       const authFixLines =
         resolvedAuth.mode === "password"
           ? [
@@ -397,7 +397,7 @@ export async function collectSecurityWarnings(
         title: "WARNING",
         detail: [
           `Gateway bound to ${bindDescriptor} (network-accessible).`,
-          "Ensure your auth credentials are strong and not exposed.",
+          "Ensure the configured authentication boundary is strong and direct Gateway access is restricted.",
         ].join("\n"),
         remediation: saferRemoteAccessLines.join("\n"),
       });
