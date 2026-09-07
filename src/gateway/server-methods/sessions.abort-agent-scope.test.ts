@@ -68,9 +68,12 @@ vi.mock("../../agents/embedded-agent-runner/runs.js", async () => {
   );
   return {
     ...actual,
-    abortEmbeddedAgentRun: (sessionId: string) => {
-      abortEmbeddedAgentRunMock(sessionId);
-      return actual.abortEmbeddedAgentRun(sessionId);
+    abortEmbeddedAgentRun: (
+      sessionId: string,
+      opts?: { agentId?: string; defaultAgentId?: string },
+    ) => {
+      abortEmbeddedAgentRunMock(sessionId, opts);
+      return actual.abortEmbeddedAgentRun(sessionId, opts);
     },
     isEmbeddedAgentRunInProgress: (...args: unknown[]) => isEmbeddedAgentRunInProgressMock(...args),
     resolveEmbeddedAgentRunProgressState: (...args: unknown[]) =>
@@ -579,7 +582,10 @@ describe("sessions.abort agent scope", () => {
         undefined,
       );
       expect(clearSessionQueuesMock).not.toHaveBeenCalled();
-      expect(abortEmbeddedAgentRunMock).toHaveBeenCalledWith("weixin-session");
+      expect(abortEmbeddedAgentRunMock).toHaveBeenCalledWith(
+        "weixin-session",
+        expect.objectContaining({ agentId: expect.any(String) }),
+      );
       expect(weixinOperation.abortSignal.aborted).toBe(true);
       expect(telegramOperation.abortSignal.aborted).toBe(false);
       expect(broadcastToConnIds).toHaveBeenCalledWith(
@@ -633,7 +639,10 @@ describe("sessions.abort agent scope", () => {
       );
 
       expect(clearSessionQueuesMock).not.toHaveBeenCalled();
-      expect(abortEmbeddedAgentRunMock).toHaveBeenCalledWith("weixin-session");
+      expect(abortEmbeddedAgentRunMock).toHaveBeenCalledWith(
+        "weixin-session",
+        expect.objectContaining({ agentId: expect.any(String) }),
+      );
       expect(weixinOperation.abortSignal.aborted).toBe(true);
       expect(telegramOperation.abortSignal.aborted).toBe(false);
       expect(respond).toHaveBeenCalledWith(
@@ -679,7 +688,10 @@ describe("sessions.abort agent scope", () => {
       "agent:main:openclaw-weixin:direct:queued-user",
       "queued-session",
     ]);
-    expect(abortEmbeddedAgentRunMock).toHaveBeenCalledWith("queued-session");
+    expect(abortEmbeddedAgentRunMock).toHaveBeenCalledWith(
+      "queued-session",
+      expect.objectContaining({ agentId: expect.any(String) }),
+    );
     expect(respond).toHaveBeenCalledWith(
       true,
       { ok: true, abortedRunId: null, status: "aborted" },

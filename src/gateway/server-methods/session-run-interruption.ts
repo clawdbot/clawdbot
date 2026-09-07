@@ -29,17 +29,22 @@ export async function interruptSessionRunIfActive(params: {
   excludeRunIds?: ReadonlySet<string>;
 }): Promise<{ interrupted: boolean; error?: ReturnType<typeof errorShape> }> {
   const cfg = params.context.getRuntimeConfig();
+  const defaultAgentId = tryResolveSessionCompatibilityOwnerAgentId(cfg, params.canonicalKey);
+  const embeddedOwner = {
+    ...(params.agentId ? { agentId: params.agentId } : {}),
+    ...(defaultAgentId ? { defaultAgentId } : {}),
+  };
   const hasTrackedRun = hasTrackedActiveSessionRun({
     context: params.context,
     requestedKey: params.requestedKey,
     canonicalKey: params.canonicalKey,
     agentId: params.agentId,
-    defaultAgentId: tryResolveSessionCompatibilityOwnerAgentId(cfg, params.canonicalKey),
+    defaultAgentId,
     excludeRunIds: params.excludeRunIds,
   });
   const hasEmbeddedRun =
     typeof params.sessionId === "string" && params.sessionId
-      ? isEmbeddedAgentRunActive(params.sessionId)
+      ? isEmbeddedAgentRunActive(params.sessionId, embeddedOwner)
       : false;
   const hasWorkerRun =
     typeof params.sessionId === "string" && params.sessionId
@@ -60,7 +65,7 @@ export async function interruptSessionRunIfActive(params: {
       requestedKey: params.requestedKey,
       canonicalKey: params.canonicalKey,
       agentId: params.agentId,
-      defaultAgentId: tryResolveSessionCompatibilityOwnerAgentId(cfg, params.canonicalKey),
+      defaultAgentId,
     });
 
     await handleChatAbortRequestWithLifecycle(
@@ -91,13 +96,13 @@ export async function interruptSessionRunIfActive(params: {
   }
 
   if (hasEmbeddedRun && params.sessionId) {
-    abortEmbeddedAgentRun(params.sessionId);
+    abortEmbeddedAgentRun(params.sessionId, embeddedOwner);
   }
 
   clearSessionQueues([params.requestedKey, params.canonicalKey, params.sessionId]);
 
   if (hasEmbeddedRun && params.sessionId) {
-    const ended = await waitForEmbeddedAgentRunEnd(params.sessionId, 15_000);
+    const ended = await waitForEmbeddedAgentRunEnd(params.sessionId, 15_000, embeddedOwner);
     if (!ended) {
       return {
         interrupted: true,

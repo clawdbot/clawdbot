@@ -389,10 +389,15 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
             }
             // Persisted channel replies are active session work even when they
             // have no connection-owned chat controller.
-            const wasActive = persistedSessionId && isEmbeddedAgentRunActive(persistedSessionId);
+            const embeddedOwner = {
+              agentId: targetAgentId,
+              ...(stableTargetOwner ? { defaultAgentId: stableTargetOwner } : {}),
+            };
+            const wasActive =
+              persistedSessionId && isEmbeddedAgentRunActive(persistedSessionId, embeddedOwner);
             const embeddedAborted =
               persistedSessionId && canonicalKey !== "global"
-                ? abortEmbeddedAgentRun(persistedSessionId)
+                ? abortEmbeddedAgentRun(persistedSessionId, embeddedOwner)
                 : false;
             if (
               (clearQueued || canonicalKey === "global") &&

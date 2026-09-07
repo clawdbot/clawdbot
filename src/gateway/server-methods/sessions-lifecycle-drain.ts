@@ -78,7 +78,13 @@ function hasAuthoritativeSessionWork(
     isCompetingSessionWorkAdmissionActive(params.storePath, params.lifecycleIdentities) ||
     params.sessionKeys.some((key) => replyRunRegistry.isActive(key)) ||
     Boolean(sessionId && isReplyRunActiveForSessionId(sessionId)) ||
-    Boolean(sessionId && isEmbeddedAgentRunInProgress(sessionId)) ||
+    Boolean(
+      sessionId &&
+      isEmbeddedAgentRunInProgress(sessionId, {
+        agentId: params.agentId,
+        defaultAgentId: params.defaultAgentId,
+      }),
+    ) ||
     hasPendingFollowupQueueWork(workIdentities) ||
     workIdentities.some(
       (key) => getCommandLaneSnapshot(resolveEmbeddedSessionLane(key)).queuedCount > 0,
@@ -184,7 +190,11 @@ export async function prepareSessionLifecycleDrain(
             }
             if (params.sessionId) {
               aborted = abortReplyRunBySessionId(params.sessionId) || aborted;
-              aborted = abortEmbeddedAgentRun(params.sessionId) || aborted;
+              aborted =
+                abortEmbeddedAgentRun(params.sessionId, {
+                  agentId: params.agentId,
+                  defaultAgentId: params.defaultAgentId,
+                }) || aborted;
             }
             return aborted;
           },
@@ -209,7 +219,10 @@ export async function prepareSessionLifecycleDrain(
       ...(params.sessionId ? [waitForReplyRunEndBySessionId(params.sessionId, timeoutMs)] : []),
     ]).then((results) => results.every(Boolean));
     const embeddedWork = params.sessionId
-      ? waitForEmbeddedAgentRunEnd(params.sessionId, timeoutMs)
+      ? waitForEmbeddedAgentRunEnd(params.sessionId, timeoutMs, {
+          agentId: params.agentId,
+          defaultAgentId: params.defaultAgentId,
+        })
       : Promise.resolve(true);
     const placementService: LifecyclePlacementService | undefined =
       params.context.workerSessionPlacementService;
