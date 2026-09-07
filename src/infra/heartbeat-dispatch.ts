@@ -23,7 +23,6 @@ import {
   type ReplyPayload,
 } from "../auto-reply/reply-payload.js";
 import { suppressPendingFinalDelivery } from "../auto-reply/reply/dispatch-from-config.pending-final.js";
-import type { ReplyDispatchDeliveryOutcome } from "../auto-reply/reply/reply-dispatcher.js";
 import {
   resolveReplyOperationAgentTurn,
   type ReplyOperationRunState,
@@ -73,7 +72,7 @@ import { buildOutboundSessionContext } from "./outbound/session-context.js";
 import { withSystemEventOwner } from "./system-event-ownership.js";
 import { consumeSelectedSystemEventEntries, enqueueSystemEvent } from "./system-events.js";
 
-export type HeartbeatDispatch = {
+type HeartbeatDispatch = {
   opts: HeartbeatRunOptions;
   wake: ReadyHeartbeatWake;
   prepared: PreparedHeartbeatRun;
@@ -82,13 +81,7 @@ export type HeartbeatDispatch = {
   deliveryReason?: string;
   deliverySilent?: boolean;
   projectTarget?: boolean;
-  prepareReply: (
-    replyResult: ReplyPayload | ReplyPayload[] | undefined,
-    runState: ReplyOperationRunState,
-  ) => Promise<{
-    reply?: ReplyPayload;
-    settle?: (outcome: ReplyDispatchDeliveryOutcome) => Promise<void>;
-  }>;
+  prepareReply: NonNullable<ReplyOperationRunState["heartbeat"]>["prepareReply"];
 };
 
 export function createHeartbeatDispatch(
@@ -285,10 +278,7 @@ async function prepareHeartbeatDispatchReply(
   policy: HeartbeatDispatch,
   replyResult: ReplyPayload | ReplyPayload[] | undefined,
   runState: ReplyOperationRunState,
-): Promise<{
-  reply?: ReplyPayload;
-  settle?: (outcome: ReplyDispatchDeliveryOutcome) => Promise<void>;
-}> {
+): ReturnType<HeartbeatDispatch["prepareReply"]> {
   const { opts, wake, prepared } = policy;
   const { cfg, agentId, startedAt, preflight, scheduledTasks, wakeSource } = wake;
   const { delivery, visibility, sessionKey, storePath, runSessionKey, previousUpdatedAt } =
