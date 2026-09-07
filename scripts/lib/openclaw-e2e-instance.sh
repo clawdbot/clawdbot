@@ -217,7 +217,7 @@ child.on("error", (error) => {
 }
 openclaw_e2e_print_log() {
   local path="$1"
-  local max_bytes max_lines redactor_module
+  local bounded_log max_bytes max_lines redactor_module
   max_bytes="$(openclaw_e2e_read_nonnegative_int_env OPENCLAW_E2E_LOG_TAIL_BYTES 262144)" || return $?
   max_lines="$(openclaw_e2e_read_nonnegative_int_env OPENCLAW_E2E_LOG_TAIL_LINES 120)" || return $?
   [ -f "$path" ] || return 0
@@ -228,7 +228,12 @@ openclaw_e2e_print_log() {
     echo "[failure log omitted: canonical redactor unavailable]"
     return 0
   fi
-  if ! { tail -c "$max_bytes" "$path" 2>/dev/null | tail -n "$max_lines" || tail -n "$max_lines" "$path" || true; } | \
+  bounded_log="$(mktemp "${TMPDIR:-/tmp}/openclaw-e2e-log-tail.XXXXXX")" || return $?
+  if ! tail -c "$max_bytes" "$path" >"$bounded_log" 2>/dev/null; then
+    : >"$bounded_log"
+    tail -n "$max_lines" "$path" >"$bounded_log" 2>/dev/null || true
+  fi
+  if ! tail -n "$max_lines" "$bounded_log" | \
     node --input-type=module -e '
       import { text } from "node:stream/consumers";
       import { pathToFileURL } from "node:url";
@@ -237,6 +242,7 @@ openclaw_e2e_print_log() {
     ' "$redactor_module"; then
     echo "[failure log omitted: canonical redaction failed]"
   fi
+  rm -f "$bounded_log"
 }
 openclaw_e2e_enable_failure_diagnostics() {
   # Keep diagnostics outside command log redirections, including inherited traps.

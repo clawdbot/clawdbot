@@ -550,6 +550,36 @@ describe("scripts/lib/openclaw-e2e-instance.sh", () => {
     });
   });
 
+  it("does not replay a partial byte tail when the fallback succeeds", () => {
+    withTempDir("openclaw-e2e-instance-log-tail-fallback-", (tempDir) => {
+      const logPath = path.join(tempDir, "install.log");
+      const redactorPath = path.join(tempDir, "redactor.mjs");
+      fs.writeFileSync(logPath, "recent npm tail\n", "utf8");
+      fs.writeFileSync(
+        redactorPath,
+        "export const redactSensitiveText = (value) => value;\n",
+        "utf8",
+      );
+      writeBashExecutable(path.join(tempDir, "tail"), [
+        'printf "recent npm tail\\n"',
+        'if [ "${1:-}" = "-c" ]; then exit 1; fi',
+      ]);
+
+      const result = runBashWithHelper(
+        [`openclaw_e2e_print_log ${shellQuote(logPath)}`],
+        {
+          PATH: `${tempDir}${path.delimiter}${hostPath}`,
+          OPENCLAW_E2E_REDACTOR_MODULE: redactorPath,
+        },
+        undefined,
+        "; ",
+      );
+
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout.match(/recent npm tail/g)).toHaveLength(1);
+    });
+  });
+
   it("bounds commands with the Node watchdog when timeout is unavailable", () => {
     withTempDir("openclaw-e2e-instance-node-watchdog-", (tempDir) => {
       writeNodeShim(tempDir);
