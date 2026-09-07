@@ -51,6 +51,23 @@ openclaw_frozen_target_source_contains() {
   git -C "$source_root" show "$OPENCLAW_SELECTED_SHA:$relative_path" 2>/dev/null | grep -F -- "$needle" >/dev/null
 }
 
+openclaw_resolve_frozen_live_cli_backend_package_mode() {
+  local source_root="${1:?missing selected source root}" authorization_status=0
+
+  export OPENCLAW_FROZEN_TARGET_LIVE_CLI_BACKEND_PACKAGE_MODE="current"
+
+  openclaw_prepare_frozen_target_context "$source_root" || authorization_status=$?
+  [ "$authorization_status" -eq 1 ] && return 0
+  [ "$authorization_status" -eq 0 ] || return "$authorization_status"
+
+  # Older selected releases have no package resolver. Derive that one released
+  # capability before Docker so the container never receives control-plane SHAs.
+  if ! openclaw_frozen_target_source_contains \
+    "$source_root" scripts/print-cli-backend-live-metadata.ts 'resolveCliBackendDockerPackages'; then
+    export OPENCLAW_FROZEN_TARGET_LIVE_CLI_BACKEND_PACKAGE_MODE="legacy"
+  fi
+}
+
 openclaw_resolve_frozen_plugin_harness_capabilities() {
   local source_root="${1:?missing selected source root}" authorization_status=0
 

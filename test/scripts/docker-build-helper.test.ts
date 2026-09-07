@@ -6583,6 +6583,10 @@ process.exit(73);
     const liveGateway = readFileSync("scripts/test-live-gateway-models-docker.sh", "utf8");
     expect(liveGateway).not.toContain("OPENCLAW_SELECTED_SHA");
     expect(liveGateway).not.toContain("OPENCLAW_TOOLING_SHA");
+    expectTextToIncludeAll(liveGateway, [
+      'openclaw_resolve_frozen_live_cli_backend_package_mode "$ROOT_DIR"',
+      "OPENCLAW_FROZEN_TARGET_LIVE_CLI_BACKEND_PACKAGE_MODE=legacy",
+    ]);
   });
 
   it.each([

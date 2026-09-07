@@ -174,17 +174,11 @@ NODE
   )" || return $?
 
   if [[ "$capability" == "missing-export" ]]; then
-    local authorization_status
-    if openclaw_frozen_target_omissions_authorized; then
+    if [[ "${OPENCLAW_FROZEN_TARGET_LIVE_CLI_BACKEND_PACKAGE_MODE:-current}" == "legacy" ]]; then
       echo "Staged target does not export resolveCliBackendDockerPackages; preserving historical no-package-setup behavior."
       return 0
-    else
-      authorization_status=$?
     fi
-    if ((authorization_status == 2)); then
-      return "$authorization_status"
-    fi
-    echo "staged target does not export resolveCliBackendDockerPackages and frozen-target omissions are not authorized" >&2
+    echo "staged target does not export resolveCliBackendDockerPackages" >&2
     return 1
   fi
 

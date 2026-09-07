@@ -238,7 +238,7 @@ export function parseRegistryNpmSpec(spec: string) {
     ]);
   });
 
-  it("omits historical package setup only with explicit frozen-target authorization", () => {
+  it("allows historical package setup omission only through its derived capability", () => {
     const root = tempDirs.make("openclaw-live-stage-packages-missing-");
     mkdirSync(path.join(root, "scripts"), { recursive: true });
     linkFixtureNodeModules(root);
@@ -254,25 +254,22 @@ export function parseRegistryNpmSpec(spec: string) {
       root,
       stageScriptPath,
     ];
-    const baseEnv = {
-      ...process.env,
-      OPENCLAW_SELECTED_SHA: "a".repeat(40),
-      OPENCLAW_TOOLING_SHA: "b".repeat(40),
-    };
-
-    const denied = spawnSync("bash", command, {
+    const rawControl = spawnSync("bash", command, {
       encoding: "utf8",
-      env: { ...baseEnv, OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: "0" },
+      env: { ...process.env, OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: "1" },
     });
-    expect(denied.status).not.toBe(0);
-    expect(denied.stderr).toContain("does not export resolveCliBackendDockerPackages");
+    expect(rawControl.status).not.toBe(0);
+    expect(rawControl.stderr).toContain("does not export resolveCliBackendDockerPackages");
 
-    const authorized = spawnSync("bash", command, {
+    const derivedCapability = spawnSync("bash", command, {
       encoding: "utf8",
-      env: { ...baseEnv, OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: "1" },
+      env: {
+        ...process.env,
+        OPENCLAW_FROZEN_TARGET_LIVE_CLI_BACKEND_PACKAGE_MODE: "legacy",
+      },
     });
-    expect(authorized.status, authorized.stderr).toBe(0);
-    expect(authorized.stdout).toContain("preserving historical no-package-setup behavior");
+    expect(derivedCapability.status, derivedCapability.stderr).toBe(0);
+    expect(derivedCapability.stdout).toContain("preserving historical no-package-setup behavior");
   });
 
   it("lets staged metadata output flush through normal Node completion", () => {
@@ -392,10 +389,11 @@ export function parseRegistryNpmSpec(spec: string) {
     expect(result.status, result.stderr).toBe(0);
   });
 
-  it("derives legacy core fixture dialects only from an authorized selected source", () => {
+  it("derives frozen harness capabilities only from an authorized selected source", () => {
     const root = tempDirs.make("openclaw-frozen-target-core-dialects-");
     mkdirSync(path.join(root, "src/agents"), { recursive: true });
     mkdirSync(path.join(root, "src/commands"), { recursive: true });
+    mkdirSync(path.join(root, "scripts"), { recursive: true });
     writeFileSync(
       path.join(root, "src/agents/code-mode-namespaces.ts"),
       'export const globals = ["ALL_TOOLS"];\n',
@@ -403,6 +401,10 @@ export function parseRegistryNpmSpec(spec: string) {
     writeFileSync(
       path.join(root, "src/commands/doctor-session-transcripts.ts"),
       'const backup = ".pre-doctor-branch-repair-";\n',
+    );
+    writeFileSync(
+      path.join(root, "scripts", "print-cli-backend-live-metadata.ts"),
+      "export const legacyMetadata = true;\n",
     );
     execFileSync("git", ["init", "-q"], { cwd: root });
     execFileSync("git", ["config", "user.email", "test@example.invalid"], { cwd: root });
@@ -415,7 +417,7 @@ export function parseRegistryNpmSpec(spec: string) {
     }).trim();
     const resolveCoreDialects = [
       "-c",
-      'set -euo pipefail; source "$1"; openclaw_resolve_frozen_core_harness_capabilities "$2"; printf "%s %s\\n" "$OPENCLAW_FROZEN_TARGET_SESSION_REPAIR_MODE" "$OPENCLAW_FROZEN_TARGET_MCP_CODE_MODE_CATALOG_MODE"',
+      'set -euo pipefail; source "$1"; openclaw_resolve_frozen_core_harness_capabilities "$2"; openclaw_resolve_frozen_live_cli_backend_package_mode "$2"; printf "%s %s %s\\n" "$OPENCLAW_FROZEN_TARGET_SESSION_REPAIR_MODE" "$OPENCLAW_FROZEN_TARGET_MCP_CODE_MODE_CATALOG_MODE" "$OPENCLAW_FROZEN_TARGET_LIVE_CLI_BACKEND_PACKAGE_MODE"',
       "test",
       stageScriptPath,
       root,
@@ -430,7 +432,7 @@ export function parseRegistryNpmSpec(spec: string) {
     });
 
     expect(strictResult.status, strictResult.stderr).toBe(0);
-    expect(strictResult.stdout.trim()).toBe("sqlite current");
+    expect(strictResult.stdout.trim()).toBe("sqlite current current");
 
     const result = spawnSync("bash", resolveCoreDialects, {
       encoding: "utf8",
@@ -443,7 +445,7 @@ export function parseRegistryNpmSpec(spec: string) {
     });
 
     expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout.trim()).toBe("jsonl legacy");
+    expect(result.stdout.trim()).toBe("jsonl legacy legacy");
   });
 
   it.each([
