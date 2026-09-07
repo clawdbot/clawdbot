@@ -32,6 +32,7 @@ import {
   ToolOutputAccumulator,
   toolOutputRawEchoSignature,
   truncateToolTranscriptText,
+  truncateUtf16SafeEchoPrefix,
 } from "./event-projector-tool-output.js";
 import { readString } from "./event-projector-values.js";
 import type {
@@ -531,9 +532,9 @@ export class CodexToolProgressProjection {
     ) {
       const next: ToolProgressRawSignature = {
         length: rawLength,
-        // Cap with truncateUtf16Safe so emoji/CJK at the budget edge cannot
-        // leave a lone surrogate in the stored echo prefix.
-        prefix: truncateUtf16Safe(rawPrefix, TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS),
+        // Cap UTF-16-safe while keeping a full scalar at the budget edge so
+        // matchesEcho retains a boundary discriminator (no lone surrogate).
+        prefix: truncateUtf16SafeEchoPrefix(rawPrefix, TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS),
       };
       if (signature.streamedDisplay) {
         existing.streamedRawSignature = next;

@@ -18,6 +18,25 @@ import {
 
 registerCodexEventProjectorTestLifecycle();
 
+
+function hasLoneSurrogate(text: string): boolean {
+  for (let i = 0; i < text.length; i += 1) {
+    const unit = text.charCodeAt(i);
+    if (unit >= 0xd800 && unit <= 0xdbff) {
+      const next = text.charCodeAt(i + 1);
+      if (!(next >= 0xdc00 && next <= 0xdfff)) {
+        return true;
+      }
+      i += 1;
+      continue;
+    }
+    if (unit >= 0xdc00 && unit <= 0xdfff) {
+      return true;
+    }
+  }
+  return false;
+}
+
 describe("CodexAppServerEventProjector tool progress echo filtering", () => {
   it("does not promote repeated tool progress text to the final assistant reply", async () => {
     const onToolResult = vi.fn();
@@ -397,9 +416,10 @@ describe("CodexAppServerEventProjector tool progress echo filtering", () => {
     expect(brokenSlice.charCodeAt(brokenSlice.length - 1)).toBe(0xd83d);
 
     for (const signature of signatures) {
-      expect(signature.prefix).not.toMatch(/[\uD800-\uDFFF]/);
-      expect(signature.prefix.endsWith("😀")).toBe(false);
-      expect(signature.prefix).toBe(asciiPrefix);
+      expect(hasLoneSurrogate(signature.prefix)).toBe(false);
+      expect(signature.prefix.endsWith("😀")).toBe(true);
+      expect(signature.prefix).toBe(`${asciiPrefix}😀`);
+      expect(signature.prefix.length).toBe(10_001);
       expect(signature.length).toBe(aggregatedOutput.length);
       process.stdout.write(
         `[utf16-echo-proof] write_sites=toolOutputRawEchoSignature+rememberEcho\n`,
@@ -416,10 +436,67 @@ describe("CodexAppServerEventProjector tool progress echo filtering", () => {
           .toString(16)}\n`,
       );
       process.stdout.write(
-        `[utf16-echo-proof] stored_prefix_has_surrogate=${/[\uD800-\uDFFF]/.test(signature.prefix)}\n`,
+        `[utf16-echo-proof] stored_prefix_has_lone_surrogate=${hasLoneSurrogate(signature.prefix)}\n`,
+      );
+      process.stdout.write(
+        `[utf16-echo-proof] stored_prefix_ends_with_emoji=${signature.prefix.endsWith("😀")}\n`,
       );
       process.stdout.write(`[utf16-echo-proof] stored_raw_length=${signature.length}\n`);
     }
+  });
+
+  it("retains distinct same-length assistant text at the UTF-16 echo budget via projector caller", async () => {
+    const projector = await createProjector();
+    const asciiPrefix = "a".repeat(9_999);
+    const aggregatedOutput = `${asciiPrefix}😀${"a".repeat(400)}`;
+    // Same UTF-16 length, differs at the former lone-surrogate cutoff.
+    const distinctAssistant = `${asciiPrefix}b${"a".repeat(aggregatedOutput.length - 10_000)}`;
+    expect(distinctAssistant.length).toBe(aggregatedOutput.length);
+
+    await projector.handleNotification(
+      turnCompleted([
+        {
+          type: "commandExecution",
+          id: "cmd-aggregate-utf16-discriminator",
+          command: "printf output",
+          cwd: "/workspace",
+          processId: null,
+          source: "agent",
+          status: "completed",
+          commandActions: [],
+          aggregatedOutput,
+          exitCode: 0,
+          durationMs: 42,
+        },
+      ]),
+    );
+
+    const progress = (
+      projector as unknown as {
+        toolProgressProjection: { matchesEcho: (text: string) => boolean };
+      }
+    ).toolProgressProjection;
+
+    expect(progress.matchesEcho(aggregatedOutput)).toBe(true);
+    expect(progress.matchesEcho(distinctAssistant)).toBe(false);
+
+    await projector.handleNotification(
+      turnCompleted([{ type: "agentMessage", id: "msg-distinct", text: distinctAssistant }]),
+    );
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+    expect(result.assistantTexts).toEqual([distinctAssistant]);
+    process.stdout.write(
+      `[utf16-echo-proof] caller_path=turn/completed+matchesEcho+assistant retention\n`,
+    );
+    process.stdout.write(
+      `[utf16-echo-proof] echo_matches_tool_output=${progress.matchesEcho(aggregatedOutput)}\n`,
+    );
+    process.stdout.write(
+      `[utf16-echo-proof] echo_matches_distinct=${progress.matchesEcho(distinctAssistant)}\n`,
+    );
+    process.stdout.write(
+      `[utf16-echo-proof] assistant_retained=${result.assistantTexts.includes(distinctAssistant)}\n`,
+    );
   });
 
   it("keeps final answers that only start with a streamed tool-output prefix", async () => {

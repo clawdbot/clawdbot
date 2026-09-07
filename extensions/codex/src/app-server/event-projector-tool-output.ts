@@ -3,6 +3,37 @@ import {
   formatToolProgressOutput,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+
+function isHighSurrogate(codeUnit: number): boolean {
+  return codeUnit >= 0xd800 && codeUnit <= 0xdbff;
+}
+
+function isLowSurrogate(codeUnit: number): boolean {
+  return codeUnit >= 0xdc00 && codeUnit <= 0xdfff;
+}
+
+/**
+ * Echo-prefix truncation that stays UTF-16-safe while retaining a boundary
+ * discriminator. Unlike truncateUtf16Safe (which backs off when the budget
+ * lands mid-surrogate), this includes the full scalar so matchesEcho cannot
+ * falsely suppress distinct same-length assistant text that only shares the
+ * shortened ASCII prefix.
+ */
+export function truncateUtf16SafeEchoPrefix(input: string, maxLen: number): string {
+  const limit = Math.max(0, Math.floor(maxLen));
+  if (input.length <= limit) {
+    return input;
+  }
+  if (
+    limit > 0 &&
+    limit < input.length &&
+    isHighSurrogate(input.charCodeAt(limit - 1)) &&
+    isLowSurrogate(input.charCodeAt(limit))
+  ) {
+    return input.slice(0, limit + 1);
+  }
+  return input.slice(0, limit);
+}
 import { readString } from "./event-projector-values.js";
 import { isJsonObject, type CodexThreadItem } from "./protocol.js";
 
@@ -99,9 +130,10 @@ export function toolOutputRawEchoSignature(
   }
   return {
     rawLength: trimmed.length,
-    // Same UTF-16 budget as transcript truncation: a raw .slice can land inside
-    // a surrogate pair and poison echo-prefix matching / suppression.
-    rawPrefix: truncateUtf16Safe(trimmed, TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS),
+    // Same UTF-16 budget as transcript truncation, but prefer a full scalar at
+    // the cutoff so echo matching keeps a boundary discriminator (raw .slice
+    // would leave a lone surrogate; truncateUtf16Safe would drop the scalar).
+    rawPrefix: truncateUtf16SafeEchoPrefix(trimmed, TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS),
   };
 }
 
