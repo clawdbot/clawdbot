@@ -1,6 +1,7 @@
 /** Native composition entry for ordinary, restricted, and cold provider-hook loading. */
 import { createExternalAuthRuntime } from "../agents/auth-profiles/external-auth.js";
 import { createAuthProfileStoreRuntime } from "../agents/auth-profiles/store.js";
+import { resolveModelRuntimePolicy } from "../agents/model-runtime-policy.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection-config.js";
 import { resolveAllowedModelRefCore } from "../agents/model-selection-resolve.js";
 import { createPluginCapabilityCatalogContext } from "./capability-catalog-context.js";
@@ -56,6 +57,7 @@ const loaderBindings: NativePluginLoadBindings = Object.freeze({
     return (modelConfig ??= Object.freeze({
       resolveDefaultModelForAgent,
       resolveAllowedModelRef: resolveAllowedModelRefCore,
+      resolveModelRuntimePolicy,
     }));
   },
   get capabilityCatalogContext() {

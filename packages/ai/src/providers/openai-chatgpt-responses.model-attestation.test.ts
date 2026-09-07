@@ -166,6 +166,32 @@ describe("ChatGPT response model attestations", () => {
     expect((await stream("websocket")).responseModel).toBe(responseModel);
   });
 
+  it("preserves model evidence carried only by the response.done alias", async () => {
+    installWebSocketEvents([
+      {
+        type: "response.done",
+        response: { ...completedWebSocketResponse("resp_ws_done", {}), model: model.id },
+      },
+    ]);
+
+    expect(await stream("websocket")).toMatchObject({
+      responseModel: model.id,
+      stopReason: "stop",
+    });
+  });
+
+  it("rejects response.done model evidence that contradicts an earlier event", async () => {
+    installWebSocketEvents([
+      { type: "response.created", response: { model: model.id } },
+      {
+        type: "response.done",
+        response: { ...completedWebSocketResponse("resp_ws_done_conflict", {}), model: "gpt-5.4" },
+      },
+    ]);
+
+    expectConflict(await stream("websocket"));
+  });
+
   it("fails closed when one websocket event has conflicting model attestations", async () => {
     installWebSocketEvents([
       {

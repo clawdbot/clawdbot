@@ -113,11 +113,23 @@ If `plugins.allow` already restricts plugin loading, preserve every existing ent
 }
 ```
 
-The selected profile must resolve to OAuth, and its id cannot contain `/`. The model must use the bundled `codex` agent runtime as shown above; the interactive wizard writes that exact model binding and preserves other model metadata. Reef requests low reasoning for this narrow classifier and the wizard uses a 120-second fail-closed deadline to accommodate OAuth refresh and provider cold starts. Reef receives only the structured verdict plus provider/model/terminal evidence; the host rejects a profile with another auth mode before dispatch and never returns credentials through the plugin runtime. ChatGPT OAuth must provide concrete provider model evidence; Reef fails closed when that evidence is absent.
+The selected profile must resolve to OAuth, and its id cannot contain `/`. The model must use the bundled `codex` agent runtime as shown above; the interactive wizard writes a shared exact model binding when needed and preserves other model metadata. Reef requests low reasoning for this narrow classifier and the wizard uses a 120-second fail-closed deadline to accommodate OAuth refresh and provider cold starts. Reef receives only the structured verdict plus provider/model/terminal evidence; the host rejects a profile with another auth mode before dispatch and never returns credentials through the plugin runtime. ChatGPT OAuth must provide concrete provider model evidence; Reef fails closed when that evidence is absent.
+
+The wizard checks runtime policy for the agent that will run the guard, including
+an explicitly configured system agent. It asks before replacing a conflicting
+inherited runtime and preserves an already-effective Codex policy. If an
+agent-specific exact model policy prevents the shared Codex binding, choose a
+different guard model or update that agent's policy explicitly; setup does not
+overwrite the agent-specific choice.
 
 ### API key
 
 The existing API-key configuration remains supported:
+
+Before rolling back to an OpenClaw version without Reef OAuth support, restore
+the API-key guard configuration below. Remove `authMode` and `authProfileId`;
+older versions reject those fields. This feature does not change Reef's stored
+identity, keys, or message-state format.
 
 ```json5
 {

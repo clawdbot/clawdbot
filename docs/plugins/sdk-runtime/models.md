@@ -98,6 +98,13 @@ Call a model, resolve model-selection policy, and resolve provider auth without 
     result includes provider/model/agent attribution plus normalized token,
     cache, and estimated cost usage when available.
 
+    Direct completions can set `responseFormat` for provider-native constrained
+    output. When the provider exposes them, the result also includes the concrete
+    `responseModel` and terminal `stopReason`. Security-sensitive callers can set
+    `requiredAuthMode: "oauth"`; the host then rejects a selected non-OAuth
+    credential before dispatch. Isolated agent-runtime completions reject these
+    direct-provider controls before dispatch.
+
     Set `reasoning` to request a reasoning effort for the selected model. The
     host normalizes the canonical thinking levels (`off`, `minimal`, `low`,
     `medium`, `high`, `xhigh`, `adaptive`, `max`, and `ultra`) for the selected
@@ -113,6 +120,8 @@ Call a model, resolve model-selection policy, and resolve provider auth without 
     Synchronous model-selection policy, without preparing a model or starting a session.
 
     `resolveDefaultModelForAgent({ cfg, agentId })` resolves the agent's configured default. `resolveAllowedModelRef({ cfg, catalog, raw, defaultProvider, defaultModel, agentId })` resolves a model name or alias against the supplied catalog and agent allowlist, returning `{ ref, key }` or `{ error }`. It does not select or validate an agent runtime; callers that require a particular harness must apply that separate policy.
+
+    `resolveModelRuntimePolicy({ config, provider, modelId, agentId?, sessionKey? })` reads the configured runtime policy. It honors exact agent/default model entries, provider-model entries, provider-wildcard entries, and provider policy in that order. The result includes `policy` and its `source` (`"model"` or `"provider"`) when configured, or an empty object when no policy matches. This lookup does not select an implicit runtime default or check harness availability.
 
     Use these host operations instead of importing model-selection implementation modules into a plugin's registration entry.
 

@@ -1,5 +1,4 @@
 import { defineChannelSetupContract } from "openclaw/plugin-sdk/channel-setup";
-import { resolveModelRuntimePolicy } from "openclaw/plugin-sdk/core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
 import { fingerprint } from "../protocol/index.js";
 import {
@@ -234,9 +233,9 @@ export const reefSetupWizard = {
           })
         : ("api-key" as const);
     const pinnedModel = await prompter.text({ message: "Pinned guard model snapshot" });
-    if (authMode === "oauth") {
-      await confirmReefOAuthAgentRuntime({ cfg, pinnedModel, prompter });
-    }
+    const configureSharedRuntime =
+      authMode === "oauth" &&
+      (await confirmReefOAuthAgentRuntime({ cfg, pinnedModel, prompter, runtime }));
     const authProfileId =
       authMode === "oauth"
         ? await prompter.text({
@@ -287,7 +286,9 @@ export const reefSetupWizard = {
     const nextConfig = { ...cfg, channels: { ...cfg.channels, reef } } as OpenClawConfig;
     return {
       cfg:
-        authMode === "oauth" ? authorizeReefOAuthGuardModel(nextConfig, pinnedModel) : nextConfig,
+        authMode === "oauth"
+          ? authorizeReefOAuthGuardModel(nextConfig, pinnedModel, configureSharedRuntime)
+          : nextConfig,
       accountId: "default",
     };
   },
@@ -297,15 +298,37 @@ async function confirmReefOAuthAgentRuntime(params: {
   cfg: OpenClawConfig;
   pinnedModel: string;
   prompter: Prompt;
-}): Promise<void> {
-  const modelRef = `openai/${params.pinnedModel}`;
-  const configuredRuntimeId = resolveModelRuntimePolicy({
+  runtime: ReturnType<typeof getReefRuntime>;
+}): Promise<boolean> {
+  const { resolveSessionAgentIdStrict } = await import("openclaw/plugin-sdk/agent-scope-runtime");
+  // Reef's unbound completion uses the system owner, then the legacy/sole owner.
+  const agentId = resolveSessionAgentIdStrict({
     config: params.cfg,
-    provider: "openai",
-    modelId: params.pinnedModel,
-  }).policy?.id?.trim();
-  if (!configuredRuntimeId || configuredRuntimeId === "codex") {
-    return;
+    agentId: params.cfg.agents?.defaults?.systemAgent?.agentId,
+  });
+  const modelRef = `openai/${params.pinnedModel}`;
+  const resolveRuntimeId = (config: OpenClawConfig) =>
+    params.runtime.modelConfig
+      .resolveModelRuntimePolicy({
+        config,
+        agentId,
+        provider: "openai",
+        modelId: params.pinnedModel,
+      })
+      .policy?.id?.trim();
+  const configuredRuntimeId = resolveRuntimeId(params.cfg);
+  if (configuredRuntimeId === "codex") {
+    return false;
+  }
+  if (!configuredRuntimeId) {
+    return true;
+  }
+  if (
+    resolveRuntimeId(authorizeReefOAuthGuardModel(params.cfg, params.pinnedModel, true)) !== "codex"
+  ) {
+    throw new Error(
+      `Reef OAuth cannot change the agent-specific runtime policy for ${modelRef} on agent ${agentId}. Choose another guard model or explicitly configure that agent's model runtime as codex.`,
+    );
   }
   const replaceRuntime = await params.prompter.confirm({
     message: `${modelRef} currently uses the ${configuredRuntimeId} agent runtime. Reef OAuth requires codex; change this shared model runtime?`,
@@ -316,9 +339,14 @@ async function confirmReefOAuthAgentRuntime(params: {
       `Reef OAuth setup left ${modelRef} on the ${configuredRuntimeId} agent runtime. Choose another guard model or change the shared model runtime explicitly.`,
     );
   }
+  return true;
 }
 
-function authorizeReefOAuthGuardModel(cfg: OpenClawConfig, pinnedModel: string): OpenClawConfig {
+function authorizeReefOAuthGuardModel(
+  cfg: OpenClawConfig,
+  pinnedModel: string,
+  configureSharedRuntime: boolean,
+): OpenClawConfig {
   const modelRef = `openai/${pinnedModel}`;
   const entry = cfg.plugins?.entries?.reef ?? {};
   const llm = entry.llm ?? {};
@@ -329,19 +357,23 @@ function authorizeReefOAuthGuardModel(cfg: OpenClawConfig, pinnedModel: string):
     values ? (values.includes(pluginId) ? values : [...values, pluginId]) : undefined;
   return {
     ...cfg,
-    agents: {
-      ...cfg.agents,
-      defaults: {
-        ...cfg.agents?.defaults,
-        models: {
-          ...cfg.agents?.defaults?.models,
-          [modelRef]: {
-            ...configuredModel,
-            agentRuntime: { ...configuredModel.agentRuntime, id: "codex" },
+    ...(configureSharedRuntime
+      ? {
+          agents: {
+            ...cfg.agents,
+            defaults: {
+              ...cfg.agents?.defaults,
+              models: {
+                ...cfg.agents?.defaults?.models,
+                [modelRef]: {
+                  ...configuredModel,
+                  agentRuntime: { ...configuredModel.agentRuntime, id: "codex" },
+                },
+              },
+            },
           },
-        },
-      },
-    },
+        }
+      : {}),
     plugins: {
       ...cfg.plugins,
       allow: addPlugin(cfg.plugins?.allow, "codex"),

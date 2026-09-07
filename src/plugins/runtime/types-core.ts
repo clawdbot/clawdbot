@@ -558,6 +558,8 @@ export type PluginRuntimeCore = {
     /** Read-only model selection; no session mutation or harness execution authority. */
     resolveDefaultModelForAgent: typeof import("../../agents/model-selection-config.js").resolveDefaultModelForAgent;
     resolveAllowedModelRef: typeof import("../../agents/model-selection-resolve.js").resolveAllowedModelRefCore;
+    /** Read authored model/provider runtime policy without projecting runtime availability. */
+    resolveModelRuntimePolicy: typeof import("../../agents/model-runtime-policy.js").resolveModelRuntimePolicy;
   };
   modelAuth: {
     /** Existing synchronous SDK operations, composed by the native host. */

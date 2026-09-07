@@ -104,151 +104,334 @@ describe("Reef setup wizard identity binding", () => {
     });
   });
 
-  it("configures host-authorized OpenAI OAuth without persisting a token reference", async () => {
-    const runtime = installRuntime();
-    await generateAndStoreKeys(runtime);
-    vi.spyOn(ReefTransportClient.prototype, "createHandle").mockResolvedValue({
-      handle: "molty",
-      key_epoch: 1,
-    });
-    const textAnswers = [
-      "https://reefwire.ai",
-      "owner@example.com",
-      "setup-session",
-      "molty",
-      "gpt-5.6-terra",
-      "openai:work",
-      "reef-v1",
-    ];
-    const selectAnswers = ["code-only", "openai", "oauth"];
-    const prompter = {
-      note: vi.fn(async () => undefined),
-      text: vi.fn(async () => textAnswers.shift() ?? ""),
-      select: vi.fn(async () => selectAnswers.shift()),
-    };
+  it.each([
+    { name: "unconfigured runtime", cfg: {}, runtimeConfigured: false },
+    {
+      name: "inherited Codex runtime",
+      runtimeConfigured: true,
+      cfg: {
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              agentRuntime: { id: "codex" },
+              models: [],
+            },
+          },
+        },
+      } satisfies OpenClawConfig,
+    },
+    {
+      name: "sole agent Codex runtime ahead of shared policy",
+      runtimeConfigured: true,
+      cfg: {
+        agents: {
+          defaults: {
+            models: { "openai/gpt-5.6-terra": { agentRuntime: { id: "openclaw" } } },
+          },
+          entries: {
+            "guard-owner": {
+              models: { "openai/gpt-5.6-terra": { agentRuntime: { id: "codex" } } },
+            },
+          },
+        },
+      } satisfies OpenClawConfig,
+    },
+    {
+      name: "explicit system agent Codex runtime ahead of shared policy",
+      runtimeConfigured: true,
+      cfg: {
+        agents: {
+          ownership: "explicit",
+          defaults: {
+            systemAgent: { agentId: "guard-owner" },
+            models: { "openai/gpt-5.6-terra": { agentRuntime: { id: "openclaw" } } },
+          },
+          entries: {
+            main: { models: { "openai/gpt-5.6-terra": { agentRuntime: { id: "openclaw" } } } },
+            "guard-owner": {
+              models: { "openai/gpt-5.6-terra": { agentRuntime: { id: "codex" } } },
+            },
+          },
+        },
+      } satisfies OpenClawConfig,
+    },
+  ])(
+    "configures host-authorized OAuth without a runtime prompt: $name",
+    async ({ cfg: input, runtimeConfigured }) => {
+      const cfg: OpenClawConfig = structuredClone(input);
+      const original = structuredClone(cfg);
+      const runtime = installRuntime();
+      await generateAndStoreKeys(runtime);
+      vi.spyOn(ReefTransportClient.prototype, "createHandle").mockResolvedValue({
+        handle: "molty",
+        key_epoch: 1,
+      });
+      const textAnswers = [
+        "https://reefwire.ai",
+        "owner@example.com",
+        "setup-session",
+        "molty",
+        "gpt-5.6-terra",
+        "openai:work",
+        "reef-v1",
+      ];
+      const selectAnswers = ["code-only", "openai", "oauth"];
+      const prompter = {
+        note: vi.fn(async () => undefined),
+        text: vi.fn(async () => textAnswers.shift() ?? ""),
+        select: vi.fn(async () => selectAnswers.shift()),
+        confirm: vi.fn(async () => false),
+      };
 
-    const result = await reefSetupWizard.configureInteractive({
-      cfg: {},
-      prompter: prompter as never,
-    });
+      const result = await reefSetupWizard.configureInteractive({
+        cfg,
+        prompter: prompter as never,
+      });
 
-    expect(result.cfg.channels?.reef?.guard).toEqual({
-      provider: "openai",
-      authMode: "oauth",
-      authProfileId: "openai:work",
-      pinnedModel: "gpt-5.6-terra",
-      policyVersion: "reef-v1",
-      timeoutMs: 120_000,
-    });
-    expect(result.cfg.plugins?.entries?.reef?.llm).toEqual({
-      allowModelOverride: true,
-      allowedModels: ["openai/gpt-5.6-terra"],
-      allowedCompletionModels: ["openai/gpt-5.6-terra"],
-    });
-    expect(result.cfg.agents?.defaults?.models?.["openai/gpt-5.6-terra"]).toEqual({
-      agentRuntime: { id: "codex" },
-    });
-    expect(JSON.stringify(result.cfg)).not.toContain("apiKeyEnv");
-  });
+      expect(result.cfg.channels?.reef?.guard).toEqual({
+        provider: "openai",
+        authMode: "oauth",
+        authProfileId: "openai:work",
+        pinnedModel: "gpt-5.6-terra",
+        policyVersion: "reef-v1",
+        timeoutMs: 120_000,
+      });
+      expect(result.cfg.plugins?.entries?.reef?.llm).toEqual({
+        allowModelOverride: true,
+        allowedModels: ["openai/gpt-5.6-terra"],
+        allowedCompletionModels: ["openai/gpt-5.6-terra"],
+      });
+      if (runtimeConfigured) {
+        expect(result.cfg.agents).toEqual(original.agents);
+        expect(result.cfg.models).toEqual(original.models);
+      } else {
+        expect(result.cfg.agents?.defaults?.models?.["openai/gpt-5.6-terra"]).toEqual({
+          agentRuntime: { id: "codex" },
+        });
+      }
+      expect(JSON.stringify(result.cfg)).not.toContain("apiKeyEnv");
+      expect(cfg).toEqual(original);
+      expect(prompter.confirm).not.toHaveBeenCalled();
+    },
+  );
 
-  it("requires explicit approval before replacing an existing model runtime", async () => {
-    const runtime = installRuntime();
-    await generateAndStoreKeys(runtime);
-    vi.spyOn(ReefTransportClient.prototype, "createHandle").mockResolvedValue({
-      handle: "molty",
-      key_epoch: 1,
-    });
-    const textAnswers = [
-      "https://reefwire.ai",
-      "owner@example.com",
-      "setup-session",
-      "molty",
-      "gpt-5.6-terra",
-    ];
-    const selectAnswers = ["code-only", "openai", "oauth"];
-    const prompter = {
-      note: vi.fn(async () => undefined),
-      text: vi.fn(async () => textAnswers.shift() ?? ""),
-      select: vi.fn(async () => selectAnswers.shift()),
-      confirm: vi.fn(async () => false),
-    };
-    const cfg = {
-      agents: {
-        defaults: {
-          models: {
-            "openai/*": { agentRuntime: { id: "openclaw" } },
+  const runtimePolicyCases: Array<{
+    name: string;
+    cfg: OpenClawConfig;
+    rejection?: string;
+  }> = [
+    {
+      name: "sole agent wildcard",
+      cfg: {
+        agents: {
+          entries: {
+            "guard-owner": { models: { "openai/*": { agentRuntime: { id: "openclaw" } } } },
           },
         },
       },
-      models: {
-        providers: {
-          openai: {
-            baseUrl: "https://api.openai.com/v1",
-            agentRuntime: { id: "codex" },
-            models: [],
+    },
+    {
+      name: "explicit system agent wildcard",
+      cfg: {
+        agents: {
+          ownership: "explicit",
+          defaults: { systemAgent: { agentId: "guard-owner" } },
+          entries: {
+            main: { models: { "openai/gpt-5.6-terra": { agentRuntime: { id: "codex" } } } },
+            "guard-owner": { models: { "openai/*": { agentRuntime: { id: "openclaw" } } } },
           },
         },
       },
-    } satisfies OpenClawConfig;
-
-    await expect(
-      reefSetupWizard.configureInteractive({ cfg, prompter: prompter as never }),
-    ).rejects.toThrow("left openai/gpt-5.6-terra on the openclaw agent runtime");
-    expect(prompter.confirm).toHaveBeenCalledWith({
-      message:
-        "openai/gpt-5.6-terra currently uses the openclaw agent runtime. Reef OAuth requires codex; change this shared model runtime?",
-      initialValue: false,
-    });
-    expect(cfg.agents.defaults.models["openai/gpt-5.6-terra"].agentRuntime.id).toBe("openclaw");
-  });
-
-  it("replaces an existing model runtime only after explicit approval", async () => {
-    const runtime = installRuntime();
-    await generateAndStoreKeys(runtime);
-    vi.spyOn(ReefTransportClient.prototype, "createHandle").mockResolvedValue({
-      handle: "molty",
-      key_epoch: 1,
-    });
-    const textAnswers = [
-      "https://reefwire.ai",
-      "owner@example.com",
-      "setup-session",
-      "molty",
-      "gpt-5.6-terra",
-      "openai:work",
-      "reef-v1",
-    ];
-    const selectAnswers = ["code-only", "openai", "oauth"];
-    const prompter = {
-      note: vi.fn(async () => undefined),
-      text: vi.fn(async () => textAnswers.shift() ?? ""),
-      select: vi.fn(async () => selectAnswers.shift()),
-      confirm: vi.fn(async () => true),
-    };
-    const cfg = {
-      agents: {
-        defaults: {
-          models: {
-            "openai/gpt-5.6-terra": {
-              alias: "reef-guard",
-              agentRuntime: { id: "openclaw" },
+    },
+    {
+      name: "sole agent exact model",
+      rejection: "agent-specific runtime policy",
+      cfg: {
+        agents: {
+          entries: {
+            "guard-owner": {
+              models: { "openai/gpt-5.6-terra": { agentRuntime: { id: "openclaw" } } },
             },
           },
         },
       },
-    } satisfies OpenClawConfig;
+    },
+    {
+      name: "explicit system agent exact model",
+      rejection: "agent-specific runtime policy",
+      cfg: {
+        agents: {
+          ownership: "explicit",
+          defaults: { systemAgent: { agentId: "guard-owner" } },
+          entries: {
+            main: { models: { "openai/gpt-5.6-terra": { agentRuntime: { id: "codex" } } } },
+            "guard-owner": {
+              models: { "openai/gpt-5.6-terra": { agentRuntime: { id: "openclaw" } } },
+            },
+          },
+        },
+      },
+    },
+    {
+      name: "explicit fleet without a system owner",
+      rejection: "Multiple agents are configured",
+      cfg: {
+        agents: {
+          ownership: "explicit",
+          entries: { main: {}, "guard-owner": {} },
+        },
+      },
+    },
+    {
+      name: "exact default model",
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "openai/gpt-5.6-terra": { alias: "reef-guard", agentRuntime: { id: "openclaw" } },
+            },
+          },
+        },
+      },
+    },
+    {
+      name: "wildcard default model ahead of provider policy",
+      cfg: {
+        agents: { defaults: { models: { "openai/*": { agentRuntime: { id: "openclaw" } } } } },
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              agentRuntime: { id: "codex" },
+              models: [],
+            },
+          },
+        },
+      },
+    },
+    {
+      name: "provider",
+      cfg: {
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              agentRuntime: { id: "openclaw" },
+              models: [],
+            },
+          },
+        },
+      },
+    },
+    {
+      name: "provider model ahead of provider policy",
+      cfg: {
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              agentRuntime: { id: "codex" },
+              models: [
+                {
+                  id: "gpt-5.6-terra",
+                  name: "Reef guard",
+                  reasoning: true,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  maxTokens: 8192,
+                  agentRuntime: { id: "openclaw" },
+                },
+              ],
+            },
+          },
+        },
+      },
+    },
+  ];
 
-    const result = await reefSetupWizard.configureInteractive({
-      cfg,
-      prompter: prompter as never,
-    });
+  it.each(
+    runtimePolicyCases.flatMap((testCase) =>
+      (testCase.rejection ? [false] : [false, true]).map((accepted) => ({
+        ...testCase,
+        accepted,
+      })),
+    ),
+  )(
+    "preserves runtime policy from $name (accepted: $accepted)",
+    async ({ cfg: input, accepted, rejection }) => {
+      const runtime = installRuntime();
+      await generateAndStoreKeys(runtime);
+      vi.spyOn(ReefTransportClient.prototype, "createHandle").mockResolvedValue({
+        handle: "molty",
+        key_epoch: 1,
+      });
+      const textAnswers = [
+        "https://reefwire.ai",
+        "owner@example.com",
+        "setup-session",
+        "molty",
+        "gpt-5.6-terra",
+        "openai:work",
+        "reef-v1",
+      ];
+      const selectAnswers = ["code-only", "openai", "oauth"];
+      const prompter = {
+        note: vi.fn(async () => undefined),
+        text: vi.fn(async () => textAnswers.shift() ?? ""),
+        select: vi.fn(async () => selectAnswers.shift()),
+        confirm: vi.fn(async () => accepted),
+      };
+      const cfg = structuredClone(input);
+      const original = structuredClone(cfg);
+      const configuring = reefSetupWizard.configureInteractive({
+        cfg,
+        prompter: prompter as never,
+      });
 
-    expect(result.cfg.agents?.defaults?.models?.["openai/gpt-5.6-terra"]).toEqual({
-      alias: "reef-guard",
-      agentRuntime: { id: "codex" },
-    });
-    expect(prompter.confirm).toHaveBeenCalledOnce();
-  });
+      if (rejection) {
+        await expect(configuring).rejects.toThrow(rejection);
+        expect(cfg).toEqual(original);
+        expect(prompter.confirm).not.toHaveBeenCalled();
+        return;
+      }
+      if (accepted) {
+        const result = await configuring;
+        expect(
+          runtime.modelConfig.resolveModelRuntimePolicy({
+            config: result.cfg,
+            provider: "openai",
+            modelId: "gpt-5.6-terra",
+            agentId: result.cfg.agents?.defaults?.systemAgent?.agentId,
+          }).policy?.id,
+        ).toBe("codex");
+        expect(result.cfg.agents).toEqual({
+          ...original.agents,
+          defaults: {
+            ...original.agents?.defaults,
+            models: {
+              ...original.agents?.defaults?.models,
+              "openai/gpt-5.6-terra": {
+                ...original.agents?.defaults?.models?.["openai/gpt-5.6-terra"],
+                agentRuntime: { id: "codex" },
+              },
+            },
+          },
+        });
+        expect(result.cfg.models).toEqual(original.models);
+      } else {
+        await expect(configuring).rejects.toThrow(
+          "left openai/gpt-5.6-terra on the openclaw agent runtime",
+        );
+      }
+      expect(cfg).toEqual(original);
+      expect(prompter.confirm).toHaveBeenCalledExactlyOnceWith({
+        message:
+          "openai/gpt-5.6-terra currently uses the openclaw agent runtime. Reef OAuth requires codex; change this shared model runtime?",
+        initialValue: false,
+      });
+    },
+  );
 
   it("releases a reservation after a definitively rejected handle claim", async () => {
     const runtime = installRuntime();

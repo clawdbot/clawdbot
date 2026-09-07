@@ -26,6 +26,7 @@ const OPENAI_RESPONSE_MODEL_EVENT_TYPES = new Set([
   "response.created",
   "response.in_progress",
   "response.completed",
+  "response.done",
   "response.incomplete",
   "response.failed",
 ]);
