@@ -25,6 +25,7 @@ vi.mock("node:worker_threads", async () => {
       }
 
       async terminate() {
+        this.emit("exit", 0);
         return 0;
       }
     },

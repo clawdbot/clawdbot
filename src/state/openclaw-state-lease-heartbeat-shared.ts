@@ -1,5 +1,7 @@
 import type { OpenClawStateLeaseIdentity } from "./openclaw-state-lease-store.js";
 
+export const LEASE_HEARTBEAT_START_TIMEOUT_MS = 5_000;
+
 export const leaseHeartbeatState = {
   status: 0,
   request: 1,
@@ -14,6 +16,7 @@ export type LeaseHeartbeatWorkerData = {
   path: string;
   identity: OpenClawStateLeaseIdentity;
   leaseMs: number;
+  expiresAt: number;
   heartbeatMs: number;
   shared: SharedArrayBuffer;
 };

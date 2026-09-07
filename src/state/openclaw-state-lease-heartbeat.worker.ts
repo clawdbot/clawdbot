@@ -1,12 +1,18 @@
 import { parentPort, workerData } from "node:worker_threads";
-import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { runWithSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
+import { runWithSqliteCoordinator } from "../infra/sqlite-coordinator.js";
 import {
   isSqliteLockError,
   runSqliteImmediateTransactionSync,
 } from "../infra/sqlite-transaction.js";
 import {
+  acquireStateDatabaseCoordinator,
+  StateDatabaseCoordinatorContentionError,
+} from "../infra/state-database-coordinator.js";
+import { openTrackedStateDatabase, closeTrackedStateDatabase } from "./openclaw-state-db-handle.js";
+import {
   leaseHeartbeatState as state,
+  LEASE_HEARTBEAT_START_TIMEOUT_MS,
   type LeaseHeartbeatWorkerData,
 } from "./openclaw-state-lease-heartbeat-shared.js";
 import {
@@ -17,14 +23,39 @@ import {
 // SAFETY: The lease owner alone starts this private entry with its typed structured-clone payload.
 const params = workerData as LeaseHeartbeatWorkerData;
 const shared = new BigInt64Array(params.shared);
-const db = openNodeSqliteDatabase(params.path);
+function openHeartbeatDatabase() {
+  // The parent's bound is a retry deadline, not ownership. Renewal below still
+  // checks the exact current persisted owner/expiry before changing the row.
+  const deadline = Math.min(params.expiresAt, Date.now() + LEASE_HEARTBEAT_START_TIMEOUT_MS);
+  while (Date.now() < deadline && Atomics.load(shared, state.status) === state.starting) {
+    try {
+      return runWithSqliteCoordinator(
+        acquireStateDatabaseCoordinator({ databasePath: params.path, busyTimeoutMs: 0 }),
+        "maintenance heartbeat open",
+        () => openTrackedStateDatabase(params.path),
+      );
+    } catch (error) {
+      if (!(error instanceof StateDatabaseCoordinatorContentionError)) {
+        throw error;
+      }
+    }
+    Atomics.wait(
+      shared,
+      state.status,
+      state.starting,
+      Math.max(1, Math.min(25, deadline - Date.now())),
+    );
+  }
+  throw new Error("state lease heartbeat startup deadline expired or owner stopped");
+}
+const db = openHeartbeatDatabase();
 let heartbeat: ReturnType<typeof setTimeout> | undefined;
 const lose = () => {
   Atomics.compareExchange(shared, state.status, state.starting, state.lost);
   Atomics.compareExchange(shared, state.status, state.ready, state.lost);
   Atomics.notify(shared, state.ack);
   clearTimeout(heartbeat);
-  db.close();
+  closeTrackedStateDatabase(db);
   parentPort?.close();
 };
 const renew = () => {
@@ -33,24 +64,29 @@ const renew = () => {
   }
   let expiresAt: number | undefined;
   try {
-    expiresAt = runWithSqliteBusyTimeout(
-      db,
-      0,
+    expiresAt = runWithSqliteCoordinator(
+      acquireStateDatabaseCoordinator({ databasePath: params.path, busyTimeoutMs: 0 }),
+      "maintenance heartbeat renewal",
       () =>
-        runSqliteImmediateTransactionSync(
+        runWithSqliteBusyTimeout(
           db,
-          () => {
-            if (Atomics.load(shared, state.status) >= state.closed) {
-              return undefined;
-            }
-            return renewOpenClawStateLeaseInTransaction(db, params.identity, params.leaseMs);
-          },
-          { logger: { warn() {} } },
+          0,
+          () =>
+            runSqliteImmediateTransactionSync(
+              db,
+              () => {
+                if (Atomics.load(shared, state.status) >= state.closed) {
+                  return undefined;
+                }
+                return renewOpenClawStateLeaseInTransaction(db, params.identity, params.leaseMs);
+              },
+              { logger: { warn() {} } },
+            ),
+          { lockFailureReporting: "suppress" },
         ),
-      { lockFailureReporting: "suppress" },
     );
   } catch (error) {
-    if (!isSqliteLockError(error)) {
+    if (!(error instanceof StateDatabaseCoordinatorContentionError) && !isSqliteLockError(error)) {
       lose();
       return;
     }
