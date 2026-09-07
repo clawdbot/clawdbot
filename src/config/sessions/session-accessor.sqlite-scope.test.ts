@@ -5,7 +5,7 @@ import { afterEach, expect, test, vi } from "vitest";
 import * as logging from "../../logging/logger.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import type { SqliteSessionReclamationDiagnostics } from "./session-accessor.sqlite-reclamation.js";
+import type { SqliteSessionReclamationDiagnostics } from "./session-accessor.sqlite-contract.js";
 import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-scope.js";
 import { drainSessionStoreWriterQueuesForTest } from "./store-writer-state.js";
 

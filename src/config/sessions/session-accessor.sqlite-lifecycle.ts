@@ -25,6 +25,7 @@ import type {
   ResetSessionEntryLifecycleResult,
   SessionLifecycleArtifactCleanupParams,
   SessionLifecycleArtifactCleanupResult,
+  SqliteSessionReclamationDiagnostics,
 } from "./session-accessor.sqlite-contract.js";
 import {
   hasPreparedNativeSessionDeletion,
@@ -58,7 +59,6 @@ import {
   runExclusiveSqliteSessionReclamation,
   runSqliteSessionReclamation,
   shouldDeleteSqliteSessionEntryLifecycle,
-  type SqliteSessionReclamationDiagnostics,
 } from "./session-accessor.sqlite-reclamation.js";
 import {
   cloneSessionEntry,

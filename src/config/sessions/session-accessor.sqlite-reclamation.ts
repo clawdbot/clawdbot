@@ -22,6 +22,7 @@ import type {
   DeleteSessionEntryLifecycleParams,
   DeleteSessionEntryLifecycleResult,
   SessionLifecycleArchivedTranscript,
+  SqliteSessionReclamationDiagnostics,
 } from "./session-accessor.sqlite-contract.js";
 import { runSqliteSessionDeletionTransaction } from "./session-accessor.sqlite-deletion.js";
 import {
@@ -115,12 +116,6 @@ export type SqliteSessionReclamationWorkerData = {
   operation: "reclaim";
   plan: SqliteSessionReclamationPlan;
   type: "sqlite-transcript-archive-v2";
-};
-
-/** One writer callback owns this record; no Worker object or plan payload is retained. */
-export type SqliteSessionReclamationDiagnostics = {
-  kind?: SqliteSessionReclamationPlan["kind"];
-  workerThreadId?: number;
 };
 
 export type SqliteSessionReclamationWorkerResult = {
