@@ -167,7 +167,7 @@ export async function reportPreMutationUpdateFailure(params: {
   message?: string;
   opts: UpdateCommandOptions;
   controlPlaneUpdateSentinelMeta: ControlPlaneUpdateSentinelMetaFile["meta"] | null;
-}): Promise<void> {
+}): Promise<never> {
   const run = params.opts.run;
   const active = run ? getUpdateRun(run.runId, { env: run.env }) : undefined;
   if (run && active && params.message) {

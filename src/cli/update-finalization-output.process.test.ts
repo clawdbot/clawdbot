@@ -4,6 +4,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { listUpdateRuns } from "../infra/update-run-ledger.js";
+import { isPidAlive } from "../shared/pid-alive.js";
 import { formatCliProcessFailure, runCliProcessChild } from "./cli-process-child.test-helpers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -25,11 +27,20 @@ const scenarios = [
   "human",
   "human-plugin-error",
   "human-plugin-warning",
+  "human-recovery-plugin-error",
+];
+const finalizeScenarios = [
+  "json",
+  "phase-hang",
+  "completion-hang",
+  "handle-hang",
+  "borrowed-phase",
+  "borrowed-output",
 ];
 
 describe.each(["repair", "finalize"])("update %s process output", (command) => {
   // Both spellings share the finalization action; one matrix covers its output modes.
-  it.each(command === "repair" ? scenarios : ["json"])(
+  it.each(command === "repair" ? scenarios : finalizeScenarios)(
     "%s preserves the output and exit contract without restarting",
     async (scenario) => {
       const root = tempDirs.make("openclaw-update-json-");
@@ -61,19 +72,54 @@ describe.each(["repair", "finalize"])("update %s process output", (command) => {
         }),
       );
       const json = !scenario.startsWith("human");
+      const blockedPhase =
+        scenario === "phase-hang"
+          ? "configSnapshot"
+          : scenario === "completion-hang"
+            ? "completionCache"
+            : undefined;
       const args = [
         "update",
         ...(scenario === "inherited-json" ? ["--json"] : []),
         command,
         "--channel",
         "dev",
-        "--yes",
+        ...(scenario === "human-recovery-plugin-error" ? [] : ["--yes"]),
         "--no-restart",
         "--timeout",
-        "9",
+        blockedPhase || scenario === "borrowed-phase" ? "1" : "9",
         ...(json && scenario !== "inherited-json" ? ["--json"] : []),
       ];
+      const readRun = () =>
+        listUpdateRuns({ limit: 1 }, { env: { HOME: root, OPENCLAW_STATE_DIR: state } })[0];
+      let observedPhaseStart: ReturnType<typeof readRun> | undefined;
       const result = await runCliProcessChild({
+        ...(scenario === "phase-hang"
+          ? {
+              interact: async (
+                child: import("node:child_process").ChildProcessWithoutNullStreams,
+              ) => {
+                child.stdin.end();
+                await new Promise<void>((resolve, reject) => {
+                  let stderr = "";
+                  const onData = (chunk: string) => {
+                    stderr += chunk;
+                    if (!stderr.includes("fixture configSnapshot entered")) {
+                      return;
+                    }
+                    child.stderr.off("data", onData);
+                    try {
+                      observedPhaseStart = readRun();
+                      resolve();
+                    } catch (error) {
+                      reject(new Error("Could not read the phase-start ledger", { cause: error }));
+                    }
+                  };
+                  child.stderr.on("data", onData);
+                });
+              },
+            }
+          : {}),
         nodeArgs: ["--import", "tsx", fixture, scenario, ...args],
         env: {
           ESBUILD_WORKER_THREADS: "0",
@@ -98,13 +144,89 @@ describe.each(["repair", "finalize"])("update %s process output", (command) => {
       });
       const failure = formatCliProcessFailure({ reason: `${command} ${scenario}`, ...result });
       expect(result.signal, failure).toBeNull();
-      expect(result.code, failure).toBe(scenario.endsWith("error") ? 1 : 0);
+      expect(result.code, failure).toBe(
+        scenario.endsWith("error") || scenario === "phase-hang" ? 1 : 0,
+      );
+      if (scenario.startsWith("borrowed-")) {
+        expect(result.stderr, failure).toContain("Borrowed caller completed.");
+        expect(result.stderr, failure).not.toContain("Process still alive after terminal output");
+        if (scenario === "borrowed-phase") {
+          const timing = JSON.parse(result.stdout).phaseTimings.find(
+            (entry: { phase: string }) => entry.phase === "configSnapshot",
+          );
+          expect(timing, failure).toMatchObject({ outcome: "completed" });
+          expect(timing.durationMs, failure).toBeGreaterThanOrEqual(1_000);
+        }
+      }
+      if (blockedPhase) {
+        if (scenario === "phase-hang") {
+          expect(observedPhaseStart?.steps).toContainEqual(
+            expect.objectContaining({
+              step: "finalize:configSnapshot",
+              status: "in_progress",
+              startedAtMs: expect.any(Number),
+            }),
+          );
+        }
+        const output = JSON.parse(result.stdout);
+        expect(output).toMatchObject({
+          status: scenario === "phase-hang" ? "failed" : "ok",
+          restart: false,
+        });
+        if (scenario === "phase-hang") {
+          expect(output.stuckPhase).toBe(blockedPhase);
+        } else {
+          expect(output.stuckPhase).toBeUndefined();
+          const pid = Number(await fs.readFile(path.join(root, "completion.pid"), "utf8"));
+          expect(pid).toBeGreaterThan(0);
+          expect(isPidAlive(pid)).toBe(false);
+        }
+        expect(output.phaseTimings).toContainEqual(
+          expect.objectContaining({
+            phase: blockedPhase,
+            outcome: "failed",
+            durationMs: expect.any(Number),
+          }),
+        );
+        expect(result.stderr).toContain(`finalize:${blockedPhase}`);
+        expect(readRun()).toMatchObject({
+          status: scenario === "phase-hang" ? "failed" : "succeeded",
+          steps: expect.arrayContaining([
+            expect.objectContaining({
+              step: `finalize:${blockedPhase}`,
+              status: "failed",
+              startedAtMs: expect.any(Number),
+              endedAtMs: expect.any(Number),
+            }),
+          ]),
+        });
+        return;
+      }
+      if (scenario === "handle-hang") {
+        expect(result.stderr).toContain("activeResources");
+        expect(result.stderr).toContain("unsettledDisposers");
+        expect(readRun()).toMatchObject({
+          status: "succeeded",
+          steps: expect.arrayContaining([
+            expect.objectContaining({
+              step: "finalize:exit",
+              detail: expect.stringContaining("activeResources"),
+            }),
+          ]),
+        });
+      }
       const diagnostics = json ? result.stderr : result.stdout;
       for (const diagnostic of doctorDiagnostics) {
         expect(diagnostics, failure).toContain(diagnostic);
       }
       expect(diagnostics.match(/Doctor console diagnostic/gu), failure).toHaveLength(1);
       expect(result.stderr, failure).toContain("Doctor stderr diagnostic");
+      if (scenario === "human-recovery-plugin-error") {
+        expect(result.stdout, failure).toContain("Update finalization failed.");
+        expect(result.stdout, failure).toContain("Interactive recovery completed.");
+        expect(result.stderr, failure).not.toContain("Process still alive after terminal output");
+        return;
+      }
       const triageNotice = "Update failed. Entering triage...";
       if (!scenario.endsWith("error")) {
         expect(result.stdout + result.stderr, failure).not.toContain(triageNotice);

@@ -22,6 +22,7 @@ import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.ui.FoldAwareContent
 import ai.openclaw.app.ui.TabletopPaneBounds
 import ai.openclaw.app.ui.UnifiedChatShellScreen
+import ai.openclaw.app.ui.WindowDisplayFeatureSnapshot
 import ai.openclaw.app.ui.design.ClawDesignTheme
 import ai.openclaw.app.ui.design.ClawTheme
 import ai.openclaw.app.ui.testFold
@@ -31,13 +32,17 @@ import android.app.Activity
 import android.content.Context
 import android.content.pm.PackageManager
 import android.graphics.Rect
+import android.os.SystemClock
 import android.provider.Settings
 import android.speech.SpeechRecognizer
 import android.view.KeyEvent
+import android.view.MotionEvent
 import android.view.View
+import android.view.ViewGroup
 import android.view.WindowManager
 import android.view.inputmethod.EditorInfo
 import android.view.inspector.WindowInspector
+import androidx.activity.ComponentDialog
 import androidx.activity.compose.LocalActivity
 import androidx.activity.findViewTreeOnBackPressedDispatcherOwner
 import androidx.compose.foundation.background
@@ -121,6 +126,7 @@ import androidx.compose.ui.unit.IntRect
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.DialogWindowProvider
 import androidx.core.graphics.Insets
 import androidx.core.os.LocaleListCompat
 import androidx.core.view.ViewCompat
@@ -135,8 +141,10 @@ import androidx.window.layout.DisplayFeature
 import androidx.window.layout.WindowInfoTracker
 import androidx.window.layout.WindowInfoTrackerDecorator
 import androidx.window.layout.WindowLayoutInfo
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.FlowCollector
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
@@ -152,6 +160,7 @@ import kotlinx.serialization.json.jsonObject
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotSame
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
@@ -162,6 +171,7 @@ import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
+import org.robolectric.shadows.ShadowDialog
 import org.robolectric.shadows.ShadowSpeechRecognizer
 import java.util.UUID
 import java.util.concurrent.ConcurrentLinkedQueue
@@ -187,9 +197,19 @@ class ChatComposerLayoutTest {
   private lateinit var insetView: View
   private var observedBottomInsets: Pair<Int, Int>? = null
   private lateinit var renderedDensity: Density
+  private val sheetFeatures = SheetFeatures()
 
   @Before
+  @SuppressLint("RestrictedApi")
   fun setUp() {
+    WindowInfoTracker.overrideDecorator(
+      object : WindowInfoTrackerDecorator {
+        override fun decorate(tracker: WindowInfoTracker): WindowInfoTracker =
+          object : WindowInfoTracker by tracker {
+            override fun windowLayoutInfo(activity: Activity): Flow<WindowLayoutInfo> = sheetFeatures
+          }
+      },
+    )
     app = RuntimeEnvironment.getApplication() as NodeApp
     prefs = SecurePrefs(app, app.getSharedPreferences("chat-composer-${UUID.randomUUID()}", Context.MODE_PRIVATE))
     AndroidScreenshotFixture.configure(AndroidScreenshotScene.Chat)
@@ -206,6 +226,7 @@ class ChatComposerLayoutTest {
   }
 
   @After
+  @SuppressLint("RestrictedApi")
   fun tearDown() {
     viewModelStore.clear()
     setApplicationRuntime(originalRuntime)
@@ -213,6 +234,7 @@ class ChatComposerLayoutTest {
     AndroidScreenshotFixture.configure(AndroidScreenshotScene.Home)
     Settings.Global.putString(app.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, originalAnimatorScale)
     NativeStringResources.install(app)
+    WindowInfoTracker.reset()
   }
 
   @Test
@@ -1725,6 +1747,9 @@ class ChatComposerLayoutTest {
     val initialOwner = composeRule.runOnIdle { sheetBackOwner() }
     composeRule.runOnIdle { fontScale.value = 1.2f }
     composeRule.waitForIdle()
+    composeRule.onNode(isDialog()).assertDoesNotExist()
+    composeRule.onNodeWithContentDescription(nativeString("Model")).performClick()
+    composeRule.onNode(hasText(nativeString("Permissions")) and hasClickAction()).performClick()
     composeRule.runOnIdle {
       val recreatedOwner = sheetBackOwner()
       assertTrue("The dialog must actually be recreated", initialOwner !== recreatedOwner)
@@ -1741,6 +1766,356 @@ class ChatComposerLayoutTest {
 
     composeRule.onNodeWithText(nativeString("Default model")).assertIsDisplayed().performClick()
     composeRule.onNode(isDialog()).assertDoesNotExist()
+  }
+
+  @Test
+  @Config(qualifiers = "w800dp-h800dp-mdpi")
+  fun modelOpeningRevokesHeldTouchBeforeCoalescedRecoveryAndPreservesDraft() = assertTerminalModelInput(keyboard = false)
+
+  @Test
+  @Config(qualifiers = "w800dp-h800dp-mdpi")
+  fun modelOpeningRevokesHeldEnterBeforeCoalescedRecoveryAndPreservesDraft() = assertTerminalModelInput(keyboard = true)
+
+  private fun assertTerminalModelInput(keyboard: Boolean) {
+    showChat(viewportWidth = 720.dp, viewportHeight = { 720.dp })
+    val editor = composeRule.onNode(hasSetTextAction())
+    editor.performTextReplacement("retained selector draft")
+    editor.performSemanticsAction(SemanticsActions.SetSelection) { assertTrue(it(4, 9, false)) }
+    val editorId = editor.fetchSemanticsNode().id
+    val before = prefs.modelFavorites.value
+    composeRule.onNodeWithContentDescription(nativeString("Model")).performClick()
+    val pin = composeRule.onAllNodesWithContentDescription(nativeString("Pin model"))[0].performScrollTo()
+    val bounds = pin.getUnclippedBoundsInRoot()
+    val x = (bounds.left.value + bounds.right.value) / 2f
+    val y = (bounds.top.value + bounds.bottom.value) / 2f
+    val old = checkNotNull(ShadowDialog.getLatestDialog()) as ComponentDialog
+    if (keyboard) {
+      composeRule.runOnIdle { assertTrue(sheetComposeView(old).requestFocusFromTouch()) }
+      pin.performSemanticsAction(SemanticsActions.RequestFocus) { assertTrue(it()) }
+      pin.assertIsFocused()
+    }
+    val time = SystemClock.uptimeMillis()
+    composeRule.mainClock.autoAdvance = false
+    composeRule.runOnUiThread {
+      if (keyboard) {
+        assertTrue(checkNotNull(old.window).decorView.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ENTER)))
+      } else {
+        assertTrue("The real row must consume the original DOWN", sheetTouch(old, MotionEvent.ACTION_DOWN, x, y, time, time))
+      }
+      val deliveries = sheetFeatures.deliveries
+      runBlocking {
+        sheetFeatures.publish(listOf(testFold(Rect(0, 0, 800, 800))))
+        sheetFeatures.publish(emptyList())
+      }
+      assertEquals("Both direct producer deliveries precede UP", deliveries + 2, sheetFeatures.deliveries)
+      assertTrue("Original UP must reach the still-attached A window", old.isShowing)
+      if (keyboard) {
+        checkNotNull(old.window).decorView.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_ENTER))
+      } else {
+        sheetTouch(old, MotionEvent.ACTION_UP, x, y, time, time + 40)
+      }
+      assertEquals("A's held touch cannot borrow recovered geometry", before, prefs.modelFavorites.value)
+    }
+    composeRule.mainClock.autoAdvance = true
+    composeRule.waitForIdle()
+    composeRule.onNode(isDialog()).assertDoesNotExist()
+    editor.assertTextEquals("retained selector draft")
+    assertEquals(editorId, editor.fetchSemanticsNode().id)
+    assertEquals(TextRange(4, 9), editor.fetchSemanticsNode().config[SemanticsProperties.TextSelectionRange])
+
+    composeRule.onNodeWithContentDescription(nativeString("Model")).performClick()
+    composeRule.waitForIdle()
+    val fresh = checkNotNull(ShadowDialog.getLatestDialog()) as ComponentDialog
+    assertNotSame(old.window, fresh.window)
+    val freshPin = composeRule.onAllNodesWithContentDescription(nativeString("Pin model"))[0].performScrollTo()
+    freshPin.performTouchInput {
+      down(center)
+      up()
+    }
+    composeRule.waitForIdle()
+    val after = prefs.modelFavorites.value.toSet()
+    assertEquals("A fresh complete touch still toggles exactly one favorite", 1, ((before.toSet() - after) + (after - before.toSet())).size)
+  }
+
+  @Test
+  @Config(qualifiers = "w800dp-h800dp-mdpi")
+  fun modelOpeningBCannotBeChangedBySavedACommandsOrQueuedRemoval() {
+    showChat(viewportWidth = 720.dp, viewportHeight = { 720.dp })
+    updatePermissions(null, pending = false)
+    val open =
+      checkNotNull(
+        composeRule
+          .onNodeWithContentDescription(nativeString("Model"))
+          .fetchSemanticsNode()
+          .config[SemanticsActions.OnClick]
+          .action,
+      )
+    composeRule.onNodeWithContentDescription(nativeString("Model")).performClick()
+    composeRule.waitForIdle()
+    val old = checkNotNull(ShadowDialog.getLatestDialog()) as ComponentDialog
+    val details =
+      checkNotNull(
+        composeRule
+          .onNodeWithText(nativeString("Details"))
+          .fetchSemanticsNode()
+          .config[SemanticsActions.OnClick]
+          .action,
+      )
+    val permissions =
+      checkNotNull(
+        composeRule
+          .onNode(hasText(nativeString("Permissions")) and hasClickAction())
+          .fetchSemanticsNode()
+          .config[SemanticsActions.OnClick]
+          .action,
+      )
+    val select =
+      checkNotNull(
+        composeRule
+          .onNodeWithText(nativeString("Default model"))
+          .fetchSemanticsNode()
+          .config[SemanticsActions.OnClick]
+          .action,
+      )
+    val before = controller.selectedModelRef.value
+    composeRule.mainClock.autoAdvance = false
+    composeRule.runOnUiThread {
+      runBlocking {
+        sheetFeatures.publish(listOf(testFold(Rect(0, 0, 800, 800))))
+        sheetFeatures.publish(emptyList())
+      }
+      // Saved callbacks deliberately test origin identity, not pointer routing through an old window.
+      assertTrue(open())
+      details()
+      permissions()
+      select()
+      old.onBackPressedDispatcher.onBackPressed()
+      assertEquals(before, controller.selectedModelRef.value)
+    }
+    composeRule.mainClock.autoAdvance = true
+    composeRule.waitForIdle()
+    val fresh = checkNotNull(ShadowDialog.getLatestDialog()) as ComponentDialog
+    assertNotSame(old.window, fresh.window)
+    assertTrue(fresh.isShowing)
+    assertFalse(old.isShowing)
+    composeRule.onNodeWithText(nativeString("Default model")).assertIsDisplayed()
+    composeRule.onNodeWithText(nativeString("Non-cached input excludes cache reads.")).assertDoesNotExist()
+    composeRule.onNodeWithText(nativeString("Back")).assertDoesNotExist()
+    composeRule.onNode(hasText(nativeString("Permissions")) and hasClickAction()).performClick()
+    composeRule.onNodeWithText(nativeString("Back")).assertIsDisplayed().performClick()
+    composeRule.runOnIdle { fresh.onBackPressedDispatcher.onBackPressed() }
+    composeRule.onNode(isDialog()).assertDoesNotExist()
+  }
+
+  @Test
+  fun modelSessionLateRetirementCannotRemoveItsReplacement() {
+    val model = showChat()
+    val owner =
+      ChatModelPickerSessionOwner(chatActivity, chatActivity.window.decorView, (chatActivity as LifecycleOwner).lifecycle) {
+        model.isCurrentChatComposerOwner(it)
+      }
+    lateinit var old: ChatModelPickerSession
+    lateinit var fresh: ChatModelPickerSession
+    composeRule.runOnUiThread {
+      owner.publishFeatures(WindowDisplayFeatureSnapshot(ready = true))
+      owner.open(model.captureChatShareOwner(), controller.sessionKey.value)
+      old = checkNotNull(owner.visible)
+      owner.retire(old)
+      owner.open(model.captureChatShareOwner(), controller.sessionKey.value)
+      fresh = checkNotNull(owner.visible)
+      assertNotSame(old, fresh)
+      assertFalse(owner.admit(old))
+    }
+    composeRule.runOnIdle {
+      assertTrue(owner.visible === fresh)
+      // Invoke the real production owner, not Material semantics on a detached node.
+      owner.retire(old)
+      assertFalse(owner.admit(old))
+    }
+    composeRule.runOnIdle {
+      assertTrue(owner.visible === fresh)
+      owner.dispose()
+    }
+  }
+
+  private fun sheetComposeView(dialog: ComponentDialog): View {
+    fun find(view: View): View? {
+      if (view.parent is DialogWindowProvider) return view
+      if (view is ViewGroup) {
+        for (index in 0 until view.childCount) find(view.getChildAt(index))?.let { return it }
+      }
+      return null
+    }
+    return checkNotNull(find(checkNotNull(dialog.window).decorView))
+  }
+
+  private fun sheetTouch(
+    dialog: ComponentDialog,
+    action: Int,
+    x: Float,
+    y: Float,
+    downTime: Long,
+    eventTime: Long,
+  ): Boolean {
+    val event = MotionEvent.obtain(downTime, eventTime, action, x, y, 0)
+    try {
+      return dialog.dispatchTouchEvent(event)
+    } finally {
+      event.recycle()
+    }
+  }
+
+  @Test
+  @Config(qualifiers = "w800dp-h800dp-mdpi")
+  fun modelOpeningDoesNotCancelOrRetargetAnAlreadyAdmittedModelEffect() {
+    prefs.gatewayRegistry.upsert(
+      GatewayRegistryEntry(stableId = AndroidScreenshotFixture.gatewayId, kind = GatewayRegistryEntryKind.MANUAL, name = "Test gateway"),
+    )
+    prefs.gatewayRegistry.setActive(AndroidScreenshotFixture.gatewayId)
+    val model = showChat(viewportWidth = 720.dp, viewportHeight = { 720.dp })
+    val originalOwner = model.captureChatShareOwner()
+    val originalSession = controller.sessionKey.value
+    val release = CompletableDeferred<Unit>()
+    val admitted = ConcurrentLinkedQueue<Pair<String, JsonObject>>()
+    val requestField = ChatController::class.java.getDeclaredField("captureRequestLease").apply { isAccessible = true }
+
+    @Suppress("UNCHECKED_CAST")
+    val originalRequest = requestField.get(controller) as (ChatCacheScope?) -> GatewaySession.RequestLease?
+    val request: (ChatCacheScope?) -> GatewaySession.RequestLease? = { scope ->
+      originalRequest(scope)?.let { lease ->
+        GatewaySession.RequestLease(
+          endpointStableId = lease.endpointStableId,
+          isCurrentImpl = lease::isCurrent,
+          commitIfCurrentImpl = lease::commitIfCurrent,
+        ) { method, params, timeout, withEnqueue ->
+          if (method == "sessions.patch") {
+            val payload = Json.parseToJsonElement(checkNotNull(params)).jsonObject
+            withEnqueue { admitted.add(lease.endpointStableId to payload) }
+            release.await()
+            """{"entry":{"key":"$originalSession","modelOverride":null},"resolved":{"modelProvider":"openai","model":"gpt-5.2"}}"""
+          } else {
+            lease.request(method, params, timeout, withEnqueue)
+          }
+        }
+      }
+    }
+    try {
+      requestField.set(controller, request)
+      composeRule.onNodeWithContentDescription(nativeString("Model")).performClick()
+      composeRule.onNodeWithText(nativeString("Default model")).performClick()
+      composeRule.waitUntil { admitted.size == 1 }
+      composeRule.onNode(isDialog()).assertDoesNotExist()
+      assertFalse(release.isCompleted)
+      composeRule.onNodeWithContentDescription(nativeString("Model")).performClick()
+      composeRule.onNodeWithText(nativeString("Default model")).assertIsDisplayed()
+      composeRule.runOnUiThread {
+        runBlocking {
+          sheetFeatures.publish(listOf(testFold(Rect(0, 0, 800, 800))))
+          sheetFeatures.publish(emptyList())
+        }
+      }
+      composeRule.waitForIdle()
+      composeRule.onNode(isDialog()).assertDoesNotExist()
+      composeRule.onNodeWithContentDescription(nativeString("Model")).performClick()
+      composeRule.onNodeWithText(nativeString("Default model")).assertIsDisplayed()
+      val fresh = checkNotNull(ShadowDialog.getLatestDialog())
+      composeRule.runOnIdle { release.complete(Unit) }
+      composeRule.waitUntil { composeRule.runOnIdle { originalSession !in model.chatPendingSessionSettingsKeys.value } }
+      assertTrue("Business completion must not close the new selector", fresh.isShowing)
+      assertEquals(1, admitted.size)
+      val (gateway, payload) = admitted.single()
+      assertEquals(originalOwner.gatewayStableId, gateway)
+      assertEquals(JsonPrimitive(originalSession), payload["key"])
+      assertEquals(JsonPrimitive(originalOwner.agentId), payload["agentId"])
+    } finally {
+      release.complete(Unit)
+      requestField.set(controller, originalRequest)
+    }
+  }
+
+  @Test
+  @Config(qualifiers = "w800dp-h800dp-mdpi")
+  fun modelBackDuringUnplacedPaneChangeRetiresOpeningAndAllowsReopen() {
+    showChat(viewportWidth = 720.dp, viewportHeight = { 720.dp })
+    composeRule.onNodeWithContentDescription(nativeString("Model")).performClick()
+    composeRule.onNodeWithText(nativeString("Default model")).assertIsDisplayed()
+    val old = checkNotNull(ShadowDialog.getLatestDialog()) as ComponentDialog
+    composeRule.mainClock.autoAdvance = false
+    composeRule.runOnUiThread {
+      runBlocking { sheetFeatures.publish(listOf(testFold(Rect(390, 0, 410, 800)))) }
+      // Both panes are usable, but A's previous placement is no longer authoritative.
+      old.onBackPressedDispatcher.onBackPressed()
+    }
+    composeRule.mainClock.autoAdvance = true
+    composeRule.waitForIdle()
+    composeRule.onNode(isDialog()).assertDoesNotExist()
+    composeRule.onNodeWithContentDescription(nativeString("Model")).performClick()
+    composeRule.onNodeWithText(nativeString("Default model")).assertIsDisplayed()
+    val fresh = checkNotNull(ShadowDialog.getLatestDialog()) as ComponentDialog
+    assertNotSame(old.window, fresh.window)
+    composeRule.runOnIdle { fresh.onBackPressedDispatcher.onBackPressed() }
+    composeRule.onNode(isDialog()).assertDoesNotExist()
+  }
+
+  @Test
+  @Config(qualifiers = "w800dp-h800dp-mdpi")
+  fun modelOpeningWithExistingImeKeepsDraftSelectionAndNativeKeyboardCommands() {
+    showChat(viewportWidth = 720.dp, viewportHeight = { 720.dp }, useChatShell = true)
+    val editor = composeRule.onNode(hasSetTextAction())
+    editor.performClick().performTextReplacement("IME before selector")
+    editor.performSemanticsAction(SemanticsActions.SetSelection) { assertTrue(it(3, 6, false)) }
+    val editorId = editor.fetchSemanticsNode().id
+    applyChatImeInsets()
+    composeRule.onNodeWithContentDescription(nativeString("Model")).performClick()
+    composeRule.onNodeWithText(nativeString("Default model")).performScrollTo().assertIsDisplayed()
+    val dialog = checkNotNull(ShadowDialog.getLatestDialog()) as ComponentDialog
+    composeRule.runOnIdle {
+      ViewCompat.dispatchApplyWindowInsets(
+        checkNotNull(dialog.window).decorView,
+        WindowInsetsCompat
+          .Builder()
+          .setInsets(WindowInsetsCompat.Type.ime(), Insets.of(0, 0, 0, 220))
+          .setVisible(WindowInsetsCompat.Type.ime(), true)
+          .build(),
+      )
+    }
+    val details = composeRule.onNode(hasText(nativeString("Details")) and hasClickAction()).performScrollTo()
+    composeRule.runOnIdle { assertTrue(sheetComposeView(dialog).requestFocusFromTouch()) }
+    details.performSemanticsAction(SemanticsActions.RequestFocus) { assertTrue(it()) }
+    details.assertIsFocused()
+    composeRule.runOnIdle { dispatchHardwareKey(checkNotNull(dialog.window).decorView, KeyEvent.KEYCODE_SPACE) }
+    details.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, nativeString("Expanded")))
+    details.performClick()
+    details.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, nativeString("Collapsed")))
+    composeRule.runOnIdle { dialog.onBackPressedDispatcher.onBackPressed() }
+    composeRule.onNode(isDialog()).assertDoesNotExist()
+    editor.assertTextEquals("IME before selector")
+    assertEquals(editorId, editor.fetchSemanticsNode().id)
+    assertEquals(TextRange(3, 6), editor.fetchSemanticsNode().config[SemanticsProperties.TextSelectionRange])
+  }
+
+  private class SheetFeatures : Flow<WindowLayoutInfo> {
+    private val collectors = mutableSetOf<FlowCollector<WindowLayoutInfo>>()
+    var deliveries = 0
+      private set
+    private var latest = WindowLayoutInfo(emptyList())
+
+    override suspend fun collect(collector: FlowCollector<WindowLayoutInfo>) {
+      collectors.add(collector)
+      try {
+        collector.emit(latest)
+        awaitCancellation()
+      } finally {
+        collectors.remove(collector)
+      }
+    }
+
+    suspend fun publish(features: List<DisplayFeature>) {
+      latest = WindowLayoutInfo(features)
+      check(collectors.isNotEmpty())
+      collectors.toList().forEach { it.emit(latest) }
+      deliveries++
+    }
   }
 
   @Test

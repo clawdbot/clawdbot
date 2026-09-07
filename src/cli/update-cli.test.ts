@@ -354,14 +354,6 @@ vi.mock("node:child_process", async () => {
     ...actual,
     execFile,
     spawn,
-    spawnSync: vi.fn(() => ({
-      pid: 0,
-      output: [],
-      stdout: "",
-      stderr: "",
-      status: 0,
-      signal: null,
-    })),
   };
 });
 
@@ -686,7 +678,6 @@ const { updateStatusCommand } = await import("./update-cli/status.js");
 const { updateWizardCommand } = await import("./update-cli/wizard.js");
 const updateCliShared = await import("./update-cli/shared.js");
 const { resolveGitInstallDir } = updateCliShared;
-const { spawnSync } = await import("node:child_process");
 const { clearRestartSentinel, readRestartSentinel } = await import("../infra/restart-sentinel.js");
 
 function requireValue<T>(value: T | undefined, label: string): T {
@@ -905,12 +896,7 @@ describe("update-cli", () => {
     return calls[index];
   };
 
-  const spawnSyncCall = (index = 0) => {
-    const calls = vi.mocked(spawnSync).mock.calls as unknown as Array<
-      [string, string[], { env?: NodeJS.ProcessEnv; timeout?: number }]
-    >;
-    return calls[index];
-  };
+  const completionCommandCall = () => commandCalls().find(([argv]) => argv[2] === "completion");
 
   const syncPluginCall = (index = 0) => {
     const calls = syncPluginsForUpdateChannel.mock.calls as unknown as Array<
@@ -1998,6 +1984,11 @@ describe("update-cli", () => {
       if (argv[1] === "--version") {
         return commandResult({ stdout: "12.0.0\n" });
       }
+      if (argv[2] === "gateway" && argv[3] === "stop") {
+        return commandResult({
+          stdout: JSON.stringify({ action: "stop", ok: true, result: "stopped" }),
+        });
+      }
       if (argv[0] === "npm" && argv[1] === "pack") {
         const destination = argv[argv.indexOf("--pack-destination") + 1];
         if (destination) {
@@ -2496,18 +2487,30 @@ describe("update-cli", () => {
     });
   });
 
-  it("bounds completion cache refresh during update follow-up", async () => {
-    const root = createCaseDir("openclaw-completion-timeout");
-    pathExists.mockResolvedValue(true);
+  it.each([undefined, 1_200])(
+    "passes the completion refresh budget %s and core-only command scope",
+    async (timeoutMs) => {
+      const root = createCaseDir("openclaw-completion-timeout");
+      pathExists.mockResolvedValue(true);
 
-    await updateCliShared.tryWriteCompletionCache(root, false);
+      await expect(updateCliShared.tryWriteCompletionCache(root, false, timeoutMs)).resolves.toBe(
+        "completed",
+      );
 
-    const call = spawnSyncCall();
-    expect(typeof call?.[0]).toBe("string");
-    expect(call?.[1]).toEqual([path.join(root, "openclaw.mjs"), "completion", "--write-state"]);
-    expect(call?.[2]?.env?.OPENCLAW_COMPLETION_SKIP_PLUGIN_COMMANDS).toBe("1");
-    expect(call?.[2]?.timeout).toBe(30_000);
-  });
+      const call = completionCommandCall();
+      expect(call?.[0]).toEqual([
+        expect.any(String),
+        path.join(root, "openclaw.mjs"),
+        "completion",
+        "--write-state",
+      ]);
+      expect(call?.[1]).toMatchObject({
+        env: { OPENCLAW_COMPLETION_SKIP_PLUGIN_COMMANDS: "1" },
+        timeoutMs: timeoutMs ?? 30_000,
+        killProcessTree: true,
+      });
+    },
+  );
 
   it("disarms legacy launchd updater jobs before refusing mutating updates in Nix mode", async () => {
     await withEnvAsync({ OPENCLAW_NIX_MODE: "1" }, async () => {
@@ -2540,18 +2543,9 @@ describe("update-cli", () => {
   it("logs friendly hint with manual refresh command when completion cache write times out", async () => {
     const root = createCaseDir("openclaw-completion-timeout-msg");
     pathExists.mockResolvedValue(true);
-    const timeoutErr = Object.assign(new Error("spawnSync /usr/bin/node ETIMEDOUT"), {
-      code: "ETIMEDOUT",
-    });
-    vi.mocked(spawnSync).mockReturnValueOnce({
-      pid: 0,
-      output: [],
-      stdout: "",
-      stderr: "",
-      status: null,
-      signal: null,
-      error: timeoutErr,
-    });
+    vi.mocked(runCommandWithTimeout).mockResolvedValueOnce(
+      commandResult({ code: 124, killed: true, termination: "timeout" }),
+    );
     vi.mocked(runtimeCapture.log).mockClear();
 
     await updateCliShared.tryWriteCompletionCache(root, false);
@@ -2559,7 +2553,6 @@ describe("update-cli", () => {
     const logOutput = getLogOutput();
     expect(logOutput).toContain("timed out after 30s");
     expect(logOutput).toContain("openclaw completion --write-state");
-    expect(logOutput).not.toContain("Error: spawnSync");
   });
 
   it("keeps update completion refresh best-effort when profile install fails", async () => {
@@ -2897,10 +2890,7 @@ describe("update-cli", () => {
     expect(freshRestartCalls()).toHaveLength(1);
     expect(freshRestartCalls()[0]?.[1]).toMatchObject({ env: { OPENCLAW_PROFILE: "work" } });
     expect(runDaemonRestart).not.toHaveBeenCalled();
-    const completionCall = vi
-      .mocked(spawnSync)
-      .mock.calls.find(([, args]) => args?.[1] === "completion");
-    expect(completionCall?.[2]?.env?.OPENCLAW_PROFILE).toBe("personal");
+    expect(completionCommandCall()?.[1]).toMatchObject({ env: { OPENCLAW_PROFILE: "personal" } });
   });
 
   it("routes JSON post-core child output to stderr", async () => {
@@ -3996,6 +3986,7 @@ describe("update-cli", () => {
   );
 
   it("post-core resume returns package work without running core update or Doctor completion", async () => {
+    readPackageVersion.mockResolvedValue("2026.9.4");
     await runPostCoreCommand({ restart: false }, { OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1" });
 
     expect(runGatewayUpdate).not.toHaveBeenCalled();
@@ -4015,6 +4006,10 @@ describe("update-cli", () => {
     expect(vi.mocked(runExec).mock.calls.filter(([, args]) => args[1] === "doctor")).toEqual([]);
     expect(syncPluginsForUpdateChannel).toHaveBeenCalledTimes(1);
     expect(updateNpmInstalledPlugins).toHaveBeenCalledTimes(1);
+    expect(lastNpmPluginUpdateCall()).toMatchObject({
+      coreVersion: "2026.9.4",
+      versionBoundPluginIds: new Set(["codex"]),
+    });
     expect(spawn).not.toHaveBeenCalled();
   });
 
@@ -12172,6 +12167,7 @@ describe("update-cli", () => {
         expect(output?.postUpdate?.doctor?.status).toBe("ok");
         expect(output?.postUpdate?.plugins?.status).toBe("ok");
         expect(output?.phaseTimings?.map((timing) => timing.phase)).toEqual([
+          "preflight",
           "targetConfigValidation",
           "configSnapshot",
           "doctor",
@@ -12189,6 +12185,7 @@ describe("update-cli", () => {
           "completed",
           "completed",
           "completed",
+          "completed",
           "skipped",
         ]);
       },
@@ -12197,7 +12194,7 @@ describe("update-cli", () => {
 
   it("updateFinalizeCommand can defer only the best-effort completion cache", async () => {
     pathExists.mockResolvedValue(true);
-    vi.mocked(spawnSync).mockClear();
+    vi.mocked(runCommandWithTimeout).mockClear();
     vi.mocked(defaultRuntime.writeJson).mockClear();
 
     await updateFinalizeCommand({
@@ -12207,7 +12204,7 @@ describe("update-cli", () => {
       deferCompletionCache: true,
     } as Parameters<typeof updateFinalizeCommand>[0] & { deferCompletionCache: boolean });
 
-    expect(spawnSync).not.toHaveBeenCalled();
+    expect(completionCommandCall()).toBeUndefined();
     const output = lastWriteJsonCall() as
       | { phaseTimings?: Array<{ phase?: string; outcome?: string }> }
       | undefined;

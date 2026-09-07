@@ -2,13 +2,19 @@ import { expect, it } from "vitest";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { formatCliProcessFailure, runCliProcessChild } from "../cli-process-child.test-helpers.js";
 
-it.each(["restart", "install", "missing candidate", "restart revoked", "install revoked"] as const)(
-  "handles %s after replacing the updater's module files",
-  async (scenario) => {
-    await withOpenClawTestState(
-      { prefix: "openclaw-update-command-replacement-", scenario: "minimal", applyEnv: false },
-      async (state) => {
-        const script = String.raw`
+it.each([
+  "restart",
+  "install",
+  "stop",
+  "missing candidate",
+  "restart revoked",
+  "install revoked",
+  "stop revoked",
+] as const)("handles %s after replacing the updater's module files", async (scenario) => {
+  await withOpenClawTestState(
+    { prefix: "openclaw-update-command-replacement-", scenario: "minimal", applyEnv: false },
+    async (state) => {
+      const script = String.raw`
           import assert from "node:assert/strict";
           import { existsSync } from "node:fs";
           import fs from "node:fs/promises";
@@ -17,7 +23,7 @@ it.each(["restart", "install", "missing candidate", "restart revoked", "install 
           import { pathToFileURL } from "node:url";
 
           const scenario = ${JSON.stringify(scenario)};
-          const action = scenario.startsWith("install") ? "install" : "restart";
+          const action = scenario.startsWith("install") ? "install" : scenario.startsWith("stop") ? "stop" : "restart";
           const root = ${JSON.stringify(state.path("installation"))};
           const dist = path.join(root, "dist");
           const receipt = path.join(root, "candidate.json");
@@ -84,7 +90,7 @@ it.each(["restart", "install", "missing candidate", "restart revoked", "install 
             }
             const observed = JSON.parse(await fs.readFile(receipt, "utf8"));
             assert.deepEqual(observed, {
-              args: ["gateway", action, action === "install" ? "--force" : "--preserve-definition", "--json"],
+              args: ["gateway", action, action === "restart" ? "--preserve-definition" : "--force", "--json"],
               node: process.execPath,
               config: process.env.OPENCLAW_CONFIG_PATH,
               compileCacheDisabled: "1",
@@ -92,24 +98,23 @@ it.each(["restart", "install", "missing candidate", "restart revoked", "install 
           }
           console.log("UPDATE_COMMAND_AFTER_REPLACEMENT_OK");
         `;
-        const result = await runCliProcessChild({
-          nodeArgs: ["--import", "./scripts/tsx.mjs", "--input-type=module", "--eval", script],
-          env: {
-            PATH: process.env.PATH,
-            ...state.envVars,
-            TMPDIR: state.root,
-            TMP: state.root,
-            TEMP: state.root,
-          },
-        });
-        const failure = formatCliProcessFailure({
-          reason: "Update command child failed",
-          ...result,
-        });
-        expect(result.signal, failure).toBeNull();
-        expect(result.code, failure).toBe(0);
-        expect(result.stdout, failure).toContain("UPDATE_COMMAND_AFTER_REPLACEMENT_OK");
-      },
-    );
-  },
-);
+      const result = await runCliProcessChild({
+        nodeArgs: ["--import", "./scripts/tsx.mjs", "--input-type=module", "--eval", script],
+        env: {
+          PATH: process.env.PATH,
+          ...state.envVars,
+          TMPDIR: state.root,
+          TMP: state.root,
+          TEMP: state.root,
+        },
+      });
+      const failure = formatCliProcessFailure({
+        reason: "Update command child failed",
+        ...result,
+      });
+      expect(result.signal, failure).toBeNull();
+      expect(result.code, failure).toBe(0);
+      expect(result.stdout, failure).toContain("UPDATE_COMMAND_AFTER_REPLACEMENT_OK");
+    },
+  );
+});

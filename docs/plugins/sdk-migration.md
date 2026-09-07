@@ -330,6 +330,11 @@ names. Its approved `removeAfter` date is **2026-10-01** (two release trains
 after the facts-first replacements shipped). Removal additionally requires a
 clean published-plugin artifact sweep at that time; migrate before the date.
 
+The unused `buildChannelTurnMediaPayload` alias has been removed from
+`openclaw/plugin-sdk/channel-inbound`. Its canonical
+`buildChannelInboundMediaPayload` export remains available for the compatibility
+window above. New ingress code should pass ordered media facts directly.
+
 For channel ingress, replace singular/plural `MediaPath`, `MediaUrl`,
 `MediaType`, `MediaPaths`, `MediaUrls`, `MediaTypes`,
 `MediaTranscribedIndexes`, `MediaWorkspaceDir`, and `MediaStaged` with ordered

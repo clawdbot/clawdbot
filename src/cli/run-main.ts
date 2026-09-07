@@ -67,7 +67,7 @@ import {
   shouldUseSetupOnboardConfigureHelpFastPath,
 } from "./run-main-policy.js";
 import { withCliCommandCleanup, type CliHarnessCleanup } from "./runtime-cleanup-scope.js";
-import { closeCliResources } from "./runtime-cleanup.js";
+import { closeCliResources, runCliDisposer } from "./runtime-cleanup.js";
 import { registerSignalExitBarrier, waitForSignalExitBarriers } from "./signal-exit-barrier.js";
 import {
   configureGatewayStartupTraceConsoleFormatting,
@@ -1705,7 +1705,7 @@ async function runCliWithPreparedOutputMode(
   } finally {
     pluginCliSession?.close();
     uninstallGatewayRunRuntimeHooks?.();
-    await stopStartedProxy();
+    await runCliDisposer("managed-proxy", stopStartedProxy);
     await closeCliResources(options.harnessCleanup);
     pauseNonTtyStdinForCliExit();
   }

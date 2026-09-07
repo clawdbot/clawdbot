@@ -419,6 +419,26 @@ function finishRunRecord(record: UpdateRunRecord, result: FinishUpdateRunResult)
   record.downtimeMs = result.downtimeMs ?? record.downtimeMs;
 }
 
+/** A terminal process diagnostic adds evidence without reopening the recorded outcome. */
+export function recordUpdateRunDiagnostic(
+  runId: string,
+  detail: string,
+  options: LedgerOptions = {},
+): UpdateRunRecord {
+  return mutateRun(
+    runId,
+    (record) => {
+      upsertStep(record, {
+        step: "finalize:exit",
+        status: "completed",
+        endedAtMs: Date.now(),
+        detail,
+      });
+    },
+    options,
+  );
+}
+
 export function finishUpdateRun(
   runId: string,
   result: FinishUpdateRunResult,
