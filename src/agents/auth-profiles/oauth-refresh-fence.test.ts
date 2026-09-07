@@ -2,11 +2,13 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { inlineAuthProfileCredentialSchema } from "./credential-schema.js";
 import { testing as externalAuthTesting } from "./external-auth.test-support.js";
-import { createOAuthManager } from "./oauth-manager.js";
+import { createOAuthManager, OAuthManagerRefreshError } from "./oauth-manager.js";
+import { withOAuthProfileLock } from "./oauth-profile-lock.js";
 import { refreshSerializedOAuthCredential } from "./oauth-refresh-fence.js";
 import {
   createFailedOAuthRefreshFence,
@@ -219,6 +221,255 @@ describe("OAuth refresh generation fence", () => {
       accountId: "acct-b",
     });
   });
+
+  it("rejects a serialized provider refresh result for a different OAuth account", async () => {
+    const profileId = "openai:default";
+    const expired = createCredential({
+      access: "account-a-access",
+      refresh: "account-a-refresh",
+      expires: 1,
+      accountId: "acct-a",
+    });
+    let persisted = JSON.stringify({ [profileId]: expired });
+    const backend = {
+      withLock<T>(fn: (current: string | undefined) => { result: T; next?: string }): T {
+        const update = fn(persisted);
+        if (update.next !== undefined) {
+          persisted = update.next;
+        }
+        return update.result;
+      },
+    };
+
+    await expect(
+      refreshSerializedOAuthCredential({
+        backend,
+        profileId,
+        label: "test serialized provider identity mismatch",
+        timeoutMs: 1_000,
+        parse: (current) => JSON.parse(current ?? "{}") as Record<string, OAuthCredential>,
+        serialize: JSON.stringify,
+        readCredential: (data) => data[profileId],
+        writeCredential: (data, credential) => ({ ...data, [profileId]: credential }),
+        canRefresh: async () => true,
+        refresh: async () => ({
+          apiKey: "account-b-access",
+          credential: createCredential({
+            access: "account-b-access",
+            refresh: "account-b-refresh",
+            expires: Date.now() + 600_000,
+            accountId: "acct-b",
+          }),
+        }),
+        resolve: async (credential) => ({ apiKey: credential.access, credential }),
+        commit: () => {},
+      }),
+    ).rejects.toThrow("different OAuth account");
+
+    const stored = JSON.parse(persisted)[profileId] as OAuthCredential;
+    expect(stored).toMatchObject({
+      type: "oauth",
+      provider: "openai",
+      accountId: "acct-a",
+      expires: 1,
+    });
+    expect(stored.access).toContain(":failed:access:");
+    expect(JSON.stringify(stored)).not.toContain("account-b-access");
+  });
+
+  it.each([{ outcome: "throw" as const }, { outcome: "null" as const }])(
+    "surfaces one failed serialized terminal write after a $outcome refresh",
+    async ({ outcome }) => {
+      const profileId = "openai:default";
+      const expired = createCredential({
+        access: "expired-access",
+        refresh: "expired-refresh",
+        expires: 1,
+        accountId: "acct-123",
+      });
+      let persisted = JSON.stringify({ [profileId]: expired });
+      let lockDepth = 0;
+      let terminalAttempts = 0;
+      const terminalError = new Error("failed to persist serialized terminal fence");
+      const backend = {
+        withLock<T>(fn: (current: string | undefined) => { result: T; next?: string }): T {
+          expect(lockDepth).toBe(0);
+          lockDepth += 1;
+          try {
+            const update = fn(persisted);
+            if (update.next?.includes(":failed:access:")) {
+              terminalAttempts += 1;
+              throw terminalError;
+            }
+            if (update.next !== undefined) {
+              persisted = update.next;
+            }
+            return update.result;
+          } finally {
+            lockDepth -= 1;
+          }
+        },
+      };
+      const initiatingError = new Error("provider refresh failed");
+      const run = refreshSerializedOAuthCredential({
+        backend,
+        profileId,
+        label: `test serialized ${outcome} terminal failure`,
+        timeoutMs: 1_000,
+        parse: (current) => JSON.parse(current ?? "{}") as Record<string, OAuthCredential>,
+        serialize: JSON.stringify,
+        readCredential: (data) => data[profileId],
+        writeCredential: (data, credential) => ({ ...data, [profileId]: credential }),
+        canRefresh: async () => true,
+        refresh: async () => {
+          if (outcome === "throw") {
+            throw initiatingError;
+          }
+          return null;
+        },
+        resolve: async (credential) => ({ apiKey: credential.access, credential }),
+        commit: () => {},
+      });
+
+      if (outcome === "throw") {
+        await expect(run).rejects.toSatisfy((caught: unknown) => {
+          expect(caught).toBeInstanceOf(AggregateError);
+          const aggregate = caught as AggregateError;
+          expect(aggregate.errors).toEqual([initiatingError, terminalError]);
+          expect(aggregate.cause).toBe(initiatingError);
+          return true;
+        });
+      } else {
+        await expect(run).rejects.toBe(terminalError);
+      }
+      expect(terminalAttempts).toBe(1);
+      expect(lockDepth).toBe(0);
+      expect(backend.withLock(() => ({ result: "reacquired" }))).toBe("reacquired");
+    },
+  );
+
+  it("rejects a manager provider refresh result for a different OAuth account", async () => {
+    await withOAuthTempRoot("oauth-manager-provider-account-mismatch-", async (tempRoot) => {
+      const agentDir = path.join(tempRoot, "agents", "main", "agent");
+      await fs.mkdir(agentDir, { recursive: true });
+      const profileId = "openai:oauth";
+      const expired = createCredential({
+        access: "account-a-access",
+        refresh: "account-a-refresh",
+        expires: 1,
+        accountId: "acct-a",
+      });
+      saveAuthProfileStore({ version: 1, profiles: { [profileId]: expired } }, agentDir, {
+        filterExternalAuthProfiles: false,
+      });
+      const manager = createOAuthManager({
+        buildApiKey: async (_provider, credential) => credential.access,
+        canRefreshCredential: async () => true,
+        refreshCredential: vi.fn(async () =>
+          createCredential({
+            access: "account-b-access",
+            refresh: "account-b-refresh",
+            expires: Date.now() + 600_000,
+            accountId: "acct-b",
+          }),
+        ),
+        readBootstrapCredential: () => null,
+      });
+
+      await expect(
+        manager.resolveOAuthAccess({
+          store: ensureAuthProfileStoreWithoutExternalProfiles(agentDir),
+          profileId,
+          credential: expired,
+          agentDir,
+        }),
+      ).rejects.toThrow("different OAuth account");
+      const persisted = ensureAuthProfileStoreWithoutExternalProfiles(agentDir).profiles[profileId];
+      expect(persisted).toMatchObject({ accountId: "acct-a", expires: 1 });
+      expect(persisted?.type === "oauth" ? persisted.access : "").toContain(":failed:access:");
+      expect(JSON.stringify(persisted)).not.toContain("account-b-access");
+    });
+  });
+
+  it.each([{ outcome: "throw" as const }, { outcome: "null" as const }])(
+    "surfaces one failed manager terminal write after a $outcome refresh",
+    async ({ outcome }) => {
+      await withOAuthTempRoot(`oauth-manager-${outcome}-terminal-failure-`, async (tempRoot) => {
+        const agentDir = path.join(tempRoot, "agents", "main", "agent");
+        await fs.mkdir(agentDir, { recursive: true });
+        const profileId = "openai:oauth";
+        const expired = createCredential({
+          access: "expired-access",
+          refresh: "expired-refresh",
+          expires: 1,
+          accountId: "acct-123",
+        });
+        saveAuthProfileStore({ version: 1, profiles: { [profileId]: expired } }, agentDir, {
+          filterExternalAuthProfiles: false,
+        });
+        const initiatingError = Object.assign(new Error("provider rejected invalid_grant"), {
+          oauthRefreshFailure: {
+            errorType: "invalid_grant_error",
+            reason: "invalid_grant",
+            status: 401,
+            summary: "provider rejected invalid_grant",
+          },
+        });
+        const originalUpdate = authProfileStoreRuntime.updateAuthProfileStoreWithLock;
+        let terminalAttempts = 0;
+        vi.spyOn(authProfileStoreRuntime, "updateAuthProfileStoreWithLock").mockImplementation(
+          async (params) => {
+            const current =
+              ensureAuthProfileStoreWithoutExternalProfiles(agentDir).profiles[profileId];
+            if (current?.type === "oauth" && isPendingOAuthRefreshFence(current)) {
+              terminalAttempts += 1;
+              return null;
+            }
+            return await originalUpdate(params);
+          },
+        );
+        const manager = createOAuthManager({
+          buildApiKey: async (_provider, credential) => credential.access,
+          canRefreshCredential: async () => true,
+          refreshCredential: vi.fn(async () => {
+            if (outcome === "throw") {
+              throw initiatingError;
+            }
+            return null;
+          }),
+          readBootstrapCredential: () => null,
+        });
+
+        let caught: unknown;
+        try {
+          await manager.resolveOAuthAccess({
+            store: ensureAuthProfileStoreWithoutExternalProfiles(agentDir),
+            profileId,
+            credential: expired,
+            agentDir,
+          });
+        } catch (error) {
+          caught = error;
+        }
+        expect(caught).toBeInstanceOf(OAuthManagerRefreshError);
+        const refreshError = caught as OAuthManagerRefreshError;
+        if (outcome === "throw") {
+          expect(refreshError.reason).toBe("invalid_grant");
+          expect(refreshError.cause).toBeInstanceOf(AggregateError);
+          const aggregate = refreshError.cause as AggregateError;
+          expect(formatErrorMessage(aggregate.errors[0])).toContain("invalid_grant");
+          expect(formatErrorMessage(aggregate.errors[1])).toContain("terminal OAuth refresh fence");
+          expect(aggregate.cause).toBe(aggregate.errors[0]);
+        } else {
+          expect(refreshError.message).toContain("terminal OAuth refresh fence");
+        }
+        expect(terminalAttempts).toBe(1);
+        await expect(
+          withOAuthProfileLock({ provider: "openai", profileId }, async () => "reacquired"),
+        ).resolves.toBe("reacquired");
+      });
+    },
+  );
 
   it("rejects a different-account login while an owner and observer settle account A", async () => {
     await withOAuthTempRoot("openclaw-oauth-account-replacement-", async () => {
@@ -622,7 +873,18 @@ describe("OAuth refresh generation fence", () => {
       },
       expectedApiKey: "new-access",
     },
-  ])("$name after a forced refresh failure", async ({ candidate, expectedApiKey }) => {
+    {
+      name: "preserves the refresh error when adopted-key construction fails",
+      candidate: {
+        access: "new-access",
+        refresh: "failed-refresh",
+        expires: Date.now() + 600_000,
+        accountId: "acct-123",
+      },
+      expectedApiKey: undefined,
+      buildError: "fallback key construction failed",
+    },
+  ])("$name after a forced refresh failure", async ({ candidate, expectedApiKey, buildError }) => {
     await withOAuthTempRoot("oauth-manager-force-fallback-", async (tempRoot) => {
       const agentDir = path.join(tempRoot, "agents", "main", "agent");
       await fs.mkdir(agentDir, { recursive: true });
@@ -636,7 +898,12 @@ describe("OAuth refresh generation fence", () => {
         filterExternalAuthProfiles: false,
       });
       const manager = createOAuthManager({
-        buildApiKey: async (_provider, credential) => credential.access,
+        buildApiKey: async (_provider, credential) => {
+          if (buildError && credential.access === candidate.access) {
+            throw new Error(buildError);
+          }
+          return credential.access;
+        },
         canRefreshCredential: async () => true,
         refreshCredential: async () => {
           saveAuthProfileStore(
@@ -661,6 +928,18 @@ describe("OAuth refresh generation fence", () => {
 
       if (expectedApiKey) {
         await expect(resolution).resolves.toMatchObject({ apiKey: expectedApiKey });
+      } else if (buildError) {
+        await expect(resolution).rejects.toSatisfy((caught: unknown) => {
+          expect(caught).toBeInstanceOf(OAuthManagerRefreshError);
+          const error = caught as OAuthManagerRefreshError;
+          expect(error.message).toContain("forced refresh failed");
+          expect(error.cause).toBeInstanceOf(AggregateError);
+          expect((error.cause as AggregateError).errors.map(formatErrorMessage)).toEqual([
+            "forced refresh failed",
+            buildError,
+          ]);
+          return true;
+        });
       } else {
         await expect(resolution).rejects.toThrow("OAuth token refresh failed");
       }

@@ -295,6 +295,7 @@ describe("createOAuthManager", () => {
           provider,
           ...metadata,
           expires: Date.now() - 60_000,
+          accountId: "acct-personal",
         });
         const { authProfileId: profileId } = connectUserModelAccount({
           ownerProfileId: owner.id,
@@ -307,6 +308,7 @@ describe("createOAuthManager", () => {
             access: "personal-rotated-access",
             refresh: "personal-rotated-refresh",
             expires: Date.now() + 600_000,
+            accountId: "acct-personal",
             ...metadata,
           };
         });
@@ -440,11 +442,13 @@ describe("createOAuthManager", () => {
         access: "expired-sub-access",
         refresh: "sub-refresh",
         expires: Date.now() - 60_000,
+        accountId: "acct-main",
       });
       const mainCredential = createCredential({
         access: "expired-main-access",
         refresh: "main-refresh",
         expires: Date.now() - 30_000,
+        accountId: "acct-main",
       });
       saveAuthProfileStore(
         {
@@ -473,6 +477,7 @@ describe("createOAuthManager", () => {
             access: "external-fresh-access",
             refresh: "external-fresh-refresh",
             expires: Date.now() + 60_000,
+            accountId: "acct-main",
           }),
           persistence: "runtime-only",
         },
@@ -484,6 +489,7 @@ describe("createOAuthManager", () => {
           access: "rotated-main-access",
           refresh: "rotated-main-refresh",
           expires: Date.now() + 600_000,
+          accountId: "acct-main",
         };
       });
       const manager = createOAuthManager({
@@ -578,6 +584,7 @@ describe("createOAuthManager", () => {
         access: "stale-local-access",
         refresh: "stale-local-refresh",
         expires: Date.now() - 60_000,
+        accountId: "acct-minimax",
       });
       saveAuthProfileStore(
         {
@@ -599,6 +606,7 @@ describe("createOAuthManager", () => {
             access: "rotated-access",
             refresh: "rotated-refresh",
             expires: Date.now() + 600_000,
+            accountId: "acct-minimax",
           };
         }),
         readBootstrapCredential: () =>
@@ -607,6 +615,7 @@ describe("createOAuthManager", () => {
             access: "expired-external-access",
             refresh: "external-refresh",
             expires: Date.now() - 30_000,
+            accountId: "acct-minimax",
           }),
       });
 
@@ -870,13 +879,14 @@ describe("createOAuthManager", () => {
         expect(caught.summary).toBe("provider rejected invalid_grant");
         expect(caught.cause).toBeInstanceOf(AggregateError);
         const aggregate = caught.cause as AggregateError;
-        expect(aggregate.errors).toHaveLength(3);
+        expect(aggregate.errors).toHaveLength(4);
         expect(aggregate.cause).toBe(aggregate.errors[0]);
         expect(formatErrorMessage(aggregate.errors[0])).toContain(
           "provider rejected invalid_grant",
         );
         expect(formatErrorMessage(aggregate.errors[1])).toContain("is unreadable");
-        expect(formatErrorMessage(aggregate.errors[2])).toContain("is unreadable");
+        expect(formatErrorMessage(aggregate.errors[2])).toContain("file is not a database");
+        expect(formatErrorMessage(aggregate.errors[3])).toContain("is unreadable");
       }
     });
   });

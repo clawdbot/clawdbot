@@ -6,7 +6,7 @@ import {
   isOAuthRefreshFence,
   isPendingOAuthRefreshFence,
 } from "./oauth-refresh-marker.js";
-import { isSafeOAuthPostClaimSettlement } from "./oauth-shared.js";
+import { hasMatchingOAuthIdentity, isSafeOAuthPostClaimSettlement } from "./oauth-shared.js";
 import type { OAuthCredential } from "./types.js";
 
 /** Full structural equality for compare-and-swap of persisted OAuth credentials. */
@@ -212,32 +212,59 @@ export async function refreshSerializedOAuthCredential<TData>(params: {
   }
   params.commit(claim.nextData);
   const markFailed = () => {
-    try {
-      const failed = params.backend.withLock<TData | null>((current) => {
-        const data = params.parse(current);
-        const authoritative = params.readCredential(data);
-        if (!isExactOAuthCredential(authoritative, claim.fence)) {
-          return { result: null };
-        }
-        const nextData = params.writeCredential(data, createFailedOAuthRefreshFence(claim.fence));
-        return { result: nextData, next: params.serialize(nextData) };
-      });
-      if (failed) {
-        params.commit(failed);
+    const failed = params.backend.withLock<TData | null>((current) => {
+      const data = params.parse(current);
+      const authoritative = params.readCredential(data);
+      if (!isExactOAuthCredential(authoritative, claim.fence)) {
+        return { result: null };
       }
-    } catch {
-      // A pending fence still prevents replay if terminal-state persistence fails.
+      const nextData = params.writeCredential(data, createFailedOAuthRefreshFence(claim.fence));
+      return { result: nextData, next: params.serialize(nextData) };
+    });
+    if (failed) {
+      params.commit(failed);
     }
   };
-  const settlement = (async () => {
+
+  const settleFailure = (initiatingError?: unknown): null => {
     try {
-      const refreshed = await params.refresh(claim.credential, claim.data);
-      if (!refreshed) {
-        markFailed();
-        return null;
+      markFailed();
+    } catch (cleanupError) {
+      if (initiatingError === undefined) {
+        throw cleanupError;
       }
+      // oxlint-disable-next-line preserve-caught-error -- errors retains cleanupError; cause must remain the provider failure.
+      throw new AggregateError(
+        [initiatingError, cleanupError],
+        "OAuth refresh failed and terminal fencing could not be completed.",
+        { cause: initiatingError },
+      );
+    }
+    if (initiatingError !== undefined) {
+      throw initiatingError;
+    }
+    return null;
+  };
+
+  const settlement = (async () => {
+    let refreshed: SerializedOAuthRefreshResult | null;
+    try {
+      refreshed = await params.refresh(claim.credential, claim.data);
+    } catch (error) {
+      return settleFailure(error);
+    }
+    if (!refreshed) {
+      return settleFailure();
+    }
+    try {
       if (!hasUnexpiredOAuthCredential(refreshed.credential)) {
         throw new Error("OAuth refresh returned an unusable credential");
+      }
+      if (
+        refreshed.credential.provider !== claim.credential.provider ||
+        !hasMatchingOAuthIdentity(claim.credential, refreshed.credential)
+      ) {
+        throw new Error("OAuth refresh returned credentials for a different OAuth account");
       }
       const settled = params.backend.withLock<{
         credential: OAuthCredential;
@@ -265,8 +292,7 @@ export async function refreshSerializedOAuthCredential<TData>(params: {
       params.commit(settled.data);
       return settled.persisted ? refreshed : await params.resolve(settled.credential);
     } catch (error) {
-      markFailed();
-      throw error;
+      return settleFailure(error);
     }
   })();
   void settlement.catch(() => {});
