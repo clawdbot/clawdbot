@@ -127,13 +127,15 @@ function resolveCredentialMode(props: LoginGateProps, override: CredentialMode |
   if (override) {
     return override;
   }
+  // A password-mode rejection outranks a saved token: the Gateway just said which
+  // credential it wants, and the stale token is what got rejected.
+  if (props.lastErrorCode && PASSWORD_MODE_CODES.has(props.lastErrorCode)) {
+    return "password";
+  }
   if (props.token.trim()) {
     return "token";
   }
-  if (props.password.trim()) {
-    return "password";
-  }
-  return props.lastErrorCode && PASSWORD_MODE_CODES.has(props.lastErrorCode) ? "password" : "token";
+  return props.password.trim() ? "password" : "token";
 }
 
 function renderSecretToggle(

@@ -179,6 +179,22 @@ describe("login gate failure recovery", () => {
     ).toBe("Token");
   });
 
+  it("selects the password field when the Gateway asks for a password despite a saved token", async () => {
+    const element = await mountFailure(
+      "password missing",
+      ConnectErrorDetailCodes.AUTH_PASSWORD_MISSING,
+      { token: "saved-token", password: "" },
+    );
+
+    expect(
+      element.querySelector('.login-gate__segmented [aria-checked="true"]')?.textContent?.trim(),
+    ).toBe("Password");
+    expect(element.querySelector<HTMLInputElement>("#login-gate-credential")?.value).toBe("");
+    expect(element.querySelector(".login-gate__failure-title")?.textContent?.trim()).toBe(
+      "Password needed",
+    );
+  });
+
   it("keeps Connect available beside Refresh for a protocol mismatch", async () => {
     const element = await mountFailure(
       "protocol mismatch",
@@ -289,10 +305,11 @@ describe("login gate failure recovery", () => {
       element.querySelectorAll<HTMLElement>(".login-gate__failure-steps li"),
       (entry) => entry.textContent?.replace(/\s+/g, " ").trim(),
     );
-    expect(steps).toHaveLength(2);
-    expect(steps[0]).toContain("Prefer a link? Run openclaw dashboard");
-    expect(steps[0]).toContain("on the Gateway host and open the one-time URL");
-    expect(steps[1]).toBe("Once approved, click Connect.");
+    expect(steps).toHaveLength(3);
+    expect(steps[0]).toContain("prints the exact approve command");
+    expect(steps[1]).toContain("Prefer a link? Run openclaw dashboard");
+    expect(steps[1]).toContain("on the Gateway host and open the one-time URL");
+    expect(steps[2]).toBe("Once approved, click Connect.");
     // The form stays reachable but folded; its summary names the target without a credential.
     const connection = failure?.querySelector<HTMLDetailsElement>(".login-gate__connection");
     expect(connection?.open).toBe(false);
@@ -314,6 +331,7 @@ describe("login gate failure recovery", () => {
     expect(safe.querySelector(".login-gate__command--hero code")?.textContent?.trim()).toBe(
       "openclaw devices approve req-123",
     );
+    expect(safe.querySelectorAll(".login-gate__failure-steps li")).toHaveLength(2);
     safe.remove();
 
     const unsafe = await mountFailure(

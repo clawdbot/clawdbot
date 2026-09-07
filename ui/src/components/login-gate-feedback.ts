@@ -195,11 +195,13 @@ export function resolveLoginFailureFeedback(
         pairing.kind === "pairing-required"
           ? "login.failure.pairing.summary"
           : "login.failure.pairing.upgradeSummary",
-      // Without a request id the CLI still resolves the newest pending request.
+      // `approve --latest` only previews the newest pending request and prints the
+      // exact approve command; without a request id the steps say to run that too.
       primaryCommand: pairing.requestId
         ? `openclaw devices approve ${pairing.requestId}`
         : "openclaw devices approve --latest",
       stepKeys: [
+        ...(pairing.requestId ? [] : ["login.failure.pairing.stepLatest"]),
         { key: "login.failure.pairing.stepDashboard", commands: ["openclaw dashboard"] },
         "login.failure.pairing.stepReconnect",
       ],

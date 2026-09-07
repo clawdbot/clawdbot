@@ -97,6 +97,8 @@ const enLogin = {
           "This browser is already paired with {host}, but it asked for access it was not approved for. Approve the new request on the Gateway host.",
         stepDashboard:
           "Prefer a link? Run openclaw dashboard on the Gateway host and open the one-time URL it prints in this browser.",
+        stepLatest:
+          "That command prints the exact approve command for the newest pending request; run that one as well.",
         stepReconnect: "Once approved, click Connect.",
       },
       insecure: {
