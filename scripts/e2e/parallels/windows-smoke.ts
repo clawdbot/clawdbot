@@ -237,7 +237,6 @@ class WindowsSmoke extends SmokeRunController<WindowsOptions> {
       }
       if (!this.server) {
         this.server = await startHostServer({
-          artifactPath: this.minGitZipPath,
           dir: this.tgzDir,
           hostIp: this.hostIp,
           label: "Windows smoke artifacts",
