@@ -5,6 +5,7 @@ read_when:
   - You need the path to a transcripts markdown summary
   - You are debugging the core transcripts storage layout
   - You want an agent or the Control UI to read past meeting notes
+  - You want to browse meetings or configure capture in the Control UI
 title: "Transcripts CLI"
 ---
 
@@ -31,6 +32,40 @@ back during capture, summarization, or listing. Default state directory is
 `~/.openclaw`; override with `OPENCLAW_STATE_DIR`. The date directory comes
 from the session start time; the session directory is a filesystem-safe slug
 derived from the session id.
+
+## Read transcripts in the Control UI
+
+In the [Control UI](/web/control-ui/settings#meetings-page), open the sidebar's pencil menu
+(**Edit pinned items**) and choose **Meetings** to browse the same SQLite archive
+at `/meetings`. You can pin Meetings to the sidebar; it is not pinned by default.
+Meeting notes are separate from agent chat history in **Sessions**.
+
+Search titles and session/source IDs; meeting URLs are not searched. Filter by
+exact provider, account, or agent ID, or by the session start date. Date filters
+use UTC: **Started on or after** includes the selected day, and **Started before**
+excludes it. Results load in deterministic pages. Changing a filter or selecting
+**Refresh** starts pagination again.
+
+Select a meeting to open its stored **Summary**. Existing
+`/meetings?selector=...` bookmarks keep working. Select **Transcript** for
+timestamped speaker text. **Search within this transcript** searches stored
+utterances on the Gateway, including text not yet loaded in the browser.
+**Load more** continues reading; the browser keeps the latest five loaded pages.
+The URL preserves the selected meeting and tab. Opening a meeting does not
+generate a missing summary.
+
+**Download Markdown** includes the transcript and any stored summary.
+**Download JSONL** exports the reader's public utterance projection, excluding
+provider-private metadata and local filesystem paths. Local CLI exports retain
+their existing raw format. Browser exports larger than 4 MiB fail visibly
+without a partial file; use `openclaw transcripts path <session> --transcript`
+or `openclaw transcripts path <session> --dir` on the Gateway host for larger
+exports.
+
+Archive reads require `operator.read` or its write/admin implication and
+permission to read the shared archive. On restricted multi-user profiles,
+choosing an agent filter does not grant archive access. Capture configuration
+requires `operator.admin`.
 
 ## Commands
 
@@ -163,7 +198,7 @@ when one capture is active.
 
 ## Gateway and Control UI reads
 
-Open **Meetings** in the [Control UI](/web/control-ui#meetings-page) to browse
+Open **Meetings** in the [Control UI](/web/control-ui/settings#meetings-page) to browse
 captured meetings and notes without a terminal. The page and other Gateway
 clients use these read-only RPC methods:
 
@@ -340,6 +375,21 @@ to the legacy files. Keep the archive until you have verified the imported
 sessions and any exports you rely on.
 
 ## Configuration
+
+Open **Settings → Communications → Meeting capture** to edit the existing
+`transcripts.enabled` and `transcripts.autoStart` settings. **Enable transcript
+storage** controls whether durable capture is permitted; each auto-start source
+opts in a provider and source. You can add or remove sources and edit their
+title, account, source locators, and optional custom session ID. Occupancy mode
+chooses session IDs automatically, so its custom ID field is disabled while
+preserving the saved value.
+
+The controls use the shared Settings draft, automatic saving, validation, and
+apply flow. If **Apply changes** appears, use it to activate saved changes.
+If a restart interrupts a pending draft, **Autosave paused after reconnect** keeps
+that draft without sending it to the new connection. Review it and select
+**Save** in the Settings footer. The full transcript schema editor is available
+under **Meeting capture → Advanced settings**.
 
 Changing only auto-start source titles applies to future captures without
 restarting or interrupting current captures. Current and historical notes keep

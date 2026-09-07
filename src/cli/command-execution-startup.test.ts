@@ -3,7 +3,8 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const emitCliBannerMock = vi.hoisted(() => vi.fn());
 const routeLogsToStderrMock = vi.hoisted(() => vi.fn());
-const ensureCliCommandBootstrapMock = vi.hoisted(() => vi.fn(async () => {}));
+const ensureConfigReadyMock = vi.hoisted(() => vi.fn(async () => {}));
+const ensureCliPluginRegistryLoadedMock = vi.hoisted(() => vi.fn(async () => {}));
 
 vi.mock("./banner.js", () => ({
   emitCliBanner: emitCliBannerMock,
@@ -17,8 +18,12 @@ vi.mock("../logging/console.js", async (importOriginal) => {
   };
 });
 
-vi.mock("./command-bootstrap.js", () => ({
-  ensureCliCommandBootstrap: ensureCliCommandBootstrapMock,
+vi.mock("./program/config-guard.js", () => ({
+  ensureConfigReady: ensureConfigReadyMock,
+}));
+
+vi.mock("./plugin-registry-loader.js", () => ({
+  ensureCliPluginRegistryLoaded: ensureCliPluginRegistryLoadedMock,
 }));
 
 describe("command-execution-startup", () => {
@@ -230,15 +235,13 @@ describe("command-execution-startup", () => {
       },
     });
 
-    expect(ensureCliCommandBootstrapMock).toHaveBeenCalledWith({
+    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
       runtime: statusRuntime,
       commandPath: ["status"],
+      measure: expect.any(Function),
       suppressDoctorStdout: true,
-      allowInvalid: undefined,
-      loadPlugins: false,
-      pluginRegistry: { scope: "channels" },
-      skipConfigGuard: false,
     });
+    expect(ensureCliPluginRegistryLoadedMock).not.toHaveBeenCalled();
 
     const messageRuntime = {} as never;
     await mod.ensureCliExecutionBootstrap({
@@ -257,16 +260,17 @@ describe("command-execution-startup", () => {
       skipPristineStartupStateMigrations: true,
     });
 
-    expect(ensureCliCommandBootstrapMock).toHaveBeenLastCalledWith({
+    expect(ensureConfigReadyMock).toHaveBeenLastCalledWith({
       runtime: messageRuntime,
       commandPath: ["message", "send"],
-      suppressDoctorStdout: false,
+      measure: expect.any(Function),
       allowInvalid: true,
-      loadPlugins: true,
-      pluginRegistry: { scope: "all" },
-      skipConfigGuard: false,
       skipPristineCoreStateMigrations: true,
       skipPristineStartupStateMigrations: true,
+    });
+    expect(ensureCliPluginRegistryLoadedMock).toHaveBeenCalledWith({
+      scope: "all",
+      routeLogsToStderr: false,
     });
   });
 });

@@ -1,4 +1,3 @@
-import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { mergeDmAllowFromSources, resolveGroupAllowFromSources } from "../allow-from.js";
 
 /**
@@ -18,19 +17,15 @@ export function resolveChannelIngressEffectiveAllowFromLists(params: {
   const allowFrom = Array.isArray(params.allowFrom) ? params.allowFrom : undefined;
   const groupAllowFrom = Array.isArray(params.groupAllowFrom) ? params.groupAllowFrom : undefined;
   const storeAllowFrom = Array.isArray(params.storeAllowFrom) ? params.storeAllowFrom : undefined;
-  const effectiveAllowFrom = normalizeStringEntries(
-    mergeDmAllowFromSources({
-      allowFrom,
-      storeAllowFrom,
-      dmPolicy: params.dmPolicy ?? undefined,
-    }),
-  );
-  const effectiveGroupAllowFrom = normalizeStringEntries(
-    resolveGroupAllowFromSources({
-      allowFrom,
-      groupAllowFrom,
-      fallbackToAllowFrom: params.groupAllowFromFallbackToAllowFrom ?? undefined,
-    }),
-  );
+  const effectiveAllowFrom = mergeDmAllowFromSources({
+    allowFrom,
+    storeAllowFrom,
+    dmPolicy: params.dmPolicy ?? undefined,
+  });
+  const effectiveGroupAllowFrom = resolveGroupAllowFromSources({
+    allowFrom,
+    groupAllowFrom,
+    fallbackToAllowFrom: params.groupAllowFromFallbackToAllowFrom ?? undefined,
+  });
   return { effectiveAllowFrom, effectiveGroupAllowFrom };
 }

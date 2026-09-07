@@ -595,6 +595,21 @@ async function sendSubagentAnnounceDirectlyUnchecked(params: {
         terminal: automaticEvidence.mayHaveSent ? undefined : true,
       };
     }
+    if (
+      asOptionalRecord(directAnnounceResponse)?.status === "ok" &&
+      directAnnounceResult?.meta?.yielded === true &&
+      !directAnnounceResult.meta.error &&
+      !directAnnounceResult.meta.aborted &&
+      directAnnounceResult.requesterContinuationSettled === true &&
+      !hasFinalMessagingToolDelivery &&
+      !automaticFinalDelivered &&
+      !hasVisibleNonSilentGatewayPayload
+    ) {
+      // Core persisted responsibility for the next wave (or observed it already
+      // completed). Acknowledge an empty wake without inventing a visible final;
+      // existing real final evidence still follows its normal path below.
+      return { delivered: true, path: "direct" };
+    }
     const hasIntentionalSilentCompletionReply = Boolean(
       directAnnounceResult && hasIntentionalSilentAgentPayload(directAnnounceResult),
     );

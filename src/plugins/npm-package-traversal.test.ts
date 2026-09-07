@@ -1,10 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  listManagedNpmRootPackageNames,
-  listNewManagedNpmRootPackageDirs,
-} from "./install-managed-npm-state.js";
+import { listManagedNpmRootPackageNames } from "./install-managed-npm-state.js";
 import {
   auditOpenClawPeerDependenciesInManagedNpmRoot,
   relinkOpenClawPeerDependenciesInManagedNpmRoot,
@@ -55,12 +52,6 @@ describe("managed npm package traversal", () => {
       "alpha",
       "zeta",
     ]);
-    expect(
-      await listNewManagedNpmRootPackageDirs({
-        npmRoot,
-        beforeInstallPackageNames: new Set([".hidden", "alpha"]),
-      }),
-    ).toEqual(["@scope/alpha", "@scope/zeta", "zeta"].map((name) => path.join(modules, name)));
     const repairNames = ["@scope/alpha", "@scope/zeta", "alpha", "openclaw", "zeta"];
     const before = await auditOpenClawPeerDependenciesInManagedNpmRoot({ npmRoot });
     expect(before.checked).toBe(5);

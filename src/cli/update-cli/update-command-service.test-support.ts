@@ -3,7 +3,6 @@ import {
   formatPostUpdateGatewayRecoveryInstructions,
   hasLoadedLaunchdKeepAliveSupervisor,
   recoverLaunchAgentAndRecheckGatewayHealth,
-  shouldUseLegacyProcessRestartAfterUpdate,
 } from "./update-command-service-recovery.js";
 
 export const testing = {
@@ -11,5 +10,4 @@ export const testing = {
   recoverInstalledLaunchAgentAfterUpdate,
   recoverLaunchAgentAndRecheckGatewayHealth,
   hasLoadedLaunchdKeepAliveSupervisor,
-  shouldUseLegacyProcessRestartAfterUpdate,
 };

@@ -434,8 +434,8 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
   skills: {
     allowBundled: ["gemini", "peekaboo"],
     load: {
-      extraDirs: ["~/Projects/agent-scripts/skills"],
-      allowSymlinkTargets: ["~/Projects/agent-scripts/skills"],
+      extraDirs: ["~/path/to/agent-scripts/skills"],
+      allowSymlinkTargets: ["~/path/to/agent-scripts/skills"],
     },
     install: {
       preferBrew: true,
@@ -457,14 +457,14 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
 ### Symlinked sibling skill repo
 
 Use this when a built-in skill root contains a symlink into a sibling repo, for
-example `~/.agents/skills/manager -> ~/Projects/manager/skills`.
+example `~/.agents/skills/manager -> ~/path/to/skills`.
 
 ```json5
 {
   skills: {
     load: {
-      extraDirs: ["~/Projects/manager/skills"],
-      allowSymlinkTargets: ["~/Projects/manager/skills"],
+      extraDirs: ["~/path/to/skills"],
+      allowSymlinkTargets: ["~/path/to/skills"],
     },
   },
 }

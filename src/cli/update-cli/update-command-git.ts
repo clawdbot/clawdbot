@@ -449,7 +449,7 @@ export async function updateGitInstall(params: {
   beforeGitMutation?: BeforeGitMutation;
   validateCandidate?: (root: string) => Promise<void>;
   onTransaction?: (transaction: PackageUpdateTransaction) => void;
-  managedServiceEnv?: NodeJS.ProcessEnv;
+  getManagedServiceEnv: () => NodeJS.ProcessEnv | undefined;
   invocationCwd?: string;
   nodeRunner?: string;
   inspectGitTarget?: UpdateRunnerOptions["inspectGitTarget"];
@@ -533,6 +533,9 @@ export async function updateGitInstall(params: {
               postVerifyStep: (root) =>
                 runPackageUpdateDoctor({
                   ...params,
+                  // Inspection is deferred until the Git target is known; read
+                  // its admitted service profile when backup and Doctor run.
+                  managedServiceEnv: params.getManagedServiceEnv(),
                   root,
                   timeoutMs: effectiveTimeout,
                 }),
@@ -606,7 +609,7 @@ export async function updateGitInstall(params: {
       const [packageOwner, gitOwner, serviceUsesPackage] = await Promise.all([
         fs.realpath(packageRoot).catch(() => null),
         fs.realpath(updateRoot).catch(() => null),
-        gatewayServiceCommandUsesRoot({ root: packageRoot, env: params.managedServiceEnv }),
+        gatewayServiceCommandUsesRoot({ root: packageRoot, env: params.getManagedServiceEnv() }),
       ]);
       // Source publication can fail after stopping an untouched package service.
       // Recover that exact package; its version alone cannot authorize Git source.

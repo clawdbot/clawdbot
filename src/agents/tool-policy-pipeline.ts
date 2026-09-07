@@ -19,20 +19,18 @@ import {
 
 const MAX_TOOL_POLICY_WARNING_CACHE = 256;
 const seenToolPolicyWarnings = new Set<string>();
-const toolPolicyWarningOrder: string[] = [];
 
 function rememberToolPolicyWarning(warning: string): boolean {
   if (seenToolPolicyWarnings.has(warning)) {
     return false;
   }
   if (seenToolPolicyWarnings.size >= MAX_TOOL_POLICY_WARNING_CACHE) {
-    const oldest = toolPolicyWarningOrder.shift();
+    const oldest = seenToolPolicyWarnings.values().next().value;
     if (oldest) {
       seenToolPolicyWarnings.delete(oldest);
     }
   }
   seenToolPolicyWarnings.add(warning);
-  toolPolicyWarningOrder.push(warning);
   return true;
 }
 
@@ -186,15 +184,9 @@ export function applyToolPolicyPipeline<TTool extends { name: string }>(params: 
           (entry) => !isKnownCoreToolId(entry) && !unavailableCoreWarningAllowlist.has(entry),
         );
         const warningEntries = [...warnableGatedCoreEntries, ...otherEntries];
-        if (
-          shouldWarnAboutUnknownAllowlist({
-            hasGatedCoreEntries: warnableGatedCoreEntries.length > 0,
-            hasOtherEntries: otherEntries.length > 0,
-          })
-        ) {
+        if (warningEntries.length > 0) {
           const entries = warningEntries.join(", ");
           const suffix = describeUnknownAllowlistSuffix({
-            pluginOnlyAllowlist: resolved.pluginOnlyAllowlist,
             hasGatedCoreEntries: warnableGatedCoreEntries.length > 0,
             hasOtherEntries: otherEntries.length > 0,
             unavailableCoreToolReason: step.unavailableCoreToolReason,
@@ -229,22 +221,11 @@ export function applyToolPolicyPipeline<TTool extends { name: string }>(params: 
   return filtered;
 }
 
-function shouldWarnAboutUnknownAllowlist(params: {
-  hasGatedCoreEntries: boolean;
-  hasOtherEntries: boolean;
-}): boolean {
-  return params.hasGatedCoreEntries || params.hasOtherEntries;
-}
-
 function describeUnknownAllowlistSuffix(params: {
-  pluginOnlyAllowlist: boolean;
   hasGatedCoreEntries: boolean;
   hasOtherEntries: boolean;
   unavailableCoreToolReason?: string;
 }): string {
-  const preface = params.pluginOnlyAllowlist
-    ? "Allowlist contains only plugin entries; core tools will not be available."
-    : "";
   const unavailableCoreToolReason = params.unavailableCoreToolReason?.trim();
   const unavailableCoreDetail = unavailableCoreToolReason
     ? `These entries are shipped core tools but unavailable here: ${unavailableCoreToolReason}.`
@@ -252,11 +233,9 @@ function describeUnknownAllowlistSuffix(params: {
   const mixedUnavailableCoreDetail = unavailableCoreToolReason
     ? `Some entries are shipped core tools but unavailable here: ${unavailableCoreToolReason}; other entries won't match any tool unless the plugin is enabled.`
     : "Some entries are shipped core tools but unavailable in the current runtime/provider/model/config; other entries won't match any tool unless the plugin is enabled.";
-  const detail =
-    params.hasGatedCoreEntries && params.hasOtherEntries
-      ? mixedUnavailableCoreDetail
-      : params.hasGatedCoreEntries
-        ? unavailableCoreDetail
-        : "These entries won't match any tool unless the plugin is enabled.";
-  return preface ? `${preface} ${detail}` : detail;
+  return params.hasGatedCoreEntries && params.hasOtherEntries
+    ? mixedUnavailableCoreDetail
+    : params.hasGatedCoreEntries
+      ? unavailableCoreDetail
+      : "These entries won't match any tool unless the plugin is enabled.";
 }

@@ -1,27 +1,34 @@
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { createSystemAgentSession } from "./agent-turn.js";
-import { runSystemAgentTurnWithDeps } from "./agent-turn.test-support.js";
+import { runSystemAgentTurnWithDeps as runSystemAgentTurnWithDepsImpl } from "./agent-turn.test-support.js";
 import { SystemAgentInferenceUnavailableError } from "./inference-error.js";
 import {
-  createSystemAgentVerifiedInferenceTestFixture,
-  installSystemAgentPluginMetadataTestSnapshot,
+  createSystemAgentVerifiedInferenceTestFixture as createSystemAgentVerifiedInferenceTestFixtureImpl,
+  createSystemAgentPluginMetadataTestSnapshot,
   type SystemAgentPluginMetadataTestSnapshot,
 } from "./system-agent.test-helpers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let pluginMetadataSnapshot: SystemAgentPluginMetadataTestSnapshot | undefined;
 
-beforeAll(() => {
-  pluginMetadataSnapshot = installSystemAgentPluginMetadataTestSnapshot();
-});
+const runSystemAgentTurnWithDeps: typeof runSystemAgentTurnWithDepsImpl = (...args) =>
+  pluginMetadataSnapshot!.run(() => runSystemAgentTurnWithDepsImpl(...args));
 
-afterAll(() => pluginMetadataSnapshot?.restore());
+const createSystemAgentVerifiedInferenceTestFixture: typeof createSystemAgentVerifiedInferenceTestFixtureImpl =
+  (...args) =>
+    pluginMetadataSnapshot!.run(
+      () => createSystemAgentVerifiedInferenceTestFixtureImpl(...args),
+      args[0],
+    );
+
+beforeAll(() => {
+  pluginMetadataSnapshot = createSystemAgentPluginMetadataTestSnapshot();
+});
 
 afterEach(() => {
   vi.unstubAllEnvs();
-  pluginMetadataSnapshot?.rebindForCurrentEnv();
 });
 
 describe("system-agent terminal failure cleanup", () => {
@@ -103,7 +110,7 @@ describe("system-agent terminal failure cleanup", () => {
     },
   ])("clears partial session state after $name", async ({ runEmbeddedAgent }) => {
     vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-turn-failure-"));
-    pluginMetadataSnapshot?.rebindForCurrentEnv();
+
     const config: OpenClawConfig = {
       agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
     };

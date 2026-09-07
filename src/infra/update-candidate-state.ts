@@ -5,6 +5,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { z } from "zod";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runCommandBuffered } from "../process/exec.js";
+import type { OpenClawSchemaVersions } from "../state/openclaw-schema-versions.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import { resolveOpenClawRegisteredAgentDatabasePath } from "../state/openclaw-state-db.paths.js";
@@ -31,11 +32,30 @@ type CandidateStateDatabase = Pick<
 export function updateStateSchemaVersionsMatch(
   before: readonly UpdateStateSchemaVersion[],
   after: readonly UpdateStateSchemaVersion[],
+  params: { sharedPath: string; candidateSchemaVersions?: OpenClawSchemaVersions },
 ): boolean {
   const versions = new Map(after.map((entry) => [entry.path, entry.userVersion]));
+  const candidate = params.candidateSchemaVersions;
+  if (!candidate) {
+    return (
+      before.length === after.length &&
+      before.every((entry) => versions.get(entry.path) === entry.userVersion)
+    );
+  }
+  const baseline = new Map(before.map((entry) => [entry.path, entry.userVersion]));
   return (
-    before.length === after.length &&
-    before.every((entry) => versions.get(entry.path) === entry.userVersion)
+    before.every(
+      (entry) => entry.userVersion === null || versions.get(entry.path) === entry.userVersion,
+    ) &&
+    after.every((entry) => {
+      if (entry.userVersion === null || baseline.get(entry.path) === entry.userVersion) {
+        return true;
+      }
+      // Verification can create a store for the first time. All collected paths
+      // except the shared database are configured or registered agent stores.
+      const supported = entry.path === params.sharedPath ? candidate.state : candidate.agent;
+      return baseline.get(entry.path) == null && entry.userVersion === supported;
+    })
   );
 }
 
@@ -117,7 +137,7 @@ async function collectStateDatabasePaths(input: StateInput): Promise<string[]> {
   return [...files].toSorted();
 }
 
-/** Missing databases stay explicit so creation or loss cannot authorize rollback. */
+/** Missing databases stay explicit so creation is schema-checked and loss blocks rollback. */
 export async function readUpdateStateSchemaVersionsInProcess(
   input: StateInput,
 ): Promise<UpdateStateSchemaVersion[]> {

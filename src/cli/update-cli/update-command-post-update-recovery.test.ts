@@ -7,14 +7,23 @@ import { ScheduledTaskAutoStartRecoveryError } from "../../daemon/schtasks-updat
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createRetainedPackageSwap } from "../../infra/package-update-swap.test-support.js";
 import { readUpdateStateSchemaVersions } from "../../infra/update-candidate-state.js";
-import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
+import {
+  createUpdateRun,
+  getUpdateRun,
+  recordUpdateRunStep,
+  recordUpdateRunVerification,
+} from "../../infra/update-run-ledger.js";
+import { renderUpdateRunNotice, renderUpdateRunReport } from "../../infra/update-run-report.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { defaultRuntime } from "../../runtime.js";
 
 const mocks = vi.hoisted(() => ({
   printResult: vi.fn(),
+  readRuntime: vi.fn(async (): Promise<{ status: string; pid?: number }> => ({
+    status: "unknown",
+  })),
   restartCandidate: vi.fn<typeof import("./update-command-service.js").maybeRestartService>(
-    async () => true,
+    async () => "ok",
   ),
   stopCandidate: vi.fn(),
   restart:
@@ -31,7 +40,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("./progress.js", () => ({ printResult: mocks.printResult }));
 vi.mock("./update-command-service-command.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./update-command-service-command.js")>()),
-  runUpdatedInstallGatewayCommand: async () => true,
+  runUpdatedInstallGatewayCommand: async () => "accepted",
 }));
 vi.mock("../../config/config.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../config/config.js")>()),
@@ -47,6 +56,7 @@ vi.mock("../../config/config.js", async (importOriginal) => ({
 }));
 vi.mock("../../daemon/service.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../daemon/service.js")>()),
+  resolveGatewayService: () => ({ readRuntime: mocks.readRuntime }),
   readGatewayServiceState: async () => ({
     installed: true,
     loadState: { status: "loaded" },
@@ -119,6 +129,7 @@ async function finishFailedUpdate(
   } = {},
 ): Promise<UpdateCommandFailure> {
   return await finishUpdate({
+    mutationStarted: true,
     result,
     ...(options.failure ? { failure: options.failure } : {}),
     root: options.originalRoot ?? result.root ?? "/repo",
@@ -455,7 +466,7 @@ describe("failed update recovery restart", () => {
   it.each([79, 80])(
     "does not restart again after post-activation convergence exits %s",
     async (childExitCode) => {
-      mocks.restartCandidate.mockResolvedValueOnce(true);
+      mocks.restartCandidate.mockResolvedValueOnce("ok");
       vi.stubEnv("OPENCLAW_UPDATE_RUN_HANDOFF", "1");
       const detail = "Fresh Doctor could not persist the migrated config.";
       mocks.freshProcess.mockResolvedValueOnce({
@@ -489,6 +500,7 @@ describe("failed update recovery restart", () => {
         OPENCLAW_PROFILE: "work",
       };
       const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
+      mocks.readRuntime.mockResolvedValue({ status: stopped ? "stopped" : "unknown" });
       await finishFailedUpdate(
         failedResult({ serviceRestartSafe: false, reason: "rollback-checkout-dirty" }),
         { stopped, run },
@@ -499,6 +511,61 @@ describe("failed update recovery restart", () => {
       expect(nextAction).toContain("Run `openclaw --profile work triage`");
       expect(nextAction?.includes("Keep the gateway stopped")).toBe(stopped);
       expect(mocks.printResult.mock.lastCall?.[2]).toEqual({ nextAction });
+    },
+  );
+
+  it.each([7376, 7377])(
+    "reports the latest running process after the activation stop (pid=%s)",
+    async (pid) => {
+      const env = {
+        ...process.env,
+        OPENCLAW_STATE_DIR: tempDirs.make("update-running-unverified-"),
+      };
+      const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
+      recordUpdateRunVerification(
+        run.runId,
+        { serviceRunning: true, pid: 7376, runningVersion: "2026.9.3", inferenceProbe: "failed" },
+        { env },
+      );
+      recordUpdateRunStep(
+        run.runId,
+        { step: "gateway verification", status: "failed", detail: "response-mismatch" },
+        { env },
+      );
+      mocks.readRuntime.mockResolvedValue({ status: "running", pid });
+
+      await finishFailedUpdate(
+        {
+          ...failedResult({ serviceRestartSafe: false, reason: "runtime-verification-failed" }),
+          reason: "state-migrated-no-rollback",
+        },
+        { stopped: true, run },
+      );
+
+      const recorded = getUpdateRun(run.runId, { env });
+      if (!recorded) {
+        throw new Error("Expected the failed update run to remain recorded");
+      }
+      const version = pid === 7376 ? "2026.9.3" : undefined;
+      expect(recorded.origin.nextAction).toContain(
+        `The gateway is running${version ? ` ${version}` : ""} but did not pass verification (response-mismatch)`,
+      );
+      expect(recorded.origin.nextAction).not.toContain("gateway stopped");
+      expect(recorded.origin.nextAction).not.toContain("remains stopped");
+      expect(recorded.origin.nextAction).toContain("triage");
+      expect(recorded.verification).toMatchObject({ serviceRunning: true, pid });
+      expect(recorded.verification.runningVersion).toBe(version);
+      expect(mocks.printResult.mock.lastCall?.[2]).toEqual({
+        nextAction: recorded.origin.nextAction,
+      });
+      for (const report of [
+        renderUpdateRunReport(recorded).markdown,
+        renderUpdateRunNotice(recorded, "finished"),
+      ]) {
+        expect(report).toContain("response-mismatch");
+        expect(report).toContain("triage");
+        expect(report).not.toContain("remains stopped");
+      }
     },
   );
 
@@ -591,7 +658,7 @@ describe("failed package update recovery safety", () => {
         refreshDefinition: true,
       },
     });
-    mocks.restartCandidate.mockResolvedValueOnce(true);
+    mocks.restartCandidate.mockResolvedValueOnce("ok");
     const rollback = vi.fn(async () => ({
       name: "package rollback",
       activePackageRoot: originalRoot,

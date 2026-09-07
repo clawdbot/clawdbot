@@ -1360,6 +1360,7 @@ class NodeRuntime private constructor(
   private val appearancePreferenceRefreshGuard = LatestGatewayRefreshGuard()
   private val appearancePreferenceWriteMutexes = appearancePreferenceKeys.associateWith { Mutex() }
   private val _modelCatalog = MutableStateFlow<List<GatewayModelSummary>>(emptyList())
+  private val modelCatalogRefreshGuard = LatestGatewayRefreshGuard()
   val modelCatalog: StateFlow<List<GatewayModelSummary>> = _modelCatalog.asStateFlow()
   private val _providerModelCatalog = MutableStateFlow<List<GatewayModelSummary>>(emptyList())
   val providerModelCatalog: StateFlow<List<GatewayModelSummary>> = _providerModelCatalog.asStateFlow()
@@ -1481,14 +1482,8 @@ class NodeRuntime private constructor(
   val devicePairingMutation: StateFlow<GatewayDevicePairingMutation?> = _devicePairingMutation.asStateFlow()
   private val devicePairingMutationLock = Any()
   private val nodeApprovalRefreshGuard = LatestGatewayRefreshGuard()
-  private val _execApprovals = MutableStateFlow<List<GatewayExecApprovalSummary>>(emptyList())
-  val execApprovals: StateFlow<List<GatewayExecApprovalSummary>> = _execApprovals.asStateFlow()
-  private val _execApprovalsRefreshing = MutableStateFlow(false)
-  val execApprovalsRefreshing: StateFlow<Boolean> = _execApprovalsRefreshing.asStateFlow()
-  private val _execApprovalsErrorText = MutableStateFlow<String?>(null)
-  val execApprovalsErrorText: StateFlow<String?> = _execApprovalsErrorText.asStateFlow()
-  private val _execApprovalsNotice = MutableStateFlow<GatewayExecApprovalNotice?>(null)
-  val execApprovalsNotice: StateFlow<GatewayExecApprovalNotice?> = _execApprovalsNotice.asStateFlow()
+  private val mutableExecApprovalInbox = MutableStateFlow(GatewayExecApprovalInboxState())
+  internal val execApprovalInbox: StateFlow<GatewayExecApprovalInboxState> = mutableExecApprovalInbox.asStateFlow()
   private val execApprovalsRefreshSeq = AtomicLong(0)
   private val execApprovalsStateLock = Any()
   private var execApprovalsSnapshotReady = false
@@ -1799,10 +1794,11 @@ class NodeRuntime private constructor(
 
   private fun currentWearAgentPulseApprovals(): WearAgentPulseApprovalSnapshot =
     synchronized(execApprovalsStateLock) {
+      val inbox = mutableExecApprovalInbox.value
       WearAgentPulseApprovalSnapshot(
-        pendingCount = _execApprovals.value.size,
-        available = execApprovalsSnapshotReady && _execApprovalsErrorText.value == null,
-        refreshing = _execApprovalsRefreshing.value,
+        pendingCount = inbox.approvals.size,
+        available = execApprovalsSnapshotReady && inbox.errorText == null,
+        refreshing = inbox.refreshing,
       )
     }
 
@@ -1858,6 +1854,7 @@ class NodeRuntime private constructor(
     // physical lease still prevents requests and response publication.
     appearancePreferenceRefreshGuard.invalidate()
     _gatewayAgents.value = emptyList()
+    modelCatalogRefreshGuard.invalidate()
     _modelCatalog.value = emptyList()
     providerModelCatalogRefreshGuard.invalidate()
     _providerModelCatalog.value = emptyList()
@@ -1926,10 +1923,7 @@ class NodeRuntime private constructor(
         pendingExecApprovalWrites.clear()
       }
     }
-    _execApprovals.value = emptyList()
-    _execApprovalsRefreshing.value = false
-    _execApprovalsErrorText.value = null
-    _execApprovalsNotice.value = null
+    mutableExecApprovalInbox.value = GatewayExecApprovalInboxState()
     channelsSummary.reset()
     dreamingSummary.reset()
     healthLogsSummary.reset()
@@ -2434,8 +2428,7 @@ class NodeRuntime private constructor(
   private fun syncMainSessionKey(agentId: String?) {
     val resolvedKey = resolveNodeMainSessionKey(agentId)
     talkMode.setMainSessionKey(resolvedKey)
-    if (_mainSessionKey.value == resolvedKey) return
-    _mainSessionKey.value = resolvedKey
+    if (!updateMainSessionKey(resolvedKey)) return
     if (operatorConnected) {
       chat.prepareMainSessionKey(resolvedKey)
       chat.onGatewayConnected(mainSessionBinding(resolvedKey))
@@ -2448,9 +2441,7 @@ class NodeRuntime private constructor(
     val resolvedKey = resolveNodeMainSessionKey(agentId)
     // Always push into TalkMode so a lazy instance cannot retain the "main" alias.
     talkMode.setMainSessionKey(resolvedKey)
-    if (_mainSessionKey.value != resolvedKey) {
-      _mainSessionKey.value = resolvedKey
-    }
+    updateMainSessionKey(resolvedKey)
     chat.prepareMainSessionKey(resolvedKey)
     return resolvedKey
   }
@@ -2458,7 +2449,7 @@ class NodeRuntime private constructor(
   private fun selectMainSessionKey(agentId: String) {
     val resolvedKey = resolveNodeMainSessionKey(agentId)
     talkMode.setMainSessionKey(resolvedKey)
-    _mainSessionKey.value = resolvedKey
+    updateMainSessionKey(resolvedKey)
     chat.prepareAndSelectMainSessionKey(resolvedKey)
     chat.onGatewayConnected(mainSessionBinding(resolvedKey))
   }
@@ -2468,6 +2459,21 @@ class NodeRuntime private constructor(
       key = sessionKey,
       label = buildAndroidAppSessionLabel(prefs.displayName.value, identityStore.loadOrCreate().deviceId),
     )
+
+  private fun updateMainSessionKey(sessionKey: String): Boolean =
+    synchronized(gatewayDataScopeLock) {
+      if (_mainSessionKey.value == sessionKey) return@synchronized false
+      // Retire reads before publishing an agent change, including a switch back to the same agent.
+      modelCatalogRefreshGuard.invalidate()
+      providerModelCatalogRefreshGuard.invalidate()
+      _modelCatalog.value = emptyList()
+      _providerModelCatalog.value = emptyList()
+      _modelAuthProviders.value = emptyList()
+      _providerModelCatalogRefreshing.value = false
+      _providerModelCatalogErrorText.value = null
+      _mainSessionKey.value = sessionKey
+      true
+    }
 
   private fun updateStatus(update: () -> Unit = {}) {
     synchronized(gatewayStatusLock) {
@@ -2530,7 +2536,7 @@ class NodeRuntime private constructor(
 
   fun refreshModelCatalog() = launchGatewayRefresh { refreshModelCatalogFromGateway() }
 
-  fun refreshProviderModels() = launchGatewayRefresh { refreshProviderModelsFromGateway() }
+  fun refreshProviderModels(refresh: Boolean = false) = launchGatewayRefresh { refreshProviderModelsFromGateway(refresh) }
 
   fun refreshTalkSetupReadiness() = launchGatewayRefresh { refreshTalkSetupReadinessFromGateway() }
 
@@ -2930,10 +2936,10 @@ class NodeRuntime private constructor(
   }
 
   fun dismissExecApprovalsNotice(expected: GatewayExecApprovalNotice) {
-    // Atomic conditional clear: not every notice publisher holds execApprovalsStateLock
-    // (refreshExecApprovalFromGateway's terminal branch), so a locked check-then-clear
-    // could still let a stale dismiss clobber a freshly published replacement.
-    _execApprovalsNotice.compareAndSet(expected, null)
+    // A stale banner callback must not clear a replacement publication or overwrite newer rows.
+    mutableExecApprovalInbox.update { inbox ->
+      if (inbox.notice == expected) inbox.copy(notice = null) else inbox
+    }
   }
 
   fun refreshChannels() = launchGatewayRefresh { refreshChannelsFromGateway() }
@@ -5127,7 +5133,7 @@ class NodeRuntime private constructor(
     }
     if (retireRunState) {
       val defaultMainSessionKey = resolveNodeMainSessionKey()
-      _mainSessionKey.value = defaultMainSessionKey
+      updateMainSessionKey(defaultMainSessionKey)
       talkMode.setMainSessionKey(defaultMainSessionKey)
     }
     connectedEndpoint = null
@@ -5676,8 +5682,8 @@ class NodeRuntime private constructor(
         approvalId?.let { id ->
           resolvedExecApprovalIds.remove(id)
           synchronized(execApprovalsStateLock) {
-            if (_execApprovalsNotice.value?.approvalId == id) {
-              _execApprovalsNotice.value = null
+            mutableExecApprovalInbox.update { inbox ->
+              if (inbox.notice?.approvalId == id) inbox.copy(notice = null) else inbox
             }
           }
         }
@@ -5705,12 +5711,13 @@ class NodeRuntime private constructor(
           -> {
             val terminal = parseGatewayExecApprovalResolvedEventTerminal(payloadJson ?: return, json)
             synchronized(execApprovalsStateLock) {
-              if (terminal != null && _execApprovals.value.any { it.id == approvalId }) {
-                _execApprovalsNotice.value = gatewayExecApprovalRemoteTerminalNotice(terminal)
-              }
+              val notice =
+                terminal
+                  ?.takeIf { mutableExecApprovalInbox.value.approvals.any { it.id == approvalId } }
+                  ?.let(::gatewayExecApprovalRemoteTerminalNotice)
               // Noncanonical peers cannot prove terminal state by readback. The
               // authenticated event is the fail-closed tombstone for this exact ID.
-              markExecApprovalResolved(approvalId)
+              markExecApprovalResolved(approvalId, notice)
             }
           }
         }
@@ -6564,18 +6571,23 @@ class NodeRuntime private constructor(
   }
 
   private suspend fun refreshModelCatalogFromGateway() {
+    val refreshGeneration = modelCatalogRefreshGuard.begin()
     val gatewayScope = captureGatewayDataScope() ?: return
+    val agentId = selectedChatAgentId
     if (!operatorConnected) {
       _modelCatalog.value = emptyList()
       _modelAuthProviders.value = emptyList()
       return
     }
     try {
-      val modelsRes = requestGatewayData(gatewayScope, "models.list", "{}")
+      val params = buildJsonObject { if (agentId != null) put("agentId", JsonPrimitive(agentId)) }
+      val modelsRes = requestGatewayData(gatewayScope, "models.list", params.toString())
       val modelsRoot = json.parseToJsonElement(modelsRes).asObjectOrNull()
       val models = parseGatewayModels(modelsRoot?.get("models") as? JsonArray)
       publishGatewayData(gatewayScope) {
-        _modelCatalog.value = models
+        modelCatalogRefreshGuard.publishIfCurrent(refreshGeneration) {
+          _modelCatalog.value = models
+        }
       }
     } catch (err: CancellationException) {
       throw err
@@ -6584,9 +6596,10 @@ class NodeRuntime private constructor(
     }
   }
 
-  private suspend fun refreshProviderModelsFromGateway() {
+  private suspend fun refreshProviderModelsFromGateway(refresh: Boolean = false) {
     val refreshGeneration = providerModelCatalogRefreshGuard.begin()
     val gatewayScope = captureGatewayDataScope() ?: return
+    val agentId = selectedChatAgentId
     publishProviderModelRefresh(gatewayScope, refreshGeneration) {
       _providerModelCatalogRefreshing.value = true
       _providerModelCatalogErrorText.value = null
@@ -6601,7 +6614,8 @@ class NodeRuntime private constructor(
     }
     try {
       try {
-        val models = requestProviderModelCatalog(gatewayScope)
+        val response = requestProviderModelConfig(agentId, refresh) { requestGatewayData(gatewayScope, "models.list", it) }
+        val models = parseGatewayModels(json.parseToJsonElement(response).asObjectOrNull()?.get("models") as? JsonArray)
         publishProviderModelRefresh(gatewayScope, refreshGeneration) {
           _providerModelCatalog.value = models
         }
@@ -6619,7 +6633,9 @@ class NodeRuntime private constructor(
       // Keep readiness independent from the additive provider-config view so
       // older Gateways still populate provider status while prompting an upgrade.
       try {
-        val providers = requestModelAuthProviders(gatewayScope)
+        val params = buildJsonObject { if (agentId != null) put("agentId", JsonPrimitive(agentId)) }
+        val response = requestGatewayData(gatewayScope, "models.authStatus", params.toString())
+        val providers = parseGatewayModelProviders(json.parseToJsonElement(response).asObjectOrNull()?.get("providers") as? JsonArray)
         publishProviderModelRefresh(gatewayScope, refreshGeneration) {
           _modelAuthProviders.value = providers
         }
@@ -6636,21 +6652,6 @@ class NodeRuntime private constructor(
         _providerModelCatalogRefreshing.value = false
       }
     }
-  }
-
-  private suspend fun requestProviderModelCatalog(gatewayScope: GatewayDataScope): List<GatewayModelSummary> {
-    val modelsRes =
-      requestProviderModelConfig { paramsJson ->
-        requestGatewayData(gatewayScope, "models.list", paramsJson)
-      }
-    val modelsRoot = json.parseToJsonElement(modelsRes).asObjectOrNull()
-    return parseGatewayModels(modelsRoot?.get("models") as? JsonArray)
-  }
-
-  private suspend fun requestModelAuthProviders(gatewayScope: GatewayDataScope): List<GatewayModelProviderSummary> {
-    val authRes = requestGatewayData(gatewayScope, "models.authStatus", "{}")
-    val authRoot = json.parseToJsonElement(authRes).asObjectOrNull()
-    return parseGatewayModelProviders(authRoot?.get("providers") as? JsonArray)
   }
 
   private suspend fun refreshTalkSetupReadinessFromGateway() {
@@ -7927,8 +7928,7 @@ class NodeRuntime private constructor(
         nextGeneration
       }
     publishGatewayData(gatewayScope) {
-      _execApprovalsRefreshing.value = true
-      _execApprovalsErrorText.value = null
+      mutableExecApprovalInbox.update { it.copy(refreshing = true, errorText = null) }
       // The terminal notice reports an outcome the reviewer has not acknowledged yet.
       // Refresh must not wipe it; it clears on user dismissal, a replacement terminal
       // notice, a re-requested approval with the same id, or gateway teardown.
@@ -7936,8 +7936,7 @@ class NodeRuntime private constructor(
     if (!operatorConnected) {
       publishGatewayData(gatewayScope) {
         if (execApprovalsRefreshSeq.get() == refreshGeneration) {
-          _execApprovals.value = emptyList()
-          _execApprovalsRefreshing.value = false
+          mutableExecApprovalInbox.update { it.copy(approvals = emptyList(), refreshing = false) }
         }
       }
       return
@@ -7946,7 +7945,7 @@ class NodeRuntime private constructor(
       // TODO(#103505): replace legacy full-request discovery with the sanitized
       // session approval lifecycle projection before removing this list seam.
       val res = requestGatewayData(gatewayScope, "exec.approval.list", "{}")
-      val existing = _execApprovals.value.associateBy { it.id }
+      val existing = mutableExecApprovalInbox.value.approvals.associateBy { it.id }
       val terminalApprovals = mutableListOf<GatewayExecApprovalSnapshot.Terminal>()
       val rows =
         parseGatewayExecApprovalListPayload(res, json)
@@ -8004,13 +8003,13 @@ class NodeRuntime private constructor(
     } catch (_: Throwable) {
       publishGatewayData(gatewayScope) {
         if (execApprovalsRefreshSeq.get() == refreshGeneration) {
-          _execApprovalsErrorText.value = execApprovalLoadFailureMessage()
+          mutableExecApprovalInbox.update { it.copy(errorText = execApprovalLoadFailureMessage()) }
         }
       }
     } finally {
       publishGatewayData(gatewayScope) {
         if (execApprovalsRefreshSeq.get() == refreshGeneration) {
-          _execApprovalsRefreshing.value = false
+          mutableExecApprovalInbox.update { it.copy(refreshing = false) }
         }
       }
     }
@@ -8022,7 +8021,7 @@ class NodeRuntime private constructor(
     if (!operatorConnected) return
     if (id in resolvedExecApprovalIds) return
     try {
-      val current = _execApprovals.value.firstOrNull { it.id == id }
+      val current = mutableExecApprovalInbox.value.approvals.firstOrNull { it.id == id }
       val methodsSnapshot = captureGatewayMethods()
       val lookup =
         fetchExecApprovalDetailFromGateway(
@@ -8053,10 +8052,13 @@ class NodeRuntime private constructor(
 
         is GatewayExecApprovalSnapshot.Terminal -> {
           publishGatewayApprovalData(gatewayScope, methodsSnapshot) {
-            if (_execApprovals.value.any { it.id == id }) {
-              _execApprovalsNotice.value = gatewayExecApprovalRemoteTerminalNotice(lookup)
+            synchronized(execApprovalsStateLock) {
+              val notice =
+                lookup
+                  .takeIf { mutableExecApprovalInbox.value.approvals.any { it.id == id } }
+                  ?.let(::gatewayExecApprovalRemoteTerminalNotice)
+              markExecApprovalResolved(id, notice)
             }
-            markExecApprovalResolved(id)
           }
         }
       }
@@ -8117,7 +8119,7 @@ class NodeRuntime private constructor(
       publishGatewayApprovalData(gatewayScope, methodsSnapshot) {
         synchronized(execApprovalsStateLock) {
           if (!operatorConnected || id in resolvedExecApprovalIds) return@synchronized
-          val currentRows = _execApprovals.value
+          val currentRows = mutableExecApprovalInbox.value.approvals
           if (currentRows.none { it.id == id && it.resolvingDecision == null }) return@synchronized
           if (pendingExecApprovalWrites.containsKey(id)) return@synchronized
           val pendingWrite =
@@ -8130,10 +8132,14 @@ class NodeRuntime private constructor(
           pendingExecApprovalWrites[id] = pendingWrite
           registeredWrite = pendingWrite
           invalidateExecApprovalRefreshes()
-          _execApprovals.value =
-            currentRows.map { row ->
-              if (row.id == id) row.copy(resolvingDecision = decision, errorText = null) else row
-            }
+          mutableExecApprovalInbox.update { inbox ->
+            inbox.copy(
+              approvals =
+                currentRows.map { row ->
+                  if (row.id == id) row.copy(resolvingDecision = decision, errorText = null) else row
+                },
+            )
+          }
           // Do not clear the notice here: it reports a different approval's terminal
           // outcome (a same-id write cannot start after its terminal notice retired the
           // row) and must stay visible until the user acknowledges it.
@@ -8148,8 +8154,7 @@ class NodeRuntime private constructor(
         synchronized(execApprovalsStateLock) {
           if (pendingExecApprovalWrites[id] !== pendingWrite || id in resolvedExecApprovalIds) return@synchronized
           // `applied=false` carries the canonical winner from another surface.
-          _execApprovalsNotice.value = gatewayExecApprovalResolutionNotice(resolution)
-          markExecApprovalResolved(id)
+          markExecApprovalResolved(id, gatewayExecApprovalResolutionNotice(resolution))
         }
       }
       if (pendingExecApprovalWrite(id, gatewayScope.stableId) === pendingWrite) {
@@ -8272,12 +8277,13 @@ class NodeRuntime private constructor(
       synchronized(execApprovalsStateLock) {
         val id = pendingWrite.id
         if (pendingExecApprovalWrites[id] !== pendingWrite) return@synchronized
-        if (_execApprovals.value.any { it.id == id }) {
-          _execApprovalsNotice.value = gatewayExecApprovalPriorResolutionNotice(id)
-        }
+        val notice =
+          id
+            .takeIf { mutableExecApprovalInbox.value.approvals.any { row -> row.id == id } }
+            ?.let(::gatewayExecApprovalPriorResolutionNotice)
         // The legacy rejection proves only that another verdict won. Retire the
         // exact card without inventing that unavailable winner's decision.
-        markExecApprovalResolved(id)
+        markExecApprovalResolved(id, notice)
       }
     }
   }
@@ -8297,22 +8303,26 @@ class NodeRuntime private constructor(
           pendingWrite.requestInFlight = false
         }
         invalidateExecApprovalRefreshes()
-        if (!operatorConnected || id in resolvedExecApprovalIds || _execApprovals.value.none { it.id == id }) {
+        if (!operatorConnected || id in resolvedExecApprovalIds || mutableExecApprovalInbox.value.approvals.none { it.id == id }) {
           return@synchronized
         }
         val error =
           if (outcomeUnknown) execApprovalOutcomeUnknownMessage() else execApprovalResolveFailureMessage()
-        _execApprovals.value =
-          _execApprovals.value.map { row ->
-            if (row.id == id) {
-              row.copy(
-                resolvingDecision = pendingWrite.decision.takeIf { outcomeUnknown },
-                errorText = error,
-              )
-            } else {
-              row
-            }
-          }
+        mutableExecApprovalInbox.update { inbox ->
+          inbox.copy(
+            approvals =
+              inbox.approvals.map { row ->
+                if (row.id == id) {
+                  row.copy(
+                    resolvingDecision = pendingWrite.decision.takeIf { outcomeUnknown },
+                    errorText = error,
+                  )
+                } else {
+                  row
+                }
+              },
+          )
+        }
       }
     }
   }
@@ -8348,7 +8358,9 @@ class NodeRuntime private constructor(
           id = pendingWrite.id,
           createdAtMs =
             pendingWrite.createdAtMs
-              ?: _execApprovals.value.firstOrNull { it.id == pendingWrite.id }?.createdAtMs,
+              ?: mutableExecApprovalInbox.value.approvals
+                .firstOrNull { it.id == pendingWrite.id }
+                ?.createdAtMs,
         )
       } catch (err: CancellationException) {
         throw err
@@ -8360,8 +8372,7 @@ class NodeRuntime private constructor(
         if (!operatorConnected || pendingExecApprovalWrites[pendingWrite.id] !== pendingWrite) return@synchronized
         when (snapshot) {
           is GatewayExecApprovalSnapshot.Terminal -> {
-            _execApprovalsNotice.value = gatewayExecApprovalRemoteTerminalNotice(snapshot)
-            markExecApprovalResolved(pendingWrite.id)
+            markExecApprovalResolved(pendingWrite.id, gatewayExecApprovalRemoteTerminalNotice(snapshot))
           }
 
           is GatewayExecApprovalSnapshot.Pending -> {
@@ -8372,12 +8383,12 @@ class NodeRuntime private constructor(
                 resolvingDecision = null,
                 errorText = execApprovalStillPendingMessage(),
               )
-            val retained = _execApprovals.value.filterNot { it.id == pendingWrite.id }
+            val retained = mutableExecApprovalInbox.value.approvals.filterNot { it.id == pendingWrite.id }
             val nextRows =
               (retained + row)
                 .filterActiveExecApprovals()
                 .sortedBy { it.createdAtMs ?: Long.MAX_VALUE }
-            _execApprovals.value = nextRows
+            mutableExecApprovalInbox.update { it.copy(approvals = nextRows) }
             scheduleExecApprovalExpiryPrune(nextRows)
           }
         }
@@ -8464,7 +8475,7 @@ class NodeRuntime private constructor(
     synchronized(execApprovalsStateLock) {
       if (!operatorConnected || row.id in resolvedExecApprovalIds) return
       if (row.isExpiredExecApproval()) return
-      val rows = _execApprovals.value
+      val rows = mutableExecApprovalInbox.value.approvals
       val replaced = rows.any { it.id == row.id }
       val nextRows =
         (
@@ -8484,7 +8495,7 @@ class NodeRuntime private constructor(
           }
         ).filterActiveExecApprovals()
           .sortedBy { it.createdAtMs ?: Long.MAX_VALUE }
-      _execApprovals.value = nextRows
+      mutableExecApprovalInbox.update { it.copy(approvals = nextRows) }
       scheduleExecApprovalExpiryPrune(nextRows)
     }
   }
@@ -8492,16 +8503,22 @@ class NodeRuntime private constructor(
   private fun invalidateExecApprovalRefreshes() {
     synchronized(execApprovalsStateLock) {
       execApprovalsRefreshSeq.incrementAndGet()
-      _execApprovalsRefreshing.value = false
+      mutableExecApprovalInbox.update { it.copy(refreshing = false) }
     }
   }
 
-  private fun markExecApprovalResolved(id: String) {
+  private fun markExecApprovalResolved(
+    id: String,
+    notice: GatewayExecApprovalNotice?,
+  ) {
     synchronized(execApprovalsStateLock) {
       resolvedExecApprovalIds.add(id)
       pendingExecApprovalWrites.remove(id)
-      invalidateExecApprovalRefreshes()
-      _execApprovals.value = _execApprovals.value.filterNot { it.id == id }
+      execApprovalsRefreshSeq.incrementAndGet()
+      // One publication prevents consumers from pairing a terminal notice with its actionable card.
+      mutableExecApprovalInbox.update { inbox ->
+        inbox.copy(approvals = inbox.approvals.filterNot { it.id == id }, refreshing = false, notice = notice ?: inbox.notice)
+      }
     }
   }
 
@@ -8514,20 +8531,21 @@ class NodeRuntime private constructor(
     publishGatewayData(gatewayScope) {
       synchronized(execApprovalsStateLock) {
         if (execApprovalsRefreshSeq.get() == refreshGeneration && operatorConnected) {
-          val visibleIds = _execApprovals.value.mapTo(mutableSetOf()) { it.id }
+          val visibleIds = mutableExecApprovalInbox.value.approvals.mapTo(mutableSetOf()) { it.id }
           val pendingWriteIds =
             pendingExecApprovalWrites.values
               .filter { it.stableId == gatewayScope.stableId }
               .mapTo(mutableSetOf()) { it.id }
-          terminalApprovals.lastOrNull { it.id in visibleIds || it.id in pendingWriteIds }?.let { terminal ->
-            _execApprovalsNotice.value = gatewayExecApprovalRemoteTerminalNotice(terminal)
-          }
+          val notice =
+            terminalApprovals
+              .lastOrNull { it.id in visibleIds || it.id in pendingWriteIds }
+              ?.let(::gatewayExecApprovalRemoteTerminalNotice)
           val terminalIds = terminalApprovals.map { it.id }
           resolvedExecApprovalIds.addAll(terminalIds)
           terminalIds.forEach(pendingExecApprovalWrites::remove)
           val nextRows = rows.filterNot { it.id in resolvedExecApprovalIds }.filterActiveExecApprovals()
           execApprovalsSnapshotReady = true
-          _execApprovals.value = nextRows
+          mutableExecApprovalInbox.update { it.copy(approvals = nextRows, notice = notice ?: it.notice) }
           scheduleExecApprovalExpiryPrune(nextRows)
         }
       }
@@ -8545,7 +8563,7 @@ class NodeRuntime private constructor(
 
   private fun pruneExpiredExecApprovals() {
     synchronized(execApprovalsStateLock) {
-      _execApprovals.value = _execApprovals.value.filterActiveExecApprovals()
+      mutableExecApprovalInbox.update { it.copy(approvals = it.approvals.filterActiveExecApprovals()) }
     }
   }
 
@@ -9390,9 +9408,19 @@ internal fun parseGatewayModels(models: JsonArray?): List<GatewayModelSummary> =
 
 internal class ProviderModelConfigUnsupported : Exception()
 
-internal suspend fun requestProviderModelConfig(request: suspend (String) -> String): String =
+internal suspend fun requestProviderModelConfig(
+  agentId: String?,
+  refresh: Boolean = false,
+  request: suspend (String) -> String,
+): String =
   try {
-    request("""{"view":"provider-config"}""")
+    request(
+      buildJsonObject {
+        put("view", JsonPrimitive("provider-config"))
+        if (agentId != null) put("agentId", JsonPrimitive(agentId))
+        if (refresh) put("refresh", JsonPrimitive(true))
+      }.toString(),
+    )
   } catch (err: GatewayRequestRejected) {
     if (err.gatewayError.code != "INVALID_REQUEST") throw err
     throw ProviderModelConfigUnsupported()

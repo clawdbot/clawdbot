@@ -465,7 +465,16 @@ describe("updateSessionStoreAfterAgentRun", () => {
             Object.values(persisted).filter((entry) => entry.archivedAt === undefined),
           ).toHaveLength(42);
           expect(persisted[sessionKey]?.sessionId).toBe(sessionId);
-          expect(persisted["agent:main:stale:44"]?.archivedAt).toEqual(expect.any(Number));
+          expect(persisted[sessionKey]?.archivedAt).toBeUndefined();
+          for (let index = 0; index < 45; index += 1) {
+            const entry = persisted[`agent:main:stale:${index}`];
+            expect(entry?.sessionId).toBe(`stale-${index}`);
+            if (index >= 41) {
+              expect(entry?.archivedAt).toEqual(expect.any(Number));
+            } else {
+              expect(entry?.archivedAt).toBeUndefined();
+            }
+          }
         },
         { timeout: 5_000 },
       );
@@ -2828,6 +2837,7 @@ describe("recordCliCompactionInStore", () => {
           outputTokens: 100,
           cacheRead: 2_900,
           cacheWrite: 0,
+          estimatedCostUsd: 0.04,
           contextBudgetStatus: {
             schemaVersion: 1,
             source: "pre-prompt-estimate",
@@ -2877,12 +2887,14 @@ describe("recordCliCompactionInStore", () => {
       expect(sessionStore[sessionKey]?.outputTokens).toBeUndefined();
       expect(sessionStore[sessionKey]?.cacheRead).toBeUndefined();
       expect(sessionStore[sessionKey]?.cacheWrite).toBeUndefined();
+      expect(sessionStore[sessionKey]?.estimatedCostUsd).toBeUndefined();
       expect(sessionStore[sessionKey]?.contextBudgetStatus).toBeUndefined();
       expect(sessionStore[sessionKey]?.cliSessionBindings?.codex).toEqual({
         sessionId: "stale-cli-session",
       });
       expect(sessionStore[sessionKey]?.cliSessionIds?.codex).toBe("stale-cli-session");
       expect(persisted[sessionKey]?.totalTokens).toBe(3_210);
+      expect(persisted[sessionKey]?.estimatedCostUsd).toBeUndefined();
       expect(persisted[sessionKey]?.totalTokensFresh).toBe(true);
       expect(resolveFreshSessionTotalTokens(persisted[sessionKey])).toBe(3_210);
       expect(persisted[sessionKey]?.contextBudgetStatus).toBeUndefined();

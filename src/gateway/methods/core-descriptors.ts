@@ -652,6 +652,9 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["transcripts.status", "transcripts", "operator.read", "2026.9"],
   ["update.report", "update", "operator.admin", "2026.9", { controlPlaneWrite: true }],
   ["skills.workshop.read", "skills", "operator.read", "2026.9"],
+  // Public sharing appends so every previously advertised method index remains stable.
+  ["session.publicShare.set", "sessions-sharing", "operator.write", "2026.9"],
+  ["claws.monitors", "claws-monitors", "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];
 
 export type CoreGatewayHandlerFamily = Exclude<(typeof CORE_GATEWAY_METHOD_SPECS)[number][1], null>;

@@ -79,9 +79,6 @@ const launchdRestartHandoffState = vi.hoisted(() => ({
     (_params: unknown) => { ok: true; value: Promise<boolean> } | { ok: false; error: string }
   >(() => ({ ok: true, value: Promise.resolve(true) })),
 }));
-const launchdConstantsState = vi.hoisted(() => ({
-  legacyGatewayLabels: [] as string[],
-}));
 const launchdSystemState = vi.hoisted(() => ({
   assertNoSystemLaunchDaemonOwnership: vi.fn<(label: string) => Promise<void>>(async () => {}),
   inspectSystemLaunchDaemonOwnership: vi.fn<
@@ -523,14 +520,6 @@ vi.mock("./launchd-restart-handoff.js", () => ({
     launchdRestartHandoffState.scheduleDetachedLaunchdRestartHandoff(params),
 }));
 
-vi.mock("./constants.js", async () => {
-  const actual = await vi.importActual<typeof import("./constants.js")>("./constants.js");
-  return {
-    ...actual,
-    resolveLegacyGatewayLaunchAgentLabels: () => [...launchdConstantsState.legacyGatewayLabels],
-  };
-});
-
 vi.mock("./launchd-system.js", () => ({
   assertNoSystemLaunchDaemonOwnership: (label: string) =>
     launchdSystemState.assertNoSystemLaunchDaemonOwnership(label),
@@ -699,7 +688,6 @@ beforeEach(() => {
   state.cleanupProtectedPids.length = 0;
   state.realExecFile = false;
   state.serviceStates.clear();
-  launchdConstantsState.legacyGatewayLabels.length = 0;
   launchctlSpawnSync.mockReset();
   launchctlSpawnSync.mockImplementation((file: string, args: string[]) => {
     const result = executeLaunchctlMock(file, args);
@@ -1939,48 +1927,6 @@ describe("launchd install", () => {
     expect(state.launchctlCalls).toEqual([["print", `${domain}/ai.openclaw.gateway`]]);
   });
 
-  it("restores an external legacy-label owner when canonical bootstrap fails", async () => {
-    const env = createDefaultLaunchdEnv();
-    const legacyLabel = "ai.openclaw.legacy-gateway";
-    const legacyPlistPath = `${env.HOME}/Library/LaunchAgents/${legacyLabel}.plist`;
-    const targetPlistPath = resolveLaunchAgentPlistPath(env);
-    const previousLegacy = createTestLaunchAgentPlist({
-      label: legacyLabel,
-      programArguments: ["/legacy/node", "/legacy/openclaw.mjs", "gateway"],
-    });
-    launchdConstantsState.legacyGatewayLabels.push(legacyLabel);
-    state.files.set(legacyPlistPath, previousLegacy);
-    const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
-    state.serviceStates.set(`${domain}/${legacyLabel}`, "running");
-    state.bootstrapError = "Operation not permitted";
-    state.bootstrapTransient = true;
-
-    await expect(
-      installLaunchAgent({
-        env,
-        stdout: new PassThrough(),
-        programArguments: defaultProgramArguments,
-      }),
-    ).rejects.toThrow("launchctl bootstrap failed: Operation not permitted");
-
-    expect(state.files.get(legacyPlistPath)).toBe(previousLegacy);
-    expect(state.files.has(targetPlistPath)).toBe(false);
-    expect(state.serviceLoaded).toBe(true);
-    expect(state.serviceRunning).toBe(true);
-    expect(launchctlCommandNames()).toEqual([
-      "print",
-      "print",
-      "print",
-      "bootout",
-      "unload",
-      "enable",
-      "bootstrap",
-      "print",
-      "enable",
-      "bootstrap",
-    ]);
-  });
-
   it("stages a canonical plist without retiring a legacy LaunchAgent", async () => {
     const env = createDefaultLaunchdEnv();
     const legacyLabel = "ai.openclaw.legacy-gateway";
@@ -1989,7 +1935,6 @@ describe("launchd install", () => {
       label: legacyLabel,
       programArguments: ["/legacy/node", "/legacy/openclaw.mjs", "gateway"],
     });
-    launchdConstantsState.legacyGatewayLabels.push(legacyLabel);
     state.files.set(legacyPlistPath, previousLegacy);
 
     await stageLaunchAgent(defaultLaunchAgentFixture(env));

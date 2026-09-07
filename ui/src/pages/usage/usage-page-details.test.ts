@@ -203,6 +203,7 @@ describe("UsagePage detail requests", () => {
       ...snapshot.result,
       sessions: ["First", "Second"].map((label, index) => ({
         key: "global",
+        sessionId: "shared-instance",
         label,
         agentId: index === 0 ? "main" : "opus",
         hasContextWeight: true,
@@ -247,14 +248,17 @@ describe("UsagePage detail requests", () => {
       sessions: result.sessions.map((session) => ({
         ...session,
         usage: { ...session.usage, totalTokens: 9999 },
-        contextWeight: contextWeight(session.label),
+        contextWeight: { ...contextWeight(session.label), sessionId: session.sessionId },
       })),
     };
     pending.resolve(full);
     await vi.waitFor(() => expect(download).toHaveBeenCalledOnce());
     const payload = JSON.parse(download.mock.calls[0]![1]) as { sessions: UsageSessionEntry[] };
     expect(payload.sessions).toEqual([
-      { ...result.sessions[0], contextWeight: contextWeight("First") },
+      {
+        ...result.sessions[0],
+        contextWeight: { ...contextWeight("First"), sessionId: "shared-instance" },
+      },
     ]);
     expect(page.querySelector('.usage-export-menu button[aria-busy="true"]')).toBeNull();
 
@@ -280,6 +284,60 @@ describe("UsagePage detail requests", () => {
       }),
     );
     expect(download).toHaveBeenCalledOnce();
+
+    for (const [scenario, sessionId, otherSessionId, expectedDownloads] of [
+      ["matching instance", "shared-instance", "shared-instance", 1],
+      ["replacement instance", "replacement-instance", "shared-instance", 0],
+      ["unrelated agent replacement", "shared-instance", "other-instance", 1],
+    ] as const) {
+      download.mockClear();
+      notice.mockClear();
+      pending = deferred<SessionsUsageResult>();
+      exportJson();
+      await page.updateComplete;
+      expect(page.querySelector('.usage-export-menu button[aria-busy="true"]')).not.toBeNull();
+      pending.resolve({
+        ...full,
+        sessions: [
+          {
+            ...full.sessions[0]!,
+            sessionId,
+            contextWeight: { ...contextWeight("Current first"), sessionId },
+          },
+          {
+            ...full.sessions[1]!,
+            sessionId: otherSessionId,
+            contextWeight: { ...contextWeight("Other agent"), sessionId: otherSessionId },
+          },
+        ],
+      });
+      await vi.waitFor(() =>
+        expect(page.querySelector('.usage-export-menu button[aria-busy="true"]')).toBeNull(),
+      );
+      expect(download, scenario).toHaveBeenCalledTimes(expectedDownloads);
+      if (expectedDownloads === 0) {
+        expect(notice).toHaveBeenCalledWith({
+          message: expect.stringContaining("Refresh usage and try again"),
+        });
+      } else {
+        expect(notice).not.toHaveBeenCalled();
+        const exportedPayload = JSON.parse(download.mock.calls[0]![1]) as {
+          sessions: UsageSessionEntry[];
+        };
+        expect(exportedPayload.sessions).toMatchObject([
+          {
+            key: "global",
+            agentId: "main",
+            sessionId: "shared-instance",
+            usage: { totalTokens: 100 },
+            contextWeight: {
+              sessionId: "shared-instance",
+              skills: { entries: [{ name: "Current first" }] },
+            },
+          },
+        ]);
+      }
+    }
   });
 
   it("marks provider usage stalled once the retry budget is spent", async () => {

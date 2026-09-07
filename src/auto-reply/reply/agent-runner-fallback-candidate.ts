@@ -203,6 +203,8 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
         emitModelFallbackStepLifecycle({ runId: params.runId, sessionKey: turn.sessionKey, step });
       },
       runCandidate: async (provider, model, runOptions) => {
+        params.state.maintenanceAuthProfile = undefined;
+        params.state.compactionRequestBudget = undefined;
         invalidateTurnCompactionContext(params.state.compaction);
         params.state.attemptedRuntimeProvider = provider;
         params.state.attemptedRuntimeModel = model;
@@ -332,6 +334,8 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
         });
         params.state.bootstrapPromptWarningSignaturesSeen =
           candidate.bootstrapPromptWarningSignaturesSeen;
+        params.state.maintenanceAuthProfile = candidate.maintenanceAuthProfile;
+        params.state.compactionRequestBudget = candidate.compactionRequestBudget;
         return candidate.result;
       },
     }),

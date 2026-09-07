@@ -1112,6 +1112,33 @@ if (process.argv[1]?.endsWith("vitest-worker-compiler.mts")) {
         "-e",
         `await import(${JSON.stringify(pathToFileURL(config).href)});`,
       ]);
+      expect(
+        imported.error === undefined,
+        JSON.stringify({
+          errors: [
+            imported.error,
+            imported.error instanceof Error ? imported.error.cause : undefined,
+          ]
+            .filter((error) => error !== undefined)
+            .map((error) =>
+              error instanceof Error
+                ? {
+                    name: error.name.slice(0, 128),
+                    message: error.message.slice(0, 2_048),
+                    code:
+                      "code" in error && typeof error.code === "string"
+                        ? error.code.slice(0, 128)
+                        : undefined,
+                  }
+                : {
+                    type: typeof error,
+                    message: typeof error === "string" ? error.slice(0, 2_048) : undefined,
+                  },
+            ),
+          stdout: imported.stdout.slice(-4_096),
+          stderr: imported.stderr.slice(-4_096),
+        }),
+      ).toBe(true);
       expect(imported.code, imported.stderr).toBe(0);
       expect(imported.stderr).not.toContain("[vitest-workers] prepared");
       for (const args of [

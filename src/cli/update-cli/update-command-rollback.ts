@@ -13,6 +13,8 @@ import {
 import { NativePackageRollbackError } from "../../infra/update-native-package-stage.js";
 import { recordUpdateRunStep } from "../../infra/update-run-ledger.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
+import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { confirmGatewayReachable } from "../daemon-cli/restart-health-probe.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-managed-context.js";
@@ -46,6 +48,8 @@ export async function rollbackFailedUpdate(params: {
   packageTransaction?: PackageUpdateTransaction;
   rollbackBlockedReason?: "state-migrated-no-rollback" | "rollback-state-unverified";
   schemaVersions?: UpdateStateSchemaVersion[];
+  candidateSchemaVersions?: OpenClawSchemaVersions;
+  previousSchemaVersions?: OpenClawSchemaVersions;
   previousVerified?: boolean;
   config: OpenClawConfig;
   opts: UpdateCommandOptions;
@@ -66,20 +70,18 @@ export async function rollbackFailedUpdate(params: {
   const port = before?.stopped
     ? await resolveUpdatedGatewayRestartPort({ config: params.config, serviceEnv: env })
     : undefined;
-  const failed = (reason: string) => {
-    return {
-      result: {
-        ...result,
-        status: "error" as const,
-        reason:
-          result.recovery?.serviceRestartSafe === true && result.recovery.packageRollbackVerified
-            ? (params.result.reason ?? reason)
-            : reason,
-      },
-      rolledBack: false,
-      stoppedForRollback,
-    };
-  };
+  const failed = (reason: string) => ({
+    result: {
+      ...result,
+      status: "error" as const,
+      reason:
+        result.recovery?.serviceRestartSafe === true && result.recovery.packageRollbackVerified
+          ? (params.result.reason ?? reason)
+          : reason,
+    },
+    rolledBack: false,
+    stoppedForRollback,
+  });
   const stateUnchanged = async () => {
     const baseline = params.schemaVersions;
     const current = await readUpdateStateSchemaVersions({
@@ -89,8 +91,30 @@ export async function rollbackFailedUpdate(params: {
       root: result.root ?? null,
       nodeRunner: params.nodeRunner,
     });
-    if (baseline === undefined || !updateStateSchemaVersionsMatch(baseline, current)) {
+    const sharedPath = resolveOpenClawStateSqlitePath(env);
+    if (
+      baseline === undefined ||
+      !updateStateSchemaVersionsMatch(baseline, current, {
+        sharedPath,
+        candidateSchemaVersions: params.candidateSchemaVersions,
+      })
+    ) {
       return false;
+    }
+    const baselineVersions = new Map(baseline.map((entry) => [entry.path, entry.userVersion]));
+    for (const entry of current) {
+      if (entry.userVersion === null || baselineVersions.get(entry.path) != null) {
+        continue;
+      }
+      // First-use creation is not migration, but the retained runtime must still
+      // support that new store before replacing a reachable candidate.
+      const kind = entry.path === sharedPath ? "state" : "agent";
+      const supported = params.previousSchemaVersions?.[kind];
+      if (supported === undefined || entry.userVersion > supported) {
+        throw new Error(
+          `Automatic rollback refused: newly created ${kind} database ${entry.path} uses schema ${entry.userVersion}; retained previous package support is ${supported ?? "unknown"}. Keep the candidate installed.`,
+        );
+      }
     }
     const snapshot = await withOwnedManagedUpdateEnv(env, () =>
       readConfigFileSnapshot({
@@ -179,16 +203,17 @@ export async function rollbackFailedUpdate(params: {
       after: undefined,
       steps: [...result.steps, restored],
     };
-    if (activePackageRoot) {
-      result.after = await readPackageUpdateIdentity(activePackageRoot);
-    }
     if (restored.exitCode === 0) {
+      // The transaction verified the previous package. Do not gate its restart
+      // on an extra diagnostic read whose result would be discarded.
       result.after = result.before;
       result.recovery = {
         serviceRestartSafe: false,
         packageRollbackVerified: true,
         reason: "runtime-verification-failed",
       };
+    } else if (activePackageRoot) {
+      result.after = await readPackageUpdateIdentity(activePackageRoot);
     }
     if (opts.run) {
       recordUpdateRunStep(
@@ -294,10 +319,9 @@ export async function rollbackFailedUpdate(params: {
     }
     failureReason = "restart-unhealthy";
     let verifiedAtMs: number | undefined;
-    const healthy = await maybeRestartService({
+    const restartOutcome = await maybeRestartService({
       shouldRestart: true,
       result,
-      channel: "stable",
       opts,
       refreshServiceEnv: false,
       serviceUpdateVerdict: verdict,
@@ -314,6 +338,7 @@ export async function rollbackFailedUpdate(params: {
         verifiedAtMs = at;
       },
     });
+    const healthy = restartOutcome === "ok";
     return {
       result: {
         ...result,

@@ -95,10 +95,10 @@ native session's model and connection.
 ### Bound native session ownership
 
 The optional `resolveSessionRuntimeOwnership({ config, agentId, sessionId,
-sessionKey, assertCurrent })` callback reports private binding ownership. Core
-calls it only on the exact pinned harness after validating the durable session
-identity. `sessionId` and `assertCurrent` are required; `config`, `agentId`, and
-`sessionKey` are optional. Return synchronously:
+sessionKey, storePath, readPreviousSessionId, assertCurrent })` callback reports
+private binding ownership. Core calls it only on the exact pinned harness after
+validating the durable session identity. `sessionId` and `assertCurrent` are
+required; the remaining parameters are optional. Return synchronously:
 
 - `{ model: "native", auth: "native" }` when the binding owns both model selection
   and authentication through its native connection.
@@ -124,6 +124,15 @@ Read the existing private binding synchronously. Call `assertCurrent()` before
 and after the read. Do not discover models, reclaim a generation, start a client,
 authenticate, or mutate the binding. The assertion expires when the callback
 returns. This ownership fact is neither execution authority nor credential readiness.
+
+If the current binding is absent, `readPreviousSessionId?.()` reads the latest
+predecessor for this exact physical session from the caller-selected store. It
+returns `undefined` when the row is missing or has been replaced. It takes no
+arguments and expires when the ownership callback returns. Use it only on a
+binding miss, rather than loading the general session runtime or carrying a
+lineage snapshot across awaited preparation; a current binding needs no lineage
+read. The predecessor identifies a binding to inspect, not permission to reclaim
+or execute it.
 
 The Codex implementation reports native model ownership from `preserveNativeModel`.
 It reports native auth only for the separate private supervision connection;
@@ -196,6 +205,13 @@ native harnesses:
 Harnesses may use the plan for decisions that need to match OpenClaw behavior,
 but treat it as host-owned attempt state: do not mutate it or use it to switch
 providers/models inside a turn.
+
+For model-visible reply policy, `buildHarnessVisibleReplyGuidance` from
+`openclaw/plugin-sdk/agent-harness-runtime` accepts the prepared delivery mode,
+actual message-tool availability, and resolved `requireExplicitMessageTarget`
+fact. Supply these facts for each turn. Harnesses with a separate static prompt
+can use the same seam's `buildUiPresentationPrompt` for stable UI guidance,
+leaving delivery and target instructions in late context.
 
 For auxiliary session control calls, `resolveSessionModelRef` from
 `openclaw/plugin-sdk/model-session-runtime` resolves the current model selection.
@@ -820,6 +836,18 @@ server names with `assignMcpCatalogSafeServerNames(...)`, and retain tools
 hidden only by a session denial in `sessionDeniedTools`. Core still applies the
 final OpenClaw tool policy and schema compatibility checks before exposing the
 rows.
+
+`SessionMcpRuntime` implementations used by materialized tool views should
+provide `joinCleanup()`. It waits for cleanup already requested from that exact
+runtime, including unpublished or retiring servers, and rejects if any owned
+cleanup failed or could not be confirmed. It must preserve that failure for
+later callers without closing transports still leased by another run. A fulfilled
+best-effort `dispose()` alone is not cleanup evidence.
+
+The method is optional for existing SDK implementations; automatic one-shot
+recovery treats a missing method as uncertain cleanup. A native facade that owns
+no transport may resolve immediately when its enclosing runtime separately owns
+and verifies the process lifetime.
 
 Harnesses that forward embedded attempt params should pass
 `skillWorkshopProposalOnly` through. Proposal-only skill-workshop runs are

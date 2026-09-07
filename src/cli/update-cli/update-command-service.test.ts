@@ -1,34 +1,33 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { defaultRuntime } from "../../runtime.js";
 
 const mocks = vi.hoisted(() => ({
   createUpdateConfigSnapshot: vi.fn(async () => undefined),
-  doctorCommand: vi.fn<typeof import("../../commands/doctor.js").doctorCommand>(),
-  runDaemonInstall: vi.fn<typeof import("../daemon-cli.js").runDaemonInstall>(),
-  runDaemonRestart: vi.fn<typeof import("../daemon-cli.js").runDaemonRestart>(),
-  runRestartScript: vi.fn(async () => undefined),
-  runUpdatedInstallGatewayCommand: vi.fn(async () => true),
+  runRestartScript: vi.fn(async () => true),
+  runUpdatedInstallGatewayCommand: vi.fn<
+    typeof import("./update-command-service-command.js").runUpdatedInstallGatewayCommand
+  >(async (_params, action) => (action === "restart" ? "accepted" : "unverified")),
   waitForGatewayHealthyRestart: vi.fn(),
   waitForGatewayHttpReadiness: vi.fn(),
-  runUpdateInferenceProbe: vi.fn(),
+  verifyUpdateServing: vi.fn(),
 }));
 vi.mock("./update-command-service-command.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./update-command-service-command.js")>()),
   runUpdatedInstallGatewayCommand: mocks.runUpdatedInstallGatewayCommand,
 }));
-vi.mock("./update-command-inference.js", () => ({
-  runUpdateInferenceProbe: mocks.runUpdateInferenceProbe,
+vi.mock("../../infra/update-serving-verification.js", () => ({
+  verifyUpdateServing: mocks.verifyUpdateServing,
+}));
+vi.mock("../../infra/update-run-ledger.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/update-run-ledger.js")>()),
+  recordUpdateRunPhase: vi.fn(),
+  recordUpdateRunStep: vi.fn(),
+  recordUpdateRunVerification: vi.fn(),
 }));
 vi.mock("../daemon-cli/restart-health-probe.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../daemon-cli/restart-health-probe.js")>()),
   resolveGatewayRestartProbeContext: async () => ({ config: {}, auth: undefined }),
-}));
-
-vi.mock("../../commands/doctor.js", () => ({ doctorCommand: mocks.doctorCommand }));
-vi.mock("../daemon-cli.js", () => ({
-  runDaemonInstall: mocks.runDaemonInstall,
-  runDaemonRestart: mocks.runDaemonRestart,
 }));
 
 vi.mock("../../infra/gateway-supervision.js", async (importOriginal) => ({
@@ -53,17 +52,28 @@ vi.mock("./update-command-config-snapshot.js", () => ({
 
 import { maybeRestartService } from "./update-command-service.js";
 
-describe("maybeRestartService", () => {
-  afterEach(() => {
-    expect(mocks.doctorCommand).not.toHaveBeenCalled();
-    expect(mocks.runDaemonInstall).not.toHaveBeenCalled();
-    expect(mocks.runDaemonRestart).not.toHaveBeenCalled();
-  });
+const run = { runId: "00000000-0000-4000-8000-000000000001", env: {} };
+const receipt = {
+  runId: run.runId,
+  gateway: { bootId: "test-boot", version: "2026.9.1", buildId: "new-build" },
+  agentId: "main",
+  sessionKey: "agent:main:update-verification:test",
+  sessionId: "test-session",
+  agentRunId: "00000000-0000-4000-8000-000000000002",
+  transcript: {
+    generation: "test-generation",
+    maxSeq: 2,
+    user: { entryId: "user-entry", seq: 1 },
+    assistant: { entryId: "assistant-entry", seq: 2 },
+  },
+  verifiedAtMs: 123,
+};
 
+describe("maybeRestartService", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.waitForGatewayHttpReadiness.mockResolvedValue({ healthz: 200, readyz: 200 });
-    mocks.runUpdateInferenceProbe.mockResolvedValue(true);
+    mocks.verifyUpdateServing.mockResolvedValue({ status: "verified", receipt });
     mocks.waitForGatewayHealthyRestart.mockResolvedValue({
       runtime: { status: "running", pid: 8000 },
       portUsage: {
@@ -75,41 +85,90 @@ describe("maybeRestartService", () => {
       healthy: true,
       staleGatewayPids: [],
       gatewayBuildId: "new-build",
+      gatewayBootId: "test-boot",
     });
   });
 
-  it("forwards the built Git identity into restart verification", async () => {
-    const result = {
-      status: "ok",
-      mode: "git",
-      root: "/tmp/openclaw-configured-ui-update",
-      after: { buildId: "new-build" },
-      steps: [],
-      durationMs: 0,
-    } satisfies UpdateRunResult;
+  it.each(["new-build", undefined])(
+    "enforces the available Git identity after restart: %s",
+    async (buildId) => {
+      const result = {
+        status: "ok",
+        mode: "git",
+        root: "/tmp/openclaw-configured-ui-update",
+        after: { version: "2026.9.1", buildId },
+        steps: [],
+        durationMs: 0,
+      } satisfies UpdateRunResult;
 
-    await expect(
-      maybeRestartService({
-        shouldRestart: true,
-        result,
-        channel: "dev",
-        opts: { json: true },
-        refreshServiceEnv: false,
-        serviceEnv: { HOME: "/home/operator" },
-        serviceInstallEnv: {},
-        gatewayPort: 18789,
-        restartScriptPath: "/tmp/openclaw-configured-ui-restart.sh",
-        timeoutMs: 1_000,
-      }),
-    ).resolves.toBe(true);
+      await expect(
+        maybeRestartService({
+          shouldRestart: true,
+          result,
+          opts: { json: true, run },
+          refreshServiceEnv: false,
+          serviceEnv: { HOME: "/home/operator" },
+          serviceInstallEnv: {},
+          gatewayPort: 18789,
+          restartScriptPath: "/tmp/openclaw-configured-ui-restart.sh",
+          timeoutMs: 1_000,
+        }),
+      ).resolves.toBe("ok");
 
-    expect(mocks.runRestartScript).toHaveBeenCalledWith("/tmp/openclaw-configured-ui-restart.sh");
-    expect(mocks.waitForGatewayHealthyRestart).toHaveBeenCalledWith(
-      expect.objectContaining({ expectedBuildId: "new-build" }),
-    );
-  });
+      expect(mocks.runRestartScript).toHaveBeenCalledWith(
+        "/tmp/openclaw-configured-ui-restart.sh",
+        1_000,
+      );
+      expect(mocks.waitForGatewayHealthyRestart.mock.lastCall?.[0].expectedBuildId).toBe(buildId);
+      // Undefined means unknown; only an explicit null proves an artifact has no build ID.
+      expect(mocks.verifyUpdateServing.mock.lastCall?.[0].expectedBuildId).toBe(buildId);
+      expect(mocks.verifyUpdateServing.mock.lastCall?.[0].expectedBootId).toBe("test-boot");
+    },
+  );
 
-  it("rejects a Git restart when the expected build is never observed", async () => {
+  it.each(["replacement", "missing"] as const)(
+    "refuses proof from a different or unbound health boot: %s",
+    async (healthBoot) => {
+      const snapshot = await mocks.waitForGatewayHealthyRestart();
+      mocks.waitForGatewayHealthyRestart.mockResolvedValue({
+        ...snapshot,
+        gatewayBootId: healthBoot === "replacement" ? "health-boot" : undefined,
+      });
+      // Model the real producer: a specified boot rejects a replacement before dispatch.
+      mocks.verifyUpdateServing.mockImplementation(async ({ expectedBootId }) =>
+        expectedBootId && expectedBootId !== receipt.gateway.bootId
+          ? { status: "failed", reason: "runtime-mismatch" }
+          : { status: "verified", receipt },
+      );
+      const onVerified = vi.fn();
+      await expect(
+        maybeRestartService({
+          shouldRestart: true,
+          result: {
+            status: "ok",
+            mode: "git",
+            after: { version: "2026.9.1", buildId: "new-build" },
+            steps: [],
+            durationMs: 0,
+          },
+          opts: { json: true, run },
+          refreshServiceEnv: false,
+          serviceEnv: { HOME: "/home/operator" },
+          gatewayPort: 18789,
+          restartScriptPath: "/tmp/openclaw-verification.sh",
+          timeoutMs: 1_000,
+          onVerified,
+        }),
+      ).resolves.toBe("restart-health-failed");
+      expect(onVerified).not.toHaveBeenCalled();
+      if (healthBoot === "missing") {
+        expect(mocks.verifyUpdateServing).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it("does not infer activation from a detached script when the expected Git build is never observed", async () => {
+    mocks.runRestartScript.mockResolvedValueOnce(false);
     mocks.waitForGatewayHealthyRestart.mockResolvedValue({
       runtime: { status: "stopped" },
       portUsage: {
@@ -131,12 +190,11 @@ describe("maybeRestartService", () => {
           status: "ok",
           mode: "git",
           root: "/tmp/openclaw-configured-ui-update",
-          after: { buildId: "new-build" },
+          after: { version: "2026.9.1", buildId: "new-build" },
           steps: [],
           durationMs: 0,
         },
-        channel: "dev",
-        opts: { json: true },
+        opts: { json: true, run },
         refreshServiceEnv: false,
         serviceEnv: { HOME: "/home/operator" },
         serviceInstallEnv: {},
@@ -144,19 +202,30 @@ describe("maybeRestartService", () => {
         restartScriptPath: "/tmp/openclaw-configured-ui-restart.sh",
         timeoutMs: 1_000,
       }),
-    ).resolves.toBe(false);
+    ).resolves.toBe("failed");
   });
 
   it.each(
     [false, true].flatMap((refreshServiceEnv) => [
-      { refreshServiceEnv, readyz: 503, inference: true, accepted: false },
-      { refreshServiceEnv, readyz: 200, inference: false, accepted: true },
+      { refreshServiceEnv, readyz: 503, serving: "verified", verified: false },
+      { refreshServiceEnv, readyz: 200, serving: "verified", verified: true },
+      { refreshServiceEnv, readyz: 200, serving: "unavailable", verified: false },
+      { refreshServiceEnv, readyz: 200, serving: "failed", verified: false },
+      { refreshServiceEnv, readyz: 200, serving: "timeout", verified: false },
     ]),
   )(
-    "requires readyz=$readyz while inference=$inference remains advisory (refresh=$refreshServiceEnv)",
-    async ({ refreshServiceEnv, readyz, inference, accepted }) => {
+    "requires readiness and serving=$serving proof (readyz=$readyz, refresh=$refreshServiceEnv)",
+    async ({ refreshServiceEnv, readyz, serving, verified }) => {
       mocks.waitForGatewayHttpReadiness.mockResolvedValue({ healthz: 200, readyz });
-      mocks.runUpdateInferenceProbe.mockResolvedValue(inference);
+      const reason =
+        serving === "unavailable"
+          ? "agent-unavailable"
+          : serving === "timeout"
+            ? "deadline"
+            : "persistence-missing";
+      mocks.verifyUpdateServing.mockResolvedValue(
+        serving === "verified" ? { status: "verified", receipt } : { status: serving, reason },
+      );
       const onVerified = vi.fn();
       const onVerificationFailure = vi.fn();
       const actual = await maybeRestartService({
@@ -168,8 +237,7 @@ describe("maybeRestartService", () => {
           steps: [],
           durationMs: 0,
         },
-        channel: "dev",
-        opts: { json: true },
+        opts: { json: true, run },
         refreshServiceEnv,
         serviceEnv: { HOME: "/home/operator" },
         gatewayPort: 18789,
@@ -178,18 +246,29 @@ describe("maybeRestartService", () => {
         onVerified,
         onVerificationFailure,
       });
-      expect(actual).toBe(accepted);
+      expect(actual).toBe(verified ? "ok" : "restart-health-failed");
       expect(mocks.waitForGatewayHealthyRestart).toHaveBeenCalledTimes(1);
       expect(mocks.runRestartScript).toHaveBeenCalledTimes(refreshServiceEnv ? 0 : 1);
       expect(mocks.runUpdatedInstallGatewayCommand).toHaveBeenCalledTimes(
         refreshServiceEnv ? 1 : 0,
       );
-      expect(onVerified).toHaveBeenCalledTimes(accepted ? 1 : 0);
-      expect(mocks.runUpdateInferenceProbe).toHaveBeenCalledTimes(accepted ? 1 : 0);
-      if (accepted) {
+      expect(onVerified).toHaveBeenCalledTimes(verified ? 1 : 0);
+      expect(mocks.verifyUpdateServing).toHaveBeenCalledTimes(readyz === 200 ? 1 : 0);
+      if (verified) {
+        expect(onVerified).toHaveBeenCalledWith(receipt.verifiedAtMs);
+        expect(mocks.verifyUpdateServing).toHaveBeenCalledWith(
+          expect.objectContaining({
+            runId: run.runId,
+            gatewayPort: 18789,
+            expectedVersion: "2026.9.1",
+            expectedBuildId: "new-build",
+          }),
+        );
         expect(onVerificationFailure).not.toHaveBeenCalled();
       } else {
-        expect(onVerificationFailure).toHaveBeenCalledWith("readyz-unhealthy");
+        expect(onVerificationFailure).toHaveBeenCalledWith(
+          readyz === 200 ? `serving-verification-${reason}` : "readyz-unhealthy",
+        );
       }
     },
   );
@@ -208,8 +287,7 @@ describe("maybeRestartService", () => {
       maybeRestartService({
         shouldRestart: true,
         result: { status: "ok", mode: "git", steps: [], durationMs: 0 },
-        channel: "stable",
-        opts: { json: true },
+        opts: { json: true, run },
         refreshServiceEnv: false,
         serviceEnv: { HOME: "/home/operator" },
         gatewayPort: 18789,
@@ -217,43 +295,10 @@ describe("maybeRestartService", () => {
         timeoutMs: 1_000,
         onVerificationFailure,
       }),
-    ).resolves.toBe(false);
+    ).resolves.toBe("restart-health-failed");
     expect(onVerificationFailure).toHaveBeenCalledWith("channel-errors");
-    expect(mocks.runUpdateInferenceProbe).not.toHaveBeenCalled();
+    expect(mocks.verifyUpdateServing).not.toHaveBeenCalled();
   });
-
-  it.each(["stable", "beta"] as const)(
-    "enforces the built Git identity for the %s channel",
-    async (channel) => {
-      const result = {
-        status: "ok",
-        mode: "git",
-        root: "/tmp/openclaw-channel-update",
-        after: { buildId: "new-build" },
-        steps: [],
-        durationMs: 0,
-      } satisfies UpdateRunResult;
-
-      await expect(
-        maybeRestartService({
-          shouldRestart: true,
-          result,
-          channel,
-          opts: { json: true },
-          refreshServiceEnv: false,
-          serviceEnv: { HOME: "/home/operator" },
-          serviceInstallEnv: {},
-          gatewayPort: 18789,
-          restartScriptPath: "/tmp/openclaw-channel-restart.sh",
-          timeoutMs: 1_000,
-        }),
-      ).resolves.toBe(true);
-
-      expect(mocks.waitForGatewayHealthyRestart).toHaveBeenCalledWith(
-        expect.objectContaining({ expectedBuildId: "new-build" }),
-      );
-    },
-  );
 
   it("reports service ownership skips to JSON callers", async () => {
     const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
@@ -267,14 +312,13 @@ describe("maybeRestartService", () => {
           steps: [],
           durationMs: 0,
         },
-        channel: "stable",
-        opts: { json: true },
+        opts: { json: true, run },
         refreshServiceEnv: false,
         gatewayPort: 18789,
         serviceMutationSkipMessage: "service management skipped: ownership conflict",
         timeoutMs: 1_000,
       }),
-    ).resolves.toBe(true);
+    ).resolves.toBe("ok");
 
     expect(errorSpy).toHaveBeenCalledWith("service management skipped: ownership conflict");
   });

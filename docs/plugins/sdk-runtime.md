@@ -1107,8 +1107,20 @@ snapshots; OpenClaw owns all persistence and lifecycle coordination.
     ```
 
   </Accordion>
+  <Accordion title="api.runtime.modelConfig">
+    Synchronous model-selection policy, without preparing a model or starting a session.
+
+    `resolveDefaultModelForAgent({ cfg, agentId })` resolves the agent's configured default. `resolveAllowedModelRef({ cfg, catalog, raw, defaultProvider, defaultModel, agentId })` resolves a model name or alias against the supplied catalog and agent allowlist, returning `{ ref, key }` or `{ error }`. It does not select or validate an agent runtime; callers that require a particular harness must apply that separate policy.
+
+    Use these host operations instead of importing model-selection implementation modules into a plugin's registration entry.
+
+  </Accordion>
   <Accordion title="api.runtime.modelAuth">
     Model and provider auth resolution.
+
+    Synchronous profile operations are also available: `resolveProviderIdForAuth`, `ensureAuthProfileStore`, `resolveAuthProfileOrder`, `listProfilesForProvider`, and `isProviderApiKeyConfigured`. They use the canonical host auth policy. Supply the owning agent directory when reading agent profiles, and use `readOnly: true` and `allowKeychainPrompt: false` for non-interactive profile inspection. Profile stores and resolved credentials must not be logged.
+
+    Capability factories should construct descriptors only. Keep credential inspection and resolution in the callbacks that need them, rather than performing them while registering a provider.
 
     ```typescript
     const auth = await api.runtime.modelAuth.getApiKeyForModel({ model, cfg });

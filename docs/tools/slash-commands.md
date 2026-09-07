@@ -621,4 +621,7 @@ See [BTW side questions](/tools/btw) for the full behavior.
   <Card title="Steer" href="/tools/steer" icon="compass">
     Guide the agent mid-run with `/steer`.
   </Card>
+  <Card title="OpenProse migration" href="/prose" icon="pen-nib">
+    Where the removed `/prose` command went.
+  </Card>
 </CardGroup>

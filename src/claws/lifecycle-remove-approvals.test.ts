@@ -41,6 +41,7 @@ import {
   digestClawAgentConfig,
   digestClawAgentRemovalSurface,
 } from "./lifecycle-config-removal.js";
+import { quiescentClawMonitorGateway } from "./lifecycle-remove.test-support.js";
 import { applyClawRemovePlan, buildClawRemovePlan, readClawStatus } from "./lifecycle-state.js";
 import { buildClawAddPlan } from "./lifecycle.js";
 import { installClawMcpServers, readClawMcpServerRefs } from "./mcp.js";
@@ -151,6 +152,7 @@ describe("Claw exec approvals removal", () => {
       const trashPath = vi.fn(async () => true);
       await expect(
         applyClawRemovePlan(plan, {
+          monitorGateway: quiescentClawMonitorGateway,
           consentPlanIntegrity: plan.planIntegrity,
           trashPath,
         }),
@@ -207,6 +209,7 @@ describe("Claw exec approvals removal", () => {
       try {
         await expect(
           applyClawRemovePlan(plan, {
+            monitorGateway: quiescentClawMonitorGateway,
             trashPath,
             consentPlanIntegrity: plan.planIntegrity,
           }),
@@ -230,6 +233,7 @@ describe("Claw exec approvals removal", () => {
       const retry = await buildClawRemovePlan("worker");
       await expect(
         applyClawRemovePlan(retry, {
+          monitorGateway: quiescentClawMonitorGateway,
           trashPath,
           consentPlanIntegrity: retry.planIntegrity,
         }),
@@ -293,17 +297,22 @@ describe("Claw exec approvals removal", () => {
         };
         await expect(
           applyClawRemovePlan(plan, {
+            monitorGateway: quiescentClawMonitorGateway,
             ...removeOptions,
             consentPlanIntegrity: plan.planIntegrity,
           }),
-        ).rejects.toThrow("database is still open in another process");
+        ).resolves.toMatchObject({
+          status: "partial",
+          agentRemoved: false,
+          error: { message: expect.stringContaining("database is still open in another process") },
+        });
         expect(config).toEqual(configBefore);
         expect(loadExecApprovals()).toEqual(approvalsBefore);
         expect(readAgentProvenance("worker")).toEqual(provenanceBefore);
         expect(trashPath).not.toHaveBeenCalled();
         expect(unsetMcpServer).not.toHaveBeenCalled();
         expect(readClawMcpServerRefs("worker")).toHaveLength(1);
-        expect(readAgentDeletionJournal("worker")).toBeUndefined();
+        expect(readAgentDeletionJournal("worker")).toMatchObject({ cleanupCompleted: false });
         const agentDir = join(home, ".openclaw", "agents", "worker", "agent");
         const deletion = beginAgentDeletion({
           agentId: "worker",
@@ -330,6 +339,7 @@ describe("Claw exec approvals removal", () => {
         const retry = await buildClawRemovePlan("worker", { config });
         await expect(
           applyClawRemovePlan(retry, {
+            monitorGateway: quiescentClawMonitorGateway,
             ...removeOptions,
             consentPlanIntegrity: retry.planIntegrity,
           }),
@@ -489,6 +499,7 @@ describe("Claw exec approvals removal", () => {
         const trashPath = vi.fn(async () => true);
         await expect(
           applyClawRemovePlan(plan, {
+            monitorGateway: quiescentClawMonitorGateway,
             config,
             commitConfig,
             trashPath,
@@ -538,6 +549,7 @@ describe("Claw exec approvals removal", () => {
         ? await buildClawRemovePlan("worker", { env, config })
         : await buildClawRemovePlan("worker");
       const common = {
+        monitorGateway: quiescentClawMonitorGateway,
         consentPlanIntegrity: plan.planIntegrity,
         trashPath: async () => complete,
       };
@@ -591,6 +603,7 @@ describe("Claw exec approvals removal", () => {
       let creationDuringCleanup: Awaited<ReturnType<typeof createAgent>> | undefined;
 
       const result = await applyClawRemovePlan(plan, {
+        monitorGateway: quiescentClawMonitorGateway,
         consentPlanIntegrity: plan.planIntegrity,
         trashPath: async () => {
           creationDuringCleanup ??= await createAgent({
@@ -638,6 +651,7 @@ describe("Claw exec approvals removal", () => {
 
       await expect(
         applyClawRemovePlan(plan, {
+          monitorGateway: quiescentClawMonitorGateway,
           consentPlanIntegrity: plan.planIntegrity,
           env,
           config,
@@ -646,7 +660,11 @@ describe("Claw exec approvals removal", () => {
           },
           trashPath: async () => true,
         }),
-      ).rejects.toThrow("injected deletion journal completion failure");
+      ).resolves.toMatchObject({
+        status: "partial",
+        agentRemoved: true,
+        error: { message: expect.stringContaining("injected deletion journal completion failure") },
+      });
 
       expect(readAgentDeletionJournal("worker", { env })).toMatchObject({
         cleanupCompleted: false,

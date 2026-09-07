@@ -73,6 +73,7 @@ describe("exec approvals allowlist evaluation", () => {
             execution: makeMockExecutableResolution({
               rawExecutable: "head",
               resolvedPath: "/usr/bin/head",
+              resolvedRealPath: "/usr/bin/head",
               executableName: "head",
             }),
           }),
@@ -244,6 +245,7 @@ describe("exec approvals allowlist evaluation", () => {
         execution: makeMockExecutableResolution({
           rawExecutable: "head",
           resolvedPath: "/usr/bin/head",
+          resolvedRealPath: "/usr/bin/head",
           executableName: "head",
         }),
       }),

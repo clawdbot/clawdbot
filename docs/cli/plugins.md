@@ -4,7 +4,7 @@ read_when:
   - You want to install or manage Gateway plugins or compatible bundles
   - You want to scaffold or validate a simple tool plugin
   - You want to debug plugin load failures
-title: "Plugins"
+title: "Plugins CLI"
 sidebarTitle: "Plugins"
 ---
 
@@ -113,6 +113,11 @@ restart the Gateway and reload the browser. See
 writes an archive containing compiled code and UI with no install scripts or
 runtime package dependencies. `--json` returns its absolute path, SHA-256 digest,
 and exact `plugin_activate_artifact` request. The output file must not exist.
+The default filename is `<plugin-id>.tgz` in the project root, with `/` replaced
+by `__` for scoped ids (for example, `@author__tools.tgz`). Use `--out` to choose
+another path. Packing follows the package's runtime entry selection, including
+`runtimeExtensions`, and bundles a declared setup entry separately. Source/runtime
+entry paths are rewritten to the compiled files included in the archive.
 See [Feature plugins](/plugins/feature-plugins) for activation approval, reload,
 view lifecycle, and recovery.
 
@@ -185,6 +190,9 @@ package name matches an official plugin. This exemption does not grant OAuth,
 operating-system, or runtime tool permissions. See
 [capability consent](/plugins/manage-plugins#capability-consent).
 
+AI onboarding separately requests a capability review before installing a chosen
+provider or required runtime, including verified first-party packages.
+
 `plugins search` queries ClawHub for installable `code-plugin` and
 `bundle-plugin` packages (not skills; use `openclaw skills search` for those).
 Default `--limit` is 20, capped at 100. It only reads the remote catalog: no
@@ -224,7 +232,11 @@ pin becomes the exact replacement version on the same registry.
 
   </Accordion>
   <Accordion title="--force confirmation and reinstall vs update">
-    `--force` confirms a non-ClawHub source without prompting. It does not bypass `security.installPolicy` or remaining install safety checks. When the plugin or hook pack is already installed, it also reuses the existing target and overwrites it in place. Use it after reviewing an arbitrary npm, local, archive, git, or marketplace source, or when intentionally reinstalling the same id. For routine upgrades of an already tracked npm plugin, prefer `openclaw plugins update <id-or-npm-spec>`.
+    `--force` confirms a non-ClawHub source without prompting. It does not bypass `security.installPolicy` or remaining install safety checks. When the plugin or hook pack is already installed, it also permits replacing the existing install. Use it after reviewing an arbitrary npm, local, archive, git, or marketplace source, or when intentionally reinstalling the same id. For routine upgrades of an already tracked npm plugin, prefer `openclaw plugins update <id-or-npm-spec>`.
+
+    Managed npm installs prepare the package and its dependencies in a private staging directory. Integrity and platform-package checks, install policy, and artifact consent finish before the installed directory is replaced. Rejection or cancellation before publication leaves the previous project unchanged. Upgrades retain generation paths that running plugins may still need for later imports.
+
+    For recognized npm project corruption or incomplete install metadata, OpenClaw quarantines the affected `node_modules`, lockfile, and shrinkwrap files outside the staging directory and attempts one rebuild. The reported quarantine path remains available after failure; failed recovery leaves the previous project unchanged.
 
     Reinstalling preserves an authored `plugins.entries.<id>.enabled: false`. `--force` does not approve capabilities: when no valid prior acceptance can be reused, review and accept them before the install commits. Use `openclaw plugins enable <id>` to activate the plugin afterward. See [Capability consent](/plugins/manage-plugins#capability-consent).
 
@@ -383,7 +395,7 @@ workspace plugin remains disabled or excluded from the allowlist. Linked install
 and explicit `plugins.load.paths` entries follow the normal policy for their
 resolved plugin origin. See
 [Configure plugin policy](/tools/plugin#configure-plugin-policy)
-and [Configuration reference](/gateway/configuration-reference#plugins).
+and [Configuration reference](/gateway/config-extensions#plugins).
 
 Use `--pin` on npm installs to save the resolved exact spec (`name@version`) in the managed plugin index while keeping the default behavior unpinned.
 </Note>

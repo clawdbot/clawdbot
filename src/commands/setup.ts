@@ -23,7 +23,7 @@ import type { OpenClawConfig } from "../config/types.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime, writeRuntimeJson } from "../runtime.js";
-import { createLazyImportLoader } from "../shared/lazy-promise.js";
+import { createLazyPromise } from "../shared/lazy-promise.js";
 import { shortenHomePath } from "../utils.js";
 
 type ConfigIO = {
@@ -55,33 +55,13 @@ type SetupCommandDeps = {
   replaceConfigFile?: ReplaceConfigFile;
 };
 
-type AgentWorkspaceModule = typeof import("../agents/workspace.js");
 type ConfigIOModule = typeof import("../config/config.js");
-type ConfigLoggingModule = typeof import("../config/logging.js");
-
-const agentWorkspaceModuleLoader = createLazyImportLoader<AgentWorkspaceModule>(
-  () => import("../agents/workspace.js"),
-);
-const configIOModuleLoader = createLazyImportLoader<ConfigIOModule>(
-  () => import("../config/config.js"),
-);
-const configLoggingModuleLoader = createLazyImportLoader<ConfigLoggingModule>(
-  () => import("../config/logging.js"),
-);
 
 // Keep setup's cold path small; config/workspace modules are loaded only when
 // their default dependency is actually needed.
-function loadAgentWorkspaceModule(): Promise<AgentWorkspaceModule> {
-  return agentWorkspaceModuleLoader.load();
-}
-
-function loadConfigIOModule(): Promise<ConfigIOModule> {
-  return configIOModuleLoader.load();
-}
-
-function loadConfigLoggingModule(): Promise<ConfigLoggingModule> {
-  return configLoggingModuleLoader.load();
-}
+const loadAgentWorkspaceModule = createLazyPromise(() => import("../agents/workspace.js"));
+const loadConfigIOModule = createLazyPromise(() => import("../config/config.js"));
+const loadConfigLoggingModule = createLazyPromise(() => import("../config/logging.js"));
 
 async function createDefaultConfigIO(): Promise<ConfigIO> {
   const { createConfigIO } = await loadConfigIOModule();

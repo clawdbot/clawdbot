@@ -249,20 +249,28 @@ describe("worker placement restart recovery", () => {
         await recovery.reconcileActive(ready.environmentId);
       }
 
+      expect.soft(destroy).toHaveBeenCalledOnce();
       expect(environments.get(ready.environmentId)).toMatchObject({
         state: "destroying",
         leaseId: ready.leaseId,
         destroyRequestedAtMs: support.testState.nowMs,
       });
+      destroy.mockClear();
+      await recovery.reconcileActive(ready.environmentId);
+      expect.soft(destroy).toHaveBeenCalledOnce();
+
+      destroy.mockClear();
       await expect(recovery.reclaim(REQUEST)).rejects.toThrow("provider deletion unavailable");
+      expect(destroy).toHaveBeenCalledOnce();
       expect(placements.get(REQUEST.sessionId)).toMatchObject({
         state: "failed",
         environmentId: ready.environmentId,
         recoveryError: expect.stringContaining("teardown failed"),
       });
 
-      destroy.mockResolvedValue(undefined);
+      destroy.mockClear().mockResolvedValue(undefined);
       await expect(recovery.reclaim(REQUEST)).resolves.toMatchObject({ state: "local" });
+      expect(destroy).toHaveBeenCalledOnce();
       expect(environments.get(ready.environmentId)).toMatchObject({
         state: "failed",
         leaseId: null,
@@ -369,9 +377,9 @@ describe("worker placement restart recovery", () => {
       ...(scenario.nodeBacked ? { nodeDeviceId: "durable-node", sshEndpoint: null } : {}),
     };
     vi.mocked(harness.environments.get).mockReturnValue(environment);
-    Object.assign(harness.environments, {
-      supportsProviderExecutionMode: vi.fn(() => scenario.providerSupportsMode),
-    });
+    vi.mocked(harness.environments.supportsProviderExecutionMode).mockReturnValue(
+      scenario.providerSupportsMode,
+    );
     harness.placements.seedActive(environment.ownerEpoch, scenario.executionMode);
 
     if (scenario.sweep) {
@@ -415,12 +423,9 @@ describe("worker placement restart recovery", () => {
         ...(nodeBacked ? { nodeDeviceId: "durable-node", sshEndpoint: null } : {}),
       };
       vi.mocked(harness.environments.get).mockReturnValue(environment);
-      const supportsProviderExecutionMode = vi.fn(() => true);
-      const supportsExecutionMode = vi.fn(() => false);
-      Object.assign(harness.environments, {
-        supportsExecutionMode,
-        supportsProviderExecutionMode,
-      });
+      const supportsProviderExecutionMode = vi.mocked(
+        harness.environments.supportsProviderExecutionMode,
+      );
       harness.placements.seedActive(environment.ownerEpoch, "remote-exec");
 
       await harness.service.reconcile();
@@ -430,7 +435,6 @@ describe("worker placement restart recovery", () => {
         executionMode: "remote-exec",
       });
       expect(supportsProviderExecutionMode).toHaveBeenCalledWith("durable-provider", "remote-exec");
-      expect(supportsExecutionMode).not.toHaveBeenCalled();
       expect(harness.environments.destroy).not.toHaveBeenCalled();
       if (nodeBacked) {
         expect(harness.environments.startTunnel).not.toHaveBeenCalled();

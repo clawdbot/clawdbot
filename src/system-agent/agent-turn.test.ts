@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { listAgentEntries } from "../agents/agent-scope-config.js";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
 import { fingerprintResolvedProviderAuth } from "../agents/execution-auth-binding.js";
@@ -12,16 +12,19 @@ import {
   createSystemAgentSession,
   type SystemAgentSession,
 } from "./agent-turn.js";
-import { runSystemAgentTurnWithDeps, type SystemAgentTurnDeps } from "./agent-turn.test-support.js";
-import { SystemAgentInferenceUnavailableError } from "./inference-error.js";
-import { resolveSystemAgentConfiguredRouteFromConfig } from "./inference-route.js";
 import {
-  createSystemAgentVerifiedInferenceTestFixture,
+  runSystemAgentTurnWithDeps as runSystemAgentTurnWithDepsImpl,
+  type SystemAgentTurnDeps,
+} from "./agent-turn.test-support.js";
+import { SystemAgentInferenceUnavailableError } from "./inference-error.js";
+import { resolveSystemAgentConfiguredRouteFromConfig as resolveSystemAgentConfiguredRouteFromConfigImpl } from "./inference-route.js";
+import {
+  createSystemAgentVerifiedInferenceTestFixture as createSystemAgentVerifiedInferenceTestFixtureImpl,
   installSystemAgentClaudeCliBackendTestFixture,
-  installSystemAgentPluginMetadataTestSnapshot,
+  createSystemAgentPluginMetadataTestSnapshot,
   type SystemAgentPluginMetadataTestSnapshot,
 } from "./system-agent.test-helpers.js";
-import { createSystemAgentVerifiedInferenceBinding } from "./verified-inference.js";
+import { createSystemAgentVerifiedInferenceBinding as createSystemAgentVerifiedInferenceBindingImpl } from "./verified-inference.js";
 
 vi.mock("../plugins/providers.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../plugins/providers.js")>()),
@@ -67,11 +70,32 @@ const tempDirs: string[] = [];
 let restoreCliBackendFixture: (() => void) | undefined;
 let pluginMetadataSnapshot: SystemAgentPluginMetadataTestSnapshot | undefined;
 
+const runSystemAgentTurnWithDeps: typeof runSystemAgentTurnWithDepsImpl = (...args) =>
+  pluginMetadataSnapshot!.run(() => runSystemAgentTurnWithDepsImpl(...args));
+
+const createSystemAgentVerifiedInferenceTestFixture: typeof createSystemAgentVerifiedInferenceTestFixtureImpl =
+  (...args) =>
+    pluginMetadataSnapshot!.run(
+      () => createSystemAgentVerifiedInferenceTestFixtureImpl(...args),
+      args[0],
+    );
+
+const resolveSystemAgentConfiguredRouteFromConfig: typeof resolveSystemAgentConfiguredRouteFromConfigImpl =
+  (...args) =>
+    pluginMetadataSnapshot!.run(
+      () => resolveSystemAgentConfiguredRouteFromConfigImpl(...args),
+      args[0],
+    );
+
+const createSystemAgentVerifiedInferenceBinding: typeof createSystemAgentVerifiedInferenceBindingImpl =
+  (...args) =>
+    pluginMetadataSnapshot!.run(() => createSystemAgentVerifiedInferenceBindingImpl(...args));
+
 function useTempStateDir(): string {
   const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-turn-"));
   tempDirs.push(stateDir);
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-  pluginMetadataSnapshot?.rebindForCurrentEnv();
+
   return stateDir;
 }
 
@@ -104,11 +128,7 @@ async function createVerifiedSession(config: OpenClawConfig) {
 }
 
 beforeAll(() => {
-  pluginMetadataSnapshot = installSystemAgentPluginMetadataTestSnapshot();
-});
-
-afterAll(() => {
-  pluginMetadataSnapshot?.restore();
+  pluginMetadataSnapshot = createSystemAgentPluginMetadataTestSnapshot();
 });
 
 beforeEach(() => {
@@ -119,7 +139,7 @@ afterEach(() => {
   restoreCliBackendFixture?.();
   restoreCliBackendFixture = undefined;
   vi.unstubAllEnvs();
-  pluginMetadataSnapshot?.rebindForCurrentEnv();
+
   vi.clearAllMocks();
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });

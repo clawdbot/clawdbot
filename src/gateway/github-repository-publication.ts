@@ -8,6 +8,7 @@ import type { PreparedGitHubPublicationIdentity } from "../agents/github-tool-id
 import type { SessionRepositoryWorkspaceRecord } from "../state/session-repository-workspaces.js";
 import { personalGitHubStatus, type PersonalGitHubAction } from "./github-personal-oauth.js";
 import {
+  assertPersonalGitHubPublicationReplay,
   bindPersonalGitHubPublicationSelection,
   preparePersonalGitHubPublicationSelection,
   type PersonalGitHubSessionAction,
@@ -516,17 +517,7 @@ export function createRepositoryGitHubPublicationCoordinator(
       action.assertCurrent();
       const existing = requestByKey(action.sessionId, input.idempotencyKey, action.owner);
       if (existing) {
-        if (
-          existing.connection_generation !== selected.generation ||
-          existing.identity_account_id !== selected.account.accountId ||
-          existing.identity_login.toLowerCase() !== selected.account.login.toLowerCase() ||
-          existing.title !== (input.title ?? null) ||
-          existing.body !== (input.body ?? null)
-        ) {
-          throw new Error(
-            "My GitHub publication idempotency key was reused with a different selection.",
-          );
-        }
+        assertPersonalGitHubPublicationReplay(existing, input, selected);
         return personalStatus(existing, action, action).result;
       }
       const bound = bindPersonalGitHubPublicationSelection(action, selected, {

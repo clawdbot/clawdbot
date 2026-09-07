@@ -25,7 +25,7 @@ import {
 import { matchesProviderPluginRef } from "../plugins/provider-registry-shared.js";
 import { prepareProviderExternalAuthWithPlugin } from "../plugins/provider-runtime.js";
 import { resolveManifestSyntheticAuthProviderRefState } from "../plugins/synthetic-auth.runtime.js";
-import { ensureAuthProfileStore } from "./auth-profiles/store.js";
+import { ensureAuthProfileStore } from "./auth-profiles/store-runtime.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import {
   isNonSecretApiKeyMarker,
@@ -381,7 +381,10 @@ async function runProviderCatalogWithTimeout(
     if (!active) {
       return undefined;
     }
-    const result = await runProviderCatalog(prepared);
+    const result = await runProviderCatalog({ ...prepared, isActive: catalogParams.isActive });
+    if (!active) {
+      return undefined;
+    }
     return prepared.finalizeCatalogResult ? prepared.finalizeCatalogResult(result) : result;
   };
   try {

@@ -603,6 +603,7 @@ export async function prepareGatewayLifecycle(params: {
     };
   };
   const closeOnStartupFailure = async () => {
+    runtime.startupTrace.close();
     const close = await prepareClose({ reason: "gateway startup failed" });
     await runGatewayShutdownSteps({
       steps: [

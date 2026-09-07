@@ -3,28 +3,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionsListResult } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
-import type { SkillWorkshopRevisionAdmissionOutcome } from "../../app/skill-workshop-revision-admissions.ts";
 import type { SkillWorkshopProposal } from "../../lib/skill-workshop/index.ts";
 import { settleLitElement } from "../../test-helpers/lit-settle.ts";
 import { createSkillWorkshopState, skillWorkshopRouteData } from "./proposals.ts";
-import type { SkillWorkshopRouteData, SkillWorkshopState } from "./proposals.ts";
+import type { SkillWorkshopRouteData } from "./proposals.ts";
 import { page as skillWorkshopRoute } from "./route.ts";
 import "./skill-workshop-page.ts";
-import { createContext, createRuntimeConfigStub } from "./skill-workshop-page.test-support.ts";
-
-type SkillWorkshopPageTestElement = HTMLElement & {
-  context: ApplicationContext;
-  data?: SkillWorkshopRouteData;
-  state?: SkillWorkshopState;
-  handleRevisionRequest: (
-    instructions: string,
-    proposal: SkillWorkshopProposal,
-    proposalAgentId: string,
-    expectedRevisionHash?: string,
-  ) => Promise<SkillWorkshopRevisionAdmissionOutcome>;
-  updateComplete: Promise<boolean>;
-  requestUpdate: () => void;
-};
+import {
+  createContext,
+  createRuntimeConfigStub,
+  type SkillWorkshopPageTestElement,
+} from "./skill-workshop-page.test-support.ts";
 
 const PAGE_LOAD_METHODS = ["skills.proposals.list", "skills.proposals.historyStatus"];
 const HISTORY_SCAN_METHODS = [...PAGE_LOAD_METHODS, "skills.proposals.historyScan"];
@@ -123,9 +112,6 @@ describe("SkillWorkshopPage lifecycle", () => {
     await settleLitElement(page);
     content.resolve({ ...skill, content: "# Release review\n\nCurrent checks are ready." });
     await waitForSkillWorkshop(() =>
-      expect(page.state?.skillWorkshopInstalledSelection.status).toBe("ready"),
-    );
-    await waitForSkillWorkshop(() =>
       expect(page.querySelector(".sw-collection__reader")?.textContent).toContain(
         "Current checks are ready.",
       ),
@@ -164,7 +150,7 @@ describe("SkillWorkshopPage lifecycle", () => {
     expect(page.querySelector("openclaw-modal-dialog")).toBeNull();
   });
 
-  it("keeps the complete suggested skill readable without guessing section names", async () => {
+  it("keeps complete suggested skills readable as sanitized Markdown", async () => {
     localStorage.setItem("openclaw:control-ui:skill-workshop-mode:v1", "suggestions");
     const previewText = `${"a".repeat(118)}😀trailing`;
     const proposal = createProposal({
@@ -172,7 +158,17 @@ describe("SkillWorkshopPage lifecycle", () => {
       slug: "proposal-utf16-preview",
       name: "UTF-16 preview",
       oneLine: "Preview boundary coverage",
-      body: `## Проверка\n\nRead this before sending.\n\n- **Required:** ${previewText}\n- Second step\n- Third step\n- Final step\n\n\`\`\`sh\nverify --all\n\`\`\``,
+      body: [
+        "## Проверка",
+        "Read this before sending.",
+        `- **Required:** ${previewText}\n- Second step\n- Third step\n- Final step`,
+        "```sh\nverify --all\n```",
+        "Read the [runbook](https://example.org/runbook).",
+        "| Check | Result |\n| --- | --- |\n| Export | Passed |",
+        "![Diagram](https://example.org/diagram.png)",
+        "[Unsafe](javascript:alert(1))",
+        '<img src="invalid" onerror="alert(1)">',
+      ].join("\n\n"),
       updatedAt: 0,
       origin: {
         agentId: "research",
@@ -198,6 +194,13 @@ describe("SkillWorkshopPage lifecycle", () => {
     expect(body?.querySelector("li")?.textContent).toBe(`Required: ${previewText}`);
     expect(body?.querySelectorAll("li")).toHaveLength(4);
     expect(body?.querySelector("pre")?.textContent).toContain("verify --all");
+    expect(body?.querySelector('a[href="https://example.org/runbook"]')?.textContent).toBe(
+      "runbook",
+    );
+    expect(body?.querySelector("table tbody td")?.textContent).toBe("Export");
+    expect(body?.querySelector('img[src="https://example.org/diagram.png"]')).toBeNull();
+    expect(body?.querySelector('a[href="https://example.org/diagram.png"]')).not.toBeNull();
+    expect(body?.querySelector('script, [onerror], a[href^="javascript:"]')).toBeNull();
   });
 
   it("forces a fresh proposal load when the gateway source changes", async () => {

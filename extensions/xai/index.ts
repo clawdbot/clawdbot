@@ -11,11 +11,13 @@ import {
   createCodeExecutionToolDefinition,
 } from "./code-execution-tool-shared.js";
 import {
-  createLazyXaiImageGenerationProvider,
-  createLazyXaiMediaUnderstandingProvider,
   createLazyXaiRealtimeTranscriptionProvider,
   createLazyXaiRealtimeVoiceProvider,
   createLazyXaiSpeechProvider,
+} from "./lazy-capability-provider-factories.js";
+import {
+  createLazyXaiImageGenerationProvider,
+  createLazyXaiMediaUnderstandingProvider,
   createLazyXaiVideoGenerationProvider,
 } from "./lazy-capability-providers.js";
 import { normalizeNativeXaiModelId } from "./model-compat.js";
@@ -204,6 +206,9 @@ export default defineSingleProviderPluginEntry({
       order: "simple",
       run: async (ctx) => {
         const auth = ctx.resolveProviderAuth(PROVIDER_ID);
+        if (auth.preparationFailed) {
+          return null;
+        }
         const { resolveApiKeyForProvider } =
           await import("openclaw/plugin-sdk/provider-auth-runtime");
         const runtimeAuth = await resolveApiKeyForProvider({
@@ -212,6 +217,8 @@ export default defineSingleProviderPluginEntry({
           ...(ctx.agentDir ? { agentDir: ctx.agentDir } : {}),
           ...(ctx.workspaceDir ? { workspaceDir: ctx.workspaceDir } : {}),
           ...(auth.profileId ? { profileId: auth.profileId, lockedProfile: true } : {}),
+          // Prepared direct auth must not reopen failed profile candidates.
+          ...(!auth.profileId && auth.mode !== "none" ? { allowAuthProfileFallback: false } : {}),
         }).catch(() => undefined);
         const selectedAuth =
           runtimeAuth?.mode === "oauth" && runtimeAuth.apiKey
@@ -276,9 +283,9 @@ export default defineSingleProviderPluginEntry({
     api.registerMediaUnderstandingProvider(createLazyXaiMediaUnderstandingProvider());
     api.registerVideoGenerationProvider(createLazyXaiVideoGenerationProvider());
     api.registerImageGenerationProvider(createLazyXaiImageGenerationProvider());
-    api.registerSpeechProvider(createLazyXaiSpeechProvider());
-    api.registerRealtimeTranscriptionProvider(createLazyXaiRealtimeTranscriptionProvider());
-    api.registerRealtimeVoiceProvider(createLazyXaiRealtimeVoiceProvider());
+    api.registerSpeechProvider(createLazyXaiSpeechProvider);
+    api.registerRealtimeTranscriptionProvider(createLazyXaiRealtimeTranscriptionProvider);
+    api.registerRealtimeVoiceProvider(createLazyXaiRealtimeVoiceProvider);
     api.registerTool((ctx) => createLazyCodeExecutionTool(ctx), { name: "code_execution" });
     api.registerTool((ctx) => createLazyXSearchTool(ctx), { name: "x_search" });
   },

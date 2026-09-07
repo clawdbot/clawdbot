@@ -43,6 +43,7 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
   setup: EmbeddedAttemptSetup;
   bootstrap: PreparedBootstrap;
   capabilityToolNames: Set<string>;
+  requireExplicitMessageTarget?: boolean;
   effectiveTools: PromptTools;
   isRawModelRun: boolean;
   modelToolsEnabled: boolean;
@@ -109,7 +110,8 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
 
   const activeProcessSessions = listActiveProcessSessionReferences({
     scopeKey: resolveProcessToolScopeKey({
-      sessionKey: params.setup.sandboxSessionKey,
+      sessionKey: attempt.sessionKey,
+      sessionId: attempt.sessionId,
       agentId: params.setup.sessionAgentId,
     }),
   });
@@ -256,6 +258,7 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
       reactionGuidance,
       promptMode: effectivePromptMode,
       sourceReplyDeliveryMode: attempt.sourceReplyDeliveryMode,
+      requireExplicitMessageTarget: params.requireExplicitMessageTarget,
       silentReplyPromptMode: attempt.silentReplyPromptMode,
       proactiveSubagentOrchestration: params.setup.proactiveSubagentOrchestration,
       acpEnabled: isAcpRuntimeSpawnAvailable({

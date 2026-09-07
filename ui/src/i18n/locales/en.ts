@@ -1112,6 +1112,7 @@ export const en: TranslationMap & {
     archivedBy: "Archived by {name}",
     archiveReason: "Archive reason",
     archiveReasonManual: "Archived manually",
+    archiveReasonAgeRetention: "Automatically archived by age retention",
     archiveReasonActiveSessionCap:
       "Automatically archived because the active-session limit was reached",
     archiveReasonStaleDashboard: "Automatically archived after dashboard inactivity",
@@ -1862,6 +1863,7 @@ export const en: TranslationMap & {
     retry: "Retry",
     applyChanges: "Apply changes",
     rawDiscard: "Discard",
+    reloadBlocked: "Finish saving or discard pending config changes before reloading.",
     rawDraftBlocksApply:
       "Unsaved raw config edits — save or discard them in the Raw editor before restarting.",
     rawDraftPendingFormTitle:
@@ -2407,7 +2409,7 @@ export const en: TranslationMap & {
     custodian: "System setup and care.",
     config: "Legacy settings route; opens Appearance.",
     profile: "Your display name, avatar, and identity on this gateway.",
-    communications: "Messages and text-to-speech settings.",
+    communications: "Messages, text-to-speech, and meeting capture settings.",
     appearance: "Theme and UI settings.",
     lobsterdex: "Every lobster palette that has visited this browser.",
     automation: "Commands, hooks, automations, and plugins.",
@@ -2428,6 +2430,11 @@ export const en: TranslationMap & {
     debug: "Snapshots, events, RPC.",
     logs: "Live gateway logs.",
     plugin: "Plugin-provided panel.",
+  },
+  meetingCapture: {
+    title: "Meeting capture",
+    description: "Choose which sources can save meeting notes on this Gateway.",
+    sources: "Auto-start sources",
   },
   cloudWorkersPage: {},
   portalsPage: {
@@ -2455,7 +2462,7 @@ export const en: TranslationMap & {
     missingAuth: "No provider credential is configured for this model. Set it up in Model Setup.",
     heading: "Connect a verified AI model",
     intro:
-      "OpenClaw checks the AI access available on this Gateway and verifies the exact model before it enables conversations.",
+      "OpenClaw discovers AI access on this Gateway. Choose a provider to begin; nothing is selected, tested, installed, or saved automatically.",
     required: {
       title: "No AI provider configured",
       body: "We couldn't find a provider and model configured for this agent. Choose a supported connection; OpenClaw will test it before enabling chat.",
@@ -2467,8 +2474,8 @@ export const en: TranslationMap & {
     checkAgain: "Check again",
     recovery: {
       unknown:
-        "The previous activation is unresolved. You can verify and use the selected model, or check again after the setup attempt has finished. No activation will be repeated automatically.",
-      wait: "The previous setup attempt may still be running. Wait for its bounded setup window to finish, then choose Check again to retry.",
+        "The previous activation is unresolved. Check again refreshes the current setup without repeating it. If a model is available, you can verify and use it.",
+      wait: "The previous setup attempt may still be running. Check again can refresh its result. If no model appears, check again after {time} to choose a provider.",
       useCurrent: "Verify & use selected model",
     },
     verify: {
@@ -2496,6 +2503,13 @@ export const en: TranslationMap & {
       retry: "Retry test",
       testingButton: "Testing…",
     },
+    nativeDiscovery: {
+      title: "Discover existing conversations",
+      body: "Show native assistant conversations from this Gateway host in OpenClaw. This is discovery, not an import or copy.",
+      enable: "Show existing native conversations",
+      decline:
+        "Leave unchecked to keep native session catalogs off when you connect your AI provider. Existing installations are not changed.",
+    },
     empty: {
       title: "Recommended installs",
       intro: "No existing AI access was detected. Install one of these tools, then check again.",
@@ -2506,7 +2520,9 @@ export const en: TranslationMap & {
       useApiKey: "Use API key",
     },
     signIn: {
-      title: "Sign in with a provider",
+      title: "Connect an AI provider",
+      install: "Review & install",
+      custom: "Set up endpoint",
       signIn: "Sign in",
       pair: "Pair",
       more: "More sign-in options",
@@ -2581,8 +2597,10 @@ export const en: TranslationMap & {
       copy: "Copy",
       expires: "Expires in {count} minutes",
       cancelled: "Provider sign-in was cancelled.",
+      finishingStep: "Setup is finishing the current step. You can cancel when it finishes.",
+      cancelFailed: "Could not confirm cancellation: {error}",
       sessionExpired:
-        "This setup session expired after the Gateway restarted. Close this dialog, then start model setup again.",
+        "The Gateway no longer has this setup session. It may already have finished. Close this dialog and choose Check again to review the current setup.",
       notComplete: "Sign-in finished, but model setup is not complete yet.",
     },
   },
@@ -3408,7 +3426,7 @@ export const en: TranslationMap & {
   githubConnections: {
     title: "GitHub connections",
     description:
-      "Choose the account for each purpose. Your verified sign-in identity and co-author credit stay separate.",
+      "Publishing access is separate from your verified GitHub sign-in and co-author credit. Connect an account here to publish with it.",
     mine: "My GitHub",
     system: "System GitHub",
     personalDescription: "Your account for explicitly selected Publish PR actions.",
@@ -3418,7 +3436,10 @@ export const en: TranslationMap & {
     signInRequired: "Personal sign-in required",
     connected: "Connected",
     disconnected: "Not connected",
-    notLoaded: "Not verified",
+    notLoaded: "Status not loaded",
+    checking: "Checking connection…",
+    statusUnavailable: "Connection status unavailable",
+    manage: "Manage connections",
     reconnectRequired: "Reconnect required",
     connectMine: "Connect My GitHub",
     changeMine: "Change My GitHub",
@@ -3455,8 +3476,6 @@ export const en: TranslationMap & {
       unidentified:
         "This connection has no personal profile; sign in through Cloudflare Access, Tailscale Serve, or a trusted proxy to set a name and avatar.",
       writeRequired: "Profile editing requires operator.write access.",
-      notSet: "Identity is not set.",
-      setIdentity: "Set identity",
       avatar: "Avatar",
       avatarDescription: "PNG, JPEG, or WebP. Images are resized to 256 × 256 or smaller.",
       chooseAvatar: "Choose image",
@@ -3466,7 +3485,8 @@ export const en: TranslationMap & {
       linkedEmails: "Linked emails",
       linkedEmailsDescription: "Email addresses connected to this profile.",
       githubAccount: "GitHub account",
-      githubAccountDescription: "Automatically verified from your GitHub-backed sign-in.",
+      githubAccountDescription:
+        "Verified sign-in identity, not permission to publish. Manage publishing access under GitHub connections below.",
       githubVerified: "Verified from your GitHub-backed sign-in",
       githubUnavailable: "Unavailable",
       githubUnavailableDescription: "GitHub-backed sign-in is unavailable. Refresh to retry.",
@@ -3542,7 +3562,6 @@ export const en: TranslationMap & {
       aria: "Workshop sections",
       skills: "Skills",
       suggestions: "Suggestions",
-      history: "History",
     },
     collection: {
       search: "Search installed skills\u2026",
@@ -3564,55 +3583,24 @@ export const en: TranslationMap & {
       noMatchTitle: "No skills match that search",
       noMatchBody: "Clear the search or try another word.",
       clearSearch: "Clear search",
-      pickTitle: "Pick a skill to read it",
-      pickBody: "Select an installed skill to read its complete instructions.",
-      viewHistory: "View history",
-    },
-    records: {
-      note: "A record of past suggestions. Nothing here changes your installed skills.",
-      filterAria: "Filter records by outcome",
-      all: "All records",
-      emptyTitle: "No records yet",
-      emptyBody: "Past decisions and outdated drafts appear here.",
-      emptyAppliedTitle: "Nothing applied yet",
-      emptyAppliedBody: "Suggestions you apply are recorded here with what changed.",
-      emptyRejectedTitle: "Nothing rejected yet",
-      emptyRejectedBody: "Suggestions you turn down are recorded here.",
-      emptyQuarantinedTitle: "Nothing quarantined",
-      emptyQuarantinedBody: "Suggestions the safety scanner held back are recorded here.",
-      emptyStaleTitle: "Nothing stale",
-      emptyStaleBody: "Suggestions that can no longer apply cleanly are recorded here.",
-    },
-    status: {
-      pending: "Pending",
-      applied: "Applied",
-      rejected: "Rejected",
-      quarantined: "Quarantined",
-      stale: "Stale",
+      pickTitle: "Pick a skill",
+      pickBody: "Select a skill to see its instructions or changes.",
+      changes: "Instruction changes",
+      savedOn: "Changes since {date}",
+      changedSince: "Changed since {date}",
+      noChanges: "No instruction changes",
+      savedVersion: "Saved version → current",
+      savedNote:
+        "Compares saved instructions with the installed skill. Intermediate edits and supporting files are not shown.",
+      noSavedVersion: "No saved version is available to compare with this skill.",
+      savedVersionError: "Could not load saved versions. Refresh to try again.",
+      unchanged: "The instructions match this saved version.",
+      diffTruncated: "This diff is shortened. Some changes may not be shown.",
     },
     recency: {
       today: "Today",
       yesterday: "Yesterday",
       earlier: "Earlier",
-    },
-    diff: {
-      changes: "Changes",
-      fullBody: "Full body",
-      viewLabel: "Revision view",
-      unchanged: "This revision left the skill body unchanged.",
-      loadingPrevious: "Loading the previous revision\u2026",
-      previousUnavailable: "The previous revision is unavailable, so this is the full body.",
-      tooLarge: "This comparison is too large to show here. Switch to Full body to read it.",
-      truncated:
-        "This comparison is truncated. Changes and statistics may be incomplete. Switch to Full body to review the complete revision.",
-    },
-    applied: {
-      history: "Revisions",
-      revision: "{count} revision",
-      revisions: "{count} revisions",
-      create: "Create",
-      update: "Update",
-      version: "v{version}",
     },
     previewContext: "in {slug}",
     actions: {
@@ -4800,6 +4788,20 @@ export const en: TranslationMap & {
       selected: "Member",
       noPeople: "No paired people found.",
       readOnlyNotice: "Only the session owner and members can act in this session.",
+      publicAccess: "Public access",
+      publicIndicator: "Public",
+      worldReadable: "Public — anyone can read without signing in.",
+      notPublic: "Only signed-in people with access can view this session.",
+      enablePublicAccess: "Enable public access…",
+      disablePublicAccess: "Disable public access",
+      copyPublicLink: "Copy public link",
+      publicConfirmTitle: "Make this session world-readable?",
+      publicConfirmMessage:
+        "Anyone with the public link can read existing and future conversation text without signing in. Tools, reasoning, files, and widgets are excluded. Review the conversation for private information before sharing. Disabling access cannot recall copies already downloaded.",
+      publicConfirmEnable: "Make public",
+      publicEnabled: "Public access enabled. Copy the public link from Session sharing.",
+      publicDisabled: "Public access disabled.",
+      publicUnavailable: "Public access requires a saved, non-incognito session.",
     },
     sessionSuggestions: {
       suggest: "Suggest",

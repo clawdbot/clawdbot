@@ -15,7 +15,7 @@ import { createWindowsTaskAutoStartRecovery } from "./update-command-windows-tas
 
 const mocks = vi.hoisted(() => ({
   stop: vi.fn(),
-  restart: vi.fn(),
+  restart: vi.fn<typeof import("./update-command-service.js").maybeRestartService>(),
   reachable: vi.fn(),
   execSchtasks: vi.fn<typeof import("../../daemon/schtasks-exec.js").execSchtasks>(),
 }));
@@ -26,7 +26,7 @@ vi.mock("./update-command-service-maintenance.js", async (importOriginal) => ({
 }));
 vi.mock("./update-command-service-command.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./update-command-service-command.js")>()),
-  runUpdatedInstallGatewayCommand: async () => true,
+  runUpdatedInstallGatewayCommand: async () => "accepted",
 }));
 vi.mock("./update-command-service.js", () => ({
   maybeStopManagedServiceBeforeMutableUpdate: mocks.stop,
@@ -41,6 +41,7 @@ vi.mock("./update-command-service.js", () => ({
 vi.mock("../daemon-cli/restart-health-probe.js", () => ({
   confirmGatewayReachable: mocks.reachable,
 }));
+import * as packageModule from "./update-command-package.js";
 import { rollbackFailedUpdate } from "./update-command-rollback.js";
 import { completeUpdateCommandRun } from "./update-command-run.js";
 import { resolveUpdateResultNextAction } from "./update-recovery-guidance.js";
@@ -48,7 +49,10 @@ import { resolveUpdateResultNextAction } from "./update-recovery-guidance.js";
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 let candidateRoot: string;
 let previousRoot: string;
-afterEach(() => vi.unstubAllEnvs());
+afterEach(() => {
+  vi.unstubAllEnvs();
+  vi.restoreAllMocks();
+});
 async function readPreviousConfig(env: NodeJS.ProcessEnv) {
   const snapshot = await createConfigIO({ env, pluginValidation: "skip" }).readConfigFileSnapshot();
   return snapshot.sourceConfigBeforeMigrations ?? snapshot.sourceConfig;
@@ -96,7 +100,7 @@ describe("verified package rollback", () => {
     });
     mocks.restart.mockImplementation(async ({ onVerified }) => {
       onVerified?.(125);
-      return true;
+      return "ok";
     });
   });
   it.each([
@@ -177,7 +181,7 @@ describe("verified package rollback", () => {
       });
       const nextAction = resolveUpdateResultNextAction({
         result: outcome.result,
-        managedGatewayStopped: !reachable,
+        serviceRunning: reachable,
         env,
       });
       expect(renderUpdateRunReport(row, { nextAction }).markdown).toContain(
@@ -249,7 +253,7 @@ describe("verified package rollback", () => {
         if (running.code !== 0) {
           throw new Error(running.stderr);
         }
-        return healthy;
+        return healthy ? "ok" : "restart-health-failed";
       });
       try {
         const outcome = await rollbackFailedUpdate({
@@ -298,6 +302,21 @@ describe("verified package rollback", () => {
   );
   it.each([
     { change: "none", previousVerified: true, restored: true, service: "stopped" },
+    { change: "new-agent", previousVerified: true, restored: true, service: "stopped" },
+    { change: "new-agent-foreign", previousVerified: true, restored: false, service: "stopped" },
+    {
+      change: "new-agent-previous-incompatible",
+      previousVerified: true,
+      restored: false,
+      service: "stopped",
+    },
+    {
+      change: "new-agent-previous-unknown",
+      previousVerified: true,
+      restored: false,
+      service: "stopped",
+    },
+    { change: "identity-read-failed", previousVerified: true, restored: true, service: "stopped" },
     { change: "shared", previousVerified: true, restored: false, service: "stopped" },
     { change: "agent", previousVerified: true, restored: false, service: "stopped" },
     { change: "during-stop", previousVerified: true, restored: false, service: "stopped" },
@@ -314,8 +333,13 @@ describe("verified package rollback", () => {
       const shared = path.join(stateDir, "state/openclaw.sqlite");
       const agent = path.join(stateDir, "agents/main/agent/openclaw-agent.sqlite");
       setVersion(shared, 7);
-      setVersion(agent, 3);
+      if (!change.startsWith("new-agent")) {
+        setVersion(agent, 3);
+      }
       const schemaVersions = await readUpdateStateSchemaVersions({ stateDir, config: {} });
+      if (change.startsWith("new-agent")) {
+        setVersion(agent, change === "new-agent-foreign" ? 4 : 3);
+      }
       if (change === "shared") {
         setVersion(shared, 8);
       }
@@ -346,11 +370,24 @@ describe("verified package rollback", () => {
         exitCode: 0,
         durationMs: 1,
       }));
+      if (change === "identity-read-failed") {
+        vi.spyOn(packageModule, "readPackageUpdateIdentity").mockRejectedValueOnce(
+          new Error("Diagnostic identity read failed after verified restoration"),
+        );
+      }
       const outcome = await rollbackFailedUpdate({
         result,
         previousRoot,
         nodeRunner: process.execPath,
         schemaVersions,
+        candidateSchemaVersions: { state: 7, agent: 3 },
+        previousSchemaVersions:
+          change === "new-agent-previous-unknown"
+            ? undefined
+            : {
+                state: 7,
+                agent: change === "new-agent-previous-incompatible" ? 2 : 3,
+              },
         previousVerified,
         packageTransaction: { backupRoot: "/backup", rollback, complete: vi.fn() },
         config,
@@ -375,7 +412,9 @@ describe("verified package rollback", () => {
         timeoutMs: 1_000,
       });
       expect(outcome.rolledBack).toBe(restored);
-      expect(rollback, JSON.stringify(outcome)).toHaveBeenCalledTimes(change === "none" ? 1 : 0);
+      expect(rollback, JSON.stringify(outcome)).toHaveBeenCalledTimes(
+        change === "none" || change === "identity-read-failed" || change === "new-agent" ? 1 : 0,
+      );
       expect(mocks.restart).toHaveBeenCalledTimes(restored ? 1 : 0);
       if (service !== "stopped") {
         expect(mocks.stop).not.toHaveBeenCalled();
@@ -406,7 +445,7 @@ describe("verified package rollback", () => {
         );
       } else {
         expect(outcome.result.reason).toBe(
-          change === "unknown-runtime"
+          change === "unknown-runtime" || change.startsWith("new-agent-previous-")
             ? "rollback-state-unverified"
             : previousVerified
               ? "state-migrated-no-rollback"
@@ -414,6 +453,10 @@ describe("verified package rollback", () => {
         );
         if (!previousVerified) {
           expect(outcome.result).toMatchObject({ root: previousRoot, after: result.before });
+        }
+        if (change.startsWith("new-agent-previous-")) {
+          expect(outcome.result).toMatchObject({ root: candidateRoot, after: result.after });
+          expect(mocks.stop).not.toHaveBeenCalled();
         }
       }
     },
@@ -466,10 +509,11 @@ describe("verified package rollback", () => {
     "restored-shims-failed",
     "partial-restore",
     "restart-unhealthy",
+    "restart-refused",
     "restart-threw",
   ] as const)("retains active installation identity after %s", async (failure) => {
     const restoredPackage = failure !== "source-failed" && failure !== "partial-restore";
-    const rollbackSucceeded = failure === "restart-unhealthy" || failure === "restart-threw";
+    const rollbackSucceeded = failure.startsWith("restart-");
     const activePackageRoot =
       failure === "partial-restore" ? null : restoredPackage ? previousRoot : candidateRoot;
     const stateDir = dirs.make("rollback-source-failed-");
@@ -489,7 +533,9 @@ describe("verified package rollback", () => {
     if (failure === "restart-threw") {
       mocks.restart.mockRejectedValueOnce(new Error("Service restart transport failed"));
     } else {
-      mocks.restart.mockResolvedValueOnce(false);
+      mocks.restart.mockResolvedValueOnce(
+        failure === "restart-unhealthy" ? "restart-health-failed" : "failed",
+      );
     }
     const outcome = await rollbackFailedUpdate({
       result,

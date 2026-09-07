@@ -354,6 +354,9 @@ module.exports = {
             if (mode !== "acquired") {
               activateAmbient();
             }
+            // Loading the public SDK must retain the host's registered metadata owners.
+            const metadataReaders = readHostMetadataReaders();
+            expect(metadataReaders.every((reader) => typeof reader === "function")).toBe(true);
             const prepared = await prepareSimpleCompletionModel({
               cfg,
               agentId: "main",
@@ -388,6 +391,10 @@ module.exports = {
             }
             expect(prepared.model.api).toBe("openai-completions");
             expect(isColdPluginRuntimeLoaded(unrelated)).toBe(false);
+            expect(
+              readHostMetadataReaders(),
+              "public SDK loading must preserve registered host metadata readers",
+            ).toEqual(metadataReaders);
           } finally {
             lease?.release();
           }
@@ -544,3 +551,10 @@ module.exports = {
     }
   });
 });
+
+function readHostMetadataReaders(): readonly unknown[] {
+  const readers = Reflect.get(globalThis, Symbol.for("openclaw.pluginMetadataSnapshotReaders")) as
+    | Record<string, unknown>
+    | undefined;
+  return [readers?.getCurrentPluginMetadataSnapshot, readers?.resolvePluginMetadataSnapshot];
+}

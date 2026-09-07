@@ -119,6 +119,7 @@ the focused test subpaths above.
 | `createProviderUsageFetch`                                                | Build provider usage fetch fixtures. Import from `plugin-sdk/test-env`                                                                      |
 | `useFrozenTime` / `useRealTime`                                           | Freeze and restore timers for time-sensitive tests. Import from `plugin-sdk/test-env`                                                       |
 | `createCliRuntimeCapture`                                                 | Capture CLI runtime output in tests. Import from `plugin-sdk/test-fixtures`                                                                 |
+| `findSourceImportBackedges`                                               | Asynchronously inspect repository-source static import closures for forbidden dependencies. Import from `plugin-sdk/test-fixtures`          |
 | `runDirectImportSmoke`                                                    | Run a plugin public-surface import in an isolated Node process. Import from `plugin-sdk/test-fixtures`                                      |
 | `importFreshModule`                                                       | Import an ESM module with a fresh query token to bypass module cache. Import from `plugin-sdk/test-fixtures`                                |
 | `bundledPluginRoot` / `bundledPluginFile`                                 | Resolve bundled plugin source or dist fixture paths. Import from `plugin-sdk/test-fixtures`                                                 |

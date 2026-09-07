@@ -283,7 +283,7 @@ Widget documents use restrictive Content Security Policies. Inline style and scr
 
 The Control UI's widget content iframe always omits `allow-same-origin`, even when the global embed mode is `trusted`, so widget scripts cannot read the parent application origin. With scripts enabled, the outer proxy runs on a dedicated origin and relays messages across the frame boundary. In `strict` mode, the Control UI still reads the document through its authenticated Gateway connection, but renders it without scripts or scripted interactions. Native clients use isolated, nonpersistent web views and block navigation away from the hosted widget. The core document host also serves widgets with a `Content-Security-Policy: sandbox allow-scripts` response header, so direct rendering still runs the widget in an opaque origin instead of an application origin. Only render widget code you are willing to execute in that isolated frame.
 
-The iframe also follows [`gateway.controlUi.embedSandbox`](/web/control-ui#hosted-embeds). The default `scripts` tier supports interactive widgets while preserving origin isolation.
+The iframe also follows [`gateway.controlUi.embedSandbox`](/web/control-ui/chat#hosted-embeds). The default `scripts` tier supports interactive widgets while preserving origin isolation.
 
 The accepted WebRTC data-channel egress residual is documented in [Dashboard Architecture](/web/dashboard-architecture#modeled-residual-webrtc-data-channels).
 
@@ -291,7 +291,7 @@ Canvas retains at most 32 widgets per session (or per agent when no session is a
 
 ## Related
 
-- [Control UI hosted embeds](/web/control-ui#hosted-embeds)
+- [Control UI hosted embeds](/web/control-ui/chat#hosted-embeds)
 - [Discord Activities](/channels/discord-activities)
 - [macOS widget panel](/platforms/mac/canvas)
 - [Gateway protocol client capabilities](/gateway/protocol#client-capabilities)

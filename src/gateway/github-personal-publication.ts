@@ -39,6 +39,28 @@ export type PersonalGitHubSessionAction = PersonalGitHubAction & {
 };
 type Selection = { generation: string; account: { accountId: number; login: string } };
 
+export function assertPersonalGitHubPublicationReplay(
+  existing: {
+    connection_generation: string | null;
+    identity_account_id: number;
+    identity_login: string;
+    title: string | null;
+    body: string | null;
+  },
+  input: Pick<SessionGitHubPublishParams, "title" | "body">,
+  selected: Selection,
+): void {
+  if (
+    existing.connection_generation !== selected.generation ||
+    existing.identity_account_id !== selected.account.accountId ||
+    existing.identity_login.toLowerCase() !== selected.account.login.toLowerCase() ||
+    existing.title !== (input.title ?? null) ||
+    existing.body !== (input.body ?? null)
+  ) {
+    throw new Error("My GitHub publication idempotency key was reused with a different selection.");
+  }
+}
+
 export function bindPersonalGitHubPublicationSelection(
   action: PersonalGitHubSessionAction,
   selected: Selection,
@@ -279,17 +301,7 @@ export function createPersonalGitHubPublicationCoordinator(
         });
       const existing = readRequest();
       if (existing) {
-        if (
-          existing.connection_generation !== selected.generation ||
-          existing.identity_account_id !== selected.account.accountId ||
-          existing.identity_login.toLowerCase() !== selected.account.login.toLowerCase() ||
-          existing.title !== (input.title ?? null) ||
-          existing.body !== (input.body ?? null)
-        ) {
-          throw new Error(
-            "My GitHub publication idempotency key was reused with a different selection.",
-          );
-        }
+        assertPersonalGitHubPublicationReplay(existing, input, selected);
         action.assertCurrent();
         return status(existing, action, action).result;
       }

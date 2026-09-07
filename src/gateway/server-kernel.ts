@@ -3,6 +3,7 @@ import { isNixMode } from "../config/paths.js";
 import { clearGatewayAgentCliShim } from "../infra/openclaw-cli-shim.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { createSubsystemLogger, runtimeForLogger } from "../logging/subsystem.js";
+import { captureRemoteModelCatalogStartupSnapshot } from "../model-catalog/remote-overlay.js";
 import { retainGatewayPluginMetadata } from "../plugins/plugin-metadata-lifecycle.js";
 import { clearSecretsRuntimeSnapshotState } from "../secrets/runtime-state.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
@@ -136,10 +137,13 @@ export async function createGatewayKernel(
     throw new Error("Gateway boot ID must contain 1 to 96 characters");
   }
   const bootId = suppliedBootId ?? randomUUID();
+  // Capture before bootstrap yields or creates workers; concurrent downloads need a restart.
+  captureRemoteModelCatalogStartupSnapshot();
   ensureOpenClawCliOnPath();
   const releasePluginMetadata = retainGatewayPluginMetadata();
   let lifecycleRuntime: Awaited<ReturnType<typeof prepareGatewayLifecycle>> | undefined;
   let kernelState: Awaited<ReturnType<typeof prepareGatewayKernelState>> | undefined;
+  let closeStartupTrace: (() => void) | undefined;
   try {
     const bootstrap = await prepareGatewayServerBootstrap({
       port,
@@ -149,6 +153,7 @@ export async function createGatewayKernel(
       loadWorkerEnvironmentStartupModule,
       formatRuntimeGatewayAuthTokenWarning,
     });
+    closeStartupTrace = bootstrap.startupTrace.close;
     const runtime = await bootstrap.startupTrace.measure("gateway.kernel-state", () =>
       prepareGatewayKernelState({
         bootstrap,
@@ -218,6 +223,7 @@ export async function createGatewayKernel(
         // The lifecycle releases metadata only after its required joins succeed.
         await lifecycleRuntime.closeOnStartupFailure();
       } else {
+        closeStartupTrace?.();
         kernelState?.mentionInbox.dispose();
         clearGatewayAgentCliShim();
         clearSecretsRuntimeSnapshotState();

@@ -12,7 +12,7 @@ import {
   resolveInlineProviderApiKeyUsageId,
   type AuthProfileFailureReason,
 } from "./auth-profiles.js";
-import { ensureAuthProfileStore, saveAuthProfileStore } from "./auth-profiles/store.js";
+import { ensureAuthProfileStore, saveAuthProfileStore } from "./auth-profiles/store-runtime.js";
 import type { EmbeddedRunAttemptResult } from "./embedded-agent-runner/run/types.js";
 import type { AgentHarness } from "./harness/types.js";
 import {

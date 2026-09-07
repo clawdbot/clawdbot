@@ -420,7 +420,7 @@ function* openOpenClawAgentDatabaseSteps(
         env: leaseEnvironment,
       });
   }
-  const finishPhase = startAgentDatabaseOpenTiming(agentId, pathname);
+  const finishPhase = startAgentDatabaseOpenTiming(agentId, pathname, pending ? "async" : "sync");
   let openedDb: DatabaseSync | undefined;
   let openedDatabase: OpenClawAgentDatabase | undefined;
   let openedWalMaintenance: SqliteWalMaintenance | undefined;

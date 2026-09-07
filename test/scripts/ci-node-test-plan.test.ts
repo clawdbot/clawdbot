@@ -54,6 +54,7 @@ type VitestConfig = {
 };
 
 const PLUGIN_PRERELEASE_NPM_SPEC_TEST = "src/plugins/install.npm-spec.test.ts";
+const PRIVATE_QA_TOOLING_TEST = "test/e2e/qa-lab/runtime/gateway-codex-delivery-cache.test.ts";
 const DEFAULT_NODE_TEST_RUNNER = "blacksmith-8vcpu-ubuntu-2404";
 const BUNDLED_NODE_TEST_RUNNER = "blacksmith-4vcpu-ubuntu-2404";
 const EXTRA_LARGE_NODE_TEST_RUNNER = "blacksmith-32vcpu-ubuntu-2404";
@@ -327,6 +328,12 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       const target = createNodeTestShards().find((shard) =>
         shard.includePatterns?.includes(consumer),
       )!;
+      const runtimeConsumers = target.includePatterns!.filter(
+        (file) => file === consumer || file === PRIVATE_QA_TOOLING_TEST,
+      );
+      const buildMode = runtimeConsumers.includes(PRIVATE_QA_TOOLING_TEST)
+        ? "private-qa"
+        : "runtime";
       const originalShards = fullSuiteVitestShards.slice();
       // Exercise this owner's split without consuming unrelated suite families' job budget.
       const fixtureShards = originalShards
@@ -348,15 +355,22 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         const groups = plan
           .flatMap((job) => job.groups)
           .filter((group) => group.shard_name.startsWith(`${target.shardName}-hosted-`));
-        // Runtime preparation stays in its own child; the remaining test
-        // cost needs three stripes on both runner profiles.
+        // Runtime consumers share one isolated build child; its fixed build may
+        // exceed the cap. Remaining work needs three stripes on both profiles.
         expect(groups).toHaveLength(4);
         if (runnerBackend === "github") {
           expect(
             plan
               .filter((job) => job.predictedSeconds! > 150)
               .every(
-                (job) => job.groups.length === 1 && job.groups[0]!.includePatterns?.length === 1,
+                (job) =>
+                  job.groups.length === 1 &&
+                  (job.groups[0]!.includePatterns?.length === 1 ||
+                    (job.pretestBuildMode === buildMode &&
+                      job.groups[0]!.includePatterns?.length === runtimeConsumers.length &&
+                      job.groups[0]!.includePatterns?.every((file) =>
+                        runtimeConsumers.some((runtimeConsumer) => runtimeConsumer === file),
+                      ))),
               ),
           ).toBe(true);
         }
@@ -367,7 +381,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
               pretestBuildMode,
               includePatterns,
             })),
-        ).toEqual([{ pretestBuildMode: "runtime", includePatterns: [consumer] }]);
+        ).toEqual([{ pretestBuildMode: buildMode, includePatterns: runtimeConsumers }]);
         for (const job of plan) {
           if (
             job.groups.some(
@@ -1152,24 +1166,28 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           }),
         );
         const runtimeCliJobs = cliProcessJobs.filter((shard) => shard.pretestBuildMode);
-        expect(runtimeCliJobs).toEqual(
-          expect.arrayContaining(
-            [
-              "src/cli/acp-cli-exit.process.test.ts",
-              "src/cli/update-dry-run-state.process.test.ts",
-            ].map((file) =>
-              expect.objectContaining({
-                pretestBuildMode: "runtime",
-                groups: expect.arrayContaining([
-                  expect.objectContaining({
-                    pretestBuildMode: "runtime",
-                    includePatterns: expect.arrayContaining([file]),
-                  }),
-                ]),
-              }),
+        for (const file of [
+          "src/cli/acp-cli-exit.process.test.ts",
+          "src/cli/update-dry-run-state.process.test.ts",
+        ]) {
+          const job = expectDefined(
+            runtimeCliJobs.find((shard) =>
+              shard.groups.some((group) => group.includePatterns?.includes(file)),
             ),
-          ),
-        );
+            `runtime CLI owner for ${file}`,
+          );
+          expect(job.pretestBuildMode).toBe(
+            job.groups.some((group) => group.includePatterns?.includes(PRIVATE_QA_TOOLING_TEST))
+              ? "private-qa"
+              : "runtime",
+          );
+          expect(job.groups).toContainEqual(
+            expect.objectContaining({
+              pretestBuildMode: "runtime",
+              includePatterns: expect.arrayContaining([file]),
+            }),
+          );
+        }
         for (const shard of cliProcessJobs) {
           // The gateway files retain 200s budgets. Hosted runtime preparation
           // alone costs 160s. Only complete non-build hybrid CLI bins use 250s.
@@ -1938,6 +1956,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       "src/gateway/gateway-active-memory.test.ts",
       "src/gateway/gateway-concurrent-streams.test.ts",
       "src/gateway/gateway-cron-process-identity.windows.test.ts",
+      "src/gateway/gateway-route-model-reuse.test.ts",
       "src/gateway/server.config-patch.test.ts",
     ];
     const full = defaultShards;
@@ -1948,20 +1967,27 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           "configs" in shard ? shard.configs : shard.groups.flatMap((group) => group.configs),
         ),
       ).not.toContain(qaConfig);
-      for (const runtimeTarget of runtimeTargets) {
-        const owner = shards.find((shard) =>
-          ("configs" in shard ? [shard] : shard.groups).some((group) =>
-            group.includePatterns?.includes(runtimeTarget),
+      for (const runtimeTarget of [...runtimeTargets, PRIVATE_QA_TOOLING_TEST]) {
+        const owner = expectDefined(
+          shards.find((shard) =>
+            ("configs" in shard ? [shard] : shard.groups).some((group) =>
+              group.includePatterns?.includes(runtimeTarget),
+            ),
           ),
+          `runtime owner for ${runtimeTarget}`,
         );
-        expect(owner?.pretestBuildMode, runtimeTarget).toBe("runtime");
-        if (owner && "groups" in owner) {
-          expect(
-            owner.groups?.find((group) => group.includePatterns?.includes(runtimeTarget))
-              ?.pretestBuildMode,
-            runtimeTarget,
-          ).toBe("runtime");
-        }
+        const groups = "configs" in owner ? [owner] : owner.groups;
+        // A shared build takes the strongest requirement of its complete selection.
+        const containsPrivateQa = groups.some((group) =>
+          group.includePatterns?.includes(PRIVATE_QA_TOOLING_TEST),
+        );
+        expect(owner.pretestBuildMode, runtimeTarget).toBe(
+          containsPrivateQa ? "private-qa" : "runtime",
+        );
+        const group = groups.find((entry) => entry.includePatterns?.includes(runtimeTarget));
+        expect(group?.pretestBuildMode, runtimeTarget).toBe(
+          group?.includePatterns?.includes(PRIVATE_QA_TOOLING_TEST) ? "private-qa" : "runtime",
+        );
       }
     }
 
@@ -2049,13 +2075,14 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     );
     expect(processProofStripes).not.toContain(undefined);
     expect(new Set(processProofStripes).size).toBe(processProofFiles.length);
-    expect(
-      stripes.find((stripe) =>
-        stripe.includePatterns?.includes(
-          "test/e2e/qa-lab/runtime/gateway-support-export-runtime.test.ts",
-        ),
-      )?.pretestBuildMode,
-    ).toBe("runtime");
+    const runtimeStripe = stripes.find((stripe) =>
+      stripe.includePatterns?.includes(
+        "test/e2e/qa-lab/runtime/gateway-support-export-runtime.test.ts",
+      ),
+    );
+    expect(runtimeStripe?.pretestBuildMode).toBe(
+      runtimeStripe?.includePatterns?.includes(PRIVATE_QA_TOOLING_TEST) ? "private-qa" : "runtime",
+    );
     expect(
       toolingShards.find((shard) => shard.shardName === "core-tooling-isolated"),
     ).toMatchObject({
@@ -2065,6 +2092,122 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       ],
       requiresDist: false,
     });
+  });
+
+  it("keeps hosted tooling within the GitHub job cap when its inventory grows", async () => {
+    const options = {
+      compactMode: "pull-request" as const,
+      runnerBackend: "github",
+    };
+    const inventoryGrowthFile = "test/scripts/resolve-fs-safe-native-contract.test.ts";
+    const isHostedToolingGroup = (group: { shard_name: string }) =>
+      /^core-tooling-\d+-hosted-\d+$/u.test(group.shard_name);
+    const isNumberedToolingGroup = (group: { shard_name: string }) =>
+      /^core-tooling-\d+(?:-hosted-\d+)?$/u.test(group.shard_name);
+    const runnerRanks = new Map([
+      [BUNDLED_NODE_TEST_RUNNER, 0],
+      [DEFAULT_NODE_TEST_RUNNER, 1],
+      [EXTRA_LARGE_NODE_TEST_RUNNER, 2],
+    ]);
+    const nonToolingPlacement = (plan: CompactNodeTestShard[]) =>
+      plan
+        .flatMap((job) => {
+          const groups = job.groups
+            .filter((group) => !isHostedToolingGroup(group))
+            .map((group) => group.shard_name)
+            .toSorted();
+          return groups.length === 0
+            ? []
+            : [
+                {
+                  groups,
+                  planConcurrency: job.planConcurrency,
+                  pretestBuildMode: job.pretestBuildMode,
+                  requiresDist: job.requiresDist,
+                  runner: job.runner,
+                },
+              ];
+        })
+        .toSorted((a, b) => a.groups.join("\0").localeCompare(b.groups.join("\0")));
+    const createPlanWithInventory = async (includeGrowthFile: boolean) => {
+      vi.resetModules();
+      vi.doMock("../../scripts/lib/list-test-files.mts", async (importOriginal) => {
+        const actual =
+          await importOriginal<typeof import("../../scripts/lib/list-test-files.mts")>();
+        return {
+          ...actual,
+          listTrackedTestFiles(rootDir: string, suffix?: string) {
+            const files = actual
+              .listTrackedTestFiles(rootDir, suffix)
+              .filter((file) => file !== inventoryGrowthFile);
+            return rootDir === "test" && includeGrowthFile
+              ? [...files, inventoryGrowthFile].toSorted()
+              : files;
+          },
+        };
+      });
+      try {
+        const { createNodeTestShardBundles: createPlan } =
+          await import("../../scripts/lib/ci-node-test-plan.mts");
+        return createPlan(options);
+      } finally {
+        vi.doUnmock("../../scripts/lib/list-test-files.mts");
+        vi.resetModules();
+      }
+    };
+    const baseline = await createPlanWithInventory(false);
+    const baselineToolingFiles = baseline
+      .flatMap((job) => job.groups)
+      .filter(isNumberedToolingGroup)
+      .flatMap((group) => group.includePatterns ?? []);
+    const grown = await createPlanWithInventory(true);
+    const toolingGroups = grown.flatMap((job) => job.groups).filter(isNumberedToolingGroup);
+    const toolingFiles = toolingGroups.flatMap((group) => group.includePatterns ?? []);
+    const crossRunnerHostedJobs: CompactNodeTestShard[] = [];
+
+    expect(grown.length).toBeLessThanOrEqual(80);
+    expect(new Set(toolingFiles).size).toBe(toolingFiles.length);
+    expect(toolingFiles.toSorted()).toEqual(
+      [...baselineToolingFiles, inventoryGrowthFile].toSorted(),
+    );
+    expect(nonToolingPlacement(grown)).toEqual(nonToolingPlacement(baseline));
+
+    for (const job of grown) {
+      const hostedToolingGroups = job.groups.filter(isHostedToolingGroup);
+      if (hostedToolingGroups.length === 0) {
+        continue;
+      }
+      const families = hostedToolingGroups.map((group) =>
+        group.shard_name.replace(/-hosted-\d+$/u, ""),
+      );
+      expect(new Set(families).size).toBe(families.length);
+      expect(job.requiresDist).toBe(false);
+      expect(job.planConcurrency).toBe(1);
+      expect(job.groups.length).toBeLessThanOrEqual(10);
+      if (job.groups.length > 1) {
+        expect(job.predictedSeconds).toBeLessThanOrEqual(150);
+      }
+      expect(job.runner).toBe(job.groups[0]?.runner);
+      expect(
+        hostedToolingGroups.every(
+          (group) => (runnerRanks.get(job.runner) ?? -1) >= (runnerRanks.get(group.runner) ?? 0),
+        ),
+      ).toBe(true);
+      if (hostedToolingGroups.some((group) => group.runner !== job.runner)) {
+        crossRunnerHostedJobs.push(job);
+        expect(job.groups.every(isHostedToolingGroup)).toBe(true);
+        expect(job.pretestBuildMode).toBeUndefined();
+        expect(job.groups.every((group) => group.pretestBuildMode === undefined)).toBe(true);
+      }
+    }
+    expect(crossRunnerHostedJobs).toHaveLength(1);
+    expect(crossRunnerHostedJobs[0]?.runner).toBe(DEFAULT_NODE_TEST_RUNNER);
+    expect(crossRunnerHostedJobs[0]?.groups.map((group) => group.shard_name)).toEqual([
+      "core-tooling-15-hosted-3",
+      "core-tooling-6-hosted-2",
+      "core-tooling-2-hosted-2",
+      "core-tooling-3-hosted-2",
+    ]);
   });
 
   it("assigns Blacksmith runners to every core node shard", () => {
@@ -2736,6 +2879,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           "src/gateway/gateway-auth-rewarm.test.ts",
           "src/gateway/gateway-concurrent-streams.test.ts",
           "src/gateway/gateway-cron-process-identity.windows.test.ts",
+          "src/gateway/gateway-route-model-reuse.test.ts",
         ],
         pretestBuildMode: "runtime",
         requiresDist: false,

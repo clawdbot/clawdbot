@@ -30,12 +30,12 @@ import {
 type UpdateDoctorPhase = "pre-plugin" | "post-plugin";
 
 export async function withPrePluginUpdateDoctorEnv<T>(run: () => Promise<T>): Promise<T> {
-  const previousUpdateInProgress = process.env.OPENCLAW_UPDATE_IN_PROGRESS;
-  const previousDeferConfiguredPluginInstallRepair =
-    process.env[UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR_ENV];
-  const previousParentSupportsDoctorConfigWrite =
-    process.env[UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV];
-  const previousPostCoreConvergence = process.env[UPDATE_POST_CORE_CONVERGENCE_ENV];
+  const previousValues = [
+    "OPENCLAW_UPDATE_IN_PROGRESS",
+    UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR_ENV,
+    UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV,
+    UPDATE_POST_CORE_CONVERGENCE_ENV,
+  ].map((key) => [key, process.env[key]] as const);
   process.env.OPENCLAW_UPDATE_IN_PROGRESS = "1";
   process.env[UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR_ENV] = "1";
   process.env[UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV] = "1";
@@ -43,27 +43,12 @@ export async function withPrePluginUpdateDoctorEnv<T>(run: () => Promise<T>): Pr
   try {
     return await run();
   } finally {
-    if (previousUpdateInProgress === undefined) {
-      delete process.env.OPENCLAW_UPDATE_IN_PROGRESS;
-    } else {
-      process.env.OPENCLAW_UPDATE_IN_PROGRESS = previousUpdateInProgress;
-    }
-    if (previousDeferConfiguredPluginInstallRepair === undefined) {
-      delete process.env[UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR_ENV];
-    } else {
-      process.env[UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR_ENV] =
-        previousDeferConfiguredPluginInstallRepair;
-    }
-    if (previousParentSupportsDoctorConfigWrite === undefined) {
-      delete process.env[UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV];
-    } else {
-      process.env[UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV] =
-        previousParentSupportsDoctorConfigWrite;
-    }
-    if (previousPostCoreConvergence === undefined) {
-      delete process.env[UPDATE_POST_CORE_CONVERGENCE_ENV];
-    } else {
-      process.env[UPDATE_POST_CORE_CONVERGENCE_ENV] = previousPostCoreConvergence;
+    for (const [key, value] of previousValues) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
     }
   }
 }

@@ -40,6 +40,15 @@ export function createSkillWorkshopCollectionFixture() {
     proposals,
   };
   const emptyManifest = { ...manifest, installedSkills: [], proposals: [] };
+  const historyStatus = {
+    schema: "openclaw.skill-workshop.history-scan.v1",
+    hasScanned: false,
+    reviewedSessions: 0,
+    ideasFound: 0,
+    hasMore: false,
+    lastScanReviewed: 0,
+    lastScanIdeas: 0,
+  };
   return {
     manifest,
     emptyManifest,
@@ -49,9 +58,12 @@ export function createSkillWorkshopCollectionFixture() {
       "skills.proposals.reject",
       "skills.proposals.requestRevision",
       "skills.proposals.historyScan",
+      "skills.proposals.historyStatus",
       "config.get",
     ],
     responses: {
+      "skills.proposals.historyStatus": historyStatus,
+      "skills.proposals.historyScan": { ...historyStatus, hasScanned: true },
       "config.get": {
         hash: "workshop-config",
         config: { skills: { workshop: { autonomous: { mode: "auto" } } } },
