@@ -1,3 +1,5 @@
+import { createServer, type Server } from "node:http";
+import type { AddressInfo, Socket } from "node:net";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { describe, expect, it, vi } from "vitest";
 import { disposeMcpClient } from "./mcp-client-lifecycle.js";
@@ -427,6 +429,113 @@ describe("OpenClaw MCP HTTP lifecycle adapters", () => {
       "allocated-before-failure",
     );
     expect(deleteRequests[0]?.signal?.aborted).toBe(false);
+  });
+
+  it("does not hang terminateSession when DELETE body cancel never settles", async () => {
+    let deleteCount = 0;
+    const sockets = new Set<Socket>();
+    let server: Server | undefined;
+    try {
+      server = createServer((request, response) => {
+        response.on("error", () => {});
+        if (request.method === "DELETE") {
+          deleteCount += 1;
+          // Real wire DELETE completes with 204. Fetch forbids constructing a
+          // Response with status 204 + body, so the never-settling cancel fault
+          // is injected via a hanging ReadableStream after real fetch returns.
+          response.writeHead(204).end();
+          return;
+        }
+        if (request.method === "GET") {
+          response.writeHead(405).end();
+          return;
+        }
+        response.writeHead(500, { "mcp-session-id": "hang-cancel-session" });
+        response.end("initialize failed");
+      });
+      server.on("connection", (socket) => {
+        sockets.add(socket);
+        socket.once("close", () => sockets.delete(socket));
+      });
+      server.on("clientError", (_err, socket) => socket.destroy());
+      await new Promise<void>((resolve) => {
+        server?.listen(0, "127.0.0.1", resolve);
+      });
+      const address = server.address() as AddressInfo | null;
+      if (!address || typeof address === "string") {
+        throw new Error("expected loopback TCP address");
+      }
+      const baseUrl = new URL(`http://127.0.0.1:${address.port}/mcp`);
+
+      // Production cleanup path: real fetch against loopback DELETE (204). After
+      // the wire response returns, replace the (empty) body with a ReadableStream
+      // whose cancel() never settles — the fault terminateSession must not await.
+      const cleanupFetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const response = await fetch(input, init);
+        if (init?.method !== "DELETE") {
+          return response;
+        }
+        expect(response.status).toBe(204);
+        // Status must stay ok for terminateSession; Fetch rejects 204 + body.
+        return new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode("bye"));
+            },
+            cancel() {
+              return new Promise(() => {});
+            },
+          }),
+          {
+            status: 200,
+            statusText: response.statusText,
+            headers: response.headers,
+          },
+        );
+      };
+
+      const transport = new OpenClawStreamableHTTPClientTransport(baseUrl, {
+        fetch: cleanupFetch,
+      });
+      const client = new Client({ name: "test", version: "1" });
+
+      await expect(client.connect(transport)).rejects.toThrow("initialize failed");
+      expect(transport.sessionId).toBe("hang-cancel-session");
+
+      const startedAt = Date.now();
+      await expect(
+        Promise.race([
+          transport.terminateSession(),
+          new Promise<never>((_, reject) => {
+            AbortSignal.timeout(1_000).addEventListener("abort", () => {
+              reject(new Error("terminateSession hung waiting for body.cancel"));
+            });
+          }),
+        ]),
+      ).resolves.toBeUndefined();
+      const elapsedMs = Date.now() - startedAt;
+
+      expect(deleteCount).toBe(1);
+      expect(elapsedMs).toBeLessThan(1_000);
+
+      // Marked terminated — a second call must not issue another DELETE.
+      await transport.terminateSession();
+      expect(deleteCount).toBe(1);
+
+      await disposeMcpClient({ client, transport, transportType: "streamable-http" });
+      expect(deleteCount).toBe(1);
+    } finally {
+      for (const socket of sockets) {
+        socket.destroy();
+      }
+      if (server) {
+        const active = server;
+        await new Promise<void>((resolve) => {
+          active.close(() => resolve());
+          active.closeAllConnections();
+        });
+      }
+    }
   });
 
   it("does not fetch another notification stream after close returns", async () => {
