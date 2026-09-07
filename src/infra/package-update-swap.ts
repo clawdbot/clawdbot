@@ -266,25 +266,28 @@ export async function swapStagedPackageInstall(params: {
   let activationCompleted = false;
   const verifyNpmRecovery = async (root: string, fromBackup: boolean) => {
     const reader = createPackageIntegrityReader(params.timeoutMs);
-    if (
-      hadPackage
-        ? !previousTree || !isDeepStrictEqual(await reader.tree(root, targetSwapRoot), previousTree)
-        : !fromBackup && (await reader.exists(root))
-    ) {
-      throw new Error("Package rollback verification failed: retained package tree changed");
-    }
-    for (const shim of shims) {
-      const target = fromBackup ? shim.backup : shim.destination;
+    await reader.observe(fromBackup ? "retained" : "restored", async () => {
       if (
-        shim.backup
-          ? !target || (await reader.launcher(target)) !== shim.fingerprint
-          : !fromBackup && (await reader.exists(shim.destination))
+        hadPackage
+          ? !previousTree ||
+            !isDeepStrictEqual(await reader.tree(root, targetSwapRoot), previousTree)
+          : !fromBackup && (await reader.exists(root))
       ) {
-        throw new Error(
-          `Package rollback verification failed: launcher ${shim.destination} changed`,
-        );
+        throw new Error("Package rollback verification failed: retained package tree changed");
       }
-    }
+      for (const shim of shims) {
+        const target = fromBackup ? shim.backup : shim.destination;
+        if (
+          shim.backup
+            ? !target || (await reader.launcher(target)) !== shim.fingerprint
+            : !fromBackup && (await reader.exists(shim.destination))
+        ) {
+          throw new Error(
+            `Package rollback verification failed: launcher ${shim.destination} changed`,
+          );
+        }
+      }
+    });
   };
   const restoreSwap = async (): Promise<string[]> => {
     const messages: string[] = [];
@@ -386,7 +389,7 @@ export async function swapStagedPackageInstall(params: {
     }
     return messages;
   };
-  try {
+  const prepareBaseline = async () => {
     hadPackage = await (native ? pathEntryExists(targetSwapRoot) : baseline.exists(targetSwapRoot));
     previousVersion =
       hadPackage && native
@@ -451,6 +454,13 @@ export async function swapStagedPackageInstall(params: {
           fingerprint,
         });
       }
+    }
+  };
+  try {
+    if (native) {
+      await prepareBaseline();
+    } else {
+      await baseline.observe("baseline", prepareBaseline);
     }
     // Validation and launcher backup finish while the old Gateway is serving.
     // Only this boundary authorizes the orchestrator to suspend the service.

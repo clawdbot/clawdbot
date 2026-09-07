@@ -1,12 +1,32 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { resetLogger, setLoggerOverride } from "../logging/logger.js";
+import { loggingState } from "../logging/state.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { swapStagedPackageInstall, type PackageUpdateTransaction } from "./package-update-swap.js";
 import { createPackageSwapFixture } from "./package-update-swap.test-support.js";
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  setLoggerOverride(null);
+  loggingState.rawConsole = null;
+  resetLogger();
+  vi.restoreAllMocks();
+});
+
+function captureReaderLogs() {
+  const records: Array<Record<string, unknown>> = [];
+  const capture = (line: string) => {
+    const record = JSON.parse(line) as Record<string, unknown>;
+    if (record.subsystem === "update/package-integrity") {
+      records.push(record);
+    }
+  };
+  setLoggerOverride({ level: "silent", consoleLevel: "debug", consoleStyle: "json" });
+  loggingState.rawConsole = { log: capture, info: capture, warn: capture, error: capture };
+  return records;
+}
 
 describe("package verification bounds", () => {
   it.each([1024 * 1024 + 1, 1024 * 1024 * 1024 + 1])(
@@ -64,6 +84,7 @@ describe("package verification bounds", () => {
       const manifest = path.join(packageRoot, "package.json");
       const contents = await fs.readFile(manifest, "utf8");
       await fs.writeFile(manifest, contents.padEnd(1024 * 1024, " "));
+      const observations = captureReaderLogs();
       const transactions: PackageUpdateTransaction[] = [];
       const result = await swapStagedPackageInstall({
         ...params,
@@ -73,6 +94,14 @@ describe("package verification bounds", () => {
       expect(transactions).toHaveLength(1);
       expect((await transactions[0]!.rollback()).exitCode).toBe(0);
       await expect(fs.readFile(manifest, "utf8")).resolves.toHaveLength(1024 * 1024);
+      const finished = observations.filter((record) => record.event === "reader-settled");
+      expect(finished.map((record) => record.phase)).toEqual(["baseline", "retained", "restored"]);
+      expect(new Set(finished.map((record) => record.readerId)).size).toBe(3);
+      for (const record of finished) {
+        expect(record).toMatchObject({ outcome: "completed", budgetMs: 30_000, pendingIo: 0 });
+        expect(record.timeoutObservedAtMonotonicMs).toBeUndefined();
+        expect(Number(record.elapsedMs)).toBeGreaterThan(0);
+      }
     });
   });
 
@@ -159,6 +188,7 @@ describe("package verification bounds", () => {
         });
         const beforeActivate = vi.fn();
         const onLiveMutation = vi.fn();
+        const observations = captureReaderLogs();
         const started = Date.now();
         try {
           const result = await swapStagedPackageInstall({
@@ -173,6 +203,26 @@ describe("package verification bounds", () => {
           expect(beforeActivate).not.toHaveBeenCalled();
           expect(onLiveMutation).not.toHaveBeenCalled();
           expect(open).toHaveBeenCalledTimes(1);
+          const baseline = observations.filter((record) => record.phase === "baseline");
+          expect(baseline).toHaveLength(2);
+          const [begin, settled] = baseline;
+          expect(begin).toMatchObject({ event: "reader-started", budgetMs: 40 });
+          expect(settled).toMatchObject({
+            event: "reader-settled",
+            readerId: begin!.readerId,
+            outcome: "timed-out",
+            budgetMs: 40,
+            deadlineClock: "wall",
+          });
+          // A pending close may accompany the stalled read. Neither is a joined OS operation.
+          expect(Number(settled!.pendingIo)).toBeGreaterThan(0);
+          expect(settled!.deadlineAtUnixMs).toBe(begin!.deadlineAtUnixMs);
+          expect(settled!.elapsedMs).toBe(
+            Number(settled!.settledAtMonotonicMs) - Number(begin!.startedAtMonotonicMs),
+          );
+          expect(Number(settled!.timeoutObservedAtMonotonicMs)).toBeLessThanOrEqual(
+            Number(settled!.settledAtMonotonicMs),
+          );
           if (operation === "open") {
             late.resolve(handle);
             await vi.waitFor(() => expect(close).toHaveBeenCalledTimes(1));
@@ -189,6 +239,68 @@ describe("package verification bounds", () => {
       });
     },
   );
+
+  it("preserves the primary refusal when reader diagnostics fail", async () => {
+    await withTestDir({ prefix: "openclaw-rollback-diagnostics-" }, async (base) => {
+      const { params, packageRoot, launcher } = await createPackageSwapFixture(base);
+      captureReaderLogs();
+      const sink = vi.fn(() => {
+        throw new Error("diagnostics sink failed");
+      });
+      loggingState.rawConsole = { log: sink, info: sink, warn: sink, error: sink };
+      vi.spyOn(fs, "open").mockRejectedValue(new Error("reader unavailable"));
+      const beforeActivate = vi.fn();
+      const onLiveMutation = vi.fn();
+      const result = await swapStagedPackageInstall({ ...params, beforeActivate, onLiveMutation });
+      expect(sink).toHaveBeenCalled();
+      expect(result.status).toBe("failed");
+      expect(result.step.stderrTail).toContain("reader unavailable");
+      expect(result.step.stderrTail).not.toContain("diagnostics sink failed");
+      expect(beforeActivate).not.toHaveBeenCalled();
+      expect(onLiveMutation).not.toHaveBeenCalled();
+      await expect(fs.readFile(path.join(packageRoot, "package.json"), "utf8")).resolves.toContain(
+        '"version":"1.0.0"',
+      );
+      await expect(fs.readFile(launcher, "utf8")).resolves.toBe("old launcher\n");
+    });
+  });
+
+  it("records a cleanup-only deadline without claiming successful reader completion", async () => {
+    await withTestDir({ prefix: "openclaw-rollback-close-deadline-" }, async (base) => {
+      const { params } = await createPackageSwapFixture(base);
+      await fs.unlink(path.join(params.stage.layout.binDir, "openclaw"));
+      const observations = captureReaderLogs();
+      const release = createDeferredCore();
+      let closing: Promise<void> | undefined;
+      const opendir = fs.opendir.bind(fs);
+      vi.spyOn(fs, "opendir").mockImplementation(async (...args) => {
+        const directory = await opendir(...args);
+        if (String(args[0]) === params.stage.layout.binDir) {
+          const resource: { close(): Promise<void> } = directory;
+          const close = resource.close.bind(resource);
+          vi.spyOn(resource, "close").mockImplementation(() => {
+            closing = release.promise.then(() => close());
+            return closing;
+          });
+        }
+        return directory;
+      });
+      try {
+        const result = await swapStagedPackageInstall({ ...params, timeoutMs: 40 });
+        // Preserve the existing best-effort close policy, but report its timeout.
+        expect(result.status).toBe("committed");
+        expect(observations.find((record) => record.event === "reader-settled")).toMatchObject({
+          phase: "baseline",
+          outcome: "timed-out",
+          pendingIo: 1,
+          timeoutObservedAtMonotonicMs: expect.any(Number),
+        });
+      } finally {
+        release.resolve();
+        await closing;
+      }
+    });
+  });
 
   it.each([
     { shape: "single directory", width: 50_000 },
