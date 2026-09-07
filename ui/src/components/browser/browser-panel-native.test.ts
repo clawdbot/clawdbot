@@ -306,7 +306,7 @@ describe("native Browser panel ownership", () => {
   it("builds panels and opens Mac tabs without crypto.randomUUID (insecure origins)", async () => {
     const secureCrypto = globalThis.crypto;
     vi.stubGlobal("crypto", {
-      getRandomValues: <T extends ArrayBufferView>(array: T) => secureCrypto.getRandomValues(array),
+      getRandomValues: (array: Uint8Array) => secureCrypto.getRandomValues(array),
     });
     const native = fakeNativeBrowser();
     const { controller } = controllerFixture();
@@ -319,6 +319,48 @@ describe("native Browser panel ownership", () => {
     expect(message.tabId).toMatch(/^mac-[0-9a-f-]{36}$/);
     flushFrames();
     expect(native.messages().at(-1)).toMatchObject({ type: "present", tabId: message.tabId });
+  });
+
+  it("focuses a cleared address field once a new tab becomes the selection", async () => {
+    fakeNativeBrowser([nativeTab("mac-one")]);
+    const { controller } = controllerFixture();
+    await controller.refreshAll();
+    const input = document.createElement("input");
+    input.className = "bp-url";
+    controller.host.renderRoot.append(input);
+    const focus = vi.spyOn(input, "focus");
+    await controller.native.beginNewTab();
+    expect(controller.activeTargetId).toMatch(/^mac-[0-9a-f-]{36}$/);
+    expect(controller.urlDraft).toBe("");
+    expect(focus).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the selected tab's address when a new-tab request is superseded", async () => {
+    const tabs = [
+      nativeTab("mac-one", "https://example.test/one"),
+      nativeTab("mac-two", "https://example.test/two"),
+    ];
+    const native = fakeNativeBrowser(tabs);
+    const { controller } = controllerFixture();
+    await controller.refreshAll();
+    const input = document.createElement("input");
+    input.className = "bp-url";
+    controller.host.renderRoot.append(input);
+    const focus = vi.spyOn(input, "focus");
+    const reply = createDeferred<{ ok: true; tabId: string }>();
+    native.postMessage.mockImplementationOnce(() => reply.promise);
+    const opening = controller.native.beginNewTab();
+    const message = native.messages().find((candidate) => candidate.type === "open");
+    if (message?.type !== "open") {
+      throw new Error("Expected a native open request");
+    }
+    await controller.selectTab("mac-two");
+    native.publish([...tabs, nativeTab(message.tabId, "about:blank")]);
+    reply.resolve({ ok: true, tabId: message.tabId });
+    await opening;
+    expect(controller.activeTargetId).toBe("mac-two");
+    expect(controller.urlDraft).toBe("https://example.test/two");
+    expect(focus).not.toHaveBeenCalled();
   });
 
   it("clears the address bar when the last tab closes without a successor", async () => {

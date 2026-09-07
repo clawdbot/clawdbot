@@ -27,6 +27,8 @@ export class BrowserPanelNativeController {
   private unsubscribeState?: () => void;
   private revision = -1;
   private pendingActivation: string | null = null;
+  /** New-tab request whose address field should be cleared and focused once it is selected. */
+  private pendingAddressFocus: string | null = null;
   private captureGeneration = 0;
   private inspectionGeneration = 0;
 
@@ -97,7 +99,11 @@ export class BrowserPanelNativeController {
     for (const tab of state.tabs) {
       if (tab.id === this.pendingActivation) {
         this.pendingActivation = null;
-        void this.controller.selectTab(tab.id);
+        void this.controller.selectTab(tab.id).then(() => {
+          if (this.pendingAddressFocus === tab.id) {
+            this.focusAddress(tab.id);
+          }
+        });
       } else if (activatePopups && tab.openedBy === "native" && !previous.has(tab.id)) {
         if (!popupScopes.has(tab.id)) {
           const eligible = [...presenters];
@@ -148,41 +154,70 @@ export class BrowserPanelNativeController {
     return reply?.ok === true;
   }
 
-  cancelPendingActivation(): void {
+  /**
+   * A selection supersedes any in-flight open. Selecting a different tab also
+   * drops a pending address focus; selecting the awaited tab keeps it.
+   */
+  cancelPendingActivation(selectedTabId?: string): void {
     this.pendingActivation = null;
+    if (this.pendingAddressFocus !== selectedTabId) {
+      this.pendingAddressFocus = null;
+    }
   }
 
-  async open(url: string, newTab: boolean): Promise<void> {
+  /**
+   * Resolves with the tab this request still owns once it is selected, or null
+   * when the request was superseded, failed, or its activation already landed
+   * through a state push (the push path finishes any pending address focus).
+   */
+  async open(url: string, newTab: boolean, focusAddress = false): Promise<string | null> {
     this.controller.setState("errorText", null);
     this.controller.setState("pendingNewTab", false);
     if (!newTab && this.activeTab) {
+      const tabId = this.activeTab.id;
       this.controller.exitCaptureModes();
-      await this.send({ type: "navigate", tabId: this.activeTab.id, url });
-      return;
+      return (await this.send({ type: "navigate", tabId, url })) ? tabId : null;
     }
     const tabId = `mac-${generateUUID()}`;
     this.pendingActivation = tabId;
+    this.pendingAddressFocus = focusAddress ? tabId : null;
     const reply = await postNativeBrowserMessage({ type: "open", tabId, url, activate: true });
     if (this.pendingActivation !== tabId) {
-      return;
+      return null;
     }
     if (!reply?.ok || !reply.tabId) {
-      this.pendingActivation = null;
+      this.cancelPendingActivation();
       if (reply && !reply.ok) {
         this.controller.reportError(reply.error);
       }
-      return;
+      return null;
     }
     this.pendingActivation = reply.tabId;
+    if (focusAddress) {
+      this.pendingAddressFocus = reply.tabId;
+    }
     if (this.nativeTabs.some((tab) => tab.id === reply.tabId)) {
       this.pendingActivation = null;
       await this.controller.selectTab(reply.tabId);
+      return reply.tabId;
     }
+    return null;
   }
 
   async beginNewTab(): Promise<void> {
-    await this.open("about:blank", true);
+    const tabId = await this.open("about:blank", true, true);
+    if (!tabId || this.pendingAddressFocus !== tabId) {
+      return;
+    }
     await this.controller.host.updateComplete;
+    this.focusAddress(tabId);
+  }
+
+  private focusAddress(tabId: string): void {
+    if (this.controller.activeTargetId !== tabId) {
+      return;
+    }
+    this.pendingAddressFocus = null;
     if (this.controller.host.isConnected && this.controller.host.browserPanelIsOpen()) {
       this.controller.setState("urlDraft", "");
       this.controller.host.renderRoot.querySelector<HTMLInputElement>(".bp-url")?.focus();
