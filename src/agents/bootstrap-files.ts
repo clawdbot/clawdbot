@@ -437,11 +437,22 @@ export function buildBootstrapContextForFiles(
     config?: OpenClawConfig;
     agentId?: string | null;
     warn?: (message: string) => void;
+    /** Characters occupied by a separately retained, already-bounded snapshot. */
+    reservedChars?: number;
   },
 ): EmbeddedContextFile[] {
+  const reservedChars = params.reservedChars ?? 0;
+  if (!Number.isSafeInteger(reservedChars) || reservedChars < 0) {
+    throw new RangeError("reservedChars must be a non-negative safe integer");
+  }
+  const totalMaxChars =
+    resolveBootstrapTotalMaxChars(params.config, params.agentId) - reservedChars;
+  if (totalMaxChars <= 0) {
+    return [];
+  }
   const contextFiles = buildBootstrapContextFiles(bootstrapFiles, {
     maxChars: resolveBootstrapMaxChars(params.config, params.agentId),
-    totalMaxChars: resolveBootstrapTotalMaxChars(params.config, params.agentId),
+    totalMaxChars,
     warn: params.warn,
   });
   return contextFiles;

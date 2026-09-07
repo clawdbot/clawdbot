@@ -15,6 +15,7 @@ import {
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveAgentWorkspaceDir } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
 import { resolveBootstrapFilesForPreparation } from "openclaw/plugin-sdk/codex-mcp-projection";
 import {
   buildMemorySystemPromptAddition,
@@ -40,20 +41,23 @@ import {
 } from "./thread-lifecycle.js";
 
 const CODEX_NATIVE_PROJECT_DOC_BASENAMES = new Set(["agents.md"]);
+const CODEX_THREAD_SCOPED_WORKSPACE_DEVELOPER_CONTEXT_BASENAMES = new Set(["tools.md"]);
 const CODEX_TURN_SCOPED_WORKSPACE_DEVELOPER_CONTEXT_BASENAMES = new Set([
   "identity.md",
   "soul.md",
   "user.md",
 ]);
-const CODEX_WORKSPACE_DEVELOPER_CONTEXT_BASENAMES = new Set(
-  CODEX_TURN_SCOPED_WORKSPACE_DEVELOPER_CONTEXT_BASENAMES,
-);
+const CODEX_WORKSPACE_DEVELOPER_CONTEXT_BASENAMES = new Set([
+  ...CODEX_THREAD_SCOPED_WORKSPACE_DEVELOPER_CONTEXT_BASENAMES,
+  ...CODEX_TURN_SCOPED_WORKSPACE_DEVELOPER_CONTEXT_BASENAMES,
+]);
 const CODEX_MEMORY_CONTEXT_BASENAME = "memory.md";
 const CODEX_MEMORY_TOOL_NAMES = new Set(["memory_search", "memory_get"]);
 const CODEX_BOOTSTRAP_CONTEXT_ORDER = new Map<string, number>([
   ["soul.md", 10],
   ["identity.md", 20],
   ["user.md", 30],
+  ["tools.md", 40],
   ["bootstrap.md", 50],
   ["memory.md", 60],
 ]);
@@ -69,6 +73,7 @@ type CodexToolReportEntry = CodexSystemPromptReport["tools"]["entries"][number];
 type CodexWorkspaceBootstrapContext = CodexBootstrapContext & {
   inheritsAgentWorkspace: boolean;
   promptContextFiles?: EmbeddedContextFile[];
+  threadDeveloperContextEnabled?: boolean;
   threadDeveloperInstructionFiles?: EmbeddedContextFile[];
   turnScopedDeveloperInstructionFiles?: EmbeddedContextFile[];
   memoryReferenceFiles?: EmbeddedContextFile[];
@@ -185,7 +190,7 @@ export async function prepareCodexWorkspaceDeveloperInstructions(params: {
   workspaceDir: string;
   cwd: string;
 }): Promise<string | undefined> {
-  if (isSameCodexWorkspacePath(params.workspaceDir, params.cwd)) {
+  if (isCodexWorkspaceContextDisabled(params.config, params.agentId)) {
     return undefined;
   }
   const files = await resolveBootstrapFilesForPreparation(params);
@@ -193,11 +198,12 @@ export async function prepareCodexWorkspaceDeveloperInstructions(params: {
     config: params.config,
     agentId: params.agentId,
   });
-  return renderCodexWorkspaceDeveloperInstructions({
-    files: selectCodexWorkspaceAgentProjectInstructionFiles(contextFiles, params.workspaceDir),
-    header: "## OpenClaw Agent Workspace Instructions",
-    preamble: "OpenClaw loaded this bounded snapshot from the configured agent workspace.",
-  });
+  return renderCodexWorkspaceThreadDeveloperInstructions(
+    selectCodexWorkspaceThreadDeveloperInstructionFiles(contextFiles, {
+      agentWorkspaceDir: params.workspaceDir,
+      includeAgentProjectInstructions: !isSameCodexWorkspacePath(params.workspaceDir, params.cwd),
+    }),
+  );
 }
 
 export async function buildCodexWorkspaceBootstrapContext(params: {
@@ -210,6 +216,7 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
   memoryToolNames: readonly string[];
   ringZeroActive: boolean;
   sandboxed?: boolean;
+  retainedThreadContext?: { instructions?: string };
 }): Promise<CodexWorkspaceBootstrapContext> {
   try {
     const executionWorkspace = params.executionWorkspace ?? params.resolvedWorkspace;
@@ -250,44 +257,90 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
         targetWorkspaceDir: promptWorkspace,
       }),
     );
-    const contextFiles = buildBootstrapContextForFiles(
-      memoryToolsAvailable
-        ? bootstrapFiles.filter(
-            (file) =>
-              !isCodexWorkspaceRootMemoryBootstrapFile({
-                file,
-                workspaceDir: params.resolvedWorkspace,
-              }),
-          )
-        : bootstrapFiles,
-      {
-        config: params.params.config,
-        agentId: params.params.agentId ?? params.sessionAgentId,
-        warn: (message) => embeddedAgentLog.warn(message),
-      },
-    ).map((file) =>
-      remapCodexContextFilePath({
-        file,
-        sourceWorkspaceDir: params.resolvedWorkspace,
-        targetWorkspaceDir: promptWorkspace,
-      }),
-    );
-    const promptContextFiles = selectCodexWorkspacePromptContextFiles(contextFiles, {
-      excludeMemory: memoryToolsAvailable,
-      memoryWorkspaceDir: params.effectiveWorkspace,
-    });
     const injectOpenClawContext = shouldInjectCodexOpenClawPromptContext(params.params);
     const restrictedProjectDocNeedsOpenClawCarrier =
       params.params.pluginHarnessToolPolicyRestricted === true &&
       !params.params.disableTools &&
       !isMessageOnlyCodexSourceReply(params.params) &&
       params.params.bootstrapContextMode !== "lightweight";
-    const threadDeveloperInstructionFiles =
+    const threadDeveloperContextEnabled =
       injectOpenClawContext &&
       !params.ringZeroActive &&
-      (inheritsAgentWorkspace || restrictedProjectDocNeedsOpenClawCarrier)
-        ? selectCodexWorkspaceAgentProjectInstructionFiles(contextFiles, params.resolvedWorkspace)
+      !isMessageOnlyCodexSourceReply(params.params) &&
+      !(params.params.pluginHarnessToolPolicyRestricted && params.params.disableTools) &&
+      params.params.bootstrapContextMode !== "lightweight" &&
+      !isCodexWorkspaceContextDisabled(
+        params.params.config,
+        params.params.agentId ?? params.sessionAgentId,
+      );
+    const includeAgentProjectInstructions =
+      inheritsAgentWorkspace || restrictedProjectDocNeedsOpenClawCarrier;
+    const rootToolsPath = path.join(path.resolve(params.resolvedWorkspace), "TOOLS.md");
+    const rootAgentsPath = path.join(path.resolve(params.resolvedWorkspace), "AGENTS.md");
+    const isThreadFile = (file: CodexBootstrapFile) =>
+      path.resolve(file.path) === rootToolsPath ||
+      (includeAgentProjectInstructions && path.resolve(file.path) === rootAgentsPath);
+    const availableBootstrapFiles = bootstrapFiles.filter((file) => {
+      if (
+        memoryToolsAvailable &&
+        isCodexWorkspaceRootMemoryBootstrapFile({ file, workspaceDir: params.resolvedWorkspace })
+      ) {
+        return false;
+      }
+      // Nested or disabled TOOLS.md has no Codex prompt carrier and must not
+      // consume the budget of files that are actually injected.
+      return (
+        file.name !== "TOOLS.md" ||
+        (threadDeveloperContextEnabled && path.resolve(file.path) === rootToolsPath)
+      );
+    });
+    const buildContextFiles = (files: CodexBootstrapFile[], reservedChars = 0) =>
+      buildBootstrapContextForFiles(files, {
+        config: params.params.config,
+        agentId: params.params.agentId ?? params.sessionAgentId,
+        warn: (message) => embeddedAgentLog.warn(message),
+        reservedChars,
+      }).map((file) =>
+        remapCodexContextFilePath({
+          file,
+          sourceWorkspaceDir: params.resolvedWorkspace,
+          targetWorkspaceDir: promptWorkspace,
+        }),
+      );
+    const initialContextFiles =
+      threadDeveloperContextEnabled &&
+      !params.retainedThreadContext &&
+      availableBootstrapFiles.some(isThreadFile)
+        ? buildContextFiles(availableBootstrapFiles)
         : [];
+    const threadDeveloperInstructionFiles = selectCodexWorkspaceThreadDeveloperInstructionFiles(
+      initialContextFiles,
+      {
+        agentWorkspaceDir: params.resolvedWorkspace,
+        toolsWorkspaceDir: promptWorkspace,
+        includeAgentProjectInstructions,
+      },
+    );
+    const threadDeveloperInstructions = threadDeveloperContextEnabled
+      ? params.retainedThreadContext
+        ? params.retainedThreadContext.instructions
+        : renderCodexWorkspaceThreadDeveloperInstructions(threadDeveloperInstructionFiles)
+      : undefined;
+    // Reserve the rendered snapshot conservatively on both creation and resume.
+    // Never let a fresh TOOLS/AGENTS read resize the budget of a frozen thread.
+    const contextFiles = [
+      ...threadDeveloperInstructionFiles,
+      ...buildContextFiles(
+        availableBootstrapFiles.filter(
+          (file) => !(threadDeveloperContextEnabled && isThreadFile(file)),
+        ),
+        threadDeveloperInstructions?.length ?? 0,
+      ),
+    ];
+    const promptContextFiles = selectCodexWorkspacePromptContextFiles(contextFiles, {
+      excludeMemory: memoryToolsAvailable,
+      memoryWorkspaceDir: params.effectiveWorkspace,
+    });
     const turnScopedDeveloperInstructionFiles = injectOpenClawContext
       ? selectCodexWorkspaceTurnScopedDeveloperInstructionFiles(contextFiles)
       : [];
@@ -296,6 +349,7 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
       contextFiles,
       inheritsAgentWorkspace,
       promptContextFiles,
+      threadDeveloperContextEnabled,
       threadDeveloperInstructionFiles,
       turnScopedDeveloperInstructionFiles,
       memoryReferenceFiles,
@@ -303,11 +357,7 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
       memoryToolNames: [...params.memoryToolNames],
       memoryToolRouted: memoryToolsAvailable,
       promptContext: renderCodexWorkspaceBootstrapPromptContext(promptContextFiles),
-      threadDeveloperInstructions: renderCodexWorkspaceDeveloperInstructions({
-        files: threadDeveloperInstructionFiles,
-        header: "## OpenClaw Agent Workspace Instructions",
-        preamble: "OpenClaw loaded this bounded snapshot from the configured agent workspace.",
-      }),
+      threadDeveloperInstructions,
       turnScopedDeveloperInstructions: renderCodexWorkspaceCollaborationDeveloperInstructions(
         turnScopedDeveloperInstructionFiles,
       ),
@@ -642,6 +692,14 @@ function shouldInjectCodexOpenClawPromptContext(params: EmbeddedRunAttemptParams
   );
 }
 
+function isCodexWorkspaceContextDisabled(
+  config: EmbeddedRunAttemptParams["config"],
+  agentId: string,
+): boolean {
+  const mode = config ? resolveAgentConfig(config, agentId)?.contextInjection : undefined;
+  return (mode ?? config?.agents?.defaults?.contextInjection) === "never";
+}
+
 /** Renders loaded OpenClaw skill prompts as Codex collaboration instructions. */
 export function renderCodexSkillsCollaborationInstructions(params: {
   attempt: EmbeddedRunAttemptParams;
@@ -810,6 +868,29 @@ function selectCodexWorkspaceAgentProjectInstructionFiles(
   ).filter((file) => path.resolve(file.path) === agentProjectDocPath);
 }
 
+function selectCodexWorkspaceThreadDeveloperInstructionFiles(
+  contextFiles: EmbeddedContextFile[],
+  params: {
+    agentWorkspaceDir: string;
+    toolsWorkspaceDir?: string;
+    includeAgentProjectInstructions: boolean;
+  },
+): EmbeddedContextFile[] {
+  const toolsPath = path.join(
+    path.resolve(params.toolsWorkspaceDir ?? params.agentWorkspaceDir),
+    "TOOLS.md",
+  );
+  return [
+    ...(params.includeAgentProjectInstructions
+      ? selectCodexWorkspaceAgentProjectInstructionFiles(contextFiles, params.agentWorkspaceDir)
+      : []),
+    ...selectCodexWorkspaceDeveloperInstructionFiles(
+      contextFiles,
+      CODEX_THREAD_SCOPED_WORKSPACE_DEVELOPER_CONTEXT_BASENAMES,
+    ).filter((file) => path.resolve(file.path) === toolsPath),
+  ];
+}
+
 function selectCodexWorkspaceDeveloperInstructionFiles(
   contextFiles: EmbeddedContextFile[],
   basenames: ReadonlySet<string>,
@@ -836,6 +917,24 @@ function renderCodexWorkspaceCollaborationDeveloperInstructions(
     preamble:
       "OpenClaw loaded these workspace instruction files from the active agent workspace. They are the canonical definitions of who you are, how you think and work, and the human you work alongside. Internalize and follow them accordingly.",
     wrapperTag: "AGENT_SOUL",
+  });
+}
+
+function renderCodexWorkspaceThreadDeveloperInstructions(
+  files: EmbeddedContextFile[],
+): string | undefined {
+  const includesTools = files.some((file) => getCodexContextFileBasename(file.path) === "tools.md");
+  return renderCodexWorkspaceDeveloperInstructions({
+    files,
+    header: "## OpenClaw Agent Workspace Instructions",
+    preamble: [
+      "OpenClaw loaded this bounded snapshot from the configured agent workspace.",
+      ...(includesTools
+        ? [
+            "TOOLS.md contains environment reference facts; it does not grant tool permissions or authorization.",
+          ]
+        : []),
+    ].join(" "),
   });
 }
 

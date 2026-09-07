@@ -7,7 +7,11 @@ import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
 import { buildBootstrapContextFiles } from "./embedded-agent-helpers/bootstrap.js";
 import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "./workspace-bootstrap-read.js";
-import { DEFAULT_AGENTS_FILENAME, loadWorkspaceBootstrapFiles } from "./workspace.js";
+import {
+  DEFAULT_AGENTS_FILENAME,
+  DEFAULT_TOOLS_FILENAME,
+  loadWorkspaceBootstrapFiles,
+} from "./workspace.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -49,27 +53,47 @@ describe("workspace bootstrap read diagnostics", () => {
     }
   });
 
-  it("marks oversized bootstrap files unreadable and warns with the bounded-read reason", async () => {
+  it.each([DEFAULT_AGENTS_FILENAME, DEFAULT_TOOLS_FILENAME])(
+    "marks oversized %s unreadable and warns with the bounded-read reason",
+    async (fileName) => {
+      const tempDir = tempDirs.make("openclaw-workspace-");
+      const agentsPath = path.join(tempDir, fileName);
+      await fs.writeFile(agentsPath, "x".repeat(MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES + 1));
+      const warn = captureWarningLogger();
+
+      const files = await loadWorkspaceBootstrapFiles(tempDir);
+      const agents = files.find((file) => file.name === fileName);
+      const warningText = warn.mock.calls.flat().map(String).join("\n");
+
+      expect(agents?.missing).toBe(false);
+      expect(agents?.content).toBe(
+        `[UNREADABLE: File exceeds ${MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES} bytes]`,
+      );
+      if (!agents) {
+        throw new Error(`expected ${fileName} bootstrap record`);
+      }
+      expect(buildBootstrapContextFiles([agents])).toEqual([
+        { path: agentsPath, content: agents.content },
+      ]);
+      expect(warningText).toContain(agentsPath);
+      expect(warningText).toContain(`File exceeds ${MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES} bytes`);
+    },
+  );
+
+  it("rejects an out-of-workspace TOOLS.md symlink without hiding the diagnostic", async () => {
     const tempDir = tempDirs.make("openclaw-workspace-");
-    const agentsPath = path.join(tempDir, DEFAULT_AGENTS_FILENAME);
-    await fs.writeFile(agentsPath, "x".repeat(MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES + 1));
+    const outsideDir = tempDirs.make("openclaw-tools-outside-");
+    const outsidePath = path.join(outsideDir, "notes.md");
+    await fs.writeFile(outsidePath, "outside content");
+    await fs.symlink(outsidePath, path.join(tempDir, DEFAULT_TOOLS_FILENAME));
     const warn = captureWarningLogger();
 
     const files = await loadWorkspaceBootstrapFiles(tempDir);
-    const agents = files.find((file) => file.name === DEFAULT_AGENTS_FILENAME);
-    const warningText = warn.mock.calls.flat().map(String).join("\n");
+    const tools = files.find((file) => file.name === DEFAULT_TOOLS_FILENAME);
 
-    expect(agents?.missing).toBe(false);
-    expect(agents?.content).toBe(
-      `[UNREADABLE: File exceeds ${MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES} bytes]`,
-    );
-    if (!agents) {
-      throw new Error("expected AGENTS.md bootstrap record");
-    }
-    expect(buildBootstrapContextFiles([agents])).toEqual([
-      { path: agentsPath, content: agents.content },
-    ]);
-    expect(warningText).toContain(agentsPath);
-    expect(warningText).toContain(`File exceeds ${MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES} bytes`);
+    expect(tools?.missing).toBe(false);
+    expect(tools?.content).toMatch(/^\[UNREADABLE:/);
+    expect(tools?.content).not.toContain("outside content");
+    expect(warn).toHaveBeenCalled();
   });
 });

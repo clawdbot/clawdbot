@@ -82,6 +82,9 @@ Optional default skill allowlist for agents that do not set
 
 Disables automatic creation of workspace bootstrap files (`AGENTS.md`, `SOUL.md`, `IDENTITY.md`, `USER.md`, `BOOTSTRAP.md`).
 
+Optional `TOOLS.md` is never created automatically. Its presence at the configured
+workspace root opts into loading; see [local environment notes](/reference/templates/TOOLS).
+
 ```json5
 {
   agents: { defaults: { skipBootstrap: true } },

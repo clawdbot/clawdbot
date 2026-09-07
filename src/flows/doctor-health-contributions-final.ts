@@ -30,7 +30,6 @@ import {
   runHooksModelHealth,
   runMemorySearchHealthContribution,
   runSkillsHealth,
-  runToolsMdMigrationHealth,
   runWorkspaceStatusHealth,
   runWorkspaceSuggestionsHealth,
 } from "./doctor-health-contribution-runners.workspace.js";
@@ -305,20 +304,6 @@ export function resolveFinalDoctorHealthContributions(params: {
         },
       },
       run: runHeartbeatScratchMigrationHealth,
-    }),
-    createDoctorHealthContribution({
-      id: "doctor:tools-md-migration",
-      label: "TOOLS.md migration",
-      healthChecks: {
-        description: "Workspace TOOLS.md notes must migrate into the AGENTS.md Tools section.",
-        defaultEnabled: true,
-        async detect(ctx) {
-          const { collectToolsMdMigrationFindings } =
-            await import("../commands/doctor-tools-md-migration.js");
-          return collectToolsMdMigrationFindings(ctx.cfg);
-        },
-      },
-      run: runToolsMdMigrationHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:heartbeat-task-cron-migration",

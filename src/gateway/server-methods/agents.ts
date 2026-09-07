@@ -74,6 +74,7 @@ import {
 import {
   DEFAULT_BOOTSTRAP_FILENAME,
   DEFAULT_IDENTITY_FILENAME,
+  DEFAULT_TOOLS_FILENAME,
   ensureAgentWorkspace,
   isExpectedAbsentBootstrapFile,
   isWorkspaceSetupCompleted,
@@ -265,12 +266,14 @@ async function listAgentFiles(workspaceDir: string, options?: { hideBootstrap?: 
   if (!workspaceRoot) {
     // Keep the UI shape stable when the workspace path is missing or unsafe.
     const missingNames = options?.hideBootstrap ? CORE_FILE_NAMES_POST_ONBOARDING : CORE_FILE_NAMES;
-    return missingNames.map((name) => ({
-      name,
-      path: path.join(workspaceDir, name),
-      missing: true,
-      expectedAbsent: isExpectedAbsentBootstrapFile(name),
-    }));
+    return missingNames
+      .filter((name) => name !== DEFAULT_TOOLS_FILENAME)
+      .map((name) => ({
+        name,
+        path: path.join(workspaceDir, name),
+        missing: true,
+        expectedAbsent: isExpectedAbsentBootstrapFile(name),
+      }));
   }
 
   const coreFileNames = options?.hideBootstrap ? CORE_FILE_NAMES_POST_ONBOARDING : CORE_FILE_NAMES;
@@ -285,7 +288,7 @@ async function listAgentFiles(workspaceDir: string, options?: { hideBootstrap?: 
         size: meta.size,
         updatedAtMs: meta.updatedAtMs,
       });
-    } else {
+    } else if (name !== DEFAULT_TOOLS_FILENAME) {
       files.push({
         name,
         path: filePath,

@@ -143,16 +143,19 @@ Regenerate with `pnpm prompt:snapshots:gen`; verify drift with `pnpm prompt:snap
 
 ## Workspace bootstrap injection
 
-Agent identity, instructions, and memory are resolved from the configured agent workspace and routed to the prompt surface matching their lifetime. When a session runs from another folder or managed worktree, that folder remains the execution workspace. Its `AGENTS.md` is appended after the configured workspace files as project context; OpenClaw does not load `SOUL.md`, `IDENTITY.md`, `USER.md`, `MEMORY.md`, or `BOOTSTRAP.md` from the execution folder.
+Agent identity, instructions, and memory are resolved from the configured agent workspace and routed to the prompt surface matching their lifetime. When a session runs from another folder or managed worktree, that folder remains the execution workspace. Its `AGENTS.md` is appended after the configured workspace files as project context; OpenClaw does not load `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `MEMORY.md`, or `BOOTSTRAP.md` from the execution folder.
 
 - `AGENTS.md`
 - `SOUL.md`
+- `TOOLS.md` when present (never created by setup)
 - `IDENTITY.md`
 - `USER.md`
 - `BOOTSTRAP.md` (only on brand-new workspaces)
 - `MEMORY.md` when present
 
 On the native Codex harness, OpenClaw avoids repeating stable workspace files in every user turn. Codex loads the execution folder's `AGENTS.md`, including its `## Tools` section, through native project-doc discovery, so OpenClaw does not inject that file again. When execution uses another folder, OpenClaw adds the configured agent workspace's bounded `AGENTS.md` snapshot to the thread-level developer instructions so native Codex sub-agents inherit it. `SOUL.md`, `IDENTITY.md`, and `USER.md` remain turn-scoped collaboration developer instructions and intentionally do not flow to native sub-agents. `MEMORY.md` content is not pasted into every native Codex turn either: when memory tools are available for the agent workspace, Codex turns get a small workspace-memory note directing the model to `memory_search` or `memory_get`. If tools are disabled or memory search is unavailable, `MEMORY.md` falls back to the normal bounded turn-context path. `BOOTSTRAP.md` keeps the normal turn-context role.
+
+Optional workspace-root `TOOLS.md` uses a bounded thread-level developer snapshot on Codex, including when execution uses the same workspace. It follows native developer-context inheritance and is not duplicated in user or collaboration input. Native role overrides can replace inherited instructions. Edits take effect in the next session; disabled-context modes suppress this carrier. See [Codex workspace context](/plugins/codex-harness-reference) for the exact gates and diagnostic limitations.
 
 Heartbeat monitor scratch is not a bootstrap file. The heartbeat runner appends it only to the scheduled heartbeat user message; normal turns do not receive it, and the system prompt contains no heartbeat-specific section.
 
@@ -173,7 +176,7 @@ When truncation happens, OpenClaw always injects a concise notice into the syste
 
 For memory files, truncation is not data loss: the file stays intact on disk. On native Codex, `MEMORY.md` is read on demand through memory tools when available, with bounded prompt fallback otherwise. On other harnesses, the model only sees the shortened injected copy until it reads or searches memory directly. If `MEMORY.md` is repeatedly truncated, distill it into a shorter durable summary, move detailed history into `memory/*.md`, or intentionally raise the bootstrap limits.
 
-Sub-agent sessions only inject `AGENTS.md` (other bootstrap files are filtered out to keep sub-agent context small).
+Sub-agent sessions inject `AGENTS.md` and optional `TOOLS.md` (other bootstrap files are filtered out to keep sub-agent context small). Ordinary cron sessions also include `TOOLS.md` when present; lightweight context excludes all workspace bootstrap files. An absent `TOOLS.md` adds no missing-file marker. See the [sandbox and Policy limitations](/concepts/agent-workspace#optional-toolsmd-limitations).
 
 Internal hooks can intercept this step via the `agent:bootstrap` event to mutate or replace the injected bootstrap files (for example swapping `SOUL.md` for an alternate persona).
 

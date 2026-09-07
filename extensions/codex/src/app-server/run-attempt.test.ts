@@ -403,7 +403,12 @@ async function buildCodexTurnContextForTest(
     memoryToolNames,
     ringZeroActive: false,
   });
-  const threadDeveloperInstructions = testing.buildDeveloperInstructions(params, { dynamicTools });
+  const threadDeveloperInstructions = [
+    testing.buildDeveloperInstructions(params, { dynamicTools }),
+    workspaceBootstrapContext.threadDeveloperInstructions,
+  ]
+    .filter(Boolean)
+    .join("\n\n");
   const openClawPromptContext = buildCodexOpenClawPromptContext({
     params,
     workspacePromptContext: workspaceBootstrapContext.promptContext,
@@ -4585,17 +4590,19 @@ describe("runCodexAppServerAttempt", () => {
     expect(inputText).toBe("hello");
     expect(inputText).not.toContain(memorySummary);
   });
-  it("sends turn-scoped workspace instructions through Codex app-server payloads", async () => {
+  it("routes thread- and turn-scoped workspace files through Codex app-server payloads", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();
     const agentsGuidance = "Follow AGENTS guidance.";
     const soulGuidance = "Soul voice goes here.";
     const identityGuidance = "Identity guidance goes here.";
     const userProfile = "User profile goes here.";
+    const toolsFacts = "Environment device aliases go here.";
     await fs.mkdir(workspaceDir, { recursive: true });
     await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), agentsGuidance);
     await fs.writeFile(path.join(workspaceDir, "SOUL.md"), soulGuidance);
     await fs.writeFile(path.join(workspaceDir, "IDENTITY.md"), identityGuidance);
     await fs.writeFile(path.join(workspaceDir, "USER.md"), userProfile);
+    await fs.writeFile(path.join(workspaceDir, "TOOLS.md"), toolsFacts);
     const harness = createStartedThreadHarness();
     const params = createParams(sessionFile, workspaceDir);
     setAgentWorkspaceForTest(params, workspaceDir);
@@ -4616,6 +4623,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(threadStartParams.developerInstructions).not.toContain(soulGuidance);
     expect(threadStartParams.developerInstructions).not.toContain(identityGuidance);
     expect(threadStartParams.developerInstructions).not.toContain(userProfile);
+    expect(threadStartParams.developerInstructions).toContain(toolsFacts);
     const turnStart = harness.requests.find((request) => request.method === "turn/start");
     const turnStartParams = turnStart?.params as {
       input?: Array<{ text?: string }>;
@@ -4633,9 +4641,18 @@ describe("runCodexAppServerAttempt", () => {
     expect(collaborationInstructions).toContain(soulGuidance);
     expect(collaborationInstructions).toContain(identityGuidance);
     expect(collaborationInstructions).toContain(userProfile);
+    expect(collaborationInstructions).not.toContain(toolsFacts);
     const inputText = turnStartParams.input?.[0]?.text ?? "";
     expect(inputText).toBe("hello");
     expect(inputText).not.toContain(agentsGuidance);
+    expect(inputText).not.toContain(toolsFacts);
+    expect(
+      result.systemPromptReport?.injectedWorkspaceFiles.find((file) => file.name === "TOOLS.md"),
+    ).toMatchObject({
+      rawChars: toolsFacts.length,
+      injectedChars: toolsFacts.length,
+      truncated: false,
+    });
     expect(result.systemPromptReport?.systemPrompt.chars).toBe(
       [threadStartParams.developerInstructions ?? "", collaborationInstructions].join("\n\n")
         .length,
@@ -4647,10 +4664,12 @@ describe("runCodexAppServerAttempt", () => {
     const agentWorkspaceDir = path.join(tempDir, "agent-workspace");
     const agentsGuidance = "Follow agent workspace AGENTS guidance.";
     const soulGuidance = "Keep the agent workspace voice.";
+    const toolsFacts = "Use the agent workspace device aliases.";
     await fs.mkdir(executionDir, { recursive: true });
     await fs.mkdir(agentWorkspaceDir, { recursive: true });
     await fs.writeFile(path.join(agentWorkspaceDir, "AGENTS.md"), agentsGuidance);
     await fs.writeFile(path.join(agentWorkspaceDir, "SOUL.md"), soulGuidance);
+    await fs.writeFile(path.join(agentWorkspaceDir, "TOOLS.md"), toolsFacts);
     await fs.writeFile(path.join(executionDir, "AGENTS.md"), "Execution project instructions");
     const harness = createStartedThreadHarness(undefined, { persistedThreads: [] });
     const params = createParams(sessionFile, executionDir);
@@ -4671,6 +4690,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(threadInstructions).toContain("OpenClaw Agent Workspace Instructions");
     expect(threadInstructions).toContain(path.join(agentWorkspaceDir, "AGENTS.md"));
     expect(threadInstructions).toContain(agentsGuidance);
+    expect(threadInstructions).toContain(toolsFacts);
     expect(threadInstructions).not.toContain(soulGuidance);
 
     const turnStart = harness.requests.find((request) => request.method === "turn/start");
@@ -4685,6 +4705,7 @@ describe("runCodexAppServerAttempt", () => {
       ).collaborationMode?.settings?.developer_instructions ?? "";
     expect(collaborationInstructions).toContain(soulGuidance);
     expect(collaborationInstructions).not.toContain(agentsGuidance);
+    expect(collaborationInstructions).not.toContain(toolsFacts);
     const agentWorkspaceStats = result.systemPromptReport?.injectedWorkspaceFiles.find(
       (file) => file.path === path.join(agentWorkspaceDir, "AGENTS.md"),
     );
@@ -4696,6 +4717,8 @@ describe("runCodexAppServerAttempt", () => {
 
     const updatedGuidance = "Updated AGENTS guidance must wait for a new session.";
     await fs.writeFile(path.join(agentWorkspaceDir, "AGENTS.md"), updatedGuidance);
+    const updatedToolsFacts = "Updated device aliases must wait for a new session.";
+    await fs.writeFile(path.join(agentWorkspaceDir, "TOOLS.md"), updatedToolsFacts);
     harness.close();
     const resumeHarness = createResumeHarness("thread-1");
     const resumeParams = createParams(sessionFile, executionDir);
@@ -4719,8 +4742,102 @@ describe("runCodexAppServerAttempt", () => {
     const resumedInstructions =
       (threadResume.params as { developerInstructions?: string }).developerInstructions ?? "";
     expect(resumedInstructions).toContain(agentsGuidance);
+    expect(resumedInstructions).toContain(toolsFacts);
     expect(resumedInstructions).not.toContain(updatedGuidance);
+    expect(resumedInstructions).not.toContain(updatedToolsFacts);
   });
+
+  it.each(["created", "removed"] as const)(
+    "keeps the bound thread snapshot when optional TOOLS.md is %s until a new session",
+    async (change) => {
+      const { sessionFile, workspaceDir } = createRunPaths();
+      const toolsPath = path.join(workspaceDir, "TOOLS.md");
+      const toolsFacts = "Optional workspace device inventory.";
+      await fs.mkdir(workspaceDir, { recursive: true });
+      if (change === "removed") {
+        await fs.writeFile(toolsPath, toolsFacts);
+      }
+      const params = createParams(sessionFile, workspaceDir);
+      setAgentWorkspaceForTest(params, workspaceDir);
+      const harness = createStartedThreadHarness(undefined, { persistedThreads: [] });
+      const run = runCodexAppServerAttempt(params);
+      await harness.waitForMethod("turn/start");
+      await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+      expect(readAttemptTerminal(await run)).toMatchObject({ promptError: null });
+      const binding = await readCodexAppServerBinding(sessionFile);
+      expect(binding?.agentWorkspaceDeveloperInstructions?.includes(toolsFacts) ?? false).toBe(
+        change === "removed",
+      );
+      harness.close();
+
+      if (change === "created") {
+        await fs.writeFile(toolsPath, toolsFacts);
+      } else {
+        await fs.unlink(toolsPath);
+      }
+      const resumeHarness = createResumeHarness("thread-1");
+      const resumedRun = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
+      await Promise.race([resumedRun, resumeHarness.waitForMethod("turn/start")]);
+      await resumeHarness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+      expect(readAttemptTerminal(await resumedRun)).toMatchObject({ promptError: null });
+      const resume = resumeHarness.requests.find((request) => request.method === "thread/resume");
+      expect(resume).toBeDefined();
+      const resumedInstructions =
+        (resume?.params as { developerInstructions?: string }).developerInstructions ?? "";
+      expect(resumedInstructions.includes(toolsFacts)).toBe(change === "removed");
+      resumeHarness.close();
+
+      const nextHarness = createStartedThreadHarness(
+        async (method) => (method === "thread/start" ? threadStartResult("thread-new") : undefined),
+        { persistedThreads: [] },
+      );
+      const nextParams = createParams(path.join(tempDir, "next-session.jsonl"), workspaceDir, {
+        sessionId: "session-new",
+        sessionKey: "agent:main:session-new",
+      });
+      setAgentWorkspaceForTest(nextParams, workspaceDir);
+      const nextRun = runCodexAppServerAttempt(nextParams);
+      await nextHarness.waitForMethod("turn/start");
+      await nextHarness.completeTurn({ threadId: "thread-new", turnId: "turn-1" });
+      expect(readAttemptTerminal(await nextRun)).toMatchObject({ promptError: null });
+      const nextStart = nextHarness.requests.find((request) => request.method === "thread/start");
+      const nextInstructions =
+        (nextStart?.params as { developerInstructions?: string }).developerInstructions ?? "";
+      expect(nextInstructions.includes(toolsFacts)).toBe(change === "created");
+    },
+  );
+
+  it.each(["never", "lightweight"] as const)(
+    "does not restore inherited TOOLS.md into a %s context turn",
+    async (mode) => {
+      const { sessionFile, workspaceDir } = createRunPaths();
+      const snapshot = "Previously inherited workspace environment facts.";
+      await fs.mkdir(workspaceDir, { recursive: true });
+      await fs.writeFile(path.join(workspaceDir, "TOOLS.md"), snapshot);
+      await writeExistingBinding(sessionFile, workspaceDir, {
+        dynamicToolsFingerprint: "[]",
+        agentWorkspaceDeveloperInstructions: snapshot,
+      });
+      const harness = createResumeHarness();
+      const params = createParams(sessionFile, workspaceDir);
+      setAgentWorkspaceForTest(params, workspaceDir);
+      if (mode === "never") {
+        params.config!.agents!.defaults!.contextInjection = "never";
+      } else {
+        params.bootstrapContextMode = "lightweight";
+        params.bootstrapContextRunKind = "cron";
+      }
+      const run = runCodexAppServerAttempt(params);
+      await Promise.race([run, harness.waitForMethod("turn/start")]);
+      await harness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
+      expect(readAttemptTerminal(await run)).toMatchObject({ promptError: null });
+      const resume = harness.requests.find((request) => request.method === "thread/resume");
+      expect(resume).toBeDefined();
+      expect(
+        (resume?.params as { developerInstructions?: string }).developerInstructions,
+      ).not.toContain(snapshot);
+    },
+  );
 
   it.each([
     "unchanged",
@@ -5177,6 +5294,7 @@ describe("runCodexAppServerAttempt", () => {
     await fs.mkdir(workspaceDir, { recursive: true });
     await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "Follow AGENTS guidance.");
     await fs.writeFile(path.join(workspaceDir, "SOUL.md"), "Soul voice goes here.");
+    await fs.writeFile(path.join(workspaceDir, "TOOLS.md"), "Environment facts go here.");
     const harness = createStartedThreadHarness();
     const params = createParams(sessionFile, workspaceDir);
     params.trigger = "cron";
@@ -5202,6 +5320,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(threadStartParams.config?.project_doc_max_bytes).toBe(0);
     expect(threadStartParams.developerInstructions).not.toContain("Soul voice goes here.");
     expect(threadStartParams.developerInstructions).not.toContain("Follow AGENTS guidance.");
+    expect(threadStartParams.developerInstructions).not.toContain("Environment facts go here.");
     expect(threadStartParams.developerInstructions).not.toContain("<available_skills>");
     const turnStart = harness.requests.find((request) => request.method === "turn/start");
     const turnStartParams = turnStart?.params as {

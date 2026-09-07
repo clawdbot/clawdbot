@@ -1050,9 +1050,21 @@ filesystem environment, so OpenClaw instead sends the bounded workspace
 lightweight, message-only, and tool-disabled internal turns suppress that
 carrier.
 
-For OpenClaw workspace parity, local tool notes live in the `## Tools` section
-of `AGENTS.md` and normally ride Codex's native project-doc discovery. The
-Codex harness forwards the other bootstrap files as developer instructions:
+Local tool notes can stay in the `## Tools` section of `AGENTS.md`, normally
+carried by native project-doc discovery, or in an optional workspace-root
+`TOOLS.md`. The Codex harness routes workspace context as follows:
+
+- A present `TOOLS.md` uses a bounded **thread-level** developer snapshot from
+  the configured agent workspace, even when execution uses the same directory.
+  It is not repeated in user input or turn-scoped collaboration instructions.
+  Native children inherit this snapshot under Codex's existing developer-context
+  contract; native role or subagent overrides can replace it. File creation,
+  edits, and removal take effect in the next session, not halfway through an
+  existing thread. Ring-zero, lightweight, message-only, policy-restricted
+  tool-disabled, and `contextInjection: "never"` turns suppress this carrier.
+  Per-file diagnostics describe freshly loaded workspace files, which can differ
+  from the retained thread snapshot after an edit. See the [sandbox and Policy
+  limitations](/concepts/agent-workspace#optional-toolsmd-limitations).
 
 - `SOUL.md`, `IDENTITY.md`, and `USER.md` are forwarded as **turn-scoped**
   collaboration instructions. Native Codex subagents do not inherit them,

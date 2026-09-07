@@ -160,6 +160,7 @@ export async function prepareCodexAttemptContext(
     historyState.messages = (await readFencedHistory()) ?? historyState.messages;
   }
   const memoryToolNames = getCodexWorkspaceMemoryToolNames(toolBridge.availableSpecs);
+  const startupBinding = connection.mutable.startupBinding;
   const workspaceBootstrapContext = await buildCodexWorkspaceBootstrapContext({
     params: runtimeParams,
     resolvedWorkspace: runtimeParams.bootstrapWorkspaceDir ?? resolvedWorkspace,
@@ -172,13 +173,14 @@ export async function prepareCodexAttemptContext(
       isHostScopedAgentToolActive("openclaw") &&
       isSystemAgentOnlyCodexDynamicToolAllowlist(runtimeParams.toolsAllow),
     sandboxed: sandbox?.enabled === true,
+    retainedThreadContext: startupBinding?.threadId
+      ? { instructions: startupBinding.agentWorkspaceDeveloperInstructions }
+      : undefined,
   });
   // A thread keeps the bounded agent-workspace snapshot captured at creation.
-  // Workspace edits take effect only in the next session.
-  const agentWorkspaceDeveloperInstructions = workspaceBootstrapContext.threadDeveloperInstructions
-    ? (connection.mutable.startupBinding?.agentWorkspaceDeveloperInstructions ??
-      workspaceBootstrapContext.threadDeveloperInstructions)
-    : undefined;
+  // Missing files are part of that snapshot too: later creation or deletion must
+  // not change inherited context. Disabled-context turns never revive a snapshot.
+  const agentWorkspaceDeveloperInstructions = workspaceBootstrapContext.threadDeveloperInstructions;
   const baseDeveloperInstructions = joinPresentSections(
     buildDeveloperInstructions(runtimeParams, {
       dynamicTools: toolBridge.availableSpecs,

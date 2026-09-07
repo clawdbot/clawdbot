@@ -172,9 +172,7 @@ const mocks = vi.hoisted(() => ({
   collectHeartbeatCadenceMigrationFindings: vi.fn(async () => [] as unknown[]),
   maybeMigrateHeartbeatCadenceToCron: vi.fn().mockResolvedValue({ changes: [], warnings: [] }),
   collectHeartbeatScratchMigrationFindings: vi.fn(async () => [] as unknown[]),
-  collectToolsMdMigrationFindings: vi.fn(async () => [] as unknown[]),
   maybeMigrateHeartbeatFilesToScratch: vi.fn().mockResolvedValue({ changes: [], warnings: [] }),
-  maybeMigrateToolsMd: vi.fn().mockResolvedValue({ changes: [], warnings: [] }),
   collectHeartbeatTaskMigrationFindings: vi.fn(async () => [] as unknown[]),
   maybeMigrateHeartbeatTasksToCron: vi.fn().mockResolvedValue({ changes: [], warnings: [] }),
   collectWhatsappResponsivenessHealthFindings: vi.fn((): readonly HealthFinding[] => []),
@@ -557,11 +555,6 @@ vi.mock("../commands/doctor-heartbeat-scratch-migration.js", () => ({
   maybeMigrateHeartbeatFilesToScratch: mocks.maybeMigrateHeartbeatFilesToScratch,
 }));
 
-vi.mock("../commands/doctor-tools-md-migration.js", () => ({
-  collectToolsMdMigrationFindings: mocks.collectToolsMdMigrationFindings,
-  maybeMigrateToolsMd: mocks.maybeMigrateToolsMd,
-}));
-
 vi.mock("../commands/doctor-heartbeat-task-migration.js", () => ({
   collectHeartbeatTaskMigrationFindings: mocks.collectHeartbeatTaskMigrationFindings,
   maybeMigrateHeartbeatTasksToCron: mocks.maybeMigrateHeartbeatTasksToCron,
@@ -856,8 +849,6 @@ describe("doctor health contributions", () => {
     mocks.maybeMigrateHeartbeatFilesToScratch
       .mockReset()
       .mockResolvedValue({ changes: [], warnings: [] });
-    mocks.collectToolsMdMigrationFindings.mockReset().mockResolvedValue([]);
-    mocks.maybeMigrateToolsMd.mockReset().mockResolvedValue({ changes: [], warnings: [] });
     mocks.collectHeartbeatTaskMigrationFindings.mockReset().mockResolvedValue([]);
     mocks.maybeMigrateHeartbeatTasksToCron
       .mockReset()
@@ -2780,6 +2771,11 @@ describe("doctor health contributions", () => {
     );
     const contributionChecks = await resolveDoctorContributionHealthChecks();
 
+    // Optional local notes must never re-enter Doctor's automatic merge/delete path.
+    expect(contributionIds).not.toContain("core/doctor/tools-md-migration");
+    expect(resolveDoctorHealthContributions().map((entry) => entry.id)).not.toContain(
+      "doctor:tools-md-migration",
+    );
     for (const coreId of coreIds) {
       expect(contributionIds).toContain(coreId);
     }

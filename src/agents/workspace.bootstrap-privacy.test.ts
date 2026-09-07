@@ -15,6 +15,7 @@ import {
 const mockFiles: WorkspaceBootstrapFile[] = [
   { name: "AGENTS.md", path: "/w/AGENTS.md", content: "", missing: false },
   { name: "SOUL.md", path: "/w/SOUL.md", content: "", missing: false },
+  { name: "TOOLS.md", path: "/w/TOOLS.md", content: "", missing: false },
   { name: "IDENTITY.md", path: "/w/IDENTITY.md", content: "", missing: false },
   { name: "USER.md", path: "/w/USER.md", content: "", missing: false },
   { name: "BOOTSTRAP.md", path: "/w/BOOTSTRAP.md", content: "", missing: false },
@@ -106,6 +107,7 @@ describe("filterBootstrapFilesForSession privacy", () => {
 
   it.each([
     ["subagent", "agent:default:subagent:task-1", "AGENTS.md"],
+    ["subagent tools", "agent:default:subagent:task-1", "TOOLS.md"],
     ["cron", "agent:default:cron:daily-check", "SOUL.md"],
   ] as const)(
     "drops root memory path aliases before the %s allowlist",

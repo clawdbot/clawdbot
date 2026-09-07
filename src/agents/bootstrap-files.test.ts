@@ -27,6 +27,7 @@ import {
 } from "../test-utils/openclaw-test-state.js";
 import { resolveBootstrapContextForDiagnostics } from "./bootstrap-files-diagnostics.js";
 import {
+  buildBootstrapContextForFiles,
   FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE,
   hasCompletedBootstrapTurn,
   makeBootstrapWarn,
@@ -216,6 +217,31 @@ function expectHeartbeatExcludedAndAgentsKept(files: WorkspaceBootstrapFile[]) {
   expect(fileNames).not.toContain("HEARTBEAT.md");
   expect(fileNames).toContain("AGENTS.md");
 }
+
+describe("buildBootstrapContextForFiles retained budget", () => {
+  it("reserves retained context before applying per-file and total limits", () => {
+    const files: WorkspaceBootstrapFile[] = [
+      {
+        name: "SOUL.md",
+        path: "/workspace/SOUL.md",
+        content: "persona\n".repeat(100),
+        missing: false,
+      },
+    ];
+    const config = {
+      agents: { defaults: { bootstrapMaxChars: 256, bootstrapTotalMaxChars: 512 } },
+    };
+
+    const fresh = buildBootstrapContextForFiles(files, { config, reservedChars: 384 });
+    expect(fresh).toHaveLength(1);
+    expect(fresh[0]?.content.length).toBeLessThanOrEqual(128);
+    expect(buildBootstrapContextForFiles(files, { config, reservedChars: 512 })).toEqual([]);
+    expect(() => buildBootstrapContextForFiles(files, { config, reservedChars: -1 })).toThrow(
+      RangeError,
+    );
+    expect(config.agents.defaults.bootstrapTotalMaxChars).toBe(512);
+  });
+});
 
 describe("resolveBootstrapFilesForRun", () => {
   beforeEach(async () => {
@@ -684,9 +710,30 @@ describe("resolveBootstrapContextForRun", () => {
     expect(contextFileNames.has("AGENTS.md")).toBe(true);
   });
 
+  it.each(["agent:main:main", "agent:main:subagent:task-1", "agent:main:cron:daily-check"])(
+    "injects opted-in TOOLS.md within the bootstrap budget for %s",
+    async (sessionKey) => {
+      const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-tools-");
+      await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "rules", "utf8");
+      await fs.writeFile(path.join(workspaceDir, "TOOLS.md"), "local notes\n".repeat(100), "utf8");
+
+      const result = await resolveBootstrapContextForRun({
+        workspaceDir,
+        sessionKey,
+        config: { agents: { defaults: { bootstrapMaxChars: 128, bootstrapTotalMaxChars: 1024 } } },
+      });
+      const tools = result.contextFiles.find((file) => path.basename(file.path) === "TOOLS.md");
+
+      expect(tools).toBeDefined();
+      expect(tools?.content.length).toBeLessThanOrEqual(128);
+      expect(tools?.content).toContain("truncated");
+    },
+  );
+
   it("keeps bootstrap context empty in lightweight heartbeat mode", async () => {
     const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
     await fs.writeFile(path.join(workspaceDir, "SOUL.md"), "persona", "utf8");
+    await fs.writeFile(path.join(workspaceDir, "TOOLS.md"), "local notes", "utf8");
 
     const files = await resolveBootstrapFilesForRun({
       workspaceDir,
@@ -701,6 +748,7 @@ describe("resolveBootstrapContextForRun", () => {
   it("keeps bootstrap context empty in lightweight cron mode", async () => {
     const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
     await fs.writeFile(path.join(workspaceDir, "HEARTBEAT.md"), "check inbox", "utf8");
+    await fs.writeFile(path.join(workspaceDir, "TOOLS.md"), "local notes", "utf8");
 
     const files = await resolveBootstrapFilesForRun({
       workspaceDir,

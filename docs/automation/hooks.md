@@ -459,22 +459,22 @@ these are alternatives, not merged lists. Without patterns, the hook does nothin
 
 Paths resolve relative to the event's workspace and must remain inside it,
 including after symlink resolution. Only these basenames load: `AGENTS.md`,
-`SOUL.md`, `IDENTITY.md`, `USER.md`, `BOOTSTRAP.md`, and `MEMORY.md`.
+`SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `BOOTSTRAP.md`, and `MEMORY.md`.
 
 Extra files go through normal bootstrap filtering and injection limits. Reads
 are capped at 2 MiB per file. Injection defaults to 20,000 characters per file
 and 60,000 total, controlled by `bootstrapMaxChars` and
 `bootstrapTotalMaxChars` in agent defaults or overrides; `USER.md` has a separate
 4,000-character cap. Duplicate paths are removed. Subagents retain only
-`AGENTS.md`; cron and non-private conversations have additional context/privacy
+`AGENTS.md` and `TOOLS.md`; cron and non-private conversations have additional context/privacy
 filters. Inspect the actual injected result with `/context detail`; see
 [Context](/concepts/context).
 
-`TOOLS.md` is not a recognized runtime bootstrap basename.
-`openclaw doctor --fix` archives workspace-root `TOOLS.md` and merges customized
-content into the `## Tools` section of `AGENTS.md`. Other `TOOLS.md` files named
-by patterns are not migrated;
-point those patterns at `AGENTS.md` instead.
+Workspace-root `TOOLS.md` loads when present without this hook. Nested files load
+only through explicitly configured patterns; OpenClaw does not discover them
+recursively by default. Doctor does not migrate or delete these files. Native
+Codex's inherited workspace-notes carrier uses only the configured workspace-root
+`TOOLS.md`, not nested hook files.
 
 <a id="command-logger"></a>
 

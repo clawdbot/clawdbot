@@ -269,6 +269,19 @@ is unavailable. Carry the result through the native runtime's existing
 per-turn application or developer context instead of appending it to stable
 thread instructions.
 
+### Retained workspace context budgets
+
+`buildBootstrapContextForFiles` from `openclaw/plugin-sdk/agent-harness-runtime`
+applies the configured per-file and total bootstrap limits. A harness retaining a
+separately bounded workspace snapshot can pass `reservedChars` to subtract its
+occupied characters before budgeting fresh files. The reservation must be a
+non-negative safe integer; an exhausted budget returns no fresh files.
+
+Exclude retained files from the fresh input set and use the same reservation on
+creation and resume. Otherwise, editing a file that will not be reinjected can
+still resize the other files' budget. The helper does not truncate or validate
+the retained snapshot itself.
+
 ## Register a harness
 
 **Import:** `openclaw/plugin-sdk/agent-harness`

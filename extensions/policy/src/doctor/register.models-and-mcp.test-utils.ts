@@ -322,7 +322,7 @@ describe("registerPolicyDoctorChecks", () => {
         checkId: "policy/tools-md-migration-required",
         severity: "error",
         message:
-          "TOOLS.md contains unmigrated governed tool declarations; run `openclaw doctor --fix` to migrate them into the AGENTS.md `## Tools` section before policy evaluation can pass.",
+          "TOOLS.md is present while tools.requireMetadata is enabled. Policy cannot distinguish optional notes from legacy governed declarations; review the file manually before policy evaluation can pass.",
         path: "TOOLS.md",
       }),
     ]);
