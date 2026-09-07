@@ -1045,6 +1045,7 @@ describe("toSanitizedMarkdownHtml links", () => {
       ["a non-github url", "`https://example.com/o/r/pull/3434`"],
       ["a url with leading prose", "`see https://github.com/o/r/pull/3434`"],
       ["a url with trailing prose", "`https://github.com/o/r/pull/3434 see this`"],
+      ["a url with one-sided padding", "`https://github.com/o/r/pull/3434 `"],
       ["a url with prose after a fragment", "`https://github.com/o/r/pull/3434#top see this`"],
       [
         "a code span inside an authored link",

@@ -525,10 +525,11 @@ export function createMarkdownParser(): MarkdownItParser {
           continue;
         }
         if (open?.type === "code_inline" && linkDepth === 0) {
-          const content = open.content.trim();
-          // The URL parser percent-encodes inner whitespace instead of failing,
-          // so a span with trailing prose would otherwise fold that prose into
-          // the href; only a span that is entirely one URL is promoted.
+          // The URL parser percent-encodes whitespace instead of failing, so a
+          // span with prose beside the URL would fold that prose into the href.
+          // CommonMark has already stripped symmetric padding; anything left is
+          // content, and only a span that is entirely one URL is promoted.
+          const content = open.content;
           const codeUrl = /\s/.test(content) ? null : parseWebLinkHref(content);
           if (!codeUrl || !isGitHubHost(codeUrl.hostname)) {
             continue;
