@@ -72,6 +72,12 @@ export type DebugOverlayStatusSample = {
 type ActiveSession = {
   key?: string;
   sessionId?: string;
+  activeRunIds?: string[];
+};
+
+type ActiveRunRow = {
+  sessionId: string;
+  runId?: string;
 };
 
 function renderLanes(diagnostics: CommandLaneDiagnostics): TemplateResult {
@@ -218,16 +224,26 @@ function renderStatus(
 }
 
 function renderActiveRuns(sessions: ActiveSession[]): TemplateResult {
+  const rows: ActiveRunRow[] = [];
+  for (const session of sessions) {
+    const sessionId = session.sessionId ?? session.key ?? t("common.unknown");
+    if (session.activeRunIds?.length) {
+      rows.push(...session.activeRunIds.map((runId) => ({ sessionId, runId })));
+    } else {
+      rows.push({ sessionId });
+    }
+  }
   return html`
     <div class="debug-overlay__count">
-      ${t("debug.overlay.activeRunsCount", { count: String(sessions.length) })}
+      ${t("debug.overlay.activeRunsCount", { count: String(rows.length) })}
     </div>
     ${
-      sessions.length > 0
+      rows.length > 0
         ? html`<ul class="debug-overlay__list">
-            ${sessions.map((session) => {
-              const id = session.sessionId ?? session.key ?? t("common.unknown");
-              return html`<li class="mono" title=${id}>${truncateUtf16Safe(id, 32)}</li>`;
+            ${rows.map((row) => {
+              const label =
+                row.runId === undefined ? row.sessionId : `${row.sessionId} / ${row.runId}`;
+              return html`<li class="mono" title=${label}>${truncateUtf16Safe(label, 64)}</li>`;
             })}
           </ul>`
         : html`<div class="debug-overlay__empty">${t("debug.overlay.noActiveRuns")}</div>`
