@@ -254,6 +254,10 @@ the marker, including the schema-16 Skill Workshop rebuild; it does not infer
 completion from table shape or repeat the rebuild. This requires no new table,
 configuration option, or environment override.
 
+Current content is ready for readers even while its version is unpublished.
+Ordinary CLI commands can run alongside the Gateway throughout this window;
+publication alone does not trigger schema repair or require stopping the Gateway.
+
 Publication waits until **every** update row whose `before.version` identifies
 the 2026.9.2 release line meets its applicable condition:
 
@@ -265,7 +269,9 @@ the 2026.9.2 release line meets its applicable condition:
 A missing ledger or no affected rows permits immediate publication. Deadlines
 come from the rows' timestamps, never the observing process's start time. The
 new Gateway's ledger watcher schedules publication at the applicable deadline
-without jitter, and any later writable database open can publish it too.
+without jitter. Publication holds the Gateway lifecycle fence: the owning Gateway
+can publish, and a later writable open can publish when no Gateway owns the state
+directory. Other processes silently leave publication to that owner.
 Publication rereads the content marker and all affected rows inside one
 synchronous write transaction before advancing both published schema markers.
 A new or refreshed running row blocks publication again. Restarting the Gateway

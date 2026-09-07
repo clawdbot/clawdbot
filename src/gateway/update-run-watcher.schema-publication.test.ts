@@ -37,7 +37,8 @@ function createDeferredState() {
     VALUES ('state.schema.contentVersion', ?, ?)`).run(String(OPENCLAW_STATE_SCHEMA_VERSION), now);
   db.exec(`PRAGMA user_version = 15;
     UPDATE schema_meta SET schema_version = 15 WHERE meta_key = 'primary';`);
-  return { db, runId: run.runId };
+  closeOpenClawStateDatabaseForTest();
+  return { db: openOpenClawStateDatabase().db, runId: run.runId };
 }
 
 function expectVersion(db: DatabaseSync, version: number) {

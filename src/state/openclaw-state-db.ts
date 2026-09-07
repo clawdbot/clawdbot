@@ -30,7 +30,10 @@ import {
   type SqliteTransactionOptions,
 } from "../infra/sqlite-transaction.js";
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
-import { withStateSchemaFence } from "../infra/state-database-coordinator.js";
+import {
+  StateSchemaMutationConflictError,
+  withStateSchemaFence,
+} from "../infra/state-database-coordinator.js";
 import { migrateLegacyCronRunLogsToTaskRuns } from "../infra/state-migrations.cron-run-logs.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { clearOpenClawDatabaseQuarantine } from "./openclaw-quarantine-store.js";
@@ -53,6 +56,7 @@ import {
 import {
   assertCurrentStateRuntimeSchema,
   isOpenClawStateSchemaFastPathEligible,
+  needsOpenClawStateDatabaseSchemaRepair,
 } from "./openclaw-state-db-fast-path.js";
 import {
   assertOpenClawStateDatabaseForMaintenance,
@@ -76,7 +80,6 @@ import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import {
   type AgentDatabasePathMigrationSummary as AgentPathSummary,
   assertCanonicalStateSchemaShape,
-  detectOpenClawStateDatabaseSchemaMigrationsFromDatabase,
   dropLegacyStateTables,
   migrateAgentDatabaseRelativePaths as migrateAgentPaths,
   migrateWorkerPlacementExecutionModeSchema,
@@ -310,26 +313,6 @@ export function repairOpenClawStateDatabaseSchema(options: OpenClawStateDatabase
     "state schema repair",
     () => withStateSchemaFence({ databasePath: pathname }, () => repairStateSchema(pathname, env)),
   );
-}
-
-function needsOpenClawStateDatabaseSchemaRepair(pathname: string): boolean {
-  let database: DatabaseSync | undefined;
-  try {
-    database = openNodeSqliteDatabase(pathname, { readOnly: true });
-    assertSupportedStateSchemaVersion(database, pathname);
-    const needsRepair =
-      readSqliteUserVersion(database) !== OPENCLAW_STATE_SCHEMA_VERSION ||
-      detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(database, pathname).length > 0;
-    if (!needsRepair) {
-      assertCurrentStateRuntimeSchema(database, pathname);
-    }
-    return needsRepair;
-  } catch {
-    // Preserve the repair path's existing diagnostics for unreadable or noncanonical databases.
-    return true;
-  } finally {
-    database?.close();
-  }
 }
 
 /** Skip the exclusive doctor repair when automatic migration sees a canonical current schema. */
@@ -612,10 +595,12 @@ function openOpenClawStateDatabaseWithBusyTimeout(
     }
     throw error;
   }
-  if (readSqliteUserVersion(unpublished.db) < OPENCLAW_STATE_SCHEMA_VERSION) {
-    deferredStateDatabases.add(unpublished.db);
+  const database = stateDbCache.publishOpenClawStateDatabase(unpublished);
+  if (readSqliteUserVersion(database.db) < OPENCLAW_STATE_SCHEMA_VERSION) {
+    deferredStateDatabases.add(database.db);
+    reconcileOpenClawStateSchemaPublication(options);
   }
-  return stateDbCache.publishOpenClawStateDatabase(unpublished);
+  return database;
 }
 
 /** Open or return a cached shared state database after schema and migration checks. */
@@ -641,20 +626,31 @@ export function reconcileOpenClawStateSchemaPublication(
   if (!pending || pending.blocker) {
     return pending?.blocker;
   }
-  return runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      // The advisory read may race a new update. Re-read every driver under the write lock.
-      const blocker = readStateSchemaPublicationBlocker(db);
-      if (blocker) {
-        return blocker;
-      }
-      assertOpenClawStateDatabaseForMaintenance(db, { pathname: resolveDatabasePath(options) });
-      markCurrentStateSchemaVersion(db);
+  const pathname = resolveDatabasePath(options);
+  try {
+    return withStateSchemaFence({ databasePath: pathname }, () =>
+      runOpenClawStateWriteTransaction(
+        ({ db }) => {
+          // The advisory read may race a new update. Re-read every driver under the write lock.
+          const blocker = readStateSchemaPublicationBlocker(db);
+          if (blocker) {
+            return blocker;
+          }
+          assertOpenClawStateDatabaseForMaintenance(db, { pathname });
+          markCurrentStateSchemaVersion(db);
+          return undefined;
+        },
+        options,
+        { operationLabel: "state.schema.publish" },
+      ),
+    );
+  } catch (error) {
+    // Current content is ready for readers; a live Gateway owns optional publication.
+    if (error instanceof StateSchemaMutationConflictError) {
       return undefined;
-    },
-    options,
-    { operationLabel: "state.schema.publish" },
-  );
+    }
+    throw error;
+  }
 }
 
 /** Run one operation through the shared owner without waiting synchronously on SQLite locks. */

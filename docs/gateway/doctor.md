@@ -89,6 +89,10 @@ five minutes old; a running row unchanged for more than 30 minutes counts as
 abandoned. Every writable database open follows this rule, and the Gateway
 watcher schedules publication after the deadline.
 
+Ordinary CLI commands, including Doctor, remain usable while that Gateway runs.
+Applied content counts as ready; only the owning Gateway, or a writable opener
+when no Gateway owns the state directory, publishes the version after the grace.
+
 Deferral does not cover agent-database migrations. Doctor reports
 `update-schema-bump-unfenced` if one is pending, if the required shared-state
 metadata table is missing, or if the content migration fails. Follow the
