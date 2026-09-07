@@ -1,4 +1,5 @@
 // WhatsApp monitor inbox behavior split by ownership.
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearWhatsAppApprovalReactionTargetsForTest,
@@ -44,8 +45,8 @@ describe("web monitor inbox delivery and dedupe", () => {
       approvalKind: "exec",
       allowedDecisions: ["allow-once", "deny"],
     });
-    const replayStarted = Promise.withResolvers<void>();
-    const finishReplay = Promise.withResolvers<void>();
+    const replayStarted = createDeferred<void>();
+    const finishReplay = createDeferred<void>();
     approvalResolver
       .mockRejectedValueOnce(new Error("gateway 503"))
       .mockRejectedValueOnce(new Error("gateway still unavailable"))
