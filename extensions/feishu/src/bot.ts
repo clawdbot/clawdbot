@@ -784,6 +784,10 @@ export async function handleFeishuMessage(params: {
     let effectiveShouldComputeCommandAuthorized =
       directAuthorization?.shouldComputeCommandAuthorized ?? shouldComputeCommandAuthorized;
     let effectiveCfg = cfg;
+    // Route resolution gets its own config reference so a live reload can refresh
+    // routing without changing the configuration generation consumed by the rest
+    // of the handler (group admission, command authorization, dispatch, ...).
+    let routeCfg = cfg;
     if (isDirect) {
       const currentCfg = getFeishuRuntime().config.current() as ClawdbotConfig;
       if (currentCfg !== effectiveCfg) {
@@ -793,11 +797,24 @@ export async function handleFeishuMessage(params: {
           return;
         }
         effectiveCfg = currentCfg;
+        routeCfg = currentCfg;
         effectiveDmPolicy = currentAuthorization.dmPolicy;
         effectiveConfigAllowFrom = currentAuthorization.configAllowFrom;
         effectiveDmIngress = currentAuthorization.ingress;
         effectiveShouldComputeCommandAuthorized =
           currentAuthorization.shouldComputeCommandAuthorized;
+      }
+    } else if (isGroup) {
+      // A bindings reload does not restart the monitor, so group events would
+      // otherwise keep resolving routes from the account-start snapshot
+      // (#133757). Only route resolution (agent route + configured binding
+      // resolution) consumes the live read here; group admission
+      // (groupPolicy/allowFrom, resolved above) and the rest of the dispatch
+      // pipeline intentionally stay on the snapshot the account started with.
+      // SAFETY: the live runtime config is the same plugin-owned ClawdbotConfig the snapshot came from.
+      const currentCfg = getFeishuRuntime().config.current() as ClawdbotConfig;
+      if (currentCfg !== routeCfg) {
+        routeCfg = currentCfg;
       }
     }
 
@@ -830,7 +847,7 @@ export async function handleFeishuMessage(params: {
     }
 
     let route = core.channel.routing.resolveAgentRoute({
-      cfg: effectiveCfg,
+      cfg: routeCfg,
       channel: "feishu",
       accountId: account.accountId,
       peer: {
@@ -865,6 +882,7 @@ export async function handleFeishuMessage(params: {
           return;
         }
         effectiveCfg = result.updatedCfg;
+        routeCfg = result.updatedCfg;
         effectiveDmPolicy = refreshedAuthorization.dmPolicy;
         effectiveConfigAllowFrom = refreshedAuthorization.configAllowFrom;
         effectiveDmIngress = refreshedAuthorization.ingress;
@@ -893,7 +911,7 @@ export async function handleFeishuMessage(params: {
     let configuredBinding = null;
     if (feishuAcpConversationSupported) {
       const configuredRoute = resolveConfiguredBindingRoute({
-        cfg: effectiveCfg,
+        cfg: routeCfg,
         route,
         conversation: {
           channel: "feishu",
@@ -930,7 +948,7 @@ export async function handleFeishuMessage(params: {
 
     if (configuredBinding) {
       const ensured = await ensureConfiguredBindingRouteReady({
-        cfg: effectiveCfg,
+        cfg: routeCfg,
         bindingResolution: configuredBinding,
       });
       if (!ensured.ok) {
