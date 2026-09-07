@@ -685,7 +685,7 @@ export interface Model<TApi extends Api = Api> {
   /** Compatibility overrides for OpenAI-compatible APIs. If not set, auto-detected from baseUrl. */
   compat?: TApi extends "openai-completions"
     ? OpenAICompletionsCompat
-    : TApi extends "openai-responses" | "azure-openai-responses" | "openai-codex-responses"
+    : TApi extends "openai-responses" | "azure-openai-responses" | "openai-chatgpt-responses"
       ? OpenAIResponsesCompat
       : TApi extends "anthropic-messages"
         ? AnthropicMessagesCompat

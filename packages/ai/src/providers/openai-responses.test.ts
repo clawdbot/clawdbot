@@ -158,6 +158,27 @@ describe("OpenAI Responses provider", () => {
     expect(openAiMockState.requestOptions[0]).toMatchObject({ maxRetries: 0 });
   });
 
+  it.each([false, true])(
+    "honors supportsReasoningEffort=%s over mapped efforts in both Responses builders",
+    async (supportsReasoningEffort) => {
+      const requestModel = model({
+        thinkingLevelMap: { high: "high" },
+        compat: { supportsReasoningEffort },
+      });
+      const options = { apiKey: "sentinel-key", reasoningEffort: "high" as const };
+      const transportParams = buildOpenAIResponsesParams(requestModel, context, options);
+      await streamOpenAIResponses(requestModel, context, options).result();
+
+      for (const params of [transportParams, openAiMockState.params[0]]) {
+        if (supportsReasoningEffort) {
+          expect(params).toMatchObject({ reasoning: { effort: "high", summary: "auto" } });
+        } else {
+          expect(params).not.toHaveProperty("reasoning");
+        }
+      }
+    },
+  );
+
   it.each([
     { id: "gpt-5.6-sol", cacheRetention: "short", ttl: undefined, retention: undefined },
     { id: "gpt-5.6-sol", cacheRetention: "long", ttl: "30m", retention: undefined },

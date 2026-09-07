@@ -413,40 +413,65 @@ describe("streamOpenAICodexResponses transport", () => {
     },
   );
 
-  it.each([
+  it.each<{
+    id: string;
+    effort: "none" | "minimal" | "high" | "xhigh";
+    map?: Model["thinkingLevelMap"];
+    compat?: Model<"openai-responses">["compat"];
+    expected?: string;
+  }>([
     { id: "gpt-6-astra", effort: "none", map: undefined, expected: undefined },
     { id: "gpt-6-astra", effort: "none", map: { off: null }, expected: undefined },
     { id: "gpt-6-astra", effort: "minimal", map: undefined, expected: "low" },
     { id: "custom-reasoning", effort: "xhigh", map: undefined, expected: "xhigh" },
     { id: "custom-reasoning", effort: "high", map: { high: "HIGH" }, expected: "HIGH" },
-  ] as const)("normalizes raw $id $effort with map=$map", async ({ id, effort, map, expected }) => {
-    let capturedPayload: Record<string, unknown> | undefined;
-    const result = await streamOpenAICodexResponses(
-      {
-        ...model,
-        id,
-        name: id,
-        thinkingLevelMap: map,
-      },
-      context,
-      {
-        apiKey: createJwt({
-          "https://api.openai.com/auth": { chatgpt_account_id: "acct-1" },
-        }),
-        reasoningEffort: effort,
-        transport: "sse",
-        onPayload: (payload) => {
-          capturedPayload = payload as Record<string, unknown>;
-          throw new Error("stop after payload");
+    { id: "custom-reasoning", effort: "high", map: { high: null }, expected: undefined },
+    {
+      id: "custom-reasoning",
+      effort: "high",
+      map: { high: "HIGH" },
+      compat: { supportsReasoningEffort: false },
+      expected: undefined,
+    },
+    {
+      id: "custom-reasoning",
+      effort: "high",
+      map: { high: "HIGH" },
+      compat: { supportsReasoningEffort: true },
+      expected: "HIGH",
+    },
+  ])(
+    "normalizes raw $id $effort with map=$map and compat=$compat",
+    async ({ id, effort, map, compat, expected }) => {
+      let capturedPayload: Record<string, unknown> | undefined;
+      const result = await streamOpenAICodexResponses(
+        {
+          ...model,
+          id,
+          name: id,
+          thinkingLevelMap: map,
+          compat,
         },
-      },
-    ).result();
+        context,
+        {
+          apiKey: createJwt({
+            "https://api.openai.com/auth": { chatgpt_account_id: "acct-1" },
+          }),
+          reasoningEffort: effort,
+          transport: "sse",
+          onPayload: (payload) => {
+            capturedPayload = payload as Record<string, unknown>;
+            throw new Error("stop after payload");
+          },
+        },
+      ).result();
 
-    expect(result.errorMessage).toBe("stop after payload");
-    expect(capturedPayload?.reasoning).toEqual(
-      expected ? { effort: expected, summary: "auto" } : undefined,
-    );
-  });
+      expect(result.errorMessage).toBe("stop after payload");
+      expect(capturedPayload?.reasoning).toEqual(
+        expected ? { effort: expected, summary: "auto" } : undefined,
+      );
+    },
+  );
 
   it("does not fall back to SSE when websocket transport is explicit", async () => {
     const fetchMock = vi.fn(async () => {

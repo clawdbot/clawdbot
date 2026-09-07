@@ -173,11 +173,16 @@ export function resolveResponsesRequestReasoningEffort<TApi extends Api>(
   model: Model<TApi>,
   reasoning: ResponsesReasoningEffort | "none" | "off",
 ): string | undefined {
+  const supported = resolveOpenAIModelReasoningEfforts(model);
+  // Catalog mappings cannot re-enable explicitly disabled reasoning effort.
+  if (supported?.length === 0) {
+    return undefined;
+  }
   const mapped = model.thinkingLevelMap?.[reasoning === "none" ? "off" : reasoning];
   if (mapped !== undefined) {
     return mapped ?? undefined;
   }
-  return resolveOpenAIModelReasoningEfforts(model) === undefined
+  return supported === undefined
     ? reasoning === "off"
       ? "none"
       : reasoning
