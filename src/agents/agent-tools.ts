@@ -1077,6 +1077,21 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
   replaceWithEffectiveCronCreatorToolAllowlist(cronCreatorToolAllowlist, authorizedTools, (tool) =>
     getPluginToolMeta(tool),
   );
+  if (
+    isMemoryFlushRun &&
+    memoryFlushWritePath &&
+    !authorizedTools.some((tool) => tool.name === "write")
+  ) {
+    // Checked on the final authorized list, not the earlier flush surface: tools.deny,
+    // the message-provider allowlist and the rest of the policy pipeline all run after
+    // that surface is built, so a flush can hold `write` there and lose it here.
+    // Otherwise the run completes normally, the model reports the save as done, and the
+    // memory is lost with no record that it was never persisted. The text names no
+    // single config key because any of those filters can be the one that removed it.
+    logWarn(
+      `memory flush cannot persist ${memoryFlushWritePath}: no write tool survived this agent's tool policy, so this run will not save anything.`,
+    );
+  }
   options?.recordToolPrepStage?.("authorization-policy");
   const turnSourceChannel = options?.messageChannel ?? options?.messageProvider;
   const turnSourceTo = options?.currentMessagingTarget ?? options?.currentChannelId;
