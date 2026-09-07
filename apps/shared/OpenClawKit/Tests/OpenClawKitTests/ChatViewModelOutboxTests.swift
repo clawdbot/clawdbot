@@ -1791,29 +1791,62 @@ struct ChatViewModelOutboxTests {
         #expect(await transport.state.sentIdempotencyKeys.isEmpty)
     }
 
-    @Test func `definitive live-send rejection restores draft without queueing`() async throws {
+    @Test(arguments: ["", "a newer unsent draft"])
+    func `definitive live-send rejection restores draft without queueing`(newDraft: String) async throws {
         let (store, _, databaseDirectory) = try makeOutboxStore()
         defer { try? FileManager.default.removeItem(at: databaseDirectory) }
         let transport = OutboxTestTransport(healthy: true)
-        await transport.state.update { $0.sendResponseErrors = true }
+        let sendGate = DeleteGate()
+        await transport.state.update {
+            $0.sendResponseErrors = true
+            $0.heldSendGate = sendGate
+        }
         let vm = await makeOutboxViewModel(transport: transport, outbox: store)
 
         await MainActor.run { vm.load() }
         // Wait for outbox restore too: until it completes, sends deliberately
         // route behind the outbox (FIFO gate), which is not the path under test.
         try await waitUntil("bootstrap healthy") {
-            await MainActor.run { vm.healthOK && vm.hasRestoredOutboxMessages }
+            await MainActor.run { vm.healthOK && !vm.isLoading && vm.hasRestoredOutboxMessages }
         }
         await MainActor.run {
             vm.input = "keep this draft"
             vm.send()
         }
-        try await waitUntil("definitive rejection surfaced") {
-            await MainActor.run { vm.errorText != nil }
+        do {
+            try await waitUntil("live send reached the held request") {
+                let requestStarted = await transport.state.heldSendGate == nil
+                return await MainActor.run { requestStarted && vm.isSending && vm.input.isEmpty }
+            }
+            await MainActor.run { vm.input = newDraft }
+        } catch {
+            await sendGate.open()
+            throw error
         }
-        #expect(await MainActor.run { vm.input } == "keep this draft")
+        await sendGate.open()
+        try await waitUntil("definitive rejection surfaced") {
+            await MainActor.run { !vm.isSending && vm.errorText?.contains("rejected") == true }
+        }
+        let recoverableDrafts = await MainActor.run {
+            var drafts = [vm.input]
+            while vm.recallPreviousInput(caretOnFirstLine: true) {
+                drafts.append(vm.input)
+            }
+            _ = vm.cancelInputRecall()
+            return drafts
+        }
+        // Check recoverability without choosing concatenation, ordering, or a new recovery surface.
+        #expect(recoverableDrafts.contains { $0.contains("keep this draft") })
+        if newDraft.isEmpty {
+            #expect(await MainActor.run { vm.input } == "keep this draft")
+        } else {
+            #expect(recoverableDrafts.contains { $0.contains(newDraft) })
+        }
         #expect(await userTexts(vm).isEmpty)
         #expect(await store.loadCommands().isEmpty)
+        #expect(await transport.state.sentMessages.isEmpty)
+        #expect(await transport.state.sentIdempotencyKeys.isEmpty)
+        #expect(await MainActor.run { vm.pendingRunCount == 0 && vm.canSend })
     }
 
     @Test func `ambiguous live transport failure requires explicit retry`() async throws {
