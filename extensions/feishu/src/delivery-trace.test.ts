@@ -6,11 +6,13 @@
 // HTTP fetch, so streaming-card entity calls are captured at the wire seam.
 // Refresh goldens with OPENCLAW_TRACE_UPDATE=1 (see delivery-trace harness docs).
 import {
+  createWireRecorder,
   deliveryTraceScenarios,
   expectDeliveryTraceMatchesGolden,
   runDeliveryTraceScenario,
   type DeliveryTraceInStep,
   type DeliveryTraceScenarioName,
+  type TraceEvent,
   type WireRecorder,
 } from "openclaw/plugin-sdk/channel-contract-testing";
 import { withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
@@ -345,7 +347,7 @@ function createRecordingCardKitFetch(): typeof fetch {
   ) as typeof fetch;
 }
 
-function makeTraceAccount(scenario: DeliveryTraceScenarioName): ResolvedFeishuAccount {
+function makeTraceAccount(scenario: string): ResolvedFeishuAccount {
   traceState.setupCount += 1;
   return {
     accountId: "main",
@@ -363,7 +365,12 @@ function makeTraceAccount(scenario: DeliveryTraceScenarioName): ResolvedFeishuAc
   };
 }
 
-function setupFeishuTrace(recorder: WireRecorder, scenario: DeliveryTraceScenarioName) {
+type FeishuTraceHarness = {
+  created: ReturnType<CreateFeishuReplyDispatcher>;
+  options: ReturnType<CreateFeishuReplyDispatcher>["dispatcherOptions"];
+};
+
+function createFeishuTraceHarness(recorder: WireRecorder, scenario: string): FeishuTraceHarness {
   traceState.recordWireCall = recorder.recordWireCall;
   traceState.messageCount = 0;
   traceState.reactionCount = 0;
@@ -381,7 +388,11 @@ function setupFeishuTrace(recorder: WireRecorder, scenario: DeliveryTraceScenari
     sendTarget: "oc-trace-chat",
     replyToMessageId: "om-inbound",
   });
-  const options = created.dispatcherOptions;
+  return { created, options: created.dispatcherOptions };
+}
+
+function setupFeishuTrace(recorder: WireRecorder, scenario: DeliveryTraceScenarioName) {
+  const { created, options } = createFeishuTraceHarness(recorder, scenario);
 
   return async (step: DeliveryTraceInStep) => {
     switch (step.kind) {
@@ -598,4 +609,144 @@ describe("feishu delivery trace goldens", () => {
       });
     });
   }
+});
+
+// Same fixed epoch as runDeliveryTraceScenario. Not imported: the harness
+// keeps that constant private so shared goldens stay the only public contract.
+const CARDKIT_RECORDING_EPOCH_MS = Date.UTC(2026, 0, 1);
+const PRE_TOOL_STREAM_TEXT = "Step 1: Identify the task.";
+const POST_TOOL_FINAL_TEXT = "Step 4: Analyze the results.";
+const COMBINED_INDEPENDENT_FINALS = `${PRE_TOOL_STREAM_TEXT}\n\n${POST_TOOL_FINAL_TEXT}`;
+const CUMULATIVE_FIRST_SNAPSHOT = "```md\n完整回复第一段\n```";
+const CUMULATIVE_SECOND_SNAPSHOT = "```md\n完整回复第一段 + 第二段\n```";
+
+function isJsonRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function recordedWirePayload(event: TraceEvent): Record<string, unknown> | undefined {
+  if (!isJsonRecord(event.data) || !isJsonRecord(event.data.payload)) {
+    return undefined;
+  }
+  return event.data.payload;
+}
+
+function cardContentWrites(events: readonly TraceEvent[]): string[] {
+  const writes: string[] = [];
+  for (const event of events) {
+    if (event.dir !== "out" || !event.kind.endsWith("/elements/content/content")) {
+      continue;
+    }
+    const content = recordedWirePayload(event)?.content;
+    if (typeof content === "string") {
+      writes.push(content);
+    }
+  }
+  return writes;
+}
+
+function closeSettingsSummary(events: readonly TraceEvent[]): string | undefined {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index];
+    if (!event || event.dir !== "out" || !event.kind.endsWith("/settings")) {
+      continue;
+    }
+    const settings = recordedWirePayload(event)?.settings;
+    if (!isJsonRecord(settings) || !isJsonRecord(settings.config)) {
+      return undefined;
+    }
+    const summary = settings.config.summary;
+    if (!isJsonRecord(summary) || typeof summary.content !== "string") {
+      return undefined;
+    }
+    return summary.content;
+  }
+  return undefined;
+}
+
+function cardKitTextPayloads(events: readonly TraceEvent[]): unknown[] {
+  return events
+    .filter(
+      (event) =>
+        event.dir === "out" &&
+        (event.kind.endsWith("/elements/content/content") || event.kind.endsWith("/settings")),
+    )
+    .map((event) => ({ kind: event.kind, payload: recordedWirePayload(event) }));
+}
+
+async function runFeishuCardKitRecording(
+  scenario: string,
+  drive: (harness: FeishuTraceHarness) => Promise<void>,
+): Promise<TraceEvent[]> {
+  vi.useFakeTimers({ now: CARDKIT_RECORDING_EPOCH_MS });
+  try {
+    const recorder = createWireRecorder();
+    const harness = createFeishuTraceHarness(recorder, scenario);
+    await drive(harness);
+    await vi.advanceTimersByTimeAsync(0);
+    return recorder.finish();
+  } finally {
+    vi.useRealTimers();
+  }
+}
+
+describe("feishu CardKit recording after independent assistant finals", () => {
+  it("retains both segments on the last content update and close", async () => {
+    const events = await runFeishuCardKitRecording(
+      "pretool-retain",
+      async ({ created, options }) => {
+        await options.onReplyStart?.();
+        created.replyOptions.onPartialReply?.({ text: PRE_TOOL_STREAM_TEXT });
+        await vi.advanceTimersByTimeAsync(300);
+        await created.delivery.deliver({ text: PRE_TOOL_STREAM_TEXT }, { kind: "final" });
+        await vi.advanceTimersByTimeAsync(0);
+        created.replyOptions.onAssistantMessageStart?.();
+        await created.delivery.deliver({ text: POST_TOOL_FINAL_TEXT }, { kind: "final" });
+        await vi.advanceTimersByTimeAsync(300);
+        await options.onIdle?.();
+        options.onCleanup?.();
+      },
+    );
+
+    const contentWrites = cardContentWrites(events);
+    const lastContent = contentWrites.at(-1);
+    const closeSummary = closeSettingsSummary(events);
+    if (process.env.OPENCLAW_TRACE_DUMP === "1") {
+      process.stdout.write(`${JSON.stringify(cardKitTextPayloads(events), null, 2)}\n`);
+    }
+
+    expect(contentWrites.length).toBeGreaterThan(0);
+    expect(lastContent).toBe(COMBINED_INDEPENDENT_FINALS);
+    expect(lastContent).toContain(PRE_TOOL_STREAM_TEXT);
+    expect(lastContent).toContain(POST_TOOL_FINAL_TEXT);
+    expect(closeSummary).toBeDefined();
+    expect(closeSummary).toContain("Step 1");
+    expect(closeSummary).toContain("Step 4");
+  });
+
+  it("replaces a same-message cumulative snapshot instead of appending", async () => {
+    const events = await runFeishuCardKitRecording(
+      "cumulative-replace",
+      async ({ created, options }) => {
+        await options.onReplyStart?.();
+        await created.delivery.deliver({ text: CUMULATIVE_FIRST_SNAPSHOT }, { kind: "final" });
+        await vi.advanceTimersByTimeAsync(300);
+        await created.delivery.deliver({ text: CUMULATIVE_SECOND_SNAPSHOT }, { kind: "final" });
+        await vi.advanceTimersByTimeAsync(300);
+        await options.onIdle?.();
+        options.onCleanup?.();
+      },
+    );
+
+    const contentWrites = cardContentWrites(events);
+    const lastContent = contentWrites.at(-1);
+    const closeSummary = closeSettingsSummary(events);
+    if (process.env.OPENCLAW_TRACE_DUMP === "1") {
+      process.stdout.write(`${JSON.stringify(cardKitTextPayloads(events), null, 2)}\n`);
+    }
+
+    expect(lastContent).toBe(CUMULATIVE_SECOND_SNAPSHOT);
+    expect(lastContent).not.toBe(`${CUMULATIVE_FIRST_SNAPSHOT}\n\n${CUMULATIVE_SECOND_SNAPSHOT}`);
+    expect(closeSummary).toBe(CUMULATIVE_SECOND_SNAPSHOT.replace(/\n/g, " ").trim());
+  });
 });

@@ -1881,6 +1881,31 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     });
   });
 
+  it("keeps pre-tool streamed prose when an independent post-tool final arrives", async () => {
+    const { result, options } = createDispatcherHarness({
+      runtime: createRuntimeLogger(),
+    });
+    const preToolText = "Step 1: Identify the task.";
+    const postToolText = "Step 4: Analyze the results.";
+
+    await options.onReplyStart?.();
+    result.replyOptions.onPartialReply?.({ text: preToolText });
+    await options.deliver({ text: preToolText }, { kind: "final" });
+    result.replyOptions.onAssistantMessageStart?.();
+    await options.deliver({ text: postToolText }, { kind: "final" });
+    await options.onIdle?.();
+
+    const session = requireStreamingInstance(0);
+    const expectedCombined = `${preToolText}\n\n${postToolText}`;
+    expect(streamingUpdateTexts()).toContain(expectedCombined);
+    expect(session.closeWithResult).toHaveBeenCalledWith(expectedCombined, {
+      note: "Agent: agent",
+    });
+    expect(session.close).toHaveBeenCalledWith(expectedCombined, {
+      note: "Agent: agent",
+    });
+  });
+
   it("falls back to chunked text when an appended error exceeds the streaming limit", async () => {
     const runtime = getFeishuRuntimeMock();
     runtime.channel.text.resolveTextChunkLimit.mockReturnValue(20);
