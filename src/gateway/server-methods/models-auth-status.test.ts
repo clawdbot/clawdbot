@@ -2042,6 +2042,7 @@ describe("models.authStatus", () => {
     const provider = "openrouter";
     const selectedId = "openrouter:two";
     mocks.getRuntimeConfig.mockReturnValue({
+      auth: { order: { openrouter: ["openrouter:one"] } },
       models: {
         providers: {
           openrouter: { apiKey: selectedId, baseUrl: "https://openrouter.ai/api/v1", models: [] },
@@ -2057,7 +2058,6 @@ describe("models.authStatus", () => {
     ]);
     setPreparedAuthStore({
       version: 1,
-      order: { openrouter: ["openrouter:one", selectedId] },
       profiles: Object.fromEntries(
         ["openrouter:one", selectedId].map((id) => [
           id,

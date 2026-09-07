@@ -121,13 +121,18 @@ describe("provider-usage.load", () => {
     async (helper) => {
       const authStore: AuthProfileStore = {
         version: 1,
-        order: { openrouter: ["openrouter:login", "openrouter:billing"] },
+        order: { openrouter: ["openrouter:login", "openrouter:other", "openrouter:billing"] },
         profiles: {
           "openrouter:login": {
             type: "api_key",
             provider: "openrouter",
             key: "synthetic-login-key",
             metadata: { authFlow: "oauth-pkce" },
+          },
+          "openrouter:other": {
+            type: "api_key",
+            provider: "openrouter",
+            key: "synthetic-other-key",
           },
           "openrouter:billing": {
             type: "api_key",
@@ -176,6 +181,15 @@ describe("provider-usage.load", () => {
         { label: "synthetic-login-key", usedPercent: 10 },
       ]);
       expect(provider.providers[0]?.windows).toEqual([
+        { label: "synthetic-other-key", usedPercent: 10 },
+      ]);
+      options.config.models.providers.openrouter.apiKey = "openrouter:billing";
+      const boundBilling = await loadProviderUsageSummary({
+        ...options,
+        providers: ["openrouter"],
+        providerOnly: true,
+      });
+      expect(boundBilling.providers[0]?.windows).toEqual([
         { label: "synthetic-billing-key", usedPercent: 10 },
       ]);
       expect(authStore.profiles["openrouter:login"]).toBeDefined();

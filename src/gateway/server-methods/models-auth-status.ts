@@ -318,7 +318,7 @@ function mapAuthStatusProvider(params: {
   // An explicit binding takes precedence over ordinary credential priority.
   const usageProfile =
     binding.kind === "profile"
-      ? effectiveProfiles.find((profile) => profile.profileId === binding.profileId)
+      ? provider.profiles.find((profile) => profile.profileId === binding.profileId)
       : binding.kind === "profile-incompatible"
         ? undefined
         : effectiveProfiles[0];

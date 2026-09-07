@@ -182,6 +182,35 @@ function hasProviderUsageAuthEnvCredentialSource(params: {
   return normalizeProviderIds(params.providerIds).some((providerId) => providers.has(providerId));
 }
 
+function resolveUsageAuthProfileOrder(
+  state: UsageAuthState,
+  store: AuthStore,
+  provider: string,
+): string[] {
+  if (state.providerOnly) {
+    const binding = resolveProviderEntryApiKeyProfileReference({
+      cfg: state.cfg,
+      provider,
+      store: resolveUsageAuthStore({ ...state, providerOnly: false }),
+    });
+    if (binding.kind === "profile-incompatible") {
+      return [];
+    }
+    // Login bindings are excluded from this store; static billing bindings remain terminal.
+    if (binding.kind === "profile" && store.profiles[binding.profileId]) {
+      return resolveAuthProfileEligibility({
+        cfg: state.cfg,
+        store,
+        provider: binding.credential.provider,
+        profileId: binding.profileId,
+      }).eligible
+        ? [binding.profileId]
+        : [];
+    }
+  }
+  return resolveAuthProfileOrder({ cfg: state.cfg, store, provider });
+}
+
 function resolveProviderApiKeyFromConfigAndStore(params: {
   state: UsageAuthState;
   providerIds: string[];
@@ -213,7 +242,7 @@ function resolveProviderApiKeyCandidatesFromConfigAndStoreSync(params: {
   const profileIds = params.profileIds
     ? dedupeProfileIds([...params.profileIds])
     : normalizedProviderIds.flatMap((provider) =>
-        resolveAuthProfileOrder({ cfg: params.state.cfg, store, provider }),
+        resolveUsageAuthProfileOrder(params.state, store, provider),
       );
   for (const profileId of profileIds) {
     const credential = store.profiles[profileId];
@@ -262,7 +291,7 @@ async function resolveProviderApiKeyCandidatesFromConfigAndStore(params: {
     ? dedupeProfileIds([...params.profileIds])
     : dedupeProfileIds(
         normalizeProviderIds(params.providerIds).flatMap((provider) =>
-          resolveAuthProfileOrder({ cfg: params.state.cfg, store, provider }),
+          resolveUsageAuthProfileOrder(params.state, store, provider),
         ),
       );
   for (const profileId of profileIds) {
