@@ -166,8 +166,8 @@ Reduces redundant results. If five notes all mention the same router config,
 MMR favors a similarly relevant result with different content instead of
 repeating near-identical snippets. The fixed relevance-biased setting uses
 lambda `0.7` with Jaccard overlap over snippet tokens. Its local work is
-`O(k²)`: ordinary defaults request 24 candidates per retrieval leg, for at
-most 48 unique non-exact candidates before overlap; broader project and
+`O(k²)`: ordinary defaults request 200 candidates per retrieval leg, for at
+most 400 unique non-exact candidates before overlap; broader project and
 identifier searches remain separately capped.
 
 <Tip>
