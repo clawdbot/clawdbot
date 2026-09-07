@@ -412,6 +412,81 @@ describe("config form renderer", () => {
     expect(selectedLabels).toEqual(["tailnet", "openai"]);
   });
 
+  it("describes an unset segmented enum with its runtime fallback placeholder", () => {
+    // gateway.bind has no schema default, so nothing is selected while unset;
+    // the hint placeholder is what tells the operator "loopback" applies.
+    const container = document.createElement("div");
+    const analysis = analyzeConfigSchema({
+      type: "object",
+      properties: {
+        gateway: {
+          type: "object",
+          properties: {
+            bind: { anyOf: [{ const: "auto" }, { const: "lan" }, { const: "loopback" }] },
+          },
+        },
+      },
+    });
+    const renderValue = (value: Record<string, unknown>) =>
+      render(
+        renderConfigForm({
+          schema: analysis.schema,
+          uiHints: {
+            "gateway.bind": { label: "Gateway Bind Mode", placeholder: "Default: loopback" },
+          },
+          unsupportedPaths: analysis.unsupportedPaths,
+          value,
+          onPatch: vi.fn(),
+        }),
+        container,
+      );
+
+    renderValue({});
+    const group = expectElement(
+      container.querySelector<HTMLElement & { value: string }>("wa-radio-group"),
+      "bind segmented group",
+    );
+    expect(group.value).toBe("");
+    expect(container.textContent).toContain("Default: loopback");
+
+    renderValue({ gateway: { bind: "lan" } });
+    expect(container.textContent).not.toContain("Default: loopback");
+  });
+
+  it("shows an unset default-on boolean as its placeholder instead of an off toggle", () => {
+    // The inherited-default table relies on this path: a boolean leaf with a
+    // placeholder hint and no schema default must not read as OFF while unset.
+    const container = document.createElement("div");
+    const analysis = analyzeConfigSchema({
+      type: "object",
+      properties: {
+        cron: { type: "object", properties: { enabled: { type: "boolean" } } },
+      },
+    });
+    render(
+      renderConfigForm({
+        schema: analysis.schema,
+        uiHints: { "cron.enabled": { label: "Automations Enabled", placeholder: "Default: On" } },
+        unsupportedPaths: analysis.unsupportedPaths,
+        value: {},
+        onPatch: vi.fn(),
+      }),
+      container,
+    );
+
+    expect(container.querySelector("wa-switch.settings-toggle")).toBeNull();
+    const select = expectElement(
+      container.querySelector<HTMLSelectElement>('select[aria-label="Automations Enabled"]'),
+      "automations enabled select",
+    );
+    expect(select.selectedOptions[0]?.textContent?.trim()).toBe("Default: On");
+    expect(Array.from(select.options, (option) => option.textContent?.trim())).toEqual([
+      "Default: On",
+      "On",
+      "Off",
+    ]);
+  });
+
   it("renders map fields from additionalProperties", () => {
     const onPatch = vi.fn();
     const container = document.createElement("div");

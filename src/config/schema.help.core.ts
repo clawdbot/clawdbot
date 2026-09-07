@@ -254,7 +254,7 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   "talk.silenceTimeoutMs": `Milliseconds of user silence before Talk mode finalizes and sends the current transcript. Leave unset to keep the platform default pause window (${describeTalkSilenceTimeoutDefaults()}).`,
   acp: "ACP runtime controls for enabling dispatch, selecting backends, constraining allowed agent targets, and selecting streamed turn projection behavior.",
   "acp.enabled":
-    "Global ACP feature gate. Keep disabled unless ACP runtime + policy are configured.",
+    "Global ACP feature gate (default: true). Set false to turn ACP off entirely; ACP still needs a configured runtime and policy before dispatch does anything.",
   "acp.dispatch.enabled":
     "Independent dispatch gate for ACP session turns (default: true). Set false to keep ACP commands available while blocking ACP turn execution.",
   "acp.backend":

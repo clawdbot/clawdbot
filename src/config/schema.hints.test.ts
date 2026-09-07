@@ -5,7 +5,10 @@ import { SENSITIVE_URL_HINT_TAG } from "@openclaw/net-policy/redact-sensitive-ur
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { buildSecretInputSchema } from "../plugin-sdk/secret-input-schema.js";
+import { computeBaseConfigSchemaResponse } from "./schema-base.js";
+import { FIELD_HELP } from "./schema.help.js";
 import { buildBaseHints, mapSensitivePaths, testApi } from "./schema.hints.js";
+import { INHERITED_DEFAULT_PLACEHOLDERS } from "./schema.inherited-defaults.js";
 import { isSensitiveConfigPath } from "./sensitive-paths.js";
 import { OpenClawSchema } from "./zod-schema.js";
 import { OpenClawSchemaShape } from "./zod-schema.root-shape.js";
@@ -101,6 +104,116 @@ describe("plugin-owned channel hint paths", () => {
         `core still owns ${key}`,
       ).toBe(false);
     }
+  });
+});
+
+type SchemaLeaf = { type?: string | string[]; default?: unknown };
+
+function collectSchemaLeaves(
+  node: Record<string, unknown>,
+  path = "",
+  leaves = new Map<string, SchemaLeaf>(),
+): Map<string, SchemaLeaf> {
+  const properties = (node.properties ?? {}) as Record<string, Record<string, unknown>>;
+  const additional = node.additionalProperties;
+  const items = Array.isArray(node.items) ? node.items : node.items ? [node.items] : [];
+  const branches = [node.anyOf, node.oneOf, node.allOf].flatMap((list) =>
+    Array.isArray(list) ? list : [],
+  ) as Record<string, unknown>[];
+  let hasChildren = false;
+  for (const [key, child] of Object.entries(properties)) {
+    hasChildren = true;
+    collectSchemaLeaves(child, path ? `${path}.${key}` : key, leaves);
+  }
+  if (additional && typeof additional === "object") {
+    hasChildren = true;
+    collectSchemaLeaves(additional as Record<string, unknown>, path ? `${path}.*` : "*", leaves);
+  }
+  for (const item of items as Record<string, unknown>[]) {
+    hasChildren = true;
+    collectSchemaLeaves(item, path ? `${path}.*` : "*", leaves);
+  }
+  for (const branch of branches) {
+    hasChildren = true;
+    collectSchemaLeaves(branch, path, leaves);
+  }
+  if (path && !hasChildren && !leaves.has(path)) {
+    leaves.set(path, node as SchemaLeaf);
+  }
+  return leaves;
+}
+
+describe("inherited default placeholders", () => {
+  const leaves = collectSchemaLeaves(
+    computeBaseConfigSchemaResponse().schema as Record<string, unknown>,
+  );
+  const DEFAULT_ON_HELP =
+    /default(?:s|ed)?(?: is| to|:)? ?`?(?:true|on|enabled)`?\b|(?:enabled|on) by default/i;
+  // Help text claims a default the core runtime does not decide for the absent
+  // case (issue #139169 "not resolved"); leave these to their owners. The
+  // `tools.swarm` boolean|object union is covered by its `enabled` leaf.
+  const UNVERIFIED_DEFAULT_ON_HELP = new Set([
+    "channels.defaults.botLoopProtection.enabled",
+    "gateway.nodes.pairing.sshVerify",
+    "memory.search.cache.enabled",
+    "tools.message.crossContext.marker.enabled",
+    "tools.swarm",
+  ]);
+
+  it("names a runtime fallback only for schema leaves that declare no default", () => {
+    const hints = buildBaseHints();
+    for (const [path, placeholder] of Object.entries(INHERITED_DEFAULT_PLACEHOLDERS)) {
+      const leaf = leaves.get(path);
+      expect(leaf, `${path} is not a config schema leaf`).toBeDefined();
+      expect(
+        leaf?.default,
+        `${path} declares a schema default; drop the placeholder`,
+      ).toBeUndefined();
+      expect(placeholder.startsWith("Default: "), `${path}: ${placeholder}`).toBe(true);
+      expect(hints[path]?.placeholder, path).toBe(placeholder);
+    }
+  });
+
+  it("never claims default-on for a boolean whose help documents default-off", () => {
+    // A wrong placeholder reproduces the original defect in the more dangerous
+    // direction: a safety control that looks active while it is opt-in.
+    const DEFAULT_OFF_HELP =
+      /default(?:s|ed)?(?: is| to|:)? ?`?(?:false|off|disabled)`?\b|(?:disabled|off) by default/i;
+    const contradictions = Object.entries(INHERITED_DEFAULT_PLACEHOLDERS)
+      .filter(
+        ([path, placeholder]) =>
+          placeholder === "Default: On" && DEFAULT_OFF_HELP.test(FIELD_HELP[path] ?? ""),
+      )
+      .map(([path]) => path);
+    expect(contradictions).toEqual([]);
+  });
+
+  it("gives every boolean documented as default-on a placeholder", () => {
+    // Without one the form renders an unset key as an OFF toggle while the
+    // runtime treats it as ON, which is the defect behind issue #139169.
+    const missing = Object.entries(FIELD_HELP)
+      .filter(([path, help]) => {
+        const leaf = leaves.get(path);
+        return (
+          leaf?.type === "boolean" &&
+          leaf.default === undefined &&
+          DEFAULT_ON_HELP.test(help) &&
+          !INHERITED_DEFAULT_PLACEHOLDERS[path] &&
+          !UNVERIFIED_DEFAULT_ON_HELP.has(path)
+        );
+      })
+      .map(([path]) => path);
+    const stubs = missing.map((path) => `  ${JSON.stringify(path)},`).join("\n");
+    expect(
+      missing,
+      [
+        `${missing.length} boolean(s) document a default-on state without a placeholder.`,
+        "Verify the runtime read site, then add each to DEFAULT_ON_BOOLEAN_PATHS in",
+        "src/config/schema.inherited-defaults.ts (or name the conditional rule):",
+        "",
+        stubs,
+      ].join("\n"),
+    ).toEqual([]);
   });
 });
 
