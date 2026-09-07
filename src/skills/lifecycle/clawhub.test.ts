@@ -71,7 +71,8 @@ vi.mock("../../plugins/install-security-scan.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../../infra/fs-safe.js", () => ({
+vi.mock("../../infra/fs-safe.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/fs-safe.js")>()),
   pathExists: pathExistsMock,
 }));
 

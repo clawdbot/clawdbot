@@ -1,6 +1,5 @@
 import fsSync from "node:fs";
 import path from "node:path";
-import { statRegularFile } from "@openclaw/fs-safe/advanced";
 import { normalizeOptionalString as normalizeOptionalStringValue } from "@openclaw/normalization-core/string-coerce";
 import type { ClawHubDownloadResult } from "../../infra/clawhub-artifacts.js";
 import {
@@ -10,6 +9,7 @@ import {
   type ClawHubSkillsShTrustState,
 } from "../../infra/clawhub-skills.js";
 import { formatErrorMessage, hasErrnoCode } from "../../infra/errors.js";
+import { statRegularFile } from "../../infra/fs-safe.js";
 import {
   JsonFileReadError,
   readJson,
