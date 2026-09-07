@@ -208,6 +208,7 @@ export async function resolveEmbeddedRunTerminal(input: {
   replayState: EmbeddedRunReplayState;
   activePromptPersisted: boolean;
   activateInternalPrompt: (prompt: string) => void;
+  markOwnedTranscriptRetry: () => void;
   activateCompactionContinuation: (instruction: string) => void;
   clearCompactionContinuation: () => void;
   setSuppressNextUserMessagePersistence: (value: boolean) => void;
@@ -474,6 +475,13 @@ export async function resolveEmbeddedRunTerminal(input: {
     input.activateInternalPrompt(
       `${BEFORE_AGENT_FINALIZE_RETRY_PROMPT_PREFIX}\n\n${beforeFinalizeRevisionReason}`,
     );
+    // The settle phase already repointed the transcript leaf past the rejected
+    // draft. The index appender cannot classify a leaf control, so the SQLite
+    // projection is dirty and rebuilds on the maintenance worker after commit;
+    // flag the hidden pass as an owned transcript retry so dispatch preparation
+    // waits for that rebuild before the durable reopen instead of failing the
+    // turn with "Session transcript projection is rebuilding".
+    input.markOwnedTranscriptRetry();
     log.warn(
       `before_agent_finalize requested one more pass: ` +
         `runId=${runParams.runId} sessionId=${runParams.sessionId} ` +

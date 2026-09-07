@@ -182,6 +182,53 @@ describe("terminal resolution", () => {
     expect(markEmbeddedRunAuthProfileSuccess).toHaveBeenCalledOnce();
   });
 
+  it("flags a before_agent_finalize revision retry as an owned transcript retry", async () => {
+    const text = "Draft answer.";
+    const assistant = buildEmbeddedRunnerAssistant({ content: [{ type: "text", text }] });
+    const attempt = makeEmbeddedRunnerAttempt({
+      assistantTexts: [text],
+      lastAssistant: assistant,
+      currentAttemptAssistant: assistant,
+      beforeAgentFinalizeRevisionReason: "Review the numbers with sql-worker.",
+    });
+    const input = makeTerminalInput({
+      attempt,
+      attemptAssistant: assistant,
+      payloadsWithToolMedia: [{ text }],
+    });
+
+    const resolved = await resolveEmbeddedRunTerminal(input);
+
+    expect(resolved.action).toBe("retry");
+    expect(input.activateInternalPrompt).toHaveBeenCalledWith(
+      expect.stringContaining("Review the numbers with sql-worker."),
+    );
+    // The settle phase repointed the transcript leaf past the rejected draft,
+    // which dirties the SQLite projection; the hidden pass must be an owned
+    // transcript retry so dispatch preparation settles it before the reopen.
+    expect(input.markOwnedTranscriptRetry).toHaveBeenCalledOnce();
+  });
+
+  it("does not flag an ordinary completion as an owned transcript retry", async () => {
+    const text = "The turn completed.";
+    const assistant = buildEmbeddedRunnerAssistant({ content: [{ type: "text", text }] });
+    const attempt = makeEmbeddedRunnerAttempt({
+      assistantTexts: [text],
+      lastAssistant: assistant,
+      currentAttemptAssistant: assistant,
+    });
+    const input = makeTerminalInput({
+      attempt,
+      attemptAssistant: assistant,
+      payloadsWithToolMedia: [{ text }],
+    });
+
+    const resolved = await resolveEmbeddedRunTerminal(input);
+
+    expect(resolved.action).toBe("complete");
+    expect(input.markOwnedTranscriptRetry).not.toHaveBeenCalled();
+  });
+
   it.each(["openai:selected", undefined])(
     "reports the successful profile %s privately for command maintenance",
     async (authProfileId) => {
