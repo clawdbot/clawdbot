@@ -18773,7 +18773,7 @@ it("pins every Performance Git owner before checkout and preserves Git deadlines
   const source = readFileSync(".github/workflows/openclaw-performance.yml", "utf8");
   const workflow = parse(source);
   const targets = [
-    ["resolve_target", "Checkout target metadata", undefined, 10],
+    ["resolve_target", "Resolve OpenClaw target ref", undefined, 10],
     ["kova", "Checkout OpenClaw", "Decide lane", 240],
     ["source_performance", "Checkout OpenClaw source target", undefined, 120],
     ["publish", "Checkout performance publisher helper", "Decide report publication lane", 30],
@@ -18818,6 +18818,18 @@ it("pins every Performance Git owner before checkout and preserves Git deadlines
       );
     }
   }
+  const resolveSteps = workflow.jobs.resolve_target.steps as WorkflowStep[];
+  expect(resolveSteps.some(({ uses }) => uses?.startsWith("actions/checkout@"))).toBe(false);
+  expect(resolveSteps.find(({ name }) => name === "Resolve OpenClaw target ref")?.run).toContain(
+    'gh api "repos/${GITHUB_REPOSITORY}/commits/${encoded_ref}" --jq .sha',
+  );
+  expect(workflow.jobs.external_performance.strategy["max-parallel"]).toBe(1);
+  expect(workflow.jobs.external_performance.strategy["fail-fast"]).toBe(false);
+  expect(
+    workflow.jobs.external_performance.strategy.matrix.include.map(
+      ({ lane }: { lane: string }) => lane,
+    ),
+  ).toEqual(["mock-provider", "mock-deep-profile", "source", "cleanup-probe"]);
   expect(workflow.on.schedule).toEqual([{ cron: "11 5 * * *" }]);
   expect(Object.keys(workflow.on.workflow_dispatch.inputs)).toEqual([
     "mode",
@@ -18832,6 +18844,7 @@ it("pins every Performance Git owner before checkout and preserves Git deadlines
     "kova_ref",
     "kova_config_contract",
     "dispatch_id",
+    "cleanup_probe",
   ]);
   expect(workflow.permissions).toEqual({ contents: "read" });
   expect(workflow.jobs.publish.permissions).toEqual({ actions: "read", contents: "read" });

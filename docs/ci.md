@@ -890,6 +890,12 @@ gh workflow run openclaw-performance.yml --ref main -f target_ref=v2026.5.2 -f p
 
 Manual dispatch normally benchmarks the workflow ref. Set `target_ref` to benchmark a release tag or another branch with the current workflow implementation. Published report paths and latest pointers are keyed by the tested ref, and each `index.md` records the tested ref/SHA, workflow ref/SHA, Kova ref, profile, lane auth mode, model, repeat count, and scenario filters.
 
+The external performance matrix runs at `max-parallel: 1` to reduce bursts of
+direct AWS lease requests. It retains all four lanes and `fail-fast: false`.
+This limits concurrent jobs, not live leases after an unconfirmed stop: cleanup
+failure remains fatal, but another matrix row can still start. Resolve uncertain
+lease cleanup before admitting further operator-controlled acceptance runs.
+
 The workflow installs OCM from a pinned release and Kova from `openclaw/Kova` at the pinned `kova_ref` input, then runs three lanes:
 
 - `mock-provider`: Kova diagnostic scenarios against a local-build runtime with deterministic fake OpenAI-compatible auth.

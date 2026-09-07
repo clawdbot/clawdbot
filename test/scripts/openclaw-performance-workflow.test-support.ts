@@ -26,7 +26,7 @@ afterAll(() => {
 });
 
 export type PerformanceFixtureOptions = {
-  mode: "target" | "record" | "tested" | "kova" | "baseline" | "prepare" | "publish";
+  mode: "record" | "tested" | "kova" | "baseline" | "prepare" | "publish";
   baseline?: "absent" | "invalid" | "trailing-newline";
   duplicate?: boolean;
   race?: boolean;

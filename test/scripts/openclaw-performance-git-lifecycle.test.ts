@@ -14,7 +14,6 @@ beforeAll(() => {
 const posixIt = it.skipIf(process.platform === "win32").concurrent;
 
 const steps = {
-  target: ["resolve_target", "Resolve OpenClaw target ref"],
   record: ["source_performance", "Record source performance revision"],
   tested: ["kova", "Record tested revision"],
   kova: ["kova", "Install OCM and Kova"],
@@ -104,7 +103,6 @@ posixIt.each(["ls-tree", "show"])(
 );
 
 const terminalCases = [
-  ...["rev-parse"].map((operation) => ({ mode: "target" as const, operation })),
   { mode: "record" as const, operation: "rev-parse" },
   { mode: "tested" as const, operation: "rev-parse" },
   ...["fetch", "checkout"].map((operation) => ({ mode: "kova" as const, operation })),
