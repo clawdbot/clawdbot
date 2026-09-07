@@ -63,17 +63,6 @@ function sanitizeDaemonStatusForJson(status: DaemonStatus): DaemonStatus {
   };
 }
 
-function formatProbeKindLabel(kind?: "connect" | "read") {
-  return kind === "read" ? "Read probe:" : "Connectivity probe:";
-}
-
-function formatCapabilityLabel(capability?: string) {
-  if (!capability) {
-    return null;
-  }
-  return capability.replaceAll("_", "-");
-}
-
 function formatCliVersionLine(cli: DaemonStatus["cli"]): string | null {
   if (!cli) {
     return null;
@@ -112,9 +101,6 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
 
   const { service, rpc, extraServices } = status;
   const serviceTargetsProbe = service.targetRole !== "diagnostic-only";
-  // gatherDaemonStatus already decided this service is not the one the probe targets. Say so on
-  // both lines that report its state, so an unrelated running service is not read as the selected
-  // Gateway sitting next to a failed probe.
   const diagnosticOnlySuffix = serviceTargetsProbe
     ? ""
     : ` ${infoText("(diagnostic only, not the probe target)")}`;
@@ -341,7 +327,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
     }
   }
   if (rpc) {
-    const probeLabel = formatProbeKindLabel(rpc.kind);
+    const probeLabel = rpc.kind === "read" ? "Read probe:" : "Connectivity probe:";
     if (rpc.ok) {
       defaultRuntime.log(`${label(probeLabel)} ${okText("ok")}`);
     } else {
@@ -360,7 +346,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
         defaultRuntime.error(`${errorText("Last gateway error:")} ${status.lastError}`);
       }
     }
-    const capability = formatCapabilityLabel(rpc.capability);
+    const capability = rpc.capability ? rpc.capability.replaceAll("_", "-") : null;
     if (capability) {
       defaultRuntime.log(`${label("Capability:")} ${infoText(capability)}`);
     }
