@@ -42,6 +42,7 @@ import { parseReleaseVersion, resolveNpmCommandInvocation } from "./openclaw-npm
 import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "./windows-cmd-helpers.mjs";
 
 type InstalledPackageJson = {
+  name?: string;
   version?: string;
   dependencies?: Record<string, string>;
   optionalDependencies?: Record<string, string>;
@@ -705,6 +706,7 @@ export function collectInstalledRootDependencyManifestErrors(packageRoot: string
   const missingImporters = new Map<string, Set<string>>();
   const bundledExtensionRuntimeDependencyOwners =
     collectBundledExtensionRuntimeDependencyOwners(packageRoot);
+  const companionManifestCache = new Map<string, InstalledPackageJson | null>();
 
   for (const filePath of distFiles.files) {
     const file = readInstalledRootDistJavaScriptFile(packageRoot, filePath);
@@ -728,6 +730,12 @@ export function collectInstalledRootDependencyManifestErrors(packageRoot: string
           dependencyName,
           ownersByDependency: bundledExtensionRuntimeDependencyOwners,
           source: file.source,
+        }) ||
+        isInstalledCompanionExtensionOwnedRuntimeImport({
+          dependencyName,
+          packageRoot,
+          source: file.source,
+          manifestCache: companionManifestCache,
         })
       ) {
         continue;
@@ -744,6 +752,46 @@ export function collectInstalledRootDependencyManifestErrors(packageRoot: string
       return `installed package root is missing declared runtime dependency '${dependencyName}' for dist importers: ${importerList.join(", ")}. Add it to package.json dependencies/optionalDependencies.`;
     })
     .toSorted((left, right) => left.localeCompare(right));
+}
+
+function isInstalledCompanionExtensionOwnedRuntimeImport(params: {
+  dependencyName: string;
+  packageRoot: string;
+  source: string;
+  manifestCache: Map<string, InstalledPackageJson | null>;
+}): boolean {
+  const extensionIds = [
+    ...params.source.matchAll(/\/\/#region extensions\/([a-z0-9][a-z0-9-]*)\//gu),
+  ].map((match) => expectDefined(match[1], "companion extension id"));
+  for (const extensionId of extensionIds) {
+    let manifest = params.manifestCache.get(extensionId);
+    if (manifest === undefined) {
+      const manifestPath = join(params.packageRoot, "..", "@openclaw", extensionId, "package.json");
+      manifest = null;
+      if (existsSync(manifestPath)) {
+        const stat = lstatSync(manifestPath);
+        if (stat.isFile() && stat.size <= MAX_INSTALLED_ROOT_PACKAGE_JSON_BYTES) {
+          try {
+            const parsed = JSON.parse(readFileSync(manifestPath, "utf8")) as InstalledPackageJson;
+            if (parsed.name === `@openclaw/${extensionId}`) {
+              manifest = parsed;
+            }
+          } catch {
+            // Invalid companion manifests cannot authorize root runtime imports.
+          }
+        }
+      }
+      params.manifestCache.set(extensionId, manifest);
+    }
+    if (
+      manifest &&
+      (Object.hasOwn(manifest.dependencies ?? {}, params.dependencyName) ||
+        Object.hasOwn(manifest.optionalDependencies ?? {}, params.dependencyName))
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function collectBundledExtensionRuntimeDependencyOwners(

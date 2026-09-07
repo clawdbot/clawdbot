@@ -1127,6 +1127,73 @@ describe("collectInstalledRootDependencyManifestErrors", () => {
     }
   });
 
+  it("accepts runtime imports owned by installed companion extension packages", () => {
+    const installRoot = makeInstalledPackageRoot();
+    const packageRoot = join(installRoot, "openclaw");
+
+    try {
+      writePackageFile(packageRoot, "package.json", {
+        name: "openclaw",
+        version: "2026.7.33",
+        dependencies: {},
+      });
+      writePackageFile(installRoot, "@openclaw/discord/package.json", {
+        name: "@openclaw/discord",
+        version: "2026.7.33",
+        dependencies: { "@discordjs/voice": "0.19.2" },
+      });
+      writePackageFile(installRoot, "@openclaw/msteams/package.json", {
+        name: "@openclaw/msteams",
+        version: "2026.7.33",
+        dependencies: { "@microsoft/teams.apps": "2.0.15" },
+      });
+      mkdirSync(join(packageRoot, "dist"), { recursive: true });
+      writeFileSync(
+        join(packageRoot, "dist", "companion-runtime.js"),
+        [
+          "//#region extensions/discord/src/voice.js",
+          'const voice = require("@discordjs/voice");',
+          "//#endregion",
+          "//#region extensions/msteams/src/graph.js",
+          'import teams from "@microsoft/teams.apps";',
+          "//#endregion",
+          "export { teams, voice };",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+
+      expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toStrictEqual([]);
+    } finally {
+      rmSync(installRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("does not trust a companion manifest with the wrong package identity", () => {
+    const installRoot = makeInstalledPackageRoot();
+    const packageRoot = join(installRoot, "openclaw");
+
+    try {
+      writePackageFile(packageRoot, "package.json", { dependencies: {} });
+      writePackageFile(installRoot, "@openclaw/discord/package.json", {
+        name: "attacker-package",
+        dependencies: { "@discordjs/voice": "0.19.2" },
+      });
+      mkdirSync(join(packageRoot, "dist"), { recursive: true });
+      writeFileSync(
+        join(packageRoot, "dist", "companion-runtime.js"),
+        '//#region extensions/discord/src/voice.js\nrequire("@discordjs/voice");\n',
+        "utf8",
+      );
+
+      expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toEqual([
+        "installed package root is missing declared runtime dependency '@discordjs/voice' for dist importers: companion-runtime.js. Add it to package.json dependencies/optionalDependencies.",
+      ]);
+    } finally {
+      rmSync(installRoot, { recursive: true, force: true });
+    }
+  });
+
   it("accepts optional or externalized runtime imports", () => {
     const packageRoot = makeInstalledPackageRoot();
 
