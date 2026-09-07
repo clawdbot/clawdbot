@@ -159,6 +159,7 @@ describe("voice-call realtime route ownership", () => {
       for (const route of routes) {
         const { streamUrl } = handler.issueStreamSession({
           providerName: "twilio",
+          callId: route.callSid,
           direction: "inbound",
           from: "+15550009999",
           to: route.to,

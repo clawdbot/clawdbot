@@ -796,6 +796,12 @@ export class VoiceCallWebhookServer {
 
         const realtimeParams = this.getRealtimeTwimlParams(ctx);
         if (realtimeParams) {
+          // Never mint stream authority without a signature-verified call identity.
+          const callSid = realtimeParams.get("CallSid")?.trim();
+          if (!callSid) {
+            this.logger.info("Realtime Twilio call rejected before stream setup");
+            return buildRealtimeRejectedTwiML();
+          }
           const direction = realtimeParams.get("Direction");
           const isInboundRealtimeRequest = !direction || direction === "inbound";
           if (
@@ -808,7 +814,7 @@ export class VoiceCallWebhookServer {
           this.logger.info(
             `Serving realtime TwiML for Twilio call ${realtimeParams.get("CallSid") ?? "unknown"} (direction=${direction ?? "unknown"})`,
           );
-          return this.realtimeHandler!.buildTwiMLPayload(req, realtimeParams);
+          return this.realtimeHandler!.buildTwiMLPayload(req, realtimeParams, callSid);
         }
 
         const parsed = this.provider.parseWebhookEvent(ctx, {
