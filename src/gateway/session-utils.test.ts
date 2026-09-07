@@ -3,6 +3,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, beforeEach, describe, expect, onTestFinished, test, vi } from "vitest";
 import { writeAcpSessionMetaForMigration } from "../acp/runtime/session-meta.js";
 import { resolveExecDefaults } from "../agents/exec-defaults.js";
@@ -2584,10 +2585,11 @@ describe("gateway session utils", () => {
         });
         closeSessionSqliteDatabasesForTest();
         const store = readStore();
-        const entry = store[key];
+        const entry = expectDefined(store[key], "topic session");
         const row = buildGatewaySessionRow({ cfg, storePath, store, key, entry });
         expect(row.displayName).toBe(title);
         expect(entry.sessionId).toBe(key);
+        expect(entry.subject).toBe("Project Team");
         expect(row.origin?.threadId).toBe(42);
         const sibling = buildGatewaySessionRow({
           cfg,
@@ -2599,18 +2601,20 @@ describe("gateway session utils", () => {
         expect(sibling.displayName).toBe("Project Team / Releases");
       }
       const store = readStore();
+      const previous = expectDefined(store[key], "topic session before sparse update");
       await recordInboundSessionMeta({
         storePath,
         sessionKey: key,
         ctx: { ...ctx, GroupSubject: undefined },
       });
       expect(readStore()[key]).toMatchObject({
-        subject: store[key].subject,
-        displayName: store[key].displayName,
+        subject: previous.subject,
+        displayName: previous.displayName,
+        topicName: "Roadmap",
       });
       await replaceSessionEntry(
         { sessionKey: key, storePath },
-        { ...store[key], label: "My planning chat" },
+        { ...previous, label: "My planning chat" },
       );
       await recordInboundSessionMeta({
         storePath,

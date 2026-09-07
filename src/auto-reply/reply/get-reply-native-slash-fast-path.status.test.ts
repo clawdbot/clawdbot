@@ -26,6 +26,7 @@ type NativeStatusSelectionCase = {
   preparedModel?: string;
   preparedProvider?: string;
   topicName?: string;
+  overrideKey?: string;
 };
 
 const buildStatusReplyMock = vi.hoisted(() => vi.fn());
@@ -116,6 +117,16 @@ describe("native /status channel model routing", () => {
       expectedModel: "claude-fable-5",
     },
     {
+      selection: "group-name override for a topic",
+      source: undefined,
+      groupId: "123:topic:77",
+      topicName: "Planning",
+      overrideKey: "Project Team",
+      channelModel: "xai/grok-4.3",
+      expectedProvider: "xai",
+      expectedModel: "grok-4.3",
+    },
+    {
       selection: "native direct peer override before wildcard",
       source: undefined,
       directUserId: "native-peer-42",
@@ -176,7 +187,7 @@ describe("native /status channel model routing", () => {
         topicName,
       } = testCase;
       const isDirect = directUserId !== undefined || directSenderId !== undefined;
-      const overrideKey = directSenderId ?? directUserId ?? "123";
+      const overrideKey = testCase.overrideKey ?? directSenderId ?? directUserId ?? "123";
       const conflictingDirectUserId =
         directSenderId !== undefined && directUserId !== undefined ? directUserId : undefined;
       await replaceSessionEntry(
@@ -192,7 +203,7 @@ describe("native /status channel model routing", () => {
               : {}),
           }),
           ...(isDirect ? {} : { groupId }),
-          ...(topicName ? { subject: "Project Team / Previous" } : {}),
+          ...(topicName ? { subject: "Project Team", topicName: "Previous" } : {}),
           ...(locked ? { modelSelectionLocked: true } : {}),
           ...(source
             ? {
@@ -319,7 +330,8 @@ describe("native /status channel model routing", () => {
           loadSessionEntry({ agentId: "main", sessionKey: targetSessionKey, storePath }),
         ).toMatchObject({
           sessionId: "status-session",
-          subject: "Project Team / Planning",
+          subject: "Project Team",
+          topicName: "Planning",
         });
       }
     },

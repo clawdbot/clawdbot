@@ -171,9 +171,8 @@ function deriveGroupSessionPatch(params: {
   }
 
   const channel = resolution.channel;
-  const subject = normalizeOptionalString(
-    [params.ctx.GroupSubject?.trim(), params.ctx.TopicName?.trim()].filter(Boolean).join(" / "),
-  );
+  const subject = normalizeOptionalString(params.ctx.GroupSubject);
+  const topicName = normalizeOptionalString(params.ctx.TopicName);
   const space = params.ctx.GroupSpace?.trim();
   const explicitChannel = params.ctx.GroupChannel?.trim();
   const subjectLooksChannel = Boolean(subject?.startsWith("#"));
@@ -209,10 +208,14 @@ function deriveGroupSessionPatch(params: {
   if (space) {
     patch.space = space;
   }
+  if (topicName) {
+    patch.topicName = topicName;
+  }
 
   const displayName = buildGroupDisplayName({
     provider: channel,
     subject: nextSubject ?? (nextGroupChannel ? undefined : params.existing?.subject),
+    topicName: topicName ?? params.existing?.topicName,
     groupChannel: nextGroupChannel ?? (nextSubject ? undefined : params.existing?.groupChannel),
     space: space ?? params.existing?.space,
     id: resolution.id,

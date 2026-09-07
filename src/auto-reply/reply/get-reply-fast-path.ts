@@ -4,7 +4,6 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveSessionParentSessionKey } from "../../channels/plugins/session-conversation.js";
 import { applyMergePatch } from "../../config/merge-patch.js";
-import { deriveSessionMetaPatch } from "../../config/sessions/metadata.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { resolveResetPreservedSelection } from "../../config/sessions/reset-preserved-selection.js";
 import { loadReplySessionInitializationSnapshot } from "../../config/sessions/session-accessor.js";
@@ -210,8 +209,14 @@ export function initFastReplySessionState(params: {
     ...(normalizeOptionalString(ctx.Provider)
       ? { channel: normalizeOptionalString(ctx.Provider) }
       : {}),
+    ...(normalizeOptionalString(ctx.GroupSubject)
+      ? { subject: normalizeOptionalString(ctx.GroupSubject) }
+      : {}),
+    ...(normalizeOptionalString(ctx.GroupChannel)
+      ? { groupChannel: normalizeOptionalString(ctx.GroupChannel) }
+      : {}),
+    topicName: normalizeOptionalString(ctx.TopicName) ?? existingEntry?.topicName,
   };
-  Object.assign(sessionEntry, deriveSessionMetaPatch({ ctx, sessionKey, existing: sessionEntry }));
   sessionStore[sessionKey] = sessionEntry;
   const sessionEntryHandle = createReplySessionEntryHandle({
     sessionEntry,

@@ -983,6 +983,7 @@ async function initSessionStateAttemptLocked(
     delivery,
     groupId: baseEntry?.groupId,
     subject: baseEntry?.subject,
+    topicName: baseEntry?.topicName,
     groupChannel: baseEntry?.groupChannel,
     space: baseEntry?.space,
     groupActivation: entry?.groupActivation,

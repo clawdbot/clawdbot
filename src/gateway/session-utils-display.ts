@@ -29,6 +29,7 @@ export function resolveGatewaySessionDisplayName(key: string, entry?: SessionEnt
   const parsedAgent = parseAgentSessionKey(key);
   const channel = sessionDeliveryChannel(entry) ?? parsed?.channel;
   const subject = entry?.subject;
+  const topicName = entry?.topicName;
   const groupChannel = entry?.groupChannel;
   const space = entry?.space;
   const id = parsed?.id;
@@ -41,12 +42,15 @@ export function resolveGatewaySessionDisplayName(key: string, entry?: SessionEnt
   // stored compact token displayName (e.g. "slack:g-general").
   const displayName =
     entry?.label ??
-    (isGroupSession ? buildGroupDisplayTitle({ subject, groupChannel, space }) : undefined) ??
+    (isGroupSession
+      ? buildGroupDisplayTitle({ subject, topicName, groupChannel, space })
+      : undefined) ??
     entry?.displayName ??
     (isGroupSession && channel
       ? buildGroupDisplayName({
           provider: channel,
           subject,
+          topicName,
           groupChannel,
           space,
           id,
