@@ -8,8 +8,7 @@ import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.j
 import {
   assertGatewayAuthConfigured,
   authorizeHttpGatewayConnect,
-  authorizeUserProfileAvatarHttpGatewayConnect,
-  resolveEffectiveSharedGatewayAuth,
+  authorizeControlUiReadHttpGatewayConnect,
   authorizeWsControlUiGatewayConnect,
   resolveGatewayAuth,
 } from "./auth.js";
@@ -83,6 +82,21 @@ function createAvatarBrowserOriginPolicy(
   };
 }
 
+describe("invalid Gateway tokens", () => {
+  it.each(["undefined", "null", "  undefined  ", "", "  "])(
+    "rejects %j in the auth validator and request boundary",
+    async (token) => {
+      const auth = { mode: "token" as const, token, allowTailscale: false };
+      expect(() => assertGatewayAuthConfigured(auth)).toThrow(
+        /must not be blank|no token was configured/,
+      );
+      await expect(
+        authorizeHttpGatewayConnect({ auth, connectAuth: { token } }),
+      ).resolves.toMatchObject({ ok: false });
+    },
+  );
+});
+
 describe("gateway auth", () => {
   async function expectTokenMismatchWithLimiter(params: {
     reqHeaders: Record<string, string>;
@@ -108,7 +122,7 @@ describe("gateway auth", () => {
   async function expectTailscaleHeaderAuthResult(params: {
     authorize:
       | typeof authorizeHttpGatewayConnect
-      | typeof authorizeUserProfileAvatarHttpGatewayConnect
+      | typeof authorizeControlUiReadHttpGatewayConnect
       | typeof authorizeWsControlUiGatewayConnect;
     expected: { ok: false; reason: string } | { ok: true; method: string; user: string };
   }) {
@@ -144,38 +158,6 @@ describe("gateway auth", () => {
     expect(auth.password).toBe("env-password");
   });
 
-  it("resolves the active shared token auth only", () => {
-    expect(
-      resolveEffectiveSharedGatewayAuth({
-        authConfig: {
-          mode: "token",
-          token: "config-token",
-          password: "config-password",
-        },
-        env: {} as NodeJS.ProcessEnv,
-      }),
-    ).toEqual({
-      mode: "token",
-      secret: "config-token",
-    });
-  });
-
-  it("resolves the active shared password auth only", () => {
-    expect(
-      resolveEffectiveSharedGatewayAuth({
-        authConfig: {
-          mode: "password",
-          token: "config-token",
-          password: "config-password",
-        },
-        env: {} as NodeJS.ProcessEnv,
-      }),
-    ).toEqual({
-      mode: "password",
-      secret: "config-password",
-    });
-  });
-
   it.each([
     { name: "Forwarded", headers: { forwarded: "for=203.0.113.10;proto=https" } },
     { name: "X-Forwarded-For", headers: { "x-forwarded-for": "203.0.113.10" } },
@@ -203,24 +185,6 @@ describe("gateway auth", () => {
 
     expect(hasForwardedRequestHeaders(req)).toBe(false);
     expect(isLocalDirectRequest(req)).toBe(true);
-  });
-
-  it("returns null for non-shared gateway auth modes", () => {
-    expect(
-      resolveEffectiveSharedGatewayAuth({
-        authConfig: { mode: "none" },
-        env: {} as NodeJS.ProcessEnv,
-      }),
-    ).toBeNull();
-    expect(
-      resolveEffectiveSharedGatewayAuth({
-        authConfig: {
-          mode: "trusted-proxy",
-          trustedProxy: { userHeader: "x-user" },
-        },
-        env: {} as NodeJS.ProcessEnv,
-      }),
-    ).toBeNull();
   });
 
   it("keeps gateway auth config values ahead of env overrides", () => {
@@ -795,10 +759,10 @@ describe("gateway auth", () => {
     ).resolves.toMatchObject({ ok: false, reason: "password_missing" });
   });
 
-  it("allows an origin-less same-origin image through the profile avatar surface", async () => {
+  it("allows an origin-less same-origin image through the Control UI read surface", async () => {
     const limiter = createLimiterSpy();
     const req = createTailscaleForwardedReq();
-    const res = await authorizeUserProfileAvatarHttpGatewayConnect({
+    const res = await authorizeControlUiReadHttpGatewayConnect({
       auth: { mode: "token", token: "secret", allowTailscale: true },
       connectAuth: null,
       tailscaleWhois: createTailscaleWhois(),
@@ -818,7 +782,7 @@ describe("gateway auth", () => {
     req.headers["sec-fetch-site"] = "cross-site";
     const tailscaleWhois = vi.fn(createTailscaleWhois());
 
-    const res = await authorizeUserProfileAvatarHttpGatewayConnect({
+    const res = await authorizeControlUiReadHttpGatewayConnect({
       auth: { mode: "token", token: "secret", allowTailscale: true },
       connectAuth: null,
       tailscaleWhois,
@@ -836,7 +800,7 @@ describe("gateway auth", () => {
     req.headers["sec-fetch-site"] = "cross-site";
     const tailscaleWhois = vi.fn(createTailscaleWhois());
 
-    const res = await authorizeUserProfileAvatarHttpGatewayConnect({
+    const res = await authorizeControlUiReadHttpGatewayConnect({
       auth: { mode: "token", token: "secret", allowTailscale: true },
       connectAuth: null,
       tailscaleWhois,
@@ -854,7 +818,7 @@ describe("gateway auth", () => {
     req.headers["sec-fetch-site"] = "cross-site";
     const tailscaleWhois = vi.fn(createTailscaleWhois());
 
-    const res = await authorizeUserProfileAvatarHttpGatewayConnect({
+    const res = await authorizeControlUiReadHttpGatewayConnect({
       auth: { mode: "token", token: "secret", allowTailscale: true },
       connectAuth: null,
       tailscaleWhois,
@@ -877,7 +841,7 @@ describe("gateway auth", () => {
       }
       const tailscaleWhois = vi.fn(createTailscaleWhois());
 
-      const res = await authorizeUserProfileAvatarHttpGatewayConnect({
+      const res = await authorizeControlUiReadHttpGatewayConnect({
         auth: { mode: "token", token: "secret", allowTailscale: true },
         connectAuth: null,
         tailscaleWhois,
@@ -922,12 +886,12 @@ describe("gateway auth", () => {
       expectedReason: "proxy_attribution_required",
     },
   ])(
-    "rejects $name on the profile avatar HTTP surface",
+    "rejects $name on the Control UI read HTTP surface",
     async ({ mutate, whois, expectedReason }) => {
       const req = createTailscaleForwardedReq();
       mutate(req);
 
-      const res = await authorizeUserProfileAvatarHttpGatewayConnect({
+      const res = await authorizeControlUiReadHttpGatewayConnect({
         auth: { mode: "token", token: "secret", allowTailscale: true },
         connectAuth: null,
         tailscaleWhois: whois,
@@ -952,11 +916,11 @@ describe("gateway auth", () => {
       tailscaleWhois: createTailscaleWhois(),
       method: "password",
     },
-  ])("keeps $method auth on the profile avatar HTTP surface", async (testCase) => {
+  ])("keeps $method auth on the Control UI read HTTP surface", async (testCase) => {
     const req = createTailscaleForwardedReq();
     req.headers.origin = "https://evil.example";
     req.headers["sec-fetch-site"] = "cross-site";
-    const res = await authorizeUserProfileAvatarHttpGatewayConnect({
+    const res = await authorizeControlUiReadHttpGatewayConnect({
       ...testCase,
       req,
       browserOriginPolicy: createAvatarBrowserOriginPolicy(req, ["*"]),
@@ -972,9 +936,9 @@ describe("gateway auth", () => {
     });
   });
 
-  it("enables tailscale header auth on the profile avatar HTTP wrapper", async () => {
+  it("enables tailscale header auth on the Control UI read HTTP wrapper", async () => {
     await expectTailscaleHeaderAuthResult({
-      authorize: authorizeUserProfileAvatarHttpGatewayConnect,
+      authorize: authorizeControlUiReadHttpGatewayConnect,
       expected: { ok: true, method: "tailscale", user: "peter@github" },
     });
   });
@@ -1196,6 +1160,7 @@ describe("gateway auth", () => {
         mode: "password",
         password: { source: "exec", provider: "op", id: "pw" } as never,
       },
+      env: {},
     });
     expect(() =>
       assertGatewayAuthConfigured(auth, {
@@ -1227,7 +1192,7 @@ describe("gateway auth", () => {
   });
 
   it("throws generic error when password mode has no password at all", () => {
-    const auth = resolveGatewayAuth({ authConfig: { mode: "password" } });
+    const auth = resolveGatewayAuth({ authConfig: { mode: "password" }, env: {} });
     expect(() => assertGatewayAuthConfigured(auth, { mode: "password" })).toThrow(
       "gateway auth mode is password, but no password was configured",
     );

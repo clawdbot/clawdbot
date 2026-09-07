@@ -52,7 +52,7 @@ suite.define(() => {
         await sortMenu.locator('wa-dropdown-item[value="asc"]').click();
         await page.getByRole("button", { name: "Sort Oldest first", exact: true }).waitFor();
         // Switching tabs recreates the dropdown with the persisted non-first value.
-        await page.locator('[data-test-id="cron-list-tab-tasks"]').click();
+        await page.locator('[data-test-id="cron-tab-all"]').click();
         await page.locator('[data-test-id="cron-list-tab-activity"]').click();
         await page.getByRole("button", { name: "Sort Oldest first", exact: true }).waitFor();
         expect(
@@ -78,9 +78,19 @@ suite.define(() => {
             String((element as HTMLElement & { value?: string }).value),
           ),
         ).toBe("minutes");
-        // Control: delivery mode's default is also its first option.
-        expect(await pickerValue("wa-select#cron-delivery-mode")).toBe("announce");
-        expect(await pickerValue("wa-select#cron-delivery-channel")).toBe("last");
+        expect(await pickerValue("wa-select#cron-delivery-mode")).toBe("none");
+        expect(await page.locator("wa-select#cron-delivery-channel").count()).toBe(0);
+
+        await action.click();
+        await page.getByRole("option", { name: "Post to main timeline", exact: true }).click();
+        await expect.poll(() => pickerValue("wa-select#cron-payload-kind")).toBe("systemEvent");
+        await expect.poll(() => pickerValue("wa-select#cron-session-target")).toBe("main");
+
+        const target = page.locator("wa-select#cron-session-target");
+        await target.click();
+        await page.getByRole("option", { name: "Isolated session", exact: true }).click();
+        await expect.poll(() => pickerValue("wa-select#cron-session-target")).toBe("isolated");
+        await expect.poll(() => pickerValue("wa-select#cron-payload-kind")).toBe("agentTurn");
       },
     );
   });

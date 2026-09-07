@@ -17,6 +17,8 @@ import { formatErrorMessage } from "../infra/errors.js";
 import {
   OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY_ENV,
   resolveToolsMcpAgentSessionKey,
+  resolveToolsMcpAgentId,
+  resolveToolsMcpSessionContext,
 } from "./agent-session-env.js";
 import {
   resolveOpenClawToolsMcpSystemAgentApproval,
@@ -42,6 +44,7 @@ export function resolveOpenClawToolsMcpAgentSessionKey(
 export function resolveOpenClawToolsForMcp(
   params: {
     agentSessionKey?: string;
+    agentId?: string;
     tools?: OpenClawToolsMcpToolId[];
     systemAgentSurface?: SystemAgentToolOptions["surface"];
     config?: OpenClawConfig;
@@ -51,6 +54,7 @@ export function resolveOpenClawToolsForMcp(
   return selection.map((tool) => {
     if (tool === "openclaw") {
       return createSystemAgentTool({
+        agentId: params.agentId,
         surface: params.systemAgentSurface ?? resolveOpenClawToolsMcpSystemAgentSurface(),
         ...resolveOpenClawToolsMcpSystemAgentApproval(),
       });
@@ -61,8 +65,10 @@ export function resolveOpenClawToolsForMcp(
     if (!agentSessionKey) {
       throw new Error(`${OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY_ENV} is required`);
     }
+    const context = resolveToolsMcpSessionContext({ agentSessionKey, agentId: params.agentId });
     return createCronTool({
       agentSessionKey,
+      agentId: context.agentId,
       // Same host-config resolution as plugin-tools-serve: the advertised cron
       // surface must reflect this deployment's cron.triggers.enabled gate.
       config: params.config ?? getRuntimeConfig(),
@@ -81,7 +87,9 @@ function createOpenClawToolsMcpServer(
 }
 
 async function serveOpenClawToolsMcp(): Promise<void> {
-  const server = createOpenClawToolsMcpServer();
+  const server = createOpenClawToolsMcpServer({
+    tools: resolveOpenClawToolsForMcp({ agentId: resolveToolsMcpAgentId() }),
+  });
   await connectToolsMcpServerToStdio(server);
 }
 

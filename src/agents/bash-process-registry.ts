@@ -6,7 +6,12 @@
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { EventSessionRoutingPolicy } from "../infra/event-session-routing.js";
-import type { TerminationReason } from "../process/supervisor/types.js";
+import type {
+  ManagedRunStdin,
+  ProcessRunActivity,
+  TerminationReason,
+} from "../process/supervisor/types.js";
+import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import { readEnvInt } from "./bash-tools.shared.js";
 
@@ -24,22 +29,15 @@ function clampTtl(value: number | undefined) {
   return Math.min(Math.max(value, MIN_JOB_TTL_MS), MAX_JOB_TTL_MS);
 }
 
-let jobTtlMs = clampTtl(readEnvInt("OPENCLAW_BASH_JOB_TTL_MS", "PI_BASH_JOB_TTL_MS"));
+const defaultJobTtlMs = clampTtl(readEnvInt("OPENCLAW_BASH_JOB_TTL_MS", "PI_BASH_JOB_TTL_MS"));
+
+/** Resolves the retention duration captured by one admitted exec process. */
+export function resolveProcessCleanupMs(value?: number): number {
+  return value === undefined ? defaultJobTtlMs : clampTtl(value);
+}
 
 /** Lifecycle status recorded for background process sessions. */
 type ProcessStatus = "running" | "completed" | "failed" | "killed";
-
-/** Writable stdin surface prepared by the supervisor for child and PTY sessions. */
-type SessionStdin = {
-  write: (data: string, cb?: (err?: Error | null) => void) => void;
-  end: () => void;
-  // Child and PTY wrappers both expose destroy today; keep it optional for alternate backends.
-  destroy?: () => void;
-  destroyed?: boolean;
-  writable?: boolean;
-  writableEnded?: boolean;
-  writableFinished?: boolean;
-};
 
 /** Removes one queued notify-on-exit event, if it is still pending. */
 type NotifyOnExitRemoval = () => boolean;
@@ -49,50 +47,55 @@ type PendingOutputChunk = {
   text: string;
 };
 
-/** Mutable session state for a running bash exec process. */
+type PendingPollDelivery = {
+  output: string;
+  outputDropped: boolean;
+  scope: object;
+};
+
+/** One process record from execution through completed retention. */
 export interface ProcessSession {
   id: string;
   command: string;
   scopeKey?: string;
   sessionKey?: string;
+  /** Admission-owned duration; another agent's tools cannot change this result's lifetime. */
+  readonly cleanupMs: number;
   /** Agent owner frozen when the exec process starts. */
   agentId?: string;
-  /** `session.mainKey` from the runtime config, snapshotted at exec start.
-   *  Used by background-exit notifications to remap cron-run keys to the
-   *  agent's main queue without an ambient config load. If config changes
-   *  while the process runs, the exit notification follows the start-time
-   *  session contract. */
-  mainKey?: string;
-  /** `session.scope` from the runtime config; required so the cron-run remap
-   *  can route global-scope agents to the literal "global" queue instead
-   *  of an agent-main queue the heartbeat never drains. Snapshotted with
-   *  `mainKey` for the same start-time routing reason. */
-  sessionScope?: "per-sender" | "global";
   /** Start-time routing policy for detached exec system events. */
   eventRouting?: EventSessionRoutingPolicy;
   notifyDeliveryContext?: DeliveryContext;
   notifyOnExit?: boolean;
   notifyOnExitEmptySuccess?: boolean;
   exitNotified?: boolean;
-  /** Set when process poll observed the terminal result before notification. */
+  /** Set only after a terminal poll result is delivered or persisted. */
   terminalPollObserved?: boolean;
   notifyOnExitRemoval?: NotifyOnExitRemoval;
   // Deprecated declaration-closure compatibility only; runtime never uses this.
   // ProcessSupervisor owns raw processes. Remove when the public Plugin SDK closure no
   // longer reaches registry types, or at the next compatible boundary change.
   child?: ChildProcessWithoutNullStreams;
-  stdin?: SessionStdin;
+  /** Retain the exact process producer while backend finalization is pending. */
+  processActivity?: ProcessRunActivity;
+  stdin?: ManagedRunStdin;
   pid?: number;
   startedAt: number;
+  /** Set only on admission to completed retention; survives index removal. */
+  endedAt?: number;
+  expiresAt?: number;
   cwd?: string;
   maxOutputChars: number;
   pendingMaxOutputChars?: number;
   totalOutputChars: number;
-  pendingOutput: PendingOutputChunk[];
+  /** Live chunks become frozen text at completion, releasing the chunk graph. */
+  pendingOutput: PendingOutputChunk[] | string;
   pendingStdoutChars: number;
   pendingStderrChars: number;
   /** Output was dropped from the pending poll buffers since their last drain. */
   pendingOutputDropped: boolean;
+  /** Output prepared for a poll but not yet attached to the agent transcript. */
+  pendingPollDelivery?: PendingPollDelivery;
   aggregated: string;
   tail: string;
   exitCode?: number | null;
@@ -110,51 +113,30 @@ export interface ProcessSession {
   cursorKeyMode: "unknown" | "normal" | "application";
 }
 
-/** Retained summary for a completed background session. */
-interface FinishedSession {
-  id: string;
-  command: string;
-  scopeKey?: string;
-  startedAt: number;
-  endedAt: number;
-  cwd?: string;
-  status: ProcessStatus;
-  exitCode?: number | null;
-  exitSignal?: NodeJS.Signals | number | null;
-  exitReason?: TerminationReason;
-  noOutputTimedOut?: boolean;
-  aggregated: string;
-  tail: string;
-  truncated: boolean;
-  totalOutputChars: number;
-  unreadOutput?: ReturnType<typeof drainSession>;
-  terminalPollObserved?: boolean;
-  notifyOnExitRemoval?: NotifyOnExitRemoval;
-}
-
 const runningSessions = new Map<string, ProcessSession>();
-const finishedSessions = new Map<string, FinishedSession>();
-let finishedSessionsByProcess = new WeakMap<ProcessSession, FinishedSession>();
-// Keep start chronology private while snapshots retain their completion-order eviction contract.
+const finishedSessions = new Map<string, ProcessSession & { endedAt: number; expiresAt: number }>();
+// Display uses start chronology; retained records are evicted in completion order.
 let processSessionStartOrders = new WeakMap<object, number>();
 let nextProcessSessionStartOrder = 0;
-const activeBackgroundExecSessionIds = new Set<string>();
+// Promotion stays live when process removal clears its presentation state.
+const activeExecSessions = new Map<
+  string,
+  { session: ProcessSession; promoted: boolean; settled?: Deferred }
+>();
 let finishedSessionOutputChars = 0;
 
 let sweeper: NodeJS.Timeout | null = null;
 
 /** Return whether a process session id is live, retained, or reserved for notification. */
 export function isProcessSessionIdTaken(id: string): boolean {
-  return (
-    runningSessions.has(id) || finishedSessions.has(id) || activeBackgroundExecSessionIds.has(id)
-  );
+  return runningSessions.has(id) || finishedSessions.has(id) || activeExecSessions.has(id);
 }
 
-/** Adds a running session and starts retention sweeping if needed. */
+/** Adds a running session; retention starts only after background completion. */
 export function addSession(session: ProcessSession) {
   processSessionStartOrders.set(session, nextProcessSessionStartOrder++);
   runningSessions.set(session.id, session);
-  startSweeper();
+  activeExecSessions.set(session.id, { session, promoted: session.backgrounded });
 }
 
 /** Sorts registered process records newest-first, including same-millisecond starts. */
@@ -178,11 +160,6 @@ export function getFinishedSession(id: string) {
   return finishedSessions.get(id);
 }
 
-/** Returns the terminal snapshot owned by this exact process incarnation. */
-export function getFinishedSessionForProcess(session: ProcessSession) {
-  return finishedSessionsByProcess.get(session);
-}
-
 function deleteFinishedSession(id: string): boolean {
   const session = finishedSessions.get(id);
   if (!session) {
@@ -197,6 +174,7 @@ function deleteFinishedSession(id: string): boolean {
 export function deleteSession(id: string) {
   runningSessions.delete(id);
   deleteFinishedSession(id);
+  scheduleSweeper();
 }
 
 /** Removes completed process records belonging to retired session identities. */
@@ -216,10 +194,14 @@ export function clearFinishedSessionsForScopes(scopeKeys: Iterable<string>): voi
       deleteFinishedSession(id);
     }
   }
+  scheduleSweeper();
 }
 
 /** Appends process output while enforcing aggregate and pending-output caps. */
 export function appendOutput(session: ProcessSession, stream: "stdout" | "stderr", chunk: string) {
+  if (typeof session.pendingOutput === "string") {
+    return;
+  }
   const streamChars = stream === "stdout" ? session.pendingStdoutChars : session.pendingStderrChars;
   const pendingCap = Math.min(
     session.pendingMaxOutputChars ?? DEFAULT_PENDING_OUTPUT_CHARS,
@@ -246,21 +228,61 @@ export function appendOutput(session: ProcessSession, stream: "stdout" | "stderr
 }
 
 /** Drains pending chunks in producer callback order for a process poll. */
-export function drainSession(session: ProcessSession) {
-  const output = session.pendingOutput.map((chunk) => chunk.text).join("");
+function drainSession(session: ProcessSession) {
+  const pending = session.pendingOutput;
+  const output =
+    typeof pending === "string" ? pending : pending.map((chunk) => chunk.text).join("");
   const outputDropped = session.pendingOutputDropped;
-  session.pendingOutput = [];
+  // Draining a terminal record must not reopen it to late producer callbacks.
+  session.pendingOutput = typeof pending === "string" ? "" : [];
   session.pendingStdoutChars = 0;
   session.pendingStderrChars = 0;
   session.pendingOutputDropped = false;
   return { output, outputDropped };
 }
 
-/** Consumes the output transferred to one exact terminal snapshot. */
-export function drainFinishedSession(session: FinishedSession) {
-  const output = session.unreadOutput;
-  session.unreadOutput = undefined;
-  return output ?? { output: "", outputDropped: false };
+/** Stages one poll result until the agent transcript acknowledges its attachment. */
+export function prepareSessionPoll(session: ProcessSession, scope: object | undefined) {
+  if (!scope) {
+    return { ...drainSession(session), acknowledge() {} };
+  }
+  const pending = session.pendingPollDelivery;
+  if (pending) {
+    // The first retry claims the staged bytes for its turn. Parallel siblings then
+    // observe that scope and cannot duplicate the recovery result.
+    if (pending.scope === scope) {
+      return { output: "", outputDropped: false, acknowledge() {} };
+    }
+    pending.scope = scope;
+    return {
+      output: pending.output,
+      outputDropped: pending.outputDropped,
+      acknowledge() {
+        if (session.pendingPollDelivery === pending) {
+          session.pendingPollDelivery = undefined;
+        }
+      },
+    };
+  }
+  const drained = drainSession(session);
+  if (drained.output.length === 0 && !drained.outputDropped) {
+    return { ...drained, acknowledge() {} };
+  }
+  const delivery = { ...drained, scope };
+  session.pendingPollDelivery = delivery;
+  return {
+    ...drained,
+    acknowledge() {
+      if (session.pendingPollDelivery === delivery) {
+        session.pendingPollDelivery = undefined;
+      }
+    },
+  };
+}
+
+/** Returns whether a prior poll has output ready for immediate replay. */
+export function hasPendingPollDelivery(session: ProcessSession): boolean {
+  return session.pendingPollDelivery !== undefined;
 }
 
 /** Moves a session to finished state and records exit metadata. */
@@ -274,35 +296,39 @@ export function markExited(
 ) {
   // Visibility can be cleared before process termination. Keep suspension
   // blocked until the process owner reports the actual terminal transition.
-  activeBackgroundExecSessionIds.delete(session.id);
   session.terminalStatus = status;
   session.exited = true;
+  delete session.processActivity;
   session.exitCode = exitCode;
   session.exitSignal = exitSignal;
   session.exitReason = exitReason;
   session.noOutputTimedOut = noOutputTimedOut;
   session.tail = tail(session.aggregated, 2000);
-  moveToFinished(session, status);
+  // Finalizer diagnostics are already appended. Freeze output before retention
+  // accounts for its size, and release the live per-callback chunk objects.
+  const pending = drainSession(session);
+  session.pendingOutput = pending.output;
+  session.pendingOutputDropped = pending.outputDropped;
+  moveToFinished(session);
+  const active = activeExecSessions.get(session.id);
+  if (active?.session === session) {
+    activeExecSessions.delete(session.id);
+    // The exec owner's synchronous task/notification callbacks run before
+    // these promise continuations resume and release the environment state.
+    active.settled?.resolve();
+  }
 }
 
 /** Marks a running session as reconnectable after the exec call returns. */
 export function markBackgrounded(session: ProcessSession) {
   session.backgrounded = true;
-  if (!session.exited) {
-    activeBackgroundExecSessionIds.add(session.id);
+  const active = activeExecSessions.get(session.id);
+  if (active?.session === session) {
+    active.promoted = true;
   }
 }
 
-/** Records that a terminal process poll consumed the process result. */
-export function markTerminalPollObserved(session: ProcessSession): void {
-  session.terminalPollObserved = true;
-  const finished = finishedSessionsByProcess.get(session);
-  if (finished) {
-    finished.terminalPollObserved = true;
-  }
-}
-
-/** Retains the precise event removal handle across the finished-session move. */
+/** Retains the precise completion-event removal handle on its process owner. */
 export function recordNotifyOnExitRemoval(
   session: ProcessSession,
   remove: NotifyOnExitRemoval,
@@ -312,16 +338,14 @@ export function recordNotifyOnExitRemoval(
     return;
   }
   session.notifyOnExitRemoval = remove;
-  const finished = finishedSessionsByProcess.get(session);
-  if (finished) {
-    finished.notifyOnExitRemoval = remove;
-  }
 }
 
 /** Acknowledges one completion event without touching unrelated queue entries. */
 export function acknowledgeNotifyOnExit(record: {
   notifyOnExitRemoval?: NotifyOnExitRemoval;
+  terminalPollObserved?: boolean;
 }): void {
+  record.terminalPollObserved = true;
   const remove = record.notifyOnExitRemoval;
   if (!remove) {
     return;
@@ -332,15 +356,34 @@ export function acknowledgeNotifyOnExit(record: {
 
 /** Reports owner-tracked process liveness even after visibility is removed. */
 export function hasActiveBackgroundExecSession(sessionId: string): boolean {
-  return activeBackgroundExecSessionIds.has(sessionId);
+  return activeExecSessions.get(sessionId)?.promoted === true;
 }
 
 /** Returns the number of live background exec sessions without exposing process details. */
 export function getActiveBackgroundExecSessionCount(): number {
-  return activeBackgroundExecSessionIds.size;
+  let count = 0;
+  for (const { promoted } of activeExecSessions.values()) {
+    if (promoted) {
+      count += 1;
+    }
+  }
+  return count;
 }
 
-function moveToFinished(session: ProcessSession, status: ProcessStatus) {
+/** Joins registered exec cleanup, including foreground and hidden processes. */
+export async function waitForExecScope(scopeKey: string): Promise<void> {
+  while (true) {
+    const pending = Array.from(activeExecSessions.values())
+      .filter(({ session }) => session.scopeKey === scopeKey)
+      .map((active) => (active.settled ??= createDeferredCore()).promise);
+    if (pending.length === 0) {
+      return;
+    }
+    await Promise.all(pending);
+  }
+}
+
+function moveToFinished(session: ProcessSession) {
   runningSessions.delete(session.id);
 
   // The supervisor owns the raw process. The registry releases only the
@@ -361,31 +404,11 @@ function moveToFinished(session: ProcessSession, status: ProcessStatus) {
   // Keep full completed logs; evict older records rather than silently
   // truncating the process poll/log contract or dropping the newest result.
   deleteFinishedSession(session.id);
-  const finished: FinishedSession = {
-    id: session.id,
-    command: session.command,
-    scopeKey: session.scopeKey,
-    startedAt: session.startedAt,
-    endedAt: Date.now(),
-    cwd: session.cwd,
-    status,
-    exitCode: session.exitCode,
-    exitSignal: session.exitSignal,
-    exitReason: session.exitReason,
-    ...(session.noOutputTimedOut !== undefined
-      ? { noOutputTimedOut: session.noOutputTimedOut }
-      : {}),
-    aggregated: session.aggregated,
-    tail: session.tail,
-    truncated: session.truncated,
-    totalOutputChars: session.totalOutputChars,
-    unreadOutput: drainSession(session),
-    ...(session.terminalPollObserved ? { terminalPollObserved: true } : {}),
-    ...(session.notifyOnExitRemoval ? { notifyOnExitRemoval: session.notifyOnExitRemoval } : {}),
-  };
-  processSessionStartOrders.set(finished, processSessionStartOrders.get(session)!);
-  finishedSessionsByProcess.set(session, finished);
-  finishedSessions.set(session.id, finished);
+  const endedAt = Date.now();
+  finishedSessions.set(
+    session.id,
+    Object.assign(session, { endedAt, expiresAt: endedAt + session.cleanupMs }),
+  );
   finishedSessionOutputChars += session.aggregated.length;
   while (
     finishedSessions.size > MAX_FINISHED_SESSION_COUNT ||
@@ -397,6 +420,7 @@ function moveToFinished(session: ProcessSession, status: ProcessStatus) {
     }
     deleteFinishedSession(oldestSessionId);
   }
+  scheduleSweeper();
 }
 
 /** Returns the last `max` characters of text without adding ellipses. */
@@ -455,11 +479,13 @@ export function listFinishedSessions() {
 function resetProcessRegistryForTests() {
   runningSessions.clear();
   finishedSessions.clear();
-  finishedSessionsByProcess = new WeakMap();
   processSessionStartOrders = new WeakMap();
   nextProcessSessionStartOrder = 0;
   finishedSessionOutputChars = 0;
-  activeBackgroundExecSessionIds.clear();
+  for (const active of activeExecSessions.values()) {
+    active.settled?.resolve();
+  }
+  activeExecSessions.clear();
   stopSweeper();
 }
 
@@ -468,30 +494,21 @@ if (process.env.VITEST || process.env.NODE_ENV === "test") {
     { resetProcessRegistryForTests };
 }
 
-/** Overrides finished-session retention TTL, clamped to supported bounds. */
-export function setJobTtlMs(value?: number) {
-  if (value === undefined || Number.isNaN(value)) {
-    return;
-  }
-  jobTtlMs = clampTtl(value);
+function scheduleSweeper() {
   stopSweeper();
-  startSweeper();
-}
-
-function pruneFinishedSessions() {
-  const cutoff = Date.now() - jobTtlMs;
-  for (const [id, session] of finishedSessions.entries()) {
-    if (session.endedAt < cutoff) {
+  const now = Date.now();
+  let nextExpiration = Number.POSITIVE_INFINITY;
+  for (const [id, session] of finishedSessions) {
+    if (session.expiresAt <= now) {
       deleteFinishedSession(id);
+    } else {
+      nextExpiration = Math.min(nextExpiration, session.expiresAt);
     }
   }
-}
-
-function startSweeper() {
-  if (sweeper) {
+  if (!Number.isFinite(nextExpiration)) {
     return;
   }
-  sweeper = setInterval(pruneFinishedSessions, Math.max(30_000, jobTtlMs / 6));
+  sweeper = setTimeout(scheduleSweeper, nextExpiration - now);
   sweeper.unref?.();
 }
 
@@ -499,6 +516,6 @@ function stopSweeper() {
   if (!sweeper) {
     return;
   }
-  clearInterval(sweeper);
+  clearTimeout(sweeper);
   sweeper = null;
 }

@@ -1,17 +1,28 @@
 // Imessage tests cover channel plugin behavior.
+import { readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { describe, expect, it, vi } from "vitest";
+import { IMessageRpcClient } from "./client.js";
+import { sendMessageIMessage } from "./send.js";
 
 const monitorMock = vi.hoisted(() => vi.fn(async () => undefined));
+const createRpcClientMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./monitor.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./monitor.js")>()),
   monitorIMessageProvider: monitorMock,
 }));
 
+vi.mock("./client.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./client.js")>()),
+  createIMessageRpcClient: createRpcClientMock,
+}));
+
 const { sendIMessageOutbound, startIMessageGatewayAccount } = await import("./channel.runtime.js");
 const { resolveIMessageAccount } = await import("./accounts.js");
+const { imessagePlugin } = await import("./channel.js");
 
 function makeCtx(params: {
   cfg: Parameters<typeof resolveIMessageAccount>[0]["cfg"];
@@ -348,5 +359,118 @@ describe("sendIMessageOutbound approval identity", () => {
     ).rejects.toBe(captionError);
 
     expect(onDeliveryResult).toHaveBeenCalledExactlyOnceWith(accepted);
+  });
+});
+
+describe("iMessage account media limits", () => {
+  it.each(["work", undefined])("enforces the resolved account cap for %s", async (accountId) => {
+    const state = await createOpenClawTestState({ prefix: "imessage-account-media-" });
+    const client = new IMessageRpcClient();
+    const delivered: Buffer[] = [];
+    const request = vi.spyOn(client, "request").mockImplementation(async (_method, params) => {
+      if (typeof params?.file !== "string") {
+        throw new Error("Missing native attachment path");
+      }
+      delivered.push(await readFile(params.file));
+      return { guid: "p:0/account-media" };
+    });
+    try {
+      const smallBytes = Buffer.from("%PDF-1.4\nsmall attachment");
+      const largeBytes = Buffer.alloc(2 * 1024 * 1024, 0x61);
+      const small = state.path("small.pdf");
+      const large = state.path("large.pdf");
+      await writeFile(small, smallBytes);
+      await writeFile(large, largeBytes);
+      const send: typeof sendMessageIMessage = (to, text, options) =>
+        sendMessageIMessage(to, text, { ...options, client });
+      const params = {
+        cfg: {
+          channels: {
+            imessage: {
+              cliPath: state.path("fixture-imsg"),
+              dbPath: state.path("fixture-chat.db"),
+              mediaMaxMb: 8,
+              defaultAccount: "work",
+              accounts: { Work: { mediaMaxMb: 1 } },
+            },
+          },
+        },
+        accountId,
+        to: "imessage:+15555550123",
+        text: "",
+        mediaLocalRoots: [state.root],
+        deps: { imessage: send },
+      };
+      await expect(sendIMessageOutbound({ ...params, mediaUrl: large })).rejects.toThrow(
+        /exceeds.*limit/i,
+      );
+      expect(request).not.toHaveBeenCalled();
+      const result = await sendIMessageOutbound({ ...params, mediaUrl: small });
+      expect(result.receipt.platformMessageIds).toEqual(["p:0/account-media"]);
+      expect(delivered).toEqual([smallBytes]);
+      await sendIMessageOutbound({ ...params, accountId: "default", mediaUrl: large });
+      expect(delivered).toHaveLength(2);
+      expect(delivered[0]?.equals(smallBytes)).toBe(true);
+      expect(delivered[1]?.equals(largeBytes)).toBe(true);
+    } finally {
+      request.mockRestore();
+      await client.stop();
+      await state.cleanup();
+    }
+  });
+});
+
+describe("imessagePlugin pairing.notifyApproval", () => {
+  const pairingCfg = {
+    channels: {
+      imessage: {
+        defaultAccount: "alpha",
+        accounts: {
+          alpha: { cliPath: "/gateway/alpha-imsg", dbPath: "/gateway/alpha-chat.db" },
+          beta: { cliPath: "/gateway/beta-imsg", dbPath: "/gateway/beta-chat.db" },
+        },
+      },
+    },
+  };
+
+  it.each([
+    {
+      name: "the approved account",
+      accountId: "beta",
+      cliPath: "/gateway/beta-imsg",
+      dbPath: "/gateway/beta-chat.db",
+    },
+    {
+      name: "the default account when no account was approved",
+      accountId: undefined,
+      cliPath: "/gateway/alpha-imsg",
+      dbPath: "/gateway/alpha-chat.db",
+    },
+  ])("sends the approval from $name", async ({ accountId, cliPath, dbPath }) => {
+    const notifyApproval = imessagePlugin.pairing?.notifyApproval;
+    if (!notifyApproval) {
+      throw new Error("imessage pairing.notifyApproval unavailable");
+    }
+    const request = vi.fn(async () => ({ guid: "p:0/pairing-approval" }));
+    createRpcClientMock.mockReset();
+    createRpcClientMock.mockResolvedValue({ request, stop: vi.fn(async () => {}) });
+
+    await notifyApproval({
+      cfg: pairingCfg,
+      id: "+15551234567",
+      ...(accountId ? { accountId } : {}),
+    });
+
+    expect(createRpcClientMock).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ cliPath, dbPath }),
+    );
+    expect(request).toHaveBeenCalledExactlyOnceWith(
+      "send",
+      expect.objectContaining({
+        to: "+15551234567",
+        text: "✅ OpenClaw access approved. Send a message to start chatting.",
+      }),
+      expect.any(Object),
+    );
   });
 });

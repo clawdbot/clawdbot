@@ -1,12 +1,11 @@
 /** Finalizes cron task rows and active markers after timer outcome persistence. */
 import { clearCronJobActive, isCronActiveJobMarkerCurrent } from "../active-jobs.js";
-import type { CronActiveJobMarker } from "../active-jobs.js";
 import {
   CronRunReceiptRevisionError,
   releaseLocalCronRunReceiptOwnership,
-  type CronRunReceiptHandle,
 } from "../store/run-receipt-store.js";
-import type { CronCompletionStatus, CronJob } from "../types.js";
+import type { CronStoreTransactionHooks } from "../store/transaction-hooks.types.js";
+import type { CronJob } from "../types.js";
 import { locked } from "./locked.js";
 import { releaseQueuedCronRun, supersedeActivatedCronRun } from "./run-admission.js";
 import { cronRunReceiptPersistHooks, supersedeServiceCronRunReceipt } from "./run-receipts.js";
@@ -15,23 +14,9 @@ import { applyCronRuntimeRowsToState, commitCronRuntimeRows } from "./runtime-st
 import { emit, type CronServiceState, type DeferredCronNotifications } from "./state.js";
 import { ensureLoaded, publishCronRuntimeRows, runPostPersistCronNotifications } from "./store.js";
 import { tryFinishCronTaskRunWithoutHistory } from "./task-runs.js";
-import type { CronTriggerEvalOutcome, TimedCronRunOutcome } from "./timer-execution-timeout.js";
+import type { TimedCronRunOutcome } from "./timer-execution-timeout.js";
 import { emitCronOutcomeEventForJob, recordCronOutcomeForJob } from "./timer-outcome-events.js";
 import { applyOutcomeToAuthoritativeJob, applyOutcomeToStoredJob } from "./timer-outcomes.js";
-
-type CronTaskRunFinalizationOutcome = {
-  jobId: string;
-  taskRunId?: string;
-  status: "ok" | "error" | "skipped";
-  completionStatus?: CronCompletionStatus;
-  error?: unknown;
-  endedAt: number;
-  summary?: string;
-  childSessionKey?: string;
-  triggerEval?: CronTriggerEvalOutcome;
-  activeJobMarker?: CronActiveJobMarker;
-  runReceipt?: CronRunReceiptHandle;
-};
 
 type CompletedCronRunOutcomeFinalizationOptions = {
   clearOnFailure?: boolean;
@@ -116,30 +101,15 @@ export async function finalizeCompletedCronRunOutcomes(
 
   let finalizedOutcomes: TimedCronRunOutcome[] = [];
   let finalizationSucceeded = false;
+  const canPublish = (outcome: TimedCronRunOutcome) =>
+    !(state.stopped && opts?.discardWhenStopped) &&
+    isCronActiveJobMarkerCurrent(outcome.activeJobMarker);
   try {
-    const currentOutcomes = filterCurrentCronRunOutcomes(outcomes);
-    if (currentOutcomes.length === 0) {
-      finishRetiredCronTaskRuns(state, outcomes, currentOutcomes);
-      return [];
-    }
-
     await locked(state, async () => {
       await ensureLoaded(state, { forceReload: true, skipRecompute: true });
-      if (state.stopped && opts?.discardWhenStopped) {
-        // A replacement service owns the durable markers after shutdown;
-        // only retire the old run's task row without rewriting its state.
-        finishRetiredCronTaskRuns(state, outcomes, []);
-        finalizationSucceeded = true;
-        return;
-      }
-      finalizedOutcomes = filterCurrentCronRunOutcomes(currentOutcomes);
-      finishRetiredCronTaskRuns(state, outcomes, finalizedOutcomes);
-      if (finalizedOutcomes.length === 0) {
-        return;
-      }
-
-      const postPersistNotifications: DeferredCronNotifications = [];
-      for (const outcome of finalizedOutcomes) {
+      // Payload outcomes survive a failed row write as recovery facts. Quiet
+      // evaluations have no payload outcome and finalize only after the commit.
+      for (const outcome of outcomes) {
         if (outcome.status !== "ok" || outcome.triggerEval?.fired !== false) {
           const taskJob = structuredClone(
             state.store?.jobs.find((job) => job.id === outcome.jobId) ?? outcome.job,
@@ -151,6 +121,15 @@ export async function finalizeCompletedCronRunOutcomes(
           recordCronOutcomeForJob(state, taskJob, outcome);
         }
       }
+      // Retirement fences publication, not the exact receipt's durable result.
+      // The transaction revalidates ownership before touching authoritative rows.
+      finalizedOutcomes = outcomes.filter((outcome) => outcome.runReceipt || canPublish(outcome));
+      if (finalizedOutcomes.length === 0) {
+        finalizationSucceeded = true;
+        return;
+      }
+
+      const postPersistNotifications: DeferredCronNotifications = [];
       const receiptHooks = finalizedOutcomes
         .filter((outcome) => outcome.runReceipt)
         .map((outcome) =>
@@ -171,19 +150,15 @@ export async function finalizeCompletedCronRunOutcomes(
             },
           }),
         );
-      const transactionHooks =
+      const transactionHooks: CronStoreTransactionHooks | undefined =
         receiptHooks.length > 0
           ? {
-              beforeWrite: (
-                database: Parameters<NonNullable<(typeof receiptHooks)[number]["beforeWrite"]>>[0],
-              ) => {
+              beforeWrite: (database) => {
                 for (const hooks of receiptHooks) {
                   hooks.beforeWrite?.(database);
                 }
               },
-              afterWrite: (
-                database: Parameters<NonNullable<(typeof receiptHooks)[number]["afterWrite"]>>[0],
-              ) => {
+              afterWrite: (database) => {
                 for (const hooks of receiptHooks) {
                   hooks.afterWrite?.(database);
                 }
@@ -235,7 +210,30 @@ export async function finalizeCompletedCronRunOutcomes(
         committed.removedJobs.map((job) => job.id),
         { publish: false },
       );
+      for (const outcome of finalizedOutcomes) {
+        if (outcome.status === "ok" && outcome.triggerEval?.fired === false) {
+          tryFinishCronTaskRunWithoutHistory(state, outcome);
+        }
+        if (!canPublish(outcome)) {
+          // Observe retired rows without publishing their schedule changes when
+          // this transaction also contains a still-current sibling outcome.
+          state.durableNextRunAtMsByJobId.set(
+            outcome.jobId,
+            state.store?.jobs.find((job) => job.id === outcome.jobId)?.state.nextRunAtMs,
+          );
+        }
+      }
+      finalizedOutcomes = finalizedOutcomes.filter(canPublish);
+      finalizationSucceeded = true;
+      if (finalizedOutcomes.length === 0) {
+        runPostPersistCronNotifications(state, postPersistNotifications);
+        return;
+      }
+      const publishedJobIds = new Set(finalizedOutcomes.map((outcome) => outcome.jobId));
       for (const plan of committed.eventPlans) {
+        if (!publishedJobIds.has(plan.outcome.jobId)) {
+          continue;
+        }
         if (plan.job) {
           emitCronOutcomeEventForJob(state, plan.job, plan.outcome);
         } else {
@@ -245,9 +243,10 @@ export async function finalizeCompletedCronRunOutcomes(
         }
       }
       runPostPersistCronNotifications(state, postPersistNotifications);
-      finishPersistedQuietCronTaskRuns(state, finalizedOutcomes);
       for (const removedJob of committed.removedJobs) {
-        emit(state, { jobId: removedJob.id, action: "removed", job: removedJob });
+        if (publishedJobIds.has(removedJob.id)) {
+          emit(state, { jobId: removedJob.id, action: "removed", job: removedJob });
+        }
       }
       publishCronRuntimeRows(state);
       try {
@@ -273,23 +272,27 @@ export async function finalizeCompletedCronRunOutcomes(
     if (error instanceof CronRunReceiptRevisionError) {
       const stale = outcomes.find((outcome) => outcome.runReceipt?.receiptId === error.receiptId);
       if (stale?.runReceipt) {
-        if (stale.reservationIdentity) {
-          await supersedeActivatedCronRun({
-            state,
-            jobId: stale.jobId,
-            reservationIdentity: stale.reservationIdentity,
-            runReceipt: stale.runReceipt,
-            reason: error.message,
+        // A retired reservation's millisecond marker cannot identify a successor.
+        // Keep its terminal fact and receipt for recovery if the guard rejects it.
+        if (isCronActiveJobMarkerCurrent(stale.activeJobMarker)) {
+          if (stale.reservationIdentity) {
+            await supersedeActivatedCronRun({
+              state,
+              jobId: stale.jobId,
+              reservationIdentity: stale.reservationIdentity,
+              runReceipt: stale.runReceipt,
+              reason: error.message,
+            });
+          } else {
+            supersedeServiceCronRunReceipt(stale.runReceipt, state.deps.nowMs(), error.message);
+          }
+          tryFinishCronTaskRunWithoutHistory(state, {
+            taskRunId: stale.taskRunId,
+            status: "skipped",
+            error: error.message,
+            endedAt: state.deps.nowMs(),
           });
-        } else {
-          supersedeServiceCronRunReceipt(stale.runReceipt, state.deps.nowMs(), error.message);
         }
-        tryFinishCronTaskRunWithoutHistory(state, {
-          taskRunId: stale.taskRunId,
-          status: "skipped",
-          error: error.message,
-          endedAt: state.deps.nowMs(),
-        });
         const remaining = outcomes.filter((outcome) => outcome !== stale);
         return await finalizeCompletedCronRunOutcomes(state, remaining, opts);
       }
@@ -300,57 +303,12 @@ export async function finalizeCompletedCronRunOutcomes(
       if (outcome.reservationIdentity) {
         releaseQueuedCronRun(state, outcome.jobId, outcome.reservationIdentity);
       }
-    }
-    if (opts?.clearOnFailure !== false || finalizationSucceeded) {
-      clearActiveMarkersForOutcomes(outcomes);
-    }
-    for (const outcome of outcomes) {
+      if (opts?.clearOnFailure !== false || finalizationSucceeded) {
+        clearCronJobActive(outcome.jobId, outcome.activeJobMarker);
+      }
       if (outcome.runReceipt) {
         releaseLocalCronRunReceiptOwnership(outcome.runReceipt);
       }
-    }
-  }
-}
-
-function finishPersistedQuietCronTaskRuns(
-  state: CronServiceState,
-  outcomes: readonly CronTaskRunFinalizationOutcome[],
-): void {
-  for (const outcome of outcomes) {
-    if (outcome.status === "ok" && outcome.triggerEval && !outcome.triggerEval.fired) {
-      tryFinishCronTaskRunWithoutHistory(state, outcome);
-    }
-  }
-}
-
-function clearActiveMarkersForOutcomes(outcomes: readonly CronTaskRunFinalizationOutcome[]): void {
-  for (const outcome of outcomes) {
-    clearCronJobActive(outcome.jobId, outcome.activeJobMarker);
-  }
-}
-
-function filterCurrentCronRunOutcomes<T extends CronTaskRunFinalizationOutcome>(
-  outcomes: readonly T[],
-): T[] {
-  return outcomes.filter((outcome) => isCronActiveJobMarkerCurrent(outcome.activeJobMarker));
-}
-
-function finishRetiredCronTaskRuns<T extends CronTaskRunFinalizationOutcome>(
-  state: CronServiceState,
-  outcomes: readonly T[],
-  currentOutcomes: readonly T[],
-): void {
-  const current = new Set(currentOutcomes);
-  for (const outcome of outcomes) {
-    if (!current.has(outcome)) {
-      if (outcome.runReceipt) {
-        supersedeServiceCronRunReceipt(
-          outcome.runReceipt,
-          state.deps.nowMs(),
-          "cron run retired before its result became durable",
-        );
-      }
-      tryFinishCronTaskRunWithoutHistory(state, outcome);
     }
   }
 }

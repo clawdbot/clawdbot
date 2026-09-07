@@ -11,6 +11,7 @@ import {
   buildOllamaProvider,
   buildOllamaModelDefinition,
   capLocalOllamaProviderContext,
+  enrichOllamaCompletionModels,
   enrichOllamaModelsWithContext,
   fetchLoadedOllamaModelNames,
   isOllamaCloudModel,
@@ -192,6 +193,188 @@ describe("ollama provider models", () => {
         fallbackModel.capabilities,
       ).compat?.supportsTools,
     ).toBe(true);
+  });
+
+  it.each([
+    {
+      description: "retains authoritative list metadata when model inspection fails",
+      showResponse: () => jsonResponse({ error: "inspection unavailable" }, 503),
+      contextWindow: 32_768,
+      supportsTools: true,
+    },
+    {
+      description: "retains list metadata omitted from a successful model inspection",
+      showResponse: () => jsonResponse({}),
+      contextWindow: 32_768,
+      supportsTools: true,
+    },
+    {
+      description: "prefers explicit model-inspection metadata over the model list",
+      showResponse: () =>
+        jsonResponse({
+          model_info: { "gemma.context_length": 65_536 },
+          capabilities: ["completion"],
+        }),
+      contextWindow: 65_536,
+      supportsTools: false,
+    },
+  ])("$description", async ({ showResponse, contextWindow, supportsTools }) => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request) =>
+        requestUrl(input).endsWith("/api/tags")
+          ? jsonResponse({
+              models: [
+                {
+                  name: "gemma4:e2b",
+                  details: { context_length: 32_768 },
+                  capabilities: ["completion", "tools"],
+                },
+              ],
+            })
+          : showResponse(),
+      ),
+    );
+
+    const provider = await buildOllamaProvider("http://127.0.0.1:11434");
+
+    expect(provider.models).toEqual([
+      expect.objectContaining({
+        id: "gemma4:e2b",
+        contextWindow,
+        compat: expect.objectContaining({ supportsTools }),
+      }),
+    ]);
+  });
+
+  it("keeps an explicit empty model-inspection capability list authoritative", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request) =>
+        requestUrl(input).endsWith("/api/tags")
+          ? jsonResponse({
+              models: [
+                {
+                  name: "gemma4:e2b",
+                  details: { context_length: 32_768 },
+                  capabilities: ["completion", "tools"],
+                },
+              ],
+            })
+          : jsonResponse({ capabilities: [] }),
+      ),
+    );
+
+    await expect(buildOllamaProvider("http://127.0.0.1:11434")).resolves.toMatchObject({
+      models: [],
+    });
+  });
+
+  it.each([
+    {
+      description: "remote host metadata",
+      listed: {
+        name: "deepseek-r1:671b",
+        remote_host: "https://ollama.example",
+        capabilities: ["vision"],
+      },
+      reasoning: true,
+    },
+    {
+      description: "upstream remote-model-only metadata",
+      listed: {
+        name: "remote-chat:latest",
+        remote_model: "upstream-chat:latest",
+        capabilities: ["vision"],
+      },
+      reasoning: false,
+    },
+    {
+      description: "the existing explicit cloud model contract",
+      listed: { name: "remote-chat:cloud", capabilities: ["vision"] },
+      reasoning: false,
+    },
+  ])(
+    "keeps incomplete cloud metadata discoverable with $description",
+    async ({ listed, reasoning }) => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (input: string | URL | Request) =>
+          requestUrl(input).endsWith("/api/tags")
+            ? jsonResponse({ models: [listed] })
+            : jsonResponse({}),
+        ),
+      );
+
+      await expect(buildOllamaProvider("http://127.0.0.1:11434")).resolves.toMatchObject({
+        models: [
+          {
+            id: listed.name,
+            input: ["text", "image"],
+            reasoning,
+            compat: { supportsTools: true },
+          },
+        ],
+      });
+    },
+  );
+
+  it.each([
+    {
+      description: "an explicitly empty inspection result",
+      listed: {
+        name: "remote-chat:cloud",
+        remote_model: "upstream-chat",
+        capabilities: ["completion", "tools"],
+      },
+      inspected: { capabilities: [] },
+    },
+    {
+      description: "an advertised remote embedding model",
+      listed: {
+        name: "remote-embedding:latest",
+        remote_model: "upstream-embedding",
+        capabilities: ["embedding"],
+      },
+    },
+    {
+      description: "an advertised local embedding model",
+      listed: { name: "local-embedding:latest", capabilities: ["embedding"] },
+    },
+  ])("does not expose $description as a completion model", async ({ listed, inspected = {} }) => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request) =>
+        requestUrl(input).endsWith("/api/tags")
+          ? jsonResponse({ models: [listed] })
+          : jsonResponse(inspected),
+      ),
+    );
+
+    await expect(buildOllamaProvider("http://127.0.0.1:11434")).resolves.toMatchObject({
+      models: [],
+    });
+  });
+
+  it("keeps strict node discovery closed when remote completion is only inferred", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => jsonResponse({})),
+    );
+
+    await expect(
+      enrichOllamaCompletionModels(
+        "http://127.0.0.1:11434",
+        [
+          {
+            name: "remote-chat:latest",
+            remote_model: "upstream-chat:latest",
+            capabilities: ["tools"],
+          },
+        ],
+        { requireCompletionCapability: true },
+      ),
+    ).resolves.toEqual([]);
   });
 
   it("forwards remote auth to model listing and show probes", async () => {
@@ -787,20 +970,59 @@ describe("ollama provider models", () => {
     }
   });
 
-  it("keeps tools off after a live /api/show failure", async () => {
+  it.each([
+    {
+      description: "keeps tools off after a live inspection failure without list metadata",
+      listed: { name: "deepseek-r1:14b", digest: "sha256:show-failure" },
+      expected: { contextWindow: OLLAMA_DEFAULT_CONTEXT_WINDOW, supportsTools: false },
+    },
+    {
+      description: "preserves authoritative list metadata after a live inspection failure",
+      listed: {
+        name: "gemma4:e2b",
+        digest: "sha256:list-metadata",
+        details: { context_length: 32_768 },
+        capabilities: ["completion", "tools"],
+      },
+      expected: { contextWindow: 32_768, supportsTools: true },
+    },
+    {
+      description: "preserves remote-model-only list capabilities after a live inspection failure",
+      listed: {
+        name: "remote-chat:latest",
+        remote_model: "upstream-chat:latest",
+        digest: "sha256:remote-model-list-metadata",
+        details: { context_length: 32_768 },
+        capabilities: ["tools"],
+      },
+      expected: { contextWindow: 32_768, supportsTools: true },
+    },
+    {
+      description: "preserves remote-model-only metadata after a live incomplete inspection",
+      listed: {
+        name: "remote-incomplete:latest",
+        remote_model: "upstream-incomplete:latest",
+        digest: "sha256:remote-model-incomplete-inspection",
+        details: { context_length: 32_768 },
+        capabilities: ["vision"],
+      },
+      showFailed: false,
+      expected: { contextWindow: 32_768, supportsTools: true },
+    },
+  ])("$description", async ({ listed, expected, showFailed = true }) => {
     const server = createServer((request, response) => {
       response.setHeader("Content-Type", "application/json");
       if (request.url === "/api/tags") {
         response.end(
           JSON.stringify({
-            models: [{ name: "deepseek-r1:14b", digest: "sha256:show-failure" }],
+            models: [listed],
           }),
         );
         return;
       }
       if (request.url === "/api/show") {
-        response.statusCode = 500;
-        response.end(JSON.stringify({ error: "show failed" }));
+        response.statusCode = showFailed ? 500 : 200;
+        response.end(JSON.stringify(showFailed ? { error: "show failed" } : {}));
         return;
       }
       response.statusCode = 404;
@@ -819,9 +1041,10 @@ describe("ollama provider models", () => {
       const provider = await buildOllamaProvider(`http://127.0.0.1:${address.port}`);
       const model = expectDefined(provider.models?.[0], "show-failed Ollama model");
 
-      expect(model.id).toBe("deepseek-r1:14b");
-      expect(model.compat?.supportsTools).toBe(false);
-      expect(model.reasoning).toBe(true);
+      expect(model.id).toBe(listed.name);
+      expect(model.contextWindow).toBe(expected.contextWindow);
+      expect(model.compat?.supportsTools).toBe(expected.supportsTools);
+      expect(model.reasoning).toBe(listed.name.startsWith("deepseek-r1"));
     } finally {
       if (server.listening) {
         await new Promise<void>((resolve, reject) => {

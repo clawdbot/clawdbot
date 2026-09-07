@@ -89,9 +89,10 @@ function chunkTextForPlan(params: {
   chunker: OutboundMessageChunker;
   formatting?: OutboundDeliveryFormattingOptions;
 }): string[] {
-  return params.formatting
+  const chunks = params.formatting
     ? params.chunker(params.text, params.limit, { formatting: params.formatting })
     : params.chunker(params.text, params.limit);
+  return chunks.length === 0 && params.text ? [params.text] : chunks;
 }
 
 /**
@@ -158,9 +159,6 @@ export function planOutboundTextMessageUnits(params: {
         chunker: params.chunker,
         formatting: params.formatting,
       });
-      if (!chunks.length && blockChunk) {
-        chunks.push(blockChunk);
-      }
       for (const chunk of chunks) {
         units.push(planTextUnit(chunk, units.length, params.chunkedTextFormatting));
       }

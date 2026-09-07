@@ -32,13 +32,11 @@ import { readInputFiles, writeOutputAsset } from "../media-output.js";
 import { collectOption } from "../program/helpers.js";
 import { isMissingMediaUnderstandingProvider } from "./media-understanding-result.js";
 import type { CapabilityEnvelope } from "./metadata.js";
+import { emitJsonOrText, formatEnvelopeForText, providerSummaryText } from "./output.js";
 import {
-  emitJsonOrText,
-  formatEnvelopeForText,
   parseOptionalPositiveInteger,
   parseOptionalTimeoutMs,
   providerHasGenericConfig,
-  providerSummaryText,
   requireProviderModelOverride,
   resolveCapabilityAgentOption,
   resolveCapabilityProviderAgentId,
@@ -314,6 +312,11 @@ function addImageGenerationOptions(command: Command): Command {
     .option("--json", "Output JSON", false);
 }
 
+function readStringOption(opts: Record<string, unknown>, key: string): string | undefined {
+  const value = opts[key];
+  return typeof value === "string" ? value : undefined;
+}
+
 function resolveImageGenerationOptions(opts: Record<string, unknown>, command: Command) {
   return {
     agent: resolveCapabilityAgentOption(command, opts.agent),
@@ -322,14 +325,14 @@ function resolveImageGenerationOptions(opts: Record<string, unknown>, command: C
     size: opts.size as string | undefined,
     aspectRatio: opts.aspectRatio as string | undefined,
     resolution: opts.resolution as "1K" | "2K" | "4K" | undefined,
-    outputFormat: normalizeImageOutputFormat(opts.outputFormat as string | undefined),
-    background: normalizeImageBackground(opts.background as string | undefined),
+    outputFormat: normalizeImageOutputFormat(readStringOption(opts, "outputFormat")),
+    background: normalizeImageBackground(readStringOption(opts, "background")),
     openaiBackground: normalizeImageBackground(
       opts.openaiBackground as string | undefined,
       "--openai-background",
     ),
-    openaiModeration: normalizeOpenAIModeration(opts.openaiModeration as string | undefined),
-    quality: normalizeImageQuality(opts.quality as string | undefined),
+    openaiModeration: normalizeOpenAIModeration(readStringOption(opts, "openaiModeration")),
+    quality: normalizeImageQuality(readStringOption(opts, "quality")),
     timeoutMs: parseOptionalTimeoutMs(opts.timeoutMs as string | number | undefined),
     output: opts.output as string | undefined,
   };
@@ -361,7 +364,7 @@ export function registerImageCapabilityCommands(capability: Command): void {
     image
       .command("edit")
       .description("Edit images with one or more input files")
-      .requiredOption("--file <path>", "Input file", collectOption, [])
+      .requiredOption("--file <path>", "Input file", collectOption)
       .requiredOption("--prompt <text>", "Prompt text"),
   ).action(async (opts, command) => {
     await runCommandWithRuntime(defaultRuntime, async () => {
@@ -405,7 +408,7 @@ export function registerImageCapabilityCommands(capability: Command): void {
   image
     .command("describe-many")
     .description("Describe multiple image files")
-    .requiredOption("--file <path>", "Image file", collectOption, [])
+    .requiredOption("--file <path>", "Image file", collectOption)
     .option("--prompt <text>", "Prompt hint")
     .option("--model <provider/model>", "Model override")
     .option("--timeout-ms <ms>", "Provider request timeout in milliseconds")

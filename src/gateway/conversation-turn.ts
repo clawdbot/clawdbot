@@ -169,6 +169,7 @@ async function ensureConversationContextBinding(params: {
   scope: ConversationRegistryScope;
   config: OpenClawConfig;
   agentId: string;
+  sourceSessionKey?: string;
   conversation: ConversationRecord;
   plugin: ReturnType<typeof resolveOutboundChannelPlugin>;
   expectedRouteFingerprint: string;
@@ -197,6 +198,7 @@ async function ensureConversationContextBinding(params: {
     channel,
     accountId: params.conversation.accountId,
     route,
+    sourceSessionKey: params.sourceSessionKey,
     // Route resolution can await plugin work; replay authority at the exact
     // session-binding commit so a concurrent config change cannot persist it.
     assertCommitAllowed: () => {
@@ -297,6 +299,7 @@ export async function runGatewayConversationTurn(
     scope,
     config: currentConfig,
     agentId: params.agentId,
+    sourceSessionKey: params.sourceSessionKey,
     conversation: discoveredConversation,
     plugin,
     expectedRouteFingerprint: discoveredRouteFingerprint,

@@ -58,7 +58,27 @@ function importedSessionCatalogMessage(params: {
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
     },
     stopReason: "stop",
-  } as AgentMessage;
+  };
+}
+
+function sessionCatalogContinuationNotice(text: string, timestamp: number): AgentMessage {
+  return {
+    role: "assistant",
+    content: [{ type: "text", text }],
+    timestamp,
+    api: "openai-responses",
+    provider: "openclaw",
+    model: "session-catalog",
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "stop",
+  };
 }
 
 function fitSessionCatalogItemToBytes(
@@ -101,31 +121,25 @@ function importableSessionCatalogItem(
 async function readBoundedSessionCatalogHistory(params: {
   read: (params: { cursor?: string; limit: number }) => Promise<SessionsCatalogReadResult>;
 }): Promise<SessionCatalogTranscriptItem[]> {
-  const pages: SessionCatalogTranscriptItem[][] = [];
+  const items: SessionCatalogTranscriptItem[] = [];
   let cursor: string | undefined;
-  let itemCount = 0;
   let bytes = 0;
-  while (itemCount < SESSION_CATALOG_HISTORY_IMPORT_MAX_ITEMS) {
+  while (items.length < SESSION_CATALOG_HISTORY_IMPORT_MAX_ITEMS) {
     const page = await params.read({
       limit: Math.min(
         SESSION_CATALOG_HISTORY_IMPORT_PAGE_LIMIT,
-        SESSION_CATALOG_HISTORY_IMPORT_MAX_ITEMS - itemCount,
+        SESSION_CATALOG_HISTORY_IMPORT_MAX_ITEMS - items.length,
       ),
       ...(cursor ? { cursor } : {}),
     });
-    const retained: SessionCatalogTranscriptItem[] = [];
-    // Catalog pages move newest-to-oldest while each page stays chronological.
-    // Walk backward for recent-window bounds, then prepend older retained pages.
-    for (let index = page.items.length - 1; index >= 0; index -= 1) {
-      const item = page.items[index];
-      if (!item) {
-        continue;
-      }
+    // Catalog reads are newest-first. Bound that recent suffix before restoring
+    // source order for persistence; timestamps do not define transcript order.
+    for (const item of page.items) {
       const importableItem = importableSessionCatalogItem(item);
       const itemBytes = Buffer.byteLength(JSON.stringify(importableItem), "utf8");
       const remainingBytes = SESSION_CATALOG_HISTORY_IMPORT_MAX_BYTES - bytes;
-      if (itemCount > 0 && itemBytes > remainingBytes) {
-        return [retained, ...pages.toReversed()].flat();
+      if (items.length > 0 && itemBytes > remainingBytes) {
+        return items.toReversed();
       }
       const retainedItem =
         itemBytes <= remainingBytes
@@ -135,23 +149,21 @@ async function readBoundedSessionCatalogHistory(params: {
         continue;
       }
       const retainedItemBytes = Buffer.byteLength(JSON.stringify(retainedItem), "utf8");
-      retained.unshift(retainedItem);
-      itemCount += 1;
+      items.push(retainedItem);
       bytes += retainedItemBytes;
       if (
-        itemCount === SESSION_CATALOG_HISTORY_IMPORT_MAX_ITEMS ||
+        items.length === SESSION_CATALOG_HISTORY_IMPORT_MAX_ITEMS ||
         bytes === SESSION_CATALOG_HISTORY_IMPORT_MAX_BYTES
       ) {
-        return [retained, ...pages.toReversed()].flat();
+        return items.toReversed();
       }
     }
-    pages.push(retained);
     if (!page.nextCursor || page.nextCursor === cursor) {
       break;
     }
     cursor = page.nextCursor;
   }
-  return pages.toReversed().flat();
+  return items.toReversed();
 }
 
 export async function importSessionCatalogHistory(params: {
@@ -163,6 +175,8 @@ export async function importSessionCatalogHistory(params: {
   agentId: string;
   cwd?: string;
   config: OpenClawConfig;
+  continuationNotice?: string;
+  commitGuard?: () => void;
 }): Promise<void> {
   const items = await readBoundedSessionCatalogHistory({ read: params.read });
   const fallbackTimestamp = Date.now();
@@ -184,6 +198,19 @@ export async function importSessionCatalogHistory(params: {
         message,
         idempotencyLookup: "scan",
         cwd: params.cwd,
+        ...(params.commitGuard ? { beforeCommitInTransaction: params.commitGuard } : {}),
+      });
+    }
+    const notice = params.continuationNotice?.trim();
+    if (notice) {
+      await transcript.appendMessage({
+        message: {
+          ...sessionCatalogContinuationNotice(notice, fallbackTimestamp + items.length),
+          idempotencyKey: `${params.catalogId}-catalog:${params.threadId}:continuation-notice`,
+        },
+        idempotencyLookup: "scan",
+        cwd: params.cwd,
+        ...(params.commitGuard ? { beforeCommitInTransaction: params.commitGuard } : {}),
       });
     }
   });

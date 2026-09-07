@@ -4,13 +4,13 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { emitDiagnosticEvent, resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
-import { resetFatalErrorHooksForTest, runFatalErrorHooks } from "../infra/fatal-error-hooks.js";
+import { registerFatalErrorHook, runFatalErrorHooks } from "../infra/fatal-error-hooks.js";
 import {
   installDiagnosticStabilityFatalHook,
   MAX_DIAGNOSTIC_STABILITY_BUNDLE_BYTES,
   readDiagnosticStabilityBundleFileSync,
   readLatestDiagnosticStabilityBundleSync,
-  resetDiagnosticStabilityBundleForTest,
+  uninstallDiagnosticStabilityFatalHook,
   writeDiagnosticStabilityBundleForFailureSync,
   writeDiagnosticStabilityBundleSync,
   type DiagnosticStabilityBundle,
@@ -27,8 +27,7 @@ describe("diagnostic stability bundles", () => {
   function resetStabilityBundleTestState(): void {
     resetDiagnosticEventsForTest();
     resetDiagnosticStabilityRecorderForTest();
-    resetDiagnosticStabilityBundleForTest();
-    resetFatalErrorHooksForTest();
+    uninstallDiagnosticStabilityFatalHook();
   }
 
   beforeEach(() => {
@@ -192,8 +191,31 @@ describe("diagnostic stability bundles", () => {
     expect(messages[0]).toContain("wrote stability bundle:");
     expect(messages[0]).toContain(tempDir);
 
-    resetDiagnosticStabilityBundleForTest();
+    uninstallDiagnosticStabilityFatalHook();
     expect(runFatalErrorHooks({ reason: "uncaught_exception" })).toStrictEqual([]);
+
+    const unsubscribeIndependent = registerFatalErrorHook(() => "independent diagnostic");
+    try {
+      const reinstalledDir = path.join(tempDir, "reinstalled");
+      installDiagnosticStabilityFatalHook({ stateDir: reinstalledDir });
+      const reinstalledMessages = runFatalErrorHooks({ reason: "uncaught_exception" });
+      expect(reinstalledMessages).toHaveLength(2);
+      expect(reinstalledMessages[0]).toBe("independent diagnostic");
+      expect(reinstalledMessages[1]).toContain("wrote stability bundle:");
+      expect(reinstalledMessages[1]).toContain(reinstalledDir);
+
+      uninstallDiagnosticStabilityFatalHook();
+      expect(runFatalErrorHooks({ reason: "uncaught_exception" })).toEqual([
+        "independent diagnostic",
+      ]);
+      uninstallDiagnosticStabilityFatalHook();
+      expect(runFatalErrorHooks({ reason: "uncaught_exception" })).toEqual([
+        "independent diagnostic",
+      ]);
+    } finally {
+      uninstallDiagnosticStabilityFatalHook();
+      unsubscribeIndependent();
+    }
   });
 
   it("retains only the newest bundle files", () => {
@@ -216,6 +238,47 @@ describe("diagnostic stability bundles", () => {
     expect(files[0]).toContain("12-00-02");
     expect(files[1]).toContain("12-00-03");
   });
+
+  it.each([1, 2])(
+    "keeps the published bundle within retention %i despite future mtimes",
+    (retention) => {
+      for (let index = 0; index < retention; index++) {
+        const older = writeDiagnosticStabilityBundleForFailureSync(
+          "gateway.startup_failed",
+          undefined,
+          {
+            stateDir: tempDir,
+            retention,
+            now: new Date(Date.UTC(2026, 3, 22, 12, 0, index)),
+          },
+        );
+        expect(older.status).toBe("written");
+        if (older.status !== "written") {
+          throw new Error("Fixture publication failed");
+        }
+        const future = new Date(Date.UTC(2036, 3, 22, 12, 0, index));
+        fs.utimesSync(older.path, future, future);
+      }
+
+      const current = writeDiagnosticStabilityBundleForFailureSync(
+        "gateway.restart_respawn_failed",
+        undefined,
+        {
+          stateDir: tempDir,
+          retention,
+          now: new Date("2026-04-22T12:01:00.000Z"),
+        },
+      );
+      expect(current.status).toBe("written");
+      if (current.status !== "written") {
+        throw new Error("Current publication failed");
+      }
+      expect(current.message).toContain(current.path);
+      expect(fs.existsSync(current.path)).toBe(true);
+      expect(readDiagnosticStabilityBundleFileSync(current.path).status).toBe("found");
+      expect(fs.readdirSync(path.dirname(current.path))).toHaveLength(retention);
+    },
+  );
 
   it("reads the newest retained bundle", () => {
     startDiagnosticStabilityRecorder();
@@ -247,13 +310,39 @@ describe("diagnostic stability bundles", () => {
   it("sanitizes imported bundles before returning them", () => {
     const file = path.join(tempDir, "imported.json");
     const bundle = createImportedBundle();
+    const retainedRuntimeEvidence = {
+      heapStatistics: { heapSizeLimitBytes: 8192, usedHeapSizeBytes: 1536 },
+      heapSpaces: [
+        {
+          spaceName: "old_space",
+          spaceSizeBytes: 2048,
+          spaceUsedBytes: 1536,
+          spaceAvailableBytes: 512,
+          physicalSpaceSizeBytes: 2048,
+        },
+      ],
+      cgroup: {
+        version: "v2",
+        values: { current: 4096, max: "max" },
+        events: { high: 2, "events.local.oom": 1 },
+      },
+      activeResources: { total: 3, byType: { Timeout: 2, PipeWrap: 1 } },
+    };
     Object.assign(bundle, {
       reason: "private reason token=secret",
       privateTopLevel: "top-level-secret",
       evidence: {
         memoryPressure: {
+          ...retainedRuntimeEvidence,
+          heapStatistics: {
+            ...retainedRuntimeEvidence.heapStatistics,
+            totalHeapSizeBytes: 1536.75,
+          },
           level: "critical",
           reason: "rss_threshold",
+          thresholdBytes: 0,
+          rssGrowthBytes: -1,
+          windowMs: 0.5,
           memory: {
             rssBytes: 4096,
             heapTotalBytes: 2048,
@@ -285,6 +374,7 @@ describe("diagnostic stability bundles", () => {
     });
     const snapshot = bundle.snapshot as Record<string, unknown>;
     Object.assign(snapshot, {
+      count: 3,
       privateSnapshot: "snapshot-secret",
       events: [
         {
@@ -305,11 +395,21 @@ describe("diagnostic stability bundles", () => {
           phase: "gateway_preflight",
           command: "raw command secret",
         },
+        {
+          seq: 3,
+          ts: 3,
+          type: "model.usage",
+          costUsd: 0,
+          durationMs: 0,
+          usage: {},
+          context: {},
+        },
       ],
       summary: {
         byType: {
           "webhook.error": 1,
           "exec.approval.followup_suppressed": 1,
+          "model.usage": 1,
           "private summary type": 1,
         },
         privateSummary: "summary-secret",
@@ -331,6 +431,18 @@ describe("diagnostic stability bundles", () => {
     expect(result.bundle.evidence?.memoryPressure?.topSessionFiles?.[0]?.relativePath).toBe(
       "agents/<agent>/sessions/<session>.jsonl",
     );
+    expect(result.bundle.evidence?.memoryPressure).toMatchObject(retainedRuntimeEvidence);
+    expect(result.bundle.evidence?.memoryPressure).toMatchObject({
+      thresholdBytes: 0,
+      rssGrowthBytes: -1,
+      windowMs: 0.5,
+      heapStatistics: { totalHeapSizeBytes: 1536 },
+    });
+    expect(Object.keys(result.bundle.evidence?.memoryPressure?.heapStatistics ?? {})).toEqual([
+      "totalHeapSizeBytes",
+      "usedHeapSizeBytes",
+      "heapSizeLimitBytes",
+    ]);
     expect(result.bundle.snapshot.events[0]).toEqual({
       seq: 1,
       ts: 1,
@@ -345,9 +457,21 @@ describe("diagnostic stability bundles", () => {
       reason: "session_rebound",
       phase: "gateway_preflight",
     });
+    expect(JSON.stringify(result.bundle.snapshot.events[2])).toBe(
+      JSON.stringify({
+        seq: 3,
+        ts: 3,
+        type: "model.usage",
+        durationMs: 0,
+        costUsd: 0,
+        usage: {},
+        context: {},
+      }),
+    );
     expect(result.bundle.snapshot.summary.byType).toEqual({
       "webhook.error": 1,
       "exec.approval.followup_suppressed": 1,
+      "model.usage": 1,
     });
     const sanitized = JSON.stringify(result.bundle);
     for (const secret of [
@@ -432,6 +556,45 @@ describe("diagnostic stability bundles", () => {
           },
         },
         error: "snapshot.summary",
+      },
+      {
+        name: "optional-code-before-number",
+        bundle: {
+          ...baseBundle,
+          snapshot: {
+            ...baseSnapshot,
+            events: [{ seq: 1, ts: 1, type: "model.usage", channel: null, durationMs: null }],
+          },
+        },
+        error: "snapshot.events[0].channel",
+      },
+      {
+        name: "optional-usage-before-context",
+        bundle: {
+          ...baseBundle,
+          snapshot: {
+            ...baseSnapshot,
+            events: [
+              { seq: 1, ts: 1, type: "model.usage", usage: { input: null }, context: false },
+            ],
+          },
+        },
+        error: "snapshot.events[0].usage.input",
+      },
+      {
+        name: "heap-statistics-before-required-memory",
+        bundle: {
+          ...baseBundle,
+          evidence: {
+            memoryPressure: {
+              level: "critical",
+              reason: "rss_threshold",
+              heapStatistics: { totalHeapSizeBytes: null },
+              memory: null,
+            },
+          },
+        },
+        error: "evidence.memoryPressure.heapStatistics.totalHeapSizeBytes",
       },
     ];
 

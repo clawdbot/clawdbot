@@ -362,12 +362,44 @@ describe("CronService", () => {
     await stopCronAndCleanup(cron, store);
   });
 
-  it("retains a required-delivery-failed one-shot and never replays it after restart", async () => {
+  it.each([
+    { name: "default delivery failure", bestEffort: undefined, expectedCompletion: "failed" },
+    { name: "required delivery failure", bestEffort: false, expectedCompletion: "failed" },
+    {
+      name: "transport hook suppression",
+      bestEffort: undefined,
+      error: "delivery suppressed by message_sending hook",
+      expectedCompletion: "failed",
+    },
+    { name: "best-effort delivery failure", bestEffort: true, expectedCompletion: "succeeded" },
+    {
+      name: "unknown delivery",
+      bestEffort: undefined,
+      unknown: true,
+      expectedCompletion: "unknown",
+    },
+    {
+      name: "best-effort unknown delivery",
+      bestEffort: true,
+      unknown: true,
+      expectedCompletion: "succeeded",
+    },
+    ...(["empty", "silent", "heartbeat", "channel_transform"] as const).map((reason) => ({
+      name: `${reason} suppression`,
+      bestEffort: false,
+      reason,
+      expectedCompletion: "succeeded",
+    })),
+  ])("cleans up $name once across restart", async (testCase) => {
+    const unknown = "unknown" in testCase && testCase.unknown;
+    const reason = "reason" in testCase ? testCase.reason : undefined;
     const runIsolatedAgentJob = vi.fn(async () => ({
       status: "ok" as const,
       summary: "payload completed",
-      delivered: false,
-      deliveryError: "delivery rejected",
+      delivered: unknown ? undefined : false,
+      deliveryError:
+        unknown || reason ? undefined : "error" in testCase ? testCase.error : "delivery rejected",
+      deliverySuppressionReason: reason,
     }));
     const { store, cron, events } = await createIsolatedAnnounceHarness(runIsolatedAgentJob);
     const runAt = new Date("2025-12-13T00:00:03.000Z");
@@ -378,7 +410,7 @@ describe("CronService", () => {
       sessionTarget: "isolated",
       wakeMode: "now",
       payload: { kind: "agentTurn", message: "do it once" },
-      delivery: { mode: "announce", bestEffort: false },
+      delivery: { mode: "announce", bestEffort: testCase.bestEffort },
     });
 
     vi.setSystemTime(runAt);
@@ -390,16 +422,22 @@ describe("CronService", () => {
 
     expect(event).toMatchObject({
       status: "ok",
-      completionStatus: "failed",
-      deliveryStatus: "not-delivered",
+      completionStatus: testCase.expectedCompletion,
+      deliveryStatus: unknown ? "unknown" : "not-delivered",
+      ...(reason ? { deliverySuppressionReason: reason } : {}),
     });
-    expect(retained).toMatchObject({
-      enabled: false,
-      state: {
-        lastRunStatus: "ok",
-        consecutiveErrors: 0,
-      },
-    });
+    const shouldDelete = testCase.expectedCompletion === "succeeded";
+    if (shouldDelete) {
+      expect(retained).toBeUndefined();
+    } else {
+      expect(retained).toMatchObject({
+        enabled: false,
+        state: {
+          lastRunStatus: "ok",
+          consecutiveErrors: 0,
+        },
+      });
+    }
     expect(retained?.state.nextRunAtMs).toBeUndefined();
     expect(runIsolatedAgentJob).toHaveBeenCalledOnce();
 
@@ -409,7 +447,11 @@ describe("CronService", () => {
     await restarted.start();
     await vi.runOnlyPendingTimersAsync();
     expect(restartedRun).not.toHaveBeenCalled();
-    expect(restarted.getJob(job.id)).toMatchObject({ enabled: false });
+    if (shouldDelete) {
+      expect(restarted.getJob(job.id)).toBeUndefined();
+    } else {
+      expect(restarted.getJob(job.id)).toMatchObject({ enabled: false });
+    }
 
     await stopCronAndCleanup(restarted, store);
   });

@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
 import { findSettingsSearchBlocks } from "./settings-search.ts";
 
@@ -8,6 +8,137 @@ afterEach(async () => {
 });
 
 describe("findSettingsSearchBlocks", () => {
+  it("finds the meeting library separately from its Communications capture settings", () => {
+    const search = (query: string) =>
+      findSettingsSearchBlocks({ query, schema: null, value: {}, uiHints: {} });
+    expect(search("meeting notes")).toContainEqual(
+      expect.objectContaining({ routeId: "meetings" }),
+    );
+    expect(search("meeting capture")).toContainEqual(
+      expect.objectContaining({
+        routeId: "communications",
+        search: "?section=transcripts",
+        hash: "#settings-communications-meeting-capture",
+      }),
+    );
+    const matches = findSettingsSearchBlocks({
+      query: "autoStart",
+      schema: {
+        type: "object",
+        properties: {
+          transcripts: {
+            type: "object",
+            properties: { autoStart: { type: "array", title: "autoStart" } },
+          },
+        },
+      },
+      value: {},
+      uiHints: {},
+    });
+    expect(matches.some((entry) => entry.routeId === "advanced")).toBe(false);
+    expect(matches.some((entry) => entry.routeId === "communications")).toBe(true);
+  });
+  it("loads Settings English only when cold search opens, before the config page", async () => {
+    // The ordinary imports above exercise warm search. This module graph starts
+    // at the runtime barrel, without importing a page or priming its catalogs.
+    const testApiKey = Symbol.for("openclaw.i18nManagerTestApi");
+    const previousTestApi = Object.getOwnPropertyDescriptor(globalThis, testApiKey);
+    vi.resetModules();
+    const runtime = await import("../../i18n/index.ts");
+    const { en } = await import("../../i18n/locales/en.ts");
+    await runtime.i18n.setLocale("en");
+    const configView = en.configView;
+    const updates = en.updates;
+    const campaign = (updates as Record<string, unknown>).campaign;
+    const sharedKeys = [
+      "configView.autoSaveSaving",
+      "configView.rawDraftBlocksApply",
+      "updates.confirm.message",
+      "updates.outcomeUnknown",
+    ];
+    const sharedCopy = sharedKeys.map((key) => runtime.t(key));
+    const lazyKeys = [
+      "configPage.themeImported",
+      "configView.chatPrefs.title",
+      "configView.notifications.title",
+      "updates.page.intro",
+      "updates.channel.stable",
+      "updates.installKind.git",
+      "modelProviders.title",
+      "modelProviders.defaults.utilityHelpPurpose",
+    ];
+    try {
+      for (const key of lazyKeys) {
+        expect(runtime.t(key), key).toBe(key);
+      }
+      const { findSettingsSearchBlocks: search } = await import("./settings-search.ts");
+      const find = (query: string) => search({ query, schema: null, value: null, uiHints: {} });
+
+      expect(find("check for updates")).toEqual([
+        expect.objectContaining({ routeId: "updates", label: "Updates" }),
+      ]);
+      expect(find("collapse task progress")).toEqual([
+        expect.objectContaining({ routeId: "appearance", label: "Chat" }),
+      ]);
+      expect(en.configView).toBe(configView);
+      expect(en.updates).toBe(updates);
+      expect((en.updates as Record<string, unknown>).campaign).toBe(campaign);
+      expect(sharedKeys.map((key) => runtime.t(key))).toEqual(sharedCopy);
+      for (const key of lazyKeys) {
+        expect(runtime.t(key), key).not.toBe(key);
+      }
+      expect(runtime.t("configPage.themeImported", { name: "Example" })).toBe("Imported Example.");
+      expect(runtime.t("updates.page.intro")).toBe(
+        "Manage the connected Gateway's release channel and update policy.",
+      );
+
+      runtime.i18n.registerTranslation("fr", {
+        configView: { chatPrefs: { title: "Discussion" } },
+      });
+      await runtime.i18n.setLocale("fr");
+      expect(find("Discussion")).toEqual([
+        expect.objectContaining({ routeId: "appearance", label: "Discussion" }),
+      ]);
+      expect(find("check for updates")).toEqual([
+        expect.objectContaining({ routeId: "updates", label: "Updates" }),
+      ]);
+      expect(runtime.t("modelProviders.title")).toBe("Configured providers");
+      expect(runtime.t("modelProviders.modelsAvailable", { available: "2", count: "3" })).toBe(
+        "2 of 3 models available",
+      );
+      expect(runtime.t("settings.missing.key")).toBe("settings.missing.key");
+      await runtime.i18n.setLocale("en");
+      expect(find("collapse task progress")).toEqual([
+        expect.objectContaining({ routeId: "appearance", label: "Chat" }),
+      ]);
+    } finally {
+      await runtime.i18n.setLocale("en");
+      vi.resetModules();
+      if (previousTestApi) {
+        Object.defineProperty(globalThis, testApiKey, previousTestApi);
+      } else {
+        Reflect.deleteProperty(globalThis, testApiKey);
+      }
+    }
+  });
+
+  it("finds the task progress disclosure preference in Chat settings", () => {
+    const matches = findSettingsSearchBlocks({
+      query: "task progress",
+      schema: null,
+      value: null,
+      uiHints: {},
+    });
+
+    expect(matches).toEqual([
+      expect.objectContaining({
+        routeId: "appearance",
+        label: "Chat",
+        hash: "#settings-appearance-chat",
+      }),
+    ]);
+  });
+
   it("uses word prefixes instead of arbitrary substrings for short queries", () => {
     const matches = findSettingsSearchBlocks({
       query: "cp",
@@ -29,6 +160,56 @@ describe("findSettingsSearchBlocks", () => {
         hash: "#settings-connection-host",
       }),
     ]);
+  });
+
+  it("routes setup consent to Advanced with its disclosure open", () => {
+    expect(
+      findSettingsSearchBlocks({
+        query: "discovery access",
+        schema: {
+          type: "object",
+          properties: {
+            wizard: {
+              type: "object",
+              properties: {
+                accessMode: { type: "string", title: "Setup Discovery Access" },
+              },
+            },
+          },
+        },
+        value: {},
+        uiHints: { "wizard.accessMode": { advanced: false } },
+      }),
+    ).toEqual([
+      expect.objectContaining({
+        routeId: "advanced",
+        label: "Setup",
+        search: "?section=wizard&advanced=1",
+        hash: "#config-section-wizard",
+      }),
+    ]);
+  });
+
+  it.each(["securityAcknowledgedAt"])("does not offer machine-owned %s in search", (key) => {
+    expect(
+      findSettingsSearchBlocks({
+        query: "internal bookkeeping",
+        schema: {
+          type: "object",
+          properties: {
+            wizard: {
+              type: "object",
+              properties: {
+                [key]: { type: "string", title: "Internal Bookkeeping" },
+                accessMode: { type: "string" },
+              },
+            },
+          },
+        },
+        value: { wizard: { [key]: "internal bookkeeping" } },
+        uiHints: {},
+      }),
+    ).toEqual([]);
   });
 
   it("matches schema sections to their owning settings page", () => {
@@ -107,7 +288,61 @@ describe("findSettingsSearchBlocks", () => {
     ]);
   });
 
-  it("does not promise update fields the curated Updates page cannot edit", () => {
+  it("refreshes prepared schema tiers while searching current draft keys and access", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        mcp: {
+          type: "object",
+          properties: {
+            servers: {
+              type: "object",
+              additionalProperties: {
+                type: "object",
+                properties: { command: { type: "string" } },
+              },
+            },
+          },
+        },
+      },
+    };
+    const servers: Record<string, { command: string }> = {};
+    const params = {
+      query: "zephyr",
+      schema,
+      value: { mcp: { servers } },
+      uiHints: { "mcp.servers.*.command": { advanced: false } },
+    };
+    expect(findSettingsSearchBlocks(params)).toEqual([]);
+    servers.zephyr = { command: "node" };
+    const common = {
+      routeId: "mcp",
+      label: "MCP",
+      search: "?section=mcp",
+      hash: "#config-section-mcp",
+    };
+    expect(findSettingsSearchBlocks(params)).toEqual([common]);
+    expect(findSettingsSearchBlocks({ ...params, canAdmin: false })).toEqual([]);
+    expect(findSettingsSearchBlocks(params)).toEqual([common]);
+    expect(findSettingsSearchBlocks({ ...params, uiHints: {} })).toEqual([
+      { ...common, search: "?section=mcp&advanced=1" },
+    ]);
+    expect(findSettingsSearchBlocks(params)).toEqual([common]);
+    expect(
+      findSettingsSearchBlocks({
+        ...params,
+        schema: {
+          type: "object",
+          properties: { mcp: { type: "object", properties: { endpoint: { type: "string" } } } },
+        },
+      }),
+    ).toEqual([]);
+    expect(findSettingsSearchBlocks(params)).toEqual([common]);
+    delete servers.zephyr;
+    expect(findSettingsSearchBlocks(params)).toEqual([]);
+  });
+
+  it("finds existing update checks and channel controls on the curated Updates page", () => {
     const updateSchema = {
       type: "object",
       properties: {
@@ -125,9 +360,6 @@ describe("findSettingsSearchBlocks", () => {
       "update.checkOnStart": { advanced: false },
     };
 
-    // checkOnStart renders nowhere on the Updates page (curated rows only)
-    // and the Advanced page excludes the scoped update section — a search hit
-    // would dead-end. The curated fields still match.
     expect(
       findSettingsSearchBlocks({
         query: "check on start",
@@ -135,7 +367,15 @@ describe("findSettingsSearchBlocks", () => {
         value: {},
         uiHints,
       }),
-    ).toEqual([]);
+    ).toEqual([expect.objectContaining({ routeId: "updates", hash: "#config-section-update" })]);
+    expect(
+      findSettingsSearchBlocks({
+        query: "check for updates",
+        schema: null,
+        value: null,
+        uiHints: {},
+      }),
+    ).toEqual([expect.objectContaining({ routeId: "updates", hash: "#config-section-update" })]);
     expect(
       findSettingsSearchBlocks({
         query: "update channel",
@@ -266,6 +506,14 @@ describe("findSettingsSearchBlocks", () => {
     });
 
     expect(matches).toEqual([
+      {
+        routeId: "communications",
+        label: "Meeting capture",
+        search: "?section=transcripts",
+        hash: "#settings-communications-meeting-capture",
+        searchText:
+          "Meeting capture Choose which sources can save meeting notes on this Gateway. Auto-start sources recording transcription meetings autoStart",
+      },
       {
         routeId: "ai-agents",
         label: "Tools",

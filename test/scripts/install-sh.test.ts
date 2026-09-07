@@ -18,15 +18,19 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { isSupportedOpenClawNodeVersion } from "../../node-version.mjs";
+import { requireNodeTool } from "../helpers/node-toolchain.js";
 import { NODE_RELEASE_VERSION_CASES } from "../helpers/node-version-cases.js";
+import { createInstallGitCommitFixtureScript } from "./install-git-fixtures.js";
 import {
   writeNpmBeforePolicyFixture,
   writeNpmFreshnessConflictFixture,
   writeNpmInstallRetryFixture,
   writeNpmLifecycleFixture,
 } from "./install-npm-fixtures.js";
+import { linkPnpmBootstrapShellTools } from "./test-helpers.js";
 
 const SCRIPT_PATH = "scripts/install.sh";
+const nodeExecutable = requireNodeTool("node");
 
 function runInstallShell(script: string, env: NodeJS.ProcessEnv = {}) {
   const home = mkdtempSync(join(tmpdir(), "openclaw-install-home-"));
@@ -48,7 +52,7 @@ function runInstallShell(script: string, env: NodeJS.ProcessEnv = {}) {
 }
 
 function linkNodeExecutable(bin: string) {
-  symlinkSync(process.execPath, join(bin, "node"));
+  symlinkSync(nodeExecutable, join(bin, "node"));
 }
 
 describe("install.sh", () => {
@@ -209,7 +213,7 @@ describe("install.sh", () => {
   });
 
   it.each(["apt-get", "dnf", "yum"])(
-    "rejects an invalid NodeSource response before %s repository setup",
+    "uses the LTS NodeSource stream and rejects an invalid response before %s setup",
     (packageManager) => {
       const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-nodesource-validation-"));
       const marker = join(tmp, "configured");
@@ -234,6 +238,7 @@ describe("install.sh", () => {
               builtin command "$@"
             }
             download_file() {
+              printf 'download:%s\n' "$1"
               printf '<html>unexpected response</html>\n' > "$2"
             }
             ui_info() { printf 'info:%s\n' "$*"; }
@@ -256,11 +261,54 @@ describe("install.sh", () => {
         );
 
         expect(result.status).toBe(1);
+        expect(result.stdout).toContain(
+          `download:https://${packageManager === "apt-get" ? "deb" : "rpm"}.nodesource.com/setup_24.x`,
+        );
         expect(result.stdout).toContain("step:Downloading NodeSource setup script");
         expect(result.stdout).not.toContain("unexpected response");
         expect(existsSync(marker)).toBe(false);
       } finally {
         rmSync(tmp, { force: true, recursive: true });
+      }
+    },
+  );
+
+  it.each(["dnf", "yum"])(
+    "pins Node.js installation to the configured NodeSource %s repository",
+    (packageManager) => {
+      for (const rootMode of ["root", "sudo"]) {
+        const result = runInstallShell(`
+          set -euo pipefail
+          source "${SCRIPT_PATH}"
+          OS=linux
+          PACKAGE_MANAGER=${JSON.stringify(packageManager)}
+          ROOT_MODE=${JSON.stringify(rootMode)}
+          require_sudo() { :; }
+          install_build_tools_linux() { return 0; }
+          is_root() { [[ "$ROOT_MODE" == "root" ]]; }
+          is_arch_linux() { return 1; }
+          is_alpine_linux() { return 1; }
+          command() {
+            if [[ "\${1:-}" == "-v" ]]; then
+              case "\${2:-}" in
+                pacman|apk|apt-get) return 1 ;;
+                dnf|yum) [[ "$PACKAGE_MANAGER" == "$2" ]]; return ;;
+              esac
+            fi
+            builtin command "$@"
+          }
+          download_validated_script() { :; }
+          ui_info() { :; }
+          run_required_step() { printf 'step:%s|%s\\n' "$1" "\${*:2}"; }
+          finish_linux_node_install() { :; }
+          install_node
+        `);
+
+        const sudoPrefix = rootMode === "sudo" ? "sudo " : "";
+        expect(result.status, result.stderr || result.stdout).toBe(0);
+        expect(result.stdout).toContain(
+          `step:Installing Node.js|${sudoPrefix}${packageManager} install -y -q --disablerepo=* --enablerepo=nodesource-nodejs nodejs`,
+        );
       }
     },
   );
@@ -322,13 +370,13 @@ NODE
       OS=macos
       check_git() { return 0; }
       ensure_pnpm() { :; }
-      ensure_pnpm_binary_for_scripts() { :; }
       resolve_git_openclaw_ref() { printf 'main\\n'; }
-      checkout_git_openclaw_ref() { :; }
+      checkout_git_openclaw_ref() {
+        [[ "$1" == "$repo" && "$2" == "main" ]] || return 1
+        GIT_REF_KIND=moving
+      }
       cleanup_legacy_submodules() { :; }
-      activate_repo_pnpm_version() { :; }
-      git_install_lockfile_flag() { printf '%s\\n' '--frozen-lockfile'; }
-      run_quiet_step() { return 0; }
+      run_pnpm() { :; }
       ensure_user_local_bin_on_path() {
         mkdir -p "$HOME/.local/bin"
         export PATH="$HOME/.local/bin:$PATH"
@@ -481,18 +529,18 @@ NODE
       ln -s "$target" "$alias_path"
 
       check_git() { return 0; }
-      ensure_pnpm() { :; }
-      ensure_pnpm_binary_for_scripts() { :; }
       resolve_git_openclaw_ref() { printf 'main\\n'; }
-      checkout_git_openclaw_ref() { [[ "$1" == "$target" && "$2" == "main" ]]; }
-      cleanup_legacy_submodules() { [[ "$1" == "$target" ]]; }
-      activate_repo_pnpm_version() { [[ "$1" == "$target" ]]; }
-      git_install_lockfile_flag() {
-        [[ "$1" == "$target" ]]
-        printf '%s\\n' '--frozen-lockfile'
+      checkout_git_openclaw_ref() {
+        [[ "$1" == "$target" && "$2" == "main" ]] || return 1
+        GIT_REF_KIND=moving
       }
+      cleanup_legacy_submodules() { [[ "$1" == "$target" ]]; }
+      ensure_pnpm() { [[ "$1" == "$target" ]]; }
       run_pnpm() {
-        [[ "$1" == "-C" && "$2" == "$target" ]]
+        [[ "$1" == "-C" && "$2" == "$target" ]] || return 1
+        if [[ "\${3:-}" == "install" ]]; then
+          [[ " $* " == *" --no-frozen-lockfile "* ]] || return 1
+        fi
         if [[ "\${3:-}" == "build" ]]; then
           mkdir -p "$target/dist"
           printf '%s\n' 'process.stdout.write("fixture-version\\n");' > "$target/dist/entry.js"
@@ -747,6 +795,95 @@ NODE
     );
   });
 
+  it("preserves RPM-owned Node packages when their linked SQLite is unsafe", () => {
+    const result = runInstallShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      OS=linux
+      require_sudo() { :; }
+      install_build_tools_linux() { return 0; }
+      dnf() { printf 'unexpected-dnf:%s\n' "$*"; return 99; }
+      node() {
+        if [[ "\${1:-}" == "-v" ]]; then printf 'v24.18.0\n'; return 0; fi
+        if [[ "\${1:-}" == "-e" ]]; then return 1; fi
+        return 1
+      }
+      ui_info() { printf 'info:%s\n' "$*"; }
+      ui_success() { printf 'success:%s\n' "$*"; }
+      install_node_with_user_prefix() { printf 'prefix-runtime\n'; }
+      install_node
+    `);
+
+    expect(result.status, result.stderr || result.stdout).toBe(0);
+    expect(result.stdout).toContain("prefix-runtime");
+    expect(result.stdout).not.toContain("unexpected-dnf:");
+    expect(result.stdout).not.toContain("Installing Node.js via NodeSource");
+  });
+
+  it("activates and persists the managed Node runtime installed by install-cli.sh", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-rpm-node-prefix-"));
+    const home = join(tmp, "home");
+    const cliInstaller = join(tmp, "install-cli.sh");
+    mkdirSync(home, { recursive: true });
+    writeFileSync(
+      cliInstaller,
+      [
+        "#!/usr/bin/env bash",
+        'PREFIX="${OPENCLAW_PREFIX:?}"',
+        "node_dir() { printf '%s/tools/node-v24.19.0\\n' \"$PREFIX\"; }",
+        "os_detect() { printf 'linux\\n'; }",
+        "arch_detect() { printf 'x64\\n'; }",
+        "install_node() {",
+        '  local dir="$PREFIX/tools/node-v24.19.0"',
+        '  local bin="$dir/bin"',
+        '  mkdir -p "$bin"',
+        "  cat > \"$bin/node\" <<'EOF'",
+        "#!/usr/bin/env bash",
+        "if [[ \"${1:-}\" == '-v' ]]; then printf 'v24.19.0\\n'; exit 0; fi",
+        "if [[ \"${1:-}\" == '-e' ]]; then exit 0; fi",
+        "exit 1",
+        "EOF",
+        '  chmod +x "$bin/node"',
+        '  ln -sfn "$dir" "$PREFIX/tools/node"',
+        "}",
+        "",
+      ].join("\n"),
+    );
+
+    try {
+      const result = runInstallShell(
+        `
+          set -euo pipefail
+          source "${SCRIPT_PATH}"
+          HOME=${JSON.stringify(home)}
+          SHELL=/bin/bash
+          OS=linux
+          PATH=/usr/bin:/bin
+          export HOME SHELL OS PATH
+          download_validated_script() { cp ${JSON.stringify(cliInstaller)} "$2"; }
+          run_required_step() { shift; "$@"; }
+          ui_info() { printf 'info:%s\n' "$*"; }
+          ui_success() { printf 'success:%s\n' "$*"; }
+          print_active_node_paths() { :; }
+          install_node_with_user_prefix
+          printf 'node=%s\n' "$(command -v node)"
+          printf 'profile=%s\n' "$(sed -n '1p' "$HOME/.bashrc")"
+          resolved_bin="$(cd "$HOME/.openclaw/tools/node/bin" && pwd -P)"
+          warn_shell_path_missing_dir "$resolved_bin" "npm global bin dir"
+        `,
+        { TERM: "dumb" },
+      );
+
+      expect(result.status, result.stderr || result.stdout).toBe(0);
+      expect(result.stdout).toContain(`node=${home}/.openclaw/tools/node/bin/node`);
+      expect(result.stdout).toContain('profile=export PATH="$HOME/.openclaw/tools/node/bin:$PATH"');
+      expect(result.stdout).toContain("PATH updated in");
+      expect(result.stdout).not.toContain("PATH missing npm global bin dir");
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
   it("stops when NodeSource repository setup fails", () => {
     const result = runInstallShell(`
       set -euo pipefail
@@ -957,6 +1094,15 @@ NODE
       );
       expect(result.status).toBe(0);
       expect(readFileSync(args, "utf8").includes("--allow-scripts=openclaw")).toBe(expected);
+      const tool = runInstallShell(
+        [
+          `source ${JSON.stringify(SCRIPT_PATH)}`,
+          `npm_lifecycle_allow_arg ${JSON.stringify(npm)} pnpm@12.0.0 "$PWD" pnpm@12.0.0`,
+        ].join("\n"),
+        { NPM_FAKE_VERSION: version },
+      );
+      expect(tool.status).toBe(0);
+      expect(tool.stdout).toBe(expected ? "--allow-scripts=pnpm@12.0.0" : "");
     } finally {
       rmSync(tmp, { recursive: true, force: true });
     }
@@ -993,11 +1139,75 @@ NODE
     }
   });
 
-  it("relativizes absolute npm path identities against the command cwd", () => {
+  it.each(["absolute", "relative", "file:absolute", "file:relative"])(
+    "uses the absolute npm tarball identity for %s input",
+    (form) => {
+      const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-archive-identity-"));
+      const npm = join(tmp, "npm");
+      const commandCwd = join(tmp, "work");
+      const candidate = join(tmp, "candidate.tgz");
+      const protocol = form.startsWith("file:") ? "file:" : "";
+      const spec = `${protocol}${form.endsWith("relative") ? "../candidate.tgz" : candidate}`;
+      mkdirSync(commandCwd);
+      writeNpmLifecycleFixture(npm);
+      try {
+        const result = runInstallShell(
+          [
+            `source ${JSON.stringify(SCRIPT_PATH)}`,
+            `cd ${JSON.stringify(commandCwd)}`,
+            `npm_lifecycle_allow_arg ${JSON.stringify(npm)} ${JSON.stringify(spec)} "$PWD"`,
+          ].join("\n"),
+          { NPM_FAKE_VERSION: "12.0.0" },
+        );
+        expect(result.status).toBe(0);
+        expect(result.stdout.trim()).toBe(`--allow-scripts=${protocol}${candidate}`);
+      } finally {
+        rmSync(tmp, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.each([
+    { version: "11.16.0", advisory: true },
+    { version: "12.0.0", advisory: false },
+  ])(
+    "handles comma tarball identity under npm $version before mutation",
+    ({ version, advisory }) => {
+      const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-archive-comma,"));
+      const npm = join(tmp, "npm");
+      const args = join(tmp, "args");
+      writeNpmLifecycleFixture(npm);
+      try {
+        const result = runInstallShell(
+          [
+            `source ${JSON.stringify(SCRIPT_PATH)}`,
+            `npm_command_path() { printf '%s\\n' ${JSON.stringify(npm)}; }`,
+            `cd ${JSON.stringify(tmp)}`,
+            `run_verified_npm_global_install ${JSON.stringify(join(tmp, "candidate.tgz"))} ${JSON.stringify(join(tmp, "log"))}`,
+          ].join("\n"),
+          {
+            NPM_FAKE_VERSION: version,
+            NPM_FAKE_ARGS: args,
+            NPM_FAKE_ROOT: join(tmp, "lib/node_modules"),
+            NPM_FAKE_PACKAGE_DIR: join(tmp, "lib/node_modules/openclaw"),
+          },
+        );
+        expect(result.status).toBe(advisory ? 0 : 1);
+        expect(existsSync(args)).toBe(advisory);
+        if (!advisory) {
+          expect(result.stderr).toContain("without commas");
+        }
+      } finally {
+        rmSync(tmp, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("retains relative directory identities under comma ancestors", () => {
     const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-lifecycle-comma,"));
     const npm = join(tmp, "npm");
     const commandCwd = join(tmp, "work");
-    const candidate = join(tmp, "candidate.tgz");
+    const candidate = join(tmp, "candidate");
     mkdirSync(commandCwd);
     writeNpmLifecycleFixture(npm);
     try {
@@ -1010,7 +1220,7 @@ NODE
         { NPM_FAKE_VERSION: "12.0.0" },
       );
       expect(result.status).toBe(0);
-      expect(result.stdout.trim()).toBe("--allow-scripts=../candidate.tgz");
+      expect(result.stdout.trim()).toBe("--allow-scripts=../candidate");
     } finally {
       rmSync(tmp, { recursive: true, force: true });
     }
@@ -1022,6 +1232,7 @@ NODE
       const result = runInstallShell(`
         set -euo pipefail
         source "${SCRIPT_PATH}"
+        env() { /usr/bin/env "$@"; }
         root="$(mktemp -d)"
         repo="$root/repo"
         npm_root="$root/lib/node_modules"
@@ -1031,7 +1242,7 @@ NODE
         cat > "$bin/openclaw" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
-exec ${process.execPath} $repo/dist/entry.js "\\$@"
+exec ${nodeExecutable} $repo/dist/entry.js "\\$@"
 EOF
         chmod +x "$bin/openclaw"
         fake_npm="$root/npm"
@@ -1048,9 +1259,9 @@ mkdir -p "$NPM_FAKE_ROOT/openclaw/dist"
 printf '%s\n' '#!/usr/bin/env node' 'process.stdout.write("npm-version\\n")' > "$NPM_FAKE_ROOT/openclaw/openclaw.mjs"
 chmod +x "$NPM_FAKE_ROOT/openclaw/openclaw.mjs"
 if [[ "$NPM_FAKE_MODE" == guard-failure ]]; then
-  : > "$NPM_FAKE_ROOT/openclaw/dist/openclaw-install-guard"
+  : > "$NPM_FAKE_ROOT/openclaw/.openclaw-lifecycle-pending"
 else
-  rm -f "$NPM_FAKE_ROOT/openclaw/dist/openclaw-install-guard"
+  rm -f "$NPM_FAKE_ROOT/openclaw/.openclaw-lifecycle-pending"
 fi
 EOF
         chmod +x "$fake_npm"
@@ -1065,6 +1276,9 @@ EOF
         install_openclaw
         status=$?
         set -e
+        if (( status == 0 )); then
+          commit_openclaw_bin_backup
+        fi
         cleanup_tmpfiles
         printf 'status=%s version=%s link=%s\n' "$status" "$("$bin/openclaw" --version)" "$([[ -L "$bin/openclaw" ]] && echo yes || echo no)"
       `);
@@ -1077,6 +1291,86 @@ EOF
       }
     },
   );
+
+  it("restores the same-bin git wrapper when final npm verification fails", () => {
+    const result = runInstallShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      root="$HOME/fixture"
+      repo="$root/repo"
+      npm_root="$root/lib/node_modules"
+      bin="$HOME/.local/bin"
+      launcher="$npm_root/openclaw/openclaw.mjs"
+      calls="$root/candidate-calls"
+      mkdir -p "$repo/dist" "$npm_root/openclaw" "$bin"
+      printf '%s\n' 'process.stdout.write("git-version\\n")' > "$repo/dist/entry.js"
+      cat > "$bin/openclaw" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+exec ${nodeExecutable} $repo/dist/entry.js "\\$@"
+EOF
+      chmod +x "$bin/openclaw"
+      cat > "$launcher" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+count=0
+[[ ! -f "$NPM_CANDIDATE_CALLS" ]] || count="$(cat "$NPM_CANDIDATE_CALLS")"
+count=$((count + 1))
+printf '%s\n' "$count" > "$NPM_CANDIDATE_CALLS"
+(( count < 3 )) || exit 9
+printf 'npm-version\n'
+EOF
+      chmod +x "$launcher"
+      fake_npm="$root/npm"
+      cat > "$fake_npm" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+case "\${1:-}" in
+  --version) printf '12.0.0\n' ;;
+  root) printf '%s\n' "$NPM_FAKE_ROOT" ;;
+  prefix) printf '%s\n' "$NPM_FAKE_PREFIX" ;;
+  config) printf 'null\n' ;;
+  *) exit 1 ;;
+esac
+EOF
+      chmod +x "$fake_npm"
+      npm() { "$fake_npm" "$@"; }
+      npm_command_path() { printf '%s\n' "$fake_npm"; }
+      install_openclaw_npm() { return 0; }
+      bootstrap_gum_temp() { :; }
+      print_installer_banner() { :; }
+      print_gum_status() { :; }
+      detect_os_or_die() { OS=linux; }
+      detect_openclaw_checkout() { return 1; }
+      show_install_plan() { :; }
+      check_existing_openclaw() { return 0; }
+      configure_install_stage_total() { :; }
+      ui_stage() { :; }
+      load_nvm_for_node_detection() { :; }
+      check_node() { return 0; }
+      activate_supported_node_on_path() { :; }
+      ensure_default_node_active_shell() { return 0; }
+      check_git() { return 0; }
+      fix_npm_permissions() { :; }
+      ui_info() { :; }
+      ui_warn() { :; }
+      ui_error() { :; }
+      ui_success() { :; }
+      INSTALL_METHOD=npm
+      OPENCLAW_VERSION="$root/candidate.tgz"
+      export NPM_CANDIDATE_CALLS="$calls" NPM_FAKE_ROOT="$npm_root" NPM_FAKE_PREFIX="$HOME/.local"
+      set +e
+      (set -e; main)
+      status=$?
+      set -e
+      version="$("$bin/openclaw" --version 2>/dev/null || printf unavailable)"
+      printf 'status=%s version=%s link=%s calls=%s\n' \
+        "$status" "$version" "$([[ -L "$bin/openclaw" ]] && echo yes || echo no)" "$(cat "$calls")"
+    `);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout, result.stderr).toContain("status=1 version=git-version link=no calls=3");
+  });
 
   it("restores an active shim backup when installation is interrupted", () => {
     const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-shim-signal-"));
@@ -1118,6 +1412,65 @@ EOF
       [[ -f "$root/openclaw/marker" && ! -e "$root/.openclaw-stale" ]]
     `);
     expect(result.status).toBe(0);
+  });
+
+  it.each(["EEXIST", "ENOTEMPTY"])("recovers from %s with default npm logging", (code) => {
+    const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-npm-recovery-"));
+    const bin = join(tmp, "bin");
+    const npmRoot = join(tmp, "lib", "node_modules");
+    const packageDir = join(npmRoot, "openclaw");
+    const calls = join(tmp, "calls");
+    const conflict = code === "EEXIST" ? join(bin, "openclaw") : join(npmRoot, ".openclaw-stale");
+    mkdirSync(bin, { recursive: true });
+    mkdirSync(packageDir, { recursive: true });
+    writeFileSync(join(packageDir, "retained"), "existing package data");
+    if (code === "EEXIST") {
+      symlinkSync(join(tmp, "missing-launcher"), conflict);
+    } else {
+      mkdirSync(conflict);
+    }
+    linkNodeExecutable(bin);
+    writeNpmInstallRetryFixture(join(bin, "npm"));
+    const error =
+      code === "EEXIST"
+        ? `npm error File exists: ${conflict}\nnpm error code EEXIST`
+        : `npm error ENOTEMPTY: directory not empty, rename ${packageDir} -> ${conflict}`;
+    try {
+      const result = runInstallShell(
+        [
+          `source ${JSON.stringify(SCRIPT_PATH)}`,
+          `PATH=${JSON.stringify(`${bin}:/usr/bin:/bin`)}`,
+          "install_openclaw_npm openclaw@latest",
+          "commit_openclaw_bin_backup",
+        ].join("\n"),
+        {
+          NPM_FAKE_ROOT: npmRoot,
+          NPM_FAKE_PREFIX: tmp,
+          NPM_FAKE_PACKAGE_DIR: packageDir,
+          NPM_FAKE_CALLS: calls,
+          NPM_FAKE_CONFLICT: conflict,
+          NPM_FAKE_OUTCOME: "transient",
+          NPM_FAKE_ERROR: error,
+        },
+      );
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+      expect(readFileSync(calls, "utf8").trim().split("\n")).toEqual([
+        "openclaw@latest",
+        "openclaw@latest",
+      ]);
+      expect(existsSync(conflict)).toBe(false);
+      expect(readFileSync(join(packageDir, "retained"), "utf8")).toBe("existing package data");
+      if (code === "EEXIST") {
+        expect(() => lstatSync(conflict)).toThrow();
+        const backups = readdirSync(bin).filter((name) =>
+          name.startsWith("openclaw.openclaw-backup."),
+        );
+        expect(backups).toHaveLength(1);
+        expect(lstatSync(join(bin, backups[0]!)).isSymbolicLink()).toBe(true);
+      }
+    } finally {
+      rmSync(tmp, { force: true, recursive: true });
+    }
   });
 
   it("does not report npm owner retirement when uninstall fails", () => {
@@ -1381,6 +1734,84 @@ EOF
     expect(output).toContain(`git=${join(openclawHome, "openclaw")}`);
   });
 
+  it.each([
+    {
+      args: "--install-method git --git-dir /cli-target",
+      envGitDir: "/env-target",
+      expected: "/cli-target",
+      name: "prefers --git-dir over the environment and detected checkout",
+    },
+    {
+      args: "--install-method git --dir '/target with spaces'",
+      expected: "/target with spaces",
+      name: "prefers --dir with spaces over the detected checkout",
+    },
+    {
+      args: "--install-method git",
+      envGitDir: "/env-target",
+      expected: "/env-target",
+      name: "prefers OPENCLAW_GIT_DIR over the detected checkout",
+    },
+    {
+      args: "--install-method git --git-dir /effective-home/openclaw",
+      expected: "/effective-home/openclaw",
+      name: "honors an explicit target equal to the default",
+    },
+    {
+      args: "--install-method git --git-dir /first --dir /last",
+      expected: "/last",
+      name: "uses the last explicit target",
+    },
+    {
+      args: "--install-method git --git-dir './relative target'",
+      expected: "./relative target",
+      name: "preserves an explicit relative target for the install owner",
+    },
+    {
+      args: "--install-method git",
+      expected: "/detected-checkout",
+      name: "uses the detected checkout when no target is explicit",
+    },
+    {
+      args: "--install-method git --git-dir ''",
+      envGitDir: "/env-target",
+      expected: "/detected-checkout",
+      name: "treats an empty CLI target as non-explicit",
+    },
+  ])("selects the git install target: $name", ({ args, envGitDir, expected }) => {
+    const result = runInstallShell(
+      `
+        source "${SCRIPT_PATH}"
+        parse_args ${args}
+        bootstrap_gum_temp() { :; }
+        print_installer_banner() { :; }
+        print_gum_status() { :; }
+        detect_os_or_die() { OS=linux; }
+        detect_openclaw_checkout() { printf '/detected-checkout\\n'; }
+        show_install_plan() { :; }
+        check_existing_openclaw() { return 1; }
+        load_nvm_for_node_detection() { :; }
+        check_node() { return 0; }
+        activate_supported_node_on_path() { :; }
+        ensure_default_node_active_shell() { return 0; }
+        npm() { return 1; }
+        install_openclaw_from_git() {
+          printf 'target=%s\\n' "$1"
+          return 23
+        }
+        main
+      `,
+      {
+        OPENCLAW_GIT_DIR: envGitDir,
+        OPENCLAW_HOME: "/effective-home",
+        TERM: "dumb",
+      },
+    );
+
+    expect(result.status).toBe(23);
+    expect(result.stdout).toContain(`target=${expected}\n`);
+  });
+
   it("uses a blobless partial clone for new git installs", () => {
     const result = runInstallShell(`
       set -euo pipefail
@@ -1390,11 +1821,10 @@ EOF
       repo="$(cd "$repo" && pwd -P)"
       check_git() { return 0; }
       ensure_pnpm() { :; }
-      ensure_pnpm_binary_for_scripts() { :; }
       resolve_git_openclaw_ref() { printf 'main\\n'; }
       checkout_git_openclaw_ref() { :; }
       cleanup_legacy_submodules() { :; }
-      activate_repo_pnpm_version() { :; }
+      ensure_pnpm() { :; }
       git_install_lockfile_flag() { printf '%s\\n' '--frozen-lockfile'; }
       run_quiet_step() {
         printf 'step:%s|%s\\n' "$1" "\${*:2}"
@@ -1714,6 +2144,29 @@ EOF
     expect(result.status).toBe(9);
     expect(result.stdout).not.toContain("installed successfully");
     expect(result.stdout).not.toContain("Upgrade complete");
+  });
+
+  it.each([
+    { name: "flag", args: "--dry-run", dryRunEnv: "0", dryRun: true },
+    { name: "environment", args: "", dryRunEnv: "1", dryRun: true },
+    { name: "normal install", args: "", dryRunEnv: "0", dryRun: false },
+  ])("keeps Gum initialization consistent with $name", ({ args, dryRunEnv, dryRun }) => {
+    const result = runInstallShell(
+      [
+        `source ${JSON.stringify(SCRIPT_PATH)}`,
+        "bootstrap_gum_temp() { printf 'gum-bootstrap\\n'; }",
+        "print_gum_status() { printf 'gum-status\\n'; }",
+        "check_existing_openclaw() { exit 73; }",
+        `parse_args --npm --no-onboard ${args}`,
+        "main",
+      ].join("\n"),
+      { OPENCLAW_DRY_RUN: dryRunEnv },
+    );
+    expect(result.status, result.stdout + result.stderr).toBe(dryRun ? 0 : 73);
+    expect(result.stdout).toContain("Install plan");
+    expect(result.stdout.includes("Dry run complete (no changes made)")).toBe(dryRun);
+    expect(result.stdout.includes("gum-bootstrap")).toBe(!dryRun);
+    expect(result.stdout.includes("gum-status")).toBe(!dryRun);
   });
 
   it.each([
@@ -2151,7 +2604,6 @@ EOF
             `OPENCLAW_VERSION=${requested}`,
             "USE_BETA=0",
             "NPM_LOGLEVEL=error",
-            "NPM_SILENT_FLAG=",
             `npm_global_bin_dir() { printf '%s\\n' ${JSON.stringify(bin)}; }`,
             "set +e",
             "install_openclaw",
@@ -2171,8 +2623,14 @@ EOF
         expect(readFileSync(calls, "utf8").trim().split("\n")).toEqual(
           Array.from({ length: expectedCalls }, () => `openclaw@${requested}`),
         );
+        const output = `${result.stdout}\n${result.stderr}`;
+        const advertisedLogs = [...output.matchAll(/^\s*Installer log:\s*(.+)$/gm)]
+          .map((match) => match[1]?.trim())
+          .filter((logPath) => logPath !== undefined);
+        expect(advertisedLogs.filter((logPath) => !existsSync(logPath))).toEqual([]);
         if (expectedStatus !== 0) {
-          expect(`${result.stdout}\n${result.stderr}`).toContain(`${error} (attempt 2)`);
+          expect(output).toContain(`${error} (attempt 2)`);
+          expect(output).toContain("showing last log lines");
         }
         if (requested !== "next") {
           expect(`${result.stdout}\n${result.stderr}`).not.toContain("openclaw@next");
@@ -2201,7 +2659,6 @@ EOF
           "OPENCLAW_VERSION=latest",
           "USE_BETA=0",
           "NPM_LOGLEVEL=error",
-          "NPM_SILENT_FLAG=",
           `npm_global_bin_dir() { printf '%s\\n' ${JSON.stringify(bin)}; }`,
           "install_openclaw",
         ].join("\n"),
@@ -2248,7 +2705,6 @@ EOF
           `HOME=${JSON.stringify(home)}`,
           `PATH=${JSON.stringify(`${bin}:/usr/bin:/bin`)}`,
           "NPM_LOGLEVEL=error",
-          "NPM_SILENT_FLAG=",
           `run_npm_global_install openclaw@latest ${JSON.stringify(join(tmp, "install.log"))}`,
         ].join("\n"),
       );
@@ -2287,7 +2743,6 @@ EOF
           `HOME=${JSON.stringify(home)}`,
           `PATH=${JSON.stringify(`${bin}:/usr/bin:/bin`)}`,
           "NPM_LOGLEVEL=error",
-          "NPM_SILENT_FLAG=",
           `run_npm_global_install openclaw@latest ${JSON.stringify(join(tmp, "install.log"))}`,
         ].join("\n"),
       );
@@ -2329,6 +2784,56 @@ EOF
     expect(result.stdout).not.toContain("[4/3] Verifying installation");
   });
 
+  it.each([0, 17])("joins the finalization watchdog after probe exit %s", (probeExit) => {
+    const root = mkdtempSync(join(tmpdir(), "openclaw-install-watchdog-"));
+    const sleep = join(root, "sleep");
+    // Synchronize on the real watchdog sleep without shortening its deadline
+    // or making the assertion depend on host timing.
+    writeFileSync(
+      sleep,
+      '#!/bin/bash\nprintf "%s\\n" "$$" > "$WATCHDOG_PID"\nprintf "ready\\n" > "$WATCHDOG_READY"\nexec /bin/sleep "$@"\n',
+      { mode: 0o755 },
+    );
+
+    try {
+      const result = runInstallShell(
+        `
+          source "${SCRIPT_PATH}"
+          mkfifo "$WATCHDOG_READY"
+          fast_probe() {
+            IFS= read -r ready < "$WATCHDOG_READY"
+            printf 'probe-output'
+            return "$PROBE_EXIT"
+          }
+          output="$(
+            probe_status=0
+            bounded_probe_output fixture fast_probe || probe_status=$?
+            watchdog_pid="$(cat "$WATCHDOG_PID")"
+            if kill -0 "$watchdog_pid" 2>/dev/null; then
+              printf ':watchdog-alive'
+            fi
+            printf ':status=%s' "$probe_status"
+            cleanup_tmpfiles
+          )"
+          printf '%s\\n' "$output"
+        `,
+        {
+          PATH: `${root}:${process.env.PATH ?? ""}`,
+          PROBE_EXIT: String(probeExit),
+          WATCHDOG_PID: join(root, "sleep.pid"),
+          WATCHDOG_READY: join(root, "ready"),
+          OPENCLAW_INSTALL_PROBE_TIMEOUT_SECONDS: undefined,
+        },
+      );
+
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toBe(`probe-output:status=${probeExit}\n`);
+      expect(result.stderr).toBe("");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("bounds installer npm prefix probes during finalization helpers", () => {
     const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-npm-probe-"));
     const npm = join(tmp, "npm");
@@ -2337,7 +2842,7 @@ EOF
       [
         "#!/usr/bin/env bash",
         'if [[ "$1" == "prefix" && "$2" == "-g" ]]; then',
-        "  sleep 2",
+        "  sleep 3",
         "  exit 0",
         "fi",
         'if [[ "$1" == "config" && "$2" == "get" && "$3" == "prefix" ]]; then',
@@ -2354,7 +2859,7 @@ EOF
       const result = runInstallShell(
         [`source ${JSON.stringify(SCRIPT_PATH)}`, "npm_global_bin_dir"].join("\n"),
         {
-          OPENCLAW_INSTALL_PROBE_TIMEOUT_SECONDS: "0.1",
+          OPENCLAW_INSTALL_PROBE_TIMEOUT_SECONDS: "1",
           PATH: `${tmp}:${process.env.PATH ?? ""}`,
         },
       );
@@ -2977,7 +3482,7 @@ EOF
     chmodSync(join(home, ".bash_profile"), 0o000);
 
     try {
-      const script = `source "${SCRIPT_PATH}"; ensure_user_local_bin_on_path`;
+      const shellScript = `source "${SCRIPT_PATH}"; ensure_user_local_bin_on_path`;
       let result: ReturnType<typeof spawnSync>;
       if (process.getuid?.() === 0) {
         chmodSync(tmp, 0o755);
@@ -2986,7 +3491,7 @@ EOF
         chownSync(join(home, ".bash_login"), 65534, 65534);
         result = spawnSync(
           "setpriv",
-          ["--reuid=65534", "--regid=65534", "--clear-groups", "bash", "-c", script],
+          ["--reuid=65534", "--regid=65534", "--clear-groups", "bash", "-c", shellScript],
           {
             encoding: "utf8",
             env: {
@@ -3001,7 +3506,11 @@ EOF
           },
         );
       } else {
-        result = runInstallShell(script, { HOME: home, PATH: "/usr/bin:/bin", SHELL: "/bin/bash" });
+        result = runInstallShell(shellScript, {
+          HOME: home,
+          PATH: "/usr/bin:/bin",
+          SHELL: "/bin/bash",
+        });
       }
 
       expect(result.status).toBe(0);
@@ -3054,7 +3563,7 @@ EOF
     chmodSync(profile, 0o400);
 
     try {
-      const script = `source "${SCRIPT_PATH}"; persist_path_line_to_profile "$HOME/.profile" 'export PATH="$HOME/.local/bin:$PATH"'`;
+      const shellScript = `source "${SCRIPT_PATH}"; persist_path_line_to_profile "$HOME/.profile" 'export PATH="$HOME/.local/bin:$PATH"'`;
       let result: ReturnType<typeof spawnSync>;
       if (process.getuid?.() === 0) {
         chmodSync(tmp, 0o755);
@@ -3062,7 +3571,7 @@ EOF
         chownSync(profile, 65534, 65534);
         result = spawnSync(
           "setpriv",
-          ["--reuid=65534", "--regid=65534", "--clear-groups", "bash", "-c", script],
+          ["--reuid=65534", "--regid=65534", "--clear-groups", "bash", "-c", shellScript],
           {
             encoding: "utf8",
             env: {
@@ -3076,7 +3585,7 @@ EOF
           },
         );
       } else {
-        result = runInstallShell(script, { HOME: home, PATH: "/usr/bin:/bin" });
+        result = runInstallShell(shellScript, { HOME: home, PATH: "/usr/bin:/bin" });
       }
 
       expect(result.status).toBe(0);
@@ -3179,7 +3688,7 @@ EOF
 
     try {
       const result = runInstallShell(
-        `source "${SCRIPT_PATH}"; persist_shell_path_prepend "$HOME/.local/bin" '\$HOME/.local/bin'`,
+        `source "${SCRIPT_PATH}"; persist_shell_path_prepend "$HOME/.local/bin" '$HOME/.local/bin'`,
         { HOME: home, PATH: "/usr/bin:/bin", SHELL: "/bin/bash" },
       );
 
@@ -3241,9 +3750,10 @@ EOF
       expect(warning.status).toBe(0);
       expect(warning.stdout).toContain(`PATH updated in ${fishRc}`);
       expect(warning.stdout).not.toContain("PATH missing user-local bin dir");
-      const fishVersion = spawnSync("fish", ["--version"], { encoding: "utf8" });
-      if (fishVersion.status === 0) {
-        const fresh = spawnSync("fish", ["-lc", "command -v openclaw"], {
+      // Resolve the executable before restricting the child shell's PATH.
+      const fishPath = runInstallShell("command -v fish");
+      if (fishPath.status === 0) {
+        const fresh = spawnSync(fishPath.stdout.trim(), ["-lc", "command -v openclaw"], {
           encoding: "utf8",
           env: { HOME: home, PATH: "/usr/bin:/bin" },
         });
@@ -3359,7 +3869,7 @@ EOF
         is_gateway_daemon_loaded() { return 0; }
         run_quiet_step() {
           case "$1" in
-            "Restarting gateway service"|"Checking gateway service") return 1 ;;
+            "Checking gateway service") return 1 ;;
             *) return 0 ;;
           esac
         }
@@ -3372,8 +3882,107 @@ EOF
 
     const quotedBin = openclawBin.replace(/ /g, "\\ ");
     expect(result?.status).toBe(0);
-    expect(result?.stdout).toContain(`Run: ${quotedBin} gateway restart`);
+    expect(result?.stdout).not.toContain(`Run: ${quotedBin} gateway restart`);
     expect(result?.stdout).toContain(`Run: ${quotedBin} gateway status --deep`);
+  });
+
+  it("does not explicitly restart after force-installing a loaded gateway", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-gateway-transition-"));
+    const openclawBin = join(tmp, "openclaw");
+    const commandLog = join(tmp, "commands.log");
+    writeFileSync(openclawBin, '#!/bin/sh\nprintf "%s\\n" "$*" >> "$COMMAND_LOG"\n');
+    chmodSync(openclawBin, 0o755);
+
+    try {
+      const result = runInstallShell(
+        `
+          set -euo pipefail
+          source "${SCRIPT_PATH}"
+          OPENCLAW_BIN=${JSON.stringify(openclawBin)}
+          is_gateway_daemon_loaded() { return 0; }
+          run_quiet_step() {
+            local title="$1"
+            shift
+            "$@"
+          }
+          refresh_gateway_service_if_loaded
+        `,
+        { COMMAND_LOG: commandLog },
+      );
+
+      expect(result.status, result.stderr || result.stdout).toBe(0);
+      expect(readFileSync(commandLog, "utf8").trim().split("\n")).toEqual([
+        "gateway install --force",
+        "gateway status --deep",
+      ]);
+    } finally {
+      rmSync(tmp, { force: true, recursive: true });
+    }
+  });
+
+  it.each([
+    { error: "SERVICE_DEFINITION_SEALED: protected", stream: "stderr" },
+    { error: "SERVICE_DEFINITION_SEALED: protected", stream: "stdout" },
+    { error: "SERVICE_DEFINITION_UNKNOWN: inaccessible", stream: "stderr" },
+    { error: "service manager unavailable", stream: "stderr" },
+  ])("handles a traced $error refresh in $stream", ({ error, stream }) => {
+    const root = mkdtempSync(join(tmpdir(), "openclaw-install-definition-"));
+    const openclaw = join(root, "openclaw");
+    const secretCanary = "installer-sh-secret-canary-never-render";
+    const commandLog = join(root, "commands.log");
+    writeFileSync(
+      openclaw,
+      [
+        "#!/bin/bash",
+        'printf "%s\\n" "$*" >> "$COMMAND_LOG"',
+        'if [[ "$*" == "gateway install --force" ]]; then',
+        '  if [[ "$SERVICE_STREAM" == stdout ]]; then printf "%s\\n" "$SERVICE_ERROR"; else printf "%s\\n" "$SERVICE_ERROR" >&2; fi',
+        '  printf "%s\\n" "$SECRET_CANARY" >&2; exit 1',
+        "fi",
+      ].join("\n"),
+    );
+    chmodSync(openclaw, 0o755);
+
+    try {
+      const result = runInstallShell(
+        [
+          "set -euo pipefail",
+          `source ${JSON.stringify(SCRIPT_PATH)}`,
+          `OPENCLAW_BIN=${JSON.stringify(openclaw)}`,
+          "is_gateway_daemon_loaded() { return 0; }",
+          "set -x",
+          "refresh_gateway_service_if_loaded",
+          "printf 'INSTALL_COMPLETE\\n'",
+        ].join("\n"),
+        {
+          COMMAND_LOG: commandLog,
+          SECRET_CANARY: secretCanary,
+          SERVICE_ERROR: error,
+          SERVICE_STREAM: stream,
+          TERM: "dumb",
+        },
+      );
+
+      const denied = error.startsWith("SERVICE_DEFINITION_");
+      expect(readFileSync(commandLog, "utf8").split("\n")).not.toContain("gateway restart");
+      expect(result.status).toBe(0);
+      expect(result.stderr).toContain("+ refresh_gateway_service_if_loaded");
+      expect(result.stdout + result.stderr).not.toContain(secretCanary);
+      if (denied) {
+        expect(result.stdout).toContain("gateway service definition left unchanged");
+        expect(result.stdout).toContain(
+          error.includes("SEALED")
+            ? "privileged deployment owner"
+            : "inspect service-definition access",
+        );
+        expect(result.stdout).toContain("INSTALL_COMPLETE");
+      } else {
+        expect(result.stdout).toContain("Gateway service refresh failed; continuing");
+        expect(result.stdout).toContain("INSTALL_COMPLETE");
+      }
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
   });
 
   it("refreshes the shell command cache after loading a persisted PATH update", () => {
@@ -3418,103 +4027,465 @@ EOF
     expect(result.stdout).toContain("main=main");
   });
 
-  it("fetches moving git refs without tags for git installs", () => {
-    expect(script).toContain('git -C "$repo_dir" fetch --no-tags origin main');
+  it("keeps ref resolution and rebase failures explicit", () => {
+    expect(script).toContain(
+      'git -C "$repo_dir" fetch --no-tags origin "refs/heads/main:refs/remotes/origin/main"',
+    );
     expect(script).toContain(
       'git -C "$repo_dir" fetch --no-tags origin "refs/heads/${ref}:refs/remotes/origin/${ref}"',
     );
-    expect(script).toContain('git -C "$repo_dir" pull --rebase --no-tags || true');
+    expect(script).toContain('git -C "$repo_dir" ls-remote --exit-code origin');
+    expect(script).toContain(
+      'run_quiet_step "Checking out ${ref}" git -C "$repo_dir" checkout --detach "refs/tags/${ref}"',
+    );
+    expect(script).toContain('git -C "$repo_dir" rebase origin/main');
+    expect(script).not.toContain('git -C "$repo_dir" pull --rebase --no-tags || true');
+  });
 
-    const branchCheckIndex = script.indexOf('ls-remote --exit-code --heads origin "$ref"');
-    const tagFetchIndex = script.indexOf("fetch --tags origin");
-    expect(branchCheckIndex).toBeGreaterThan(-1);
-    expect(tagFetchIndex).toBeGreaterThan(-1);
-    expect(branchCheckIndex).toBeLessThan(tagFetchIndex);
+  it.each(["bundle", "remote"] as const)("pins a full commit from a %s", (source) => {
+    const result = runInstallShell(createInstallGitCommitFixtureScript(source), {
+      OPENCLAW_INSTALLER_SCRIPT: SCRIPT_PATH,
+    });
+
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(result.stdout).toContain("kind=immutable");
+    expect(result.stdout).toContain("rejected=HEAD~1");
+  });
+
+  it("prefers a release tag over a same-named branch", () => {
+    const result = runInstallShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      run_quiet_step() {
+        shift
+        "$@"
+      }
+      tmp="$(mktemp -d)"
+      trap 'rm -rf "$tmp"' EXIT
+      remote="$tmp/remote.git"
+      seed="$tmp/seed"
+      repo="$tmp/repo"
+      ref=v2026.5.12
+      git init --bare -q "$remote"
+      git init -q --initial-branch=main "$seed"
+      git -C "$seed" config user.email test@example.invalid
+      git -C "$seed" config user.name test
+      printf 'tag\n' > "$seed/state.txt"
+      git -C "$seed" add state.txt
+      git -C "$seed" commit -qm tag
+      tag_head="$(git -C "$seed" rev-parse HEAD)"
+      git -C "$seed" remote add origin "$remote"
+      git -C "$seed" push -q -u origin main
+      git -C "$seed" tag "$ref"
+      git -C "$seed" push -q origin "refs/tags/$ref"
+      git -C "$seed" checkout -qb "$ref"
+      printf 'branch\n' > "$seed/state.txt"
+      git -C "$seed" commit -qam branch
+      branch_head="$(git -C "$seed" rev-parse HEAD)"
+      git -C "$seed" push -q origin "refs/heads/$ref"
+      git clone -q "$remote" "$repo"
+      checkout_git_openclaw_ref "$repo" "$ref"
+      selected="$(git -C "$repo" rev-parse HEAD)"
+      printf 'selected=%s tag=%s branch=%s kind=%s\n' "$selected" "$tag_head" "$branch_head" "$GIT_REF_KIND"
+      [[ "$selected" == "$tag_head" && "$selected" != "$branch_head" && "$GIT_REF_KIND" == "immutable" ]]
+    `);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("kind=immutable");
+    expect(result.stdout).toContain("selected=");
+  });
+
+  it("falls back to a v-prefixed branch when no matching release tag exists", () => {
+    const result = runInstallShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      run_quiet_step() {
+        shift
+        "$@"
+      }
+      tmp="$(mktemp -d)"
+      trap 'rm -rf "$tmp"' EXIT
+      remote="$tmp/remote.git"
+      seed="$tmp/seed"
+      repo="$tmp/repo"
+      ref=v2-hotfix
+      git init --bare -q "$remote"
+      git init -q --initial-branch=main "$seed"
+      git -C "$seed" config user.email test@example.invalid
+      git -C "$seed" config user.name test
+      printf 'base\\n' > "$seed/state.txt"
+      git -C "$seed" add state.txt
+      git -C "$seed" commit -qm base
+      git -C "$seed" remote add origin "$remote"
+      git -C "$seed" push -q -u origin main
+      git -C "$seed" checkout -qb "$ref"
+      printf 'branch\\n' > "$seed/state.txt"
+      git -C "$seed" commit -qam branch
+      branch_head="$(git -C "$seed" rev-parse HEAD)"
+      git -C "$seed" push -q origin "refs/heads/$ref"
+      git clone -q "$remote" "$repo"
+      checkout_git_openclaw_ref "$repo" "$ref"
+      selected="$(git -C "$repo" rev-parse HEAD)"
+      printf 'selected=%s branch=%s kind=%s\\n' "$selected" "$branch_head" "$GIT_REF_KIND"
+      [[ "$selected" == "$branch_head" && "$GIT_REF_KIND" == "moving" ]]
+    `);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("kind=moving");
+    expect(result.stdout).toContain("selected=");
+  });
+
+  it("updates a stale existing main checkout from the remote tracking ref", () => {
+    const result = runInstallShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      tmp="$(mktemp -d)"
+      trap 'rm -rf "$tmp"' EXIT
+      remote="$tmp/remote.git"
+      source_repo="$tmp/source"
+      repo="$tmp/repo"
+      git init --bare -q "$remote"
+      git init -q --initial-branch=main "$source_repo"
+      git -C "$source_repo" config user.email test@example.invalid
+      git -C "$source_repo" config user.name test
+      printf 'base\\n' > "$source_repo/state.txt"
+      git -C "$source_repo" add state.txt
+      git -C "$source_repo" commit -qm base
+      git -C "$source_repo" remote add origin "$remote"
+      git -C "$source_repo" push -q -u origin main
+      git --git-dir="$remote" symbolic-ref HEAD refs/heads/main
+      git clone -q "$remote" "$repo"
+      git -C "$repo" config user.email test@example.invalid
+      git -C "$repo" config user.name test
+      printf 'target\\n' > "$source_repo/state.txt"
+      git -C "$source_repo" commit -qam target
+      git -C "$source_repo" push -q origin main
+      base="$(git -C "$repo" rev-parse HEAD)"
+      stale_tracking="$(git -C "$repo" rev-parse refs/remotes/origin/main)"
+      [[ "$base" == "$stale_tracking" ]]
+      run_quiet_step() { shift; "$@"; }
+      GIT_UPDATE=1
+      checkout_git_openclaw_ref "$repo" main
+      head="$(git -C "$repo" rev-parse HEAD)"
+      tracking="$(git -C "$repo" rev-parse refs/remotes/origin/main)"
+      remote_head="$(git --git-dir="$remote" rev-parse refs/heads/main)"
+      printf 'head=%s\\ntracking=%s\\nremote=%s\\n' "$head" "$tracking" "$remote_head"
+      [[ "$head" == "$remote_head" && "$tracking" == "$remote_head" && "$head" != "$base" ]]
+    `);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("head=");
+    expect(result.stdout).toContain("tracking=");
+    expect(result.stdout).toContain("remote=");
+  });
+
+  it("restores an existing main checkout after a failed rebase", () => {
+    const result = runInstallShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      tmp="$(mktemp -d)"
+      trap 'rm -rf "$tmp"' EXIT
+      remote="$tmp/remote.git"
+      seed="$tmp/seed"
+      repo="$tmp/repo"
+      git init --bare -q "$remote"
+      git init -q --initial-branch=main "$seed"
+      git -C "$seed" config user.email test@example.invalid
+      git -C "$seed" config user.name test
+      printf 'base\\n' > "$seed/state.txt"
+      git -C "$seed" add state.txt
+      git -C "$seed" commit -qm base
+      git -C "$seed" remote add origin "$remote"
+      git -C "$seed" push -q -u origin main
+      git --git-dir="$remote" symbolic-ref HEAD refs/heads/main
+      git clone -q "$remote" "$repo"
+      git -C "$repo" config user.email test@example.invalid
+      git -C "$repo" config user.name test
+      printf 'remote\\n' > "$seed/state.txt"
+      git -C "$seed" commit -qam remote
+      git -C "$seed" push -q origin main
+      printf 'local\\n' > "$repo/state.txt"
+      git -C "$repo" commit -qam local
+      printf 'keep this user change\\n' > "$repo/user-note.txt"
+      expected_head="$(git -C "$repo" rev-parse HEAD)"
+      expected_status="$(git -C "$repo" status --porcelain=v1 --untracked-files=all)"
+      set +e
+      output="$(checkout_git_openclaw_ref "$repo" main 2>&1)"
+      status=$?
+      set -e
+      [[ "$status" -ne 0 ]]
+      actual_head="$(git -C "$repo" rev-parse HEAD)"
+      actual_status="$(git -C "$repo" status --porcelain=v1 --untracked-files=all)"
+      rebase_merge="$(git -C "$repo" rev-parse --git-path rebase-merge)"
+      rebase_apply="$(git -C "$repo" rev-parse --git-path rebase-apply)"
+      [[ "$actual_head" == "$expected_head" ]]
+      [[ "$actual_status" == "$expected_status" ]]
+      [[ "$(cat "$repo/user-note.txt")" == "keep this user change" ]]
+      [[ ! -d "$rebase_merge" && ! -d "$rebase_apply" ]]
+      [[ "$output" == *"restored to its pre-update state"* ]]
+      printf 'recovery=head-restored status-clean rebase-state-cleared\\n'
+    `);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("recovery=head-restored status-clean rebase-state-cleared");
+  });
+
+  it("verifies unchanged state when a hook refuses rebase before it starts", () => {
+    const result = runInstallShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      run_quiet_step() { shift; "$@"; }
+      tmp="$(mktemp -d)"
+      trap 'rm -rf "$tmp"' EXIT
+      remote="$tmp/remote.git"
+      seed="$tmp/seed"
+      repo="$tmp/repo"
+      git init --bare -q "$remote"
+      git init -q --initial-branch=main "$seed"
+      git -C "$seed" config user.email test@example.invalid
+      git -C "$seed" config user.name test
+      printf 'base\\n' > "$seed/state.txt"
+      git -C "$seed" add state.txt
+      git -C "$seed" commit -qm base
+      git -C "$seed" remote add origin "$remote"
+      git -C "$seed" push -q -u origin main
+      git --git-dir="$remote" symbolic-ref HEAD refs/heads/main
+      git clone -q "$remote" "$repo"
+      printf 'remote\\n' > "$seed/state.txt"
+      git -C "$seed" commit -qam remote
+      git -C "$seed" push -q origin main
+      git -C "$repo" config user.email test@example.invalid
+      git -C "$repo" config user.name test
+      printf 'local\\n' > "$repo/local.txt"
+      git -C "$repo" add local.txt
+      git -C "$repo" commit -qm local
+      cat > "$repo/.git/hooks/pre-rebase" <<'HOOK'
+#!/usr/bin/env bash
+exit 42
+HOOK
+      chmod +x "$repo/.git/hooks/pre-rebase"
+      printf 'keep this user change\\n' > "$repo/user-note.txt"
+      expected_head="$(git -C "$repo" rev-parse HEAD)"
+      expected_status="$(git -C "$repo" status --porcelain=v1 --untracked-files=all)"
+      set +e
+      output="$(GIT_UPDATE=1 checkout_git_openclaw_ref "$repo" main 2>&1)"
+      status=$?
+      set -e
+      actual_head="$(git -C "$repo" rev-parse HEAD)"
+      actual_status="$(git -C "$repo" status --porcelain=v1 --untracked-files=all)"
+      rebase_merge="$(git -C "$repo" rev-parse --git-path rebase-merge)"
+      rebase_apply="$(git -C "$repo" rev-parse --git-path rebase-apply)"
+      [[ "$status" -ne 0 ]]
+      [[ "$actual_head" == "$expected_head" ]]
+      [[ "$actual_status" == "$expected_status" ]]
+      [[ "$(cat "$repo/user-note.txt")" == "keep this user change" ]]
+      [[ ! -d "$rebase_merge" && ! -d "$rebase_apply" ]]
+      [[ "$output" == *"restored to its pre-update state"* ]]
+      printf 'hook-refusal=head-verified status-verified rebase-state-absent\\n'
+    `);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain(
+      "hook-refusal=head-verified status-verified rebase-state-absent",
+    );
   });
 
   it("uses non-frozen lockfile installs only for moving git refs", () => {
     const result = runInstallShell(`
       set -euo pipefail
       source "${SCRIPT_PATH}"
-      git() {
-        if [[ "$1" == "-C" && "$3" == "ls-remote" && "\${7:-}" == "feature" ]]; then
-          return 0
-        fi
-        return 1
-      }
-      printf 'main=%s\\n' "$(git_install_lockfile_flag /repo main)"
-      printf 'branch=%s\\n' "$(git_install_lockfile_flag /repo feature)"
-      printf 'tag=%s\\n' "$(git_install_lockfile_flag /repo v2026.5.12)"
+      printf 'moving=%s\\n' "$(git_install_lockfile_flag moving)"
+      printf 'immutable=%s\\n' "$(git_install_lockfile_flag immutable)"
     `);
 
     expect(result.status).toBe(0);
-    expect(result.stdout).toContain("main=--no-frozen-lockfile");
-    expect(result.stdout).toContain("branch=--no-frozen-lockfile");
-    expect(result.stdout).toContain("tag=--frozen-lockfile");
+    expect(result.stdout).toContain("moving=--no-frozen-lockfile");
+    expect(result.stdout).toContain("immutable=--frozen-lockfile");
     expect(script).toContain(
-      'CI="${CI:-true}" run_quiet_step "Installing dependencies" run_pnpm -C "$repo_dir" install "$install_lockfile_flag"',
+      'CI="${CI:-true}" run_quiet_step "Installing dependencies" run_pnpm -C "$repo_dir" install "${pnpm_prefer_offline_args[@]}" "$install_lockfile_flag"',
     );
   });
 
-  it("aligns pnpm to the checked-out repo packageManager before installing", () => {
-    expect(script).toContain("activate_repo_pnpm_version()");
-    expect(script).toContain('corepack prepare "pnpm@${version}" --activate');
-    expect(script).toContain('activate_repo_pnpm_version "$repo_dir"');
+  it("preserves explicit pnpm prefer-offline settings", () => {
+    const result = runInstallShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      run_pnpm() { printf 'undefined\n'; }
+      unset PNPM_CONFIG_PREFER_OFFLINE pnpm_config_prefer_offline
+      if should_prefer_offline_pnpm_install; then printf 'default=true\\n'; fi
+      PNPM_CONFIG_PREFER_OFFLINE=false
+      if should_prefer_offline_pnpm_install; then printf 'upper=true\\n'; else printf 'upper=false\\n'; fi
+      unset PNPM_CONFIG_PREFER_OFFLINE
+      pnpm_config_prefer_offline=false
+      if should_prefer_offline_pnpm_install; then printf 'lower=true\\n'; else printf 'lower=false\\n'; fi
+    `);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("default=true");
+    expect(result.stdout).toContain("upper=false");
+    expect(result.stdout).toContain("lower=false");
+    expect(script).toContain(
+      'run_pnpm -C "$repo_dir" install "${pnpm_prefer_offline_args[@]}" "$install_lockfile_flag"',
+    );
   });
 
-  it("uses the repo Corepack pnpm when a global pnpm version is already present", () => {
-    const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-pnpm-version-"));
-    const bin = join(tmp, "bin");
-    const outer = join(tmp, "outer");
-    const repo = join(tmp, "repo");
-    mkdirSync(bin, { recursive: true });
-    mkdirSync(outer, { recursive: true });
-    mkdirSync(repo, { recursive: true });
-    writeFileSync(join(outer, "package.json"), '{\n  "packageManager": "yarn@4.5.0"\n}\n');
-    writeFileSync(
-      join(repo, "package.json"),
-      '{\n  "packageManager": "pnpm@11.2.2+sha512.test"\n}\n',
-    );
-    writeFileSync(
-      join(bin, "pnpm"),
-      ["#!/bin/bash", '[[ "${1:-}" == "--version" ]] && echo "11.8.0"', ""].join("\n"),
-    );
-    writeFileSync(
-      join(bin, "corepack"),
+  it.each([
+    ["undefined", "true"],
+    ["null", "true"],
+    ["false", "false"],
+    ["true", "false"],
+    ["failure", "false"],
+  ])("uses pnpm's effective prefer-offline config when it returns %s", (configured, expected) => {
+    const result = runInstallShell(
       [
-        "#!/bin/bash",
-        'if [[ "${1:-}" == "prepare" ]]; then exit 0; fi',
-        'if [[ "${1:-}" == "pnpm" && "${2:-}" == "--version" ]]; then',
-        '  if grep -q "pnpm@11.2.2" package.json 2>/dev/null; then echo "11.2.2"; else exit 1; fi',
-        "  exit 0",
-        "fi",
-        "exit 1",
-        "",
+        "set -euo pipefail",
+        `source "${SCRIPT_PATH}"`,
+        'run_pnpm() { [[ "$*" == "-C $PWD config get prefer-offline" ]]; [[ "$CONFIGURED" != "failure" ]] || return 1; printf "%s\\n" "$CONFIGURED"; }',
+        "unset PNPM_CONFIG_PREFER_OFFLINE pnpm_config_prefer_offline",
+        'if should_prefer_offline_pnpm_install "$PWD"; then printf "result=true\\n"; else printf "result=false\\n"; fi',
       ].join("\n"),
+      { CONFIGURED: configured },
     );
-    chmodSync(join(bin, "pnpm"), 0o755);
-    chmodSync(join(bin, "corepack"), 0o755);
 
-    try {
-      const result = runInstallShell(
-        [
-          `cd ${JSON.stringify(process.cwd())}`,
-          `source ${JSON.stringify(SCRIPT_PATH)}`,
-          `cd ${JSON.stringify(outer)}`,
-          `activate_repo_pnpm_version ${JSON.stringify(repo)}`,
-          'printf "cmd=%s\\n" "${PNPM_CMD[*]}"',
-          `printf "run=%s\\n" "$(run_pnpm -C ${JSON.stringify(repo)} --version)"`,
-        ].join("\n"),
-        { PATH: `${bin}:${process.env.PATH ?? ""}` },
-      );
-
-      expect(result.status).toBe(0);
-      expect(result.stdout).toContain("cmd=corepack pnpm");
-      expect(result.stdout).toContain("run=11.2.2");
-    } finally {
-      rmSync(tmp, { force: true, recursive: true });
-    }
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain(`result=${expected}`);
   });
+
+  it.each([
+    ["corepack", "12.0.0", ""],
+    ["missing", "12.0.0", ""],
+    ["failing", "12.0.0", ""],
+    ["corepack", "11.15.1", ""],
+    ["missing", "11.15.1", ""],
+    ["failing", "11.15.1", ""],
+    ["corepack", "12.0.0", "install"],
+    ["missing", "12.0.0", "build"],
+  ])(
+    "keeps selected pnpm through install and nested build (%s, %s, failure=%s)",
+    (mode, version, failure) => {
+      const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-pnpm-boundary-"));
+      const bin = join(tmp, "bin");
+      const repo = join(tmp, "repo");
+      const outer = join(tmp, "outer");
+      const temp = join(tmp, "temp");
+      for (const dir of [bin, repo, outer, temp]) {
+        mkdirSync(dir, { recursive: true });
+      }
+      writeFileSync(
+        join(repo, "package.json"),
+        JSON.stringify({ packageManager: `pnpm@${version}` }),
+      );
+      writeFileSync(join(repo, "pnpm-lock.yaml"), "unchanged lock\n");
+      writeFileSync(join(outer, "package.json"), '{"packageManager":"yarn@4.5.0"}');
+      linkPnpmBootstrapShellTools(bin);
+      symlinkSync(nodeExecutable, join(bin, "node"));
+      const executable = (name: string, body: string) => {
+        writeFileSync(join(bin, name), `#!/bin/bash\nset -eu\n${body}\n`);
+        chmodSync(join(bin, name), 0o755);
+      };
+      executable(
+        "pnpm",
+        `
+      echo "$*" >> "$FIXTURE/ambient.log"
+      echo corrupted > "$TARGET/pnpm-lock.yaml"
+      if [[ "$1" == --version ]]; then echo "$VERSION"; fi
+    `,
+      );
+      executable(
+        "selected",
+        `
+      [[ "\${COREPACK_ENABLE_DOWNLOAD_PROMPT:-}" == 0 ]] || { echo "Corepack would await terminal input" >&2; exit 91; }
+      [[ -z "\${CI:-}" ]]
+      [[ "$PWD" == "$TARGET" ]]
+      [[ "$NPM_CONFIG_WORKSPACE_DIR" == "$TARGET" && "$npm_config_workspace_dir" == "$TARGET" ]]
+      [[ "$PNPM_CONFIG_LOCKFILE_DIR" == "$TARGET" && "$pnpm_config_lockfile_dir" == "$TARGET" ]]
+      case "$1" in
+        --version) echo "$VERSION" ;;
+        config) echo undefined ;;
+        install) [[ "$2" == --frozen-lockfile ]]; echo install >> "$FIXTURE/steps"; [[ "$FAILURE" != install ]] || exit 42 ;;
+        build) echo build >> "$FIXTURE/steps"; pnpm nested ;;
+        nested) [[ "$FAILURE" != build ]] || exit 42; echo "nested:$VERSION" >> "$FIXTURE/steps" ;;
+        *) exit 90 ;;
+      esac
+    `,
+      );
+      executable(
+        "npm",
+        `
+      if [[ "$1" == --version ]]; then echo 12.0.0; exit; fi
+      [[ "$1 $2 $3" == 'install -g --prefix' ]]
+      [[ "$4" == "$FIXTURE/"* && "$4" != "$TARGET" ]]
+      [[ "$5" == "pnpm@$VERSION" && "$6" == "--allow-scripts=pnpm@$VERSION" ]]
+      mkdir -p "$4/bin"
+      cp "$FIXTURE/bin/selected" "$4/bin/pnpm"
+      echo "$4" > "$FIXTURE/npm-prefix"
+    `,
+      );
+      if (mode !== "missing") {
+        executable(
+          "corepack",
+          `
+        [[ "$1 $2" == 'enable --install-directory' && "$4" == pnpm ]]
+        [[ "$3" == "$FIXTURE/"* ]]
+        cp "$FIXTURE/bin/selected" "$3/pnpm"
+        ${mode === "failing" ? 'echo "#!/bin/bash" > "$3/pnpm"; echo "exit 1" >> "$3/pnpm"' : ":"}
+      `,
+        );
+      }
+      try {
+        const result = runInstallShell(
+          [
+            "set -euo pipefail",
+            "unset CI",
+            `source '${SCRIPT_PATH}'`,
+            'PREFIX="$FIXTURE/prefix"',
+            'node_bin() { printf "%s\\n" "$FIXTURE/bin/node"; }',
+            'npm_bin() { printf "%s\\n" "$FIXTURE/bin/npm"; }',
+            'cd "$FOREIGN"',
+            'ensure_pnpm "$TARGET"',
+            'run_pnpm -C "$TARGET" config get prefer-offline',
+            'run_pnpm -C "$TARGET" install --frozen-lockfile',
+            'run_pnpm -C "$TARGET" build',
+            '[[ "$NPM_CONFIG_WORKSPACE_DIR" == "$FOREIGN" && "$npm_config_workspace_dir" == "$FOREIGN" ]]',
+            '[[ "$PNPM_CONFIG_LOCKFILE_DIR" == "$FOREIGN" && "$pnpm_config_lockfile_dir" == "$FOREIGN" ]]',
+            '[[ "$(command -v pnpm)" == "$FIXTURE/bin/pnpm" ]]',
+            '[[ "$COREPACK_ENABLE_DOWNLOAD_PROMPT" == 1 ]]',
+            "echo completed",
+          ].join("\n"),
+          {
+            PATH: bin,
+            COREPACK_ENABLE_DOWNLOAD_PROMPT: "1",
+            TMPDIR: temp,
+            HOME: tmp,
+            FIXTURE: tmp,
+            TARGET: repo,
+            FOREIGN: outer,
+            VERSION: version,
+            FAILURE: failure,
+            NPM_CONFIG_WORKSPACE_DIR: outer,
+            npm_config_workspace_dir: outer,
+            PNPM_CONFIG_LOCKFILE_DIR: outer,
+            pnpm_config_lockfile_dir: outer,
+          },
+        );
+        expect(result.status, result.stdout + result.stderr).toBe(failure ? 42 : 0);
+        expect(readFileSync(join(repo, "pnpm-lock.yaml"), "utf8")).toBe("unchanged lock\n");
+        expect(existsSync(join(tmp, "ambient.log"))).toBe(false);
+        expect(result.stdout.includes("completed")).toBe(!failure);
+        expect(readFileSync(join(tmp, "steps"), "utf8").trim().split("\n")).toEqual(
+          failure === "install"
+            ? ["install"]
+            : failure === "build"
+              ? ["install", "build"]
+              : ["install", "build", `nested:${version}`],
+        );
+        expect(existsSync(join(tmp, "npm-prefix"))).toBe(mode !== "corepack");
+        expect(readdirSync(temp)).toEqual([]);
+      } finally {
+        rmSync(tmp, { force: true, recursive: true });
+      }
+    },
+  );
 
   it("does not treat /dev/tty permissions as a controlling terminal", () => {
     const result = runInstallShell(`
@@ -3662,15 +4633,18 @@ describe("install.sh macOS Homebrew Node behavior", () => {
     }
   });
 
-  it("gum spin preserves terminal stdin for direct interactive installs", () => {
-    // When needs_stdin_isolation returns false (direct interactive run),
-    // gum spin should NOT redirect stdin from /dev/null so that wrapped
-    // commands like Homebrew can still prompt the user via stdin.
+  it("gum spin preserves supplied stdin when isolation is disabled", () => {
+    // Force the non-isolating branch with known input, independently of the
+    // subprocess runtime's default stdin. This is inheritance proof, not a TTY probe.
     const dir = mkdtempSync(join(tmpdir(), "openclaw-install-sh-gum-stdin-"));
     try {
       const gumPath = join(dir, "gum");
       const commandPath = join(dir, "command");
       const stdinLog = join(dir, "stdin-source");
+      const stdinPath = join(dir, "stdin");
+      const inputLog = join(dir, "stdin-content");
+      const input = "spinner fixture input\n";
+      writeFileSync(stdinPath, input);
       // Gum stub: skip args up to and including "--", then run the rest
       writeFileSync(
         gumPath,
@@ -3685,26 +4659,32 @@ describe("install.sh macOS Homebrew Node behavior", () => {
 stdin_dev=$(stat -f '%d:%i' /dev/fd/0 2>/dev/null || stat -c '%d:%i' /dev/fd/0 2>/dev/null)
 null_dev=$(stat -f '%d:%i' /dev/null 2>/dev/null || stat -c '%d:%i' /dev/null 2>/dev/null)
 if [ "$stdin_dev" = "$null_dev" ]; then echo "devnull" > "${stdinLog}"; else echo "other" > "${stdinLog}"; fi
+cat > "${inputLog}"
 exit 0
 `,
         { mode: 0o755 },
       );
 
-      const result = runInstallShell(`
+      const result = runInstallShell(
+        `
         set -euo pipefail
+        exec < "$STDIN_FIXTURE_PATH"
         source "${SCRIPT_PATH}"
         # Override needs_stdin_isolation to return false (direct interactive)
         needs_stdin_isolation() { return 1; }
         gum_is_tty() { return 0; }
         GUM="${gumPath}"
         run_with_spinner "Installing node" "${commandPath}"
-      `);
+      `,
+        { STDIN_FIXTURE_PATH: stdinPath },
+      );
 
       // The gum spin command should NOT have redirected stdin from /dev/null
       expect(result.status).toBe(0);
       // Assert the child command's stdin was NOT /dev/null
       const observed = readFileSync(stdinLog, "utf8").trim();
       expect(observed).toBe("other");
+      expect(readFileSync(inputLog, "utf8")).toBe(input);
       expect(script).toContain("needs_stdin_isolation; then");
       expect(script).toContain(
         '"$GUM" spin --spinner dot --title "$title" -- "$@" >"$gum_out" 2>"$gum_err" || gum_status=$?',

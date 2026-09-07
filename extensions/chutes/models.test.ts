@@ -1,9 +1,13 @@
 // Chutes tests cover models plugin behavior.
 import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { CHUTES_DEFAULT_MODEL_ID } from "./api.js";
+import { buildChutesProvider, CHUTES_DEFAULT_MODEL_ID } from "./api.js";
 import { CHUTES_MODEL_CATALOG, discoverChutesModels } from "./models.js";
-import { applyChutesConfig, CHUTES_DEFAULT_MODEL_REF } from "./onboard.js";
+import {
+  applyChutesConfig,
+  applyChutesProviderConfig,
+  CHUTES_DEFAULT_MODEL_REF,
+} from "./onboard.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 const EXPECTED_STATIC_MODEL_IDS = [
@@ -27,21 +31,13 @@ function jsonResponse(payload: unknown, init: ResponseInit = {}): Response {
 async function withLiveChutesDiscovery<T>(
   fetchMock: ReturnType<typeof vi.fn>,
   run: () => Promise<T>,
-  options?: { now?: string },
 ): Promise<T> {
-  if (options?.now) {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date(options.now));
-  }
   vi.stubGlobal("fetch", fetchMock);
 
   try {
     return await run();
   } finally {
     vi.unstubAllGlobals();
-    if (options?.now) {
-      vi.useRealTimers();
-    }
   }
 }
 
@@ -84,75 +80,127 @@ describe("chutes-models", () => {
     }
   });
 
-  it("keeps manifest, runtime catalog, defaults, and aliases aligned", () => {
-    const manifestIds = manifest.modelCatalog.providers.chutes.models.map((model) => model.id);
-    const runtimeIds = CHUTES_MODEL_CATALOG.map((model) => model.id);
-    expect(manifestIds).toEqual(EXPECTED_STATIC_MODEL_IDS);
-    expect(runtimeIds).toEqual(EXPECTED_STATIC_MODEL_IDS);
-    expect(
-      CHUTES_MODEL_CATALOG.every((model) => model.compat?.supportsUsageInStreaming === false),
-    ).toBe(true);
-    expect(CHUTES_DEFAULT_MODEL_ID).toBe(manifest.modelCatalog.providers.chutes.defaultModel);
-    expect(manifest.modelCatalog.providers.chutes.defaultModel).toBe("zai-org/GLM-5.2-TEE");
-    expect(
-      manifest.modelCatalog.providers.chutes.models
-        .filter((model) => "status" in model && model.status === "deprecated")
-        .map((model) => ({ id: model.id, replacedBy: model.replacedBy })),
-    ).toEqual([
-      {
-        id: "moonshotai/Kimi-K2.5-TEE",
-        replacedBy: "moonshotai/Kimi-K2.6-TEE",
-      },
-      {
-        id: "Qwen/Qwen3.5-397B-A17B-TEE",
-        replacedBy: "Qwen/Qwen3.6-27B-TEE",
-      },
-    ]);
+  it.each(["default", "merge", "replace"] as const)(
+    "keeps catalog ownership, defaults, and aliases aligned in %s mode",
+    (mode) => {
+      const manifestIds = manifest.modelCatalog.providers.chutes.models.map((model) => model.id);
+      const runtimeIds = CHUTES_MODEL_CATALOG.map((model) => model.id);
+      expect(manifestIds).toEqual(EXPECTED_STATIC_MODEL_IDS);
+      expect(runtimeIds).toEqual(EXPECTED_STATIC_MODEL_IDS);
+      expect(
+        CHUTES_MODEL_CATALOG.every((model) => model.compat?.supportsUsageInStreaming === false),
+      ).toBe(true);
+      expect(CHUTES_DEFAULT_MODEL_ID).toBe(manifest.modelCatalog.providers.chutes.defaultModel);
+      expect(manifest.modelCatalog.providers.chutes.defaultModel).toBe("zai-org/GLM-5.2-TEE");
+      expect(
+        manifest.modelCatalog.providers.chutes.models
+          .filter((model) => "status" in model && model.status === "deprecated")
+          .map((model) => ({ id: model.id, replacedBy: model.replacedBy })),
+      ).toEqual([
+        {
+          id: "moonshotai/Kimi-K2.5-TEE",
+          replacedBy: "moonshotai/Kimi-K2.6-TEE",
+        },
+        {
+          id: "Qwen/Qwen3.5-397B-A17B-TEE",
+          replacedBy: "Qwen/Qwen3.6-27B-TEE",
+        },
+      ]);
 
-    const cfg = applyChutesConfig({});
-    expect(cfg.models?.providers?.chutes?.models.map((model) => model.id)).toEqual(
-      EXPECTED_STATIC_MODEL_IDS,
-    );
-    expect(cfg.agents?.defaults?.model).toEqual({
-      primary: CHUTES_DEFAULT_MODEL_REF,
-      fallbacks: ["chutes/deepseek-ai/DeepSeek-V3.2-TEE", "chutes/moonshotai/Kimi-K2.6-TEE"],
-    });
-    expect(cfg.agents?.defaults?.imageModel).toEqual({
-      primary: "chutes/moonshotai/Kimi-K2.6-TEE",
-      fallbacks: ["chutes/Qwen/Qwen3.6-27B-TEE"],
-    });
-    expect(cfg.agents?.defaults?.models?.["chutes-fast"]).toBeUndefined();
-    expect(cfg.agents?.defaults?.models?.["chutes-pro"]?.alias).toBe(
-      "chutes/deepseek-ai/DeepSeek-V3.2-TEE",
-    );
-    expect(cfg.agents?.defaults?.models?.["chutes-vision"]?.alias).toBe(
-      "chutes/moonshotai/Kimi-K2.6-TEE",
-    );
-    expect(Object.keys(cfg.agents?.defaults?.models ?? {}).toSorted()).toEqual(
-      [
-        ...EXPECTED_STATIC_MODEL_IDS.map((id) => `chutes/${id}`),
-        "chutes-pro",
-        "chutes-vision",
-      ].toSorted(),
-    );
-    const catalogBackedTargets = [
-      CHUTES_DEFAULT_MODEL_REF,
-      "chutes/deepseek-ai/DeepSeek-V3.2-TEE",
-      "chutes/moonshotai/Kimi-K2.6-TEE",
-      "chutes/Qwen/Qwen3.6-27B-TEE",
-    ];
-    expect(
-      catalogBackedTargets.every((modelRef) =>
-        runtimeIds.includes(modelRef.slice("chutes/".length)),
-      ),
-    ).toBe(true);
-  });
+      const miniMax = manifest.modelCatalog.providers.chutes.models.find(
+        (model) => model.id === "MiniMaxAI/MiniMax-M2.5-TEE",
+      );
+      expect(miniMax).toBeDefined();
+      expect(miniMax).not.toHaveProperty("status");
+      expect(miniMax).not.toHaveProperty("replacedBy");
 
-  it("discoverChutesModels correctly maps API responses", async () => {
+      const cfg = applyChutesConfig(mode === "default" ? {} : { models: { mode } });
+      expect(cfg.models?.mode).toBe(mode === "replace" ? "replace" : "merge");
+      expect(cfg.models?.providers?.chutes?.models.map((model) => model.id)).toEqual(
+        mode === "replace" ? EXPECTED_STATIC_MODEL_IDS : [],
+      );
+      if (mode === "replace") {
+        expect(cfg.models?.providers?.chutes?.models).toEqual(CHUTES_MODEL_CATALOG);
+      }
+      expect(cfg.agents?.defaults?.model).toEqual({
+        primary: CHUTES_DEFAULT_MODEL_REF,
+        fallbacks: ["chutes/deepseek-ai/DeepSeek-V3.2-TEE", "chutes/moonshotai/Kimi-K2.6-TEE"],
+      });
+      expect(cfg.agents?.defaults?.imageModel).toEqual({
+        primary: "chutes/moonshotai/Kimi-K2.6-TEE",
+        fallbacks: ["chutes/Qwen/Qwen3.6-27B-TEE"],
+      });
+      expect(cfg.agents?.defaults?.models?.["chutes-fast"]).toBeUndefined();
+      expect(cfg.agents?.defaults?.models?.["chutes-pro"]?.alias).toBe(
+        "chutes/deepseek-ai/DeepSeek-V3.2-TEE",
+      );
+      expect(cfg.agents?.defaults?.models?.["chutes-vision"]?.alias).toBe(
+        "chutes/moonshotai/Kimi-K2.6-TEE",
+      );
+      expect(Object.keys(cfg.agents?.defaults?.models ?? {}).toSorted()).toEqual(
+        [
+          ...EXPECTED_STATIC_MODEL_IDS.map((id) => `chutes/${id}`),
+          "chutes-pro",
+          "chutes-vision",
+        ].toSorted(),
+      );
+      const catalogBackedTargets = [
+        CHUTES_DEFAULT_MODEL_REF,
+        "chutes/deepseek-ai/DeepSeek-V3.2-TEE",
+        "chutes/moonshotai/Kimi-K2.6-TEE",
+        "chutes/Qwen/Qwen3.6-27B-TEE",
+      ];
+      expect(
+        catalogBackedTargets.every((modelRef) =>
+          runtimeIds.includes(modelRef.slice("chutes/".length)),
+        ),
+      ).toBe(true);
+    },
+  );
+
+  it.each([
+    { label: "zero", cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } },
+    { label: "custom", cost: { input: 1, output: 2, cacheRead: 0.25, cacheWrite: 0.5 } },
+  ])(
+    "preserves authored $label prices, aliases, and selections without adding merge-mode pins",
+    ({ cost }) => {
+      const config = applyChutesProviderConfig({});
+      const [seed] = CHUTES_MODEL_CATALOG;
+      if (!seed) {
+        throw new Error("expected a Chutes seed model");
+      }
+      const model = { ...structuredClone(seed), id: "fixture-provider/authored-model", cost };
+      config.models!.providers!.chutes!.models = [model];
+      config.models!.providers!.chutes!.apiKey = "fixture-key";
+      config.agents!.defaults!.model = {
+        primary: "chutes/fixture-provider/authored-model",
+        fallbacks: ["fixture-provider/fallback"],
+      };
+      config.agents!.defaults!.imageModel = {
+        primary: "fixture-provider/image-model",
+        fallbacks: ["fixture-provider/image-fallback"],
+      };
+      config.agents!.defaults!.models!["chutes/fixture-provider/authored-model"] = {
+        alias: "My authored model",
+      };
+      config.agents!.defaults!.models!["chutes-pro"] = { alias: "My pro alias" };
+
+      const reapplied = applyChutesProviderConfig(config);
+
+      expect(reapplied.models?.providers?.chutes?.models).toEqual([model]);
+      expect(reapplied.models?.providers?.chutes?.apiKey).toBe("fixture-key");
+      expect(reapplied.agents?.defaults).toEqual(config.agents?.defaults);
+    },
+  );
+
+  it("preserves native per-million prices and exact zero rates during discovery", async () => {
     const mockFetch = vi.fn().mockResolvedValue(
       jsonResponse({
         data: [
-          { id: "zai-org/GLM-5.2-TEE" },
+          {
+            id: "fixture-provider/zero-input",
+            pricing: { prompt: 0, completion: 0.2, input_cache_read: 0 },
+          },
           {
             id: "new-provider/new-model-r1",
             supported_features: ["reasoning"],
@@ -161,7 +209,10 @@ describe("chutes-models", () => {
             max_output_length: 16384,
             pricing: { prompt: 0.1, completion: 0.2, input_cache_read: 0.05 },
           },
-          { id: "new-provider/simple-model" },
+          {
+            id: "fixture-provider/free-model",
+            pricing: { prompt: 0, completion: 0, input_cache_read: 0 },
+          },
         ],
       }),
     );
@@ -170,8 +221,22 @@ describe("chutes-models", () => {
       expect(models).toHaveLength(3);
       const firstModel = requireChutesModel(models, 0);
       const secondModel = requireChutesModel(models, 1);
-      expect(firstModel.id).toBe("zai-org/GLM-5.2-TEE");
-      expect(secondModel.reasoning).toBe(true);
+      expect(firstModel).toMatchObject({
+        id: "fixture-provider/zero-input",
+        cost: { input: 0, output: 0.2, cacheRead: 0, cacheWrite: 0 },
+      });
+      expect(requireChutesModel(models, 2).cost).toEqual({
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+      });
+      expect(secondModel).toMatchObject({
+        reasoning: true,
+        input: ["text", "image"],
+        contextWindow: 200000,
+        maxTokens: 16384,
+      });
       expect(secondModel.cost).toEqual({
         input: 0.1,
         output: 0.2,
@@ -182,6 +247,36 @@ describe("chutes-models", () => {
         throw new Error("expected Chutes API model compat");
       }
       expect(secondModel.compat.supportsUsageInStreaming).toBe(false);
+    });
+  });
+
+  it.each([
+    { label: "absent pricing", pricing: undefined },
+    { label: "missing prompt", pricing: { completion: 0.2 } },
+    { label: "missing completion", pricing: { prompt: 0.1 } },
+    { label: "negative prompt", pricing: { prompt: -0.1, completion: 0.2 } },
+    { label: "null completion", pricing: { prompt: 0.1, completion: null } },
+    { label: "string prompt", pricing: { prompt: "0.1", completion: 0.2 } },
+    {
+      label: "invalid cache rate",
+      pricing: { prompt: 0.1, completion: 0.2, input_cache_read: -0.05 },
+    },
+  ])("keeps an unknown runtime price, not partial paid rates, for $label", async ({ pricing }) => {
+    const mockFetch = vi.fn().mockResolvedValue(
+      jsonResponse({
+        data: [{ id: "fixture-provider/unpriced-model", pricing }],
+      }),
+    );
+
+    await withLiveChutesDiscovery(mockFetch, async () => {
+      const models = await discoverChutesModels("fixture-pricing-token");
+      expect(models).toHaveLength(1);
+      expect(requireChutesModel(models, 0)).toMatchObject({
+        id: "fixture-provider/unpriced-model",
+        // Runtime requires a complete cost; this existing placeholder is not proof of free billing.
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        compat: { supportsUsageInStreaming: false },
+      });
     });
   });
 
@@ -254,14 +349,18 @@ describe("chutes-models", () => {
     });
   });
 
-  it("does not cache fallback static catalog for non-OK responses", async () => {
+  it("propagates uncached discovery failures", async () => {
     const mockFetch = vi.fn().mockResolvedValue(new Response("", { status: 503 }));
 
     await withLiveChutesDiscovery(mockFetch, async () => {
-      const first = await discoverChutesModels("chutes-fallback-token");
-      const second = await discoverChutesModels("chutes-fallback-token");
-      expect(first.map((m) => m.id)).toEqual(CHUTES_MODEL_CATALOG.map((m) => m.id));
-      expect(second.map((m) => m.id)).toEqual(CHUTES_MODEL_CATALOG.map((m) => m.id));
+      await expect(
+        discoverChutesModels("chutes-fallback-token", { discoveryMode: "strict" }),
+      ).rejects.toMatchObject({
+        status: 503,
+      });
+      await expect(buildChutesProvider("chutes-fallback-token")).resolves.toMatchObject({
+        models: CHUTES_MODEL_CATALOG,
+      });
       expect(mockFetch).toHaveBeenCalledTimes(2);
     });
   });
@@ -300,7 +399,7 @@ describe("chutes-models", () => {
     });
   });
 
-  it("does not cache 401 fallback under the failed token key", async () => {
+  it("does not replace rejected account discovery with an anonymous catalog", async () => {
     const mockFetch = vi.fn().mockImplementation((_url, init?: { headers?: HeadersInit }) => {
       if (readAuthorizationHeader(init) === "Bearer failed-token") {
         return Promise.resolve(new Response("", { status: 401 }));
@@ -312,15 +411,16 @@ describe("chutes-models", () => {
       );
     });
     await withLiveChutesDiscovery(mockFetch, async () => {
-      const first = await discoverChutesModels("failed-token");
-      const second = await discoverChutesModels("failed-token");
-
-      expect(requireChutesModel(first, 0).id).toBe("public/model");
-      expect(requireChutesModel(second, 0).id).toBe("public/model");
+      await expect(
+        discoverChutesModels("failed-token", { discoveryMode: "strict" }),
+      ).rejects.toMatchObject({ status: 401 });
+      await expect(buildChutesProvider("failed-token")).resolves.toMatchObject({
+        models: [{ id: "public/model" }],
+      });
       expect(mockFetch.mock.calls.map(([, init]) => readAuthorizationHeader(init))).toEqual([
         "Bearer failed-token",
-        "",
         "Bearer failed-token",
+        "",
       ]);
       expect(mockFetch).toHaveBeenCalledTimes(3);
     });

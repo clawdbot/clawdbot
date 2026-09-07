@@ -22,10 +22,6 @@ import {
   removePairedDeviceRole,
 } from "../../infra/device-pairing.js";
 import { reconcileRevokedDeviceWorker } from "../device-worker-revocation.js";
-import {
-  resolveNodePairingCommandAllowlist,
-  normalizeDeclaredNodeCommands,
-} from "../node-command-policy.js";
 import { clearRemovedNodeRuntimeState } from "../node-runtime-state.js";
 import { invalidateNodeWakeState } from "../node-wake-state.js";
 import { PAIRING_SCOPE } from "../operator-scopes.js";
@@ -37,10 +33,11 @@ import {
   type DeviceManagementAuthz,
 } from "./device-management-authz.js";
 import { emitDeviceManagementSecurityEvent } from "./device-management-security.js";
-import { respondInvalidParams, respondUnavailableOnThrow } from "./nodes.helpers.js";
+import { respondUnavailableOnThrow } from "./nodes.helpers.js";
 import { refreshConnectedNodeSurfaceCaches } from "./nodes.read.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./shared-types.js";
 import type { GatewayRequestHandlers } from "./types.js";
+import { assertValidParams } from "./validation.js";
 
 function broadcastRemovedNodePairing(params: {
   context: Pick<GatewayRequestContext, "broadcast">;
@@ -142,19 +139,11 @@ function emitNodeRoleRemovalSecurityEvent(params: {
 async function removePairedDeviceBackedNode(params: {
   nodeId: string;
   client: GatewayClient | null;
-  context: Pick<
-    GatewayRequestContext,
-    | "disconnectClientsForDevice"
-    | "invalidateClientsForDevice"
-    | "logGateway"
-    | "workerEnvironmentService"
-    | "workerPlacementDispatchService"
-  >;
+  context: Pick<GatewayRequestContext, "invalidateClientsForDevice" | "logGateway">;
 }): Promise<
   | {
       status: "removed";
       nodeId: string;
-      disconnectDeviceId: string;
     }
   | { status: "denied"; message: string }
   | { status: "unknown" }
@@ -213,22 +202,15 @@ async function removePairedDeviceBackedNode(params: {
     role: "node",
     reason: "device-pair-removed",
   });
-  await reconcileRevokedDeviceWorker(params.context, removed.deviceId);
   return {
     status: "removed",
     nodeId: removed.deviceId,
-    disconnectDeviceId: removed.deviceId,
   };
 }
 
 export const nodePairingHandlers: GatewayRequestHandlers = {
   "node.pair.list": async ({ params, respond, client }) => {
-    if (!validateNodePairListParams(params)) {
-      respondInvalidParams({
-        respond,
-        method: "node.pair.list",
-        validator: validateNodePairListParams,
-      });
+    if (!assertValidParams(params, validateNodePairListParams, "node.pair.list", respond)) {
       return;
     }
     await respondUnavailableOnThrow(respond, async () => {
@@ -247,15 +229,10 @@ export const nodePairingHandlers: GatewayRequestHandlers = {
     });
   },
   "node.pair.approve": async ({ params, respond, context, client }) => {
-    if (!validateNodePairApproveParams(params)) {
-      respondInvalidParams({
-        respond,
-        method: "node.pair.approve",
-        validator: validateNodePairApproveParams,
-      });
+    if (!assertValidParams(params, validateNodePairApproveParams, "node.pair.approve", respond)) {
       return;
     }
-    const { requestId } = params as { requestId: string };
+    const { requestId } = params;
     // Intentionally fail closed for RPC callers without an explicit scoped session.
     const callerScopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
     await respondUnavailableOnThrow(respond, async () => {
@@ -304,21 +281,6 @@ export const nodePairingHandlers: GatewayRequestHandlers = {
       // Surface approval rotates the persistent generation. Abort any wake
       // already admitted under the prior command surface before it can send.
       invalidateNodeWakeState(approvedNode.nodeId);
-      const cfg = context.getRuntimeConfig();
-      // Pairing allowlist matches connect-time reconciliation: approved
-      // dangerous surfaces stay live so persistent enablement does not require
-      // another reconnect; invoke policy still gates use.
-      const currentAllowlist = resolveNodePairingCommandAllowlist(cfg, {
-        platform: approvedNode.platform,
-        deviceFamily: approvedNode.deviceFamily,
-        caps: approvedNode.caps,
-        commands: approvedNode.commands,
-        approvedCommands: approvedNode.commands,
-      });
-      const currentAllowedCommands = normalizeDeclaredNodeCommands({
-        declaredCommands: approvedNode.commands ?? [],
-        allowlist: currentAllowlist,
-      });
       // Only the exact generation committed by this approval may inherit the
       // authenticated live session. A later re-pair must reconnect instead.
       const persistedApprovedState = await captureNodePairingState(approvedNode.nodeId);
@@ -339,7 +301,7 @@ export const nodePairingHandlers: GatewayRequestHandlers = {
               approvedNode.nodeId,
               {
                 caps: approvedNode.caps ?? [],
-                commands: currentAllowedCommands,
+                commands: approvedNode.commands ?? [],
                 permissions: approvedNode.permissions,
               },
               {
@@ -353,7 +315,7 @@ export const nodePairingHandlers: GatewayRequestHandlers = {
             )
           : null;
       if (updatedNode) {
-        refreshConnectedNodeSurfaceCaches({ context, nodeSession: updatedNode, cfg });
+        refreshConnectedNodeSurfaceCaches({ context, nodeSession: updatedNode });
       }
       context.broadcast(
         "node.pair.resolved",
@@ -369,15 +331,10 @@ export const nodePairingHandlers: GatewayRequestHandlers = {
     });
   },
   "node.pair.reject": async ({ params, respond, context, client }) => {
-    if (!validateNodePairRejectParams(params)) {
-      respondInvalidParams({
-        respond,
-        method: "node.pair.reject",
-        validator: validateNodePairRejectParams,
-      });
+    if (!assertValidParams(params, validateNodePairRejectParams, "node.pair.reject", respond)) {
       return;
     }
-    const { requestId } = params as { requestId: string };
+    const { requestId } = params;
     await respondUnavailableOnThrow(respond, async () => {
       if (
         !(await enforcePendingNodePairingOwnership({
@@ -409,7 +366,7 @@ export const nodePairingHandlers: GatewayRequestHandlers = {
     });
   },
   // Remove a node pairing (CLI: `openclaw nodes remove`). This revokes the
-  // device's `node` role in devices/paired.json, which drops the approved node
+  // device's `node` role in the paired-device store, which drops the approved node
   // surface with it, and disconnects the device's node-role sessions: a
   // mixed-role device keeps its row and only loses the `node` role, a
   // node-only device row is deleted. Authz mirrors device.pair.remove:
@@ -417,15 +374,10 @@ export const nodePairingHandlers: GatewayRequestHandlers = {
   // revoking its own node role on a mixed-role device additionally needs
   // operator.admin (see removePairedDeviceBackedNode).
   "node.pair.remove": async ({ params, respond, context, client }) => {
-    if (!validateNodePairRemoveParams(params)) {
-      respondInvalidParams({
-        respond,
-        method: "node.pair.remove",
-        validator: validateNodePairRemoveParams,
-      });
+    if (!assertValidParams(params, validateNodePairRemoveParams, "node.pair.remove", respond)) {
       return;
     }
-    const { nodeId } = params as { nodeId: string };
+    const { nodeId } = params;
     await respondUnavailableOnThrow(respond, async () => {
       const deviceBacked = await removePairedDeviceBackedNode({ nodeId, client, context });
       if (deviceBacked.status === "denied") {
@@ -438,13 +390,14 @@ export const nodePairingHandlers: GatewayRequestHandlers = {
       }
       try {
         clearRemovedNodeRuntimeState({ nodeId: deviceBacked.nodeId, context });
+        await reconcileRevokedDeviceWorker(context, deviceBacked.nodeId);
         broadcastRemovedNodePairing({ nodeId: deviceBacked.nodeId, context });
         respond(true, { nodeId: deviceBacked.nodeId }, undefined);
       } finally {
         // Preserve response-first shutdown on success, while guaranteeing the
         // hard close when runtime cleanup or later bookkeeping throws.
         queueMicrotask(() => {
-          context.disconnectClientsForDevice?.(deviceBacked.disconnectDeviceId, {
+          context.disconnectClientsForDevice?.(deviceBacked.nodeId, {
             role: "node",
           });
         });
@@ -452,18 +405,10 @@ export const nodePairingHandlers: GatewayRequestHandlers = {
     });
   },
   "node.rename": async ({ params, respond, context, client }) => {
-    if (!validateNodeRenameParams(params)) {
-      respondInvalidParams({
-        respond,
-        method: "node.rename",
-        validator: validateNodeRenameParams,
-      });
+    if (!assertValidParams(params, validateNodeRenameParams, "node.rename", respond)) {
       return;
     }
-    const { nodeId, displayName } = params as {
-      nodeId: string;
-      displayName: string;
-    };
+    const { nodeId, displayName } = params;
     await respondUnavailableOnThrow(respond, async () => {
       const authz = resolveDeviceManagementAuthz(client, nodeId);
       if (deniesCrossDeviceManagement(authz)) {

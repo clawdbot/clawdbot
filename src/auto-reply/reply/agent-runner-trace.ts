@@ -1,12 +1,16 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { deriveContextPromptTokens } from "../../agents/usage.js";
-import type { SessionEntry } from "../../config/sessions.js";
+import { deriveContextPromptTokens, type NormalizedUsage } from "../../agents/usage.js";
 import { readLatestSessionUsageFromTranscriptAsync } from "../../gateway/session-transcript-readers.js";
-import { formatTokenCount } from "../../utils/usage-format.js";
+import { formatTokenCount } from "../../utils/token-format.js";
 import type { ReplyPayload } from "../types.js";
 import { INBOUND_CONTEXT_MARKER } from "./inbound-context-marker.js";
+
+type TraceUsageView = Pick<
+  NormalizedUsage,
+  "input" | "output" | "cacheRead" | "cacheWrite" | "total"
+>;
 
 function formatRawTraceBlock(title: string, value: string | undefined): string {
   const body = value?.trim() ? escapeTraceFence(value) : "<empty>";
@@ -17,17 +21,7 @@ function escapeTraceFence(value: string): string {
   return value.replace(/^~~~/gm, "\\~~~");
 }
 
-function hasTraceUsageFields(
-  usage:
-    | {
-        input?: number;
-        output?: number;
-        cacheRead?: number;
-        cacheWrite?: number;
-        total?: number;
-      }
-    | undefined,
-): boolean {
+function hasTraceUsageFields(usage: TraceUsageView | undefined): boolean {
   if (!usage) {
     return false;
   }
@@ -43,15 +37,7 @@ function formatTraceUsageLine(label: string, value: number | undefined): string 
 
 function formatUsageTraceBlock(
   title: string,
-  usage:
-    | {
-        input?: number;
-        output?: number;
-        cacheRead?: number;
-        cacheWrite?: number;
-        total?: number;
-      }
-    | undefined,
+  usage: TraceUsageView | undefined,
 ): string | undefined {
   if (!hasTraceUsageFields(usage)) {
     return undefined;
@@ -229,7 +215,7 @@ export function derivePromptSegments(
             lines.slice(index, end + 1).join("\n").length,
           );
           index = end + 1;
-          while ((lines[index] ?? "") === "") {
+          while (index < lines.length && lines[index] === "") {
             index += 1;
           }
           continue;
@@ -258,7 +244,7 @@ export function derivePromptSegments(
             lines.slice(start, end + 1).join("\n").length,
           );
           index = end + 1;
-          while ((lines[index] ?? "") === "") {
+          while (index < lines.length && lines[index] === "") {
             index += 1;
           }
           continue;
@@ -340,16 +326,7 @@ export async function accumulateSessionUsageFromTranscript(params: {
   sessionKey?: string;
   storePath?: string;
   sessionFile?: string;
-}): Promise<
-  | {
-      input?: number;
-      output?: number;
-      cacheRead?: number;
-      cacheWrite?: number;
-      total?: number;
-    }
-  | undefined
-> {
+}): Promise<TraceUsageView | undefined> {
   const sessionId = normalizeOptionalString(params.sessionId);
   if (!sessionId) {
     return undefined;
@@ -446,13 +423,7 @@ function formatRawTraceSummaryLine(params: {
   completion?: TraceCompletionView;
   contextLimit?: number;
   promptTokens?: number;
-  usage?: {
-    input?: number;
-    output?: number;
-    cacheRead?: number;
-    cacheWrite?: number;
-    total?: number;
-  };
+  usage?: TraceUsageView;
   toolSummary?: TraceToolSummaryView;
   contextManagement?: TraceContextManagementView;
   requestShaping?: {
@@ -505,30 +476,11 @@ function formatRawTraceSummaryLine(params: {
 }
 
 export function buildInlineRawTracePayload(params: {
-  entry: SessionEntry | undefined;
   rawUserText?: string;
   rawAssistantText?: string;
-  sessionUsage?: {
-    input?: number;
-    output?: number;
-    cacheRead?: number;
-    cacheWrite?: number;
-    total?: number;
-  };
-  usage?: {
-    input?: number;
-    output?: number;
-    cacheRead?: number;
-    cacheWrite?: number;
-    total?: number;
-  };
-  lastCallUsage?: {
-    input?: number;
-    output?: number;
-    cacheRead?: number;
-    cacheWrite?: number;
-    total?: number;
-  };
+  sessionUsage?: TraceUsageView;
+  usage?: TraceUsageView;
+  lastCallUsage?: TraceUsageView;
   provider?: string;
   model?: string;
   contextLimit?: number;
@@ -547,10 +499,7 @@ export function buildInlineRawTracePayload(params: {
   toolSummary?: TraceToolSummaryView;
   completion?: TraceCompletionView;
   contextManagement?: TraceContextManagementView;
-}): ReplyPayload | undefined {
-  if (params.entry?.traceLevel !== "raw") {
-    return undefined;
-  }
+}): ReplyPayload {
   const resolvedPromptTokens = deriveContextPromptTokens({
     lastCallUsage: params.lastCallUsage,
     promptTokens: params.promptTokens,

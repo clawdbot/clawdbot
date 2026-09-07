@@ -53,7 +53,6 @@
   letter-spacing: 0.04em;
 }
 
-.model-providers__fallbacks,
 .model-providers__inline-form,
 .model-providers__probe {
   display: grid;
@@ -136,9 +135,7 @@
 }
 
 .model-providers__probe-summary,
-.model-providers__probe-target,
-.model-providers__fallback-heading,
-.model-providers__fallback-row {
+.model-providers__probe-target {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -156,50 +153,99 @@
   color: var(--muted);
 }
 
-.model-providers__default-grid,
 .model-providers__add-form {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: minmax(160px, 0.8fr) minmax(220px, 1.4fr) auto;
   align-items: end;
   gap: 12px;
   margin-top: 16px;
 }
 
-.model-providers__utility-label {
+.model-providers__label-with-help {
   display: inline-flex;
   align-items: center;
-  gap: var(--space-1);
+  gap: var(--space-2);
   width: fit-content;
 }
 
-.model-providers__fallbacks {
-  margin-top: 16px;
+.model-providers__label-with-help .settings-section__help-button svg {
+  width: 14px;
+  height: 14px;
 }
 
-.model-providers__fallback-heading {
+.model-providers__help-button {
+  width: 16px;
+  height: 16px;
+  border: 0;
+  border-radius: 0;
+}
+
+.model-providers__help-button:hover,
+.model-providers__help-button:focus-visible {
+  color: var(--text);
+}
+
+.model-providers__help-button:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+.model-providers__segment-label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.model-providers__segment-info {
+  display: inline-grid;
+  place-items: center;
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  border: 0;
+  background: transparent;
   color: var(--muted);
-  font-size: 13px;
-  font-weight: 600;
+  cursor: var(--cursor-action);
 }
 
-.model-providers__fallback-row {
-  padding: 8px 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--bg-muted);
+.model-providers__segment-info svg {
+  width: 12px;
+  height: 12px;
 }
 
-.model-providers__fallback-row code {
-  min-width: 0;
-  overflow-wrap: anywhere;
+.model-providers__segment-info:hover,
+.model-providers__segment-info:focus-visible {
+  color: var(--text);
 }
 
-.model-providers__fallback-add {
-  max-width: 520px;
+.model-providers__segment-info:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent);
 }
 
-.model-providers__add-form {
-  grid-template-columns: minmax(160px, 0.8fr) minmax(220px, 1.4fr) auto;
+.settings-section > .settings-group:has(> .model-providers__provider-list) {
+  overflow: visible;
+  border: 0;
+  background: transparent;
+}
+
+.model-providers__provider-list {
+  display: grid;
+  gap: calc(var(--space-3) * 1.5);
+}
+
+.model-providers__updated {
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+}
+
+.settings-section__actions .model-providers__refresh-button.btn--icon.btn--xs svg {
+  width: var(--control-ui-text-xs);
+  height: var(--control-ui-text-xs);
+}
+
+.model-providers__defaults .model-picker {
+  width: min(420px, 100%);
 }
 
 @media (max-width: 768px) {
@@ -218,7 +264,6 @@
     justify-content: flex-start;
   }
 
-  .model-providers__default-grid,
   .model-providers__add-form {
     grid-template-columns: 1fr;
   }

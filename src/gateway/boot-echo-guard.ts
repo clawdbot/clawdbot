@@ -10,7 +10,14 @@
 // adds a defense-in-depth substantial-echo check using the active boot prompt
 // as the comparison source. Refs #53732.
 
+import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+
 const MIN_ECHO_CHARS = 80;
+
+function sliceEchoWindow(input: string, start: number, length: number): string | undefined {
+  const window = sliceUtf16Safe(input, start, start + length);
+  return window.length === length ? window : undefined;
+}
 
 type BootEchoContext = {
   bootPrompt: string;
@@ -36,7 +43,10 @@ function getBootPromptChunks(normalizedBootPrompt: string, minLen: number): Set<
   }
   const chunks = new Set<string>();
   for (let i = 0; i <= normalizedBootPrompt.length - minLen; i += 1) {
-    chunks.add(normalizedBootPrompt.slice(i, i + minLen));
+    const chunk = sliceEchoWindow(normalizedBootPrompt, i, minLen);
+    if (chunk) {
+      chunks.add(chunk);
+    }
   }
   chunksByLength.set(minLen, chunks);
   return chunks;
@@ -89,8 +99,11 @@ function containsSubstantialBootEcho(
     return false;
   }
   const bootChunks = getBootPromptChunks(needle, minLen);
+  const nextBootChunks = getBootPromptChunks(needle, minLen + 1);
   for (let i = 0; i <= haystack.length - minLen; i += 1) {
-    if (bootChunks.has(haystack.slice(i, i + minLen))) {
+    const chunk = sliceEchoWindow(haystack, i, minLen);
+    const nextChunk = sliceEchoWindow(haystack, i, minLen + 1);
+    if ((chunk && bootChunks.has(chunk)) || (nextChunk && nextBootChunks.has(nextChunk))) {
       return true;
     }
   }

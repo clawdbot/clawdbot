@@ -1,15 +1,7 @@
 // Vitest config config wires the config test shard.
 import { defineConfig } from "vitest/config";
 import { agentVitestProjectConfigs } from "./vitest.agents-paths.mjs";
-import {
-  resolveDefaultVitestPool,
-  resolveLocalVitestMaxWorkers,
-  resolveLocalVitestScheduling,
-  nonIsolatedRunnerPath,
-  sharedVitestConfig,
-} from "./vitest.shared.config.ts";
-
-export { resolveDefaultVitestPool, resolveLocalVitestMaxWorkers, resolveLocalVitestScheduling };
+import { nonIsolatedRunnerPath, sharedVitestConfig } from "./vitest.shared.config.ts";
 
 const rootVitestProjects = [
   "test/vitest/vitest.unit.config.ts",
@@ -24,6 +16,7 @@ const rootVitestProjects = [
   "test/vitest/vitest.gateway-core.config.ts",
   "test/vitest/vitest.gateway-client.config.ts",
   "test/vitest/vitest.gateway-methods.config.ts",
+  "test/vitest/vitest.gateway-methods-isolated.config.ts",
   "test/vitest/vitest.gateway-server.config.ts",
   "test/vitest/vitest.gateway-server-isolated.config.ts",
   "test/vitest/vitest.hooks.config.ts",
@@ -55,6 +48,8 @@ const rootVitestProjects = [
   "test/vitest/vitest.tooling.config.ts",
   "test/vitest/vitest.tui.config.ts",
   "test/vitest/vitest.ui.config.ts",
+  "test/vitest/vitest.ui-isolated.config.ts",
+  "test/vitest/vitest.ui-browser.config.ts",
   "test/vitest/vitest.utils.config.ts",
   "test/vitest/vitest.wizard.config.ts",
   "test/vitest/vitest.channels.config.ts",

@@ -2,11 +2,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { requireNodeTool } from "../../test/helpers/node-toolchain.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   killPidIfAlive,
-  readPidFile,
+  waitForPidFile,
   waitForPidToExit,
   writeForkingNoOutputScript,
 } from "../test-utils/process-tree.js";
@@ -195,7 +196,7 @@ describe("runInstallPolicy", () => {
         },
       },
       env: {
-        PATH: path.dirname(process.execPath),
+        PATH: path.dirname(requireNodeTool("node")),
       },
       request: baseRequest(sourceDir),
     });
@@ -232,8 +233,6 @@ describe("runInstallPolicy", () => {
                   command: forkScriptPath,
                   env: { NODE_BINARY: process.execPath, PID_FILE: pidPath },
                   trustedDirs: [path.dirname(forkScriptPath)],
-                  // Preserve production-like startup headroom; the test fires
-                  // the re-armed timer only after the readiness byte arrives.
                   noOutputTimeoutMs: 1_000,
                   timeoutMs: 10_000,
                 },
@@ -242,13 +241,14 @@ describe("runInstallPolicy", () => {
           },
           request: baseRequest(sourceDir),
         });
+        void resultPromise.catch(() => undefined);
+        childPid = await waitForPidFile(pidPath);
         await vi.waitFor(
           () => {
             expect(noOutputTimeouts.length).toBeGreaterThanOrEqual(2);
           },
           { timeout: 5_000 },
         );
-        childPid = await readPidFile(pidPath);
         noOutputTimeouts.at(-1)?.();
         const result = await resultPromise;
 

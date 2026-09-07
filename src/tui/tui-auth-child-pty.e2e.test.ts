@@ -12,7 +12,7 @@ const STARTUP_TIMEOUT_MS = 60_000;
 const EXIT_TIMEOUT_MS = 4_000;
 const tempDirs: string[] = [];
 
-async function createCodexFixture(exitMs?: number) {
+async function createCodexFixture(exitMs?: number, exitCode = 0) {
   const dir = await mkdtemp(path.join(tmpdir(), "openclaw-tui-auth-"));
   tempDirs.push(dir);
   const scriptPath = path.join(dir, "codex-fixture.cjs");
@@ -22,7 +22,7 @@ async function createCodexFixture(exitMs?: number) {
       'console.log("AUTH_CHILD_STARTED:" + process.pid);',
       exitMs === undefined
         ? "setInterval(() => {}, 1000);"
-        : `setTimeout(() => process.exit(0), ${String(exitMs)});`,
+        : `setTimeout(() => process.exit(${String(exitCode)}), ${String(exitMs)});`,
     ].join("\n"),
     "utf8",
   );
@@ -55,7 +55,7 @@ async function waitForProcessExit(pid: number, timeoutMs: number): Promise<void>
   throw new Error(`auth child ${String(pid)} remained alive`);
 }
 
-describe.sequential("TUI auth child lifecycle", () => {
+describe("TUI auth child lifecycle", { concurrent: false }, () => {
   afterEach(async () => {
     await disposeActiveTuiFixtures();
     for (const dir of tempDirs.splice(0)) {
@@ -101,6 +101,26 @@ describe.sequential("TUI auth child lifecycle", () => {
       await fixture.run.waitForOutput("auth flow finished for openai", STARTUP_TIMEOUT_MS);
       await fixture.run.write("/gateway-status\r", { delay: false });
       await fixture.run.waitForOutput("fixture gateway ok", STARTUP_TIMEOUT_MS);
+    },
+    STARTUP_TIMEOUT_MS * 2,
+  );
+
+  it(
+    "keeps a failed auth command visible after the TUI resumes",
+    async () => {
+      const auth = await createCodexFixture(50, 1);
+      const fixture = await startTuiFixture({
+        env: {
+          PATH: auth.pathEnv,
+        },
+      });
+      await fixture.run.waitForOutput("local ready", STARTUP_TIMEOUT_MS);
+      await fixture.run.write("/auth openai\r", { delay: false });
+      await fixture.run.waitForOutput("auth flow failed (exit 1)", STARTUP_TIMEOUT_MS);
+      await fixture.run.waitForOutput(
+        "in a regular terminal to see its output",
+        STARTUP_TIMEOUT_MS,
+      );
     },
     STARTUP_TIMEOUT_MS * 2,
   );

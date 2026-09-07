@@ -70,13 +70,24 @@ export const buzzPlugin = createChatChannelPlugin<ResolvedBuzzAccount, BuzzProbe
       chatTypes: ["group"],
       threads: true,
     },
+    threading: {
+      resolveReplyTransport: ({ replyDelivery, threadId, replyToId, replyToIsExplicit }) => {
+        if (replyDelivery?.replyToMode === "off") {
+          return { threadId: null, replyToId: null };
+        }
+        // Implicit replies belong to the root; explicit child targets keep their nesting.
+        return threadId && replyToId && !replyToIsExplicit
+          ? { threadId, replyToId: String(threadId) }
+          : null;
+      },
+    },
     agentPrompt: {
       messageToolHints: () => [
         "- Buzz targets: use a configured room UUID, `buzz:<ROOM_UUID>`, or a unique current room name. Use the UUID when room names are ambiguous.",
         "- Buzz mentions: write a unique current room member as `@Display Name`. For an explicit identity, include `nostr:npub...`; the public key must belong to the target room. Any unresolved or ambiguous label needs an explicit identity for every intended member.",
       ],
     },
-    reload: { configPrefixes: ["channels.buzz"] },
+    reload: { configPrefixes: ["channels.buzz"], accountScopedRestart: true },
     configSchema: BuzzConfigSchema,
     setupContract: buzzSetupContract,
     setupWizard: buzzSetupWizard,

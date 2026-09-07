@@ -14,7 +14,7 @@ import type { DashboardsRouteData } from "./view.ts";
 export function dashboardSessionListQuery(context: ApplicationContext): SessionListOptions {
   return {
     ...DEFAULT_SESSION_LIST_QUERY,
-    boardFace: "dashboard",
+    hasBoard: true,
     archivedFilter: "all",
     ...(context.agentSelection.state.scopeId
       ? { agentId: context.agentSelection.state.scopeId }
@@ -28,7 +28,7 @@ export function dashboardsRouteData(
 ): DashboardsRouteData {
   return {
     result: snapshot.result,
-    error: snapshot.result ? null : snapshot.error,
+    error: snapshot.error,
     basePath: context.basePath,
     fallbackAgentId: resolveSessionNavigationAgentId(context),
     mainKey: resolveUiConfiguredMainKey({

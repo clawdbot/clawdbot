@@ -61,7 +61,7 @@ type AttachmentLimits = {
   retainOnSessionKeep: boolean;
 };
 
-export type SubagentAttachmentReceiptFile = {
+type SubagentAttachmentReceiptFile = {
   name: string;
   bytes: number;
   sha256: string;
@@ -314,6 +314,7 @@ export function resolveAcpSessionsSpawnImageAttachments(params: {
 }
 
 export async function materializeSubagentAttachments(params: {
+  assertActive?: () => void;
   config: OpenClawConfig;
   targetAgentId: string;
   workspaceDir?: string;
@@ -346,7 +347,11 @@ export async function materializeSubagentAttachments(params: {
       relDir,
       prepared.attachments.map((attachment) => attachment.name),
     );
+    // Keep cancellation inside staging so an awaited operation cannot start
+    // the next write after closure or leave its directory outside cleanup.
+    params.assertActive?.();
     await fs.mkdir(absDir, { recursive: true, mode: 0o700 });
+    params.assertActive?.();
     const store = privateFileStore(absDir);
 
     const files: SubagentAttachmentReceiptFile[] = [];
@@ -365,6 +370,7 @@ export async function materializeSubagentAttachments(params: {
       totalBytes: prepared.totalBytes,
       files,
     };
+    params.assertActive?.();
     await store.writeJson(".manifest.json", manifest, { trailingNewline: true });
 
     return {

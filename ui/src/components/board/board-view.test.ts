@@ -41,7 +41,7 @@ describe("openclaw-board-view", () => {
     }
   });
 
-  it("renders the shared sandbox for an empty same-origin gateway URL", async () => {
+  it("renders an ungranted widget in the shared sandbox without popup authority", async () => {
     const view = await mount({
       context: gatewayContext(null),
       snapshot: snapshot({
@@ -58,15 +58,18 @@ describe("openclaw-board-view", () => {
 
     const frame = view.querySelector("iframe");
     expect(frame?.getAttribute("src")).toContain(":18790/mcp-app-sandbox");
-    expect(frame?.getAttribute("sandbox")).toBe(
-      "allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox",
-    );
+    expect(frame?.getAttribute("sandbox")).toBe("allow-scripts allow-same-origin allow-forms");
+    expect(frame?.getAttribute("sandbox")).not.toContain("allow-popups");
     expect(frame?.getAttribute("loading")).toBe("eager");
     expect(view.querySelector('[data-test-id="board-widget-error"]')).toBeNull();
   });
 
   it("bounds the wait for a sandbox proxy that never becomes ready", async () => {
     vi.useFakeTimers();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("<!doctype html><p>Ready document</p>")),
+    );
     const frameLoadFailed = vi.fn(async () => undefined);
     const view = await mount({
       context: gatewayContext(null),
@@ -673,7 +676,7 @@ describe("openclaw-board-view", () => {
     expect(refreshWidgetAppView).not.toHaveBeenCalled();
   });
 
-  it("shows stale MCP Apps with retry and remove without breaking the board", async () => {
+  it("shows stale MCP Apps with retry and delete without breaking the board", async () => {
     if (!customElements.get("mcp-app-view")) {
       customElements.define("mcp-app-view", class extends HTMLElement {});
     }
@@ -699,7 +702,7 @@ describe("openclaw-board-view", () => {
     const buttons = view.querySelectorAll<HTMLButtonElement>(
       '[data-test-id="board-mcp-app-stale"] button',
     );
-    expect([...buttons].map((button) => button.textContent?.trim())).toEqual(["Retry", "Remove"]);
+    expect([...buttons].map((button) => button.textContent?.trim())).toEqual(["Retry", "Delete"]);
     buttons[1]?.click();
     await vi.waitFor(() =>
       expect(applyOps).toHaveBeenCalledWith([{ kind: "widget_remove", name: "alpha" }]),

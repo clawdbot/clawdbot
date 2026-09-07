@@ -1,5 +1,9 @@
 import type { DatabaseSync } from "node:sqlite";
-import { GIT_COAUTHOR_PREFERENCE_KEY } from "../../packages/gateway-protocol/src/schema/users.js";
+import {
+  GATEWAY_OWNER_PROFILE_ID,
+  GIT_COAUTHOR_PREFERENCE_KEY,
+  isGitCoauthorCreditEnabled,
+} from "../../packages/gateway-protocol/src/schema/users.js";
 import type { UserProfileGitHubIdentity } from "../../packages/gateway-protocol/src/schema/users.js";
 import { executeSqliteQuerySync, executeSqliteQueryTakeFirstSync } from "../infra/kysely-sync.js";
 import { normalizeGitHubLogin } from "../utils/github-login.js";
@@ -9,7 +13,7 @@ import {
 } from "./openclaw-state-db.js";
 import { mutateUserPreference, selectUserPreferenceValues } from "./user-preferences.js";
 import { selectResolvedUserProfileById, userProfilesDb } from "./user-profiles-internal.js";
-import { ensureUserProfilesSchema } from "./user-profiles-schema.js";
+import { ensureUserProfilesSchema, UserProfileOwnerError } from "./user-profiles-schema.js";
 
 const GITHUB_PROVIDER = "github";
 const GITHUB_LOGIN_SUBJECT_PREFIX = "login:";
@@ -60,6 +64,34 @@ function selectStoredGitHubIdentities(
   );
 }
 
+export function resolveCachedGitHubIdentity(
+  params: { accountId: number; email: string },
+  options: OpenClawStateDatabaseOptions = {},
+): { profileId: string; updatedAt: number } | undefined {
+  const email = params.email.trim().toLowerCase();
+  if (!email || !Number.isSafeInteger(params.accountId) || params.accountId <= 0) {
+    return undefined;
+  }
+  const database = openOpenClawStateDatabase(options);
+  ensureUserProfilesSchema(options, database);
+  const { db } = database;
+  const alias = executeSqliteQueryTakeFirstSync(
+    db,
+    userProfilesDb(db)
+      .selectFrom("user_profile_emails")
+      .select("profile_id")
+      .where("email", "=", email),
+  );
+  const profile = alias ? selectResolvedUserProfileById(db, alias.profile_id) : undefined;
+  if (!profile) {
+    return undefined;
+  }
+  const identity = selectStoredGitHubIdentities(db, [profile.id]).get(profile.id);
+  return identity?.accountId === params.accountId
+    ? { profileId: profile.id, updatedAt: profile.updated_at }
+    : undefined;
+}
+
 function deleteProfileGitHubIdentities(
   db: DatabaseSync,
   profileIds: readonly string[],
@@ -100,7 +132,7 @@ export function selectUserProfileGitHubIdentities(
   );
 }
 
-/** Resolves bounded participants only when verified identity and public credit opt-in agree. */
+/** Resolves bounded participants for verified identities that have not opted out of public credit. */
 export function resolveUserProfileGitHubAttribution(
   profileIds: readonly string[],
   options: OpenClawStateDatabaseOptions = {},
@@ -127,7 +159,9 @@ export function resolveUserProfileGitHubAttribution(
   return new Map(
     [...canonicalBySource].map(([sourceId, canonicalId]) => [
       sourceId,
-      preferences.get(canonicalId) === true ? (identities.get(canonicalId) ?? null) : null,
+      isGitCoauthorCreditEnabled(preferences.get(canonicalId))
+        ? (identities.get(canonicalId) ?? null)
+        : null,
     ]),
   );
 }
@@ -222,6 +256,15 @@ export function applyVerifiedGitHubIdentity(params: {
   const targetProfileId = existing
     ? (selectResolvedUserProfileById(db, existing.profile_id)?.id ?? currentProfileId)
     : currentProfileId;
+  // An email linked by older code must not turn shared owner attribution into a person.
+  if (
+    aliasIdentity?.profile_id === GATEWAY_OWNER_PROFILE_ID ||
+    existing?.profile_id === GATEWAY_OWNER_PROFILE_ID ||
+    currentProfileId === GATEWAY_OWNER_PROFILE_ID ||
+    targetProfileId === GATEWAY_OWNER_PROFILE_ID
+  ) {
+    throw new UserProfileOwnerError("merge");
+  }
   const currentIdentity = selectStoredGitHubIdentities(db, [currentProfileId]).get(
     currentProfileId,
   );

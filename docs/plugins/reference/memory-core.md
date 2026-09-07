@@ -2,10 +2,13 @@
 summary: "Adds agent-callable tools."
 read_when:
   - You are installing, configuring, or auditing the memory-core plugin
-title: "Memory Core plugin"
+title: "Memory Core plugin reference"
 ---
 
-# Memory Core plugin
+<!-- Generated file. Do not edit by hand.
+Run `pnpm plugins:inventory:gen` to rebuild it. Hand-written text survives only
+between the openclaw-plugin-reference:manual-start and
+openclaw-plugin-reference:manual-end comment markers. -->
 
 Adds agent-callable tools.
 
@@ -16,4 +19,6 @@ Adds agent-callable tools.
 
 ## Surface
 
-CLI commands: `openclaw memory`; slash commands: `/dreaming`; contracts: `tools`
+- CLI commands: `openclaw memory`
+- Slash commands: `/dreaming`
+- Contracts: `tools`

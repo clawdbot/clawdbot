@@ -335,6 +335,8 @@ export async function dispatchDiscordComponentEvent(params: {
               mediaLocalRoots,
               kind: info.kind,
               bindPendingFinalDelivery: info.bindPendingFinalDelivery,
+              onPlatformSendDispatch: info.onPlatformSendDispatch,
+              assertPlatformSendAuthorized: info.assertPlatformSendAuthorized,
             });
             if (result.visibleReplySent) {
               replyReference.markSent();

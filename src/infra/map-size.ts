@@ -10,10 +10,13 @@ export function pruneMapToMaxSize<K, V>(map: Map<K, V>, maxSize: number): void {
     return;
   }
 
+  if (map.size <= limit) {
+    return;
+  }
+  // Reuse the insertion-order cursor so bulk pruning does not restart at deleted entries.
+  const keys = map.keys();
   while (map.size > limit) {
-    // Map iteration is insertion ordered; deleting the first key preserves the newest tracked
-    // entries for request/memory guard caches.
-    const oldest = map.keys().next();
+    const oldest = keys.next();
     if (oldest.done) {
       break;
     }

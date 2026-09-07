@@ -11,14 +11,12 @@ import {
   CLAW_LAZY_ADDITIVE_STATE_COLUMN_DEFINITIONS,
   CLAW_STARTUP_ADDITIVE_STATE_COLUMN_DEFINITIONS,
 } from "./openclaw-state-db-additive-columns.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import {
   ensureAdditiveStateColumns,
   ensureDevicePairSetupBootstrapSchema,
 } from "./openclaw-state-db-schema-additive.js";
-import {
-  assertOpenClawStateDatabaseForMaintenance,
-  OPENCLAW_STATE_SCHEMA_VERSION,
-} from "./openclaw-state-db.js";
+import { assertOpenClawStateDatabaseForMaintenance } from "./openclaw-state-db.js";
 import { OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY } from "./openclaw-state-schema-compatibility.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
@@ -46,12 +44,12 @@ describe("OpenClaw database maintenance schema validation", () => {
 
   it("accepts a global schema produced by an additive column migration", () => {
     const schemaWithoutMigratedColumn = OPENCLAW_STATE_SCHEMA_SQL.replace(
-      "  delivery_thread_id_type TEXT,\n",
+      "  schedule_identity TEXT,\n",
       "",
     );
     const database = createGlobalDatabase(schemaWithoutMigratedColumn);
     try {
-      database.exec("ALTER TABLE cron_jobs ADD COLUMN delivery_thread_id_type TEXT;");
+      database.exec("ALTER TABLE cron_jobs ADD COLUMN schedule_identity TEXT;");
 
       expect(() =>
         assertOpenClawStateDatabaseForMaintenance(database, {
@@ -81,6 +79,52 @@ describe("OpenClaw database maintenance schema validation", () => {
     }
   });
 
+  it("keeps Web Push binding columns compatible with the previous schema", () => {
+    const previousSchema = OPENCLAW_STATE_SCHEMA_SQL.replace(
+      "  auth TEXT NOT NULL,\n  device_id TEXT,\n  user_profile_id TEXT,\n  preferences_json TEXT,\n",
+      "  auth TEXT NOT NULL,\n",
+    );
+    const database = createGlobalDatabase();
+    try {
+      expect(previousSchema).not.toBe(OPENCLAW_STATE_SCHEMA_SQL);
+      expect(() =>
+        assertSqliteSchemaContains(database, "previous global schema", previousSchema, {
+          allowCompatibleAdditiveColumns: true,
+        }),
+      ).not.toThrow();
+    } finally {
+      database.close();
+    }
+  });
+
+  it("keeps the Web Push approval delivery table compatible with the previous schema", () => {
+    const additiveSchema = `CREATE TABLE IF NOT EXISTS web_push_approval_deliveries (
+  approval_id TEXT NOT NULL
+    REFERENCES operator_approvals(approval_id) ON DELETE CASCADE,
+  subscription_id TEXT NOT NULL
+    REFERENCES web_push_subscriptions(subscription_id) ON DELETE CASCADE,
+  device_id TEXT NOT NULL,
+  user_profile_id TEXT,
+  prepared_at_ms INTEGER NOT NULL,
+  PRIMARY KEY (approval_id, subscription_id)
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_web_push_approval_deliveries_subscription
+  ON web_push_approval_deliveries(subscription_id, approval_id);
+
+`;
+    const previousSchema = OPENCLAW_STATE_SCHEMA_SQL.replace(additiveSchema, "");
+    const database = createGlobalDatabase();
+    try {
+      expect(previousSchema).not.toBe(OPENCLAW_STATE_SCHEMA_SQL);
+      expect(() =>
+        assertSqliteSchemaContains(database, "previous global schema", previousSchema),
+      ).not.toThrow();
+    } finally {
+      database.close();
+    }
+  });
+
   it("keeps the cron authority companion table compatible with the previous schema", () => {
     const start = OPENCLAW_STATE_SCHEMA_SQL.indexOf(
       "CREATE TABLE IF NOT EXISTS cron_job_runtime_authorities (",
@@ -98,6 +142,43 @@ describe("OpenClaw database maintenance schema validation", () => {
       expect(() =>
         assertSqliteSchemaContains(database, "previous global schema", previousSchema),
       ).not.toThrow();
+    } finally {
+      database.close();
+    }
+  });
+
+  it("keeps lifecycle bindings additive and keyed only by canonical owner identity", () => {
+    const start = OPENCLAW_STATE_SCHEMA_SQL.indexOf(
+      "CREATE TABLE IF NOT EXISTS execution_owner_lifecycle_bindings (",
+    );
+    const endMarker = ") STRICT;";
+    const end = start >= 0 ? OPENCLAW_STATE_SCHEMA_SQL.indexOf(endMarker, start) : -1;
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    const previousSchema = `${OPENCLAW_STATE_SCHEMA_SQL.slice(0, start)}${OPENCLAW_STATE_SCHEMA_SQL.slice(end + endMarker.length)}`;
+    const database = createGlobalDatabase();
+    try {
+      expect(() =>
+        assertSqliteSchemaContains(database, "previous global schema", previousSchema),
+      ).not.toThrow();
+      expect(
+        database.prepare("PRAGMA table_info(execution_owner_lifecycle_bindings)").all(),
+      ).toEqual([
+        { cid: 0, name: "owner_kind", type: "TEXT", notnull: 1, dflt_value: null, pk: 1 },
+        { cid: 1, name: "owner_id", type: "TEXT", notnull: 1, dflt_value: null, pk: 2 },
+        { cid: 2, name: "context_id", type: "TEXT", notnull: 1, dflt_value: null, pk: 0 },
+        { cid: 3, name: "execution_id", type: "TEXT", notnull: 1, dflt_value: null, pk: 0 },
+      ]);
+      expect(
+        database
+          .prepare(
+            `SELECT COUNT(*) AS count
+             FROM sqlite_schema
+             WHERE type = 'index' AND tbl_name = 'execution_owner_lifecycle_bindings'
+               AND sql IS NOT NULL`,
+          )
+          .get(),
+      ).toEqual({ count: 0 });
     } finally {
       database.close();
     }
@@ -179,15 +260,17 @@ describe("OpenClaw database maintenance schema validation", () => {
       "worker_environments.node_device_id TEXT",
       "worker_session_placements.terminal_reason TEXT",
       "worker_session_placements.terminal_at_ms INTEGER",
+      "worker_workspace_pending_results.repository_workspace_id TEXT",
       "worker_session_placement_moves.abandon_source INTEGER",
       "worker_session_placement_moves.target_machine_class TEXT",
       "worktrees.run_end_cleanup_json TEXT",
       "device_bootstrap_tokens.setup_id TEXT",
       "session_groups.cwd TEXT",
       "session_groups.worktree INTEGER",
-      "installed_plugin_index.workspace_dir TEXT",
       "secret_store_entries.allowed_hosts TEXT",
-      "skill_workshop_proposals.claim_released_time INTEGER",
+      "web_push_subscriptions.device_id TEXT",
+      "web_push_subscriptions.user_profile_id TEXT",
+      "web_push_subscriptions.preferences_json TEXT",
     ]);
 
     const database = createGlobalDatabase();
@@ -246,8 +329,8 @@ describe("OpenClaw database maintenance schema validation", () => {
 
   it("accepts a migrated required column with its temporary default", () => {
     const schemaWithoutMigratedColumn = OPENCLAW_STATE_SCHEMA_SQL.replace(
-      "  owner_session_key TEXT,\n  name TEXT NOT NULL,\n  description TEXT,\n",
-      "  owner_session_key TEXT,\n  description TEXT,\n",
+      "  name TEXT NOT NULL,\n  description TEXT,\n  enabled INTEGER NOT NULL,\n",
+      "  description TEXT,\n  enabled INTEGER NOT NULL,\n",
     );
     const database = createGlobalDatabase(schemaWithoutMigratedColumn);
     try {
@@ -340,39 +423,40 @@ describe("OpenClaw database maintenance schema validation", () => {
     }
   });
 
-  it.each(["node_worker_launches", "worker_environment_ssh_fallback_ports"])(
-    "allows lazy table %s to be absent but rejects drift",
-    (tableName) => {
-      const database = createGlobalDatabase();
-      try {
-        const canonicalTable = database
-          .prepare("SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = ?")
-          .get(tableName) as { sql?: unknown } | undefined;
-        if (typeof canonicalTable?.sql !== "string") {
-          throw new Error(`missing canonical ${tableName} table`);
-        }
-        database.exec(`DROP TABLE ${tableName};`);
-
-        expect(() =>
-          assertOpenClawStateDatabaseForMaintenance(database, {
-            pathname: "global.sqlite",
-          }),
-        ).not.toThrow();
-
-        const driftedTableSql = canonicalTable.sql.replace("(\n", "(\n  unexpected TEXT,\n");
-        expect(driftedTableSql).not.toBe(canonicalTable.sql);
-        database.exec(driftedTableSql);
-
-        expect(() =>
-          assertOpenClawStateDatabaseForMaintenance(database, {
-            pathname: "global.sqlite",
-          }),
-        ).toThrow(`column definitions differ for ${tableName}`);
-      } finally {
-        database.close();
+  it.each([
+    "node_worker_launches",
+    "node_worker_launch_containers",
+    "worker_environment_ssh_fallback_ports",
+  ])("allows lazy table %s to be absent but rejects drift", (tableName) => {
+    const database = createGlobalDatabase();
+    try {
+      const canonicalTable = database
+        .prepare("SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = ?")
+        .get(tableName) as { sql?: unknown } | undefined;
+      if (typeof canonicalTable?.sql !== "string") {
+        throw new Error(`missing canonical ${tableName} table`);
       }
-    },
-  );
+      database.exec(`DROP TABLE ${tableName};`);
+
+      expect(() =>
+        assertOpenClawStateDatabaseForMaintenance(database, {
+          pathname: "global.sqlite",
+        }),
+      ).not.toThrow();
+
+      const driftedTableSql = canonicalTable.sql.replace("(\n", "(\n  unexpected TEXT,\n");
+      expect(driftedTableSql).not.toBe(canonicalTable.sql);
+      database.exec(driftedTableSql);
+
+      expect(() =>
+        assertOpenClawStateDatabaseForMaintenance(database, {
+          pathname: "global.sqlite",
+        }),
+      ).toThrow(`column definitions differ for ${tableName}`);
+    } finally {
+      database.close();
+    }
+  });
 
   it("rejects a current agent database with a missing canonical table", () => {
     const database = createAgentDatabase();

@@ -209,7 +209,7 @@ describe("node-hosting preconditions", () => {
     ).toEqual([]);
   });
 
-  it("does not activate plugins or reject an unknown external runtime", () => {
+  it.each(["codex", "auto"])("does not activate plugins or reject a cold %s runtime", (runtime) => {
     resetPluginRuntimeStateForTest();
 
     expect(
@@ -218,7 +218,7 @@ describe("node-hosting preconditions", () => {
         agents: {
           defaults: {
             model: "openai/gpt-5.6-sol",
-            models: { "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } } },
+            models: { "openai/gpt-5.6-sol": { agentRuntime: { id: runtime } } },
           },
         },
       }),

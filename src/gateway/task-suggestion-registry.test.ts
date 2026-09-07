@@ -46,7 +46,7 @@ describe("task suggestion registry", () => {
       title: "Latest follow up",
     });
 
-    expect(replacement).toMatchObject({ status: "created", evictedPendingTaskIds: [] });
+    expect(replacement).toMatchObject({ status: "created", evictedPendingSuggestions: [] });
     expect(beginTaskSuggestionAcceptance(accepted.suggestion.id)).toEqual({ status: "missing" });
     expect(listTaskSuggestions({}).map((suggestion) => suggestion.id)).toContain(
       oldestPendingTaskId,

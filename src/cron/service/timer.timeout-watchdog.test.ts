@@ -2,8 +2,8 @@
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import {
+  createCronRegressionState,
   createIsolatedRegressionJob,
-  noopLogger,
   setupCronRegressionFixtures,
 } from "../../../test/helpers/cron/service-regression-fixtures.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
@@ -16,7 +16,7 @@ import type {
   CronAgentExecutionStarted,
   CronJob,
 } from "../types.js";
-import { createCronServiceState, type CronServiceDeps } from "./state.js";
+import type { CronServiceDeps } from "./state.js";
 import { onTimer } from "./timer.test-support.js";
 
 const timerRegressionFixtures = setupCronRegressionFixtures({
@@ -43,6 +43,138 @@ function firstMockArg(mock: unknown): unknown {
 }
 
 describe("cron service timer regressions", () => {
+  it("restarts the watchdog from the effective agent heartbeat timeout at handoff", async () => {
+    vi.useFakeTimers();
+    try {
+      const store = timerRegressionFixtures.makeStorePath();
+      const scheduledAt = Date.parse("2026-09-02T12:00:00.000Z");
+      const cronJob = createIsolatedRegressionJob({
+        id: "heartbeat-watchdog-handoff",
+        name: "heartbeat watchdog handoff",
+        scheduledAt,
+        schedule: { kind: "every", everyMs: 60_000, anchorMs: scheduledAt - 60_000 },
+        payload: { kind: "heartbeat" },
+        state: { nextRunAtMs: scheduledAt },
+      });
+      cronJob.sessionTarget = "main";
+      cronJob.agentId = "   ";
+      cronJob.sessionKey = "agent:ops:main";
+      await saveCronStore(store.storePath, { version: 1, jobs: [cronJob] });
+
+      vi.setSystemTime(scheduledAt);
+      const heartbeatStarted = createDeferred();
+      let abortObserved = false;
+      const resolveHeartbeatTimeoutMs = vi.fn(() => 15 * 60_000);
+      const state = createCronRegressionState({
+        storePath: store.storePath,
+        nowMs: () => Date.now(),
+        defaultAgentId: "main",
+        resolveHeartbeatTimeoutMs,
+        requestHeartbeatAndWait: vi.fn<NonNullable<CronServiceDeps["requestHeartbeatAndWait"]>>(
+          async (_wake, { abortSignal }) => {
+            heartbeatStarted.resolve();
+            await new Promise<void>((resolve) => {
+              if (abortSignal?.aborted) {
+                abortObserved = true;
+                resolve();
+                return;
+              }
+              abortSignal?.addEventListener(
+                "abort",
+                () => {
+                  abortObserved = true;
+                  resolve();
+                },
+                { once: true },
+              );
+            });
+            return { status: "failed", reason: "aborted" };
+          },
+        ),
+        runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+      });
+
+      const timerPromise = onTimer(state);
+      await heartbeatStarted.promise;
+
+      await vi.advanceTimersByTimeAsync(10 * 60_000 + 1);
+      expect(abortObserved).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(5 * 60_000);
+      await timerPromise;
+
+      expect(abortObserved).toBe(true);
+      expect(resolveHeartbeatTimeoutMs).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          source: "interval",
+          intent: "scheduled",
+          agentId: "ops",
+        }),
+      );
+      expect(requireJob(state, cronJob.id).state.lastError).toContain("job execution timed out");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("restarts a main system-event watchdog when its immediate heartbeat begins", async () => {
+    vi.useFakeTimers();
+    try {
+      const store = timerRegressionFixtures.makeStorePath();
+      const scheduledAt = Date.parse("2026-09-02T12:15:00.000Z");
+      const cronJob = createIsolatedRegressionJob({
+        id: "system-event-heartbeat-watchdog",
+        name: "system event heartbeat watchdog",
+        scheduledAt,
+        schedule: { kind: "at", at: new Date(scheduledAt).toISOString() },
+        payload: { kind: "systemEvent", text: "check heartbeat work" },
+        state: { nextRunAtMs: scheduledAt },
+      });
+      cronJob.sessionTarget = "main";
+      cronJob.wakeMode = "now";
+      await saveCronStore(store.storePath, { version: 1, jobs: [cronJob] });
+
+      vi.setSystemTime(scheduledAt);
+      const heartbeatStarted = createDeferred();
+      const resolveHeartbeatTimeoutMs = vi.fn(() => 15 * 60_000);
+      const state = createCronRegressionState({
+        storePath: store.storePath,
+        nowMs: () => Date.now(),
+        defaultAgentId: "main",
+        resolveHeartbeatTimeoutMs,
+        runHeartbeatOnce: vi.fn(() => {
+          heartbeatStarted.resolve();
+          return new Promise<never>(() => {});
+        }),
+        runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+      });
+
+      const timerPromise = onTimer(state);
+      let timerSettled = false;
+      void timerPromise.then(() => {
+        timerSettled = true;
+      });
+      await heartbeatStarted.promise;
+      await vi.advanceTimersByTimeAsync(10 * 60_000 + 1);
+      expect(timerSettled).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(5 * 60_000);
+      await timerPromise;
+
+      expect(timerSettled).toBe(true);
+      expect(resolveHeartbeatTimeoutMs).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          source: "cron",
+          intent: "immediate",
+          agentId: "main",
+          heartbeat: { target: "last" },
+        }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("outer cron timeout fires at configured timeoutSeconds, not at 1/3 (#29774)", async () => {
     vi.useFakeTimers();
     try {
@@ -66,13 +198,9 @@ describe("cron service timer regressions", () => {
       let abortReason: unknown;
       const started = createDeferred();
 
-      const state = createCronServiceState({
-        cronEnabled: true,
+      const state = createCronRegressionState({
         storePath: store.storePath,
-        log: noopLogger,
         nowMs: () => now,
-        enqueueSystemEvent: vi.fn(),
-        requestHeartbeat: vi.fn(),
         runIsolatedAgentJob: vi.fn(
           async ({
             abortSignal,
@@ -154,13 +282,9 @@ describe("cron service timer regressions", () => {
       const started = createDeferred();
       let abortObserved = false;
       const cleanupTimedOutAgentRun = vi.fn(async () => {});
-      const state = createCronServiceState({
-        cronEnabled: true,
+      const state = createCronRegressionState({
         storePath: store.storePath,
-        log: noopLogger,
         nowMs: () => now,
-        enqueueSystemEvent: vi.fn(),
-        requestHeartbeat: vi.fn(),
         cleanupTimedOutAgentRun,
         runIsolatedAgentJob: vi.fn(
           async ({
@@ -235,13 +359,9 @@ describe("cron service timer regressions", () => {
       let abortObserved = false;
       const cleanupTimedOutAgentRun = vi.fn(async () => {});
       const onIsolatedAgentSetupTimeout = vi.fn();
-      const state = createCronServiceState({
-        cronEnabled: true,
+      const state = createCronRegressionState({
         storePath: store.storePath,
-        log: noopLogger,
         nowMs: () => now,
-        enqueueSystemEvent: vi.fn(),
-        requestHeartbeat: vi.fn(),
         cleanupTimedOutAgentRun,
         onIsolatedAgentSetupTimeout,
         runIsolatedAgentJob: vi.fn(async ({ abortSignal }: { abortSignal?: AbortSignal }) => {
@@ -309,13 +429,9 @@ describe("cron service timer regressions", () => {
       await laneEntered.promise;
 
       const onIsolatedAgentSetupTimeout = vi.fn();
-      const state = createCronServiceState({
-        cronEnabled: true,
+      const state = createCronRegressionState({
         storePath: store.storePath,
-        log: noopLogger,
         nowMs: () => now,
-        enqueueSystemEvent: vi.fn(),
-        requestHeartbeat: vi.fn(),
         cleanupTimedOutAgentRun: vi.fn(async () => {}),
         onIsolatedAgentSetupTimeout,
         runIsolatedAgentJob: vi.fn(async ({ onLaneWait }) => {
@@ -372,13 +488,9 @@ describe("cron service timer regressions", () => {
       let now = scheduledAt;
       const started = createDeferred();
       const onIsolatedAgentSetupTimeout = vi.fn();
-      const state = createCronServiceState({
-        cronEnabled: true,
+      const state = createCronRegressionState({
         storePath: store.storePath,
-        log: noopLogger,
         nowMs: () => now,
-        enqueueSystemEvent: vi.fn(),
-        requestHeartbeat: vi.fn(),
         cleanupTimedOutAgentRun: vi.fn(async () => {}),
         onIsolatedAgentSetupTimeout,
         runIsolatedAgentJob: vi.fn(async ({ abortSignal }: { abortSignal?: AbortSignal }) => {
@@ -425,13 +537,9 @@ describe("cron service timer regressions", () => {
       let abortReason: unknown;
       const cleanupTimedOutAgentRun = vi.fn(async () => {});
       const onIsolatedAgentSetupTimeout = vi.fn();
-      const state = createCronServiceState({
-        cronEnabled: true,
+      const state = createCronRegressionState({
         storePath: store.storePath,
-        log: noopLogger,
         nowMs: () => now,
-        enqueueSystemEvent: vi.fn(),
-        requestHeartbeat: vi.fn(),
         cleanupTimedOutAgentRun,
         onIsolatedAgentSetupTimeout,
         runIsolatedAgentJob: vi.fn(
@@ -535,13 +643,9 @@ describe("cron service timer regressions", () => {
       const started = createDeferred();
       let abortObserved = false;
       const cleanupTimedOutAgentRun = vi.fn(async () => {});
-      const state = createCronServiceState({
-        cronEnabled: true,
+      const state = createCronRegressionState({
         storePath: store.storePath,
-        log: noopLogger,
         nowMs: () => now,
-        enqueueSystemEvent: vi.fn(),
-        requestHeartbeat: vi.fn(),
         cleanupTimedOutAgentRun,
         runIsolatedAgentJob: vi.fn(
           async ({
@@ -643,13 +747,9 @@ describe("cron service timer regressions", () => {
         const started = createDeferred();
         let abortObserved = false;
         const cleanupTimedOutAgentRun = vi.fn(async () => {});
-        const state = createCronServiceState({
-          cronEnabled: true,
+        const state = createCronRegressionState({
           storePath: store.storePath,
-          log: noopLogger,
           nowMs: () => now,
-          enqueueSystemEvent: vi.fn(),
-          requestHeartbeat: vi.fn(),
           cleanupTimedOutAgentRun,
           runIsolatedAgentJob: vi.fn(
             async ({
@@ -741,13 +841,9 @@ describe("cron service timer regressions", () => {
       const sendCronFailureAlert = vi.fn<NonNullable<CronServiceDeps["sendCronFailureAlert"]>>(
         async () => {},
       );
-      const state = createCronServiceState({
-        cronEnabled: true,
+      const state = createCronRegressionState({
         storePath: store.storePath,
-        log: noopLogger,
         nowMs: () => now,
-        enqueueSystemEvent: vi.fn(),
-        requestHeartbeat: vi.fn(),
         cleanupTimedOutAgentRun,
         sendCronFailureAlert,
         runIsolatedAgentJob: vi.fn(
@@ -830,6 +926,7 @@ describe("cron service timer regressions", () => {
         accountId: undefined,
         threadId: undefined,
         inheritSessionThread: false,
+        onDeliverySettled: expect.any(Function),
       });
     } finally {
       vi.useRealTimers();

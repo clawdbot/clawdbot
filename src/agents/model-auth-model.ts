@@ -34,7 +34,7 @@ import {
   type ProviderCredentialPrecedence,
 } from "./model-auth-provider.js";
 import type { ResolvedProviderAuth } from "./model-auth-runtime-shared.js";
-import { resolveSyntheticLocalProviderAuth } from "./model-auth-runtime.js";
+import { prepareSyntheticLocalProviderAuth } from "./model-auth-runtime.js";
 import {
   attachModelProviderRequestTransport,
   getModelProviderRequestTransport,
@@ -165,7 +165,11 @@ export async function hasAvailableAuthForProvider(params: {
   ) {
     return true;
   }
-  const syntheticLocalAuth = resolveSyntheticLocalProviderAuth({ cfg, provider });
+  const syntheticLocalAuth = await prepareSyntheticLocalProviderAuth({
+    cfg,
+    provider,
+    workspaceDir: params.workspaceDir,
+  });
   if (
     syntheticLocalAuth &&
     (!authConfig.isConfigBackedInlineProviderApiKey({

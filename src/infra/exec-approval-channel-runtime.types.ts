@@ -7,9 +7,13 @@ import type {
 } from "./approval-types.js";
 import type { ExecApprovalRequest, ExecApprovalResolved } from "./exec-approvals.js";
 import type { PluginApprovalResolved } from "./plugin-approvals.js";
+import type { SystemAgentApprovalResolved } from "./system-agent-approvals.js";
 
 type ApprovalRequestEvent = ApprovalRequestInput;
-type ApprovalResolvedEvent = ExecApprovalResolved | PluginApprovalResolved;
+type ApprovalResolvedEvent =
+  | ExecApprovalResolved
+  | PluginApprovalResolved
+  | SystemAgentApprovalResolved;
 
 /** Adapter implemented by a channel to deliver and finalize native approval prompts. */
 export type ExecApprovalChannelRuntimeAdapter<

@@ -1,7 +1,8 @@
-import { mkdir, rm } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { BrowserContext, Page } from "playwright";
-import { beforeAll, expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   defaultControlUiFeatureMethods,
   installMockGateway,
@@ -16,12 +17,7 @@ const suite = createControlUiE2eSuite({
   unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
 });
 
-const artifactDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "skill-workshop-revision-integrity",
-);
+let artifactDir: string;
 const viewport = { height: 900, width: 1280 };
 const PROPOSAL_ID = "revision-integrity-proposal";
 const SKILL_KEY = "revision-integrity";
@@ -39,7 +35,7 @@ const H2 = {
   updatedAt: "2026-08-18T10:01:00.000Z",
   version: "v2",
 };
-const staleMessage = /Proposal changed\. Review the updated draft/i;
+const staleMessage = /Suggestion changed\. Review the updated draft/i;
 const staleError = {
   code: "INVALID_REQUEST",
   message: "Skill proposal revision changed.",
@@ -66,6 +62,7 @@ const workshopFeatureMethods = [
 function proposalManifest(revision: ProposalRevision, status: ProposalStatus = "pending") {
   return {
     schema: "openclaw.skill-workshop.proposals-manifest.v1",
+    installedSkills: [],
     updatedAt: revision.updatedAt,
     proposals: [
       {
@@ -96,7 +93,7 @@ function proposalInspect(revision: ProposalRevision, status: ProposalStatus = "p
       updatedAt: revision.updatedAt,
       proposedVersion: revision.version,
       draftHash: "d".repeat(64),
-      origin: { agentId: "main", sessionKey: "main" },
+      origin: { agentId: "main", sessionKey: "agent:main:main" },
       target: { skillName: "Revision Integrity", skillKey: SKILL_KEY },
     },
     revisionHash: revision.hash,
@@ -132,7 +129,7 @@ async function openReviewedProposal(page: Page): Promise<MockGatewayControls> {
   const response = await page.goto(`${suite.server.baseUrl}skills/workshop`);
   expect(response?.status()).toBe(200);
   await gateway.waitForRequest("skills.proposals.list");
-  await page.locator("#skill-workshop-mode-tab-board").click();
+  await page.locator("#skill-workshop-mode-tab-suggestions").click();
   await page.getByText(H1.body, { exact: true }).waitFor();
   return gateway;
 }
@@ -145,14 +142,14 @@ async function waitForProposalRefresh(
 ): Promise<void> {
   await gateway.waitForRequest("skills.proposals.list", { after: previousListCount });
   await gateway.waitForRequest("skills.proposals.inspect", { after: previousInspectCount });
-  await page.locator("#skill-workshop-mode-tab-board").click();
+  await page.locator("#skill-workshop-mode-tab-suggestions").click();
   await page.getByText(H2.body, { exact: true }).waitFor();
   await page.getByText(staleMessage).waitFor();
 }
 
 async function provePersistentStaleOutcome(page: Page): Promise<void> {
-  await page.locator("#skill-workshop-mode-tab-today").click();
-  await page.locator("#skill-workshop-mode-tab-board").click();
+  await page.locator("#skill-workshop-mode-tab-skills").click();
+  await page.locator("#skill-workshop-mode-tab-suggestions").click();
   await page.getByText(staleMessage).waitFor();
 }
 
@@ -174,9 +171,8 @@ async function closeProofContext(params: { context: BrowserContext }): Promise<v
 }
 
 suite.define(() => {
-  beforeAll(async () => {
-    await rm(artifactDir, { force: true, recursive: true });
-    await mkdir(artifactDir, { recursive: true });
+  beforeEach(() => {
+    artifactDir = createControlUiE2eArtifactDir("skill-workshop-revision-integrity");
   });
 
   it.each([
@@ -252,11 +248,11 @@ suite.define(() => {
         await gateway.resolveDeferred(method, {});
         await gateway.waitForRequest("skills.proposals.list", { after: secondListCount });
         await gateway.waitForRequest("skills.proposals.inspect", { after: secondInspectCount });
-        await page
-          .locator(".sw-lifecycle-tab")
-          .filter({ hasText: status === "applied" ? "Applied" : "Rejected" })
-          .click();
-        await page.getByText(H2.body, { exact: true }).waitFor();
+        await expect.poll(() => page.locator(".sw-row").count()).toBe(0);
+        await expect
+          .poll(() => page.locator(".sw-action-toast").textContent())
+          .toContain(status === "applied" ? "Applied" : "Rejected");
+        expect(await page.getByText(H2.body, { exact: true }).count()).toBe(0);
         expect(await gateway.getRequests(method)).toHaveLength(secondActionCount + 1);
         await page.screenshot({
           animations: "disabled",
@@ -306,7 +302,7 @@ suite.define(() => {
         expectedRevisionHash: H1_HASH,
         instructions,
         proposalId: PROPOSAL_ID,
-        sessionKey: "main",
+        sessionKey: "agent:main:main",
       });
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
       await page.waitForURL(/\/skills\/workshop(?:[?#].*)?$/u);
@@ -351,7 +347,7 @@ suite.define(() => {
         expectedRevisionHash: H2_HASH,
         instructions: reviewedInstructions,
         proposalId: PROPOSAL_ID,
-        sessionKey: "main",
+        sessionKey: "agent:main:main",
       });
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
       await page.screenshot({

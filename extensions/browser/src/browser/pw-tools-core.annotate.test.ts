@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  getPwToolsCoreSessionMocks,
   installPwToolsCoreTestHooks,
   setPwToolsCoreCurrentPage,
   setPwToolsCoreCurrentRefLocator,
@@ -128,12 +129,77 @@ describe("screenshotWithLabelsViaPlaywright (fullpage)", () => {
     expect(result.annotations[0]?.box.y).toBe(1200);
     expect(result.annotations[0]?.box.x).toBe(10);
   });
+
+  it("stops reading geometry after filling the label budget and counts remaining refs as skipped", async () => {
+    const evaluate = evaluateMockReturning({ x: 0, y: 1000 });
+    const screenshot = vi.fn(async () => Buffer.from("FULL"));
+    setPwToolsCoreCurrentPage({ evaluate, screenshot });
+    const boundingBox = vi
+      .fn<() => Promise<{ x: number; y: number; width: number; height: number } | null>>()
+      .mockRejectedValueOnce(new Error("detached"))
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ x: 10, y: 20, width: 30, height: 40 })
+      .mockResolvedValueOnce({ x: 50, y: 60, width: 70, height: 80 })
+      .mockResolvedValueOnce({ x: 90, y: 100, width: 30, height: 40 })
+      .mockRejectedValueOnce(new Error("detached tail"));
+    setPwToolsCoreCurrentRefLocator({ boundingBox });
+
+    const result = await mod.screenshotWithLabelsViaPlaywright({
+      cdpUrl: "http://127.0.0.1:18792",
+      refs: Object.fromEntries(
+        ["e1", "e2", "e3", "e4", "e5", "e6"].map((ref) => [ref, { role: "button" }]),
+      ),
+      fullPage: true,
+      maxLabels: 2,
+    });
+
+    expect(result.annotations).toEqual([
+      {
+        ref: "e3",
+        number: 3,
+        role: "button",
+        box: { x: 10, y: 1020, width: 30, height: 40 },
+      },
+      {
+        ref: "e4",
+        number: 4,
+        role: "button",
+        box: { x: 50, y: 1060, width: 70, height: 80 },
+      },
+    ]);
+    expect(result.labels).toBe(2);
+    expect(result.skipped).toBe(4);
+    expect(boundingBox).toHaveBeenCalledTimes(4);
+    expect(screenshot).toHaveBeenCalledWith(expect.objectContaining({ fullPage: true }));
+  });
+
+  it("still rejects unknown refs after filling the full-page label budget", async () => {
+    const screenshot = vi.fn(async () => Buffer.from("FULL"));
+    setPwToolsCoreCurrentPage({ evaluate: evaluateMockReturning({ x: 0, y: 0 }), screenshot });
+    getPwToolsCoreSessionMocks()
+      .refLocator.mockImplementationOnce(() => ({
+        boundingBox: async () => ({ x: 0, y: 0, width: 10, height: 10 }),
+      }))
+      .mockImplementationOnce(() => {
+        throw new Error('Unknown ref "e2". Run a new snapshot.');
+      });
+
+    await expect(
+      mod.screenshotWithLabelsViaPlaywright({
+        cdpUrl: "http://127.0.0.1:18792",
+        refs: { e1: { role: "button" }, e2: { role: "button" } },
+        fullPage: true,
+        maxLabels: 1,
+      }),
+    ).rejects.toThrow('Unknown ref "e2"');
+    expect(screenshot).not.toHaveBeenCalled();
+  });
 });
 
 describe("screenshotWithLabelsViaPlaywright (element/ref)", () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it("uses refLocator.screenshot for ref mode and projects relative to element", async () => {
+  it("captures the resolved ref element and projects relative to it", async () => {
     const evaluate = evaluateMockReturning({ x: 0, y: 0 });
     // First call resolves the element rect (container), second resolves e1 annotation bbox.
     const boundingBox = vi
@@ -142,7 +208,14 @@ describe("screenshotWithLabelsViaPlaywright (element/ref)", () => {
       .mockResolvedValueOnce({ x: 60, y: 110, width: 30, height: 20 });
     const elementScreenshot = vi.fn(async () => Buffer.from("ELEM"));
     setPwToolsCoreCurrentPage({ evaluate, screenshot: vi.fn() });
-    setPwToolsCoreCurrentRefLocator({ boundingBox, screenshot: elementScreenshot });
+    setPwToolsCoreCurrentRefLocator({
+      boundingBox,
+      elementHandle: async () => ({
+        screenshot: elementScreenshot,
+        scrollIntoViewIfNeeded: async () => {},
+        dispose: async () => {},
+      }),
+    });
 
     const result = await mod.screenshotWithLabelsViaPlaywright({
       cdpUrl: "http://127.0.0.1:18792",

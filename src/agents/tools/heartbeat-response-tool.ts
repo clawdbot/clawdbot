@@ -29,8 +29,7 @@ const HeartbeatResponseToolSchema = Type.Object(
     nextCheck: Type.Optional(Type.String()),
     scratch: Type.Optional(
       Type.String({
-        description:
-          "Complete replacement for heartbeat monitor prose. Recurring schedules belong in automations, not scratch.",
+        description: "Complete replacement for heartbeat monitor prose; not a recurring schedule.",
       }),
     ),
   },
@@ -56,7 +55,7 @@ export function createHeartbeatResponseTool(): AnyAgentTool {
     catalogMode: "direct-only",
     displaySummary: "Accept heartbeat outcome/notify choice.",
     description:
-      "Accept heartbeat result for post-turn handling. `notify=false` no visible send. `notify=true` needs concise notificationText. Scratch is monitor prose only; manage recurring tasks with cron.",
+      "Accept heartbeat result for post-turn handling. `notify=false` no visible send. `notify=true` needs concise notificationText. Scratch is monitor prose only.",
     parameters: HeartbeatResponseToolSchema,
     execute: async (_toolCallId, args) => {
       if (!isRecord(args)) {

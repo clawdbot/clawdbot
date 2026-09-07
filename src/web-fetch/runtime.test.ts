@@ -1,5 +1,6 @@
 /** Tests web_fetch runtime provider selection, credential discovery, and sandbox filtering. */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type { PluginWebFetchProviderEntry } from "../plugins/types.js";
 import type { RuntimeWebFetchMetadata } from "../secrets/runtime-web-tools.types.js";
@@ -57,13 +58,16 @@ function createFirecrawlProvider(
   });
 }
 
-function createThirdPartyFetchProvider(): PluginWebFetchProviderEntry {
+function createThirdPartyFetchProvider(
+  overrides: Partial<WebFetchTestProviderParams> = {},
+): PluginWebFetchProviderEntry {
   return createWebFetchTestProvider({
     pluginId: "third-party-fetch",
     id: "thirdparty",
     credentialPath: "plugins.entries.third-party-fetch.config.webFetch.apiKey",
     autoDetectOrder: 0,
     getConfiguredCredentialValue: () => "runtime-key",
+    ...overrides,
   });
 }
 
@@ -141,6 +145,11 @@ describe("web fetch runtime", () => {
   });
 
   it("prefers the runtime-selected provider when metadata is available", async () => {
+    const unrelated = createThirdPartyFetchProvider({
+      getConfiguredCredentialValue: () => {
+        throw new Error("selected provider resolution probed unrelated credentials");
+      },
+    });
     const provider = createFirecrawlProvider({
       createTool: ({ runtimeMetadata }) => ({
         description: "firecrawl",
@@ -151,8 +160,8 @@ describe("web fetch runtime", () => {
         }),
       }),
     });
-    resolvePluginWebFetchProvidersMock.mockReturnValue([provider]);
-    resolveRuntimeWebFetchProvidersMock.mockReturnValue([provider]);
+    resolvePluginWebFetchProvidersMock.mockReturnValue([unrelated, provider]);
+    resolveRuntimeWebFetchProvidersMock.mockReturnValue([unrelated, provider]);
 
     const runtimeWebFetch: RuntimeWebFetchMetadata = {
       providerSource: "auto-detect",
@@ -286,26 +295,38 @@ describe("web fetch runtime", () => {
     expect(resolvePluginWebFetchProvidersMock).toHaveBeenCalledTimes(2);
   });
 
-  it("invalidates provider discovery when the same config object changes", () => {
-    const firecrawl = createFirecrawlProvider({
-      getConfiguredCredentialValue: () => "firecrawl-key",
-    });
-    const external = createThirdPartyFetchProvider();
-    resolvePluginWebFetchProvidersMock
-      .mockReturnValueOnce([firecrawl])
-      .mockReturnValueOnce([external]);
-    const config = {
-      tools: { web: { fetch: { provider: "firecrawl" } } },
-    } as OpenClawConfig & { tools: { web: { fetch: { provider: string } } } };
+  it.each(["detached", "published"])(
+    "invalidates provider discovery when the same %s config object changes",
+    (mode) => {
+      const firecrawl = createFirecrawlProvider({
+        getConfiguredCredentialValue: () => "firecrawl-key",
+      });
+      const external = createThirdPartyFetchProvider();
+      resolvePluginWebFetchProvidersMock
+        .mockReturnValueOnce([firecrawl])
+        .mockReturnValueOnce([external]);
+      const config = {
+        tools: { web: { fetch: { provider: "firecrawl" } } },
+      } as OpenClawConfig & { tools: { web: { fetch: { provider: string } } } };
+      const resolveProvider = () =>
+        requireResolvedWebFetch(resolveWebFetchDefinition({ config })).provider.id;
 
-    const first = requireResolvedWebFetch(resolveWebFetchDefinition({ config }));
-    config.tools.web.fetch.provider = "thirdparty";
-    const second = requireResolvedWebFetch(resolveWebFetchDefinition({ config }));
+      if (mode === "published") {
+        setRuntimeConfigSnapshot(config);
+      }
+      expect(resolveProvider()).toBe("firecrawl");
+      expect(resolveProvider()).toBe("firecrawl");
+      expect(resolvePluginWebFetchProvidersMock).toHaveBeenCalledTimes(1);
 
-    expect(first.provider.id).toBe("firecrawl");
-    expect(second.provider.id).toBe("thirdparty");
-    expect(resolvePluginWebFetchProvidersMock).toHaveBeenCalledTimes(2);
-  });
+      config.tools.web.fetch.provider = "thirdparty";
+      if (mode === "published") {
+        setRuntimeConfigSnapshot(config);
+      }
+      expect(resolveProvider()).toBe("thirdparty");
+      expect(resolveProvider()).toBe("thirdparty");
+      expect(resolvePluginWebFetchProvidersMock).toHaveBeenCalledTimes(2);
+    },
+  );
 
   it("evicts superseded provider discovery cache entries", () => {
     const firstFirecrawl = createFirecrawlProvider({

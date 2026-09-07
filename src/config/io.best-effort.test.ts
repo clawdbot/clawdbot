@@ -14,6 +14,7 @@ import {
   readConfigFileSnapshot,
   readSourceConfigBestEffort,
 } from "./config.js";
+import { resetConfigOverrides, setConfigOverride } from "./runtime-overrides.js";
 import { withTempHome, writeOpenClawConfig } from "./test-helpers.js";
 
 type ConfigHealthDatabase = Pick<OpenClawStateKyselyDatabase, "config_health_entries">;
@@ -33,6 +34,7 @@ function readConfigHealthRow(env: NodeJS.ProcessEnv, configPath: string) {
 describe("readBestEffortConfig", () => {
   afterEach(() => {
     closeOpenClawStateDatabaseForTest();
+    resetConfigOverrides();
   });
 
   it("can read snapshots without updating config observation state", async () => {
@@ -230,6 +232,7 @@ describe("readBestEffortConfig", () => {
   it("materializes fresh-install defaults when the config file is missing", async () => {
     await withTempHome(async () => {
       const { loadConfig } = await import("./io.runtime.js");
+      expect(setConfigOverride("logging.level", "warn").ok).toBe(true);
 
       const snapshot = await readConfigFileSnapshot({ observe: false });
       const loaded = loadConfig({ pin: false, skipPluginValidation: true });
@@ -240,6 +243,7 @@ describe("readBestEffortConfig", () => {
       // stays provider-conditional, so compaction is the parity signal here).
       expect(snapshot.config.agents?.defaults?.compaction?.mode).toBe("safeguard");
       expect(loaded.agents?.defaults?.compaction?.mode).toBe("safeguard");
+      expect(loaded.logging?.level).toBe("warn");
     });
   });
 

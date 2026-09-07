@@ -1,58 +1,35 @@
 // @vitest-environment node
-// Sidebar zone and session-section persistence split from settings.node.test.ts
-// to keep both files under the lint size budget.
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createStorageMock } from "../test-helpers/storage.ts";
-import { loadSettings, saveSettings, type UiSettings } from "./settings.ts";
-
-function setTestLocation(params: { protocol: string; host: string; pathname: string }) {
-  vi.stubGlobal("location", {
-    protocol: params.protocol,
-    host: params.host,
-    hostname: params.host.replace(/:\d+$/, ""),
-    pathname: params.pathname,
-  } as Location);
-}
-
-function expectedGatewayUrl(basePath: string): string {
-  const proto = location.protocol === "https:" ? "wss" : "ws";
-  return `${proto}://${location.host}${basePath}`;
-}
-
-function makeSettings(gatewayUrl: string, overrides: Partial<UiSettings> = {}): UiSettings {
-  return {
-    gatewayUrl,
-    token: "",
-    sessionKey: "main",
-    lastActiveSessionKey: "main",
-    theme: "claw",
-    themeMode: "system",
-    chatShowThinking: true,
-    chatShowToolCalls: true,
-    navCollapsed: false,
-    navWidth: 258,
-    sidebarEntries: [],
-    ...overrides,
-  };
-}
+// Sidebar zone and session-section persistence split from the settings suites
+// to keep each file under the lint size budget.
+import { describe, expect, it } from "vitest";
+import {
+  expectedGatewayUrl,
+  installSettingsStorageLifecycle,
+  makeUiSettings,
+  setTestLocation,
+} from "../test-helpers/settings-node.ts";
+import { loadSettings, saveSettings } from "./settings.ts";
 
 describe("sidebar preference persistence", () => {
-  beforeEach(() => {
-    vi.stubGlobal("localStorage", createStorageMock());
-    vi.stubGlobal("sessionStorage", createStorageMock());
-    vi.stubGlobal("navigator", { language: "en-US" } as Navigator);
-    localStorage.clear();
-    sessionStorage.clear();
-  });
+  installSettingsStorageLifecycle();
 
-  afterEach(() => {
-    vi.restoreAllMocks();
-    vi.stubGlobal("localStorage", createStorageMock());
-    vi.stubGlobal("sessionStorage", createStorageMock());
-    vi.stubGlobal("navigator", { language: "en-US" } as Navigator);
-    setTestLocation({ protocol: "https:", host: "gateway.example", pathname: "/" });
-    saveSettings(loadSettings());
-    vi.unstubAllGlobals();
+  it("persists sidebar width without leaking tab-local visibility across reloads", () => {
+    setTestLocation({ protocol: "https:", host: "gateway.example:8443", pathname: "/" });
+    const gatewayUrl = expectedGatewayUrl("");
+    const scopedKey = `openclaw.control.settings.v1:${gatewayUrl}`;
+
+    saveSettings(makeUiSettings(gatewayUrl, { navCollapsed: true, navWidth: 320 }));
+
+    const persisted = JSON.parse(localStorage.getItem(scopedKey) ?? "{}") as Record<
+      string,
+      unknown
+    >;
+    expect(persisted).not.toHaveProperty("navCollapsed");
+    expect(persisted.navWidth).toBe(320);
+    expect(loadSettings()).toMatchObject({ navCollapsed: false, navWidth: 320 });
+
+    localStorage.setItem(scopedKey, JSON.stringify({ ...persisted, navCollapsed: true }));
+    expect(loadSettings()).toMatchObject({ navCollapsed: false, navWidth: 320 });
   });
 
   it("persists sidebar entries across save and load, normalizing bad values", () => {
@@ -64,7 +41,7 @@ describe("sidebar preference persistence", () => {
 
     const gwUrl = expectedGatewayUrl("");
     saveSettings(
-      makeSettings(gwUrl, {
+      makeUiSettings(gwUrl, {
         sidebarEntries: ["route:tasks", "route:cron"],
         textScale: 100,
       }),
@@ -83,7 +60,11 @@ describe("sidebar preference persistence", () => {
     persisted.navWidth = 220;
     localStorage.setItem(scopedKey, JSON.stringify(persisted));
 
-    expect(loadSettings().sidebarEntries).toEqual(["route:cron", "route:plugins"]);
+    expect(loadSettings().sidebarEntries).toEqual([
+      "route:dashboards",
+      "route:cron",
+      "route:plugins",
+    ]);
     expect(loadSettings().navWidth).toBe(258);
   });
 
@@ -95,18 +76,22 @@ describe("sidebar preference persistence", () => {
     });
     const gwUrl = expectedGatewayUrl("");
     const scopedKey = `openclaw.control.settings.v1:${gwUrl}`;
-    const legacy = makeSettings(gwUrl) as unknown as Record<string, unknown>;
+    const legacy = makeUiSettings(gwUrl) as unknown as Record<string, unknown>;
     delete legacy.sidebarEntries;
     legacy.sidebarPinnedRoutes = ["workboard", "usage", "tasks", "usage", "worktrees", 7];
     localStorage.setItem(scopedKey, JSON.stringify(legacy));
 
     expect(loadSettings().sidebarEntries).toEqual([
-      "route:workboard",
+      "plugin:workboard/workboard",
       "route:usage",
       "route:tasks",
     ]);
     const migrated = JSON.parse(localStorage.getItem(scopedKey) ?? "{}") as Record<string, unknown>;
-    expect(migrated.sidebarEntries).toEqual(["route:workboard", "route:usage", "route:tasks"]);
+    expect(migrated.sidebarEntries).toEqual([
+      "plugin:workboard/workboard",
+      "route:usage",
+      "route:tasks",
+    ]);
     expect(migrated).not.toHaveProperty("sidebarPinnedRoutes");
   });
 });

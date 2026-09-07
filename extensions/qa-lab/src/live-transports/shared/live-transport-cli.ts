@@ -1,26 +1,19 @@
 // Qa Lab plugin module implements live transport cli behavior.
 import type { Command } from "commander";
-import type { QaRunnerCliRegistration } from "openclaw/plugin-sdk/qa-runner-runtime";
+import type {
+  LiveTransportQaCommandOptions as QaRunnerCommandOptions,
+  QaRunnerCliRegistration,
+} from "openclaw/plugin-sdk/qa-runner-runtime";
+import { parseQaCliPositiveIntegerOption } from "../../cli-options.js";
 import { DEFAULT_QA_LIVE_PROVIDER_MODE, formatQaProviderModeHelp } from "../../providers/index.js";
+import type { QaTransportAdapterFactory } from "../../qa-transport-registry.js";
 
-export type LiveTransportQaCommandOptions = {
-  repoRoot?: string;
-  outputDir?: string;
-  providerMode?: string;
-  primaryModel?: string;
-  alternateModel?: string;
-  fastMode?: boolean;
-  allowFailures?: boolean;
-  failFast?: boolean;
-  profile?: string;
-  scenarioIds?: string[];
-  listScenarios?: boolean;
-  sutAccountId?: string;
-  credentialSource?: string;
-  credentialRole?: string;
+export type LiveTransportQaCommandOptions = QaRunnerCommandOptions & {
+  concurrency?: number;
 };
 
 type LiveTransportQaCommanderOptions = {
+  concurrency?: number;
   repoRoot?: string;
   outputDir?: string;
   providerMode?: string;
@@ -37,7 +30,9 @@ type LiveTransportQaCommanderOptions = {
   credentialRole?: string;
 };
 
-export type LiveTransportQaCliRegistration = QaRunnerCliRegistration;
+export type LiveTransportQaCliRegistration = Omit<QaRunnerCliRegistration, "adapterFactory"> & {
+  adapterFactory?: QaTransportAdapterFactory;
+};
 
 type LiveTransportQaCliRegistrationOptions = {
   commandName: string;
@@ -55,7 +50,7 @@ type LiveTransportQaCliRegistrationOptions = {
   allowFailuresHelp?: string;
   scenarioHelp: string;
   sutAccountHelp: string;
-  adapterFactory?: QaRunnerCliRegistration["adapterFactory"];
+  adapterFactory?: QaTransportAdapterFactory;
   run: (opts: LiveTransportQaCommandOptions) => Promise<void>;
 };
 
@@ -74,6 +69,7 @@ function collectStringOption(value: string, previous: string[]) {
 
 function mapCommanderOptions(opts: LiveTransportQaCommanderOptions): LiveTransportQaCommandOptions {
   return {
+    ...(opts.concurrency !== undefined ? { concurrency: opts.concurrency } : {}),
     repoRoot: opts.repoRoot,
     outputDir: opts.outputDir,
     providerMode: opts.providerMode,
@@ -109,6 +105,13 @@ function createSharedLiveTransportQaCliRegistration(
         .option("--scenario <id>", params.scenarioHelp, collectStringOption, [])
         .option("--fast", "Enable provider fast mode where supported");
 
+      if (params.adapterFactory?.isolatesInstances === true) {
+        command.option(
+          "--concurrency <count>",
+          "Scenario worker concurrency (bounded by the transport limit)",
+          (value: string) => parseQaCliPositiveIntegerOption(value, "--concurrency"),
+        );
+      }
       if (params.allowFailuresHelp) {
         command.option("--allow-failures", params.allowFailuresHelp, false);
       }
@@ -167,12 +170,49 @@ export function createLiveTransportQaAdapterFactory(params: {
   id: string;
   isolatesInstances?: boolean;
   supportsModuleFlows?: true;
+  prepareSelectedScenarios?: QaTransportAdapterFactory["prepareSelectedScenarios"];
 }): NonNullable<LiveTransportQaCliRegistrationOptions["adapterFactory"]> {
   return {
     id: params.id,
     isolatesInstances: params.isolatesInstances,
     supportsModuleFlows: params.supportsModuleFlows,
+    ...(params.prepareSelectedScenarios
+      ? { prepareSelectedScenarios: params.prepareSelectedScenarios }
+      : {}),
     matches: ({ channelId, driver }) => driver === "live" && channelId === params.id,
     create: params.create,
   };
+}
+
+export function createStandardLiveTransportQaCliRegistration(params: {
+  channelId: string;
+  channelLabel: string;
+  createAdapter: NonNullable<LiveTransportQaCliRegistrationOptions["adapterFactory"]>["create"];
+  description: string;
+}): LiveTransportQaCliRegistration {
+  const adapterFactory = createLiveTransportQaAdapterFactory({
+    id: params.channelId,
+    supportsModuleFlows: true,
+    create: params.createAdapter,
+  });
+  return createLiveTransportQaCliRegistration({
+    commandName: params.channelId,
+    adapterFactory,
+    credentialOptions: {
+      sourceDescription: `Credential source for ${params.channelLabel} QA: env or convex (default: env)`,
+      roleDescription:
+        "Credential role for convex auth: maintainer or ci (default: ci in CI, maintainer otherwise)",
+    },
+    description: params.description,
+    outputDirHelp: `${params.channelLabel} QA artifact directory`,
+    scenarioHelp: `Run only the named ${params.channelLabel} QA scenario (repeatable)`,
+    sutAccountHelp: `Temporary ${params.channelLabel} account id inside the QA gateway config`,
+    async run(options) {
+      const runtime = await loadLiveTransportQaSuiteRuntime();
+      await runtime.runStandardLiveTransportQaSuiteCommand({
+        channelId: params.channelId,
+        options,
+      });
+    },
+  });
 }

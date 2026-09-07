@@ -1,5 +1,6 @@
 import { sanitizeForPromptLiteral } from "../agents/sanitize-for-prompt.js";
 import { formatApprovalDisplayPath } from "../infra/approval-display-paths.js";
+import { summarizeApprovalScope } from "../infra/approval-scope.js";
 import { normalizeApprovalRequest, type ChannelApprovalKind } from "../infra/approval-types.js";
 import { buildPendingApprovalView } from "../infra/approval-view-model.js";
 import type { ApprovalRequest, PendingApprovalView } from "../infra/approval-view-model.types.js";
@@ -308,6 +309,7 @@ function buildApprovalReactionPromptText(params: {
   reactionHint: string | null;
 }): string {
   const { view } = params;
+  const scopeSummary = view.scope ? summarizeApprovalScope(view.scope) : undefined;
   const allowedDecisions = listDecisionActions(view.actions);
   const sections: string[] = [];
   if (view.approvalKind === "exec") {
@@ -347,6 +349,9 @@ function buildApprovalReactionPromptText(params: {
     if (view.nodeId) {
       info.push(`**Node:** ${view.nodeId}`);
     }
+    if (scopeSummary) {
+      info.push(`**Scope:** ${scopeSummary}`);
+    }
     if (view.agentId) {
       info.push(`**Agent:** ${view.agentId}`);
     }
@@ -356,12 +361,25 @@ function buildApprovalReactionPromptText(params: {
     info.push(`**Expires in:** ${formatExecApprovalExpiresIn(view.expiresAtMs, params.nowMs)}`);
     info.push(`**Full id:** \`${view.approvalId}\``);
     sections.push(info.join("\n"));
+  } else if (view.approvalKind === "system-agent") {
+    const details = [
+      "**OpenClaw change requires approval**",
+      `**Change:** ${view.operationSummary}`,
+    ];
+    if (view.agentId) {
+      details.push(`**Agent:** ${view.agentId}`);
+    }
+    details.push(`**Expires in:** ${formatExecApprovalExpiresIn(view.expiresAtMs, params.nowMs)}`);
+    sections.push(details.join("\n"));
   } else {
     const header = ["**Plugin approval required**", `**ID:** ${view.approvalId}`];
     sections.push(header.join("\n"));
     const details = [`**Title:** ${view.title}`];
     if (view.description) {
       details.push(`**Description:** ${view.description}`);
+    }
+    if (scopeSummary) {
+      details.push(`**Scope:** ${scopeSummary}`);
     }
     details.push(`**Severity:** ${formatSeverity(view.severity)}`);
     if (view.toolName) {
@@ -486,6 +504,25 @@ export function buildApprovalReactionPendingContent(params: {
       }),
     };
   }
+  if (params.view.approvalKind === "system-agent") {
+    if (request.approvalKind !== "system-agent") {
+      throw new Error("approval request and view kinds do not match");
+    }
+    return {
+      reactionPayload,
+      manualFallbackPayload: withoutPresentation(
+        buildApprovalPendingReplyPayload({
+          approvalKind: "system-agent",
+          approvalId: request.id,
+          approvalSlug: request.id.slice(0, 8),
+          text: reactionPayload.text ?? "",
+          agentId: params.view.agentId ?? null,
+          allowedDecisions: reactionPayload.allowedDecisions,
+          sessionKey: request.request.sessionKey ?? null,
+        }),
+      ),
+    };
+  }
   if (request.approvalKind !== "exec") {
     throw new Error("approval request and view kinds do not match");
   }
@@ -504,6 +541,7 @@ export function buildApprovalReactionPendingContent(params: {
         cwd: params.view.cwd ?? undefined,
         host: params.view.host === "node" ? "node" : "gateway",
         nodeId: params.view.nodeId ?? undefined,
+        scope: params.view.scope ?? undefined,
         sessionKey: params.view.sessionKey ?? null,
         expiresAtMs: request.expiresAtMs,
         nowMs: params.nowMs,

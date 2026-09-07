@@ -17,6 +17,8 @@ scenario:
   execution:
     kind: flow
     channel: telegram
+    transportPolicy:
+      directMessageOnly: true
     summary: Request one exact Telegram marker and verify single-message delivery.
     config:
       requiredProviderMode: mock-openai
@@ -31,13 +33,13 @@ flow:
           value:
             expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
         - sendInbound:
-            conversation: { id: telegram-command-room, kind: channel }
+            conversation: { id: telegram-reply-chain-dm, kind: direct }
             senderId: qa-command-operator
             senderName: QA Command Operator
             text:
-              expr: "`@openclaw Telegram reply-chain marker QA. Reply exactly: ${config.marker}`"
+              expr: "`Telegram reply-chain marker QA. Reply exactly: ${config.marker}`"
         - waitForOutbound:
-            conversation: { id: telegram-command-room, kind: channel }
+            conversation: { id: telegram-reply-chain-dm, kind: direct }
             sinceIndex: { ref: startIndex }
             textIncludes: { ref: config.marker }
             timeoutMs: 90000

@@ -9,6 +9,7 @@ import {
   loadRatchetReference,
   loadRatchetSnapshot,
   loadRatchetSources,
+  parseRatchetArgs,
   parseRatchetCounts,
   reportRatchetFailures,
   reportRatchetSuccess,
@@ -56,30 +57,22 @@ function scriptKindForPath(filePath: string) {
 }
 
 function collectSafetyCommentLines(sourceFile: ts.SourceFile, source: string) {
-  const scanner = ts.createScanner(
-    ts.ScriptTarget.Latest,
-    false,
-    sourceFile.languageVariant,
-    source,
-  );
+  // Line text, not token scanning: a raw scanner desyncs on the `}` that ends a
+  // template substitution and then misses every later comment in the file.
   const sameLine = new Set<number>();
   const standalone = new Set<number>();
-  for (let token = scanner.scan(); token !== ts.SyntaxKind.EndOfFileToken; token = scanner.scan()) {
-    if (token !== ts.SyntaxKind.SingleLineCommentTrivia) {
-      continue;
+  sourceFile.getLineStarts().forEach((lineStart, line) => {
+    const lineEnd = source.indexOf("\n", lineStart);
+    const text = source.slice(lineStart, lineEnd === -1 ? source.length : lineEnd);
+    const commentStart = text.indexOf("//");
+    if (commentStart === -1 || !/^\/\/\s*SAFETY:\s*\S/u.test(text.slice(commentStart).trim())) {
+      return;
     }
-    const comment = source.slice(scanner.getTokenPos(), scanner.getTextPos()).trim();
-    if (!/^\/\/\s*SAFETY:\s*\S/u.test(comment)) {
-      continue;
-    }
-    const position = scanner.getTokenPos();
-    const line = sourceFile.getLineAndCharacterOfPosition(position).line;
     sameLine.add(line);
-    const lineStart = sourceFile.getPositionOfLineAndCharacter(line, 0);
-    if (source.slice(lineStart, position).trim() === "") {
+    if (text.slice(0, commentStart).trim() === "") {
       standalone.add(line);
     }
-  }
+  });
   return { sameLine, standalone };
 }
 
@@ -258,31 +251,6 @@ function writeBaseline(root: string, counts: ReadonlyMap<string, number>) {
   fs.writeFileSync(path.join(root, BASELINE_PATH), formatBaseline(counts));
 }
 
-function parseArgs(argv: string[]) {
-  const args: { base?: string; prune: boolean; staged: boolean } = {
-    prune: false,
-    staged: false,
-  };
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index];
-    if (arg === "--prune") {
-      args.prune = true;
-      continue;
-    }
-    if (arg === "--staged") {
-      args.staged = true;
-      continue;
-    }
-    if (arg === "--base" && argv[index + 1]) {
-      args.base = argv[index + 1];
-      index += 1;
-      continue;
-    }
-    throw new Error("Unknown or incomplete argument: " + arg);
-  }
-  return args;
-}
-
 function formatDeltas(entries: RatchetCountDelta[], comparison: ">" | "<") {
   return entries.map((entry) => `${entry.entry}: ${entry.current} ${comparison} ${entry.allowed}`);
 }
@@ -293,7 +261,7 @@ function totalCount(counts: ReadonlyMap<string, number>) {
 
 export function main(root = process.cwd(), argv: string[] = process.argv.slice(2)) {
   try {
-    const args = parseArgs(argv);
+    const args = parseRatchetArgs(argv);
     if (args.staged && args.prune) {
       throw new Error("--prune cannot be combined with --staged");
     }

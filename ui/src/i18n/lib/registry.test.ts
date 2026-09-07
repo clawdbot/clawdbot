@@ -1,6 +1,13 @@
 // @vitest-environment node
 
 import { describe, expect, it } from "vitest";
+import { de } from "../locales/de.ts";
+import { es } from "../locales/es.ts";
+import { hi } from "../locales/hi.ts";
+import { pt_BR } from "../locales/pt-BR.ts";
+import { ru } from "../locales/ru.ts";
+import { th } from "../locales/th.ts";
+import { zh_CN } from "../locales/zh-CN.ts";
 import {
   DEFAULT_LOCALE,
   loadLazyLocaleTranslation,
@@ -70,12 +77,16 @@ describe("lazy locale registry", () => {
       expect(catalog?.common, locale).toHaveProperty("health");
     }
     const byLocale = Object.fromEntries(catalogs);
-    expect(byLocale.de).toMatchObject({ common: { health: "Status" } });
-    expect(byLocale.es).toMatchObject({ languages: { de: "Deutsch (Alemán)" } });
-    expect(byLocale["pt-BR"]).toMatchObject({ languages: { es: "Español (Espanhol)" } });
-    expect(byLocale["zh-CN"]).toMatchObject({ common: { health: "健康状况" } });
-    expect(byLocale.hi).toMatchObject({ languages: { en: "English (अंग्रेज़ी)" } });
-    expect(byLocale.th).toMatchObject({ languages: { en: "อังกฤษ" } });
-    expect(byLocale.ru).toMatchObject({ languages: { en: "Английский" } });
+    for (const [locale, expected] of Object.entries({
+      de,
+      es,
+      "pt-BR": pt_BR,
+      "zh-CN": zh_CN,
+      hi,
+      th,
+      ru,
+    })) {
+      expect(byLocale[locale], locale).toEqual(expected);
+    }
   });
 });

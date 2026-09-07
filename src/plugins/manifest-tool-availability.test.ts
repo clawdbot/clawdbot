@@ -1,6 +1,7 @@
 // Manifest tool-availability tests cover config, auth, environment, and base-URL gates.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { SecretRef } from "../config/types.secrets.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import {
   hasManifestToolAvailability,
@@ -160,6 +161,50 @@ describe("manifestConfigSignalPasses", () => {
       }),
     ).toBe(false);
   });
+
+  it.each([
+    {
+      name: "present selected env",
+      selected: true,
+      env: { COLLISION_KEY: "synthetic-key" },
+      expected: true,
+    },
+    { name: "missing selected env", selected: true, env: {}, expected: false },
+    {
+      name: "non-default mismatch",
+      selected: false,
+      env: { COLLISION_KEY: "synthetic-key" },
+      expected: false,
+    },
+  ])("evaluates $name under an exec collision", ({ selected, env, expected }) => {
+    const config = xaiConfig({
+      webSearch: { apiKey: { source: "env", provider: "selected", id: "COLLISION_KEY" } },
+    });
+    config.secrets = {
+      defaults: selected ? { env: "selected" } : undefined,
+      providers: { selected: { source: "exec", command: "/unused" } },
+    };
+    expect(manifestConfigSignalPasses({ config, env, signal: webSearchSignal })).toBe(expected);
+  });
+
+  it.each([
+    { allowlist: ["XAI_API_KEY"], expected: true },
+    { allowlist: ["OTHER_API_KEY"], expected: false },
+  ])("honors the explicit env provider allowlist $allowlist", ({ allowlist, expected }) => {
+    const config: OpenClawConfig = {
+      ...xaiConfig({
+        webSearch: { apiKey: { source: "env", provider: "shared", id: "XAI_API_KEY" } },
+      }),
+      secrets: { providers: { shared: { source: "env", allowlist } } },
+    };
+    expect(
+      manifestConfigSignalPasses({
+        config,
+        env: { XAI_API_KEY: "token" },
+        signal: webSearchSignal,
+      }),
+    ).toBe(expected);
+  });
 });
 
 describe("manifestProviderBaseUrlGuardPasses", () => {
@@ -223,6 +268,86 @@ describe("hasManifestToolAvailability", () => {
         configSignals: [webSearchSignal],
       },
     },
+  });
+
+  it.each<{
+    name: string;
+    ref: SecretRef;
+    secrets?: OpenClawConfig["secrets"];
+    expected: boolean;
+  }>([
+    {
+      name: "implicit store default",
+      ref: { source: "store", provider: "default", id: "TOOL_API_KEY" },
+      expected: true,
+    },
+    {
+      name: "selected store default without a declaration",
+      ref: { source: "store", provider: "shared", id: "TOOL_API_KEY" },
+      secrets: { defaults: { store: "shared" } },
+      expected: true,
+    },
+    ...(
+      [
+        { source: "file", path: "/tmp/unused-store-alias-fixture.json" },
+        { source: "env" },
+        { source: "exec", command: "/tmp/unused-store-alias-command" },
+      ] as const
+    ).map((provider) => ({
+      name: `selected store default shadowing ${provider.source}`,
+      ref: { source: "store", provider: "shared", id: "TOOL_API_KEY" } as const,
+      secrets: { defaults: { store: "shared" }, providers: { shared: provider } },
+      expected: true,
+    })),
+    ...(
+      [
+        { source: "store" },
+        { source: "file", path: "/tmp/unused-store-alias-fixture.json" },
+        { source: "exec", command: "/tmp/unused-store-alias-command" },
+      ] as const
+    ).map((provider) => ({
+      name: `explicit matching non-default ${provider.source} provider`,
+      ref: {
+        source: provider.source,
+        provider: "shared",
+        id: provider.source === "file" ? "/tool/apiKey" : "TOOL_API_KEY",
+      },
+      secrets: { providers: { shared: provider } },
+      expected: true,
+    })),
+    {
+      name: "missing non-default store provider",
+      ref: { source: "store", provider: "shared", id: "TOOL_API_KEY" },
+      expected: false,
+    },
+    {
+      name: "mismatched non-default store provider",
+      ref: { source: "store", provider: "shared", id: "TOOL_API_KEY" },
+      secrets: { providers: { shared: { source: "file", path: "/tmp/unused.json" } } },
+      expected: false,
+    },
+    {
+      name: "old store default after selecting another alias",
+      ref: { source: "store", provider: "default", id: "TOOL_API_KEY" },
+      secrets: { defaults: { store: "shared" } },
+      expected: false,
+    },
+    ...(["file", "exec"] as const).map((source) => ({
+      name: `undeclared ${source} default`,
+      ref: { source, provider: "default", id: source === "file" ? "/tool/apiKey" : "TOOL_API_KEY" },
+      expected: false,
+    })),
+  ])("checks $name through config-only metadata", ({ ref, secrets, expected }) => {
+    const plugin = makePlugin({
+      toolMetadata: { x_search: { configSignals: [webSearchSignal] } },
+    });
+    const config: OpenClawConfig = {
+      ...xaiConfig({ webSearch: { apiKey: ref } }),
+      secrets,
+    };
+    expect(hasManifestToolAvailability({ plugin, toolNames: ["x_search"], config, env: {} })).toBe(
+      expected,
+    );
   });
 
   it("fails open for tools without availability signals", () => {

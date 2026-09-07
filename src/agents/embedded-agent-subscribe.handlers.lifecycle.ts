@@ -2,6 +2,7 @@
  * Handles lifecycle and compaction events from subscribed embedded-agent sessions.
  */
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
+import { projectChatErrorDetail } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { createInlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { hasAcceptedSessionSpawn } from "./accepted-session-spawn.js";
@@ -12,7 +13,7 @@ import {
   shouldSuppressRawErrorConsoleSuffix,
 } from "./embedded-agent-error-observation.js";
 import {
-  classifyFailoverReason,
+  classifyAssistantFailoverReason,
   formatUserFacingAssistantErrorText,
   GENERIC_ASSISTANT_ERROR_TEXT,
 } from "./embedded-agent-helpers.js";
@@ -22,8 +23,8 @@ import { resolveFinalAssistantVisibleText } from "./embedded-agent-runner/run/he
 import { isIncompleteTerminalAssistantTurn } from "./embedded-agent-runner/run/incomplete-turn-classification.js";
 import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
 import {
-  consumePendingToolMediaReply,
   hasAssistantVisibleReply,
+  readPendingToolMediaReply,
 } from "./embedded-agent-subscribe.handlers.messages.replies.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
 import { isAssistantMessage } from "./embedded-agent-utils.js";
@@ -37,6 +38,7 @@ export {
 
 export function handleAgentStart(ctx: EmbeddedAgentSubscribeContext) {
   ctx.log.debug(`embedded run agent start: runId=${ctx.params.runId}`);
+  const data = { phase: "start", startedAt: Date.now() };
   emitAgentEvent({
     runId: ctx.params.runId,
     ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
@@ -46,10 +48,7 @@ export function handleAgentStart(ctx: EmbeddedAgentSubscribeContext) {
       ? { lifecycleGeneration: ctx.params.lifecycleGeneration }
       : {}),
     stream: "lifecycle",
-    data: {
-      phase: "start",
-      startedAt: Date.now(),
-    },
+    data,
   });
   runBestEffortCallback({
     label: "lifecycle agent event",
@@ -57,7 +56,7 @@ export function handleAgentStart(ctx: EmbeddedAgentSubscribeContext) {
     callback: () =>
       ctx.params.onAgentEvent?.({
         stream: "lifecycle",
-        data: { phase: "start" },
+        data,
       }),
   });
 }
@@ -71,6 +70,7 @@ export function handleAgentEnd(
   const lastAssistant = ctx.state.lastAssistant;
   const isError = isAssistantMessage(lastAssistant) && lastAssistant.stopReason === "error";
   let lifecycleErrorText: string | undefined;
+  let errorObservation: ReturnType<typeof projectChatErrorDetail>;
   // Terminal delivery does not depend on streamed text alone: when the streamed
   // assistant texts are empty, payload building falls back to the completed
   // assistant message's visible text, so such a turn still reaches the user.
@@ -150,23 +150,34 @@ export function handleAgentEnd(
 
   if (isError && lastAssistant) {
     const rawError = lastAssistant.errorMessage?.trim();
-    const failoverReason = classifyFailoverReason(rawError ?? "", {
-      provider: lastAssistant.provider,
+    const failoverReason = classifyAssistantFailoverReason(lastAssistant, {
+      providerOwner: ctx.params.providerOwner ?? null,
     });
     const errorText = formatUserFacingAssistantErrorText(lastAssistant, {
       cfg: ctx.params.config,
       sessionKey: ctx.params.sessionKey,
+      agentId: ctx.params.agentId,
       provider: lastAssistant.provider,
       model: lastAssistant.model,
+      providerOwner: ctx.params.providerOwner,
     });
     const observedError = buildApiErrorObservationFields(rawError, {
       provider: lastAssistant.provider,
+      providerOwner: ctx.params.providerOwner,
     });
     const safeErrorText =
       buildTextObservationFields(errorText, {
         provider: lastAssistant.provider,
       }).textPreview ?? GENERIC_ASSISTANT_ERROR_TEXT;
     lifecycleErrorText = safeErrorText;
+    // Lifecycle events also reach clients, so log-only diagnostics must not leave here.
+    errorObservation = projectChatErrorDetail({
+      provider: lastAssistant.provider,
+      model: lastAssistant.model,
+      failoverReason,
+      ...observedError,
+      httpStatus: observedError.httpCode ? Number(observedError.httpCode) : undefined,
+    });
     const safeRunId = sanitizeForConsole(ctx.params.runId) ?? "-";
     const safeModel = sanitizeForConsole(lastAssistant.model) ?? "unknown";
     const safeProvider = sanitizeForConsole(lastAssistant.provider) ?? "unknown";
@@ -207,7 +218,11 @@ export function handleAgentEnd(
       terminalAborted === true && ctx.state.lastToolError
         ? summarizeToolValidationError(ctx.state.lastToolError)
         : undefined;
-    const terminalMeta = {
+    const data = {
+      phase:
+        ctx.params.terminalLifecyclePhase === "finishing" ? "finishing" : isError ? "error" : "end",
+      ...(isError ? { error: lifecycleErrorText ?? GENERIC_ASSISTANT_ERROR_TEXT } : {}),
+      ...(errorObservation ? { errorObservation } : {}),
       ...(terminalStopReason ? { stopReason: terminalStopReason } : {}),
       ...(ctx.state.yielded === true ? { yielded: true } : {}),
       ...(ctx.state.timeoutPhase ? { timeoutPhase: ctx.state.timeoutPhase } : {}),
@@ -216,10 +231,9 @@ export function handleAgentEnd(
         : {}),
       ...(typeof terminalAborted === "boolean" ? { aborted: terminalAborted } : {}),
       ...(toolErrorSummary ? { toolErrorSummary } : {}),
+      ...(livenessState ? { livenessState } : {}),
+      ...(replayInvalid ? { replayInvalid } : {}),
     };
-    const phase =
-      ctx.params.terminalLifecyclePhase === "finishing" ? "finishing" : isError ? "error" : "end";
-    const errorData = isError ? { error: lifecycleErrorText ?? GENERIC_ASSISTANT_ERROR_TEXT } : {};
     emitAgentEvent({
       runId: ctx.params.runId,
       ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
@@ -229,14 +243,7 @@ export function handleAgentEnd(
         ? { lifecycleGeneration: ctx.params.lifecycleGeneration }
         : {}),
       stream: "lifecycle",
-      data: {
-        phase,
-        ...errorData,
-        ...terminalMeta,
-        ...(livenessState ? { livenessState } : {}),
-        ...(replayInvalid ? { replayInvalid } : {}),
-        endedAt: Date.now(),
-      },
+      data: { ...data, endedAt: Date.now() },
     });
     runBestEffortCallback({
       label: "lifecycle agent event",
@@ -244,13 +251,7 @@ export function handleAgentEnd(
       callback: () =>
         ctx.params.onAgentEvent?.({
           stream: "lifecycle",
-          data: {
-            phase,
-            ...errorData,
-            ...terminalMeta,
-            ...(livenessState ? { livenessState } : {}),
-            ...(replayInvalid ? { replayInvalid } : {}),
-          },
+          data,
         }),
     });
   };
@@ -271,14 +272,10 @@ export function handleAgentEnd(
   };
 
   const flushPendingMediaAndChannel = () => {
-    if (ctx.params.onBlockReply) {
-      const pendingToolMediaReply = consumePendingToolMediaReply(ctx.state);
+    if (ctx.params.onBlockReply && !ctx.state.pendingToolMediaDeliveryFailed) {
+      const pendingToolMediaReply = readPendingToolMediaReply(ctx.state);
       if (pendingToolMediaReply && hasAssistantVisibleReply(pendingToolMediaReply)) {
-        const visibleReplyCountBefore = ctx.state.visibleBlockReplyCount;
         ctx.emitBlockReply(pendingToolMediaReply);
-        if (ctx.state.visibleBlockReplyCount > visibleReplyCountBefore) {
-          ctx.state.hasToolMediaBlockReply = true;
-        }
       }
     }
 
@@ -322,7 +319,7 @@ export function handleAgentEnd(
 
   const deliverTerminal = () => {
     ctx.state.deferBlockReplyDelivery = false;
-    ctx.flushDeferredAssistantEvents();
+    ctx.flushAssistantStream();
     ctx.flushDeferredBlockReplies();
     const flushBlockReplyBufferResult = ctx.flushBlockReplyBuffer({ final: true });
     finalizeAgentEnd();
@@ -362,7 +359,7 @@ export function handleAgentEnd(
   };
 
   const suppressTerminalDelivery = () => {
-    ctx.clearDeferredAssistantEvents();
+    ctx.clearAssistantStream();
     ctx.clearDeferredBlockReplies();
     finalizeAgentEnd();
   };

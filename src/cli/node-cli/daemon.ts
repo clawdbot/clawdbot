@@ -35,9 +35,9 @@ import { buildDaemonServiceSnapshot, installDaemonServiceAndEmit } from "../daem
 import {
   createCliStatusTextStyles,
   createDaemonInstallActionContext,
-  failIfNixDaemonInstallMode,
-  filterDaemonEnv,
+  resolveDaemonInstallBlockMessage,
   formatRuntimeStatus,
+  projectDaemonServiceForJson,
   resolveRuntimeStatusColor,
 } from "../daemon-cli/shared.js";
 import { formatInvalidConfigPort, formatInvalidPortOption } from "../error-format.js";
@@ -67,7 +67,7 @@ type NodeDaemonStatusOptions = {
 
 function renderNodeServiceStartHints(): string[] {
   return buildPlatformServiceStartHints({
-    installCommand: formatCliCommand("openclaw node install"),
+    installHint: formatCliCommand("openclaw node install"),
     startCommand: formatCliCommand("openclaw node start"),
     launchAgentPlistPath: `~/Library/LaunchAgents/${resolveNodeLaunchAgentLabel()}.plist`,
     systemdServiceName: resolveNodeSystemdServiceName(),
@@ -111,7 +111,9 @@ async function warnIfSystemdUserLingerDisabled(warn: (message: string) => void):
 
 export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
   const { json, stdout, warnings, emit, fail } = createDaemonInstallActionContext(opts.json);
-  if (failIfNixDaemonInstallMode(fail)) {
+  const installBlock = resolveDaemonInstallBlockMessage("node");
+  if (installBlock) {
+    fail(installBlock);
     return;
   }
 
@@ -143,7 +145,7 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
 
   const runtimeRaw = opts.runtime ? opts.runtime : DEFAULT_GATEWAY_DAEMON_RUNTIME;
   if (!isGatewayDaemonRuntime(runtimeRaw)) {
-    fail('Invalid --runtime (use "node"; Bun lacks the required node:sqlite API)');
+    fail('Invalid --runtime (use "node" or "bun")');
     return;
   }
 
@@ -281,12 +283,10 @@ export async function runNodeDaemonStatus(opts: NodeDaemonStatusOptions = {}) {
   }
   const [command, runtime] = await Promise.all([
     service.readCommand(process.env).catch(() => null),
-    service.readRuntime(process.env).catch(
-      (err: unknown): GatewayServiceRuntime => ({
-        status: "unknown",
-        detail: formatErrorMessage(err),
-      }),
-    ),
+    service.readRuntime(process.env).catch((err: unknown): GatewayServiceRuntime => ({
+      status: "unknown",
+      detail: formatErrorMessage(err),
+    })),
   ]);
 
   const payload = {
@@ -298,17 +298,8 @@ export async function runNodeDaemonStatus(opts: NodeDaemonStatusOptions = {}) {
   };
 
   if (json) {
-    const safeEnvironment = filterDaemonEnv(command?.environment);
     defaultRuntime.writeJson({
-      service: {
-        ...payload.service,
-        command: command
-          ? {
-              ...command,
-              environment: Object.keys(safeEnvironment).length > 0 ? safeEnvironment : undefined,
-            }
-          : command,
-      },
+      service: projectDaemonServiceForJson(payload.service, { includeDefinitionPaths: true }),
     });
     return;
   }

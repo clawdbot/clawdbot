@@ -2,6 +2,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { expect, vi } from "vitest";
+import {
+  appendTranscriptEventSync,
+  appendTranscriptMessageSync,
+  replaceSessionEntrySync,
+  type SessionTranscriptRuntimeTarget,
+} from "../config/sessions/session-accessor.js";
 import { CURRENT_SESSION_VERSION } from "../config/sessions/version.js";
 import type { McpLoopbackRequestContext } from "../gateway/mcp-grant-store.js";
 import {
@@ -9,14 +15,10 @@ import {
   type DiagnosticEventPayload,
   type DiagnosticEventPrivateData,
 } from "../infra/diagnostic-events.js";
-import type { ExecApprovalsFile } from "../infra/exec-approvals-core.js";
-import { saveExecApprovals } from "../infra/exec-approvals-store.js";
-import { testing as execApprovalsStoreTesting } from "../infra/exec-approvals-store.test-support.js";
 import type { CliBackendPlugin } from "../plugins/cli-backend.types.js";
-import type { RunExit } from "../process/supervisor/types.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { withEnvAsync } from "../test-utils/env.js";
+import { closeOpenClawAgentDatabaseByPath } from "../state/openclaw-agent-db.js";
 import { createTestAdmittedRunContext } from "./admitted-run-context.test-support.js";
+import { resolveCliExecutionTarget } from "./cli-runner/execution-target.js";
 import type { PreparedCliRunContext, RunCliAgentParams } from "./cli-runner/types.js";
 
 type CliProvider = "claude-cli" | "codex-cli" | "google-gemini-cli";
@@ -79,22 +81,13 @@ export function createTestMcpLoopbackServerConfig(port: number) {
   };
 }
 
-export function createClaudeInputStartedEvent(data: string) {
-  const input = JSON.parse(data) as { type?: string; uuid?: string };
-  return input.type === "user" && typeof input.uuid === "string"
-    ? { type: "command_lifecycle" as const, command_uuid: input.uuid, state: "started" as const }
-    : undefined;
-}
-
 export function createTestMcpLoopbackClientGrant(params: {
   context: McpLoopbackRequestContext;
 }): McpLoopbackClientGrant {
   return { token: "loopback-token", context: structuredClone(params.context) };
 }
 
-export async function createTestMcpLoopbackServer(port = 0) {
-  return { port, close: vi.fn(async () => undefined) };
-}
+export async function createTestMcpLoopbackServer(): Promise<void> {}
 
 export function buildDefaultTestCliBackend(
   params: TestCliBackendParams = {},
@@ -119,13 +112,14 @@ export function buildDefaultTestCliBackend(
   };
 }
 
-export type PreparedCliRunContextOverrides = {
+type PreparedCliRunContextOverrides = {
   provider?: CliProvider;
   model?: string;
   runId?: string;
   prompt?: string;
   sessionId?: string;
   sessionKey?: string;
+  sessionTarget?: SessionTranscriptRuntimeTarget;
   sessionEntry?: PreparedCliRunContext["params"]["sessionEntry"];
   agentId?: string;
   backend?: Partial<PreparedCliRunContext["preparedBackend"]["backend"]>;
@@ -146,7 +140,6 @@ export type PreparedCliRunContextOverrides = {
   timeoutMs?: number;
   onSuccessfulAuthBinding?: PreparedCliRunContext["params"]["onSuccessfulAuthBinding"];
   runtimeArtifact?: PreparedCliRunContext["backendResolved"]["runtimeArtifact"];
-  liveSessionRequirement?: PreparedCliRunContext["backendResolved"]["liveSessionRequirement"];
 };
 
 export function buildPreparedCliRunContext(
@@ -206,11 +199,13 @@ export function buildPreparedCliRunContext(
   return {
     params: {
       admittedRunContext: createTestAdmittedRunContext(runId),
-      sessionId: overrides.sessionId ?? "s1",
-      sessionKey: overrides.sessionKey,
+      sessionId: overrides.sessionId ?? overrides.sessionTarget?.sessionId ?? "s1",
+      sessionKey: overrides.sessionKey ?? overrides.sessionTarget?.sessionKey,
+      sessionTarget: overrides.sessionTarget,
       sessionEntry: overrides.sessionEntry,
-      agentId: overrides.agentId,
-      sessionFile: "/tmp/session.jsonl",
+      agentId: overrides.agentId ?? overrides.sessionTarget?.agentId,
+      sessionFile:
+        overrides.sessionTarget?.sessionKey ?? overrides.sessionKey ?? overrides.sessionId ?? "s1",
       workspaceDir,
       config: overrides.config,
       prompt: overrides.prompt ?? "hi",
@@ -242,8 +237,11 @@ export function buildPreparedCliRunContext(
         overrides.toolAvailabilityEnforcement ??
         (provider === "google-gemini-cli" ? "prepare-execution" : "execution-args"),
       runtimeArtifact: overrides.runtimeArtifact,
-      liveSessionRequirement: overrides.liveSessionRequirement,
     },
+    executionTarget: resolveCliExecutionTarget({
+      params: { sessionEntry: overrides.sessionEntry },
+      backendId: provider,
+    }),
     preparedBackend: {
       backend,
       env: overrides.preparedEnv ?? {},
@@ -257,38 +255,9 @@ export function buildPreparedCliRunContext(
     normalizedModel: model,
     systemPrompt: overrides.systemPrompt ?? "You are a helpful assistant.",
     systemPromptReport: {} as PreparedCliRunContext["systemPromptReport"],
-    bootstrapPromptWarningLines: [],
     authEpochVersion: 2,
+    claudeSkillsPluginArgs: [],
     ...(overrides.mcpDeliveryCapture ? { mcpDeliveryCapture: true } : {}),
-  };
-}
-
-export function buildClaudeLiveRunContext(overrides: PreparedCliRunContextOverrides = {}) {
-  return buildPreparedCliRunContext({
-    ...overrides,
-    backend: { ...overrides.backend, liveSession: "claude-stdio" },
-  });
-}
-
-export function createCancelableLiveRunLifecycle() {
-  let resolveExit!: (exit: RunExit) => void;
-  const exited = new Promise<RunExit>((resolve) => {
-    resolveExit = resolve;
-  });
-  return {
-    wait: vi.fn(() => exited),
-    cancel: vi.fn((_reason?: string) => {
-      resolveExit({
-        reason: "manual-cancel",
-        exitCode: null,
-        exitSignal: null,
-        durationMs: 1,
-        stdout: "",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      });
-    }),
   };
 }
 
@@ -353,60 +322,40 @@ export async function expectPathMissing(targetPath: string) {
   throw new Error(`expected ${targetPath} to be missing`);
 }
 
-export async function withTempExecApprovalsState(
-  file: Record<string, unknown>,
-  run: () => Promise<void>,
-) {
-  const home = await fs.promises.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-exec-approvals-"));
-  const stateDir = path.join(home, ".openclaw");
-  try {
-    await withEnvAsync({ HOME: home, OPENCLAW_STATE_DIR: stateDir }, async () => {
-      execApprovalsStoreTesting.reset();
-      saveExecApprovals(file as ExecApprovalsFile);
-      await run();
-    });
-  } finally {
-    closeOpenClawStateDatabaseForTest();
-    execApprovalsStoreTesting.reset();
-    await fs.promises.rm(home, { recursive: true, force: true });
-  }
-}
-
-export async function withTempOpenClawHome(run: (home: string) => Promise<void>) {
-  const home = await fs.promises.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-home-"));
-  try {
-    await withEnvAsync({ OPENCLAW_HOME: home }, async () => run(home));
-  } finally {
-    await fs.promises.rm(home, { recursive: true, force: true });
-  }
-}
-
 type PrepareCliRun = (params: RunCliAgentParams) => Promise<PreparedCliRunContext>;
 
 export function createCliRunnerPrepareFixture(prepareCliRun: PrepareCliRun) {
   const tempDirs = new Set<string>();
   const hadStateDir = Object.hasOwn(process.env, "OPENCLAW_STATE_DIR");
   const originalStateDir = process.env.OPENCLAW_STATE_DIR;
-  let defaultSession: { dir: string; sessionFile: string } | undefined;
+  let defaultSession:
+    | { dir: string; sessionFile: string; sessionTarget: SessionTranscriptRuntimeTarget }
+    | undefined;
+  const databasePaths = new Set<string>();
 
   const createSession = () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-prepare-"));
+    const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-prepare-")));
     tempDirs.add(dir);
     process.env.OPENCLAW_STATE_DIR = dir;
-    const sessionFile = path.join(dir, "agents", "main", "sessions", "session-test.jsonl");
-    fs.mkdirSync(path.dirname(sessionFile), { recursive: true });
-    fs.writeFileSync(
-      sessionFile,
-      `${JSON.stringify({
-        type: "session",
-        version: CURRENT_SESSION_VERSION,
-        id: "session-test",
-        timestamp: new Date(0).toISOString(),
-        cwd: dir,
-      })}\n`,
-      "utf-8",
-    );
-    return { dir, sessionFile };
+    const sessionTarget = {
+      agentId: "main",
+      sessionId: "session-test",
+      sessionKey: "agent:main:main",
+      storePath: path.join(dir, "agents", "main", "agent", "openclaw-agent.sqlite"),
+    };
+    databasePaths.add(sessionTarget.storePath);
+    replaceSessionEntrySync(sessionTarget, { sessionId: sessionTarget.sessionId, updatedAt: 0 });
+    const appended = appendTranscriptEventSync(sessionTarget, {
+      type: "session",
+      version: CURRENT_SESSION_VERSION,
+      id: sessionTarget.sessionId,
+      timestamp: new Date(0).toISOString(),
+      cwd: dir,
+    });
+    if (!appended.ok) {
+      throw new Error("Could not initialize CLI fixture transcript");
+    }
+    return { dir, sessionFile: sessionTarget.sessionKey, sessionTarget };
   };
 
   const getSession = () => (defaultSession ??= createSession());
@@ -416,10 +365,11 @@ export function createCliRunnerPrepareFixture(prepareCliRun: PrepareCliRun) {
     },
     createSession,
     prepare(overrides: Partial<Omit<RunCliAgentParams, "admittedRunContext">> = {}) {
-      const { dir, sessionFile } = getSession();
+      const { dir, sessionFile, sessionTarget } = getSession();
       const defaults: Omit<RunCliAgentParams, "admittedRunContext"> = {
         sessionId: "session-test",
         sessionFile,
+        sessionTarget,
         workspaceDir: dir,
         prompt: "latest ask",
         provider: "test-cli",
@@ -442,10 +392,23 @@ export function createCliRunnerPrepareFixture(prepareCliRun: PrepareCliRun) {
       timestamp: string;
       message: unknown;
     }) {
-      const { sessionFile } = getSession();
-      fs.appendFileSync(sessionFile, `${JSON.stringify({ type: "message", ...entry })}\n`, "utf-8");
+      const { dir, sessionTarget } = getSession();
+      const appended = appendTranscriptMessageSync(sessionTarget, {
+        cwd: dir,
+        eventId: entry.id,
+        parentId: entry.parentId,
+        now: Date.parse(entry.timestamp),
+        message: entry.message,
+      });
+      if (!appended.ok || !appended.value) {
+        throw new Error("Could not append CLI fixture transcript message");
+      }
     },
     cleanup() {
+      for (const databasePath of databasePaths) {
+        closeOpenClawAgentDatabaseByPath(databasePath);
+      }
+      databasePaths.clear();
       for (const dir of tempDirs) {
         fs.rmSync(dir, { recursive: true, force: true });
       }
@@ -512,164 +475,4 @@ export function createWeatherSkillFixture(root: string, materialized: boolean) {
       ],
     } satisfies NonNullable<RunCliAgentParams["skillsSnapshot"]>,
   };
-}
-
-type SupervisorSpawnMock = (typeof import("./cli-runner.test-support.js"))["supervisorSpawnMock"];
-
-type ClaudeLiveRunFixture = ReturnType<typeof mockClaudeLiveRun>;
-
-export function mockClaudeLiveRun(
-  spawnMock: SupervisorSpawnMock,
-  options: {
-    cancelable?: boolean;
-    beforeSpawn?: () => Promise<void>;
-    events?: Array<Record<string, unknown> | string>;
-    inputLifecycle?: boolean;
-    exitImmediately?: RunExit;
-    exitOnWrite?: RunExit;
-    onWrite?: (params: {
-      data: string;
-      emit: (events: Array<Record<string, unknown> | string>) => void;
-      writeIndex: number;
-    }) => void;
-    runId?: string;
-    pid?: number;
-  } = {},
-) {
-  let stdoutListener: ((chunk: string) => void) | undefined;
-  let resolveExit: ((exit: RunExit) => void) | undefined;
-  const exited = new Promise<RunExit>((resolve) => {
-    resolveExit = resolve;
-  });
-  let spawnInput: {
-    argv?: string[];
-    env?: Record<string, string>;
-    onStdout?: (chunk: string) => void;
-  } = {};
-  const writes: string[] = [];
-  const emit = (events: Array<Record<string, unknown> | string>) => {
-    stdoutListener?.(
-      `${events.map((event) => (typeof event === "string" ? event : JSON.stringify(event))).join("\n")}\n`,
-    );
-  };
-  const stdin = {
-    write: vi.fn((data: string, callback?: (error?: Error | null) => void) => {
-      writes.push(data);
-      const writeIndex = writes.length - 1;
-      const inputStartedEvent = createClaudeInputStartedEvent(data);
-      if (options.inputLifecycle !== false && inputStartedEvent) {
-        emit([inputStartedEvent]);
-      }
-      if (options.onWrite) {
-        options.onWrite({ data, emit, writeIndex });
-      } else if (writeIndex === 0 && options.events) {
-        emit(options.events);
-      }
-      callback?.();
-      if (options.exitOnWrite) {
-        resolveExit?.(options.exitOnWrite);
-      }
-    }),
-    end: vi.fn(),
-  };
-  const lifecycle = options.cancelable
-    ? createCancelableLiveRunLifecycle()
-    : {
-        wait: vi.fn(() =>
-          options.exitImmediately
-            ? Promise.resolve(options.exitImmediately)
-            : options.exitOnWrite
-              ? exited
-              : new Promise<RunExit>(() => {}),
-        ),
-        cancel: vi.fn(),
-      };
-  spawnMock.mockImplementationOnce(async (...args: unknown[]) => {
-    spawnInput = (args[0] ?? {}) as typeof spawnInput;
-    stdoutListener = spawnInput.onStdout;
-    await options.beforeSpawn?.();
-    return {
-      runId: options.runId ?? "live-run",
-      pid: options.pid ?? 2345,
-      startedAtMs: Date.now(),
-      stdin,
-      ...lifecycle,
-    };
-  });
-  return {
-    emit,
-    get spawnInput() {
-      return spawnInput;
-    },
-    stdin,
-    lifecycle,
-    writes,
-  };
-}
-
-export function buildClaudeControlRequestEvents(params: {
-  requestId: string;
-  toolUseId: string;
-  input: Record<string, unknown>;
-  sessionId?: string;
-  toolName?: string;
-}) {
-  const sessionId = params.sessionId ?? "live-control";
-  return [
-    {
-      type: "control_request",
-      request_id: params.requestId,
-      request: {
-        subtype: "can_use_tool",
-        tool_name: params.toolName ?? "Bash",
-        tool_use_id: params.toolUseId,
-        input: params.input,
-      },
-    },
-    { type: "system", subtype: "init", session_id: sessionId },
-    { type: "result", session_id: sessionId, result: "ok" },
-  ];
-}
-
-export function expectClaudeControlDecision(
-  fixture: ClaudeLiveRunFixture,
-  expected: {
-    behavior: "allow" | "deny";
-    requestId: string;
-    toolUseId?: string;
-    updatedInput?: Record<string, unknown>;
-    messageIncludes?: string;
-  },
-) {
-  const encoded = fixture.writes.find((entry) => entry.includes('"control_response"'));
-  expect(encoded, "control_response written to stdin").toBeDefined();
-  const parsed = JSON.parse((encoded ?? "").trim()) as {
-    type: string;
-    response: {
-      subtype: string;
-      request_id: string;
-      response: {
-        behavior: string;
-        decisionClassification?: string;
-        message?: string;
-        toolUseID?: string;
-        updatedInput?: unknown;
-      };
-    };
-  };
-  expect(parsed.type).toBe("control_response");
-  expect(parsed.response.subtype).toBe("success");
-  expect(parsed.response.request_id).toBe(expected.requestId);
-  expect(parsed.response.response.behavior).toBe(expected.behavior);
-  if (expected.toolUseId) {
-    expect(parsed.response.response.toolUseID).toBe(expected.toolUseId);
-  }
-  if (expected.updatedInput) {
-    expect(parsed.response.response.updatedInput).toEqual(expected.updatedInput);
-  }
-  if (expected.messageIncludes) {
-    expect(parsed.response.response.decisionClassification).toBe("user_reject");
-    expect(parsed.response.response.message).toContain(expected.messageIncludes);
-  }
-  return parsed;
 }

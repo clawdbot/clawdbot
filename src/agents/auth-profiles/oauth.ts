@@ -26,9 +26,10 @@ import {
   findActiveDegradedSecretOwner,
   SecretSurfaceUnavailableError,
 } from "../../secrets/runtime-degraded-state.js";
+import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
 import { normalizeOptionalSecretInput } from "../../utils/normalize-secret-input.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
-import { authProfilesLog } from "./constants.js";
+import { authProfilesLog, CLAUDE_CLI_PROFILE_ID } from "./constants.js";
 import {
   evaluateStoredCredentialEligibility,
   resolveTokenExpiryState,
@@ -43,10 +44,11 @@ import { suggestOAuthProfileIdForLegacyDefault } from "./repair.js";
 import {
   getRuntimeAuthProfileStoreSnapshotCore,
   hasRuntimeAuthProfileStoreSnapshot,
-  setRuntimeAuthProfileStoreSnapshot,
+  updateRuntimeAuthProfileStoreSnapshot,
 } from "./runtime-snapshots.js";
+import { loadAuthProfileStoreForSecretsRuntime } from "./store-runtime.js";
 import {
-  loadAuthProfileStoreForSecretsRuntime,
+  findPersistedAuthProfileCredential,
   resolvePersistedAuthProfileOwnerAgentDir,
 } from "./store.js";
 import type { AuthProfileCredential, AuthProfileStore, OAuthCredential } from "./types.js";
@@ -257,6 +259,9 @@ async function tryResolveOAuthProfile(
   params: ResolveApiKeyForProfileParams,
 ): Promise<ResolveApiKeyForProfileResult | null> {
   const { cfg, store, profileId } = params;
+  if (isRetiredOAuthProfileId(profileId)) {
+    return null;
+  }
   const cred = store.profiles[profileId];
   if (!cred || cred.type !== "oauth") {
     return null;
@@ -291,6 +296,10 @@ async function tryResolveOAuthProfile(
     profileType: cred.type,
     credential: resolved.credential,
   });
+}
+
+function isRetiredOAuthProfileId(profileId: string): boolean {
+  return profileId === CLAUDE_CLI_PROFILE_ID;
 }
 
 function authProfileSecretRefKey(
@@ -378,8 +387,15 @@ export async function resolveApiKeyForProfile(
   params: ResolveApiKeyForProfileParams,
 ): Promise<ResolveApiKeyForProfileResult | null> {
   const { cfg, store, profileId } = params;
-  const storedProfile = store.profiles[profileId];
+  const storedProfile = isUserModelAuthProfileId(profileId)
+    ? findPersistedAuthProfileCredential({ agentDir: params.agentDir, profileId })
+    : store.profiles[profileId];
   if (!storedProfile) {
+    return null;
+  }
+  // Claude owns this native login slot. Legacy persisted copies must never
+  // resolve, refresh, or leave OpenClaw as bearer tokens.
+  if (isRetiredOAuthProfileId(profileId)) {
     return null;
   }
   const configForRefResolution = cfg ?? getRuntimeConfig();
@@ -498,7 +514,7 @@ export async function resolveApiKeyForProfile(
     let refreshedStore =
       error instanceof OAuthManagerRefreshError
         ? error.getRefreshedStore()
-        : loadAuthProfileStoreForSecretsRuntime(params.agentDir);
+        : loadAuthProfileStoreForSecretsRuntime(params.agentDir, { profileId });
     const surfacedCause =
       error instanceof OAuthManagerRefreshError && error.cause ? error.cause : error;
     if (isRefreshTokenReusedError(surfacedCause)) {
@@ -531,11 +547,11 @@ export async function resolveApiKeyForProfile(
           if (Object.keys(snapshot.lastGood).length === 0) {
             snapshot.lastGood = undefined;
           }
-          setRuntimeAuthProfileStoreSnapshot(snapshot, params.agentDir);
+          updateRuntimeAuthProfileStoreSnapshot(snapshot, params.agentDir);
         }
       }
       if (clearedLastGood) {
-        refreshedStore = loadAuthProfileStoreForSecretsRuntime(params.agentDir);
+        refreshedStore = loadAuthProfileStoreForSecretsRuntime(params.agentDir, { profileId });
       }
     }
     const fallbackProfileId =

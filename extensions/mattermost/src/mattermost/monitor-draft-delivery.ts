@@ -134,15 +134,18 @@ export async function deliverMattermostReplyWithDraftPreview(
           previewFinalDeliveryText = previewFinalResolution?.deliveryText;
           previewFinalTextAlreadyDelivered =
             previewFinalResolution?.alreadyDelivered === true && payload.isError !== true;
+          // A text-only preview cannot finalize unsent presentation content or controls.
           useConfirmedPreviewAsWholeFinal =
             previewFinalTextAlreadyDelivered &&
-            !resolveSendableOutboundReplyParts(payload).hasMedia;
+            !resolveSendableOutboundReplyParts(payload).hasMedia &&
+            !payload.presentation;
           const previewFinalText = previewFinalResolution?.editText;
 
           if (
             (hasMedia && !ttsSupplement) ||
             typeof previewFinalText !== "string" ||
             payload.isError ||
+            payload.presentation ||
             !canFinalizeMattermostPreviewInPlace({
               kind: params.kind,
               previewRootId: params.effectiveReplyToId,

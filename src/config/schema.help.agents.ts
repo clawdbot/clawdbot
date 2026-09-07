@@ -1,14 +1,10 @@
 // Defines user-facing config field help text for docs and UI surfaces.
 export const AGENT_FIELD_HELP: Record<string, string> = {
-  ui: "UI presentation settings for accenting and assistant identity shown in control surfaces. Use this for branding and readability customization without changing runtime behavior.",
+  ui: "UI presentation settings for accenting and operator display preferences. Use this for readability customization without changing runtime behavior.",
   "ui.seamColor":
     "Primary accent color used by UI surfaces for emphasis, badges, and visual identity cues. Use high-contrast values that remain readable across light/dark themes.",
-  "ui.assistant":
-    "Assistant display identity settings for name and avatar shown in UI surfaces. Keep these values aligned with your operator-facing persona and support expectations.",
-  "ui.assistant.name":
-    "Display name shown for the assistant in UI views, chat chrome, and status contexts. Keep this stable so operators can reliably identify which assistant persona is active.",
-  "ui.assistant.avatar":
-    "Assistant avatar image source used in UI surfaces (URL, path, or data URI depending on runtime support). Use trusted assets and consistent branding dimensions for clean rendering.",
+  "ui.prefs.accent":
+    "User-selected Control UI accent color in #RRGGBB format. Overrides ui.seamColor; clear it to restore the configured seam color or theme default.",
   tui: "Terminal UI display settings. Use this section for terminal-only presentation preferences without changing Gateway or other UI behavior.",
   "tui.footer":
     "Terminal UI footer display settings. Keep optional context compact so session, model, goal, and token information stay readable.",
@@ -33,7 +29,7 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
   "plugins.entries":
     "Per-plugin settings keyed by plugin ID including enablement and plugin-specific runtime configuration payloads. Use this for scoped plugin tuning without changing global loader policy.",
   "plugins.entries.*.enabled":
-    "Per-plugin enablement override for a specific entry, applied on top of global plugin policy (restart required). Use this to stage plugin rollout gradually across environments.",
+    "Per-plugin enablement override for a specific entry, applied on top of global plugin policy. With the default hybrid reload mode, changes hot-reload the plugin runtime for new agent turns without restarting the Gateway unless the plugin requires a restart for this path. Use this to stage plugin rollout gradually across environments.",
   "plugins.entries.*.hooks":
     "Per-plugin typed hook policy controls for core-enforced safety gates. Use this to constrain high-impact hook categories without disabling the entire plugin.",
   "plugins.entries.*.hooks.allowPromptInjection":
@@ -86,6 +82,8 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
     "Optional per-model runtime policy for this agent. Use this for agent-specific model exceptions instead of setting a whole-agent runtime.",
   "agents.entries.*.models.*.agentRuntime.id":
     'Per-agent model runtime id: "openclaw", "auto", a registered plugin harness id such as "codex", or a supported CLI backend alias such as "claude-cli".',
+  "agents.entries.*.models.*.codeMode":
+    "OpenClaw Code Mode for this agent and exact provider/model: On forces it on, Off disables it, and Default inherits the agent activation setting, then the shared model override, then tools.codeMode.enabled. This does not change the selected runtime or Codex native Code Mode.",
   "agents.defaults.imageModel.primary":
     "Optional image model (provider/model) used when the primary model lacks image input.",
   "agents.defaults.imageModel.fallbacks": "Ordered fallback image models (provider/model).",
@@ -129,7 +127,7 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
   "agents.defaults.compaction.provider":
     "Id of a registered compaction provider plugin used for summarization. When set and the provider is registered, its summarize() method is called instead of the built-in summarizeInStages pipeline. Falls back to built-in on provider failure. Leave unset to use the default built-in summarization.",
   "agents.defaults.compaction.thinkingLevel":
-    'Thinking level used only for embedded OpenClaw compaction summaries: "off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max", "ultra", or "inherit". The default is "low"; set "inherit" to reuse the session level. The selected level is clamped to the actual compaction model/runtime. Native Codex app-server compaction ignores this setting because its compact request has no per-operation thinking override, and OpenClaw logs a warning.',
+    'Thinking level used only for embedded OpenClaw compaction summaries: "off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max", "ultra", or "inherit". Defaults to the provider compaction preference, otherwise "low"; native local Ollama prefers "off". Set "inherit" to reuse the session level. Explicit settings override provider defaults, and the selected level is clamped to the actual compaction model/runtime. Native Codex app-server compaction ignores this setting because its compact request has no per-operation thinking override, and OpenClaw logs a warning.',
   "agents.defaults.compaction.keepRecentTokens":
     "Minimum token budget preserved from the most recent conversation window during compaction. Use higher values to protect immediate context continuity and lower values to keep more long-tail history.",
   "agents.defaults.compaction.identifierPolicy":
@@ -151,11 +149,11 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
   "agents.defaults.compaction.postCompactionSections":
     'Opt-in AGENTS.md H2/H3 section names re-injected after compaction. Leave unset or set [] to disable reinjection. Explicitly set ["Session Startup", "Red Lines"] to enable the legacy default pair.',
   "agents.defaults.compaction.timeoutSeconds":
-    "Maximum time in seconds allowed for a single compaction operation before it is aborted (default: 180). Increase this for very large sessions that need more time to summarize, or decrease it to fail faster on unresponsive models.",
+    "Safety window in seconds for each built-in compaction model request (default: 180). Multi-stage compaction refreshes the window as each serial request starts, so the complete compaction can take longer; plugin-owned compaction receives one window for the complete operation.",
   "agents.defaults.compaction.model":
     "Optional provider/model or configured bare alias used only for compaction summarization. Bare aliases resolve before dispatch; a configured literal model ID wins if it collides with an alias. Leave unset to keep using the primary agent model.",
   "agents.defaults.compaction.maxActiveTranscriptBytes":
-    'Byte threshold that triggers normal preflight local compaction when the active session transcript reaches this size (bytes or strings like "20mb"). Set to 0 or leave unset to disable. Also caps Codex app-server native rollout transcripts; oversized native threads restart fresh.',
+    'Byte threshold that triggers normal preflight local compaction when the transcript window the model sees (since the latest compaction or reset) reaches this size (bytes or strings like "20mb"). Set to 0 or leave unset to disable. Also caps Codex app-server native rollout transcripts; oversized native threads restart fresh.',
   "agents.defaults.compaction.notifyUser":
     "When enabled, sends brief context-maintenance notices to the user: when compaction starts and completes (for example, '🧹 Compacting context...' and '🧹 Compaction complete'), and when a pre-compaction memory flush is exhausted so the reply continues in a degraded state (for example, '⚠️ Memory maintenance temporarily failed; continuing your reply.'). Disabled by default to keep context maintenance silent and non-intrusive.",
   "agents.defaults.compaction.memoryFlush":
@@ -167,7 +165,7 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
   "agents.defaults.compaction.memoryFlush.softThresholdTokens":
     "Threshold distance to compaction (in tokens) that triggers pre-compaction memory flush execution. Use earlier thresholds for safer persistence, or tighter thresholds for lower flush frequency.",
   "agents.defaults.compaction.memoryFlush.forceFlushTranscriptBytes":
-    'Forces pre-compaction memory flush when active transcript size reaches this threshold (bytes or strings like "2mb"). Use this to prevent long-session hangs even when token counters are stale; set to 0 to disable.',
+    'Forces pre-compaction memory flush when the model-visible transcript window reaches this threshold (bytes or strings like "2mb"). After compaction, this includes the retained tail and subsequent turns rather than discarded history. Use this to prevent long-session hangs even when token counters are stale; set to 0 to disable.',
   "agents.defaults.embeddedAgent":
     "Embedded OpenClaw runner hardening controls for how workspace-local agent settings are trusted and applied in OpenClaw sessions.",
   "agents.defaults.embeddedAgent.projectSettingsPolicy":
@@ -205,7 +203,8 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
   "commands.plugins":
     "Allow /plugins chat command to list discovered plugins and toggle plugin enablement in config (default: false).",
   "commands.debug": "Allow /debug chat command for runtime-only overrides (default: false).",
-  "commands.restart": "Allow /restart and external SIGUSR1 restart requests (default: true).",
+  "commands.restart":
+    "Allow /restart, /update, and external SIGUSR1 restart requests (default: true).",
   "commands.ownerAllowFrom":
     "Explicit owner allowlist for owner-scoped commands. Use channel-native IDs (optionally prefixed like \"whatsapp:+15551234567\"). '*' is ignored.",
   "commands.allowFrom":

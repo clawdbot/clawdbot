@@ -5,6 +5,10 @@ inputs:
     description: Cache authority for this job (off, restore, or read-write).
     required: false
     default: "off"
+  install-screenshot-emulators:
+    description: Install the pinned phone and Wear OS emulator images used by release screenshots.
+    required: false
+    default: "false"
 outputs:
   cache-mode:
     description: Validated cache authority for downstream save gates.
@@ -16,6 +20,7 @@ runs:
       shell: bash
       env:
         CACHE_MODE: ${{ inputs.cache-mode }}
+        INSTALL_SCREENSHOT_EMULATORS: ${{ inputs.install-screenshot-emulators }}
       run: |
         case "$CACHE_MODE" in
           off|restore|read-write) ;;
@@ -24,9 +29,16 @@ runs:
             exit 2
             ;;
         esac
+        case "$INSTALL_SCREENSHOT_EMULATORS" in
+          true|false) ;;
+          *)
+            echo "::error::Invalid install-screenshot-emulators input: '$INSTALL_SCREENSHOT_EMULATORS' (expected true or false)"
+            exit 2
+            ;;
+        esac
 
     - name: Setup Java
-      uses: actions/setup-java@ad2b38190b15e4d6bdf0c97fb4fca8412226d287 # v5
+      uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
       with:
         distribution: temurin
         # Keep sdkmanager on the stable JDK path for Linux CI runners.
@@ -43,25 +55,47 @@ runs:
     - name: Restore Android SDK cache
       id: android-sdk-cache
       if: inputs.cache-mode != 'off'
-      uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ~/.android-sdk
-        key: ${{ runner.os }}-android-sdk-v1-cmdline-14742923-platform-37.0-build-tools-36.0.0
+        key: ${{ runner.os }}-android-sdk-v1-cmdline-15859902-platform-37.0-build-tools-36.0.0
         restore-keys: |
-          ${{ runner.os }}-android-sdk-v1-
+          ${{ runner.os }}-android-sdk-v1-cmdline-15859902-
 
     - name: Setup Android SDK command-line tools
       shell: bash
       run: |
         set -euo pipefail
         ANDROID_SDK_ROOT="$HOME/.android-sdk"
-        CMDLINE_TOOLS_VERSION="14742923"
+        CMDLINE_TOOLS_VERSION="15859902"
+        CMDLINE_TOOLS_SHA256="4e4c464f145a7512b57d088ac6c278c03c9eea610886b35a5e0804e74eedf583"
         ARCHIVE="commandlinetools-linux-${CMDLINE_TOOLS_VERSION}_latest.zip"
+        case "${RUNNER_OS}/${RUNNER_ARCH}" in
+          Linux/X64)
+            ;;
+          macOS/X64)
+            CMDLINE_TOOLS_SHA256="c5a6378ab5cf7e0d5701921405115befff13e9ff7417fb588389338f8bd050f3"
+            ARCHIVE="commandlinetools-mac_x86_64-${CMDLINE_TOOLS_VERSION}_latest.zip"
+            ;;
+          macOS/ARM64)
+            CMDLINE_TOOLS_SHA256="835b62a26162b229b441d1f6d4680383815a270809eb33522c0d480fa5002c4e"
+            ARCHIVE="commandlinetools-mac_arm64-${CMDLINE_TOOLS_VERSION}_latest.zip"
+            ;;
+          *)
+            echo "::error::Unsupported Android command-line tools runner: ${RUNNER_OS}/${RUNNER_ARCH}"
+            exit 2
+            ;;
+        esac
         URL="https://dl.google.com/android/repository/${ARCHIVE}"
 
         if [[ ! -x "${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager" ]]; then
           mkdir -p "${ANDROID_SDK_ROOT}/cmdline-tools"
           curl -fsSL --connect-timeout 10 --max-time 300 "${URL}" -o "${RUNNER_TEMP}/${ARCHIVE}"
+          if [[ "${RUNNER_OS}" == "Linux" ]]; then
+            printf '%s  %s\n' "${CMDLINE_TOOLS_SHA256}" "${RUNNER_TEMP}/${ARCHIVE}" | sha256sum --check -
+          else
+            printf '%s  %s\n' "${CMDLINE_TOOLS_SHA256}" "${RUNNER_TEMP}/${ARCHIVE}" | shasum -a 256 --check -
+          fi
           rm -rf "${ANDROID_SDK_ROOT}/cmdline-tools/latest"
           unzip -q "${RUNNER_TEMP}/${ARCHIVE}" -d "${ANDROID_SDK_ROOT}/cmdline-tools"
           mv "${ANDROID_SDK_ROOT}/cmdline-tools/cmdline-tools" "${ANDROID_SDK_ROOT}/cmdline-tools/latest"
@@ -71,22 +105,42 @@ runs:
         echo "ANDROID_HOME=${ANDROID_SDK_ROOT}" >> "${GITHUB_ENV}"
         echo "${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin" >> "${GITHUB_PATH}"
         echo "${ANDROID_SDK_ROOT}/platform-tools" >> "${GITHUB_PATH}"
+        echo "${ANDROID_SDK_ROOT}/emulator" >> "${GITHUB_PATH}"
 
     - name: Install Android SDK packages
       shell: bash
+      env:
+        INSTALL_SCREENSHOT_EMULATORS: ${{ inputs.install-screenshot-emulators }}
       run: |
         set -euo pipefail
         # sdkmanager closes stdin after accepting every license, which gives yes SIGPIPE.
         # Preserve sdkmanager's status so a real license failure still stops the job.
         yes | sdkmanager --sdk_root="${ANDROID_SDK_ROOT}" --licenses >/dev/null || [[ "${PIPESTATUS[1]}" -eq 0 ]]
-        sdkmanager --sdk_root="${ANDROID_SDK_ROOT}" --install \
-          "platform-tools" \
-          "platforms;android-37.0" \
+        packages=(
+          "platform-tools"
+          "platforms;android-37.0"
           "build-tools;36.0.0"
+        )
+        if [[ "${INSTALL_SCREENSHOT_EMULATORS}" == "true" ]]; then
+          case "${RUNNER_ARCH}" in
+            ARM64) screenshot_abi="arm64-v8a" ;;
+            X64) screenshot_abi="x86_64" ;;
+            *)
+              echo "::error::Unsupported Android emulator runner architecture: ${RUNNER_ARCH}"
+              exit 2
+              ;;
+          esac
+          packages+=(
+            "emulator"
+            "system-images;android-36;google_apis;${screenshot_abi}"
+            "system-images;android-34;android-wear;${screenshot_abi}"
+          )
+        fi
+        sdkmanager --sdk_root="${ANDROID_SDK_ROOT}" --install "${packages[@]}"
 
     - name: Save Android SDK cache
       if: inputs.cache-mode == 'read-write' && steps.android-sdk-cache.outputs.cache-hit != 'true'
-      uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ~/.android-sdk
         key: ${{ steps.android-sdk-cache.outputs.cache-primary-key }}

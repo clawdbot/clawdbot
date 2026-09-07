@@ -11,11 +11,9 @@ import { runCommandWithRuntime } from "../cli-utils.js";
 import { getModelsCommandSecretTargetIds } from "../command-secret-targets.js";
 import { isMissingMediaUnderstandingProvider } from "./media-understanding-result.js";
 import type { CapabilityEnvelope } from "./metadata.js";
+import { emitJsonOrText, formatEnvelopeForText, providerSummaryText } from "./output.js";
 import {
-  emitJsonOrText,
-  formatEnvelopeForText,
   providerHasGenericConfig,
-  providerSummaryText,
   requireProviderModelOverride,
   resolveCapabilityAgentOption,
   resolveCapabilityProviderAgentId,
@@ -96,10 +94,13 @@ export function registerAudioCapabilityCommands(capability: Command): void {
     .description("List audio transcription providers")
     .option("--agent <id>", "Agent whose provider state should be inspected")
     .option("--json", "Output JSON", false)
-    .action(async (opts) => {
+    .action(async (opts, command) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
         const cfg = getRuntimeConfig();
-        const agentId = resolveCapabilityProviderAgentId(cfg, opts.agent as string | undefined);
+        const agentId = resolveCapabilityProviderAgentId(
+          cfg,
+          resolveCapabilityAgentOption(command, opts.agent),
+        );
         const remoteProviders = [...buildMediaUnderstandingRegistry(undefined, cfg).values()]
           .filter((provider) => provider.capabilities?.includes("audio"))
           .map((provider) => ({

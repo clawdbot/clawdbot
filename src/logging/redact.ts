@@ -9,7 +9,7 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { compileConfigRegex } from "../security/config-regex.js";
 import { readLoggingConfig } from "./config.js";
-import { REDACT_REGEX_CHUNK_THRESHOLD, replacePatternBounded } from "./redact-bounded.js";
+import { replacePatternBounded } from "./redact-bounded.js";
 import { isFullContextToolPayloadRedaction } from "./redact-internal.js";
 import {
   AWS_SECRET_ACCESS_KEY_FIELD_KEYS,
@@ -25,6 +25,7 @@ import {
   PAYMENT_CREDENTIAL_JSON_KEYS,
   PAYMENT_CREDENTIAL_QUERY_KEYS,
   SHELL_REFERENCE_PRESERVING_PATTERN_SOURCES,
+  TOOL_PAYLOAD_AMBIGUOUS_ASSIGNMENT_PATTERNS,
   TOOL_PAYLOAD_REDACT_PATTERNS,
 } from "./redact-patterns.js";
 import { redactRegisteredSecretValues } from "./secret-redaction-registry.js";
@@ -41,21 +42,8 @@ const shellReferencePreservingPatterns = new WeakSet<RegExp>();
 // Patterns whose left-context assertions or complete token can cross a chunk boundary must run
 // against the full string; chunking can invent a `^` boundary or split the secret itself.
 const chunkUnsafePatterns = new WeakSet<RegExp>();
-// Whole-text prefilter eligibility is an allowlist, not "anything not chunkUnsafePatterns":
-// chunkUnsafePatterns only classifies the fixed default/tool-payload table, so an arbitrary
-// user-configured `logging.redactPatterns` entry (e.g. an anchored `/^SECRET.../g`) would
-// otherwise skip the prefilter's whole-text test() even though replacePatternBounded gives `^`
-// a fresh chunk-local start and would still redact it later in the string.
-const chunkSafePatterns = new WeakSet<RegExp>();
-const CHUNK_SAFE_PATTERN_SOURCES = new Set(DEFAULT_REDACT_PATTERNS);
-// A `(^|...)` boundary alternative matches "start of string", which chunking legitimately
-// re-invents at every chunk start; replacePatternBounded relies on that to catch a real match
-// that only happens to land at a chunk boundary. A whole-text test() cannot observe that
-// chunk-local match, so it is not a valid superset check for these patterns even though they are
-// otherwise default/vetted — exclude them from the prefilter allowlist, not from bounded
-// replacement itself.
-const START_OF_STRING_ALTERNATION = "(^|";
 const formAwareEqualsAssignmentPatterns = new WeakSet<RegExp>();
+const sourceAssignmentPatterns = new WeakSet<RegExp>();
 let defaultResolvedPatterns: RegExp[] | undefined;
 let toolPayloadResolvedPatterns: RegExp[] | undefined;
 
@@ -139,7 +127,9 @@ const DEFAULT_REDACT_PREFILTER_SOURCES: string[] = [
   // filler), but at least one key character must follow a splice so bare `+=` or line-leading
   // `===` separators do not trip the fast path.
   String.raw`%[0-9A-Fa-f]{2}[A-Za-z0-9_%.-]*=`,
-  String.raw`(?:\+|[${FORM_BODY_KEY_INVISIBLE_CHARS}])(?:[${FORM_BODY_KEY_INVISIBLE_CHARS}+]*[A-Za-z0-9_%.-])+[${FORM_BODY_KEY_INVISIBLE_CHARS}+]*=`,
+  // Search at the required assignment separator, not at every invisible character.
+  // Look behind it to retain the same obfuscated-key language without rescanning blank runs.
+  String.raw`=(?<=(?:\+|[${FORM_BODY_KEY_INVISIBLE_CHARS}])(?:[${FORM_BODY_KEY_INVISIBLE_CHARS}+]*[A-Za-z0-9_%.-])+[${FORM_BODY_KEY_INVISIBLE_CHARS}+]*=)`,
 ];
 const DEFAULT_REDACT_PREFILTER_RE = new RegExp(
   `(?:${DEFAULT_REDACT_PREFILTER_SOURCES.join("|")})`,
@@ -186,6 +176,9 @@ function parsePattern(raw: RedactPattern): RegExp | null {
   if (pattern && typeof raw === "string" && SHELL_REFERENCE_PRESERVING_PATTERN_SOURCES.has(raw)) {
     shellReferencePreservingPatterns.add(pattern);
   }
+  if (pattern && typeof raw === "string" && TOOL_PAYLOAD_AMBIGUOUS_ASSIGNMENT_PATTERNS.has(raw)) {
+    sourceAssignmentPatterns.add(pattern);
+  }
   if (pattern && typeof raw === "string" && FORM_AWARE_EQUALS_ASSIGNMENT_PATTERN_SOURCES.has(raw)) {
     formAwareEqualsAssignmentPatterns.add(pattern);
   }
@@ -198,15 +191,6 @@ function parsePattern(raw: RedactPattern): RegExp | null {
   ) {
     chunkUnsafePatterns.add(pattern);
   }
-  if (
-    pattern &&
-    typeof raw === "string" &&
-    CHUNK_SAFE_PATTERN_SOURCES.has(raw) &&
-    !chunkUnsafePatterns.has(pattern) &&
-    !raw.includes(START_OF_STRING_ALTERNATION)
-  ) {
-    chunkSafePatterns.add(pattern);
-  }
   return pattern;
 }
 
@@ -217,7 +201,7 @@ function resolvePatterns(value?: readonly RedactPattern[]): RegExp[] {
     );
     return toolPayloadResolvedPatterns;
   }
-  if (!value?.length) {
+  if (!value?.length || value === DEFAULT_REDACT_PATTERNS) {
     defaultResolvedPatterns ??= DEFAULT_REDACT_PATTERNS.map(parsePattern).filter(
       (re): re is RegExp => Boolean(re),
     );
@@ -227,10 +211,7 @@ function resolvePatterns(value?: readonly RedactPattern[]): RegExp[] {
 }
 
 function includesDefaultRedactPatterns(value?: readonly RedactPattern[]): boolean {
-  if (value === TOOL_PAYLOAD_REDACT_PATTERNS) {
-    return true;
-  }
-  if (!value?.length) {
+  if (!value || usesBuiltInRedactPatterns(value)) {
     return true;
   }
   const source = new Set(value.filter((pattern): pattern is string => typeof pattern === "string"));
@@ -711,13 +692,27 @@ function redactMatch(
   match: string,
   groups: string[],
   pattern: RegExp,
-  context?: { input?: string; offset?: number },
+  context?: {
+    input?: string;
+    offset?: number;
+    preserveSourceAssignment?: (text: string, offset: number) => boolean;
+  },
 ): string {
   if (match.includes("PRIVATE KEY-----")) {
     return redactPemBlock(match);
   }
   const selected = selectSecretCapture(match, groups);
   const token = selected.value;
+  if (
+    sourceAssignmentPatterns.has(pattern) &&
+    context?.preserveSourceAssignment?.(
+      context.input ?? "",
+      (context.offset ?? -1) +
+        getSecretCaptureStart(pattern, context.input ?? "", match, context.offset ?? -1, selected),
+    )
+  ) {
+    return match;
+  }
   const formAwareValue = formAwareEqualsAssignmentPatterns.has(pattern)
     ? splitFormAwareCredentialValue(token)
     : { secret: token, suffix: "" };
@@ -739,9 +734,14 @@ function redactMatch(
   // Assignment values can legitimately include trailing shell/structural characters
   // (e.g. `${VAR:-default}`); mask the captured token whole so those characters count toward the
   // retained hint instead of being exposed by delimiter-aware masking.
-  const masked = isShellReferencePattern
-    ? maskToken(token)
-    : `${maskSecretValue(formAwareValue.secret, { hinted: true })}${formAwareValue.suffix}`;
+  // Source goes through both the guard and SQLite. Full assignment masks keep
+  // those copies identical; diagnostic hints otherwise shrink on the second pass.
+  const masked =
+    context?.preserveSourceAssignment && sourceAssignmentPatterns.has(pattern)
+      ? maskSecretValue(token)
+      : isShellReferencePattern
+        ? maskToken(token)
+        : `${maskSecretValue(formAwareValue.secret, { hinted: true })}${formAwareValue.suffix}`;
   if (token === match) {
     return masked;
   }
@@ -765,6 +765,7 @@ function redactText(
     fullContext?: boolean;
     redactFormBodies?: boolean;
     redactStructuredAuthHeaders?: boolean;
+    preserveSourceAssignment?: (text: string, offset: number) => boolean;
   },
 ): string {
   let next = text;
@@ -776,28 +777,6 @@ function redactText(
     next = redactFormBody(next);
   }
   for (const pattern of patterns) {
-    const isChunkUnsafe = options?.fullContext || chunkUnsafePatterns.has(pattern);
-    // Bounded patterns are vetted to never match a chunk without also matching the full,
-    // unchunked text, so a cheap whole-text test() first lets non-matching patterns (the
-    // common case across a large default pattern table) skip the chunked replace entirely.
-    // Only patterns from the vetted default/tool-payload table (chunkSafePatterns) get this
-    // shortcut: an arbitrary configured pattern may be `^`-anchored, and replacePatternBounded
-    // gives `^` a fresh chunk-local start that a whole-text test() cannot see. Sticky (`y`)
-    // patterns only match at the regex's current lastIndex, so a whole-text test() only proves
-    // a match at position 0 and can miss a match bounded replacement would still find at a later
-    // chunk start; exempt them too. Below the chunk threshold, replacePatternBounded already
-    // falls through to a single text.replace() with no chunking to skip, so the prefilter's
-    // extra test() only adds a redundant scan; skip it.
-    const canChunk = next.length > REDACT_REGEX_CHUNK_THRESHOLD;
-    if (
-      !isChunkUnsafe &&
-      canChunk &&
-      chunkSafePatterns.has(pattern) &&
-      !pattern.sticky &&
-      !pattern.test(next)
-    ) {
-      continue;
-    }
     const replacer = (...args: unknown[]) => {
       const hasNamedGroups =
         args.length > 0 &&
@@ -811,11 +790,16 @@ function redactText(
         .map((value) => (typeof value === "string" ? value : ""));
       const offset = typeof args[offsetIndex] === "number" ? args[offsetIndex] : -1;
       const input = typeof args[inputIndex] === "string" ? args[inputIndex] : "";
-      return redactMatch(match, groups, pattern, { input, offset });
+      return redactMatch(match, groups, pattern, {
+        input,
+        offset,
+        preserveSourceAssignment: options?.preserveSourceAssignment,
+      });
     };
-    next = isChunkUnsafe
-      ? next.replace(pattern, replacer)
-      : replacePatternBounded(next, pattern, replacer);
+    next =
+      options?.fullContext || chunkUnsafePatterns.has(pattern)
+        ? next.replace(pattern, replacer)
+        : replacePatternBounded(next, pattern, replacer);
   }
   return next;
 }
@@ -870,7 +854,8 @@ export function computeSensitiveRedactionBitmap(
   text: string,
   resolved: ResolvedRedactOptions,
 ): boolean[] {
-  const bitmap: boolean[] = Array.from({ length: text.length }, () => false);
+  // oxlint-disable-next-line unicorn/no-new-array -- Fill the dense bitmap without a callback for every character.
+  const bitmap = new Array<boolean>(text.length).fill(false);
   if (resolved.mode === "off" || !resolved.patterns.length || !text) {
     return bitmap;
   }
@@ -1024,6 +1009,25 @@ export function redactToolPayloadTextWithConfig(
   );
 }
 
+/** Input source retains computations, but uses diagnostic credential masking, not output policy. */
+export function redactInputTextWithSourcePolicy(
+  text: string,
+  loggingConfig: LoggingConfig | undefined,
+  preserveSourceAssignment: (text: string, offset: number) => boolean,
+): string {
+  // Custom patterns run without syntax exemptions, even when identical to a built-in pattern.
+  const customPatterns = loggingConfig?.redactPatterns;
+  const prepared = customPatterns?.length
+    ? redactSensitiveText(text, { mode: "tools", patterns: customPatterns })
+    : redactRegisteredSecretValues(text, maskToken);
+  return redactText(prepared, resolvePatterns(), {
+    fullContext: true,
+    redactFormBodies: true,
+    redactStructuredAuthHeaders: true,
+    preserveSourceAssignment,
+  });
+}
+
 // Model-visible tool output commonly contains source code, so its assignment matching is
 // intentionally narrower than diagnostic and logging redaction.
 export function redactModelVisibleToolPayloadText(text: string): string {
@@ -1045,6 +1049,12 @@ export function isSensitiveFieldKey(key: string): boolean {
   return STRUCTURED_SECRET_FIELD_RE.test(key) || STRUCTURED_SECRET_ENV_FIELD_RE.test(key);
 }
 
+function isPublicShareIdPath(path: readonly string[]): boolean {
+  const idKey = path.at(-1)?.toLowerCase();
+  const parentKey = path.at(-2)?.toLowerCase().replaceAll("-", "").replaceAll("_", "");
+  return idKey === "id" && parentKey === "publicshare";
+}
+
 function redactSensitiveFieldValueWithOptions(
   key: string,
   value: string,
@@ -1052,6 +1062,9 @@ function redactSensitiveFieldValueWithOptions(
   path: readonly string[] = [key],
 ): string {
   const exactRedacted = redactRegisteredSecretValues(value, maskToken);
+  if (isPublicShareIdPath(path)) {
+    return maskToken(exactRedacted);
+  }
   const sensitiveKey = isSensitiveFieldKey(key);
   const fieldOptions =
     sensitiveKey && options.sensitiveFieldPatterns
@@ -1164,7 +1177,11 @@ function shouldRedactStructuredAuthorizationCode(
 
 function shouldRedactStructuredPrimitiveField(key: string, path: readonly string[]): boolean {
   const normalizedKey = key.toLowerCase();
-  return shouldRedactStructuredAuthorizationCode(normalizedKey, path) || isSensitiveFieldKey(key);
+  return (
+    isPublicShareIdPath(path) ||
+    shouldRedactStructuredAuthorizationCode(normalizedKey, path) ||
+    isSensitiveFieldKey(key)
+  );
 }
 
 function isPlainRedactableObject(value: object): value is Record<string, unknown> {
@@ -1205,15 +1222,14 @@ function redactStructuredSecretValue(
       return value;
     }
     seen.add(value);
-    const out: Record<string, unknown> = {};
-    for (const [nestedKey, nestedValue] of Object.entries(value)) {
-      out[nestedKey] = redactStructuredSecretValue(nestedKey, nestedValue, seen, options, [
-        ...path,
-        nestedKey,
-      ]);
+    const entries = Object.entries(value);
+    for (const entry of entries) {
+      const [name, child] = entry;
+      entry[1] = redactStructuredSecretValue(name, child, seen, options, [...path, name]);
     }
     seen.delete(value);
-    return out;
+    // Define own data properties so JSON field names cannot change the output prototype.
+    return Object.fromEntries(entries);
   }
   return value;
 }

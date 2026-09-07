@@ -41,6 +41,7 @@
       "@openclaw/ai/internal/retry-after": ["./packages/ai/src/internal/retry-after.ts"],
       "@openclaw/ai/internal/runtime": ["./packages/ai/src/internal/runtime.ts"],
       "@openclaw/ai/internal/shared": ["./packages/ai/src/internal/shared.ts"],
+      "@openclaw/ai/internal/tool-schema": ["./packages/ai/src/internal/tool-schema.ts"],
       "@openclaw/agent-core": ["./packages/agent-core/src/index.ts"],
       "@openclaw/agent-core/*": ["./packages/agent-core/src/*"],
       "@openclaw/llm-core": ["./packages/llm-core/src/index.ts"],
@@ -54,6 +55,9 @@
       ],
       "@openclaw/model-catalog-core/model-catalog-normalize": [
         "./packages/model-catalog-core/src/model-catalog-normalize.ts"
+      ],
+      "@openclaw/model-catalog-core/model-catalog-pricing": [
+        "./packages/model-catalog-core/src/model-catalog-pricing.ts"
       ],
       "@openclaw/model-catalog-core/model-catalog-refs": [
         "./packages/model-catalog-core/src/model-catalog-refs.ts"
@@ -154,11 +158,17 @@
       "@openclaw/normalization-core/agent-id": [
         "./packages/normalization-core/src/agent-id.ts"
       ],
+      "@openclaw/normalization-core/agent-run-terminal-outcome": [
+        "./packages/normalization-core/src/agent-run-terminal-outcome.ts"
+      ],
       "@openclaw/normalization-core/boolean-coercion": [
         "./packages/normalization-core/src/boolean-coercion.ts"
       ],
       "@openclaw/normalization-core/cjk-chars": [
         "./packages/normalization-core/src/cjk-chars.ts"
+      ],
+      "@openclaw/normalization-core/code-points": [
+        "./packages/normalization-core/src/code-points.ts"
       ],
       "@openclaw/normalization-core/error-coercion": [
         "./packages/normalization-core/src/error-coercion.ts"
@@ -172,6 +182,9 @@
       ],
       "@openclaw/normalization-core/markdown-plain-text": [
         "./packages/normalization-core/src/markdown-plain-text.ts"
+      ],
+      "@openclaw/normalization-core/mountinfo-path": [
+        "./packages/normalization-core/src/mountinfo-path.ts"
       ],
       "@openclaw/normalization-core/number-coercion": [
         "./packages/normalization-core/src/number-coercion.ts"
@@ -205,7 +218,12 @@
       ],
       "@openclaw/normalization-core/*": ["./packages/normalization-core/src/*"],
       "@openclaw/retry": ["./packages/retry/src/index.ts"],
+      "@openclaw/mermaid-renderer": ["./packages/mermaid-renderer/src/renderer.ts"],
       "@openclaw/session-url-contract": ["./packages/session-url-contract/src/index.ts"],
+      "@openclaw/session-url-contract/parse": ["./packages/session-url-contract/src/parse.ts"],
+      "@openclaw/session-url-contract/share-build": [
+        "./packages/session-url-contract/src/share-build.ts"
+      ],
       "@openclaw/session-url-contract/*": ["./packages/session-url-contract/src/*"],
       "@openclaw/workboard-contract": ["./packages/workboard-contract/src/index.ts"],
       "@openclaw/acp-core": ["./packages/acp-core/src/index.ts"],

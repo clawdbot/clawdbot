@@ -83,11 +83,23 @@ store an xAI key under `plugins.entries.xai.config.webSearch.apiKey`, the
 bundled xAI model provider reuses it as a fallback too.
 </Note>
 
+`openclaw status --usage`, `/status`, and the Control UI usage cards show
+SuperGrok quota when the xAI provider is signed in with OAuth. OpenClaw fetches
+the Grok billing window for that subscription and reports its reset time through
+the normal provider-usage surface. API-key-only xAI setups are intentionally not
+shown as SuperGrok usage because xAI Console API credits and SuperGrok
+subscription quota are separate billing buckets.
+
 ## OAuth troubleshooting
 
 - For SSH, Docker, VPS, or other remote setups, use
   `openclaw models auth login --provider xai --method oauth`; it uses
   device-code verification, not a localhost callback.
+- If a previous OAuth login left xAI using the API-key endpoint or catalog,
+  rerun `openclaw models auth login --provider xai --method oauth`. A successful
+  login refreshes the subscription catalog and proxy route from your account.
+  It preserves your primary model and fallbacks; the moving alias remains
+  discovery-owned so it can follow later default changes.
 - If sign-in succeeds but Grok is not the default model, run
   `openclaw models set xai/auto`. OAuth login preserves an existing
   primary model unless you explicitly change it.
@@ -100,6 +112,15 @@ bundled xAI model provider reuses it as a fallback too.
 
 - xAI decides which accounts can receive OAuth API tokens. If an account is
   not eligible, use the API-key path or check the subscription on xAI's side.
+
+For a manually managed Grok subscription token, set `models.providers.xai.auth`
+to `"token"` and `models.providers.xai.baseUrl` to
+`https://cli-chat-proxy.grok.com/v1`. Model discovery uses the subscription
+catalog and keeps token authentication; an unavailable token does not switch
+discovery to the Console API. Tokens with the default or native xAI API endpoint
+continue to use the API catalog. Prefer OAuth login for automatic token refresh.
+Resolved environment-backed tokens also work in standalone model commands without
+a running Gateway.
 
 <Tip>
 Use `xai-oauth` when signing in from SSH, Docker, or a VPS. OpenClaw prints a
@@ -416,6 +437,9 @@ stale context metadata on active 4.20 rows. It does not pin active 4.20
     transcription request. Prompt hints are accepted by the shared OpenClaw
     surface, but the xAI REST STT integration forwards only file and language
     because those map to the current public xAI endpoint.
+
+    Valid empty transcripts are skipped, and OpenClaw tries any configured
+    fallback. Malformed responses and HTTP failures remain errors.
 
   </Accordion>
 

@@ -545,7 +545,15 @@ export async function writeMeetExportBundle(params: {
 }): Promise<{ outputDir: string; files: string[]; zipFile?: string }> {
   const outputDir = params.outputDir?.trim() || defaultExportDirectory();
   await fsp.mkdir(outputDir, { recursive: true });
-  const zipFile = params.zip ? `${outputDir.replace(/\/$/, "")}.zip` : undefined;
+  let zipOutputDir = outputDir;
+  if (params.zip) {
+    const resolvedOutputDir = path.resolve(outputDir);
+    if (resolvedOutputDir !== path.parse(resolvedOutputDir).root) {
+      // POSIX backslashes are filename characters; Windows accepts both separator spellings.
+      zipOutputDir = outputDir.replace(path.sep === "\\" ? /[\\/]+$/ : /\/+$/, "");
+    }
+  }
+  const zipFile = params.zip ? `${zipOutputDir.replace(/\/$/, "")}.zip` : undefined;
   const fileNames = googleMeetExportFileNames();
   const files = [
     {

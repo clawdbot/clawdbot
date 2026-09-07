@@ -142,14 +142,20 @@ export function createFinishedBarrier() {
 export function createStartedCronServiceWithFinishedBarrier(params: {
   storePath: string;
   logger: ReturnType<typeof createNoopLogger>;
+  requestHeartbeatAndWait?: CronServiceDeps["requestHeartbeatAndWait"];
+  onEvent?: CronServiceDeps["onEvent"];
 }): {
   cron: CronService;
   enqueueSystemEvent: MockFn;
   requestHeartbeat: MockFn;
+  requestHeartbeatAndWait: MockFn;
   finished: ReturnType<typeof createFinishedBarrier>;
 } {
   const enqueueSystemEvent = vi.fn();
   const requestHeartbeat = vi.fn();
+  const requestHeartbeatAndWait = vi.fn(
+    params.requestHeartbeatAndWait ?? (async () => ({ status: "ran" as const, durationMs: 1 })),
+  );
   const finished = createFinishedBarrier();
   const cron = new CronService({
     storePath: params.storePath,
@@ -157,10 +163,14 @@ export function createStartedCronServiceWithFinishedBarrier(params: {
     log: params.logger,
     enqueueSystemEvent,
     requestHeartbeat,
+    requestHeartbeatAndWait,
     runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
-    onEvent: finished.onEvent,
+    onEvent: (event) => {
+      finished.onEvent(event);
+      params.onEvent?.(event);
+    },
   });
-  return { cron, enqueueSystemEvent, requestHeartbeat, finished };
+  return { cron, enqueueSystemEvent, requestHeartbeat, requestHeartbeatAndWait, finished };
 }
 
 export async function withCronServiceForTest(
@@ -252,6 +262,7 @@ export function createMockCronStateForJobs(params: {
     running: false,
     activeTimerTicks: 0,
     stopped: false,
+    lifecycleGeneration: 0,
     schedulingPaused: false,
     schedulerStarted: false,
     activeManualRunJobIds: new Set<string>(),

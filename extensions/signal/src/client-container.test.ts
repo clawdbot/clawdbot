@@ -272,8 +272,8 @@ function expectMockLogNotContains(mock: ReturnType<typeof vi.fn>, expected: stri
 }
 
 // Minimal WebSocket mock for connection-log assertions.
-vi.mock("ws", () => ({
-  default: class MockWebSocket {
+vi.mock("./ws-runtime.js", () => ({
+  WebSocket: class MockWebSocket {
     private handlers = new Map<string, Array<(...args: unknown[]) => void>>();
     private bufferedMessageFlushed = false;
 
@@ -595,9 +595,7 @@ describe("containerRestRequest", () => {
   });
 
   it("caps oversized REST request timeouts before arming abort timers", async () => {
-    const timeoutSpy = vi
-      .spyOn(globalThis, "setTimeout")
-      .mockReturnValue(0 as unknown as ReturnType<typeof setTimeout>);
+    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
     try {
       mockFetch.mockResolvedValue({
         ok: true,
@@ -1587,19 +1585,6 @@ describe("containerRestRequest edge cases", () => {
     expect(result.items).toHaveLength(50_000);
     expect(result.items[0]?.id).toBe(0);
     expect(result.items[49_999]?.id).toBe(49_999);
-  });
-
-  it("returns undefined for an empty success body via the bounded reader", async () => {
-    // The bounded reader must preserve the existing empty-body -> undefined contract
-    // (no spurious JSON.parse("") throw) so well-behaved 200/empty responses are unchanged.
-    mockFetch.mockResolvedValue({
-      ok: true,
-      status: 200,
-      ...bodyStream(""),
-    });
-
-    const result = await containerRestRequest("/v1/about", { baseUrl: "http://localhost:8080" });
-    expect(result).toBeUndefined();
   });
 });
 

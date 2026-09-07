@@ -5,7 +5,7 @@ import {
   normalizePluginsConfigWithResolverCore,
   type NormalizedPluginsConfig,
 } from "./config-normalization-shared.js";
-import { isInstalledPluginEnabled } from "./installed-plugin-index.js";
+import { createInstalledPluginEnabledPredicate } from "./installed-plugin-index.js";
 import { loadPluginManifestRegistryForInstalledIndex } from "./manifest-registry-installed.js";
 import type {
   BundledChannelConfigCollector,
@@ -44,7 +44,7 @@ type LoadPluginRegistryManifestParams = LoadPluginRegistryParams & {
   bundledChannelConfigCollector?: BundledChannelConfigCollector;
 };
 
-export type PluginRegistryContributionKey =
+type PluginRegistryContributionKey =
   | "providers"
   | "channels"
   | "channelConfigs"
@@ -172,17 +172,16 @@ function listManifestContributionIds(
   return [];
 }
 
-function resolveContributionPluginIds(params: {
-  index: PluginRegistrySnapshot;
-  includeDisabled?: boolean;
-  config?: OpenClawConfig;
-}): readonly string[] {
+function createContributionPluginFilter(
+  params: PluginRegistryContributionOptions,
+  index: PluginRegistrySnapshot,
+): (pluginId: string) => boolean {
   if (params.includeDisabled) {
-    return params.index.plugins.map((plugin) => plugin.pluginId);
+    // Keep disabled-owner inspection within the supplied installed inventory.
+    const installedPluginIds = new Set(index.plugins.map((plugin) => plugin.pluginId));
+    return (pluginId) => installedPluginIds.has(pluginId);
   }
-  return params.index.plugins
-    .filter((plugin) => isInstalledPluginEnabled(params.index, plugin.pluginId, params.config))
-    .map((plugin) => plugin.pluginId);
+  return createInstalledPluginEnabledPredicate(index.plugins, params.config, params.env);
 }
 
 function loadContributionManifestRegistry(
@@ -191,16 +190,17 @@ function loadContributionManifestRegistry(
     includeDisabled?: boolean;
   },
 ): PluginManifestRegistry {
+  const pluginIds = params.index.plugins.map((plugin) => plugin.pluginId);
   return loadPluginManifestRegistryForInstalledIndex({
     index: params.index,
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
-    pluginIds: resolveContributionPluginIds({
-      index: params.index,
-      includeDisabled: params.includeDisabled,
-      config: params.config,
-    }),
+    pluginIds: params.includeDisabled
+      ? pluginIds
+      : pluginIds.filter(
+          createInstalledPluginEnabledPredicate(params.index.plugins, params.config, params.env),
+        ),
     includeDisabled: true,
   });
 }
@@ -212,62 +212,13 @@ function listContributionManifestPlugins(
 ): readonly PluginManifestRecord[] {
   const plugins = params.lookUpTable?.plugins;
   if (plugins) {
-    const enabledPluginIds = new Set(
-      resolveContributionPluginIds({
-        index: params.index,
-        includeDisabled: params.includeDisabled,
-        config: params.config,
-      }),
-    );
-    return plugins.filter((plugin) => enabledPluginIds.has(plugin.id));
+    const includePlugin = createContributionPluginFilter(params, params.index);
+    return plugins.filter((plugin) => includePlugin(plugin.id));
   }
   return loadContributionManifestRegistry({
     ...params,
     index: params.index,
   }).plugins;
-}
-
-function resolveContributionOwnerMap(
-  table: PluginLookUpTable,
-  contribution: PluginRegistryContributionKey,
-): ReadonlyMap<string, readonly string[]> | undefined {
-  switch (contribution) {
-    case "channels":
-      return table.owners.channels;
-    case "channelConfigs":
-      return table.owners.channelConfigs;
-    case "providers":
-      return table.owners.providers;
-    case "modelCatalogProviders":
-      return table.owners.modelCatalogProviders;
-    case "cliBackends":
-      return table.owners.cliBackends;
-    case "setupProviders":
-      return table.owners.setupProviders;
-    case "commandAliases":
-      return table.owners.commandAliases;
-    case "contracts":
-      return table.owners.contracts;
-  }
-  return undefined;
-}
-
-function filterContributionOwnerIds(params: {
-  owners: readonly string[];
-  index: PluginRegistrySnapshot;
-  includeDisabled?: boolean;
-  config?: OpenClawConfig;
-}): readonly string[] {
-  const enabledPluginIds = new Set(
-    resolveContributionPluginIds({
-      index: params.index,
-      includeDisabled: params.includeDisabled,
-      config: params.config,
-    }),
-  );
-  return normalizeSortedUniqueStringEntries(
-    params.owners.filter((owner) => enabledPluginIds.has(owner)),
-  );
 }
 
 export function loadPluginManifestRegistryForPluginRegistry(
@@ -314,17 +265,13 @@ export function resolvePluginContributionOwners(
 ): readonly string[] {
   const index = params.lookUpTable?.index ?? loadPluginRegistrySnapshot(params);
   if (params.lookUpTable && typeof params.matches === "string") {
-    const ownerMap = resolveContributionOwnerMap(params.lookUpTable, params.contribution);
-    const owners = ownerMap?.get(params.matches);
-    if (owners) {
-      return filterContributionOwnerIds({
-        owners,
-        index,
-        includeDisabled: params.includeDisabled,
-        config: params.config,
-      });
+    const owners = params.lookUpTable.owners[params.contribution].get(params.matches);
+    if (!owners) {
+      return [];
     }
-    return [];
+    return normalizeSortedUniqueStringEntries(
+      owners.filter(createContributionPluginFilter(params, index)),
+    );
   }
   const matcher =
     typeof params.matches === "string"

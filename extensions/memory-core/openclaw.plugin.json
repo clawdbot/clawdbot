@@ -1,7 +1,13 @@
 {
   "id": "memory-core",
   "doctorContract": {
-    "stateMigrations": true
+    "stateMigrations": [
+      { "id": "memory-core-host-events-jsonl-to-sqlite", "doctorOnly": true },
+      { "id": "memory-core-dreams-json-to-sqlite" },
+      { "id": "memory-core-legacy-sidecar-index-to-agent-sqlite" },
+      { "id": "memory-core-qmd-workspace-retired", "doctorOnly": true },
+      { "id": "memory-core-qmd-file-locks-to-sqlite-leases" }
+    ]
   },
   "name": "OpenClaw Memory",
   "cliCommands": [
@@ -57,6 +63,30 @@
     "type": "object",
     "additionalProperties": false,
     "properties": {
+      "memoryPolicy": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "excludeSessions": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "hookExternalContentSources": {
+                "type": "array",
+                "items": { "type": "string" }
+              },
+              "channels": {
+                "type": "array",
+                "items": { "type": "string" }
+              },
+              "chatTypes": {
+                "type": "array",
+                "items": { "type": "string", "enum": ["direct", "group", "channel"] }
+              }
+            }
+          }
+        }
+      },
       "dreaming": {
         "type": "object",
         "additionalProperties": false,

@@ -1,19 +1,19 @@
-// Discord plugin module implements runtime.messaging.send behavior.
+import { readBooleanParam } from "openclaw/plugin-sdk/boolean-param";
+import {
+  assertMediaNotDataUrl,
+  jsonResult,
+  readPositiveIntegerParam,
+  readStringArrayParam,
+  readStringParam,
+} from "openclaw/plugin-sdk/channel-actions";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { isDiscordThreadChannelType } from "../channel-type.js";
+import { coerceDiscordComponentParam } from "../components.js";
 import {
   createReusableDiscordReplyReference,
   resolveDiscordReplyReference,
 } from "../reply-reference.js";
-import {
-  assertMediaNotDataUrl,
-  jsonResult,
-  readBooleanParam,
-  readPositiveIntegerParam,
-  readStringArrayParam,
-  readStringParam,
-} from "../runtime-api.js";
 import { DiscordThreadInitialMessageError } from "../send.js";
-import { isThreadChannelType } from "../send.permissions.js";
 import type { DiscordSendComponents, DiscordSendEmbeds } from "../send.shared.js";
 import { discordMessagingActionRuntime } from "./runtime.messaging.runtime.js";
 import type { DiscordMessagingActionContext } from "./runtime.messaging.shared.js";
@@ -144,7 +144,7 @@ async function appendDiscordThreadRenameResult(
       channelId,
       ctx.withOpts(),
     );
-    if (!isThreadChannelType(channel.type)) {
+    if (!isDiscordThreadChannelType(channel.type)) {
       return {
         ...params.payload,
         warning: "Discord threadName was ignored because the send target is not a thread.",
@@ -180,17 +180,17 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
         throw new Error("Discord stickers are disabled.");
       }
       const to = readStringParam(ctx.params, "to", { required: true });
-      const content = readStringParam(ctx.params, "content");
+      const content = readStringParam(ctx.params, "content", { trim: false });
       const stickerIds = readStringArrayParam(ctx.params, "stickerIds", {
         required: true,
         label: "stickerIds",
       });
-      await discordMessagingActionRuntime.sendStickerDiscord(
+      const result = await discordMessagingActionRuntime.sendStickerDiscord(
         to,
         stickerIds,
-        ctx.withOpts({ content }),
+        ctx.withOpts({ content, ...(ctx.params.silent === true ? { silent: true } : {}) }),
       );
-      return jsonResult({ ok: true });
+      return jsonResult({ ok: true, result });
     }
     case "sendMessage": {
       if (!ctx.isActionEnabled("messages")) {
@@ -201,7 +201,7 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
       const silent = ctx.params.silent === true;
       const suppressEmbeds =
         ctx.params.suppressEmbeds === undefined ? undefined : ctx.params.suppressEmbeds === true;
-      const rawComponents = ctx.params.components;
+      const rawComponents = coerceDiscordComponentParam(ctx.params.components);
       const componentSpec = hasDiscordComponentObjectKeys(rawComponents)
         ? discordMessagingActionRuntime.readDiscordComponentSpec(rawComponents)
         : null;
@@ -213,17 +213,18 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
         readStringParam(ctx.params, "mediaUrl", { trim: false }) ??
         readStringParam(ctx.params, "path", { trim: false }) ??
         readStringParam(ctx.params, "filePath", { trim: false });
-      const content = readStringParam(ctx.params, "content", {
-        required: !asVoice && !componentSpec && !components && !mediaUrl,
-        allowEmpty: true,
-      });
-      const filename = readStringParam(ctx.params, "filename");
-      const replyTo = readStringParam(ctx.params, "replyTo");
-      const threadName = readStringParam(ctx.params, "threadName");
       const rawEmbeds = ctx.params.embeds;
       const embeds: DiscordSendEmbeds | undefined = Array.isArray(rawEmbeds)
         ? (rawEmbeds as DiscordSendEmbeds)
         : undefined;
+      const content = readStringParam(ctx.params, "content", {
+        required: !asVoice && !componentSpec && !components && !embeds?.length && !mediaUrl,
+        allowEmpty: true,
+        trim: false,
+      });
+      const filename = readStringParam(ctx.params, "filename");
+      const replyTo = readStringParam(ctx.params, "replyTo");
+      const threadName = readStringParam(ctx.params, "threadName");
       const sessionKey = readStringParam(ctx.params, "__sessionKey");
       const agentId = readStringParam(ctx.params, "__agentId");
 
@@ -258,7 +259,7 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
         return jsonResult(
           await appendDiscordThreadRenameResult(ctx, {
             payload: { ok: true, result, components: true },
-            target: to,
+            target: result.receipt?.threadId ?? to,
             threadName,
           }),
         );
@@ -309,7 +310,7 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
       return jsonResult(
         await appendDiscordThreadRenameResult(ctx, {
           payload: { ok: true, result },
-          target: to,
+          target: result.receipt?.threadId ?? to,
           threadName,
         }),
       );
@@ -321,7 +322,7 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
       const channelId = ctx.resolveChannelId();
       const name = readStringParam(ctx.params, "name", { required: true });
       const messageId = readStringParam(ctx.params, "messageId");
-      const content = readStringParam(ctx.params, "content");
+      const content = readStringParam(ctx.params, "content", { trim: false });
       const autoArchiveMinutes = readDiscordAutoArchiveDurationParam(
         ctx.params,
         "autoArchiveMinutes",
@@ -404,6 +405,7 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
       const channelId = ctx.resolveChannelId();
       const content = readStringParam(ctx.params, "content", {
         required: true,
+        trim: false,
       });
       const mediaUrl = readStringParam(ctx.params, "mediaUrl");
       const replyTo = readStringParam(ctx.params, "replyTo");
@@ -417,6 +419,7 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
           mediaLocalRoots: ctx.options?.mediaLocalRoots,
           mediaReadFile: ctx.options?.mediaReadFile,
           reply: resolveActionReplyReference(ctx, replyTo),
+          ...(ctx.params.silent === true ? { silent: true } : {}),
         },
       );
       return jsonResult({ ok: true, result });

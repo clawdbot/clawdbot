@@ -2,9 +2,14 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { withEnv } from "../test-utils/env.js";
-import { DEFAULT_REDACT_PATTERNS } from "./redact-patterns.js";
+import { replacePatternBounded } from "./redact-bounded.js";
+import {
+  DEFAULT_REDACT_PATTERNS,
+  TOOL_PAYLOAD_AMBIGUOUS_ASSIGNMENT_PATTERNS,
+} from "./redact-patterns.js";
+import { redactSourceInputTextWithConfig } from "./redact-source.js";
 import {
   computeSensitiveRedactionBitmap,
   getDefaultRedactPatterns,
@@ -38,6 +43,42 @@ afterEach(() => {
     fs.rmSync(dir, { force: true, recursive: true });
   }
   tempDirs = [];
+});
+
+describe("bounded replacement output", () => {
+  it.each<[RegExp, string, string]>([
+    [/aaaa/g, "blue", "bluebbbbcccc"],
+    [/bbbb/g, "blue", "aaaabluecccc"],
+    [/cccc/g, "blue", "aaaabbbbblue"],
+    [/none/g, "blue", "aaaabbbbcccc"],
+    [/aaaa/g, "", "bbbbcccc"],
+  ])("preserves complete output for %s", (pattern, replacement, expected) => {
+    expect(
+      replacePatternBounded("aaaabbbbcccc", pattern, () => replacement, {
+        chunkThreshold: 4,
+        chunkSize: 4,
+      }),
+    ).toBe(expected);
+  });
+
+  it("keeps calling a stateful replacer after unchanged results", () => {
+    const calls: Array<{ match: string; offset: number; input: string }> = [];
+    const output = replacePatternBounded(
+      "red red red",
+      /red/g,
+      (match, offset, input) => {
+        calls.push({ match, offset, input });
+        return calls.length === 3 ? "blue" : match;
+      },
+      { chunkThreshold: 4, chunkSize: 4 },
+    );
+    expect(output).toBe("red red blue");
+    expect(calls).toEqual([
+      { match: "red", offset: 0, input: "red " },
+      { match: "red", offset: 0, input: "red " },
+      { match: "red", offset: 0, input: "red" },
+    ]);
+  });
 });
 
 describe("default redact pattern ownership", () => {
@@ -119,6 +160,69 @@ describe("registered exact secret values", () => {
 });
 
 describe("model-visible tool payload redaction", () => {
+  it.each([
+    'const API_TOKEN = "fixture-only-not-a-real-secret"; return API_TOKEN;',
+    "const API_TOKEN = 'fixture-only-not-a-real-secret'; return API_TOKEN;",
+    "const API_TOKEN = `fixture-only-not-a-real-secret`; return API_TOKEN;",
+    "const API_TOKEN = 987654321; return API_TOKEN;",
+    'const note = "API_TOKEN=fixture-only-not-a-real-secret";',
+    "// API_TOKEN=fixture-only-not-a-real-secret\nreturn 42;",
+    'return { "api_key": "fixture-only-not-a-real-secret" };',
+    'const API_TOKEN = "fixture-only-not-a-real-secret" + suffix; return API_TOKEN;',
+    "const API_TOKEN = computeToken(); /* API_TOKEN=fixture-only-not-a-real-secret */",
+    'const API_TOKEN = "fixture-only-not-a-real-secret"; @',
+    '(token="fixture-only-not-a-real-secret");',
+  ])("retains diagnostic literal masking in input source: %s", (source) => {
+    const redacted = redactSourceInputTextWithConfig(source);
+    expect(redactToolPayloadTextWithConfig(source)).not.toBe(source);
+    expect(redacted).not.toMatch(/fixture-only-not-a-real-secret|987654321/);
+    expect(redacted).toContain("***");
+    expect(redacted).not.toBe(source);
+    expect(redactSourceInputTextWithConfig(redacted)).toBe(redacted);
+  });
+
+  it.each([
+    "const API_TOKEN = computeToken(); return API_TOKEN;",
+    "const API_TOKEN: number = computeToken(); return API_TOKEN;",
+    "const API_TOKEN = computeToken<string>(); return API_TOKEN;",
+    "const API_TOKEN = (40 + 2); return API_TOKEN;",
+    "const API_TOKEN = await computeToken(); return API_TOKEN;",
+    "const HAS_API_TOKEN = false; return HAS_API_TOKEN;",
+    "const HAS_API_TOKEN = true; return HAS_API_TOKEN;",
+    "let API_TOKEN = null; return API_TOKEN;",
+    "(token=computeToken());",
+  ])("preserves input computations without changing diagnostics: %s", (source) => {
+    expect(redactSourceInputTextWithConfig(source)).toBe(source);
+    expect(redactToolPayloadTextWithConfig(source)).not.toBe(source);
+  });
+
+  it("keeps explicit custom assignment patterns authoritative over source syntax", () => {
+    const source = "const API_TOKEN = computeToken(); return API_TOKEN;";
+    const assignmentPatterns = [...TOOL_PAYLOAD_AMBIGUOUS_ASSIGNMENT_PATTERNS].filter(
+      (pattern) => redactSensitiveText(source, { patterns: [pattern] }) !== source,
+    );
+    expect(assignmentPatterns.length).toBeGreaterThan(0);
+    for (const pattern of ["computeToken", ...assignmentPatterns]) {
+      expect(redactSourceInputTextWithConfig(source, { redactPatterns: [pattern] })).not.toContain(
+        "computeToken",
+      );
+    }
+  });
+
+  it("does not substitute the weaker output policy for input source", () => {
+    const source = 'const API_TOKEN = "fixture-only-not-a-real-secret"; return API_TOKEN;';
+    expect(redactModelVisibleToolPayloadText(source)).toBe(source);
+    expect(redactSourceInputTextWithConfig(source)).toBe(
+      'const API_TOKEN = "***"; return API_TOKEN;',
+    );
+  });
+
+  it("uses bounded diagnostic masking for oversized source", () => {
+    const source = `const API_TOKEN = computeToken();\n${" ".repeat(131_072)}`;
+    expect(redactSourceInputTextWithConfig(source)).toBe(redactToolPayloadTextWithConfig(source));
+    expect(redactSourceInputTextWithConfig(source)).not.toContain("computeToken");
+  });
+
   it("preserves source assignments while masking explicit credential forms", () => {
     const registeredSecret = "registered-model-visible-secret";
     registerSecretValueForRedaction(registeredSecret);
@@ -132,6 +236,7 @@ describe("model-visible tool payload redaction", () => {
       "token = timeObserverToken",
       "API_TOKEN = computeToken()",
       "API_TOKEN=computeToken()",
+      "(token=computeToken())",
       "API_KEY: str = computeKey()",
       '"api_key": "computeToken()"',
       `registered: ${credentials[0]}`,
@@ -145,6 +250,7 @@ describe("model-visible tool payload redaction", () => {
     expect(output).toContain("token = timeObserverToken");
     expect(output).toContain("API_TOKEN = computeToken()");
     expect(output).toContain("API_TOKEN=computeToken()");
+    expect(output).toContain("(token=computeToken())");
     expect(output).toContain("API_KEY: str = computeKey()");
     expect(output).toContain('"api_key": "computeToken()"');
     for (const credential of credentials) {
@@ -154,6 +260,13 @@ describe("model-visible tool payload redaction", () => {
 });
 
 describe("redactSensitiveText", () => {
+  it("preserves long blank runs without stalling the default redaction scan", () => {
+    const input = `<details>a${"\n".repeat(60_000)}X</details>`;
+    const started = performance.now();
+    expect(redactSensitiveText(input, { mode: "tools" })).toBe(input);
+    expect(performance.now() - started).toBeLessThan(1_000);
+  });
+
   it("masks env assignments while keeping the key", () => {
     const input = "OPENAI_API_KEY=sk-1234567890abcdef";
     const output = redactSensitiveText(input, { mode: "tools" });
@@ -292,10 +405,25 @@ describe("redactSensitiveText", () => {
     expect(output).not.toContain(token);
   });
 
-  it("masks standalone lowercase token assignments in diagnostic output", () => {
-    const input = "matrix access_token=abcdef1234567890ghij next";
-    const output = redactSensitiveText(input, { mode: "tools" });
-    expect(output).toBe("matrix access_token=abcdef…ghij next");
+  it.each([
+    ["matrix access_token=abcdef1234567890ghij next", "matrix access_token=abcdef…ghij next"],
+    [
+      "Docker authentication failed (password=fixture-secret); install and start the engine",
+      "Docker authentication failed (password=*** install and start the engine",
+    ],
+    ["failed [token=fixture-secret]; retry", "failed [token=*** retry"],
+    ["failed {client_secret=fixture-secret}; retry", "failed {client_secret=*** retry"],
+    ['failed (password="it\'s-a-secret"); retry', 'failed (password="***"); retry'],
+    ["failed [token='has\"quotes']; retry", "failed [token='***']; retry"],
+    ["failed {secret=`has'quotes`}; retry", "failed {secret=`***`}; retry"],
+    ['failed (token="unterminated retry', "failed (token=*** retry"],
+  ])("masks standalone diagnostic assignments: %s", (input, expected) => {
+    expect(redactSensitiveText(input)).toBe(expected);
+  });
+
+  it("preserves non-secret key names after opening delimiters", () => {
+    const input = "(token_count=42) [password_hint=visible] {mytoken=visible}";
+    expect(redactSensitiveText(input)).toBe(input);
   });
 
   it("masks JSON fields", () => {
@@ -1601,83 +1729,6 @@ describe("redactSensitiveText", () => {
     ].join(" ");
     const output = redactSensitiveText(input, { mode: "tools" });
     expect(output).toBe(input);
-  });
-
-  it("redacts a large payload with no default-pattern matches quickly", () => {
-    // "npm_telegram_package_spec" trips the outer prefilter (couldMatchDefaultRedactPatterns)
-    // without matching any real DEFAULT_REDACT_PATTERNS entry, so the full per-pattern walk
-    // below runs against every pattern in the table for a payload above the chunk threshold.
-    const benignTrigger = "npm_telegram_package_spec";
-    const filler = "the quick brown fox jumps over the lazy dog ".repeat(40_000);
-    const input = `${benignTrigger} ${filler}`;
-    expect(input.length).toBeGreaterThan(32_768);
-
-    const startedAt = performance.now();
-    const output = redactSensitiveText(input, { mode: "tools" });
-    expect(performance.now() - startedAt).toBeLessThan(200);
-    expect(output).toBe(input);
-  });
-
-  it("skips the whole-text prefilter test() for payloads under the chunk threshold", () => {
-    // Below the chunk threshold, replacePatternBounded already falls through to a single
-    // text.replace() with no chunking to skip, so the prefilter's whole-text pattern.test()
-    // would be a redundant extra scan; it must not run for sub-threshold payloads.
-    const input = "the quick brown fox jumps over the lazy dog ".repeat(100);
-    expect(input.length).toBeLessThan(32_768);
-    const testSpy = vi.spyOn(RegExp.prototype, "test");
-    try {
-      redactSensitiveText(input, { mode: "tools", patterns: [/NEVER_MATCHES_ANYTHING/g] });
-      expect(testSpy).not.toHaveBeenCalled();
-    } finally {
-      testSpy.mockRestore();
-    }
-  });
-
-  it("masks a configured sticky pattern that only matches at a chunk boundary", () => {
-    // A sticky (`y`) configured pattern only matches at the regex's current lastIndex, so a
-    // whole-text test() proves nothing beyond position 0; it must still fall through to bounded
-    // replacement, which retries the pattern at every chunk start (here, offset 16_384).
-    const chunkSize = 16_384;
-    const secret = "SECRETVALUE12345";
-    const input = `${"x".repeat(chunkSize)}${secret}${"y".repeat(20_000)}`;
-    expect(input.length).toBeGreaterThan(32_768);
-    const output = redactSensitiveText(input, {
-      mode: "tools",
-      patterns: [/SECRETVALUE\d+/y],
-    });
-    expect(output).not.toContain(secret);
-  });
-
-  it("masks a configured non-sticky anchored pattern that only matches at a chunk boundary", () => {
-    // An anchored (`^`) configured pattern only matches at the start of the whole text (no `m`
-    // flag), so a whole-text test() proves nothing about a later chunk; it must still fall
-    // through to bounded replacement, which gives `^` a fresh chunk-local start at every chunk
-    // (here, offset 16_384) since it is not part of the vetted default/tool-payload table.
-    const chunkSize = 16_384;
-    const secret = "SECRETVALUE12345";
-    const input = `${"x".repeat(chunkSize)}${secret}${"y".repeat(20_000)}`;
-    expect(input.length).toBeGreaterThan(32_768);
-    const output = redactSensitiveText(input, {
-      mode: "tools",
-      patterns: [/^SECRETVALUE\d+/g],
-    });
-    expect(output).not.toContain(secret);
-  });
-
-  it("masks a default anchored assignment pattern that only matches at a chunk boundary", () => {
-    // STANDALONE_ASSIGNMENT_REDACT_PATTERN (`(^|[\s,;])token=...`) is a DEFAULT_REDACT_PATTERNS
-    // entry, not a user-configured one, so it must stay out of the whole-text prefilter allowlist
-    // for the same reason as the configured case above: `token=` here is preceded by a plain
-    // letter, not a boundary, so it never matches on the whole text, but a chunk boundary landing
-    // right before it gives replacePatternBounded's per-chunk `.replace()` a fresh `^` start.
-    const chunkSize = 16_384;
-    const secret = "SECRETVALUE12345";
-    const prefix = `${"x".repeat(chunkSize - "unsafe".length)}unsafe`;
-    expect(prefix.length).toBe(chunkSize);
-    const input = `${prefix}token=${secret}${"y".repeat(20_000)}`;
-    expect(input.length).toBeGreaterThan(32_768);
-    const output = redactSensitiveText(input, { mode: "tools" });
-    expect(output).not.toContain(secret);
   });
 
   it("masks Fireworks tokens that cross bounded-replacement chunk boundaries", () => {

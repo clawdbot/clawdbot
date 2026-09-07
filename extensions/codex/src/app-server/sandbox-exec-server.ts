@@ -9,7 +9,7 @@ import { isIP, type AddressInfo } from "node:net";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import type { SandboxContext } from "openclaw/plugin-sdk/sandbox";
-import { WebSocketServer, type RawData, type WebSocket } from "ws";
+import type { RawData, WebSocket } from "ws";
 import type { CodexAppServerClient } from "./client.js";
 import type { CodexAppServerStartOptions } from "./config.js";
 import {
@@ -17,6 +17,7 @@ import {
   startCodexNodeExecServerRelay,
 } from "./sandbox-exec-server-node-relay.js";
 import { sandboxExecServerRegistry } from "./sandbox-exec-server-registry.js";
+import { websocket } from "./sandbox-exec-server.websocket.js";
 import { parseRequest } from "./sandbox-exec-server/json-rpc.js";
 import type { SandboxChildOwner } from "./sandbox-exec-server/sandbox-child.js";
 import { CodexSandboxExecSession } from "./sandbox-exec-server/session.js";
@@ -58,7 +59,7 @@ export async function ensureCodexSandboxExecServerEnvironment(params: {
     return undefined;
   }
   if (placementNodeId && !params.runtime) {
-    throw new Error("Codex paired-device execution requires its active plugin runtime.");
+    throw new Error("Codex node execution requires its active plugin runtime.");
   }
   if (!canExposeLocalExecServerToAppServer(params.appServerStartOptions)) {
     throw new Error(
@@ -162,7 +163,7 @@ async function acquireOpenClawExecServer(params: {
       }
       if (!runtime || !signal) {
         await releaseOpenClawExecServer(server);
-        throw new Error("Codex paired-device execution requires an active runtime and attempt.");
+        throw new Error("Codex node execution requires an active runtime and attempt.");
       }
       try {
         const placementIdentity = readCodexPlacementWorkspaceIdentity(sandbox);
@@ -183,7 +184,7 @@ async function acquireOpenClawExecServer(params: {
           sandboxExecServerRegistry.servers.get(key) !== promise
         ) {
           channel.close();
-          throw new Error("Codex paired-device execution retired before its channel was ready.");
+          throw new Error("Codex node execution retired before its channel was ready.");
         }
         const nodeLease = {
           id: randomUUID(),
@@ -251,7 +252,7 @@ async function startOpenClawExecServer(sandbox: SandboxContext): Promise<OpenCla
     }
     connection = { kind: "sandbox", backend, fsBridge };
   }
-  const server = new WebSocketServer({
+  const server = new websocket.WebSocketServer({
     host: "127.0.0.1",
     port: 0,
     // Match ws' historical default: Codex fs/writeFile sends one base64 JSON-RPC
@@ -283,7 +284,15 @@ async function startOpenClawExecServer(sandbox: SandboxContext): Promise<OpenCla
   const execServer: OpenClawLeasedExecServer =
     connection.kind === "node"
       ? { ...common, node: { id: connection.id, leases: new Map() } }
-      : { ...common, backend: connection.backend, fsBridge: connection.fsBridge };
+      : {
+          ...common,
+          backend: connection.backend,
+          fsBridge: connection.fsBridge,
+          // Bind isolation to this provisioned runtime, not mutable config or request claims.
+          networkIsolated:
+            (connection.backend.id === "docker" || connection.backend.id === "podman") &&
+            sandbox.docker.network.trim().toLowerCase() === "none",
+        };
   server.on("connection", (socket, request) => {
     // ws emits error for maxPayload rejections before auth or JSON-RPC sees the frame.
     socket.on("error", handleExecServerSocketError);
@@ -373,9 +382,7 @@ function readCodexPlacementWorkspaceIdentity(sandbox: SandboxContext): {
     !sandbox.sessionKey ||
     sandbox.sessionKey.trim() !== sandbox.sessionKey
   ) {
-    throw new Error(
-      "Codex paired-device execution requires its exact placement workspace identity.",
-    );
+    throw new Error("Codex node execution requires its exact placement workspace identity.");
   }
   return {
     environmentId: sandbox.placementEnvironmentId,
@@ -438,7 +445,7 @@ function handleClosedCodexNodeExecServerLease(
   try {
     lease.onDisconnected?.(
       createCodexNodeExecServerDisconnectError(
-        result.failed ? "execution device failed" : "execution device disconnected",
+        result.failed ? "execution node failed" : "execution node disconnected",
         result.error,
       ),
     );

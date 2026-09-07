@@ -44,6 +44,8 @@ export type ChannelStructuredContextEntry = {
   source?: string;
   type?: string;
   payload: unknown;
+  /** Keeps this provider-owned window independent of bounded canonical transcript enrichment. */
+  sessionTranscriptMode?: "preserve";
   /** Internal exact-id hints for canonical transcript/live-cache deduplication. */
   sessionTranscriptDedupeMessageIds?: string[];
   /** Internal visible-text hints for legacy assistant rows without transcript ids. */
@@ -304,19 +306,25 @@ export type MsgContext = Partial<CanonicalInboundText> & {
   UntrustedStructuredContext?: UntrustedStructuredContextEntry[];
   /** System-attached provenance for the current inbound message. */
   InputProvenance?: InputProvenance;
+  /** Internal wake cause, independent of transport, transcript provenance, and execution authority. */
+  InternalTurnSource?: "heartbeat" | "cron" | "exec";
   /** Explicit owner allowlist overrides (trusted, configuration-derived). */
   OwnerAllowFrom?: Array<string | number>;
   SenderName?: string;
   SenderId?: string;
   /** Trusted in-process creation provenance; never populated from channel payloads. */
   SessionCreation?: {
+    skillLibrarySelections?: import("../../packages/gateway-protocol/src/schema/skill-library.js").SkillLibrarySelection[];
     via: import("../config/sessions/session-entry-provenance.js").SessionCreatedVia;
     actor?: import("../config/sessions/session-entry-provenance.js").SessionCreatedActor;
+    sandbox?: "required";
   };
   SenderUsername?: string;
   SenderTag?: string;
   SenderE164?: string;
   SenderIsBot?: boolean;
+  /** Channel-ingress fact: sender is the operator's own account (from-me). */
+  SenderIsSelf?: boolean;
   Timestamp?: number;
   LocationLat?: number;
   LocationLon?: number;

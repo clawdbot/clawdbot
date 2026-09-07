@@ -222,6 +222,27 @@ describe("model catalog normalization", () => {
     });
   });
 
+  it("keeps only explicit owned models.dev mappings without creating provider rows", () => {
+    expect(
+      normalizeModelCatalog(
+        {
+          modelsDev: {
+            " Example ": " Upstream-ID ",
+            other: "other-source",
+            alias: "alias-source",
+            Constructor: "blocked-source",
+          },
+          providers: { example: { models: [] } },
+          aliases: { alias: { provider: "example" } },
+        },
+        { ownedProviders: new Set([" EXAMPLE ", "constructor"]) },
+      ),
+    ).toEqual({
+      modelsDev: { example: "Upstream-ID" },
+      aliases: { alias: { provider: "example" } },
+    });
+  });
+
   it("builds normalized rows with provider defaults and stable refs", () => {
     const rows = normalizeModelCatalogProviderRows({
       provider: "OpenAI",
@@ -238,6 +259,12 @@ describe("model catalog normalization", () => {
               "x-model": "gpt-5.4",
             },
             input: ["image"],
+            contextTokens: 64_000,
+            maxTokens: 4096,
+            thinkingLevelMap: { off: null, high: " high " },
+            cost: { input: 0, output: 2 },
+            compat: { supportsTools: false },
+            upstreamModel: "other/gpt-5.4",
           },
         ],
       },
@@ -253,6 +280,11 @@ describe("model catalog normalization", () => {
         name: "GPT-5.4",
         source: "manifest",
         input: ["image"],
+        contextTokens: 64_000,
+        maxTokens: 4096,
+        thinkingLevelMap: { off: null, high: "high" },
+        cost: { input: 0, output: 2 },
+        compat: { supportsTools: false },
         reasoning: false,
         status: "available",
         api: "openai-responses",
@@ -384,6 +416,13 @@ describe("model catalog normalization", () => {
     { name: "unowned alias", value: { aliases: { alias: { provider: "anthropic" } } } },
     { name: "invalid suppression", value: { suppressions: [{ provider: "openai" }] } },
     { name: "unknown discovery", value: { discovery: { openai: "unknown" } } },
+    { name: "non-record models.dev mapping", value: { modelsDev: "openai" } },
+    { name: "array models.dev mapping", value: { modelsDev: ["openai"] } },
+    { name: "null models.dev mapping", value: { modelsDev: null } },
+    { name: "empty models.dev mapping", value: { modelsDev: {} } },
+    { name: "blank models.dev source", value: { modelsDev: { openai: "  " } } },
+    { name: "non-string models.dev source", value: { modelsDev: { openai: true } } },
+    { name: "unowned models.dev mapping", value: { modelsDev: { anthropic: "anthropic" } } },
   ])("rejects a $name instead of publishing an empty catalog", ({ value }) => {
     expect(normalizeModelCatalog(value, { ownedProviders: new Set(["openai"]) })).toBeUndefined();
   });

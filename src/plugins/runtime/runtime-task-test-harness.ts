@@ -33,13 +33,15 @@ export function installRuntimeTaskDeliveryMock(): void {
   });
 }
 
-export function resetRuntimeTaskTestState(
-  taskRegistryOptions?: Parameters<typeof resetTaskRegistryForTests>[0],
-): void {
+// Runtime task tests write durable rows into the worker's shared state store.
+// Skipping the reset write leaves those rows behind, and the next
+// ensureTaskRegistryReady() restores them into the process registry as active
+// restart blockers for every later test file in the same worker.
+export function resetRuntimeTaskTestState(): void {
   resetDetachedTaskLifecycleRuntimeForTests();
   resetTaskRegistryControlRuntimeForTests();
   resetTaskRegistryDeliveryRuntimeForTests();
-  resetTaskRegistryForTests(taskRegistryOptions);
-  resetTaskFlowRegistryForTests({ persist: false });
+  resetTaskRegistryForTests();
+  resetTaskFlowRegistryForTests();
   vi.clearAllMocks();
 }

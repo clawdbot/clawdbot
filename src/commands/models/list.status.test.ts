@@ -2,10 +2,9 @@
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, type Mock, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import {
-  getCurrentPluginMetadataSnapshot,
-  setCurrentPluginMetadataSnapshot,
-} from "../../plugins/current-plugin-metadata-snapshot.js";
+import type { ModelDefinitionConfig } from "../../config/types.js";
+import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
+import { setCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata.test-support.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 
@@ -205,9 +204,12 @@ vi.mock("../../agents/auth-profiles/profiles.js", () => ({
 }));
 vi.mock("../../agents/auth-profiles/store.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../agents/auth-profiles/store.js")>()),
+  getRuntimeAuthProfileStoreSnapshot: mocks.getRuntimeAuthProfileStoreSnapshot,
+}));
+vi.mock("../../agents/auth-profiles/store-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/auth-profiles/store-runtime.js")>()),
   ensureAuthProfileStore: mocks.ensureAuthProfileStore,
   ensureAuthProfileStoreWithoutExternalProfiles: mocks.ensureAuthProfileStore,
-  getRuntimeAuthProfileStoreSnapshot: mocks.getRuntimeAuthProfileStoreSnapshot,
 }));
 vi.mock("../../agents/auth-profiles.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../agents/auth-profiles.js")>()),
@@ -290,13 +292,13 @@ vi.mock("../../plugins/synthetic-auth.runtime.js", () => ({
   resolveRuntimeSyntheticAuthProviderRefs: mocks.resolveRuntimeSyntheticAuthProviderRefs,
 }));
 vi.mock("../../plugins/provider-runtime.js", () => ({
-  resolveProviderSyntheticAuthWithPlugin: mocks.resolveProviderSyntheticAuthWithPlugin,
+  prepareProviderSyntheticAuthWithPlugin: mocks.resolveProviderSyntheticAuthWithPlugin,
 }));
 vi.mock("../../agents/harness/runtime-plugin.js", () => ({
   resolveAgentHarnessOwnerPluginIds: mocks.resolveAgentHarnessOwnerPluginIds,
   resolveAgentHarnessRuntimeAvailability: mocks.resolveAgentHarnessRuntimeAvailability,
 }));
-vi.mock("../../cli/update-cli/plugin-payload-validation.js", () => ({
+vi.mock("../../plugins/payload-verification.js", () => ({
   runPluginPayloadSmokeCheckForManifestRecords: mocks.runPluginPayloadSmokeCheckForManifestRecords,
 }));
 vi.mock("../../agents/prepared-model-catalog.js", () => ({
@@ -439,6 +441,7 @@ async function withOpenAIStatusFixture<T>(
     providerApiKey?: unknown;
     providerApi?: "openai-chatgpt-responses";
     providerBaseUrl?: string;
+    providerModels?: ModelDefinitionConfig[];
     agentRuntime?: string;
     catalog?: unknown[];
     routeVariants?: unknown[];
@@ -484,14 +487,15 @@ async function withOpenAIStatusFixture<T>(
         params.providerAuth ||
         params.providerApiKey !== undefined ||
         params.providerApi ||
-        params.providerBaseUrl
+        params.providerBaseUrl ||
+        params.providerModels
           ? {
               openai: {
                 ...(params.providerAuth ? { auth: params.providerAuth } : {}),
                 ...(params.providerApiKey !== undefined ? { apiKey: params.providerApiKey } : {}),
                 ...(params.providerApi ? { api: params.providerApi } : {}),
                 ...(params.providerBaseUrl ? { baseUrl: params.providerBaseUrl } : {}),
-                models: [],
+                models: params.providerModels ?? [],
               },
             }
           : {},
@@ -672,7 +676,7 @@ describe("modelsStatusCommand auth overview", () => {
     }
   });
 
-  it("does not restore over plugin metadata published while status is running", async () => {
+  it("keeps status metadata scoped while another operation publishes metadata", async () => {
     const originalLoadModelCatalog = mocks.loadModelCatalog.getMockImplementation();
     const config = mocks.loadConfig();
     const workspaceDir = "/tmp/openclaw-agent/workspace";
@@ -695,6 +699,9 @@ describe("modelsStatusCommand auth overview", () => {
     try {
       await catalogStarted.promise;
       expect(replacement).toBeDefined();
+      expect(
+        getCurrentPluginMetadataSnapshot({ config, workspaceDir, env: process.env }),
+      ).toBeUndefined();
       clearPluginMetadataLifecycleCaches();
       setCurrentPluginMetadataSnapshot(replacement!, {
         config,
@@ -930,7 +937,7 @@ describe("modelsStatusCommand auth overview", () => {
       await modelsStatusCommand({ json: true }, localRuntime as never);
     });
 
-    expect(mocks.resolveAgentDir).not.toHaveBeenCalled();
+    expectResolveAgentDirCalledFor("main");
     expect(mocks.ensureAuthProfileStore).toHaveBeenCalledWith("/tmp/openclaw-isolated-agent");
     const payload = parseFirstJsonLog(localRuntime);
     expect(payload.agentDir).toBe("/tmp/openclaw-isolated-agent");
@@ -950,7 +957,7 @@ describe("modelsStatusCommand auth overview", () => {
       },
     );
 
-    expect(mocks.resolveAgentDir).not.toHaveBeenCalled();
+    expectResolveAgentDirCalledFor("main");
     expect(mocks.ensureAuthProfileStore).toHaveBeenCalledWith("/tmp/openclaw-legacy-agent");
     const payload = parseFirstJsonLog(localRuntime);
     expect(payload.agentDir).toBe("/tmp/openclaw-legacy-agent");
@@ -1484,6 +1491,55 @@ describe("modelsStatusCommand auth overview", () => {
     expect(localRuntime.exit).not.toHaveBeenCalledWith(1);
   });
 
+  it.each(["Writer", "rEaDeR"])(
+    "keeps model status independent of %s routes",
+    async (responsesId) => {
+      const localRuntime = createRuntime();
+      const baseUrl = "https://models.example.test/v1";
+      const model = (id: string, api?: ModelDefinitionConfig["api"]): ModelDefinitionConfig => ({
+        id,
+        name: id,
+        api,
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 8192,
+        maxTokens: 1024,
+      });
+      const providerModels = [
+        model("Reader", "openai-completions"),
+        model(responsesId, "openai-responses"),
+        model("reader"),
+      ];
+      const catalog = providerModels.map((entry) => ({ ...entry, provider: "openai", baseUrl }));
+      const fallbacks = [`openai/${responsesId}`, "openai/reader"];
+      await withOpenAIStatusFixture(
+        {
+          primary: "openai/Reader",
+          fallbacks,
+          profiles: {
+            "openai:default": { type: "api_key", provider: "openai", key: "status-proof" },
+          },
+          providerBaseUrl: baseUrl,
+          providerModels,
+          catalog,
+          routeVariants: catalog,
+        },
+        async () => {
+          await modelsStatusCommand({ json: true, check: true }, localRuntime as never);
+        },
+      );
+
+      const payload = parseFirstJsonLog(localRuntime);
+      expect(payload.defaultModel).toBe("openai/Reader");
+      expect(payload.fallbacks).toEqual(fallbacks);
+      expect(payload.auth.modelRouteIssues).toEqual([]);
+      expect(payload.auth.missingProvidersInUse).toEqual([]);
+      expect(payload.auth.runtimeAuthRoutes).toEqual([]);
+      expect(localRuntime.exit).toHaveBeenCalledWith(0);
+    },
+  );
+
   it("keeps API-key SecretRef profiles usable for a concrete OpenAI route", async () => {
     const localRuntime = createRuntime();
     await withOpenAIStatusFixture(
@@ -1959,12 +2015,18 @@ describe("modelsStatusCommand auth overview", () => {
   it("exits non-zero when auth is missing", async () => {
     const originalProfiles = { ...mocks.store.profiles };
     mocks.store.profiles = {};
-    const localRuntime = createRuntime();
+    const localRuntime = {
+      ...createRuntime(),
+      writeStdout: vi.fn(),
+      writeJson: vi.fn(),
+    };
     const originalEnvImpl = mocks.resolveEnvApiKey.getMockImplementation();
     mocks.resolveEnvApiKey.mockImplementation(() => null);
 
     try {
       await modelsStatusCommand({ check: true, plain: true }, localRuntime as never);
+      expect(localRuntime.writeStdout).toHaveBeenCalledOnce();
+      expect(localRuntime.log).not.toHaveBeenCalled();
       expect(localRuntime.exit).toHaveBeenCalledWith(1);
     } finally {
       mocks.store.profiles = originalProfiles;

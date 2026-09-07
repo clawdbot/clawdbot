@@ -13,6 +13,29 @@ const CACHE_VERSION =
 const CACHE_NAME = `${CACHE_PREFIX}${CACHE_VERSION}`;
 const CONTROL_CACHE_LIMIT = 3;
 
+// Older pages reload directly and cannot acquire new config-draft guards. Keep
+// their root/chat announcement contract; current pages also reconcile on resume.
+function isControlUiChatClient(url) {
+  const clientUrl = new URL(url);
+  const scopeUrl = new URL(self.registration.scope);
+  const scopePath = scopeUrl.pathname.endsWith("/") ? scopeUrl.pathname : `${scopeUrl.pathname}/`;
+  const chatPath = `${scopePath}chat`;
+  return (
+    clientUrl.origin === scopeUrl.origin &&
+    (clientUrl.pathname === scopeUrl.pathname ||
+      clientUrl.pathname === chatPath ||
+      clientUrl.pathname.startsWith(`${chatPath}/`))
+  );
+}
+
+// A resumed/BFCache document may have missed activation entirely. Build identity
+// belongs to the running worker, not its potentially old sw.js?v= registration URL.
+self.addEventListener("message", (event) => {
+  if (event.data?.type === "sw-version-probe") {
+    event.ports[0]?.postMessage({ type: "sw-updated", version: CACHE_VERSION });
+  }
+});
+
 // Minimal app-shell files to precache.
 const PRECACHE_URLS = ["./"];
 
@@ -39,16 +62,16 @@ self.addEventListener("activate", (event) => {
           controlKeys.filter((key) => !retained.has(key)).map((key) => caches.delete(key)),
         ),
       ]);
-      // Enumerate after claim so a concurrent reload receives the activation event
-      // instead of leaving the new document unaware of the replacement worker.
+      // Queue the announcement without waiting for suspended pages or navigating
+      // around their unsaved-work guards. Resumed pages also query our identity.
       const windowClients = await self.clients.matchAll({
         type: "window",
         includeUncontrolled: true,
       });
-
       for (const client of windowClients) {
-        // oxlint-disable-next-line unicorn/require-post-message-target-origin -- Service Worker Client.postMessage does not take targetOrigin.
-        client.postMessage({ type: "sw-updated", version: CACHE_VERSION });
+        if (isControlUiChatClient(client.url)) {
+          client.postMessage({ type: "sw-updated", version: CACHE_VERSION }, []);
+        }
       }
     })(),
   );
@@ -79,7 +102,8 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  // Cache-first for hashed assets; network-first for HTML/other.
+  // Cache-first for hashed assets; network-first for other paths. Versioned
+  // public URLs reuse the HTTP immutable cache; unversioned/custom files revalidate.
   if (url.pathname.includes("/assets/")) {
     event.respondWith(
       caches.match(event.request).then(
@@ -129,6 +153,7 @@ self.addEventListener("push", (event) => {
     icon: "./apple-touch-icon.png",
     badge: "./favicon-32.png",
     tag: data.tag || "openclaw-notification",
+    renotify: data.renotify === true,
     data: {
       url: data.url || self.registration.scope,
       explicitUrl: Boolean(data.url),

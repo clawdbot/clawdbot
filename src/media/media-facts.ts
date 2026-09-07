@@ -282,7 +282,7 @@ export function readRuntimePromptImageOrder(message: object): PromptImageOrderEn
 }
 
 /** Returns whether a declared MIME only describes otherwise unclassified binary bytes. */
-export function isGenericBinaryMediaContentType(contentType?: string | null): boolean {
+function isGenericBinaryMediaContentType(contentType?: string | null): boolean {
   const normalizedContentType = normalizeMimeType(contentType);
   return (
     normalizedContentType === "application/octet-stream" ||
@@ -290,7 +290,8 @@ export function isGenericBinaryMediaContentType(contentType?: string | null): bo
   );
 }
 
-function classifyMediaFact(fact: MediaFactInput): MediaKind | undefined {
+/** Resolves attachment kind from authoritative facts before source or filename hints. */
+export function resolveMediaFactKind(fact: MediaFactInput): MediaKind | undefined {
   if (fact.kind && fact.kind !== "unknown") {
     return fact.kind;
   }
@@ -305,7 +306,19 @@ function classifyMediaFact(fact: MediaFactInput): MediaKind | undefined {
       ? (normalizedContentType as MediaKind)
       : undefined;
   }
-  const pathValue = normalizeOptionalString(fact.path) ?? normalizeOptionalString(fact.url);
+  const source = normalizeOptionalString(fact.path) ?? normalizeOptionalString(fact.url);
+  if (!source) {
+    return undefined;
+  }
+  const pathValue =
+    [fact.path, fact.url, fact.fileName].find((candidate) => {
+      const extension = getFileExtension(candidate);
+      return (
+        mimeTypeFromFilePath(candidate) !== undefined ||
+        extension === ".tif" ||
+        extension === ".tiff"
+      );
+    }) ?? source;
   const inferredMime = mimeTypeFromFilePath(pathValue);
   if (inferredMime === "image/svg+xml") {
     return undefined;
@@ -320,13 +333,13 @@ function classifyMediaFact(fact: MediaFactInput): MediaKind | undefined {
 
 /** Returns whether a fact can produce native image input. */
 export function isImageMediaFact(fact: MediaFactInput): boolean {
-  const kind = classifyMediaFact(fact);
+  const kind = resolveMediaFactKind(fact);
   return kind === "image" || kind === "sticker";
 }
 
 /** Returns whether a fact can produce native video input. */
 export function isVideoMediaFact(fact: MediaFactInput): boolean {
-  return classifyMediaFact(fact) === "video";
+  return resolveMediaFactKind(fact) === "video";
 }
 
 type MediaFactDefaults<TInput extends MediaFactInput = MediaFactInput> = {

@@ -6,14 +6,13 @@ import {
   WORKSPACE,
   controlUiSessionPath,
   createNewSessionPageE2eSuite,
+  expectPastedPngImage,
   installMockGateway,
   pastePng,
   pollLocatorText,
   replaceGatewayClient,
   waitForCommittedChatRoute,
 } from "./new-session-page.test-support.ts";
-import { waitForCommittedState } from "./settle.test-support.ts";
-
 const suite = createNewSessionPageE2eSuite();
 const SESSION_PLACEMENT_STARTUP_RUNTIME_REQUEST =
   /\/assets\/session-placement-startup\.runtime-[^/?]+\.js(?:\?.*)?$/;
@@ -99,15 +98,16 @@ suite.define(() => {
         .click();
       await page.getByRole("heading", { name: "Local" }).waitFor();
       await expect.poll(() => trigger.getAttribute("data-cloud-profile")).toBeNull();
-      await expect.poll(() => page.locator("#new-session-detail-trigger").count()).toBe(0);
+      await expect.poll(() => page.locator("#new-session-checkout-trigger").count()).toBe(0);
     } finally {
       await context.close();
     }
   });
 
-  it("restores a cloud startup after a page reload without creating another session", async () => {
+  it("restores an unconfirmed cloud turn after reload and checks delivery without replay", async () => {
     const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
     const page = await context.newPage();
+    const recoveryRuntimeLoad = createDeferred();
     const sessionKey = "agent:cloud:reload-recovery";
     const message = "resume this cloud task after reload";
     const gateway = await installMockGateway(page, {
@@ -199,6 +199,7 @@ suite.define(() => {
       expect(firstSend.params).toMatchObject({
         attachments: [{ fileName: "pixel.png", content: ONE_PIXEL_PNG_B64 }],
       });
+      await waitForCommittedChatRoute(page);
       await gateway.rejectDeferred("sessions.send", {
         code: "UNAVAILABLE",
         message: "send outcome unknown",
@@ -242,64 +243,13 @@ suite.define(() => {
         sessionKey,
       );
       expect(startupError).toContain("send outcome unknown");
-      await waitForCommittedChatRoute(page);
-      await waitForCommittedState(
-        page,
-        ({ messageId: expectedMessageId, recoveryPrefix, sessionKey: expectedSessionKey }) => {
-          if (
-            typeof expectedMessageId !== "string" ||
-            typeof recoveryPrefix !== "string" ||
-            typeof expectedSessionKey !== "string"
-          ) {
-            return false;
-          }
-          for (let index = 0; index < sessionStorage.length; index += 1) {
-            const key = sessionStorage.key(index);
-            if (!key?.startsWith(recoveryPrefix)) {
-              continue;
-            }
-            const raw = sessionStorage.getItem(key);
-            if (!raw) {
-              continue;
-            }
-            try {
-              const value: unknown = JSON.parse(raw);
-              if (typeof value !== "object" || value === null || Array.isArray(value)) {
-                continue;
-              }
-              const recovery = value as Record<string, unknown>;
-              if (
-                recovery.sessionKey === expectedSessionKey &&
-                recovery.messageId === expectedMessageId &&
-                recovery.phase === "sending"
-              ) {
-                return true;
-              }
-            } catch {
-              // Ignore unrelated malformed rows in the current recovery namespace.
-            }
-          }
-          return false;
-        },
-        {
-          messageId,
-          recoveryPrefix: "openclaw.new-session.session-placement-recovery.v1:",
-          sessionKey,
-        },
-      );
-      await gateway.setMethodResponse("sessions.send", {
-        runId: "run-reload-recovery",
-        status: "started",
-      });
-
-      const recoveryRuntimeLoad = createDeferred();
       let recoveryRuntimeRequested = false;
       await page.route(SESSION_PLACEMENT_STARTUP_RUNTIME_REQUEST, async (route) => {
         recoveryRuntimeRequested = true;
         await recoveryRuntimeLoad.promise;
         await route.continue();
       });
-      await page.reload();
+      const reload = page.reload();
       await expect.poll(() => recoveryRuntimeRequested).toBe(true);
       await expect
         .poll(() =>
@@ -313,22 +263,58 @@ suite.define(() => {
         .toBe("connected");
       expect(await gateway.getRequests("sessions.send")).toHaveLength(0);
       recoveryRuntimeLoad.resolve();
-      const resumedSend = await gateway.waitForRequest("sessions.send");
-      expect(resumedSend.params).toMatchObject({
-        attachments: [{ fileName: "pixel.png", content: ONE_PIXEL_PNG_B64 }],
-        idempotencyKey: messageId,
-        key: sessionKey,
-        message,
-      });
-      expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
+      await reload;
       await waitForCommittedChatRoute(page);
       expect(page.url()).toContain(controlUiSessionPath(sessionKey));
+      const retainedTurn = page.locator(".chat-group.user", { hasText: message });
+      const checkDelivery = page.getByRole("button", { name: "Check delivery", exact: true });
+      await checkDelivery.waitFor({ state: "visible" });
+      await expectPastedPngImage(retainedTurn.locator("img.chat-message-image"));
+      await expect
+        .poll(() => page.locator(".agent-chat__composer-combobox textarea").isDisabled())
+        .toBe(true);
+
+      const historyCount = (await gateway.getRequests("chat.history")).length;
+      await checkDelivery.click();
+      // Background history loads may arrive before this action's request.
+      await expect
+        .poll(async () => (await gateway.getRequests("chat.history")).slice(historyCount))
+        .toContainEqual(
+          expect.objectContaining({
+            params: { sessionKey, limit: 1000, inputRunIds: [messageId] },
+          }),
+        );
+      await pollLocatorText(page.getByRole("alert")).toContain("No matching user message");
+      await expectPastedPngImage(retainedTurn.locator("img.chat-message-image"));
+
+      // Gateway user-turn recording uses the admitted client key plus :user.
+      await gateway.setHistoryMessages([
+        {
+          role: "user",
+          content: [
+            { type: "text", text: message },
+            {
+              type: "image",
+              source: { type: "base64", media_type: "image/png", data: ONE_PIXEL_PNG_B64 },
+            },
+          ],
+          __openclaw: { idempotencyKey: `${messageId}:user` },
+        },
+      ]);
+      await checkDelivery.click();
+      await expect.poll(() => checkDelivery.count()).toBe(0);
+      await expect.poll(() => retainedTurn.count()).toBe(1);
+      await expect.poll(() => retainedTurn.locator(".chat-send-status").count()).toBe(0);
+      expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
+      expect(await gateway.getRequests("sessions.dispatch")).toHaveLength(0);
+      expect(await gateway.getRequests("sessions.send")).toHaveLength(0);
     } finally {
+      recoveryRuntimeLoad.resolve();
       await context.close();
     }
   });
 
-  it("resumes runtime recovery added while disconnected without locking the new-session page", async () => {
+  it("reconciles an accepted turn added while disconnected without locking the new-session page", async () => {
     const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
@@ -357,11 +343,15 @@ suite.define(() => {
           defaultBranch: "main",
           repositoryStatus: "git",
         },
-        "sessions.describe": {
-          session: {
-            key: "agent:cloud:offline-recovery",
-            placement: { state: "active", environmentId: "environment-offline-recovery" },
-          },
+        "chat.history": {
+          messages: [
+            {
+              role: "user",
+              content: [{ type: "text", text: "restore after reconnect" }],
+              __openclaw: { idempotencyKey: "message-offline-recovery:user" },
+            },
+          ],
+          sessionId: "session-offline-recovery",
         },
       },
     });
@@ -427,18 +417,20 @@ suite.define(() => {
       }, recoveryIdentity);
 
       await gateway.setOnline(true);
-      const resumedSend = await gateway.waitForRequest("sessions.send");
-      expect(resumedSend.params).toMatchObject({
-        idempotencyKey: "message-offline-recovery",
-        key: "agent:cloud:offline-recovery",
-        message: "restore after reconnect",
+      expect(await gateway.waitForRequest("chat.history")).toMatchObject({
+        params: { sessionKey: "agent:cloud:offline-recovery", limit: 1000 },
       });
-      expect(
-        await page.evaluate(
-          ({ storageKey }) => sessionStorage.getItem(storageKey),
-          recoveryIdentity,
-        ),
-      ).toBeNull();
+      await expect
+        .poll(() =>
+          page.evaluate(() =>
+            Object.keys(sessionStorage).filter((key) =>
+              key.startsWith("openclaw.new-session.session-placement-recovery.v1:"),
+            ),
+          ),
+        )
+        .toHaveLength(0);
+      expect(await gateway.getRequests("sessions.send")).toHaveLength(0);
+      expect(await gateway.getRequests("sessions.dispatch")).toHaveLength(0);
       await expect.poll(() => page.locator(".new-session-page__message").inputValue()).toBe("");
       await page.locator("#new-session-where-trigger").click();
       await page

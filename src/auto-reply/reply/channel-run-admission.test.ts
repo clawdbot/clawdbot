@@ -6,6 +6,7 @@ import {
 } from "../../agents/admitted-run-context.js";
 import { configureExecutionIdentityAdmissionSink } from "../../audit/execution-identity-admission.js";
 import {
+  combineChannelAdmissionEvidence,
   configureChannelAdmissionDecisionSink,
   configureChannelAdmissionEvidenceCollection,
   consumeChannelAdmissionEvidence,
@@ -66,6 +67,8 @@ describe("channel run admission", () => {
         onAdmitted: (context) => admittedContexts.push(context),
       });
 
+      expect(() => prepared.assertSourceCurrent()).not.toThrow();
+      expect(identityWork).toHaveLength(0);
       const first = await prepared.admit("embedded");
       const fallback = await prepared.admit("embedded");
 
@@ -73,11 +76,18 @@ describe("channel run admission", () => {
       expect(identityWork).toHaveLength(1);
       expect(decisions).toHaveLength(1);
       expect(admittedContexts).toEqual([first]);
+      expect(decisions).toMatchObject([
+        {
+          decision: { reasonCode: "channel_ingress_attribution_only" },
+          enforcement: { policyRefs: [], contextFieldsUsed: [] },
+        },
+      ]);
       expect(consumeChannelAdmissionEvidence(evidence)).toMatchObject({
         ingressState: "unknown",
       });
 
       prepared.close();
+      expect(() => prepared.assertSourceCurrent()).not.toThrow();
       await expect(prepared.admit("embedded")).rejects.toThrow(
         "prepared execution context is already closed",
       );
@@ -87,6 +97,60 @@ describe("channel run admission", () => {
       clearCollection();
     }
   });
+
+  it.each([false, true])(
+    "explains identifier-authentication effects in the receipt with an unevaluated contribution: %s",
+    async (includeUnevaluated) => {
+      const decisions: unknown[] = [];
+      const clearCollection = configureChannelAdmissionEvidenceCollection(true);
+      const clearIdentitySink = configureExecutionIdentityAdmissionSink(() => true);
+      const clearDecisionSink = configureChannelAdmissionDecisionSink((receipt) => {
+        decisions.push(receipt);
+        return true;
+      });
+      try {
+        const prepared = prepareChannelRunAdmission({
+          cfg: identityConfig,
+          runId: "run-auth",
+          agentId: "main",
+          ingressKind: "channel",
+          boundary: "test.channel",
+          evidence: combineChannelAdmissionEvidence(
+            (includeUnevaluated
+              ? (["affected", "not-evaluated"] as const)
+              : (["affected"] as const)
+            ).map((identifierAuthentication) =>
+              createChannelParticipantAdmissionEvidence({
+                channelId: "test",
+                participantId: "private-person-value",
+                identifierAuthentication,
+              }),
+            ),
+          ),
+        });
+
+        await prepared.admit("embedded");
+
+        expect(decisions).toEqual([
+          expect.objectContaining({
+            receiptId: expect.stringContaining(":channel-admission"),
+            decision: expect.objectContaining({
+              reasonCode: "channel_ingress_identifier_authentication_applied",
+            }),
+            enforcement: expect.objectContaining({
+              policyRefs: ["channel.identifier-authentication"],
+              contextFieldsUsed: ["channel.identifier-authentication"],
+            }),
+          }),
+        ]);
+        expect(JSON.stringify(decisions)).not.toContain("private-person-value");
+      } finally {
+        clearDecisionSink();
+        clearIdentitySink();
+        clearCollection();
+      }
+    },
+  );
 
   it("does not consume a cancelled pre-admission carrier or label internal ACP as a person", async () => {
     const identityWork: unknown[] = [];

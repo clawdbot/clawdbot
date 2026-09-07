@@ -88,7 +88,7 @@ const imessageApproval = createApproverRestrictedNativeApprovalCapabilityFromFor
   },
   createNativeRuntime: (routing) =>
     createLazyChannelApprovalNativeRuntimeAdapter({
-      eventKinds: ["exec", "plugin"],
+      eventKinds: ["exec", "plugin", "system-agent"],
       isConfigured: ({ cfg, accountId, context }) =>
         Boolean(context) &&
         routing.canAnyApprovalPotentiallyRouteToChannel({
@@ -225,6 +225,7 @@ function buildIMessageExecPendingPayload(params: { request: ExecApprovalRequest;
     cwd: params.request.request.cwd ?? undefined,
     host: params.request.request.host === "node" ? "node" : "gateway",
     nodeId: params.request.request.nodeId ?? undefined,
+    scope: params.request.request.scope ?? undefined,
     sessionKey: params.request.request.sessionKey ?? null,
     expiresAtMs: params.request.expiresAtMs,
     nowMs: params.nowMs,

@@ -23,21 +23,23 @@ openclaw daemon uninstall
 
 ## Subcommands and options
 
-| Subcommand  | Options                                                                                          |
-| ----------- | ------------------------------------------------------------------------------------------------ |
-| `status`    | `--url`, `--token`, `--password`, `--timeout`, `--no-probe`, `--require-rpc`, `--deep`, `--json` |
-| `install`   | `--port`, `--runtime <node>`, `--token`, `--wrapper <path>`, `--force`, `--json`                 |
-| `uninstall` | `--json`                                                                                         |
-| `start`     | `--json`                                                                                         |
-| `stop`      | `--force`, `--json`, `--disable` (launchd only: suppress KeepAlive/RunAtLoad until next start)   |
-| `restart`   | `--force`, `--safe`, `--skip-deferral`, `--wait <duration>`, `--json`                            |
+| Subcommand  | Options                                                                                                    |
+| ----------- | ---------------------------------------------------------------------------------------------------------- |
+| `status`    | `--url`, `--port`, `--token`, `--password`, `--timeout`, `--no-probe`, `--require-rpc`, `--deep`, `--json` |
+| `install`   | `--port`, `--runtime <node\|bun>`, `--token`, `--wrapper <path>`, `--force`, `--json`                      |
+| `uninstall` | `--json`                                                                                                   |
+| `start`     | `--json`                                                                                                   |
+| `stop`      | `--force`, `--json`, `--disable` (launchd only: suppress KeepAlive/RunAtLoad until next start)             |
+| `restart`   | `--force`, `--safe`, `--skip-deferral`, `--wait <duration>`, `--json`                                      |
 
 `--json` is accepted before or after every subcommand (for example, `daemon --json status` and `daemon status --json`).
 
 - `status`: shows service install state (launchd/systemd/schtasks) and probes Gateway health.
+- `status --port <port>`: selects a local Gateway using the invoking CLI config for auth and TLS. Cannot combine with `--url`; native service details remain diagnostic-only.
 - `install`: installs the service; `--force` reinstalls/overwrites an existing install.
-- `restart --safe`: asks the running Gateway to preflight active work and schedule one coalesced restart after work drains, bounded to 5 minutes. When that budget expires, the restart is forced anyway. Plain `restart` uses the service manager directly; `--force` is the immediate override.
-- `restart --safe --skip-deferral`: bypasses the active-work deferral gate so the Gateway restarts immediately even when blockers are reported. Requires `--safe`.
+- Node is the primary, default, and recommended service runtime. Bun 1.4+ with WAL-reset-safe `node:sqlite` is available as an explicit opt-in with `install --runtime bun`.
+- `restart --safe`: asks the running Gateway to preflight active work and schedule one coalesced restart after work drains, bounded to 5 minutes. When that budget expires, the restart is forced anyway. Plain `restart` normally uses the service manager directly; on Windows, commands launched from a Gateway service automatically use the [safe restart path](/cli/gateway#restart-the-gateway). Explicit lifecycle controls retain their behavior; `--force` is the immediate override.
+- `restart --safe --skip-deferral`: bypasses only the active-work deferral gate. Shutdown may still wait for pending replies to drain before the Gateway process exits. Requires `--safe`.
 
 ## Notes
 
@@ -47,7 +49,7 @@ openclaw daemon uninstall
 - Token-drift checks resolve `gateway.auth.token` SecretRefs using merged runtime env (service command env first, then process env). If token auth is not effectively active (`gateway.auth.mode` of `password`/`none`/`trusted-proxy`, or unset with password able to win), config token resolution is skipped.
 - `install` validates a SecretRef-managed `gateway.auth.token` is resolvable but never persists the resolved value into service environment metadata; if it can't resolve, install fails closed.
 - If both `gateway.auth.token` and `gateway.auth.password` are configured and `gateway.auth.mode` is unset, `install` blocks until you set the mode explicitly.
-- On macOS, `install` keeps LaunchAgent plists and the generated env file/wrapper owner-only (mode `0600`/`0700`) instead of embedding secrets in `EnvironmentVariables`.
+- On macOS, `install` writes LaunchAgent plists with mode `0644`; secrets stay in the generated owner-only environment file (`0600`), loaded through an owner-only wrapper (`0700`).
 - Running multiple Gateways on one host: isolate ports, config/state, and workspaces. See [Multiple gateways](/gateway#multiple-gateways-same-host).
 
 ## Related

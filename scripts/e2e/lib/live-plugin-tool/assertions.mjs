@@ -5,6 +5,10 @@ import { DatabaseSync } from "node:sqlite";
 import { isRecord } from "../../../lib/record-shared.mjs";
 import { extractAgentReplyTexts } from "../agent-turn-output.mjs";
 import { readPositiveIntEnv } from "../env-limits.mjs";
+import {
+  resolveOpenClawConfigPath as configPath,
+  resolveOpenClawStateDir as stateDir,
+} from "../openclaw-state-paths.mjs";
 import { readPluginInstallRecords } from "../plugin-index-sqlite.mjs";
 import { readTextFileTail, tailText } from "../text-file-utils.mjs";
 
@@ -36,14 +40,6 @@ function requireEnv(name) {
     throw new Error(`missing ${name}`);
   }
   return value;
-}
-
-function stateDir() {
-  return process.env.OPENCLAW_STATE_DIR || path.join(process.env.HOME, ".openclaw");
-}
-
-function configPath() {
-  return process.env.OPENCLAW_CONFIG_PATH || path.join(stateDir(), "openclaw.json");
 }
 
 function agentOutputPath() {

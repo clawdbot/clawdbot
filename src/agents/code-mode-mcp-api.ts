@@ -1,5 +1,5 @@
 import { isRecord } from "../../packages/normalization-core/src/record-coerce.js";
-import type { PluginToolMcpMeta } from "../plugins/tools.js";
+import type { PluginToolMcpMeta } from "../plugins/tool-metadata.js";
 
 type McpApiParamDoc = {
   name: string;
@@ -60,10 +60,6 @@ function normalizeDocLines(value: string | undefined): string[] {
     : [];
 }
 
-function collapseDocText(value: string | undefined): string {
-  return normalizeDocLines(value).join(" ");
-}
-
 function renderDocComment(
   summary: string | undefined,
   params: readonly McpApiParamDoc[],
@@ -77,7 +73,9 @@ function renderDocComment(
     lines.push(" *");
   }
   for (const param of params) {
-    const description = collapseDocText(param.description);
+    const suffix =
+      param.defaultValue === undefined ? "" : ` Default: ${JSON.stringify(param.defaultValue)}.`;
+    const description = `${normalizeDocLines(param.description).join(" ")}${suffix}`.trim();
     if (description) {
       lines.push(
         ` * @param ${param.name}${param.required ? "" : "?"} ${escapeDocComment(description)}`,
@@ -92,33 +90,75 @@ function tsPropertyName(name: string): string {
   return /^[A-Za-z_$][A-Za-z0-9_$]*$/u.test(name) ? name : JSON.stringify(name);
 }
 
-function renderInlineObjectType(schema: unknown): string {
-  const properties = readMcpSchemaProperties(schema);
-  const keys = Object.keys(properties);
-  if (keys.length === 0) {
-    return "Record<string, unknown>";
+function renderInlineObjectType(
+  schema: unknown,
+  params: readonly McpApiParamDoc[],
+  depth = 0,
+): string {
+  const additional = isRecord(schema) ? schema.additionalProperties : undefined;
+  const patterns = isRecord(schema) ? schema.patternProperties : undefined;
+  const extraType =
+    isRecord(patterns) && Object.keys(patterns).length > 0
+      ? "unknown"
+      : additional === false
+        ? "never"
+        : schemaType(additional, depth + 1);
+  if (params.length === 0) {
+    return `Record<string, ${extraType}>`;
   }
-  const required = new Set(readMcpRequiredKeys(schema));
-  return `{ ${keys
-    .map(
-      (key) =>
-        `${tsPropertyName(key)}${required.has(key) ? "" : "?"}: ${schemaType(properties[key])}`,
-    )
-    .join("; ")} }`;
+  const fields = params.map(
+    (param) => `${tsPropertyName(param.name)}${param.required ? "" : "?"}: ${param.type};`,
+  );
+  if (extraType !== "never") {
+    // TypeScript index signatures also cover named properties, unlike JSON Schema's
+    // additionalProperties. Include their types so valid named inputs remain expressible.
+    const types = new Set([extraType, ...params.map((param) => param.type)]);
+    if (params.some((param) => !param.required)) {
+      types.add("undefined");
+    }
+    fields.push(
+      `[key: string]: ${types.has("unknown") || types.size > 8 ? "unknown" : [...types].join(" | ")};`,
+    );
+  }
+  return `{ ${fields.join(" ")} }`;
 }
 
-function schemaType(schema: unknown): string {
-  if (!isRecord(schema)) {
+function schemaType(schema: unknown, depth = 0): string {
+  if (!isRecord(schema) || depth >= 8) {
     return "unknown";
   }
-  const enumValues = Array.isArray(schema.enum)
-    ? schema.enum.filter(
-        (entry): entry is string | number | boolean =>
-          typeof entry === "string" || typeof entry === "number" || typeof entry === "boolean",
+  const enumValues = Array.isArray(schema.enum) ? schema.enum : undefined;
+  const types = new Set(Array.isArray(schema.type) ? schema.type : [schema.type]);
+  // Ajv widens the declared types with nullable, then independently applies enum.
+  const allowsNull =
+    (types.has(undefined) || types.has("null") || schema.nullable === true) &&
+    (!enumValues || enumValues.includes(null));
+  if (allowsNull && schema.nullable === true) {
+    types.add("null");
+  }
+  if (!allowsNull) {
+    types.delete("null");
+  }
+  if (enumValues && enumValues.length > 0 && enumValues.length <= 16) {
+    const compatible = enumValues.filter((entry) => {
+      const type = entry === null ? "null" : Array.isArray(entry) ? "array" : typeof entry;
+      return (
+        types.has(undefined) ||
+        types.has(type) ||
+        (type === "number" && types.has("integer") && Number.isInteger(entry))
+      );
+    });
+    if (
+      compatible.every(
+        (entry) =>
+          entry === null ||
+          typeof entry === "string" ||
+          typeof entry === "boolean" ||
+          (typeof entry === "number" && Number.isFinite(entry)),
       )
-    : [];
-  if (enumValues.length > 0 && enumValues.length <= 16) {
-    return enumValues.map((entry) => JSON.stringify(entry)).join(" | ");
+    ) {
+      return compatible.map((entry) => JSON.stringify(entry)).join(" | ") || "never";
+    }
   }
   const union = Array.isArray(schema.oneOf)
     ? schema.oneOf
@@ -126,33 +166,32 @@ function schemaType(schema: unknown): string {
       ? schema.anyOf
       : undefined;
   if (union && union.length > 0 && union.length <= 8) {
-    return union.map(schemaType).join(" | ");
+    return union.map((variant) => schemaType(variant, depth + 1)).join(" | ");
   }
-  if (Array.isArray(schema.type)) {
-    return schema.type.map((type) => schemaType({ ...schema, type })).join(" | ");
-  }
-  switch (schema.type) {
-    case "string":
-      return "string";
-    case "integer":
-    case "number":
-      return "number";
-    case "boolean":
-      return "boolean";
-    case "array":
-      return `${schemaType(schema.items)}[]`;
-    case "object":
-      return renderInlineObjectType(schema);
-    case "null":
-      return "null";
-    default:
-      return Object.keys(readMcpSchemaProperties(schema)).length > 0
-        ? renderInlineObjectType(schema)
-        : "unknown";
-  }
+  return (
+    [...types]
+      .map((type) => {
+        switch (type) {
+          case "integer":
+          case "number":
+            return "number";
+          case "array":
+            return `Array<${schemaType(schema.items, depth + 1)}>`;
+          case "string":
+          case "boolean":
+          case "null":
+            return type;
+          case "object":
+            return renderInlineObjectType(schema, buildMcpParamDocs(schema, depth), depth);
+          default:
+            return "unknown";
+        }
+      })
+      .join(" | ") || "never"
+  );
 }
 
-export function buildMcpParamDocs(schema: unknown): McpApiParamDoc[] {
+export function buildMcpParamDocs(schema: unknown, depth = 0): McpApiParamDoc[] {
   const properties = readMcpSchemaProperties(schema);
   const requiredKeys = readMcpRequiredKeys(schema);
   const required = new Set(requiredKeys);
@@ -161,7 +200,7 @@ export function buildMcpParamDocs(schema: unknown): McpApiParamDoc[] {
     const doc: McpApiParamDoc = {
       name: key,
       required: required.has(key),
-      type: schemaType(descriptor),
+      type: schemaType(descriptor, depth + 1),
     };
     if (isRecord(descriptor)) {
       const description =
@@ -169,30 +208,12 @@ export function buildMcpParamDocs(schema: unknown): McpApiParamDoc[] {
       if (description) {
         doc.description = description;
       }
-      if ("default" in descriptor) {
+      if (Object.hasOwn(descriptor, "default")) {
         doc.defaultValue = descriptor.default;
       }
     }
     return doc;
   });
-}
-
-function renderMcpInputType(params: readonly McpApiParamDoc[]): string[] {
-  if (params.length === 0) {
-    return ["input?: Record<string, never>"];
-  }
-  const lines = ["input: {"];
-  for (const param of params) {
-    if (param.description || param.defaultValue !== undefined) {
-      const description = collapseDocText(param.description);
-      const suffix =
-        param.defaultValue === undefined ? "" : ` Default: ${JSON.stringify(param.defaultValue)}.`;
-      lines.push(`  /** ${escapeDocComment(`${description}${suffix}`.trim())} */`);
-    }
-    lines.push(`  ${tsPropertyName(param.name)}${param.required ? "" : "?"}: ${param.type};`);
-  }
-  lines.push("}");
-  return lines;
 }
 
 function renderMcpToolSignature(
@@ -206,10 +227,16 @@ function renderMcpToolSignature(
     prompts_list: "McpPromptsListResult",
     prompts_get: "McpPromptsGetResult",
   }[tool.operation];
+  // The invocation mapper supplies defaults only for top-level arguments.
+  const inputParams = tool.params.map((param) => ({
+    ...param,
+    required: param.required && param.defaultValue === undefined,
+  }));
+  const optional = inputParams.some((param) => param.required) ? "" : "?";
   return [
-    ...renderDocComment(tool.description, tool.params),
+    ...renderDocComment(tool.description, inputParams),
     `function ${functionName}(`,
-    ...renderMcpInputType(tool.params).map((line) => `  ${line}`),
+    `  input${optional}: ${renderInlineObjectType(tool.parameters, inputParams)}`,
     `): Promise<${resultType}>;`,
   ];
 }

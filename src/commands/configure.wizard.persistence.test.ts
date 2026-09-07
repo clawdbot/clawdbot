@@ -106,6 +106,7 @@ describe("configure wizard persistence before local side effects", () => {
       },
     });
     mocks.probeGatewayReachable.mockResolvedValue({ ok: false });
+    mocks.waitForGatewayReachable.mockResolvedValue({ ok: false });
     mocks.text.mockResolvedValue("18789");
   });
 

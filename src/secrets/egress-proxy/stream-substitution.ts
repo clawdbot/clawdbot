@@ -10,6 +10,7 @@ const SENTINEL_PREFIX_BYTES = Buffer.from(SECRET_SENTINEL_PREFIX);
 const SENTINEL_SUFFIX_BYTES = Buffer.from(SECRET_SENTINEL_SUFFIX);
 
 export type SecretEgressRefusalReason =
+  | "host-not-allowed"
   | "invalid-proxy-auth"
   | "missing-proxy-auth"
   | "non-https-request"

@@ -1,16 +1,19 @@
 /** Tests Code Mode TypeScript execution. */
 
+import { writeFile } from "node:fs/promises";
+import { createRequire } from "node:module";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
-const loadCodeModeTypeScriptRuntime = vi.hoisted(() =>
-  vi.fn<() => Promise<typeof import("typescript")>>(),
-);
-
-vi.mock("./code-mode-typescript-runtime.js", () => ({
-  loadCodeModeTypeScriptRuntime,
-}));
-import { applyCodeModeCatalog } from "./code-mode.js";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { observeWorkerActivity } from "../../test/helpers/worker-activity.js";
+import * as workerUrls from "../infra/runtime-worker-url.js";
+import {
+  applyCodeModeCatalog,
+  createCodeModeTools,
+  runCodeModeScriptHeadless,
+} from "./code-mode.js";
 import {
   resetCodeModeTestState,
   pluginTool,
@@ -19,17 +22,71 @@ import {
   runUntilCompleted,
   testing,
 } from "./code-mode.test-support.js";
+import { clearToolSearchCatalog, registerHeadlessToolSearchCatalog } from "./tool-search.js";
+
+async function observeTypeScriptPreparation(source: string) {
+  const tempDirs = useAutoCleanupTempDirTracker(onTestFinished);
+  const dir = tempDirs.make("code-mode-typescript-load-");
+  const channelName = `typescript-load-${crypto.randomUUID()}`;
+  const loading = observeWorkerActivity(channelName);
+  await writeFile(
+    path.join(dir, "observed-typescript.mjs"),
+    `import { BroadcastChannel, threadId } from "node:worker_threads";
+     new BroadcastChannel(${JSON.stringify(channelName)}).postMessage(threadId);
+     ${source}`,
+  );
+  const workerPath = path.join(dir, "observed-worker.ts");
+  await writeFile(path.join(dir, "package.json"), '{"type":"module"}');
+  // Observe the real worker's lazy import; parent-isolate mocks cannot prove this boundary.
+  await writeFile(
+    workerPath,
+    `import { registerHooks } from "node:module";
+     registerHooks({ resolve(specifier, context, nextResolve) {
+       return specifier === "typescript"
+         ? { url: new URL("./observed-typescript.mjs", import.meta.url).href, shortCircuit: true }
+         : nextResolve(specifier, context);
+     }});
+     await import(${JSON.stringify(new URL("./code-mode.worker.ts", import.meta.url).href)});`,
+  );
+  const resolveWorker = vi
+    .spyOn(workerUrls, "resolveRuntimeWorkerUrl")
+    .mockReturnValue(pathToFileURL(workerPath));
+  onTestFinished(() => resolveWorker.mockRestore());
+  return { loading };
+}
 
 describe("Code Mode TypeScript execution", () => {
-  beforeEach(async () => {
-    vi.useRealTimers();
-    loadCodeModeTypeScriptRuntime.mockResolvedValue(await import("typescript"));
-  });
-
   afterEach(() => {
     vi.useRealTimers();
-    loadCodeModeTypeScriptRuntime.mockReset();
     resetCodeModeTestState();
+  });
+
+  it.each([
+    {
+      name: "runtime error after erased declarations",
+      code: "type Ignored = string;\ninterface IgnoredToo {\n  value: number;\n}\nconst value: number = 1;\n(value as unknown as () => void)();",
+      location: /openclaw-code-mode:generated\.js:\d+:\d+/,
+      cause: "TypeError",
+    },
+    {
+      name: "compiler syntax error",
+      code: "type Ignored = string;\nconst value: number = ;",
+      location: /openclaw-code-mode:user\.ts:2:\d+/,
+      cause: "Expression expected",
+    },
+  ])("identifies the source of a $name", async ({ code, location, cause }) => {
+    const { ctx, config, catalogRef, tools } = createCodeModeHarness();
+    applyCodeModeCatalog({ ...ctx, config, catalogRef, tools });
+    const result = await runUntilCompleted({
+      execTool: expectDefined(tools[0], "exec"),
+      waitTool: expectDefined(tools[1], "wait"),
+      code,
+      language: "typescript",
+    });
+    expect(result).toMatchObject({ status: "failed", error: expect.stringContaining(cause) });
+    expect(String(result.error)).toMatch(location);
+    expect(String(result.error)).not.toContain("openclaw-code-mode:user.js");
+    expect(String(result.error)).not.toContain("controller.js");
   });
 
   it("supports TypeScript source transform", async () => {
@@ -115,68 +172,104 @@ describe("Code Mode TypeScript execution", () => {
     expect(testing.activeRuns.size).toBe(0);
   });
 
-  it("times out an unfinished TypeScript runtime load without starting a worker", async () => {
-    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
-    (config as { tools: { codeMode: unknown } }).tools.codeMode = {
-      enabled: true,
-      timeoutMs: 100,
-    };
-    applyCodeModeCatalog({
-      tools: [...codeModeTools, pluginTool("fake_noop", "Noop")],
-      config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
-    });
-    loadCodeModeTypeScriptRuntime.mockReturnValue(new Promise(() => {}));
+  it.each(
+    (["exec", "headless"] as const).flatMap((mode) =>
+      (["aborted", "timeout"] as const).map((outcome) => ({ mode, outcome })),
+    ),
+  )(
+    "stops $mode source preparation on $outcome before any tool dispatch",
+    async ({ mode, outcome }) => {
+      const { loading } = await observeTypeScriptPreparation("await new Promise(() => {});");
+      const h = createCodeModeHarness();
+      const tool = pluginTool("fake_noop", "Noop");
+      onTestFinished(() => clearToolSearchCatalog(h.ctx));
+      (h.config as { tools: { codeMode: unknown } }).tools.codeMode = {
+        enabled: true,
+        timeoutMs: 1_000,
+      };
+      // Controls capture limits once; construct them after applying this execution's budget.
+      const codeModeTools = createCodeModeTools(h.ctx);
+      if (mode === "headless") {
+        registerHeadlessToolSearchCatalog({ catalogRef: h.catalogRef, tools: [tool] });
+      } else {
+        applyCodeModeCatalog({ ...h.ctx, tools: [...codeModeTools, tool] });
+      }
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const controller = new AbortController();
+      const code = "await fake_noop({}); return 42;";
+      const execution =
+        mode === "headless"
+          ? runCodeModeScriptHeadless({
+              ctx: h.ctx,
+              code,
+              language: "typescript",
+              wallClockMs: 1_000,
+              signal: controller.signal,
+            })
+          : expectDefined(codeModeTools[0], "Code Mode exec test invariant")
+              .execute("typescript-load", { code, language: "typescript" }, controller.signal)
+              .then(resultDetails);
+      onTestFinished(async () => {
+        controller.abort();
+        await execution;
+      });
+      const worker = await Promise.race([
+        loading,
+        execution.then((result) => {
+          throw new Error(`Code Mode settled before source preparation: ${JSON.stringify(result)}`);
+        }),
+      ]);
+      if (outcome === "aborted") {
+        controller.abort();
+      } else {
+        await vi.advanceTimersByTimeAsync(3_000);
+      }
+      expect(await execution).toMatchObject({ status: "failed", code: outcome, output: [] });
+      expect(tool.execute).not.toHaveBeenCalled();
+      expect(worker.threadId).toBe(-1);
+      expect(testing.activeRuns.size).toBe(0);
+    },
+  );
 
-    const result = resultDetails(
-      await expectDefined(codeModeTools[0], "Code Mode exec test invariant").execute(
-        "code-call-typescript-load-timeout",
-        { code: "return 42;", language: "typescript" },
-      ),
-    );
-
-    expect(result).toMatchObject({
-      status: "failed",
-      code: "timeout",
-      error: "code mode timeout exceeded",
-      failurePhase: "host",
-      bridgeDispatchStarted: false,
-      output: [],
-    });
-    expect(testing.activeRuns.size).toBe(0);
-  });
-
-  it("aborts an unfinished TypeScript runtime load without starting a worker", async () => {
-    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
-    applyCodeModeCatalog({
-      tools: [...codeModeTools, pluginTool("fake_noop", "Noop")],
-      config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
-    });
-    loadCodeModeTypeScriptRuntime.mockReturnValue(new Promise(() => {}));
-    const controller = new AbortController();
-    const resultPromise = expectDefined(codeModeTools[0], "Code Mode exec test invariant").execute(
-      "code-call-typescript-load-abort",
-      { code: "return 42;", language: "typescript" },
-      controller.signal,
-    );
-
-    controller.abort();
-
-    expect(resultDetails(await resultPromise)).toMatchObject({
-      status: "failed",
-      code: "aborted",
-      error: "code mode execution aborted",
-      failurePhase: "host",
-      bridgeDispatchStarted: false,
-      output: [],
-    });
-    expect(testing.activeRuns.size).toBe(0);
-  });
+  it.each([
+    {
+      name: "short guest",
+      code: "const value: number = 42; return value;",
+      expected: { status: "completed", value: 42 },
+    },
+    {
+      name: "CPU-bound guest",
+      code: "while (true) {}",
+      expected: { status: "failed", code: "timeout" },
+    },
+  ])(
+    "keeps headless preparation outside the guest budget for a $name",
+    async ({ code, expected }) => {
+      const typescriptUrl = pathToFileURL(createRequire(import.meta.url).resolve("typescript"));
+      const { loading } = await observeTypeScriptPreparation(`
+      export * from ${JSON.stringify(typescriptUrl.href)};
+      const now = performance.now.bind(performance);
+      Object.defineProperty(performance, "now", { value: () => now() + 2_000 });
+    `);
+      const h = createCodeModeHarness();
+      registerHeadlessToolSearchCatalog({ catalogRef: h.catalogRef, tools: [] });
+      onTestFinished(() => clearToolSearchCatalog(h.ctx));
+      const controller = new AbortController();
+      const execution = runCodeModeScriptHeadless({
+        ctx: h.ctx,
+        code,
+        language: "typescript",
+        overrides: { timeoutMs: 100 },
+        wallClockMs: 10_000,
+        signal: controller.signal,
+      });
+      onTestFinished(async () => {
+        controller.abort();
+        await execution;
+      });
+      const [, result] = await Promise.all([loading, execution]);
+      expect(result).toMatchObject({ ...expected, toolCallCount: 0 });
+    },
+    15_000,
+  );
 });

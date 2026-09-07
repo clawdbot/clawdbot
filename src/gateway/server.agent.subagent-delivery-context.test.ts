@@ -1,5 +1,6 @@
 // Subagent delivery-context tests protect route metadata inheritance for child
 // agent sessions and outbound delivery through channel plugins.
+import { randomUUID } from "node:crypto";
 import { describe, expect, test } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
@@ -12,7 +13,13 @@ import { projectSessionDeliveryFields } from "../utils/delivery-context.shared.j
 import { setRegistry } from "./server.agent.gateway-server-agent.mocks.js";
 import { createRegistry } from "./server.e2e-registry-helpers.js";
 import { installConnectedSessionStoreGatewaySuite } from "./test-helpers.connected-session-store.js";
-import { installGatewayTestHooks, rpcReq, testState, writeSessionStore } from "./test-helpers.js";
+import {
+  installGatewayTestHooks,
+  onceMessage,
+  prepareGatewayReplyRuntimeForTest,
+  testState,
+  writeSessionStore,
+} from "./test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
@@ -74,11 +81,20 @@ async function readStoredSessionEntry(key: string): Promise<StoredEntry> {
 }
 
 async function sendAgentRequest(params: Record<string, unknown>): Promise<void> {
-  const res = await rpcReq(gatewaySuite.ws, "agent", {
-    deliver: false,
-    ...params,
-  });
+  await prepareGatewayReplyRuntimeForTest();
+  const id = randomUUID();
+  // Acceptance precedes execution; the next fixture must not delete a session with an active run.
+  const finalResponse = onceMessage(
+    gatewaySuite.ws,
+    (message) =>
+      message.type === "res" && message.id === id && message.payload?.status !== "accepted",
+  );
+  gatewaySuite.ws.send(
+    JSON.stringify({ type: "req", id, method: "agent", params: { deliver: false, ...params } }),
+  );
+  const res = await finalResponse;
   expect(res.ok).toBe(true);
+  expect(res.payload?.status).toBe("ok");
 }
 
 function expectDeliveryContextFields(entry: StoredEntry, expected: Record<string, unknown>): void {

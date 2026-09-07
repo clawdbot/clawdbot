@@ -1,5 +1,5 @@
 import { runGit } from "../agents/worktrees/git.js";
-import { pruneMapToMaxSize } from "../infra/map-size.js";
+import { createSessionPullRequestCache } from "./control-ui-session-pr-cache.js";
 import {
   gitOutput,
   resolveBranchLanding,
@@ -7,21 +7,21 @@ import {
 } from "./control-ui-session-prs-landing.js";
 import { parseGitHubRemoteUrl } from "./github-remote.js";
 
-const LOCAL_GIT_CACHE_MS = 10_000;
-const LOCAL_GIT_CACHE_LIMIT = 100;
+const LOCAL_GIT_CACHE_MS = 75_000;
 
-/** GitHub repo + branch resolved from a session's git checkout. */
+/** GitHub repo + branch resolved from the session's recorded source or checkout. */
 export type SessionPullRequestGitContext = {
   owner: string;
   repo: string;
   branch: string;
-  /** Checkout root for local diff stats; absent for stubbed test contexts. */
+  /** Checkout root for local diff stats; absent for repository-only sessions. */
   root?: string;
   /** Remote default branch when origin/HEAD is resolvable. */
   defaultBranch?: string;
 };
 
 export type SessionPullRequestLocalGitDeps = {
+  cacheSignal?: AbortSignal;
   gitOutput?: typeof gitOutput;
   runGit?: typeof runGit;
   resolveBranchLanding?: typeof resolveBranchLanding;
@@ -35,50 +35,67 @@ type SessionPullRequestBranchFacts = {
 type LocalGitCacheEntry<T> = { expiresAt: number; promise: Promise<T> };
 
 function createLocalGitCache<T>() {
-  const entries = new Map<string, LocalGitCacheEntry<T>>();
-  return (key: string, refresh: boolean, load: () => Promise<T>): Promise<T> => {
-    const cached = entries.get(key);
-    if (!refresh && cached && cached.expiresAt > Date.now()) {
-      entries.delete(key);
-      entries.set(key, cached);
-      return cached.promise;
-    }
-    const entry = { expiresAt: Date.now() + LOCAL_GIT_CACHE_MS, promise: load() };
-    entries.delete(key);
-    entries.set(key, entry);
-    pruneMapToMaxSize(entries, LOCAL_GIT_CACHE_LIMIT);
-    return entry.promise;
+  const entries = createSessionPullRequestCache<LocalGitCacheEntry<T>>();
+  return {
+    load(key: string, refresh: boolean, load: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+      const cached = entries.get(key, signal);
+      const entry =
+        !refresh && cached && cached.expiresAt > Date.now()
+          ? cached
+          : { expiresAt: Date.now() + LOCAL_GIT_CACHE_MS, promise: load() };
+      entries.set(key, entry, signal);
+      return entry.promise;
+    },
+    release: entries.release,
   };
 }
 
-// Process-local and bounded: ten seconds keeps sidebar checkout/tree facts
-// responsive; removing this freshness window respawns Git for every row.
+// Outlive the 60-second subscription poll so unchanged rows do not respawn
+// Git every cycle; explicit structural refreshes still bypass both caches.
 const cachedGitContext = createLocalGitCache<SessionPullRequestGitContext | null>();
 const cachedBranchFacts = createLocalGitCache<SessionPullRequestBranchFacts | undefined>();
+
+export function releaseSessionPullRequestLocalGitCache(signal?: AbortSignal): void {
+  cachedGitContext.release(signal);
+  cachedBranchFacts.release(signal);
+}
+
+export function releaseSessionPullRequestBranchFacts(signal?: AbortSignal): void {
+  cachedBranchFacts.release(signal);
+}
 
 export function resolveCachedGitContext(
   root: string,
   deps: SessionPullRequestLocalGitDeps,
   refresh = false,
 ): Promise<SessionPullRequestGitContext | null> {
-  return cachedGitContext(root, refresh, async () => {
-    const output = deps.gitOutput ?? gitOutput;
-    const branch = await output(root, ["rev-parse", "--abbrev-ref", "HEAD"]);
-    if (!branch || branch === "HEAD") {
-      return null;
-    }
-    const remoteUrl = await output(root, ["remote", "get-url", "origin"]);
-    const remote = remoteUrl ? parseGitHubRemoteUrl(remoteUrl) : null;
-    if (!remote) {
-      return null;
-    }
-    const defaultRef = await output(root, ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"]);
-    const defaultBranch = defaultRef?.replace(/^origin\//, "");
-    if (defaultBranch === branch) {
-      return null;
-    }
-    return { ...remote, branch, root, ...(defaultBranch ? { defaultBranch } : {}) };
-  });
+  return cachedGitContext.load(
+    root,
+    refresh,
+    async () => {
+      const output = deps.gitOutput ?? gitOutput;
+      const branch = await output(root, ["rev-parse", "--abbrev-ref", "HEAD"]);
+      if (!branch || branch === "HEAD") {
+        return null;
+      }
+      const remoteUrl = await output(root, ["remote", "get-url", "origin"]);
+      const remote = remoteUrl ? parseGitHubRemoteUrl(remoteUrl) : null;
+      if (!remote) {
+        return null;
+      }
+      const defaultRef = await output(root, [
+        "symbolic-ref",
+        "--short",
+        "refs/remotes/origin/HEAD",
+      ]);
+      const defaultBranch = defaultRef?.replace(/^origin\//, "");
+      if (defaultBranch === branch) {
+        return null;
+      }
+      return { ...remote, branch, root, ...(defaultBranch ? { defaultBranch } : {}) };
+    },
+    deps.cacheSignal,
+  );
 }
 
 export function resolveCachedSessionBranchFacts(
@@ -86,7 +103,13 @@ export function resolveCachedSessionBranchFacts(
   mergedHeads: readonly MergedPullHead[],
   load: () => Promise<SessionPullRequestBranchFacts | undefined>,
   refresh = false,
+  signal?: AbortSignal,
 ): Promise<SessionPullRequestBranchFacts | undefined> {
   const landingKey = JSON.stringify([context.defaultBranch ?? null, mergedHeads]);
-  return cachedBranchFacts(`${context.root}\0${context.branch}\0${landingKey}`, refresh, load);
+  return cachedBranchFacts.load(
+    `${context.root}\0${context.branch}\0${landingKey}`,
+    refresh,
+    load,
+    signal,
+  );
 }

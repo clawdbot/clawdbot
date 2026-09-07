@@ -21,11 +21,6 @@ import {
   SLASH_COMMANDS,
 } from "../../lib/chat/commands.ts";
 import {
-  type ChatModelOverride,
-  createChatModelOverride,
-  resolvePreferredServerChatModelValue,
-} from "../../lib/chat/model-ref.ts";
-import {
   normalizeChatFastModeInput,
   resolveChatFastModeStatus,
 } from "../../lib/chat/model-select-state.ts";
@@ -49,13 +44,11 @@ import { patchChatCommandSessionSettings, selectedGlobalScope } from "./chat-set
 
 type SlashCommandResult = {
   /** Markdown-formatted result to display in chat. */
-  content: string;
+  content?: string;
   /** Side-effect action the caller should perform after displaying the result. */
   action?: "refresh" | "export" | "new-session" | "reset" | "stop" | "clear" | "navigate-usage";
-  /** Optional session-level directive changes that the caller should mirror locally. */
-  sessionPatch?: {
-    modelOverride?: ChatModelOverride | null;
-  };
+  /** Model-dependent tools need refreshing after a confirmed selection. */
+  modelChanged?: boolean;
   /** When set, the caller should track this as the active run (enables Abort, blocks concurrent sends). */
   trackRunId?: string;
   /** When set, the caller should surface a visible pending item tied to the current run. */
@@ -228,17 +221,7 @@ async function executeCompact(
       };
     }
     if (result?.compacted) {
-      const before = result.result?.tokensBefore;
-      const after = result.result?.tokensAfter;
-      const tokenSummary =
-        typeof before === "number" && typeof after === "number"
-          ? t("chat.commandResults.compaction.tokenSummary", {
-              before: before.toLocaleString(),
-              after: after.toLocaleString(),
-            })
-          : "";
       return {
-        content: `${t("chat.commandResults.compaction.succeeded")}${tokenSummary}.`,
         action: "refresh",
       };
     }
@@ -304,10 +287,6 @@ async function executeModel(
 
   try {
     const requestedModel = args.trim();
-    const resolvedModelCatalog = modelCatalog
-      ? Promise.resolve(modelCatalog)
-      : loadModelCatalog(client, agentId, { allowFailure: true });
-    let resolvedOverride: ChatModelOverride | null = null;
     await patchSession(
       context,
       sessionKey,
@@ -315,37 +294,13 @@ async function executeModel(
         model: requestedModel,
       },
       {
-        deferModelOverride: true,
         ownsModelOverride: context.ownsModelOverride,
-        reconcile: async (result) => {
-          const resolvedModel = result.resolved?.model ?? requestedModel;
-          let resolvedValue = resolvePreferredServerChatModelValue(
-            resolvedModel,
-            result.resolved?.modelProvider,
-            await resolvedModelCatalog,
-          );
-          const requestedOverride = createChatModelOverride(requestedModel);
-          const resolvedProvider = result.resolved?.modelProvider?.trim();
-          if (
-            requestedOverride?.kind === "qualified" &&
-            resolvedProvider &&
-            resolvedValue &&
-            !resolvedValue.toLowerCase().startsWith(`${resolvedProvider.toLowerCase()}/`) &&
-            requestedOverride.value.toLowerCase().endsWith(`/${resolvedModel.trim().toLowerCase()}`)
-          ) {
-            resolvedValue = requestedOverride.value;
-          }
-          resolvedOverride = createChatModelOverride(resolvedValue);
-          if (context.ownsModelOverride?.() !== false) {
-            context.sessions.setModelOverride(sessionKey, resolvedOverride?.value ?? null);
-          }
-        },
       },
     );
     return {
       content: t("chat.commandResults.model.set", { model: `\`${requestedModel}\`` }),
       action: "refresh",
-      sessionPatch: { modelOverride: resolvedOverride },
+      modelChanged: true,
     };
   } catch (err) {
     return {
@@ -792,23 +747,15 @@ async function loadThinkingCommandState(
 async function loadModelCatalog(
   client: GatewayBrowserClient,
   agentId: string | undefined,
-  opts?: { allowFailure?: boolean },
 ): Promise<ModelCatalogEntry[]> {
   if (!agentId) {
     return [];
   }
-  try {
-    const result = await client.request<{ models: ModelCatalogEntry[] }>("models.list", {
-      agentId,
-      view: "configured",
-    });
-    return result?.models ?? [];
-  } catch (err) {
-    if (opts?.allowFailure) {
-      return [];
-    }
-    throw err;
-  }
+  const result = await client.request<{ models: ModelCatalogEntry[] }>("models.list", {
+    agentId,
+    view: "configured",
+  });
+  return result?.models ?? [];
 }
 
 function resolveCommandMessage(
@@ -885,7 +832,7 @@ async function executeSteer(
     );
     const terminalAckContent = formatTerminalSteerAckContent(ackStatus);
     if (terminalAckContent) {
-      return { content: terminalAckContent };
+      return { content: terminalAckContent, failed: true };
     }
     const result: SlashCommandResult = { content: t("chat.commandResults.steer.succeeded") };
     if (ackStatus === "started" || ackStatus === "in_flight") {
@@ -926,7 +873,7 @@ async function executeRedirect(
     const ackStatus = normalizeSteerChatSendAckStatus(resp);
     const terminalAckContent = formatTerminalRedirectAckContent(ackStatus);
     if (terminalAckContent) {
-      return { content: terminalAckContent };
+      return { content: terminalAckContent, failed: true };
     }
     const runId = typeof resp?.runId === "string" ? resp.runId : undefined;
     return {

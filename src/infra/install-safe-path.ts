@@ -10,10 +10,7 @@ export {
 /** Returns the package basename for scoped npm names while preserving plain ids. */
 export function unscopedPackageName(name: string): string {
   const trimmed = name.trim();
-  if (!trimmed) {
-    return trimmed;
-  }
-  return trimmed.includes("/") ? (trimmed.split("/").pop() ?? trimmed) : trimmed;
+  return trimmed.slice(trimmed.lastIndexOf("/") + 1);
 }
 
 /** Matches a requested install id against either the full package name or unscoped basename. */

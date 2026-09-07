@@ -1,6 +1,6 @@
 // Nextcloud Talk tests cover monitor.replay plugin behavior.
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { createMockIncomingRequest } from "openclaw/plugin-sdk/test-env";
+import { createMockIncomingRequest, postRawWebhook } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
 import { createNextcloudTalkWebhookServer as createRawNextcloudTalkWebhookServer } from "./monitor.js";
 import { createSignedCreateMessageRequest } from "./monitor.test-fixtures.js";
@@ -35,8 +35,8 @@ async function invokeWebhookRequestListener(params: {
     method: "POST",
     url: params.path,
     headers: params.headers,
-    socket: { remoteAddress: params.remoteAddress },
-  }) as unknown as IncomingMessage;
+  });
+  Object.defineProperty(req.socket, "remoteAddress", { value: params.remoteAddress });
 
   return await new Promise<{ body: string; status: number }>((resolve) => {
     let status = 0;
@@ -56,34 +56,6 @@ async function invokeWebhookRequestListener(params: {
       },
     };
     params.listener(req, res as unknown as ServerResponse);
-  });
-}
-
-async function invokeWebhookServerRequest(params: {
-  body: string;
-  headers: Record<string, string>;
-  maxBodyBytes: number;
-}) {
-  const { server } = createNextcloudTalkWebhookServer({
-    host: "127.0.0.1",
-    port: 0,
-    path: "/nextcloud-body-limit",
-    secret: "nextcloud-secret", // pragma: allowlist secret
-    maxBodyBytes: params.maxBodyBytes,
-    onMessage: vi.fn(),
-  });
-  const listener = server.listeners("request")[0] as
-    | ((req: IncomingMessage, res: ServerResponse) => void)
-    | undefined;
-  if (!listener) {
-    throw new Error("expected Nextcloud Talk request listener");
-  }
-  return await invokeWebhookRequestListener({
-    listener,
-    path: "/nextcloud-body-limit",
-    body: params.body,
-    headers: params.headers,
-    remoteAddress: "127.0.0.1",
   });
 }
 
@@ -129,19 +101,6 @@ describe("createNextcloudTalkWebhookServer auth order", () => {
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({ error: "Missing signature headers" });
     expect(readBody).not.toHaveBeenCalled();
-  });
-
-  it("rejects signed payloads over the configured body limit", async () => {
-    const { body, headers } = createSignedCreateMessageRequest();
-
-    const response = await invokeWebhookServerRequest({
-      body,
-      headers,
-      maxBodyBytes: 128,
-    });
-
-    expect(response.status).toBe(413);
-    expect(JSON.parse(response.body)).toEqual({ error: "Payload too large" });
   });
 });
 
@@ -242,6 +201,39 @@ describe("createNextcloudTalkWebhookServer payload validation", () => {
     });
 
     expect(response.status).toBe(200);
+    expect(onMessage).not.toHaveBeenCalled();
+  });
+
+  it("answers an over-limit webhook with 413 and then closes the connection", async () => {
+    // Driven over a raw socket rather than fetch: the server answers while the sender is
+    // still uploading and then closes, so both halves of the contract - the status is
+    // delivered, and the rejected request does not stay open - have to be observed on the
+    // wire. A mocked response records status(413) either way and proves neither half.
+    const body = JSON.stringify({ type: "Create", padding: "x".repeat(70 * 1024) });
+    const { random, signature } = generateNextcloudTalkSignature({
+      body,
+      secret: "nextcloud-secret", // pragma: allowlist secret
+    });
+    const onMessage = vi.fn();
+    const harness = await startWebhookServer({
+      path: "/nextcloud-oversized-body",
+      onMessage,
+    });
+
+    const result = await postRawWebhook({
+      url: harness.webhookUrl,
+      body,
+      headers: {
+        "content-type": "application/json",
+        "x-nextcloud-talk-random": random,
+        "x-nextcloud-talk-signature": signature,
+        "x-nextcloud-talk-backend": "https://nextcloud.example",
+      },
+    });
+
+    expect(result.statusLine).toBe("HTTP/1.1 413 Payload Too Large");
+    expect(result.body).toBe(JSON.stringify({ error: "Payload too large" }));
+    expect(result.closedByServer).toBe(true);
     expect(onMessage).not.toHaveBeenCalled();
   });
 
@@ -386,7 +378,7 @@ describe("createNextcloudTalkWebhookServer auth rate limiting", () => {
 
   it("keeps unattributed trusted proxies in separate socket buckets", async () => {
     const path = "/nextcloud-auth-rate-limit-proxy-fallback";
-    const { server } = createNextcloudTalkWebhookServer({
+    const { server, stop } = createNextcloudTalkWebhookServer({
       host: "127.0.0.1",
       port: 0,
       path,
@@ -395,33 +387,37 @@ describe("createNextcloudTalkWebhookServer auth rate limiting", () => {
       trustedProxies: ["127.0.0.0/8"],
       onMessage: vi.fn(),
     });
-    const listener = server.listeners("request")[0] as
-      | ((req: IncomingMessage, res: ServerResponse) => void)
-      | undefined;
-    if (!listener) {
-      throw new Error("expected Nextcloud Talk request listener");
+    try {
+      const listener = server.listeners("request")[0] as
+        | ((req: IncomingMessage, res: ServerResponse) => void)
+        | undefined;
+      if (!listener) {
+        throw new Error("expected Nextcloud Talk request listener");
+      }
+      const { body, headers } = createSignedCreateMessageRequest();
+      const invalidHeaders = {
+        ...headers,
+        "x-nextcloud-talk-signature": "invalid-signature",
+      };
+      const invoke = (remoteAddress: string, requestHeaders: Record<string, string>) =>
+        invokeWebhookRequestListener({
+          listener,
+          path,
+          body,
+          headers: requestHeaders,
+          remoteAddress,
+        });
+
+      const firstAttack = await invoke("127.0.0.2", invalidHeaders);
+      const blockedAttack = await invoke("127.0.0.2", invalidHeaders);
+      const legitimateDelivery = await invoke("127.0.0.3", headers);
+
+      expect(firstAttack.status).toBe(401);
+      expect(blockedAttack.status).toBe(429);
+      expect(legitimateDelivery.status).toBe(200);
+    } finally {
+      await stop();
     }
-    const { body, headers } = createSignedCreateMessageRequest();
-    const invalidHeaders = {
-      ...headers,
-      "x-nextcloud-talk-signature": "invalid-signature",
-    };
-    const invoke = (remoteAddress: string, requestHeaders: Record<string, string>) =>
-      invokeWebhookRequestListener({
-        listener,
-        path,
-        body,
-        headers: requestHeaders,
-        remoteAddress,
-      });
-
-    const firstAttack = await invoke("127.0.0.2", invalidHeaders);
-    const blockedAttack = await invoke("127.0.0.2", invalidHeaders);
-    const legitimateDelivery = await invoke("127.0.0.3", headers);
-
-    expect(firstAttack.status).toBe(401);
-    expect(blockedAttack.status).toBe(429);
-    expect(legitimateDelivery.status).toBe(200);
   });
 
   it("does not rate limit valid signed webhook bursts from the same source", async () => {

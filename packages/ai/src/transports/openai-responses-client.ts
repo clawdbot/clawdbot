@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import type { AssistantMessage, Context, Model, StreamFn } from "@openclaw/llm-core";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import OpenAI, { AzureOpenAI } from "openai";
 import { getEnvApiKey } from "../env-api-keys.js";
 import { getAiTransportHost } from "../host.js";
@@ -16,15 +15,14 @@ import {
 import { buildGuardedModelFetch } from "./host-policy.js";
 import { emitModelTransportDebug } from "./model-transport-debug.js";
 import { formatModelTransportDebugBaseUrl } from "./model-transport-url.js";
-import {
-  claimResponsesCompactRequest,
-  type OpenAIResponsesCompactEndpointResult,
-} from "./openai-responses-compact-request.js";
+import { postOpenAIResponsesCompaction } from "./openai-responses-compact-client.js";
+import { claimResponsesCompactRequest } from "./openai-responses-compact-request.js";
 import {
   buildOpenAIResponsesReasoningReplayMetadata,
   suppressOpenAIResponsesCompaction,
   type OpenAIResponsesReplayMode,
 } from "./openai-responses-compaction-replay.js";
+import { createBoundedOpenAIResponsesCompactionFetch } from "./openai-responses-compaction-window.js";
 import {
   claimOpenAIResponsesHttpContinuation,
   type ResponsesContinuationRequest,
@@ -32,6 +30,7 @@ import {
 import {
   AZURE_RESPONSES_FIRST_EVENT_TIMEOUT_MS,
   OpenAIResponsesWebSocketPreDispatchError,
+  OpenAIResponsesWebSocketPostDispatchError,
   OpenAIResponsesWebSocketSafeRetryError,
   type OpenAIResponsesOptions,
 } from "./openai-responses-contracts.js";
@@ -42,11 +41,13 @@ import {
   summarizeOpenAITransportError,
   summarizeResponsesPayload,
 } from "./openai-responses-debug.js";
+import { recordResponsesInputReplay } from "./openai-responses-input-replay.js";
 import {
   buildOpenAIResponsesParams,
   sanitizeOpenAICodexResponsesParams,
 } from "./openai-responses-params-internal.js";
 import { createResponsesPromptEgressObserver } from "./openai-responses-prompt-observer-internal.js";
+import { supportsResponsesReasoningUpdate } from "./openai-responses-reasoning-update.js";
 import {
   createOpenAIResponsesAssistantOutput,
   createResponsesStreamWithEncryptedContentRetry,
@@ -54,6 +55,7 @@ import {
   resolveNextResponsesEncryptedContentAttempt,
   resolveAzureOpenAIApiVersion,
 } from "./openai-responses-replay-internal.js";
+import { projectResponsesSteeringInput } from "./openai-responses-steering.js";
 import { processResponsesStream } from "./openai-responses-stream-internal.js";
 import { observeResponsesStream } from "./openai-responses-stream-observer-internal.js";
 import {
@@ -70,7 +72,11 @@ import {
   isOpenAICodexResponsesModel,
   resolveCodeModeResponsesVisibleToolNames,
 } from "./openai-transport-params.js";
-import { createOpenAIProviderAcceptanceHook, log } from "./openai-transport-shared.js";
+import {
+  createOpenAIProviderAcceptanceHook,
+  log,
+  resolveOpenAIClientBaseUrl,
+} from "./openai-transport-shared.js";
 import { sanitizeResponsesImagePayload } from "./responses-image-payload-sanitizer.js";
 import {
   createWritableTransportEventStream,
@@ -154,83 +160,16 @@ export function createOpenAIResponsesClient(
   optionHeaders?: Record<string, string>,
   turnHeaders?: Record<string, string>,
   sessionId?: string,
+  fetchOverride?: typeof globalThis.fetch,
 ) {
   return new OpenAI({
     apiKey,
-    baseURL: model.baseUrl,
+    baseURL: resolveOpenAIClientBaseUrl(model),
     dangerouslyAllowBrowser: true,
     defaultHeaders: buildOpenAIClientHeaders(model, context, optionHeaders, turnHeaders, sessionId),
-    fetch: buildGuardedModelFetch(model),
+    fetch: fetchOverride ?? buildGuardedModelFetch(model),
     ...buildOpenAISdkClientOptions(model),
   });
-}
-
-async function postOpenAIResponsesCompaction(params: {
-  client: ReturnType<typeof createOpenAIResponsesClient>;
-  model: Model;
-  request: ReturnType<typeof buildOpenAIResponsesParams>;
-  options: OpenAIResponsesOptions | undefined;
-}): Promise<OpenAIResponsesCompactEndpointResult> {
-  const response = await params.client.post<unknown>("/responses/compact", {
-    ...buildOpenAISdkRequestOptions(params.model, params.options?.signal, {
-      timeoutMs: params.options?.timeoutMs,
-      maxRetries: params.options?.maxRetries,
-    }),
-    body: { model: params.request.model, input: params.request.input },
-  });
-  const output = isRecord(response) && Array.isArray(response.output) ? response.output : [];
-  const item = output.at(-1);
-  const retainedItems = output.slice(0, -1);
-  const retainedMessagesAreValid = retainedItems.every(
-    (candidate) =>
-      isRecord(candidate) &&
-      candidate.type === "message" &&
-      (candidate.role === "user" ||
-        candidate.role === "developer" ||
-        candidate.role === "system") &&
-      Array.isArray(candidate.content),
-  );
-  const retainedUserMessageCount = retainedItems.filter(
-    (candidate) =>
-      isRecord(candidate) &&
-      candidate.type === "message" &&
-      candidate.role === "user" &&
-      Array.isArray(candidate.content),
-  ).length;
-  const inputUserMessageCount = Array.isArray(params.request.input)
-    ? params.request.input.filter(
-        (candidate) =>
-          isRecord(candidate) && candidate.type === "message" && candidate.role === "user",
-      ).length
-    : 0;
-  const retainedMessagePrefixSupported = supportsNativeOpenAIResponsesEndpoint(params.model);
-  const usage = isRecord(response) && isRecord(response.usage) ? response.usage : undefined;
-  if (
-    !isRecord(response) ||
-    response.object !== "response.compaction" ||
-    !retainedMessagesAreValid ||
-    (retainedItems.length > 0 &&
-      (!retainedMessagePrefixSupported || retainedUserMessageCount !== inputUserMessageCount)) ||
-    !isRecord(item) ||
-    item.type !== "compaction" ||
-    typeof item.encrypted_content !== "string" ||
-    item.encrypted_content.length === 0 ||
-    !usage ||
-    typeof usage.input_tokens !== "number" ||
-    typeof usage.output_tokens !== "number"
-  ) {
-    throw new Error("Responses compact endpoint did not return one trailing compaction item");
-  }
-  return {
-    item,
-    historyMode: retainedUserMessageCount > 0 ? "retained-users" : "compacted-prefix",
-    usage,
-    model: params.model,
-    replayMetadata: buildOpenAIResponsesReasoningReplayMetadata(params.model, {
-      authProfileId: params.options?.authProfileId,
-      sessionId: params.options?.sessionId,
-    }),
-  } as OpenAIResponsesCompactEndpointResult;
 }
 
 type ResponsesPricingOptions = Pick<
@@ -256,9 +195,6 @@ type ResponsesTransportExecutorOptions = {
     metadata?: Record<string, string>,
     replayMode?: OpenAIResponsesReplayMode,
   ) => ReturnType<typeof buildOpenAIResponsesParams>;
-  createResponseStream: (
-    params: ResponsesStreamParams,
-  ) => ReturnType<typeof createResponsesStreamWithEncryptedContentRetry>;
   pricingOptions?: (
     options: OpenAIResponsesOptions | undefined,
     model: Model,
@@ -303,15 +239,18 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
           options?.headers,
           turnState?.headers,
           options?.sessionId,
+          compactRequest
+            ? createBoundedOpenAIResponsesCompactionFetch(buildGuardedModelFetch(model))
+            : undefined,
         );
-        const buildRequest = async (replayMode: OpenAIResponsesReplayMode) => {
-          let params = config.buildRequest(
-            model,
-            context,
-            responsesOptions,
-            turnState?.metadata,
-            replayMode,
-          );
+        const nativeAstra =
+          model.id === "gpt-6-astra" && supportsNativeOpenAIResponsesEndpoint(model);
+        const asyncToolExecutionEligible =
+          nativeAstra &&
+          options?.asyncToolExecution === true &&
+          !responsesOptions?.openclawCodeModeToolSurface;
+        const prepareRequest = async (request: ReturnType<typeof config.buildRequest>) => {
+          let params = request;
           const nextParams = await options?.onPayload?.(params, model);
           if (nextParams !== undefined) {
             params = nextParams as typeof params;
@@ -340,9 +279,33 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
             );
             assertCodeModeResponsesToolSurface(params, visibleToolNames, allowedHostedToolTypes);
           }
+          if (
+            asyncToolExecutionEligible &&
+            params.model === "gpt-6-astra" &&
+            params.multi_agent?.enabled !== true &&
+            params.tools
+          ) {
+            params.tools = params.tools.map((tool) =>
+              tool.type === "function" ? { ...tool, async: true } : tool,
+            );
+          }
           return params;
         };
-        const params = await buildRequest("checkpoint");
+        const buildRequest = (replayMode: OpenAIResponsesReplayMode, requestContext = context) =>
+          prepareRequest(
+            config.buildRequest(
+              model,
+              requestContext,
+              responsesOptions,
+              turnState?.metadata,
+              replayMode,
+            ),
+          );
+        let params = await buildRequest("checkpoint");
+        const asyncTools =
+          asyncToolExecutionEligible &&
+          params.model === "gpt-6-astra" &&
+          params.multi_agent?.enabled !== true;
         if (compactRequest) {
           const compacted = await postOpenAIResponsesCompaction({
             client,
@@ -370,7 +333,7 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
         if (
           httpContinuationEligible &&
           sessionId &&
-          params.store === true &&
+          (params.store === true || supportsResponsesReasoningUpdate(params)) &&
           !params.previous_response_id
         ) {
           continuationClaim = claimOpenAIResponsesHttpContinuation({
@@ -386,6 +349,10 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
             ),
             request: params as ResponsesContinuationRequest,
           });
+          if (continuationClaim) {
+            // SAFETY: The owner preserves the request; SDK inputs predate configuration_update.
+            params = continuationClaim.fullRequest as typeof params;
+          }
         }
         const observePrompt = createResponsesPromptEgressObserver(
           responsesOptions,
@@ -404,7 +371,6 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
         const requestOptions = buildOpenAISdkRequestOptions(model, firstEvent.signal, {
           stream: config.streamRequest,
           timeoutMs: options?.timeoutMs,
-          maxRetries: options?.maxRetries,
         });
         const websocketSignal = combineWebSocketTimeoutSignal(
           firstEvent.signal,
@@ -424,11 +390,7 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
           initialAttemptKind: NonNullable<ResponsesStreamParams["initialAttemptKind"]> = "initial",
           initialRejectedCompaction?: ResponsesStreamParams["initialRejectedCompaction"],
         ): Promise<AsyncIterable<unknown>> => {
-          const {
-            stream: rawResponseStream,
-            response,
-            attempt,
-          } = await config.createResponseStream({
+          const { stream: responseStream } = await createResponsesStreamWithEncryptedContentRetry({
             client,
             request: initialRequest,
             requestOptions,
@@ -439,26 +401,30 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
             buildFullHistoryRequest: () => buildRequest("full-history"),
             onCompactionRejected: (checkpoint) =>
               suppressOpenAIResponsesCompaction(output, model, responsesOptions, checkpoint),
-          });
-          if (continuationClaim) {
-            continuationBaseline = attempt.request.previous_response_id
-              ? (params as ResponsesContinuationRequest)
-              : (attempt.request as ResponsesContinuationRequest);
-          }
-          return withProviderResponseHook({
-            stream: observeResponsesStream(rawResponseStream, model, requestStartedAt),
-            signal: firstEvent.signal,
-            abort: firstEvent.abort,
-            hook: createOpenAIProviderAcceptanceHook(options, response, model),
-            onReady: () => {
-              emitModelTransportDebug(
-                log,
-                `[responses] headers provider=${model.provider} api=${model.api} model=${model.id} ` +
-                  `transport=sse elapsedMs=${Date.now() - requestStartedAt}`,
-              );
-              startStream();
+            canRetryStream: () => output.content.length === 0,
+            wrapStream: ({ stream: rawResponseStream, response, attempt }) => {
+              if (continuationClaim) {
+                continuationBaseline = attempt.request.previous_response_id
+                  ? (params as ResponsesContinuationRequest)
+                  : (attempt.request as ResponsesContinuationRequest);
+              }
+              return withProviderResponseHook({
+                stream: observeResponsesStream(rawResponseStream, model, requestStartedAt),
+                signal: firstEvent.signal,
+                abort: firstEvent.abort,
+                hook: createOpenAIProviderAcceptanceHook(options, response, model),
+                onReady: () => {
+                  emitModelTransportDebug(
+                    log,
+                    `[responses] headers provider=${model.provider} api=${model.api} model=${model.id} ` +
+                      `transport=sse elapsedMs=${Date.now() - requestStartedAt}`,
+                  );
+                  startStream();
+                },
+              });
             },
           });
+          return responseStream;
         };
 
         let responseStream: AsyncIterable<unknown>;
@@ -487,8 +453,20 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
               signal: websocketSignal,
               callerSignal: options?.signal,
               degradeCooldownMs: websocketSessionPolicy?.degradeCooldownMs,
+              onActiveResponse:
+                nativeAstra && params.model === "gpt-6-astra"
+                  ? options?.onActiveResponse
+                  : undefined,
+              steeringInput: (messages) =>
+                projectResponsesSteeringInput(params, () =>
+                  buildRequest("checkpoint", {
+                    ...context,
+                    messages: [...context.messages, ...messages],
+                  }),
+                ),
             });
             finishWebSocket = websocket.finish;
+            recordResponsesInputReplay(output, websocket.inputReplay);
             observePrompt?.(websocket.request, {
               egress: "responses-websocket",
               payloadVariant: "initial",
@@ -558,7 +536,10 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
                 }
               },
             };
-          } catch {
+          } catch (error) {
+            if (error instanceof OpenAIResponsesWebSocketPostDispatchError) {
+              throw error;
+            }
             closeWebSocketForFallback("setup_failure");
             responseStream = await createSseStream();
           }
@@ -577,6 +558,7 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
               authProfileId: responsesOptions?.authProfileId,
               sessionId: options?.sessionId,
             }),
+            asyncToolExecution: asyncTools,
           });
           finishWebSocket?.();
           if (options?.signal?.aborted) {
@@ -628,7 +610,6 @@ export function createOpenAIResponsesTransportStreamFn(): StreamFn {
     httpContinuation: true,
     createClient: createOpenAIResponsesClient,
     buildRequest: buildOpenAIResponsesParams,
-    createResponseStream: createResponsesStreamWithEncryptedContentRetry,
     pricingOptions: (options, model) => ({
       serviceTier: options?.serviceTier,
       // One canonical service-tier pricing table; a transport-local copy drifted
@@ -653,12 +634,7 @@ export function createAzureOpenAIResponsesTransportStreamFn(): StreamFn {
         metadata,
         replayMode,
       ),
-    createResponseStream: createResponsesStreamWithEncryptedContentRetry,
   });
-}
-
-function normalizeAzureBaseUrl(baseUrl: string): string {
-  return baseUrl.replace(/\/+$/, "");
 }
 
 function resolveAzureDeploymentName(model: Model): string {
@@ -674,14 +650,16 @@ export function createAzureOpenAIClient(
   apiKey: string,
   optionHeaders?: Record<string, string>,
   turnHeaders?: Record<string, string>,
+  _sessionId?: string,
+  fetchOverride?: typeof globalThis.fetch,
 ) {
-  const baseURL = normalizeAzureBaseUrl(model.baseUrl);
+  const baseURL = model.baseUrl.replace(/\/+$/, "");
   const clientOptions = {
     apiKey,
     dangerouslyAllowBrowser: true,
     defaultHeaders: buildOpenAIClientHeaders(model, context, optionHeaders, turnHeaders),
     baseURL,
-    fetch: buildGuardedModelFetch(model),
+    fetch: fetchOverride ?? buildGuardedModelFetch(model),
     ...buildOpenAISdkClientOptions(model),
   };
 

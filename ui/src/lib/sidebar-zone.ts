@@ -4,7 +4,6 @@ import {
   type SidebarNavRoute,
   type SidebarZoneEntry,
 } from "../app-navigation.ts";
-import type { SidebarWorkboardBoard } from "../components/app-sidebar-workboard.ts";
 
 type SidebarPinnedSession = { key: string };
 
@@ -21,14 +20,10 @@ export function reconcileSidebarZone(
   pinnedSessions: readonly SidebarPinnedSession[],
   validRoutes: readonly SidebarNavRoute[],
   knownUnpinnedKeys: ReadonlySet<string> = new Set(),
-  workboardBoards: readonly SidebarWorkboardBoard[] = [],
-  workboardEnabled = false,
-  workboardBoardsReady = false,
-  workboardParentVisible = false,
+  pluginNavigationKeys: ReadonlySet<string> = new Set(),
 ): { entries: SidebarZoneEntry[]; sidebarEntries: string[] } {
   const pinnedKeys = new Set(pinnedSessions.map((session) => session.key));
   const validRouteSet = new Set(validRoutes);
-  const validBoardIds = new Set(workboardBoards.map((board) => board.id));
   const seen = new Set<string>();
   const entries: SidebarZoneEntry[] = [];
   const canonical: string[] = [];
@@ -43,14 +38,6 @@ export function reconcileSidebarZone(
       continue;
     }
     if (entry.type === "route") {
-      if (entry.route === "workboard") {
-        seen.add(canonicalKey);
-        canonical.push(canonicalKey);
-        if (workboardParentVisible) {
-          entries.push(entry);
-        }
-        continue;
-      }
       if (!validRouteSet.has(entry.route)) {
         continue;
       }
@@ -59,21 +46,14 @@ export function reconcileSidebarZone(
       canonical.push(canonicalKey);
       continue;
     }
-    if (entry.type === "workboard") {
+    if (entry.type === "plugin") {
       seen.add(canonicalKey);
       canonical.push(canonicalKey);
-      // Disabled reads exactly like startup: the runtime config snapshot is
-      // unloaded until the gateway answers, so a zone write in that window
-      // would erase every persisted pin. Preserve the slot, render nothing;
-      // only a loaded catalog that positively lacks the id deletes below.
-      if (!workboardEnabled || !workboardBoardsReady) {
-        continue;
+      // Registration can disappear on reload, disconnect, or permission loss;
+      // an unavailable plugin must not erase the operator's saved placement.
+      if (pluginNavigationKeys.has(entry.key)) {
+        entries.push(entry);
       }
-      if (!validBoardIds.has(entry.boardId)) {
-        canonical.pop();
-        continue;
-      }
-      entries.push(entry);
       continue;
     }
     if (pinnedKeys.has(entry.key)) {

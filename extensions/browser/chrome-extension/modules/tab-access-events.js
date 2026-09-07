@@ -5,9 +5,8 @@ export function registerTabAccessEvents({
   chromeApi = chrome,
   accessReady,
   policy,
-  attachedTabs,
-  attachedAccessEpochs,
-  attachingTabs,
+  attachments,
+  nativeDetached,
   send,
   scheduleTabsSync,
   detachDebugger,
@@ -21,30 +20,34 @@ export function registerTabAccessEvents({
     if (typeof source.tabId !== "number") {
       return;
     }
-    const accessEpoch = attachedAccessEpochs.get(source.tabId);
+    const accessEpoch = attachments.get(source.tabId)?.epoch;
     if (!accessEpoch || !policy.epochIsCurrent(source.tabId, accessEpoch)) {
       return;
     }
-    send({
-      type: "cdpEvent",
-      tabId: source.tabId,
-      ...(source.sessionId ? { sessionId: source.sessionId } : {}),
-      method,
-      params,
-    });
+    policy.forwardDocumentEvent(
+      {
+        type: "cdpEvent",
+        tabId: source.tabId,
+        ...(source.sessionId ? { sessionId: source.sessionId } : {}),
+        method,
+        params,
+      },
+      send,
+    );
   });
 
   chromeApi.debugger.onDetach.addListener((source, reason) => {
     if (typeof source.tabId !== "number") {
       return;
     }
-    attachedTabs.delete(source.tabId);
-    attachedAccessEpochs.delete(source.tabId);
+    // Preserve controlled-document pause evidence before native retirement revokes it.
+    const revocation =
+      reason === "canceled_by_user" ? policy.beginRevocation(source.tabId) : undefined;
+    nativeDetached(source.tabId);
     send({ type: "detached", tabId: source.tabId, reason });
-    if (reason !== "canceled_by_user") {
+    if (revocation === undefined) {
       return;
     }
-    const revocation = policy.beginRevocation(source.tabId);
     void runAccessMutation(async () => {
       try {
         await accessReady;
@@ -62,11 +65,12 @@ export function registerTabAccessEvents({
   });
 
   chromeApi.tabs.onRemoved.addListener((tabId) => {
+    policy.retireTab(tabId);
+    void detachDebugger(tabId).catch((error) =>
+      console.warn("Debugger removal cleanup failed", error),
+    );
     void (async () => {
       await accessReady;
-      policy.invalidateTab(tabId);
-      attachedTabs.delete(tabId);
-      attachedAccessEpochs.delete(tabId);
       scheduleTabsSync();
       await policy.forgetTab(tabId).catch(() => undefined);
     })();
@@ -74,16 +78,15 @@ export function registerTabAccessEvents({
 
   chromeApi.tabs.onReplaced.addListener((addedTabId, removedTabId) => {
     const revocation = policy.beginRevocation(addedTabId);
-    policy.invalidateTab(removedTabId);
-    attachedTabs.delete(removedTabId);
-    attachedAccessEpochs.delete(removedTabId);
+    policy.retireTab(addedTabId);
+    policy.retireTab(removedTabId);
+    const detaching = [detachDebugger(removedTabId), detachDebugger(addedTabId)];
     scheduleTabsSync();
     void (async () => {
       try {
         await accessReady;
         await policy.replaceTab(addedTabId, removedTabId);
-        await Promise.allSettled([attachingTabs.get(removedTabId), attachingTabs.get(addedTabId)]);
-        await Promise.allSettled([detachDebugger(removedTabId), detachDebugger(addedTabId)]);
+        await Promise.allSettled(detaching);
       } finally {
         policy.endRevocation(revocation);
         scheduleTabsSync();
@@ -91,20 +94,24 @@ export function registerTabAccessEvents({
     })().catch(() => undefined);
   });
 
-  chromeApi.tabs.onUpdated.addListener((tabId, changeInfo) => {
+  chromeApi.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
     scheduleTabsSync();
-    if (
-      typeof changeInfo.url === "string" ||
-      (policy.mode === ACCESS_MODE_SELECTED && typeof changeInfo.groupId === "number")
-    ) {
-      // Security contract: every URL change retires synchronous CDP authority.
-      // Pre-proof events intentionally drop; replay could cross a restricted destination.
-      policy.invalidateTab(tabId);
+    const generation = attachments.get(tabId);
+    const pendingAttach = generation?.pending;
+    if (policy.observeTabUpdate(tabId, changeInfo, tab)) {
+      const renewed = policy.renewTabAccess(tabId, generation?.epoch, tab);
+      if (renewed && generation) {
+        generation.epoch = renewed;
+      }
     }
     const eventEpoch = policy.capture(tabId);
     void (async () => {
       await accessReady;
-      const eventIsCurrent = () => policy.epochIsCurrent(tabId, eventEpoch);
+      const eventIsCurrent = () =>
+        policy.epochIsCurrent(tabId, eventEpoch) &&
+        attachments.get(tabId) === generation &&
+        generation?.pending === pendingAttach &&
+        !generation?.retired;
       if (!eventIsCurrent()) {
         return;
       }
@@ -113,37 +120,30 @@ export function registerTabAccessEvents({
         return;
       }
       if (!state.accessible) {
-        await Promise.allSettled([attachingTabs.get(tabId)]);
-        if (!eventIsCurrent()) {
-          return;
-        }
         await detachDebugger(tabId);
+        return;
       }
-      if (attachedTabs.has(tabId) && attachedAccessEpochs.has(tabId)) {
-        attachedAccessEpochs.set(tabId, eventEpoch);
+      if (generation?.epoch) {
+        generation.epoch = eventEpoch;
       }
     })();
   });
 
-  const onGroupChanged = () => {
+  const onGroupChanged = (group, removed = false) => {
     const eventRevision = ++groupEventRevision;
     scheduleTabsSync();
+    policy.invalidateGroup(group, removed);
     if (policy.mode !== ACCESS_MODE_SELECTED) {
       return;
     }
-    // Group title/removal changes mutate the selected-mode ACL. Retire every
-    // attachment epoch synchronously before any readiness or Chrome lookup.
-    policy.invalidateAll();
+    const generations = [...attachments]
+      .filter(([, record]) => !record.retired)
+      .map(([tabId, generation]) => [tabId, generation, policy.capture(tabId)]);
     void accessReady.then(async () => {
       if (eventRevision !== groupEventRevision || policy.mode !== ACCESS_MODE_SELECTED) {
         return;
       }
-      const epochs = new Map(
-        [...attachedAccessEpochs.keys()]
-          .filter((tabId) => attachedTabs.has(tabId))
-          .map((tabId) => [tabId, policy.capture(tabId)]),
-      );
-      await Promise.allSettled(attachingTabs.values());
+      await Promise.allSettled([...attachments.values()].map((record) => record.pending));
       if (eventRevision !== groupEventRevision) {
         return;
       }
@@ -152,29 +152,30 @@ export function registerTabAccessEvents({
         return;
       }
       await Promise.allSettled(
-        [...attachedTabs]
-          .filter((tabId) => !selected.has(tabId))
-          .map((tabId) => detachDebugger(tabId)),
+        generations
+          .filter(
+            ([tabId, generation]) => !selected.has(tabId) && attachments.get(tabId) === generation,
+          )
+          .map(([tabId]) => detachDebugger(tabId)),
       );
       if (eventRevision !== groupEventRevision) {
         return;
       }
-      let newerTabEventOwnsAccess = false;
-      for (const [tabId, epoch] of epochs) {
-        if (!selected.has(tabId) || !attachedTabs.has(tabId)) {
+      for (const [tabId, generation, epoch] of generations) {
+        if (!selected.has(tabId) || attachments.get(tabId) !== generation) {
           continue;
         }
         const state = await policy.inspectTab(tabId, epoch);
-        if (eventRevision !== groupEventRevision) {
+        if (eventRevision !== groupEventRevision || attachments.get(tabId) !== generation) {
           return;
         }
         if (!policy.epochIsCurrent(tabId, epoch)) {
-          // A newer tab event owns this attachment's revision.
-          newerTabEventOwnsAccess = true;
+          // The newer tab event owns validation. Replaying this old group event
+          // would revoke commands admitted after that validation completed.
           continue;
         }
         if (state.accessible) {
-          attachedAccessEpochs.set(tabId, epoch);
+          generation.epoch = epoch;
         } else {
           await detachDebugger(tabId);
           if (eventRevision !== groupEventRevision) {
@@ -182,14 +183,8 @@ export function registerTabAccessEvents({
           }
         }
       }
-      if (eventRevision !== groupEventRevision) {
-        return;
-      }
-      if (newerTabEventOwnsAccess) {
-        onGroupChanged();
-      }
     });
   };
   chromeApi.tabGroups.onUpdated.addListener(onGroupChanged);
-  chromeApi.tabGroups.onRemoved.addListener(onGroupChanged);
+  chromeApi.tabGroups.onRemoved.addListener((group) => onGroupChanged(group, true));
 }

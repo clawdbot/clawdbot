@@ -349,7 +349,8 @@ export function createWorkerCredentialBroker(options: WorkerCredentialBrokerOpti
   const acquireTurnCredential = (claim: WorkerSessionTurnClaim) => {
     const binding = bindingForClaim(claim);
     return withLock(binding.environmentId, async () => {
-      if (!validateTurnClaim(claim)) {
+      const placementStore = options.placementStore;
+      if (!placementStore || !validateTurnClaim(claim)) {
         throw serviceError("invalid_state", "Worker turn credential claim is not authoritative");
       }
       const pending = readPendingCredential(binding, claim)?.grant;
@@ -367,10 +368,15 @@ export function createWorkerCredentialBroker(options: WorkerCredentialBrokerOpti
         throw serviceError("invalid_state", "Worker session credential owner is not attached");
       }
       const previous = store.getCredential(binding.environmentId);
+      const ackedSeq =
+        previous?.sessionId === binding.sessionId
+          ? placementStore.readWorkerTurnLiveAckCursor(claim)
+          : undefined;
       const minted = mintCredentialLocked(binding, claim);
       const grant = stageCredential(minted.grant);
-      if (previous?.sessionId === binding.sessionId) {
+      if (previous && ackedSeq !== undefined) {
         options.liveEvents?.rotateCredential({
+          ackedSeq,
           credentialHash: minted.credentialHash,
           environmentId: binding.environmentId,
           newProcessTurn: true,

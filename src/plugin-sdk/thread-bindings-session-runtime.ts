@@ -4,6 +4,7 @@
 export { resolveThreadBindingFarewellText } from "../channels/thread-bindings-messages.js";
 export {
   resolveThreadBindingLifecycle,
+  resolveThreadBindingExpiry,
   type ThreadBindingLifecycleRecord,
 } from "../shared/thread-binding-lifecycle.js";
 export {

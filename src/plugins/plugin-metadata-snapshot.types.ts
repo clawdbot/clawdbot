@@ -1,17 +1,27 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { PluginDiscoveryResult } from "./discovery.js";
+import type { PluginDiscoveryResult } from "./discovery.types.js";
 import type { InstalledPluginIndex } from "./installed-plugin-index-types.js";
-import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
-import type { PluginDiagnostic } from "./manifest-types.js";
+import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.types.js";
 import type {
+  PluginDiagnostic,
+  PluginManifestModelIdNormalizationProvider,
   PluginManifestProviderEndpoint,
   PluginManifestProviderRequestProvider,
-} from "./manifest.js";
-import type { PluginRegistrySnapshotSource } from "./plugin-registry-snapshot.types.js";
+} from "./manifest-types.js";
+import type {
+  PluginRegistrySnapshotDiagnostic,
+  PluginRegistrySnapshotSource,
+} from "./plugin-registry-snapshot.types.js";
 
 export type PluginMetadataSnapshotPluginIdScope = {
-  key: string;
   resolve: (params: { index: InstalledPluginIndex }) => readonly string[] | undefined;
+};
+
+export type PluginProviderAuthAliasCandidate = {
+  plugin: PluginManifestRecord;
+  target: string;
+  /** First eligible declaration owns public map order, even if a later candidate wins. */
+  order: number;
 };
 
 export type PluginMetadataSnapshotOwnerMaps = {
@@ -23,6 +33,9 @@ export type PluginMetadataSnapshotOwnerMaps = {
   setupProviders: ReadonlyMap<string, readonly string[]>;
   commandAliases: ReadonlyMap<string, readonly string[]>;
   contracts: ReadonlyMap<string, readonly string[]>;
+  /** Empty views must not fall through to process-current model normalization policies. */
+  modelIdNormalizationPolicies: ReadonlyMap<string, PluginManifestModelIdNormalizationProvider>;
+  providerAuthAliases?: ReadonlyMap<string, readonly PluginProviderAuthAliasCandidate[]>;
   providerEndpoints?: readonly PluginManifestProviderEndpoint[];
   providerRequests?: ReadonlyMap<string, PluginManifestProviderRequestProvider>;
 };
@@ -36,15 +49,6 @@ type PluginMetadataSnapshotMetrics = {
   manifestPluginCount: number;
 };
 
-type PluginMetadataSnapshotRegistryDiagnostic = {
-  level: "info" | "warn";
-  code:
-    | "persisted-registry-missing"
-    | "persisted-registry-stale-policy"
-    | "persisted-registry-stale-source";
-  message: string;
-};
-
 export type PluginMetadataSnapshot = {
   policyHash: string;
   configFingerprint?: string;
@@ -52,8 +56,12 @@ export type PluginMetadataSnapshot = {
   registrySource?: PluginRegistrySnapshotSource;
   workspaceDir?: string;
   index: InstalledPluginIndex;
-  registryDiagnostics: readonly PluginMetadataSnapshotRegistryDiagnostic[];
+  /** The original workspace-scoped index described by registrySource, before runtime unions. */
+  registryIndex: InstalledPluginIndex;
+  registryDiagnostics: readonly PluginRegistrySnapshotDiagnostic[];
   manifestRegistry: PluginManifestRegistry;
+  /** Independently validated bundled owners, including packages shadowed by active plugins. */
+  bundledManifestRegistry?: PluginManifestRegistry;
   plugins: readonly PluginManifestRecord[];
   diagnostics: readonly PluginDiagnostic[];
   byPluginId: ReadonlyMap<string, PluginManifestRecord>;

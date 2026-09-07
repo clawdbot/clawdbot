@@ -68,10 +68,7 @@ export function resolveGatewayAgentSelectionState(cfg: OpenClawConfig): GatewayA
 }
 
 /** Lists gateway-visible agents with canonical membership, ordering, and semantic kind. */
-export function listGatewayAgentsBasic(cfg: OpenClawConfig): {
-  defaultId: string;
-  ownership?: GatewayAgentOwnership;
-  selectionRequired?: boolean;
+export function listGatewayAgentsBasic(cfg: OpenClawConfig): GatewayAgentSelectionState & {
   mainKey: string;
   scope: SessionScope;
   agents: GatewayAgentListRow[];

@@ -1,5 +1,5 @@
 ---
-summary: "Contract for `secrets apply` plans: target validation, path matching, and `auth-profiles.json` target scope"
+summary: "Contract for `secrets apply` plans: target validation, path matching, and SQLite auth-profile target scope"
 read_when:
   - Generating or reviewing `openclaw secrets apply` plans
   - Debugging `Invalid plan target path` errors
@@ -105,8 +105,8 @@ Each target is validated with all of the following:
 - Forbidden segments are rejected: `__proto__`, `prototype`, `constructor`.
 - The normalized path must match the registered path shape for the target type.
 - If `providerId` or `accountId` is set, it must match the id encoded in the path.
-- `auth-profiles.json` targets require `agentId`.
-- When creating a new `auth-profiles.json` mapping, include `authProfileProvider`.
+- SQLite auth-profile targets require `agentId`.
+- When creating a new auth-profile mapping, include `authProfileProvider`.
 
 ## Failure behavior
 
@@ -116,7 +116,7 @@ If a target fails validation, apply exits with an error like:
 Invalid plan target path for models.providers.apiKey: models.providers.openai.baseUrl
 ```
 
-No writes are committed for an invalid plan: target resolution and path validation run before any file is touched. Separately, once a valid plan starts writing, apply snapshots every touched file first and restores those snapshots if a later write in the same run fails, so a partial write never leaves config, auth-profile, or env state out of sync.
+No writes are committed for an invalid plan: target resolution and path validation run before any state is changed. For a valid plan, apply captures file snapshots and SQLite auth-store snapshots before writing. If a later write fails, it attempts to restore the files and conditionally roll back the auth-store writes without overwriting concurrent credential changes.
 
 ## Exec provider consent behavior
 
@@ -126,8 +126,9 @@ No writes are committed for an invalid plan: target resolution and path validati
 
 ## Runtime and audit scope notes
 
-- Ref-only `auth-profiles.json` entries (`keyRef`/`tokenRef`) are included in runtime credential resolution and audit coverage.
-- `secrets apply` writes supported `openclaw.json` targets, supported `auth-profiles.json` targets, and three optional scrub passes, each on by default: `scrubEnv` (removes migrated plaintext values from `.env` files in the effective state and active-config directories), `scrubAuthProfilesForProviderTargets` (clears plaintext/unused-ref residue in `auth-profiles.json` for providers a plan just migrated), and `scrubLegacyAuthJson` (drops migrated `api_key` entries from legacy `auth.json` stores). Set any of `options.scrubEnv`, `options.scrubAuthProfilesForProviderTargets`, `options.scrubLegacyAuthJson` to `false` in the plan to skip that pass.
+- Ref-only SQLite auth-profile entries (`keyRef`/`tokenRef`) are included in runtime credential resolution and audit coverage.
+- `secrets apply` writes supported `openclaw.json` targets and SQLite auth-profile targets. Two optional scrub passes are on by default: `scrubEnv` removes migrated plaintext values from `.env` files in the effective state and active-config directories; `scrubAuthProfilesForProviderTargets` clears plaintext/unused-ref residue in auth stores for providers a plan just migrated. Set either option to `false` in the plan to skip that pass.
+- `scrubLegacyAuthJson` is a deprecated plan input and is always disabled. Doctor owns legacy `auth.json` migration; `secrets apply` does not read or rewrite it.
 
 ## Operator checks
 

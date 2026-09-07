@@ -14,6 +14,7 @@ import {
 import { registerSecretsCli } from "./secrets-cli.js";
 
 const execFileAsync = promisify(execFile);
+const missingPlan = path.join(os.tmpdir(), "openclaw-secrets-cli-missing-plan.json");
 
 const mocks = await vi.hoisted(async () => {
   const { createCliRuntimeMock } = await import("./test-runtime-mock.js");
@@ -49,6 +50,11 @@ vi.mock("./gateway-rpc.js", () => ({
 
 vi.mock("../runtime.js", () => ({
   defaultRuntime: mocks.defaultRuntime,
+}));
+
+vi.mock("./one-shot-exit.js", () => ({
+  exitCliAfterOutput: (runtime: typeof mocks.defaultRuntime, exitCode: number) =>
+    runtime.exit(exitCode),
 }));
 
 vi.mock("../secrets/audit.js", () => ({
@@ -212,6 +218,54 @@ describe("secrets CLI", () => {
     expect(runtimeLogs.at(-1)).toContain('"ok": true');
   });
 
+  it.each([
+    {
+      name: "reload",
+      prepare: () => callGatewayFromCli.mockRejectedValue(new Error("reload failed")),
+      args: ["secrets", "reload", "--json"],
+      exitCode: 1,
+      message: "reload failed",
+    },
+    {
+      name: "audit",
+      prepare: () => runSecretsAudit.mockRejectedValue(new Error("audit failed")),
+      args: ["secrets", "audit", "--json"],
+      exitCode: 2,
+      message: "audit failed",
+    },
+    {
+      name: "configure",
+      prepare: () =>
+        runSecretsConfigureInteractive.mockRejectedValue(new Error("configure failed")),
+      args: ["secrets", "configure", "--json"],
+      exitCode: 1,
+      message: "configure failed",
+    },
+    {
+      name: "apply",
+      prepare: async () => {
+        await fs.rm(missingPlan, { force: true });
+      },
+      args: ["secrets", "apply", "--from", missingPlan, "--json"],
+      exitCode: 1,
+      message: `Secrets plan file not found: ${missingPlan}`,
+    },
+  ])("prints one JSON failure when $name fails", async (testCase) => {
+    await testCase.prepare();
+
+    await expect(createProgram().parseAsync(testCase.args, { from: "user" })).rejects.toThrow(
+      `__exit__:${testCase.exitCode}`,
+    );
+
+    expect(defaultRuntime.writeJson).toHaveBeenCalledTimes(1);
+    expect(runtimeLogs).toHaveLength(1);
+    expect(JSON.parse(runtimeLogs[0] ?? "")).toEqual({
+      ok: false,
+      error: { type: "cli_error", message: testCase.message },
+    });
+    expect(runtimeErrors).toHaveLength(0);
+  });
+
   it("explains Gateway reload failures without duplicate doctor noise", async () => {
     callGatewayFromCli.mockRejectedValue(
       new Error(
@@ -231,8 +285,8 @@ describe("secrets CLI", () => {
     expect(runtimeErrors.at(-1)).not.toContain("diagnostics..");
   });
 
-  it("runs secrets audit and exits via check code", async () => {
-    runSecretsAudit.mockResolvedValue({
+  it("writes one audit report before exiting with the check code", async () => {
+    const report = {
       version: 1,
       status: "findings",
       filesScanned: [],
@@ -249,18 +303,54 @@ describe("secrets CLI", () => {
         resolvabilityComplete: true,
       },
       findings: [],
-    });
+    };
+    runSecretsAudit.mockResolvedValue(report);
     resolveSecretsAuditExitCode.mockReturnValue(1);
 
     await expect(
-      createProgram().parseAsync(["secrets", "audit", "--check"], { from: "user" }),
-    ).rejects.toThrow("__exit__:2");
+      createProgram().parseAsync(["secrets", "audit", "--check", "--json"], { from: "user" }),
+    ).rejects.toThrow("__exit__:1");
     expect(mockFirstObjectArg(runSecretsAudit).allowExec).toBe(false);
     const exitCodeCall = mockCall(resolveSecretsAuditExitCode);
     if (exitCodeCall[0] === undefined) {
       throw new Error("Expected secrets audit result for exit-code resolution");
     }
     expect(exitCodeCall[1]).toBe(true);
+    expect(defaultRuntime.writeJson).toHaveBeenCalledTimes(1);
+    expect(mockFirstObjectArg(defaultRuntime.writeJson)).toBe(report);
+    expect(runtimeLogs).toHaveLength(1);
+    expect(runtimeErrors).toHaveLength(0);
+  });
+
+  it("keeps an unresolved audit report intact at exit 2", async () => {
+    const report = {
+      version: 1,
+      status: "unresolved",
+      filesScanned: [],
+      summary: {
+        plaintextCount: 0,
+        unresolvedRefCount: 1,
+        shadowedRefCount: 0,
+        storeResidueCount: 0,
+        legacyResidueCount: 0,
+      },
+      resolution: {
+        refsChecked: 1,
+        skippedExecRefs: 0,
+        resolvabilityComplete: true,
+      },
+      findings: [],
+    };
+    runSecretsAudit.mockResolvedValue(report);
+    resolveSecretsAuditExitCode.mockReturnValue(2);
+
+    await expect(
+      createProgram().parseAsync(["secrets", "audit", "--json"], { from: "user" }),
+    ).rejects.toThrow("__exit__:2");
+
+    expect(defaultRuntime.writeJson).toHaveBeenCalledTimes(1);
+    expect(mockFirstObjectArg(defaultRuntime.writeJson)).toBe(report);
+    expect(runtimeErrors).toHaveLength(0);
   });
 
   it("forwards --allow-exec to secrets audit", async () => {

@@ -17,11 +17,13 @@ describe("llama.cpp embedding setup policy", () => {
   });
 
   it("accepts managed config produced by the models auth CLI without mutating it", () => {
-    const provider = buildLlamaCppProviderConfig(undefined, {
-      command: "/managed/llama-server",
-      baseUrl: "http://127.0.0.1:19432/v1",
-      healthUrl: "http://127.0.0.1:19432/health",
-      args: ["--models-preset", "/managed/models.ini"],
+    const provider = buildLlamaCppProviderConfig({
+      managed: {
+        command: "/managed/llama-server",
+        baseUrl: "http://127.0.0.1:19432/v1",
+        healthUrl: "http://127.0.0.1:19432/health",
+        args: ["--models-preset", "/managed/models.ini"],
+      },
     });
     const config: OpenClawConfig = { models: { providers: { "llama-cpp": provider } } };
     const configBefore = JSON.stringify(config);

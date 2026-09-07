@@ -98,7 +98,7 @@ describe("nodes-cli coverage", () => {
       return;
     }
     sharedProgram.exitOverride();
-    await registerNodesCli(sharedProgram);
+    await registerNodesCli(sharedProgram, ["node", "openclaw", "nodes", "status"]);
   });
 
   beforeEach(() => {
@@ -291,6 +291,42 @@ describe("nodes-cli coverage", () => {
       command: "rename",
       args: ["nodes", "rename", "--node", "mac-1", "--name", "   "],
       message: "--name must not be empty",
+    },
+    {
+      label: "push with an invalid environment",
+      command: "push",
+      args: ["nodes", "push", "--node", "mac-1", "--environment", "staging"],
+      message: "invalid --environment (use sandbox|production)",
+    },
+    {
+      label: "notify without a title or body",
+      command: "notify",
+      args: ["nodes", "notify", "--node", "mac-1", "--title", " ", "--body", " "],
+      message: "missing --title or --body",
+    },
+    {
+      label: "camera snap with an invalid facing",
+      command: "camera snap",
+      args: ["nodes", "camera", "snap", "--node", "mac-1", "--facing", "side"],
+      message: "invalid facing: side (expected front|back|both)",
+    },
+    {
+      label: "camera clip with an invalid facing",
+      command: "camera clip",
+      args: ["nodes", "camera", "clip", "--node", "mac-1", "--facing", "both"],
+      message: "invalid facing: both (expected front|back)",
+    },
+    {
+      label: "camera clip with an invalid duration",
+      command: "camera clip",
+      args: ["nodes", "camera", "clip", "--node", "mac-1", "--duration", "later"],
+      message: "Invalid duration",
+    },
+    {
+      label: "screen record with an invalid duration",
+      command: "screen record",
+      args: ["nodes", "screen", "record", "--node", "mac-1", "--duration", "later"],
+      message: "Invalid duration",
     },
   ])("reports $label once before calling the gateway", async ({ command, args, message }) => {
     await expect(sharedProgram.parseAsync(args, { from: "user" })).rejects.toThrow("__exit__:1");
@@ -605,9 +641,13 @@ describe("nodes-cli coverage", () => {
       ],
       flag: "--invoke-timeout",
     },
-  ])("rejects partial numeric option for $args", async ({ args, flag }) => {
-    await expect(sharedProgram.parseAsync(args, { from: "user" })).rejects.toThrow("__exit__:1");
-    expect(runtimeErrors.at(-1)).toContain(`${flag} must be`);
-    expect(lastNodeInvokeCall).toBeNull();
-  });
+  ])(
+    "rejects invalid numeric option before calling the gateway for $args",
+    async ({ args, flag }) => {
+      await expect(sharedProgram.parseAsync(args, { from: "user" })).rejects.toThrow("__exit__:1");
+      expect(runtimeErrors.at(-1)).toContain(`${flag} must be`);
+      expect(callGateway).not.toHaveBeenCalled();
+      expect(lastNodeInvokeCall).toBeNull();
+    },
+  );
 });

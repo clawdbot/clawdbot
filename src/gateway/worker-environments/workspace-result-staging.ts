@@ -1,11 +1,11 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { runBestEffortCleanup } from "../../infra/non-fatal-cleanup.js";
+import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runCommandBuffered, runCommandWithTimeout } from "../../process/exec.js";
-import type { WorkerWorkspaceReconcileRequest } from "./tunnel-contract.js";
+import type { WorkerLocalWorkspaceReconcileRequest } from "./tunnel-contract.js";
 import { boundedWorkerError } from "./worker-error.js";
 import {
   activeWorkspaceHashContext,
@@ -29,8 +29,14 @@ import {
   manifestNodes,
   type WorkerWorkspaceApplyResult,
 } from "./workspace-reconcile.js";
+import {
+  requireWorkspaceResultGit as requireGit,
+  updateWorkspaceResultRefs,
+  withWorkspaceResultRefMutation,
+  workspaceResultGitCommand as gitCommand,
+  WORKSPACE_RESULT_GIT_TIMEOUT_MS as PATCH_TIMEOUT_MS,
+} from "./workspace-result-git.js";
 
-const PATCH_TIMEOUT_MS = 10 * 60_000;
 // Match managed-worktree refs/openclaw/snapshots: deleting the owning ref is
 // sufficient; unreachable objects may remain until normal Git GC.
 const WORKER_RESULT_REF_PREFIX = "refs/openclaw/worker-results";
@@ -40,13 +46,6 @@ const WORKER_RESULT_CLAIM_ID_PATTERN = /^[A-Za-z0-9-]+$/u;
 const STAGED_RESULT_MESSAGE = "OpenClaw worker workspace result";
 const STAGED_RESULT_METADATA_LIMIT = 128 * 1024 * 1024 + 4_096;
 const workspaceLog = createSubsystemLogger("gateway/worker-workspace");
-// Git documents the platform null device as the per-command way to disable
-// hooks. An unowned path under a shared temp dir could be populated by another user.
-const DISABLED_GIT_HOOKS_PATH = os.devNull;
-
-function gitCommand(cwd: string, args: string[]): string[] {
-  return ["git", "-c", `core.hooksPath=${DISABLED_GIT_HOOKS_PATH}`, "-C", cwd, ...args];
-}
 
 export function workerWorkspaceTransferPaths(
   current: WorkerWorkspaceManifest,
@@ -91,17 +90,6 @@ function parseChangedWorkspaceResult(
     }
   }
   return { changed: recordCount > 0, entries };
-}
-
-async function requireGit(cwd: string, args: string[]): Promise<string> {
-  const result = await runCommandWithTimeout(gitCommand(cwd, args), {
-    timeoutMs: PATCH_TIMEOUT_MS,
-    maxOutputBytes: 1024 * 1024,
-  });
-  if (result.termination !== "exit" || result.code !== 0) {
-    throw new Error((result.stderr || result.stdout || `git ${args[0]} failed`).trim());
-  }
-  return result.stdout.trim();
 }
 
 function requireWorkerResultStorageRef(ref: string): string {
@@ -190,7 +178,16 @@ export async function hasWorkerWorkspaceResultRef(params: {
     throw error;
   }
   if (!(await hasGitAdminPath(root))) {
-    return false;
+    const bare = await runCommandWithTimeout(
+      gitCommand(root, ["rev-parse", "--is-bare-repository"]),
+      {
+        timeoutMs: PATCH_TIMEOUT_MS,
+        maxOutputBytes: 1024,
+      },
+    );
+    if (bare.termination !== "exit" || bare.code !== 0 || bare.stdout.trim() !== "true") {
+      return false;
+    }
   }
   const result = await runCommandWithTimeout(
     gitCommand(root, [
@@ -321,11 +318,13 @@ async function stageWorkerWorkspaceResult(params: {
     chunks.push(Buffer.from(`M ${mode} :${blob.mark} ${quoteFastImportPath(blob.entry.path)}\n`));
   }
   chunks.push(Buffer.from("done\n"));
-  const imported = await runCommandBuffered(gitCommand(root, ["fast-import", "--quiet"]), {
-    input: Buffer.concat(chunks),
-    timeoutMs: PATCH_TIMEOUT_MS,
-    maxOutputBytes: { stdout: 1024 * 1024, stderr: 1024 * 1024 },
-  });
+  const imported = await withWorkspaceResultRefMutation(root, () =>
+    runCommandBuffered(gitCommand(root, ["fast-import", "--quiet"]), {
+      input: Buffer.concat(chunks),
+      timeoutMs: PATCH_TIMEOUT_MS,
+      maxOutputBytes: { stdout: 1024 * 1024, stderr: 1024 * 1024 },
+    }),
+  );
   if (imported.termination !== "exit" || imported.code !== 0) {
     throw new Error(imported.stderr.toString("utf8").trim() || "git fast-import failed");
   }
@@ -333,6 +332,8 @@ async function stageWorkerWorkspaceResult(params: {
 }
 
 type LoadedStagedWorkerWorkspace = {
+  baseManifestRaw: string;
+  currentManifestRaw: string;
   baseManifestRef: string;
   currentManifestRef: string;
   base: WorkerWorkspaceManifest;
@@ -430,6 +431,8 @@ async function loadStagedWorkerWorkspace(
     }
   }
   return {
+    baseManifestRaw: baseRaw,
+    currentManifestRaw: currentRaw,
     baseManifestRef,
     currentManifestRef,
     base,
@@ -461,6 +464,65 @@ async function materializeStagedEntry(params: {
   }
 }
 
+export async function readStagedWorkerWorkspaceResult(root: string, stagedResultRef: string) {
+  const { objectsByPath, ...snapshot } = await loadStagedWorkerWorkspace(root, stagedResultRef);
+  const readEntry = async (entry: WorkerWorkspaceManifestEntry): Promise<Buffer> => {
+    const object = objectsByPath.get(entry.path);
+    if (!object) {
+      throw new Error(`Cloud workspace result has no payload for ${entry.path}`);
+    }
+    const content = await readGitBlob({
+      root,
+      objectId: object.objectId,
+      maxBytes: MAX_RECONCILIATION_FILE_BYTES,
+    });
+    const matches =
+      entry.type === "symlink"
+        ? content.toString("utf8") === entry.target
+        : content.byteLength === entry.size &&
+          createHash("sha256").update(content).digest("hex") === entry.sha256;
+    if (!matches) {
+      throw new Error(`Cloud workspace staged result payload is invalid: ${entry.path}`);
+    }
+    return content;
+  };
+  return { ...snapshot, readEntry };
+}
+
+export async function withStagedWorkerWorkspaceResult<T>(
+  params: { root: string; stagedResultRef: string },
+  use: (
+    snapshot: Awaited<ReturnType<typeof readStagedWorkerWorkspaceResult>> & { stagingRoot: string },
+  ) => Promise<T>,
+): Promise<T> {
+  const snapshot = await readStagedWorkerWorkspaceResult(params.root, params.stagedResultRef);
+  return await withMaterializedWorkerWorkspaceResult(snapshot, use);
+}
+
+async function withMaterializedWorkerWorkspaceResult<T>(
+  snapshot: Awaited<ReturnType<typeof readStagedWorkerWorkspaceResult>>,
+  use: (
+    snapshot: Awaited<ReturnType<typeof readStagedWorkerWorkspaceResult>> & { stagingRoot: string },
+  ) => Promise<T>,
+): Promise<T> {
+  const stagingRoot = await fs.mkdtemp(
+    path.join(resolvePreferredOpenClawTmpDir(), "openclaw-checkpoint-payload-"),
+  );
+  try {
+    for (const entry of snapshot.changedEntries) {
+      const content = await snapshot.readEntry(entry);
+      await materializeStagedEntry({ root: stagingRoot, entry, content });
+    }
+    return await use({ ...snapshot, stagingRoot });
+  } finally {
+    await runBestEffortCleanup({
+      cleanup: () => fs.rm(stagingRoot, { recursive: true, force: true }),
+      onError: (error) =>
+        workspaceLog.warn(`worker workspace staging cleanup failed: ${boundedWorkerError(error)}`),
+    });
+  }
+}
+
 export async function applyStagedWorkerWorkspaceResult(params: {
   root: string;
   stagedResultRef: string;
@@ -482,7 +544,7 @@ async function applyStagedWorkerWorkspaceResultWithMemo(
   params: Parameters<typeof applyStagedWorkerWorkspaceResult>[0],
 ): Promise<WorkerWorkspaceApplyResult & { changed: boolean }> {
   const root = await fs.realpath(params.root);
-  const staged = await loadStagedWorkerWorkspace(root, params.stagedResultRef);
+  const staged = await readStagedWorkerWorkspaceResult(root, params.stagedResultRef);
   if (params.alreadyAccepted || staged.baseManifestRef !== params.expectedBaseManifestRef) {
     // An acceptance marker proves the mutations already ran even when omitted
     // local nodes left the manifest ref unchanged. Re-snapshot; never replay.
@@ -503,24 +565,7 @@ async function applyStagedWorkerWorkspaceResultWithMemo(
       changed: staged.changed,
     };
   }
-  const stagingRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-staged-result-"));
-  try {
-    for (const entry of staged.changedEntries) {
-      const object = staged.objectsByPath.get(entry.path)!;
-      const content = await readGitBlob({
-        root,
-        objectId: object.objectId,
-        maxBytes: MAX_RECONCILIATION_FILE_BYTES,
-      });
-      if (entry.type === "symlink") {
-        if (content.toString("utf8") !== entry.target) {
-          throw new Error(`Cloud workspace staged result tree is invalid: ${entry.path}`);
-        }
-        await materializeStagedEntry({ root: stagingRoot, entry });
-      } else {
-        await materializeStagedEntry({ root: stagingRoot, entry, content });
-      }
-    }
+  return await withMaterializedWorkerWorkspaceResult(staged, async ({ stagingRoot }) => {
     const applied = await applyStagedWorkerWorkspace({
       root,
       stagingRoot,
@@ -532,17 +577,11 @@ async function applyStagedWorkerWorkspaceResultWithMemo(
       publishAcceptedManifest: params.publishAcceptedManifest,
     });
     return { ...applied, changed: staged.changed };
-  } finally {
-    await runBestEffortCleanup({
-      cleanup: () => fs.rm(stagingRoot, { recursive: true, force: true }),
-      onError: (error) =>
-        workspaceLog.warn(`worker workspace staging cleanup failed: ${boundedWorkerError(error)}`),
-    });
-  }
+  });
 }
 
 async function prepareRequestedWorkerWorkspaceResult(params: {
-  request: WorkerWorkspaceReconcileRequest;
+  request: WorkerLocalWorkspaceReconcileRequest;
   stagingRoot: string;
   currentManifestRef: string;
   baseManifestRaw: string;
@@ -603,8 +642,10 @@ async function prepareRequestedWorkerWorkspaceResult(params: {
     publishStagedResult: async () => {
       const root = await ensureWorkerWorkspaceResultRepository(params.request.localPath);
       const commit = await requireGit(root, ["rev-parse", `${candidateRef}^{commit}`]);
-      await requireGit(root, ["update-ref", stagedResult.ref, commit]);
-      await requireGit(root, ["update-ref", "-d", candidateRef]);
+      await updateWorkspaceResultRefs(root, [
+        { ref: stagedResult.ref, objectId: commit },
+        { ref: candidateRef },
+      ]);
       // Final fences precede publishing. Preserve the canonical ref on any
       // SQLite failure so restart recovery can discover the verified result.
       stagedResult.record(stagedResult.ref);
@@ -624,10 +665,12 @@ export async function deleteStagedWorkerWorkspaceResult(params: {
 }): Promise<void> {
   const root = await fs.realpath(params.root);
   const stagedResultRef = requireWorkerResultStorageRef(params.stagedResultRef);
-  await requireGit(root, ["update-ref", "-d", stagedResultRef]);
-  if (stagedResultRef.startsWith(`${WORKER_RESULT_REF_PREFIX}/`)) {
-    await requireGit(root, ["update-ref", "-d", preparedWorkerWorkspaceResultRef(stagedResultRef)]);
-  }
+  await updateWorkspaceResultRefs(root, [
+    { ref: stagedResultRef },
+    ...(stagedResultRef.startsWith(`${WORKER_RESULT_REF_PREFIX}/`)
+      ? [{ ref: preparedWorkerWorkspaceResultRef(stagedResultRef) }]
+      : []),
+  ]);
 }
 
 export async function moveStagedWorkerWorkspaceResultToCleanup(params: {
@@ -638,10 +681,13 @@ export async function moveStagedWorkerWorkspaceResultToCleanup(params: {
   const stagedResultRef = requireWorkerResultRef(params.stagedResultRef);
   const cleanupRef = cleanupWorkerWorkspaceResultRef(stagedResultRef);
   const commit = await requireGit(root, ["rev-parse", `${stagedResultRef}^{commit}`]);
-  // The temporary cleanup namespace survives the SQLite fence removal. Either
-  // side of this two-step move is therefore discoverable after a crash.
-  await requireGit(root, ["update-ref", cleanupRef, commit]);
-  await deleteStagedWorkerWorkspaceResult({ root, stagedResultRef });
+  // Complete the ref move before removing the SQLite fence, keeping an
+  // inspectable result on either side of a crash.
+  await updateWorkspaceResultRefs(root, [
+    { ref: cleanupRef, objectId: commit },
+    { ref: stagedResultRef },
+    { ref: preparedWorkerWorkspaceResultRef(stagedResultRef) },
+  ]);
   return cleanupRef;
 }
 
@@ -657,13 +703,15 @@ export async function restoreStagedWorkerWorkspaceResultFromCleanup(params: {
   }
   const stagedResultRef = requireWorkerResultRef(params.stagedResultRef);
   const commit = await requireGit(root, ["rev-parse", `${cleanupRef}^{commit}`]);
-  await requireGit(root, ["update-ref", stagedResultRef, commit]);
-  await requireGit(root, ["update-ref", "-d", cleanupRef]);
+  await updateWorkspaceResultRefs(root, [
+    { ref: stagedResultRef, objectId: commit },
+    { ref: cleanupRef },
+  ]);
 }
 
 export async function deleteWorkerWorkspaceResultCleanupRefs(params: {
   root: string;
-  retainedRefs?: ReadonlySet<string>;
+  retainedRefs?: () => ReadonlySet<string>;
 }): Promise<void> {
   const root = await fs.realpath(params.root);
   const output = await requireGit(root, [
@@ -671,11 +719,17 @@ export async function deleteWorkerWorkspaceResultCleanupRefs(params: {
     "--format=%(refname)",
     `${WORKER_RESULT_CLEANUP_REF_PREFIX}/`,
   ]);
-  for (const cleanupRef of output.split("\n").filter(Boolean)) {
-    requireWorkerResultStorageRef(cleanupRef);
-    if (!params.retainedRefs?.has(cleanupRef)) {
-      await requireGit(root, ["update-ref", "-d", cleanupRef]);
-    }
+  const cleanupRefs = output.split("\n").filter(Boolean);
+  if (cleanupRefs.length > 0) {
+    await updateWorkspaceResultRefs(root, () => {
+      // Read fences after inventory and the shared ref queue wait. Later
+      // claims cannot appear in these immutable claim refs.
+      const retainedRefs = params.retainedRefs?.();
+      return cleanupRefs
+        .map(requireWorkerResultStorageRef)
+        .filter((ref) => !retainedRefs?.has(ref))
+        .map((ref) => ({ ref }));
+    });
   }
 }
 

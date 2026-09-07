@@ -1,5 +1,9 @@
+import { normalizeResolvedPricing } from "@openclaw/llm-core";
+import { normalizeConfiguredProviderCatalogModelId } from "@openclaw/model-catalog-core/provider-model-id-normalization";
 import { asOptionalRecord as readModelParams } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { mergeModelCost } from "../../config/model-cost.js";
+import { projectConfigOntoRuntimeSourceSnapshot } from "../../config/runtime-source-projection.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { Api, Model } from "../../llm/types.js";
 import type { PluginMetadataSnapshotOwnerMaps } from "../../plugins/plugin-metadata-snapshot.types.js";
@@ -175,6 +179,43 @@ export function findConfiguredProviderModel(
   return providerConfig?.models?.find((candidate) =>
     matchesProviderScopedModelId({ candidateId: candidate.id, provider, modelId }),
   );
+}
+
+/** Merge authored rates after discovery; runtime defaults must not become price pins. */
+export function mergeConfiguredModelCost(params: {
+  provider: string;
+  cfg?: OpenClawConfig;
+  configuredModel?: NonNullable<InlineProviderConfig["models"]>[number];
+  catalogCost?: Model["cost"];
+}): Model["cost"] {
+  let authoredCost = params.configuredModel?.cost;
+  if (params.cfg && params.configuredModel) {
+    const source = projectConfigOntoRuntimeSourceSnapshot(params.cfg);
+    if (source !== params.cfg) {
+      const modelId = normalizeConfiguredProviderCatalogModelId(
+        params.provider,
+        params.configuredModel.id,
+      ).trim();
+      const sourceModels = resolveConfiguredProviderConfig(source, params.provider)?.models?.filter(
+        (model) =>
+          matchesProviderScopedModelId({
+            candidateId: normalizeConfiguredProviderCatalogModelId(
+              params.provider,
+              model.id,
+            ).trim(),
+            provider: params.provider,
+            modelId,
+          }),
+      );
+      if (sourceModels?.length) {
+        authoredCost = sourceModels.reduce<Model["cost"] | undefined>(
+          (cost, model) => mergeModelCost(model.cost, cost),
+          undefined,
+        );
+      }
+    }
+  }
+  return normalizeResolvedPricing(mergeModelCost(params.catalogCost, authoredCost) ?? {});
 }
 
 export function mergeStaticCatalogInlineModel(
@@ -506,12 +547,12 @@ export function applyConfiguredProviderOverrides(params: {
     workspaceDir: params.workspaceDir,
     runtimeHooks: params.runtimeHooks,
   });
-  const resolvedContextWindow = metadataOverrideModel?.contextWindow;
+  const contextWindow = metadataOverrideModel?.contextWindow ?? discoveredModel.contextWindow;
   const configuredMaxTokens = metadataOverrideModel?.maxTokens ?? providerConfig.maxTokens;
   const resolvedMaxTokens = configuredMaxTokens ?? discoveredModel.maxTokens;
   const normalizedResolvedMaxTokens = clampModelMaxTokensToContextWindow(
     resolvedMaxTokens,
-    resolvedContextWindow,
+    contextWindow,
   );
   const catalogCompat = mergeModelCompat(
     configuredStaticCatalogModel?.compat,
@@ -573,8 +614,13 @@ export function applyConfiguredProviderOverrides(params: {
           baseUrl: requestConfig.baseUrl ?? discoveredModel.baseUrl,
           reasoning: resolvedReasoning,
           input: normalizedInput,
-          cost: metadataOverrideModel?.cost ?? discoveredModel.cost,
-          contextWindow: resolvedContextWindow ?? discoveredModel.contextWindow,
+          cost: mergeConfiguredModelCost({
+            provider: params.provider,
+            cfg: params.cfg,
+            configuredModel: metadataOverrideModel,
+            catalogCost: discoveredModel.cost,
+          }),
+          contextWindow,
           contextTokens: metadataOverrideModel?.contextTokens ?? discoveredModel.contextTokens,
           ...(normalizedResolvedMaxTokens !== undefined
             ? {

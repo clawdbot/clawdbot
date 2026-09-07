@@ -106,7 +106,7 @@ Example roster for a personal-assistant workspace; swap in whichever skills fit 
 
 - **mcporter** - tool server runtime/CLI for managing external skill backends.
 - **Peekaboo** - fast macOS screenshots with optional AI vision analysis.
-- **camsnap** - capture frames, clips, or motion alerts from RTSP/ONVIF security cams.
+- **camsnap** - capture frames, clips, or motion alerts from RTSP/ONVIF security cams and local webcams, including USB pan/tilt/zoom control.
 - **oracle** - OpenAI-ready agent CLI with session replay and browser control.
 - **eightctl** - control your sleep, from the terminal.
 - **imsg** - send, read, stream iMessage & SMS.

@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import { postRawWebhook } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildDiscordActivityCustomId } from "../component-custom-id.js";
 import { createDiscordActivityHttpHandler } from "./http.js";
@@ -279,6 +280,42 @@ describe("Discord Activity HTTP OAuth", () => {
     const base = await startServer(createActivityTestRuntime(), { bodyTimeoutMs: 25 });
 
     await expect(observeStalledTokenRequest(base, 1_000)).resolves.toBe("server-terminated");
+  });
+
+  it.each([
+    {
+      name: "413 when the token body exceeds its limit",
+      bodyTimeoutMs: 5_000,
+      // Declared and sent in one write: the shape whose rejection used to race the flush.
+      body: JSON.stringify({ code: "x".repeat(8 * 1024) }),
+      contentLength: undefined,
+      statusLine: "HTTP/1.1 413 Payload Too Large",
+      error: "request body too large",
+    },
+    {
+      name: "408 when the sender stalls mid-upload",
+      bodyTimeoutMs: 50,
+      // Promises more than is ever sent, so the read deadline fires with the request open.
+      body: "{",
+      contentLength: 4 * 1024,
+      statusLine: "HTTP/1.1 408 Request Timeout",
+      error: "request body timeout",
+    },
+  ])("delivers $name and then closes the connection", async (scenario) => {
+    const base = await startServer(createActivityTestRuntime(), {
+      bodyTimeoutMs: scenario.bodyTimeoutMs,
+    });
+
+    const result = await postRawWebhook({
+      url: `${base}/discord/activity/api/token`,
+      body: scenario.body,
+      contentLength: scenario.contentLength,
+      headers: { "content-type": "application/json" },
+    });
+
+    expect(result.statusLine).toBe(scenario.statusLine);
+    expect(JSON.parse(result.body)).toEqual({ error: scenario.error });
+    expect(result.closedByServer).toBe(true);
   });
 
   it("exchanges a code, creates a session, and uses it on the widget endpoint", async () => {

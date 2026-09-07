@@ -1,6 +1,5 @@
 {
   "id": "qianfan",
-  "icon": "https://cdn.simpleicons.org/baidu",
   "activation": {
     "onStartup": false
   },

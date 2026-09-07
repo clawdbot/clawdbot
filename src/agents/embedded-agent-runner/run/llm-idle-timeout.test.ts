@@ -434,6 +434,32 @@ describe("resolveLlmIdleTimeoutMs", () => {
   });
 
   it.each([
+    ["kimi-k2.5:cloud", "http://127.0.0.1:11434", 0],
+    ["gpt-oss:120b-cloud", "http://127.0.0.1:11434", 0],
+    ["kimi-k2.5:cloud", "http://ollama-box:11434", SELF_HOSTED_LLM_IDLE_TIMEOUT_MS],
+    ["gpt-oss:120b-cloud", "http://ollama-box:11434", SELF_HOSTED_LLM_IDLE_TIMEOUT_MS],
+  ])(
+    "keeps hosted watchdogs for custom Ollama model %s through %s",
+    (id, baseUrl, localIdleTimeoutMs) => {
+      const providerConfig = { api: "ollama", apiKey: "ollama-local", baseUrl, models: [] };
+      const cfg = { models: { providers: { "local-ollama": providerConfig } } } as OpenClawConfig;
+      const model = { provider: "local-ollama", id, baseUrl };
+
+      expect({
+        idle: resolveLlmIdleTimeoutMs({ cfg, model }),
+        firstEvent: resolveLlmFirstEventTimeoutMs({ cfg, model }),
+        cron: resolveLlmIdleTimeoutMs({ cfg, trigger: "cron", runTimeoutMs: 600_000, model }),
+        local: resolveLlmIdleTimeoutMs({ cfg, model: { ...model, id: "gemma4:latest" } }),
+      }).toEqual({
+        idle: DEFAULT_LLM_IDLE_TIMEOUT_MS,
+        firstEvent: CLOUD_LLM_FIRST_EVENT_TIMEOUT_MS,
+        cron: CRON_LLM_IDLE_TIMEOUT_MS,
+        local: localIdleTimeoutMs,
+      });
+    },
+  );
+
+  it.each([
     "http://172.32.0.1:11434",
     "http://192.169.1.1:11434",
     "http://100.63.255.254:11434",

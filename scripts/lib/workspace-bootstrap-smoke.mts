@@ -12,12 +12,9 @@ export const WORKSPACE_TEMPLATE_PACK_PATHS: readonly string[] = [
   "docs/reference/templates/SOUL.md",
   "docs/reference/templates/IDENTITY.md",
   "docs/reference/templates/USER.md",
-  "src/agents/templates/HEARTBEAT.md",
   "docs/reference/templates/BOOTSTRAP.md",
 ];
 
-// HEARTBEAT.md ships in the template pack for docs/doctor context but is no
-// longer seeded into new workspaces; heartbeat context lives in cron scratch.
 const REQUIRED_BOOTSTRAP_WORKSPACE_FILES = [
   "AGENTS.md",
   "SOUL.md",

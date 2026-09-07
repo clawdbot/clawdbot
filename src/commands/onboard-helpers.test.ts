@@ -533,11 +533,59 @@ describe("resolveBrowserOpenCommand", () => {
 });
 
 describe("formatControlUiSshHint", () => {
+  it.each([
+    {
+      label: "plain HTTP root",
+      tlsEnabled: false,
+      basePath: undefined,
+      expectedUrl: "http://localhost:18789/",
+    },
+    {
+      label: "plain HTTP base path",
+      tlsEnabled: false,
+      basePath: "/control",
+      expectedUrl: "http://localhost:18789/control/",
+    },
+    {
+      label: "HTTPS root",
+      tlsEnabled: true,
+      basePath: undefined,
+      expectedUrl: "https://localhost:18789/",
+    },
+    {
+      label: "HTTPS base path",
+      tlsEnabled: true,
+      basePath: "/control",
+      expectedUrl: "https://localhost:18789/control/",
+    },
+  ])("uses the Gateway transport for $label", ({ tlsEnabled, basePath, expectedUrl }) => {
+    const hint = formatControlUiSshHint({ port: 18789, basePath, tlsEnabled });
+
+    expect(hint).toContain(`Then open:\n${expectedUrl}`);
+  });
+
   it("includes the IPv4-only BYOH note and workaround", () => {
-    const hint = formatControlUiSshHint({ port: 18789 });
+    const hint = formatControlUiSshHint({ port: 18789, tlsEnabled: false });
     expect(hint).toContain("BYOH note: lan, tailnet, and custom bind are currently IPv4-only.");
     expect(hint).toContain(
       "If your host is IPv6-only, use an IPv4 sidecar or proxy in front of the Gateway.",
+    );
+  });
+
+  it("leaves remote login coordinates explicit instead of guessing from the server process", async () => {
+    await withEnvAsync(
+      {
+        USER: "gateway-service",
+        LOGNAME: "gateway-service",
+        SSH_CONNECTION: "192.0.2.10 54321 127.0.0.1 22",
+      },
+      async () => {
+        const hint = formatControlUiSshHint({ port: 18789, tlsEnabled: false });
+
+        expect(hint).toContain("ssh -N -L 18789:127.0.0.1:18789 <user>@<host>");
+        expect(hint).not.toContain("gateway-service");
+        expect(hint).not.toContain("192.0.2.10");
+      },
     );
   });
 });

@@ -144,7 +144,7 @@ extension AgentProTab {
         async let usage = self.requestOptional(
             CostUsageSummaryLite.self,
             method: "usage.cost",
-            paramsJSON: "{\"days\":31}",
+            paramsJSON: CostUsageRequest.monthParamsJSON(),
             timeoutSeconds: 12)
 
         let loadedSkills = await skills
@@ -207,13 +207,7 @@ extension AgentProTab {
     }
 
     private func requestCronJobsSnapshot() async -> CronJobsListLite? {
-        let pageLimit = 100
-        let jobLimit = 20000
-        var jobs: [CronJob] = []
-        var seenJobIDs: Set<String> = []
-        var expectedIdentity: CronJobsSnapshotIdentity?
-        var offset = 0
-        for _ in 0..<pageLimit {
+        await CronJobsListLite.collect(maximumPageCount: 100, maximumJobCount: 20000) { offset in
             guard let paramsJSON = try? Self.automationParams([
                 "includeDisabled": true,
                 "limit": 200,
@@ -221,54 +215,12 @@ extension AgentProTab {
                 "sortBy": "name",
                 "sortDir": "asc",
             ]) else { return nil }
-            guard let page = await self.requestOptional(
+            return await self.requestOptional(
                 CronJobsListLite.self,
                 method: "cron.list",
                 paramsJSON: paramsJSON,
                 timeoutSeconds: 12)
-            else { return nil }
-            guard let identity = cronJobsSnapshotIdentity(page: page, maximumCount: jobLimit) else { return nil }
-            if let expectedIdentity, identity != expectedIdentity {
-                // Offset pages are separately locked by the Gateway. Restart instead of
-                // combining pages when a concurrent mutation changes the snapshot.
-                return nil
-            }
-            expectedIdentity = identity
-            let pageJobIDs = Set(page.jobs.map(\.id))
-            guard pageJobIDs.count == page.jobs.count,
-                  seenJobIDs.isDisjoint(with: pageJobIDs)
-            else { return nil }
-            seenJobIDs.formUnion(pageJobIDs)
-            jobs.append(contentsOf: page.jobs)
-            guard jobs.count <= jobLimit else { return nil }
-            if let total = identity.total {
-                guard total >= jobs.count else { return nil }
-                if jobs.count == total {
-                    guard !page.hasMore else { return nil }
-                    return CronJobsListLite(
-                        jobs: jobs,
-                        snapshotRevision: identity.revision,
-                        total: total,
-                        hasMore: false,
-                        nextOffset: nil)
-                }
-            }
-            guard page.hasMore else {
-                return CronJobsListLite(
-                    jobs: jobs,
-                    snapshotRevision: identity.revision,
-                    total: nil,
-                    hasMore: false,
-                    nextOffset: nil)
-            }
-            guard let nextOffset = nextCronJobsListOffset(page: page, currentOffset: offset),
-                  nextOffset <= jobLimit
-            else {
-                return nil
-            }
-            offset = nextOffset
         }
-        return nil
     }
 
     func normalized(_ value: String?) -> String? {

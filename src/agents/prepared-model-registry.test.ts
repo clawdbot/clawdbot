@@ -188,6 +188,7 @@ describe("prepared agent model registry", () => {
       setupProviders: new Map(),
       commandAliases: new Map(),
       contracts: new Map(),
+      modelIdNormalizationPolicies: new Map(),
     };
     registry.getProviderMetadataOwners.mockReturnValue(providerMetadataOwners);
     mocks.prepareSnapshot.mockResolvedValue(snapshot);

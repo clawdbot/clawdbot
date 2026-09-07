@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   editMatrixMessage: vi.fn(),
   deleteMatrixMessage: vi.fn(),
   readMatrixMessages: vi.fn(),
+  listMatrixEmojis: vi.fn(),
   listMatrixReactions: vi.fn(),
   removeMatrixReactions: vi.fn(),
   sendMatrixMessage: vi.fn(),
@@ -32,6 +33,7 @@ vi.mock("./matrix/actions.js", () => {
     editMatrixMessage: mocks.editMatrixMessage,
     getMatrixMemberInfo: mocks.getMatrixMemberInfo,
     getMatrixRoomInfo: mocks.getMatrixRoomInfo,
+    listMatrixEmojis: mocks.listMatrixEmojis,
     listMatrixReactions: mocks.listMatrixReactions,
     pinMatrixMessage: mocks.pinMatrixMessage,
     unpinMatrixMessage: mocks.unpinMatrixMessage,
@@ -75,6 +77,9 @@ describe("handleMatrixAction pollVote", () => {
       maxSelections: 2,
     });
     mocks.listMatrixReactions.mockResolvedValue([{ key: "👍", count: 1, users: ["@u:example"] }]);
+    mocks.listMatrixEmojis.mockResolvedValue([
+      { name: "party", identifier: "party", url: "mxc://example.org/party" },
+    ]);
     mocks.listMatrixPins.mockResolvedValue({ pinned: ["$pin"], events: [] });
     mocks.pinMatrixMessage.mockResolvedValue({ pinned: ["$existing", "$pin"] });
     mocks.unpinMatrixMessage.mockResolvedValue({ pinned: ["$existing"] });
@@ -238,6 +243,51 @@ describe("handleMatrixAction pollVote", () => {
       accountId: "ops",
       client: mocks.matrixClient,
     });
+  });
+
+  it("lists custom emotes only after authorizing the selected Matrix room", async () => {
+    const cfg = { channels: { matrix: { actions: { reactions: true } } } } as CoreConfig;
+    const result = await handleMatrixAction(
+      { action: "emoji-list", accountId: "ops", roomId: "room:!room:example", limit: 5 },
+      cfg,
+      {
+        readContext: {
+          requesterAccountId: "ops",
+          currentChannelId: "room:!room:example",
+          currentChannelProvider: "matrix",
+        },
+      },
+    );
+
+    expect(mocks.listMatrixEmojis).toHaveBeenCalledWith("!room:example", {
+      cfg,
+      accountId: "ops",
+      client: mocks.matrixClient,
+      limit: 5,
+    });
+    expect(result.details).toEqual({
+      ok: true,
+      emojis: [{ name: "party", identifier: "party", url: "mxc://example.org/party" }],
+    });
+  });
+
+  it("rejects custom-emote discovery when reactions or room access are disabled", async () => {
+    const params = { action: "emoji-list", roomId: "!blocked:example" };
+
+    await expect(
+      handleMatrixAction(params, {
+        channels: { matrix: { actions: { reactions: false } } },
+      } as CoreConfig),
+    ).rejects.toThrow("Matrix reactions are disabled.");
+    expect(mocks.withAuthorizedMatrixReadTarget).not.toHaveBeenCalled();
+
+    mocks.withAuthorizedMatrixReadTarget.mockRejectedValueOnce(
+      new Error("Matrix read target is not allowed."),
+    );
+    await expect(handleMatrixAction(params, {} as CoreConfig)).rejects.toThrow(
+      "Matrix read target is not allowed.",
+    );
+    expect(mocks.listMatrixEmojis).not.toHaveBeenCalled();
   });
 
   it.each([

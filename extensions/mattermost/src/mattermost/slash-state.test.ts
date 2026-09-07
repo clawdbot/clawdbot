@@ -1,9 +1,9 @@
 // Mattermost tests cover slash state plugin behavior.
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { PassThrough } from "node:stream";
+import { createMockIncomingRequest, withServer } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig, RuntimeEnv } from "../runtime-api.js";
 import type { ResolvedMattermostAccount } from "./accounts.js";
+import type { OpenClawConfig, RuntimeEnv } from "./runtime-api.js";
 import type { MattermostRegisteredCommand } from "./slash-commands.js";
 import {
   activateSlashCommands,
@@ -76,12 +76,9 @@ function replaceAccountHandler(accountId: string): void {
 }
 
 function createRequest(body: string): IncomingMessage {
-  const req = new PassThrough() as PassThrough & IncomingMessage;
+  const req = createMockIncomingRequest([body]);
   req.method = "POST";
   req.headers = { "content-type": "application/x-www-form-urlencoded" };
-  process.nextTick(() => {
-    req.end(body);
-  });
   return req;
 }
 
@@ -97,13 +94,10 @@ function createResponse(): { res: ServerResponse; getBody: () => string } {
   return { res, getBody: () => body };
 }
 
-async function routeSlashRequest(params: {
-  body: string;
-  register?: typeof registerSlashCommandRoute;
-}): Promise<{ statusCode: number; body: string; warn: ReturnType<typeof vi.fn> }> {
+function createSlashRoute(register = registerSlashCommandRoute) {
   let routeHandler: ((req: IncomingMessage, res: ServerResponse) => Promise<void>) | undefined;
   const warn = vi.fn();
-  (params.register ?? registerSlashCommandRoute)({
+  register({
     config: { channels: { mattermost: {} } },
     logger: { warn },
     registerHttpRoute(route: {
@@ -115,8 +109,16 @@ async function routeSlashRequest(params: {
   if (!routeHandler) {
     throw new Error("expected Mattermost slash route registration");
   }
+  return { handler: routeHandler, warn };
+}
+
+async function routeSlashRequest(params: {
+  body: string;
+  register?: typeof registerSlashCommandRoute;
+}): Promise<{ statusCode: number; body: string; warn: ReturnType<typeof vi.fn> }> {
+  const { handler, warn } = createSlashRoute(params.register);
   const response = createResponse();
-  await routeHandler(createRequest(params.body), response.res);
+  await handler(createRequest(params.body), response.res);
   return { statusCode: response.res.statusCode, body: response.getBody(), warn };
 }
 
@@ -163,6 +165,54 @@ describe("slash-state global singleton", () => {
 describe("slash-state request routing", () => {
   afterEach(() => {
     deactivateSlashCommands();
+  });
+
+  it.each([
+    {
+      name: "token match",
+      body: "token=token-1",
+      status: 400,
+      message: "Invalid slash command payload.",
+    },
+    {
+      name: "registered command match",
+      body: "token=rotated&team_id=team-1&channel_id=c1&user_id=u1&command=%2Foc_status&text=",
+      status: 401,
+      message: "Unauthorized: invalid command token.",
+    },
+  ])("keeps real multi-account $name requests in account validation", async (testCase) => {
+    activateSlashCommands({
+      account: createResolvedMattermostAccount("a1"),
+      commandTokens: ["token-1"],
+      registeredCommands: [createRegisteredCommand()],
+      api: slashApi,
+    });
+    activateSlashCommands({
+      account: createResolvedMattermostAccount("a2"),
+      commandTokens: ["token-2"],
+      registeredCommands: [createRegisteredCommand({ id: "cmd-2", teamId: "team-2" })],
+      api: slashApi,
+    });
+    const route = createSlashRoute();
+    await withServer(
+      (req, res) => {
+        void route.handler(req, res).catch((error: unknown) => {
+          res.destroy(error instanceof Error ? error : new Error(String(error)));
+        });
+      },
+      async (baseUrl) => {
+        const response = await fetch(`${baseUrl}/slash`, {
+          method: "POST",
+          headers: { "content-type": "application/x-www-form-urlencoded" },
+          body: testCase.body,
+        });
+        expect(response.status).toBe(testCase.status);
+        expect(await response.json()).toEqual({
+          response_type: "ephemeral",
+          text: testCase.message,
+        });
+      },
+    );
   });
 
   it("routes a token owned by one account", async () => {

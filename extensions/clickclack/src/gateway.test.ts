@@ -1,6 +1,7 @@
 // Clickclack tests cover gateway plugin behavior.
 import { EventEmitter } from "node:events";
 import type { ChannelGatewayContext } from "openclaw/plugin-sdk/channel-contract";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedClickClackAccount } from "./types.js";
 
@@ -427,6 +428,83 @@ describe("ClickClack gateway", () => {
     abort.abort();
     await run;
   });
+
+  it("does not dispatch queued websocket events after the account stops", async () => {
+    const socket = new FakeSocket();
+    mocks.client.websocket.mockReturnValue(socket);
+    const firstDispatch = createDeferred<void>();
+    mocks.handleClickClackInbound.mockImplementationOnce(() => firstDispatch.promise);
+    const abort = new AbortController();
+    const ctx = createGatewayContext(abort.signal);
+    const run = startClickClackGatewayAccount(ctx);
+
+    await waitForGatewayState(() => expect(mocks.client.websocket).toHaveBeenCalledOnce());
+    emitMessageEvent(socket, 1);
+    emitMessageEvent(socket, 2);
+    await waitForGatewayState(() => expect(mocks.handleClickClackInbound).toHaveBeenCalledOnce());
+
+    abort.abort();
+    await run;
+    expect(ctx.setStatus).toHaveBeenLastCalledWith(
+      expect.objectContaining({ lifecycle: "stopped" }),
+    );
+
+    firstDispatch.resolve();
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
+
+    expect(mocks.client.message).toHaveBeenCalledOnce();
+    expect(mocks.handleClickClackInbound).toHaveBeenCalledOnce();
+  });
+
+  it.each(["authoritative message fetch", "sender access resolution"] as const)(
+    "does not begin an inbound turn when shutdown interrupts %s",
+    async (interruptedStep) => {
+      const socket = new FakeSocket();
+      mocks.client.websocket.mockReturnValue(socket);
+      const stepStarted = createDeferred<void>();
+      const releaseStep = createDeferred<void>();
+      const waitForShutdown = async () => {
+        stepStarted.resolve();
+        await releaseStep.promise;
+      };
+      if (interruptedStep === "authoritative message fetch") {
+        mocks.client.message.mockImplementationOnce(async () => {
+          await waitForShutdown();
+          return { id: "msg-1", author_id: "human-1", channel_id: "chan-1" };
+        });
+      } else {
+        mocks.resolveClickClackInboundAccess.mockImplementationOnce(async () => {
+          await waitForShutdown();
+          return { shouldDispatch: true, commandAuthorized: true };
+        });
+      }
+      const abort = new AbortController();
+      const ctx = createGatewayContext(abort.signal);
+      const run = startClickClackGatewayAccount(ctx);
+
+      await waitForGatewayState(() => expect(mocks.client.websocket).toHaveBeenCalledOnce());
+      emitMessageEvent(socket, 1);
+      await stepStarted.promise;
+
+      abort.abort();
+      await run;
+      expect(ctx.setStatus).toHaveBeenLastCalledWith(
+        expect.objectContaining({ lifecycle: "stopped" }),
+      );
+
+      releaseStep.resolve();
+      await new Promise((resolve) => {
+        setImmediate(resolve);
+      });
+
+      expect(mocks.handleClickClackInbound).not.toHaveBeenCalled();
+      if (interruptedStep === "authoritative message fetch") {
+        expect(mocks.resolveClickClackInboundAccess).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it("replays a failed websocket event on reconnect without processing later queued events", async () => {
     const firstSocket = new FakeSocket();

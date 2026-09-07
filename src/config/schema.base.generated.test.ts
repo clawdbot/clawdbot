@@ -1,5 +1,6 @@
 // Verifies generated base config schema snapshots and sensitive redaction.
 import { SENSITIVE_URL_HINT_TAG } from "@openclaw/net-policy/redact-sensitive-url";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { computeBaseConfigSchemaResponse } from "./schema-base.js";
 
@@ -111,11 +112,17 @@ function collectSchemaConsts(
 }
 
 describe("base config schema", () => {
-  it("is deterministic for a fixed generatedAt timestamp", () => {
+  it("returns independent schema and hint trees for a fixed generatedAt timestamp", () => {
+    const response = computeBaseConfigSchemaResponse({
+      generatedAt: BASE_CONFIG_SCHEMA.generatedAt,
+    });
+    expect(response).toEqual(BASE_CONFIG_SCHEMA);
+    delete (response.schema.properties as Record<string, unknown>).logging;
+    const hint = expectDefined(response.uiHints["mcp.servers.*.url"], "URL hint");
+    hint.help = "Changed by caller";
+    hint.tags?.push("caller-tag");
     expect(
-      computeBaseConfigSchemaResponse({
-        generatedAt: BASE_CONFIG_SCHEMA.generatedAt,
-      }),
+      computeBaseConfigSchemaResponse({ generatedAt: BASE_CONFIG_SCHEMA.generatedAt }),
     ).toEqual(BASE_CONFIG_SCHEMA);
   });
 

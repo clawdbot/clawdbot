@@ -88,13 +88,6 @@ interface ResourceManifest {
   themes?: string[];
 }
 
-interface ResourceAccumulator {
-  extensions: Map<string, { metadata: PathMetadata; enabled: boolean }>;
-  skills: Map<string, { metadata: PathMetadata; enabled: boolean }>;
-  prompts: Map<string, { metadata: PathMetadata; enabled: boolean }>;
-  themes: Map<string, { metadata: PathMetadata; enabled: boolean }>;
-}
-
 /**
  * Compute a numeric precedence rank for a resource based on its metadata.
  * Lower rank = higher precedence. Used to sort resolved resources so that
@@ -124,8 +117,14 @@ interface PackageFilter {
 
 type ResourceType = "extensions" | "skills" | "prompts" | "themes";
 type TopLevelAutoResourceType = Extract<ResourceType, "prompts" | "themes">;
+type ResourceState = { metadata: PathMetadata; enabled: boolean };
+type ResourceAccumulator = Record<ResourceType, Map<string, ResourceState>>;
 
-const RESOURCE_TYPES: ResourceType[] = ["extensions", "skills", "prompts", "themes"];
+const RESOURCE_TYPES = ["extensions", "skills", "prompts", "themes"] as const;
+
+type ResolvedPackageTarget =
+  | { kind: "missing" }
+  | { kind: "file" | "directory"; path: string; baseDir: string };
 
 const FILE_PATTERNS: Record<ResourceType, RegExp> = {
   extensions: /\.(ts|js)$/,
@@ -543,6 +542,13 @@ function collectResourceFiles(dir: string, resourceType: ResourceType): string[]
   return collectFiles(dir, FILE_PATTERNS[resourceType]);
 }
 
+const AUTO_RESOURCE_COLLECTORS = {
+  extensions: collectAutoExtensionEntries,
+  skills: (dir: string) => collectAutoSkillEntries(dir, "openclaw"),
+  prompts: (dir: string) => collectTopLevelAutoResourceEntries(dir, "prompts"),
+  themes: (dir: string) => collectTopLevelAutoResourceEntries(dir, "themes"),
+} satisfies Record<ResourceType, (dir: string) => string[]>;
+
 function resolveRealPathIfPossible(path: string): string {
   try {
     return realpathSync.native(path);
@@ -658,6 +664,13 @@ function applyPatterns(allPaths: string[], patterns: string[], baseDir: string):
   return new Set(result);
 }
 
+function getPackageFilter(pkg: PackageSource): PackageFilter | undefined {
+  if (typeof pkg === "string") {
+    return undefined;
+  }
+  return RESOURCE_TYPES.some((resourceType) => pkg[resourceType] !== undefined) ? pkg : undefined;
+}
+
 export class DefaultPackageManager implements PackageManager {
   private cwd: string;
   private agentDir: string;
@@ -692,32 +705,20 @@ export class DefaultPackageManager implements PackageManager {
     const globalBaseDir = this.agentDir;
     const projectBaseDir = join(this.cwd, CONFIG_DIR_NAME);
 
+    const localScopes = [
+      { scope: "project", settings: projectSettings, baseDir: projectBaseDir },
+      { scope: "user", settings: globalSettings, baseDir: globalBaseDir },
+    ] as const;
     for (const resourceType of RESOURCE_TYPES) {
-      const target = this.getTargetMap(accumulator, resourceType);
-      const globalEntries = globalSettings[resourceType] ?? [];
-      const projectEntries = projectSettings[resourceType] ?? [];
-      this.resolveLocalEntries(
-        projectEntries,
-        resourceType,
-        target,
-        {
-          source: "local",
-          scope: "project",
-          origin: "top-level",
-        },
-        projectBaseDir,
-      );
-      this.resolveLocalEntries(
-        globalEntries,
-        resourceType,
-        target,
-        {
-          source: "local",
-          scope: "user",
-          origin: "top-level",
-        },
-        globalBaseDir,
-      );
+      for (const { scope, settings, baseDir } of localScopes) {
+        this.resolveLocalEntries(
+          settings[resourceType] ?? [],
+          resourceType,
+          accumulator[resourceType],
+          { source: "local", scope, origin: "top-level" },
+          baseDir,
+        );
+      }
     }
 
     this.addAutoDiscoveredResources(
@@ -753,79 +754,89 @@ export class DefaultPackageManager implements PackageManager {
   ): Promise<void> {
     for (const { pkg, scope } of sources) {
       const sourceStr = typeof pkg === "string" ? pkg : pkg.source;
-      const filter = typeof pkg === "object" ? pkg : undefined;
+      const filter = getPackageFilter(pkg);
       const parsed = this.parseSource(sourceStr);
       const metadata: PathMetadata = { source: sourceStr, scope, origin: "package" };
-
-      if (parsed.type === "local") {
-        const baseDir = this.getBaseDirForScope(scope);
-        this.resolveLocalExtensionSource(parsed, accumulator, filter, metadata, baseDir);
+      const target = this.resolvePackageTarget(parsed, scope);
+      if (!target) {
         continue;
       }
-
-      const handleMissing = async (): Promise<void> => {
-        if (!onMissing) {
-          return;
-        }
-        const action = await onMissing(sourceStr);
-        if (action === "error") {
+      if (target.kind === "missing") {
+        if (onMissing && (await onMissing(sourceStr)) === "error") {
           throw new Error(`Missing source: ${sourceStr}`);
         }
-      };
-
-      if (parsed.type === "npm") {
-        const installedPath = this.getNpmInstallPath(parsed, scope);
-        const missingOrWrongVersion =
-          !existsSync(installedPath) ||
-          (parsed.pinned && !this.installedNpmMatchesPinnedVersion(parsed, installedPath));
-        if (missingOrWrongVersion) {
-          await handleMissing();
-          continue;
-        }
-        metadata.baseDir = installedPath;
-        this.collectPackageResources(installedPath, accumulator, filter, metadata);
         continue;
       }
 
-      if (parsed.type === "git") {
-        const installedPath = this.getGitInstallPath(parsed, scope);
-        if (!existsSync(installedPath)) {
-          await handleMissing();
-          continue;
-        }
-        metadata.baseDir = installedPath;
-        this.collectPackageResources(installedPath, accumulator, filter, metadata);
+      metadata.baseDir = target.baseDir;
+      if (target.kind === "file") {
+        this.addResource(
+          accumulator.extensions,
+          target.path,
+          metadata,
+          this.isExtensionEnabled(target.path, filter?.extensions, target.baseDir),
+        );
+        continue;
+      }
+
+      const hasPackageLayout = this.collectPackageResources(
+        target.path,
+        accumulator,
+        filter,
+        metadata,
+      );
+      if (parsed.type === "local" && !hasPackageLayout) {
+        this.addResource(
+          accumulator.extensions,
+          target.path,
+          metadata,
+          this.isExtensionEnabled(target.path, filter?.extensions, target.baseDir),
+        );
       }
     }
   }
 
-  private resolveLocalExtensionSource(
-    source: LocalSource,
-    accumulator: ResourceAccumulator,
-    filter: PackageFilter | undefined,
-    metadata: PathMetadata,
-    baseDir: string,
-  ): void {
-    const resolved = this.resolvePathFromBase(source.path, baseDir);
-    if (!existsSync(resolved)) {
-      return;
+  private resolvePackageTarget(
+    source: ParsedSource,
+    scope: SourceScope,
+  ): ResolvedPackageTarget | undefined {
+    if (source.type === "npm") {
+      const path = this.getNpmInstallPath(source, scope);
+      return !existsSync(path) ||
+        (source.pinned && !this.installedNpmMatchesPinnedVersion(source, path))
+        ? { kind: "missing" }
+        : { kind: "directory", path, baseDir: path };
+    }
+    if (source.type === "git") {
+      const path = this.getGitInstallPath(source, scope);
+      return existsSync(path) ? { kind: "directory", path, baseDir: path } : { kind: "missing" };
     }
 
+    const path = this.resolvePathFromBase(source.path, this.getBaseDirForScope(scope));
+    if (!existsSync(path)) {
+      return { kind: "missing" };
+    }
     try {
-      const stats = statSync(resolved);
+      const stats = statSync(path);
       if (stats.isFile()) {
-        metadata.baseDir = dirname(resolved);
-        this.addResource(accumulator.extensions, resolved, metadata, true);
-        return;
+        return { kind: "file", path, baseDir: dirname(path) };
       }
       if (stats.isDirectory()) {
-        metadata.baseDir = resolved;
-        const resources = this.collectPackageResources(resolved, accumulator, filter, metadata);
-        if (!resources) {
-          this.addResource(accumulator.extensions, resolved, metadata, true);
-        }
+        return { kind: "directory", path, baseDir: path };
       }
     } catch {}
+    return undefined;
+  }
+
+  private isExtensionEnabled(
+    path: string,
+    patterns: string[] | undefined,
+    baseDir: string,
+  ): boolean {
+    if (patterns === undefined) {
+      return true;
+    }
+    return patterns.length > 0 && applyPatterns([path], patterns, baseDir).has(path);
   }
 
   private parseSource(source: string): ParsedSource {
@@ -1012,69 +1023,29 @@ export class DefaultPackageManager implements PackageManager {
     filter: PackageFilter | undefined,
     metadata: PathMetadata,
   ): boolean {
-    if (filter) {
-      for (const resourceType of RESOURCE_TYPES) {
-        const patterns = filter[resourceType as keyof PackageFilter];
-        const target = this.getTargetMap(accumulator, resourceType);
-        if (patterns !== undefined) {
-          this.applyPackageFilter(packageRoot, patterns, resourceType, target, metadata);
-        } else {
-          this.collectDefaultResources(packageRoot, resourceType, target, metadata);
-        }
-      }
-      return true;
-    }
-
-    const manifest = this.readResourceManifest(packageRoot);
-    if (manifest) {
-      for (const resourceType of RESOURCE_TYPES) {
-        const entries = manifest[resourceType as keyof ResourceManifest];
-        this.addManifestEntries(
-          entries,
-          packageRoot,
-          resourceType,
-          this.getTargetMap(accumulator, resourceType),
-          metadata,
-        );
-      }
-      return true;
-    }
-
-    let hasAnyDir = false;
+    const manifest = readResourceManifestFile(join(packageRoot, "package.json"));
+    const hasPackageLayout =
+      manifest !== null || RESOURCE_TYPES.some((type) => existsSync(join(packageRoot, type)));
     for (const resourceType of RESOURCE_TYPES) {
+      const patterns = filter?.[resourceType];
+      const target = accumulator[resourceType];
+      if (patterns !== undefined) {
+        this.applyPackageFilter(packageRoot, patterns, resourceType, target, metadata);
+        continue;
+      }
+      const entries = manifest?.[resourceType];
+      if (manifest !== null && (!filter || entries !== undefined)) {
+        this.addManifestEntries(entries, packageRoot, resourceType, target, metadata);
+        continue;
+      }
       const dir = join(packageRoot, resourceType);
       if (existsSync(dir)) {
-        // Collect all files from the directory (all enabled by default)
-        const files = this.collectConventionResourceFiles(packageRoot, resourceType);
-        for (const f of files) {
-          this.addResource(this.getTargetMap(accumulator, resourceType), f, metadata, true);
+        for (const path of this.collectConventionResourceFiles(packageRoot, resourceType)) {
+          this.addResource(target, path, metadata, true);
         }
-        hasAnyDir = true;
       }
     }
-    return hasAnyDir;
-  }
-
-  private collectDefaultResources(
-    packageRoot: string,
-    resourceType: ResourceType,
-    target: Map<string, { metadata: PathMetadata; enabled: boolean }>,
-    metadata: PathMetadata,
-  ): void {
-    const manifest = this.readResourceManifest(packageRoot);
-    const entries = manifest?.[resourceType as keyof ResourceManifest];
-    if (entries) {
-      this.addManifestEntries(entries, packageRoot, resourceType, target, metadata);
-      return;
-    }
-    const dir = join(packageRoot, resourceType);
-    if (existsSync(dir)) {
-      // Collect all files from the directory (all enabled by default)
-      const files = this.collectConventionResourceFiles(packageRoot, resourceType);
-      for (const f of files) {
-        this.addResource(target, f, metadata, true);
-      }
-    }
+    return hasPackageLayout;
   }
 
   private applyPackageFilter(
@@ -1084,7 +1055,7 @@ export class DefaultPackageManager implements PackageManager {
     target: Map<string, { metadata: PathMetadata; enabled: boolean }>,
     metadata: PathMetadata,
   ): void {
-    const { allFiles } = this.collectManifestFiles(packageRoot, resourceType);
+    const allFiles = this.collectManifestFiles(packageRoot, resourceType);
 
     if (userPatterns.length === 0) {
       // Empty array explicitly disables all resources of this type
@@ -1103,29 +1074,20 @@ export class DefaultPackageManager implements PackageManager {
     }
   }
 
-  /**
-   * Collect all files from a package for a resource type, applying manifest patterns.
-   * Returns { allFiles, enabledByManifest } where enabledByManifest is the set of files
-   * that pass the manifest's own patterns.
-   */
-  private collectManifestFiles(
-    packageRoot: string,
-    resourceType: ResourceType,
-  ): { allFiles: string[]; enabledByManifest: Set<string> } {
-    const manifest = this.readResourceManifest(packageRoot);
-    const entries = manifest?.[resourceType as keyof ResourceManifest];
+  private collectManifestFiles(packageRoot: string, resourceType: ResourceType): string[] {
+    const manifest = readResourceManifestFile(join(packageRoot, "package.json"));
+    const entries = manifest?.[resourceType];
     if (entries && entries.length > 0) {
       const allFiles = this.collectFilesFromManifestEntries(entries, packageRoot, resourceType);
       const manifestPatterns = entries.filter(isOverridePattern);
-      const enabledByManifest =
+      return Array.from(
         manifestPatterns.length > 0
           ? applyPatterns(allFiles, manifestPatterns, packageRoot)
-          : new Set(allFiles);
-      return { allFiles: Array.from(enabledByManifest), enabledByManifest };
+          : new Set(allFiles),
+      );
     }
 
-    const allFiles = this.collectConventionResourceFiles(packageRoot, resourceType);
-    return { allFiles, enabledByManifest: new Set(allFiles) };
+    return this.collectConventionResourceFiles(packageRoot, resourceType);
   }
 
   private collectConventionResourceFiles(
@@ -1140,21 +1102,6 @@ export class DefaultPackageManager implements PackageManager {
       collectResourceFiles(conventionDir, resourceType),
       packageRoot,
     );
-  }
-
-  private readResourceManifest(packageRoot: string): ResourceManifest | null {
-    const packageJsonPath = join(packageRoot, "package.json");
-    if (!existsSync(packageJsonPath)) {
-      return null;
-    }
-
-    try {
-      const content = readFileSync(packageJsonPath, "utf-8");
-      const pkg = JSON.parse(content) as { openclaw?: ResourceManifest };
-      return pkg.openclaw ?? null;
-    } catch {
-      return null;
-    }
   }
 
   private addManifestEntries(
@@ -1244,160 +1191,73 @@ export class DefaultPackageManager implements PackageManager {
     globalBaseDir: string,
     projectBaseDir: string,
   ): void {
-    const userMetadata: PathMetadata = {
-      source: "auto",
-      scope: "user",
-      origin: "top-level",
-      baseDir: globalBaseDir,
-    };
-    const projectMetadata: PathMetadata = {
-      source: "auto",
-      scope: "project",
-      origin: "top-level",
-      baseDir: projectBaseDir,
-    };
-
-    const userOverrides = {
-      extensions: globalSettings.extensions ?? [],
-      skills: globalSettings.skills ?? [],
-      prompts: globalSettings.prompts ?? [],
-      themes: globalSettings.themes ?? [],
-    };
-    const projectOverrides = {
-      extensions: projectSettings.extensions ?? [],
-      skills: projectSettings.skills ?? [],
-      prompts: projectSettings.prompts ?? [],
-      themes: projectSettings.themes ?? [],
-    };
-
-    const userDirs = {
-      extensions: join(globalBaseDir, "extensions"),
-      skills: join(globalBaseDir, "skills"),
-      prompts: join(globalBaseDir, "prompts"),
-      themes: join(globalBaseDir, "themes"),
-    };
-    const projectDirs = {
-      extensions: join(projectBaseDir, "extensions"),
-      skills: join(projectBaseDir, "skills"),
-      prompts: join(projectBaseDir, "prompts"),
-      themes: join(projectBaseDir, "themes"),
-    };
     const userAgentsSkillsDir = join(getHomeDir(), ".agents", "skills");
     const projectAgentsSkillDirs = collectAncestorAgentsSkillDirs(this.cwd).filter(
       (dir) => resolve(dir) !== resolve(userAgentsSkillsDir),
     );
+    const addScopeResources = (options: {
+      scope: Extract<SourceScope, "project" | "user">;
+      settings: ReturnType<SettingsManager["getGlobalSettings"]>;
+      baseDir: string;
+      agentsSkillDirs: string[];
+    }): void => {
+      const metadata: PathMetadata = {
+        source: "auto",
+        scope: options.scope,
+        origin: "top-level",
+        baseDir: options.baseDir,
+      };
+      const addResources = (
+        resourceType: ResourceType,
+        paths: string[],
+        resourceMetadata = metadata,
+        patternBaseDir = options.baseDir,
+      ): void => {
+        for (const path of paths) {
+          this.addResource(
+            accumulator[resourceType],
+            path,
+            resourceMetadata,
+            isEnabledByOverrides(path, options.settings[resourceType] ?? [], patternBaseDir),
+          );
+        }
+      };
 
-    const addResources = (
-      resourceType: ResourceType,
-      paths: string[],
-      metadata: PathMetadata,
-      overrides: string[],
-      baseDir: string,
-    ) => {
-      const target = this.getTargetMap(accumulator, resourceType);
-      for (const path of paths) {
-        const enabled = isEnabledByOverrides(path, overrides, baseDir);
-        this.addResource(target, path, metadata, enabled);
+      for (const resourceType of RESOURCE_TYPES) {
+        addResources(
+          resourceType,
+          AUTO_RESOURCE_COLLECTORS[resourceType](join(options.baseDir, resourceType)),
+        );
+        if (resourceType !== "skills") {
+          continue;
+        }
+        // .agents roots use different traversal and pattern bases; flattening them
+        // into the ordinary skill directory would weaken containment and overrides.
+        for (const skillsDir of options.agentsSkillDirs) {
+          const agentsBaseDir = dirname(skillsDir);
+          addResources(
+            "skills",
+            collectAutoSkillEntries(skillsDir, "agents"),
+            { ...metadata, baseDir: agentsBaseDir },
+            agentsBaseDir,
+          );
+        }
       }
     };
 
-    // Project extensions from the embedded agent project directory.
-    addResources(
-      "extensions",
-      collectAutoExtensionEntries(projectDirs.extensions),
-      projectMetadata,
-      projectOverrides.extensions,
-      projectBaseDir,
-    );
-
-    // Project skills from the embedded agent project directory.
-    addResources(
-      "skills",
-      collectAutoSkillEntries(projectDirs.skills, "openclaw"),
-      projectMetadata,
-      projectOverrides.skills,
-      projectBaseDir,
-    );
-
-    // Project skills from .agents/ (each with its own baseDir)
-    for (const agentsSkillsDir of projectAgentsSkillDirs) {
-      const agentsBaseDir = dirname(agentsSkillsDir); // the .agents directory
-      const agentsMetadata: PathMetadata = {
-        ...projectMetadata,
-        baseDir: agentsBaseDir,
-      };
-      addResources(
-        "skills",
-        collectAutoSkillEntries(agentsSkillsDir, "agents"),
-        agentsMetadata,
-        projectOverrides.skills,
-        agentsBaseDir,
-      );
-    }
-
-    addResources(
-      "prompts",
-      collectTopLevelAutoResourceEntries(projectDirs.prompts, "prompts"),
-      projectMetadata,
-      projectOverrides.prompts,
-      projectBaseDir,
-    );
-    addResources(
-      "themes",
-      collectTopLevelAutoResourceEntries(projectDirs.themes, "themes"),
-      projectMetadata,
-      projectOverrides.themes,
-      projectBaseDir,
-    );
-
-    // User extensions from ~/.openclaw/agent/
-    addResources(
-      "extensions",
-      collectAutoExtensionEntries(userDirs.extensions),
-      userMetadata,
-      userOverrides.extensions,
-      globalBaseDir,
-    );
-
-    // User skills from ~/.openclaw/agent/
-    addResources(
-      "skills",
-      collectAutoSkillEntries(userDirs.skills, "openclaw"),
-      userMetadata,
-      userOverrides.skills,
-      globalBaseDir,
-    );
-
-    if (isDefaultStateDir()) {
-      // Home-scoped personal skills belong to the default install, not isolated state roots.
-      const userAgentsBaseDir = dirname(userAgentsSkillsDir);
-      const userAgentsMetadata: PathMetadata = {
-        ...userMetadata,
-        baseDir: userAgentsBaseDir,
-      };
-      addResources(
-        "skills",
-        collectAutoSkillEntries(userAgentsSkillsDir, "agents"),
-        userAgentsMetadata,
-        userOverrides.skills,
-        userAgentsBaseDir,
-      );
-    }
-
-    addResources(
-      "prompts",
-      collectTopLevelAutoResourceEntries(userDirs.prompts, "prompts"),
-      userMetadata,
-      userOverrides.prompts,
-      globalBaseDir,
-    );
-    addResources(
-      "themes",
-      collectTopLevelAutoResourceEntries(userDirs.themes, "themes"),
-      userMetadata,
-      userOverrides.themes,
-      globalBaseDir,
-    );
+    addScopeResources({
+      scope: "project",
+      settings: projectSettings,
+      baseDir: projectBaseDir,
+      agentsSkillDirs: projectAgentsSkillDirs,
+    });
+    addScopeResources({
+      scope: "user",
+      settings: globalSettings,
+      baseDir: globalBaseDir,
+      // Home-scoped personal skills belong only to the default install.
+      agentsSkillDirs: isDefaultStateDir() ? [userAgentsSkillsDir] : [],
+    });
   }
 
   private collectFilesFromPaths(paths: string[], resourceType: ResourceType): string[] {
@@ -1419,24 +1279,6 @@ export class DefaultPackageManager implements PackageManager {
       }
     }
     return files;
-  }
-
-  private getTargetMap(
-    accumulator: ResourceAccumulator,
-    resourceType: ResourceType,
-  ): Map<string, { metadata: PathMetadata; enabled: boolean }> {
-    switch (resourceType) {
-      case "extensions":
-        return accumulator.extensions;
-      case "skills":
-        return accumulator.skills;
-      case "prompts":
-        return accumulator.prompts;
-      case "themes":
-        return accumulator.themes;
-      default:
-        throw new Error(`Unknown resource type: ${String(resourceType)}`);
-    }
   }
 
   private addResource(

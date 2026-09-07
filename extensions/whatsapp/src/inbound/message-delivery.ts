@@ -2,6 +2,8 @@
 import { createHash } from "node:crypto";
 import type { AnyMessageContent, MiscMessageGenerationOptions, WAMessage, WASocket } from "baileys";
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
+import { resolveInboundDebounceMs } from "openclaw/plugin-sdk/channel-inbound-debounce";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { getChildLogger } from "openclaw/plugin-sdk/logging-core";
 import { parseStrictFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
 import { defaultRuntime, createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
@@ -10,7 +12,6 @@ import { resolveComparableIdentity } from "../identity.js";
 import { addWhatsAppImagePreviewFields } from "../image-preview.js";
 import { maybeResolveWhatsAppQuestionReaction } from "../question-reactions.js";
 import { cacheInboundMessageMeta } from "../quoted-message.js";
-import type { OpenClawConfig } from "../runtime-api.js";
 import { formatError } from "../session.js";
 import { requireWhatsAppInboundAdmission } from "./admission.js";
 import {
@@ -185,7 +186,12 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
     await maybeMarkInboundAsRead(target);
   };
   const messageDebouncer = createWhatsAppInboundMessageDebouncer({
-    debounceMs: options.debounceMs,
+    resolveDebounceMs: () =>
+      resolveInboundDebounceMs({
+        cfg: options.loadConfig?.() ?? options.cfg,
+        channel: "whatsapp",
+        overrideMs: options.debounceMs,
+      }),
     onMessage: options.onMessage,
     shouldDebounce: options.shouldDebounce,
     markRead: maybeMarkInboundAsRead,

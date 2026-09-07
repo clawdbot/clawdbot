@@ -1,5 +1,7 @@
+import { constants as osConstants } from "node:os";
 import process from "node:process";
 import { getWindowsSystem32ExePath } from "../infra/windows-install-roots.js";
+import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
 import { COMMAND_PROCESS_TREE_KILL_GRACE_MS, spawnCommand } from "./exec-spawn.js";
 import { killProcessTree as terminateProcessTree } from "./kill-tree.js";
 
@@ -9,7 +11,6 @@ type TerminationChild = {
   pid?: number;
   exitCode: number | null;
   signalCode: NodeJS.Signals | null;
-  kill(signal?: NodeJS.Signals | number): boolean;
 };
 
 export function createCommandTerminationController(params: {
@@ -17,24 +18,28 @@ export function createCommandTerminationController(params: {
   cancelController: AbortController;
   baseEnv?: NodeJS.ProcessEnv;
   env?: NodeJS.ProcessEnv;
-  killProcessTree?: boolean;
+  processTree?: { mode: "graceful" } | { mode: "force" };
   killGraceMs: number;
+  killSignal?: NodeJS.Signals | number;
   isChildExited: () => boolean;
   isCommandSettled: () => boolean;
-}): { terminate: () => boolean; settle: () => Promise<void> } {
-  let processTreeSettleAt: number | undefined;
+}): {
+  terminate: () => boolean;
+  settle: () => Promise<"normal" | "cooperative" | "forced" | "uncertain">;
+} {
+  let processTreeSettlement: Promise<void> | undefined;
+  let cleanup: "normal" | "cooperative" | "forced" | "uncertain" = "normal";
+  const originalStart =
+    params.processTree && params.child.pid && process.platform !== "win32"
+      ? getFileLockProcessStartTime(params.child.pid)
+      : null;
   let windowsTerminationPromise: Promise<void> | undefined;
 
   const isDirectChildAlive = () =>
     !params.isChildExited() && params.child.exitCode == null && params.child.signalCode == null;
-  const killDirectChild = () => {
-    if (isDirectChildAlive()) {
-      params.child.kill("SIGKILL");
-    }
-  };
-  const spawnTaskkillOrFallback = (args: string[], onSpawnError: () => void) => {
+  const spawnTaskkill = async (args: string[]) => {
     try {
-      const taskkillChild = spawnCommand([getWindowsSystem32ExePath("taskkill.exe"), ...args], {
+      await spawnCommand([getWindowsSystem32ExePath("taskkill.exe"), ...args], {
         baseEnv: params.baseEnv,
         env: params.env,
         forceKillAfterDelay: COMMAND_PROCESS_TREE_KILL_GRACE_MS,
@@ -42,46 +47,27 @@ export function createCommandTerminationController(params: {
         stdio: "ignore",
         timeout: WINDOWS_TASKKILL_TIMEOUT_MS,
       });
-      return taskkillChild.then(
-        (result) => {
-          if (result.failed && result.exitCode === undefined) {
-            onSpawnError();
-          }
-          return result;
-        },
-        () => {
-          onSpawnError();
-          return undefined;
-        },
-      );
     } catch {
-      onSpawnError();
-      return undefined;
+      // Best-effort Windows cleanup still joins every attempted helper.
     }
   };
   const startWindowsTermination = (childPid: number, graceful: boolean): void => {
     const taskkills: Promise<unknown>[] = [];
-    const startTaskkill = (args: string[]) => {
-      const taskkill = spawnTaskkillOrFallback(args, killDirectChild);
-      if (taskkill) {
-        taskkills.push(taskkill);
-      }
-    };
     windowsTerminationPromise = (async () => {
       if (graceful) {
-        startTaskkill(["/PID", String(childPid), "/T"]);
+        taskkills.push(spawnTaskkill(["/PID", String(childPid), "/T"]));
         await new Promise<void>((resolve) => {
           const timer = setTimeout(resolve, params.killGraceMs);
           timer.unref();
         });
         if (isDirectChildAlive()) {
-          startTaskkill(["/PID", String(childPid), "/T", "/F"]);
+          taskkills.push(spawnTaskkill(["/PID", String(childPid), "/T", "/F"]));
         }
       } else {
-        startTaskkill(["/PID", String(childPid), "/T", "/F"]);
+        taskkills.push(spawnTaskkill(["/PID", String(childPid), "/T", "/F"]));
       }
-      // taskkill owns the live PID while it enumerates descendants. Abort Execa
-      // only after every started taskkill settles, avoiding a reused-PID race.
+      // Failed helpers still join here before root cancellation; a sibling taskkill
+      // may still be enumerating descendants through that live PID.
       await Promise.allSettled(taskkills);
       if (!params.isCommandSettled()) {
         params.cancelController.abort();
@@ -97,17 +83,81 @@ export function createCommandTerminationController(params: {
       // target an unrelated tree; stronger ownership requires a spawn-time Job Object.
       return false;
     }
-    if (params.killProcessTree && typeof childPid === "number") {
-      processTreeSettleAt ??= Date.now() + params.killGraceMs;
+    if (params.processTree && typeof childPid === "number") {
       if (process.platform === "win32") {
-        startWindowsTermination(childPid, true);
+        startWindowsTermination(childPid, params.processTree.mode !== "force");
         return true;
       }
-      terminateProcessTree(childPid, {
-        graceMs: params.killGraceMs,
-        detached: true,
+      const force =
+        params.processTree.mode === "force" ||
+        params.killSignal === "SIGKILL" ||
+        params.killSignal === osConstants.signals.SIGKILL;
+      if (processTreeSettlement) {
+        return !force;
+      }
+      cleanup = "cooperative";
+      const groupAlive = () => {
+        try {
+          process.kill(-childPid, 0);
+          return true;
+        } catch (error) {
+          // SAFETY: Node's kill error carries errno; only ESRCH certifies absence.
+          return (error as NodeJS.ErrnoException).code !== "ESRCH";
+        }
+      };
+      const forceAndObserve = async () => {
+        const start = getFileLockProcessStartTime(childPid);
+        if (start !== null && start !== originalStart) {
+          cleanup = "uncertain";
+          if (isDirectChildAlive()) {
+            params.cancelController.abort();
+          }
+          return;
+        }
+        cleanup = "forced";
+        terminateProcessTree(childPid, { force: true, detached: true });
+        const deadline = Date.now() + COMMAND_PROCESS_TREE_KILL_GRACE_MS;
+        // Signal delivery is not exit. Observe only this group; never re-signal a retired PID.
+        while (groupAlive()) {
+          const currentStart = getFileLockProcessStartTime(childPid);
+          const remaining = deadline - Date.now();
+          if ((currentStart !== null && currentStart !== originalStart) || remaining <= 0) {
+            cleanup = "uncertain";
+            return;
+          }
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, Math.min(25, remaining));
+          });
+        }
+      };
+      if (force) {
+        processTreeSettlement = forceAndObserve();
+        return false;
+      }
+      try {
+        process.kill(-childPid, params.killSignal ?? "SIGTERM");
+      } catch (error) {
+        // SAFETY: Node's kill error carries errno; every non-ESRCH result stays uncertain.
+        if ((error as NodeJS.ErrnoException).code !== "ESRCH") {
+          cleanup = "uncertain";
+        }
+      }
+      processTreeSettlement = new Promise<void>((resolve) => {
+        const deadline = Date.now() + params.killGraceMs;
+        const check = () => {
+          if (!groupAlive()) {
+            resolve();
+            return;
+          }
+          if (Date.now() < deadline) {
+            setTimeout(check, Math.min(25, deadline - Date.now()));
+            return;
+          }
+          void forceAndObserve().then(resolve);
+        };
+        check();
       });
-      return false;
+      return true;
     }
     if (!directChildAlive) {
       return false;
@@ -119,29 +169,13 @@ export function createCommandTerminationController(params: {
     return false;
   };
 
-  const settle = async (): Promise<void> => {
+  const settle = async (): Promise<"normal" | "cooperative" | "forced" | "uncertain"> => {
     if (windowsTerminationPromise) {
       await windowsTerminationPromise;
+      return "forced";
     }
-    if (
-      !params.killProcessTree ||
-      processTreeSettleAt === undefined ||
-      typeof params.child.pid !== "number"
-    ) {
-      return;
-    }
-    // A direct child can exit before its descendants finish the graceful
-    // signal. Keep the wrapper pending through that grace window, then ensure
-    // the detached group cannot outlive the completed command result.
-    const remainingMs = Math.max(0, processTreeSettleAt - Date.now());
-    if (remainingMs > 0) {
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, remainingMs);
-      });
-    }
-    if (process.platform !== "win32") {
-      terminateProcessTree(params.child.pid, { force: true, detached: true });
-    }
+    await processTreeSettlement;
+    return cleanup;
   };
 
   return { terminate, settle };

@@ -1,12 +1,16 @@
 // Control UI tests cover mobile pairing setup through the mocked Gateway.
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
+import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "@openclaw/gateway-client/browser";
 import type { Page } from "playwright";
 import qrcode from "qrcode";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { requireRecord, requireString } from "./chat-flow.test-support.ts";
-import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import {
+  createControlUiE2eContextOptions,
+  createControlUiE2eSuite,
+} from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI mobile pairing mocked Gateway E2E",
@@ -18,129 +22,121 @@ const suite = createControlUiE2eSuite({
 // Visual proof rides the behavioral scenario so every captured state is one the
 // assertions above it already proved, at whatever SHA the lane ran.
 const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const uiProofArtifactDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "mobile-pairing",
-);
+let uiProofArtifactDir: string;
+beforeEach(() => {
+  if (captureUiProofEnabled) {
+    uiProofArtifactDir = createControlUiE2eArtifactDir("mobile-pairing");
+  }
+});
 
 async function captureUiProof(page: Page, fileName: string) {
   if (!captureUiProofEnabled) {
     return;
   }
-  await mkdir(uiProofArtifactDir, { recursive: true });
   await page.screenshot({ animations: "disabled", path: path.join(uiProofArtifactDir, fileName) });
 }
 
 suite.define(() => {
   it("opens pairing from a catalog command without creating a transcript turn", async () => {
-    await suite.withPage(
-      {
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 900, width: 1280 },
-      },
-      async ({ page }) => {
-        const baselineText = "Pairing command baseline transcript.";
-        const gateway = await installMockGateway(page, {
-          historyMessages: [
-            {
-              content: [{ text: baselineText, type: "text" }],
-              role: "assistant",
-              timestamp: Date.now(),
-            },
-          ],
-          methodResponses: {
-            "commands.list": {
-              commands: [
-                {
-                  name: "pair",
-                  textAliases: ["/pair"],
-                  description: "Generate setup codes and approve device pairing requests.",
-                  source: "plugin",
-                  scope: "both",
-                  acceptsArgs: true,
-                  clientPresentation: {
-                    when: "no-arguments",
-                    action: { kind: "device-pairing" },
-                  },
-                },
-              ],
-            },
-            "device.pair.list": { paired: [], pending: [] },
+    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      const baselineText = "Pairing command baseline transcript.";
+      const gateway = await installMockGateway(page, {
+        historyMessages: [
+          {
+            content: [{ text: baselineText, type: "text" }],
+            role: "assistant",
+            timestamp: Date.now(),
           },
-          operatorScopes: ["operator.admin"],
-        });
+        ],
+        methodResponses: {
+          "commands.list": {
+            commands: [
+              {
+                name: "pair",
+                textAliases: ["/pair"],
+                description: "Generate setup codes and approve device pairing requests.",
+                source: "plugin",
+                scope: "both",
+                acceptsArgs: true,
+                clientPresentation: {
+                  when: "no-arguments",
+                  action: { kind: "device-pairing" },
+                },
+              },
+            ],
+          },
+          "device.pair.list": { paired: [], pending: [] },
+        },
+        operatorScopes: ["operator.admin"],
+      });
 
-        await page.goto(`${suite.server.baseUrl}chat`);
-        const baseline = page
-          .locator(".chat-group.assistant .chat-text")
-          .getByText(baselineText, { exact: true });
-        await baseline.waitFor();
-        const composer = page.locator(".agent-chat__composer-combobox textarea");
-        await composer.fill("/pa");
-        await gateway.waitForRequest("commands.list");
-        const pairOption = page.getByRole("option").filter({ hasText: "/pair" });
-        await pairOption.waitFor();
-        await pairOption.click();
-        await expect.poll(() => composer.inputValue()).toBe("/pair ");
-        await page.getByRole("button", { name: "Send message" }).click();
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const baseline = page
+        .locator(".chat-group.assistant .chat-text")
+        .getByText(baselineText, { exact: true });
+      await baseline.waitFor();
+      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      await composer.fill("/pa");
+      await gateway.waitForRequest("commands.list");
+      const pairOption = page.getByRole("option").filter({ hasText: "/pair" });
+      await pairOption.waitFor();
+      await pairOption.click();
+      await expect.poll(() => composer.inputValue()).toBe("/pair ");
+      await page.getByRole("button", { name: "Send message" }).click();
 
-        const dialog = page.getByRole("dialog", { name: "Pair a device" });
-        await dialog.waitFor();
-        expect(await gateway.getRequests("chat.send")).toEqual([]);
-        expect(await gateway.getRequests("device.pair.setupCode")).toEqual([]);
-        expect(await baseline.count()).toBe(1);
-        expect(await page.locator(".chat-group.user", { hasText: "/pair" }).count()).toBe(0);
+      const dialog = page.getByRole("dialog", { name: "Pair a device" });
+      await dialog.waitFor();
+      expect(await gateway.getRequests("chat.send")).toEqual([]);
+      expect(await gateway.getRequests("device.pair.setupCode")).toEqual([]);
+      expect(await baseline.count()).toBe(1);
+      expect(await page.locator(".chat-group.user", { hasText: "/pair" }).count()).toBe(0);
 
-        await page.locator(".device-pair-setup__close").click();
-        await dialog.waitFor({ state: "hidden" });
-        await page.reload();
-        await baseline.waitFor();
-        expect(await page.locator(".chat-group.user", { hasText: "/pair" }).count()).toBe(0);
-        expect(await gateway.getRequests("chat.send")).toEqual([]);
+      await page.locator(".device-pair-setup__close").click();
+      await dialog.waitFor({ state: "hidden" });
+      await page.reload();
+      await baseline.waitFor();
+      expect(await page.locator(".chat-group.user", { hasText: "/pair" }).count()).toBe(0);
+      expect(await gateway.getRequests("chat.send")).toEqual([]);
 
-        await composer.fill("/pair status");
-        await page.getByRole("button", { name: "Send message" }).click();
-        const remote = await gateway.waitForRequest("chat.send");
-        const remoteParams = requireRecord(remote.params);
-        expect(remoteParams).toEqual(expect.objectContaining({ message: "/pair status" }));
-        const remoteReply = "Pair status completed remotely.";
-        await gateway.emitChatFinal({
-          runId: requireString(remoteParams.idempotencyKey, "pair status run id"),
-          text: remoteReply,
-        });
-        await page
-          .locator(".chat-group.assistant .chat-text")
-          .getByText(remoteReply, { exact: true })
-          .waitFor();
-        await expect.poll(() => page.locator(".chat-queue").count()).toBe(0);
+      await composer.fill("/pair status");
+      await page.getByRole("button", { name: "Send message" }).click();
+      const remote = await gateway.waitForRequest("chat.send");
+      const remoteParams = requireRecord(remote.params);
+      expect(remoteParams).toEqual(expect.objectContaining({ message: "/pair status" }));
+      const remoteReply = "Pair status completed remotely.";
+      await gateway.emitChatFinal({
+        runId: requireString(remoteParams.idempotencyKey, "pair status run id"),
+        text: remoteReply,
+      });
+      await page
+        .locator(".chat-group.assistant .chat-text")
+        .getByText(remoteReply, { exact: true })
+        .waitFor();
+      await expect.poll(() => page.locator(".chat-queue").count()).toBe(0);
 
-        await gateway.setMethodResponse("commands.list", {
-          commands: [
-            {
-              name: "pair",
-              textAliases: ["/pair"],
-              description: "Generate setup codes and approve device pairing requests.",
-              source: "plugin",
-              scope: "both",
-              acceptsArgs: true,
-            },
-          ],
-        });
-        await page.reload();
-        await baseline.waitFor();
-        await composer.fill("/pa");
-        await expect.poll(async () => (await gateway.getRequests("commands.list")).length).toBe(1);
-        await page.getByRole("option").filter({ hasText: "/pair" }).click();
-        await page.getByRole("button", { name: "Send message" }).click();
-        await expect.poll(async () => (await gateway.getRequests("chat.send")).length).toBe(1);
-        expect((await gateway.getRequests("chat.send")).at(-1)?.params).toEqual(
-          expect.objectContaining({ message: "/pair" }),
-        );
-      },
-    );
+      await gateway.setMethodResponse("commands.list", {
+        commands: [
+          {
+            name: "pair",
+            textAliases: ["/pair"],
+            description: "Generate setup codes and approve device pairing requests.",
+            source: "plugin",
+            scope: "both",
+            acceptsArgs: true,
+          },
+        ],
+      });
+      await page.reload();
+      await baseline.waitFor();
+      await composer.fill("/pa");
+      await expect.poll(async () => (await gateway.getRequests("commands.list")).length).toBe(1);
+      await page.getByRole("option").filter({ hasText: "/pair" }).click();
+      await page.getByRole("button", { name: "Send message" }).click();
+      await expect.poll(async () => (await gateway.getRequests("chat.send")).length).toBe(1);
+      expect((await gateway.getRequests("chat.send")).at(-1)?.params).toEqual(
+        expect.objectContaining({ message: "/pair" }),
+      );
+    });
   });
 
   it("retires exact setup credentials across success, expiry, regeneration, and errors", async () => {
@@ -203,7 +199,18 @@ suite.define(() => {
         expect(dialogBox?.width).toBeLessThanOrEqual(390);
         await captureUiProof(page, "01-mobile-access-selection.png");
 
+        const helpDocumentUrl = "https://docs.openclaw.ai/channels/pairing";
+        const helpUrl = `${helpDocumentUrl}#pair-from-the-control-ui-recommended`;
+        // This mocked scenario owns navigation, not docs-site availability. Context
+        // routing also covers the popup's first request, which page routing misses.
+        await page.context().route(helpDocumentUrl, (route) =>
+          route.fulfill({
+            contentType: "text/html",
+            body: "<!doctype html><title>Pairing help</title>",
+          }),
+        );
         const help = page.getByRole("link", { name: "Pairing help (opens in a new tab)" });
+        expect(await help.getAttribute("href")).toBe(helpUrl);
         expect(await help.getAttribute("target")).toBe("_blank");
         expect((await help.getAttribute("rel"))?.split(" ")).toEqual(
           expect.arrayContaining(["noopener", "noreferrer"]),
@@ -214,8 +221,9 @@ suite.define(() => {
         await help.hover();
         await captureUiProof(page, "10-mobile-pairing-help-focus-hover.png");
         const [helpPopup] = await Promise.all([page.waitForEvent("popup"), help.click()]);
-        await helpPopup.waitForURL(/docs\.openclaw\.ai\/channels\/pairing/u);
-        expect(helpPopup.url()).toContain("docs.openclaw.ai/channels/pairing");
+        await helpPopup.waitForURL(helpUrl);
+        expect(helpPopup.url()).toBe(helpUrl);
+        expect(await helpPopup.title()).toBe("Pairing help");
         await helpPopup.close();
 
         await gateway.deferNext("device.pair.setupCode");
@@ -389,6 +397,19 @@ suite.define(() => {
           "device.pair.setupCode",
           setupResult("setup-recovered", "full"),
         );
+        await page.getByRole("button", { name: "Reload" }).click();
+        await qr.waitFor();
+
+        await page.clock.install();
+        await gateway.deferNext("device.pair.setupCode");
+        await page.getByRole("button", { name: "New code" }).click();
+        await page.clock.fastForward(DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS + 1);
+        await page.clock.runFor(100);
+        expect(
+          await error
+            .getByText("gateway request timed out after 30000ms: device.pair.setupCode")
+            .isVisible(),
+        ).toBe(true);
         await page.getByRole("button", { name: "Reload" }).click();
         await qr.waitFor();
         await page.locator(".device-pair-setup__close").click();

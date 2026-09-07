@@ -1,10 +1,12 @@
 // Register maintenance tests cover maintenance command registration in the CLI program.
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ExitError } from "../../runtime.js";
 import { registerMaintenanceCommands } from "./register.maintenance.js";
 
 const mocks = vi.hoisted(() => ({
   doctorCommand: vi.fn(),
+  triageCommand: vi.fn(),
   dashboardCommand: vi.fn(),
   resetCommand: vi.fn(),
   uninstallCommand: vi.fn(),
@@ -19,6 +21,7 @@ const mocks = vi.hoisted(() => ({
 
 const {
   doctorCommand,
+  triageCommand,
   dashboardCommand,
   resetCommand,
   uninstallCommand,
@@ -48,6 +51,10 @@ vi.mock("../../commands/doctor.js", () => ({
   doctorCommand: mocks.doctorCommand,
 }));
 
+vi.mock("../../commands/triage.js", () => ({
+  triageCommand: mocks.triageCommand,
+}));
+
 vi.mock("../../commands/dashboard.js", () => ({
   dashboardCommand: mocks.dashboardCommand,
 }));
@@ -64,7 +71,8 @@ vi.mock("../../commands/doctor-lint.js", () => ({
   runDoctorLintCli: mocks.runDoctorLintCli,
 }));
 
-vi.mock("../../runtime.js", () => ({
+vi.mock("../../runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../runtime.js")>()),
   defaultRuntime: mocks.runtime,
 }));
 
@@ -84,7 +92,14 @@ describe("registerMaintenanceCommands doctor action", () => {
   async function runMaintenanceCli(args: string[]) {
     const program = new Command();
     registerMaintenanceCommands(program);
-    await program.parseAsync(args, { from: "user" });
+    try {
+      await program.parseAsync(args, { from: "user" });
+    } catch (error) {
+      if (!(error instanceof ExitError)) {
+        throw error;
+      }
+      runtime.exit(error.code);
+    }
   }
 
   beforeEach(() => {
@@ -154,15 +169,32 @@ describe("registerMaintenanceCommands doctor action", () => {
     expect(runtime.exit).toHaveBeenCalledWith(2);
   });
 
-  it("maps --fix to repair=true", async () => {
+  it.each([
+    { args: [], repair: false, force: false, yes: false },
+    { args: ["--fix"], repair: true, force: false, yes: false },
+    { args: ["--force"], repair: false, force: true, yes: false },
+    { args: ["--fix", "--force"], repair: true, force: true, yes: false },
+    { args: ["--repair", "--force"], repair: true, force: true, yes: false },
+    { args: ["--yes", "--force"], repair: false, force: true, yes: true },
+  ])("forwards repair and force independently for $args", async ({ args, repair, force, yes }) => {
     doctorCommand.mockResolvedValue(undefined);
 
-    await runMaintenanceCli(["doctor", "--fix"]);
+    await runMaintenanceCli(["doctor", ...args]);
 
     expect(doctorCommand).toHaveBeenCalledTimes(1);
     const [runtimeArg, options] = commandCall(doctorCommand);
     expect(runtimeArg).toBe(runtime);
-    expect(options.repair).toBe(true);
+    expect(options).toMatchObject({ repair, force, yes });
+  });
+
+  it("explains the force option without promising service rewrites during repair", () => {
+    const program = new Command();
+    registerMaintenanceCommands(program);
+    const doctor = program.commands.find((command) => command.name() === "doctor");
+    const help = doctor?.helpInformation().replace(/\s+/gu, " ");
+
+    expect(help).toContain("Allow aggressive repair choices");
+    expect(help).toContain("(with --fix, preserves service definitions)");
   });
 
   it("passes session sqlite options to doctor command", async () => {
@@ -391,6 +423,28 @@ describe("registerMaintenanceCommands doctor action", () => {
   });
 
   it.each(
+    [
+      { name: "severity threshold", selector: ["--severity-min", "error"] },
+      { name: "all checks", selector: ["--all"] },
+      { name: "skipped check", selector: ["--skip", "core/example"] },
+      { name: "selected check", selector: ["--only", "core/example"] },
+    ].flatMap(({ name, selector }) => [
+      { name: `${name} after JSON`, args: ["--json", ...selector] },
+      { name: `${name} before JSON`, args: [...selector, "--json"] },
+    ]),
+  )("rejects lint-only $name without explicit lint mode", async ({ args }) => {
+    const message = "doctor lint options require --lint. Use `openclaw doctor --lint ...`.";
+
+    await runMaintenanceCli(["doctor", ...args]);
+
+    expect(doctorCommand).not.toHaveBeenCalled();
+    expect(runDoctorLintCli).not.toHaveBeenCalled();
+    expect(runtime.writeJson).toHaveBeenCalledWith(jsonFailure(message));
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.exit).toHaveBeenCalledWith(2);
+  });
+
+  it.each(
     DOCTOR_MUTATION_OPTIONS.flatMap((mutationOption) => [
       { mode: "explicit lint", args: ["--lint", mutationOption], mutationOption },
       {
@@ -601,6 +655,77 @@ describe("registerMaintenanceCommands doctor action", () => {
     expect(options.noOpen).toBe(true);
     expect(options.json).toBe(true);
   });
+
+  it.each([
+    { args: [], options: { json: false, noExport: false, run: false } },
+    { args: ["--json", "--no-export"], options: { json: true, noExport: true, run: false } },
+    { args: ["--run"], options: { json: false, noExport: false, run: true } },
+    {
+      args: ["--non-interactive", "--update-result", "/tmp/update-failure.json"],
+      options: {
+        json: false,
+        noExport: false,
+        run: false,
+        nonInteractive: true,
+        updateResult: "/tmp/update-failure.json",
+      },
+    },
+    ...["claude", "codex", "opencode", "pi"].map((agent) => ({
+      args: ["--agent", agent],
+      options: { json: false, noExport: false, run: false, agent },
+    })),
+  ])("forwards triage options for $args", async ({ args, options }) => {
+    triageCommand.mockResolvedValue(undefined);
+
+    await runMaintenanceCli(["triage", ...args]);
+
+    expect(triageCommand).toHaveBeenCalledWith(runtime, options);
+  });
+
+  it("rejects embedded execution in triage JSON mode", async () => {
+    await runMaintenanceCli(["triage", "--json", "--run"]);
+
+    expect(triageCommand).not.toHaveBeenCalled();
+    expect(runtime.writeJson).toHaveBeenCalledWith(
+      jsonFailure("triage --json cannot be combined with --run."),
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(2);
+  });
+
+  it("rejects embedded execution in explicitly non-interactive triage", async () => {
+    await runMaintenanceCli(["triage", "--non-interactive", "--run"]);
+
+    expect(triageCommand).not.toHaveBeenCalled();
+    expect(runtime.error).toHaveBeenCalledWith(
+      "triage --non-interactive cannot be combined with --run.",
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(2);
+  });
+
+  it("rejects conflicting embedded and external triage routes", async () => {
+    await runMaintenanceCli(["triage", "--run", "--agent", "codex"]);
+
+    expect(triageCommand).not.toHaveBeenCalled();
+    expect(runtime.error).toHaveBeenCalledWith("triage --run cannot be combined with --agent.");
+    expect(runtime.exit).toHaveBeenCalledWith(2);
+  });
+
+  it.each([false, true])(
+    "rejects an unknown triage agent before diagnostics (json=%s)",
+    async (json) => {
+      await runMaintenanceCli(["triage", "--agent", "unknown-agent", ...(json ? ["--json"] : [])]);
+
+      expect(triageCommand).not.toHaveBeenCalled();
+      const message = "Invalid --agent. Use claude, codex, opencode, or pi.";
+      if (json) {
+        expect(runtime.writeJson).toHaveBeenCalledWith(jsonFailure(message));
+        expect(runtime.error).not.toHaveBeenCalled();
+      } else {
+        expect(runtime.error).toHaveBeenCalledWith(message);
+      }
+      expect(runtime.exit).toHaveBeenCalledWith(2);
+    },
+  );
 
   it("passes reset options to reset command", async () => {
     resetCommand.mockResolvedValue(undefined);

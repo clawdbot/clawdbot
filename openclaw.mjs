@@ -7,7 +7,30 @@ import module from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { isSupportedOpenClawNodeVersion } from "./node-version.mjs";
+
+const isSourceCheckoutLauncher = () =>
+  existsSync(new URL("./.git", import.meta.url)) ||
+  existsSync(new URL("./src/entry.ts", import.meta.url));
+
+if (
+  !isSourceCheckoutLauncher() &&
+  (existsSync(new URL("./.openclaw-lifecycle-pending", import.meta.url)) ||
+    existsSync(new URL("./dist/openclaw-install-guard", import.meta.url)))
+) {
+  try {
+    const { completePendingPackageLifecycle } = await import("./dist/infra/package-lifecycle.js");
+    await completePendingPackageLifecycle({
+      packageRoot: fileURLToPath(new URL("./", import.meta.url)),
+    });
+  } catch (error) {
+    process.stderr.write(
+      `openclaw: package lifecycle is incomplete. Reinstall with package scripts enabled, then retry. ${error instanceof Error ? error.message : String(error)}\n`,
+    );
+    process.exit(1);
+  }
+}
+
+const { isSupportedOpenClawNodeVersion } = await import("./node-version.mjs");
 
 const RECOMMENDED_NODE_MAJOR = 26;
 const SUPPORTED_NODE_RANGE = ">=22.22.3 <23, >=24.15.0 <25, or >=25.9.0";
@@ -51,10 +74,6 @@ ensureSupportedRuntimeVersion();
 if (tryOutputLauncherVersion(process.argv)) {
   process.exit(0);
 }
-
-const isSourceCheckoutLauncher = () =>
-  existsSync(new URL("./.git", import.meta.url)) ||
-  existsSync(new URL("./src/entry.ts", import.meta.url));
 
 const isNodeCompileCacheDisabled = () => process.env.NODE_DISABLE_COMPILE_CACHE !== undefined;
 const isNodeCompileCacheRequested = () =>
@@ -258,30 +277,11 @@ const respawnWithPackagedCompileCacheIfNeeded = () => {
   };
   return runRespawnedChild(
     process.execPath,
-    [...process.execArgv, fileURLToPath(import.meta.url), ...process.argv.slice(2)],
+    // pnpm's lexical hash link owns the install; its realpath is only shared package content.
+    [...process.execArgv, process.argv[1], ...process.argv.slice(2)],
     env,
   );
 };
-
-// Codex owns the relay timeout by PID. Keep the launcher as that exact process
-// so a timeout cannot strand a compile-cache respawn child.
-const waitingForCompileCacheRespawn =
-  !(process.platform !== "win32" && isNativeHookRelayInvocation(process.argv)) &&
-  (respawnWithoutCompileCacheIfNeeded() || respawnWithPackagedCompileCacheIfNeeded());
-
-// https://nodejs.org/api/module.html#module-compile-cache
-if (
-  !waitingForCompileCacheRespawn &&
-  module.enableCompileCache &&
-  !isNodeCompileCacheDisabled() &&
-  !isSourceCheckoutLauncher()
-) {
-  try {
-    module.enableCompileCache(resolvePackagedCompileCacheDirectory());
-  } catch {
-    // Ignore errors
-  }
-}
 
 const getErrorMessage = (err) =>
   err && typeof err === "object" && "message" in err && typeof err.message === "string"
@@ -298,7 +298,9 @@ const isDirectModuleNotFoundError = (err, specifier) => {
     message.includes(`Cannot find module "${specifier}"`);
   const launcherPath = fileURLToPath(import.meta.url);
   const bunLauncherImporterMiss =
-    message.includes(` from '${launcherPath}'`) || message.includes(` from "${launcherPath}"`);
+    message.includes(` from '${launcherPath}'`) ||
+    message.includes(` from "${launcherPath}"`) ||
+    message.includes(` imported from ${launcherPath}`);
 
   const expectedUrl = new URL(specifier, import.meta.url);
   const expectedPath = fileURLToPath(expectedUrl);
@@ -425,6 +427,24 @@ const consumeLauncherRootOptionToken = (args, index) => {
   return 0;
 };
 
+// Mirror the entry's foreground Gmail policy before any built modules can load.
+// A compile-cache wrapper would kill its owner before descendant cleanup finishes.
+const isForegroundGmailRunInvocation = (argv) => {
+  const args = argv.slice(2);
+  const commandPath = [];
+  for (let index = 0; index < args.length && commandPath.length < 3; index += 1) {
+    const consumed = consumeLauncherRootOptionToken(args, index);
+    if (consumed > 0) {
+      index += consumed - 1;
+    } else if (!args[index] || args[index].startsWith("-")) {
+      break;
+    } else {
+      commandPath.push(args[index]);
+    }
+  }
+  return commandPath.join(" ") === "webhooks gmail run";
+};
+
 const hasLauncherContainerTarget = (argv) => {
   if (normalizeLauncherMetadataValue(process.env.OPENCLAW_CONTAINER)) {
     return true;
@@ -457,37 +477,29 @@ const resolvePrecomputedCommandHelpByName = (commandName) => {
 
 const resolvePrecomputedCommandHelp = (argv) => {
   const args = argv.slice(2);
-  let commandHelp = null;
-  let sawHelp = false;
-
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
     if (!arg || arg === "--") {
       return null;
     }
-    if (!commandHelp) {
-      const consumed = consumeLauncherRootOptionToken(args, index);
-      if (consumed > 0) {
-        index += consumed - 1;
-        continue;
-      }
-      if (arg.startsWith("-")) {
-        return null;
-      }
-      commandHelp = resolvePrecomputedCommandHelpByName(arg);
-      if (!commandHelp) {
-        return null;
-      }
+    // The runtime entry owns profile validation and config projection before cached help.
+    if (arg === "--dev" || arg === "--profile" || arg.startsWith("--profile=")) {
+      return null;
+    }
+    const consumed = consumeLauncherRootOptionToken(args, index);
+    if (consumed > 0) {
+      index += consumed - 1;
       continue;
     }
-    if (LAUNCHER_HELP_FLAGS.has(arg)) {
-      sawHelp = true;
-      continue;
-    }
-    return null;
+    const commandHelp = resolvePrecomputedCommandHelpByName(arg);
+    const helpFlags = args.slice(index + 1);
+    return commandHelp &&
+      helpFlags.length > 0 &&
+      helpFlags.every((flag) => LAUNCHER_HELP_FLAGS.has(flag))
+      ? commandHelp
+      : null;
   }
-
-  return commandHelp && sawHelp ? commandHelp : null;
+  return null;
 };
 
 const isHelpFastPathDisabled = () =>
@@ -507,7 +519,7 @@ const resolveLauncherHomeDir = () => {
   const explicit = normalizeLauncherHomeValue(process.env.OPENCLAW_HOME);
   const rawHome =
     explicit && (explicit === "~" || explicit.startsWith("~/") || explicit.startsWith("~\\"))
-      ? explicit.replace(/^~(?=$|[\\/])/, resolveLauncherOsHomeDir())
+      ? explicit.replace(/^~(?=$|[\\/])/, () => resolveLauncherOsHomeDir())
       : (explicit ?? resolveLauncherOsHomeDir());
   return path.resolve(rawHome);
 };
@@ -723,7 +735,7 @@ const tryOutputBareRootHelp = async () => {
   if (!isBareRootHelpInvocation(process.argv)) {
     return false;
   }
-  if (shouldDeferRootHelpToRuntimeEntry()) {
+  if (hasLauncherContainerTarget(process.argv) || shouldDeferRootHelpToRuntimeEntry()) {
     return false;
   }
   const precomputed = loadPrecomputedHelpText("rootHelpText");
@@ -766,6 +778,27 @@ const tryOutputPrecomputedCommandHelp = () => {
   process.stdout.write(precomputed);
   return true;
 };
+
+// Codex owns the relay timeout by PID. Keep the launcher as that exact process
+// so a timeout cannot strand a compile-cache respawn child.
+const waitingForCompileCacheRespawn =
+  !isForegroundGmailRunInvocation(process.argv) &&
+  !(process.platform !== "win32" && isNativeHookRelayInvocation(process.argv)) &&
+  (respawnWithoutCompileCacheIfNeeded() || respawnWithPackagedCompileCacheIfNeeded());
+
+// https://nodejs.org/api/module.html#module-compile-cache
+if (
+  !waitingForCompileCacheRespawn &&
+  module.enableCompileCache &&
+  !isNodeCompileCacheDisabled() &&
+  !isSourceCheckoutLauncher()
+) {
+  try {
+    module.enableCompileCache(resolvePackagedCompileCacheDirectory());
+  } catch {
+    // Ignore errors
+  }
+}
 
 if (!waitingForCompileCacheRespawn) {
   if (!isHelpFastPathDisabled() && (await tryOutputBareRootHelp())) {

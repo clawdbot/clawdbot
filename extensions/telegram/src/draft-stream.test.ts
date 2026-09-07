@@ -563,8 +563,7 @@ describe("createTelegramDraftStream", () => {
           },
         });
         // Reposition: rewind for a new message; the old one's delete is deferred.
-        const superseded = stream.rotateToNewMessageDeferringDelete();
-        expect(superseded).toBe(17);
+        stream.rotateToNewMessageDeferringDelete();
 
         // The replacement lands before detached cleanup, so the old message
         // still owns the single-use reply and the replacement must omit it.
@@ -601,7 +600,7 @@ describe("createTelegramDraftStream", () => {
     const api = createMockDraftApi();
     const stream = createThreadedDraftStream(api, { id: 42, scope: "dm" });
 
-    expect(stream.rotateToNewMessageDeferringDelete()).toBeUndefined();
+    stream.rotateToNewMessageDeferringDelete();
     expect(api.deleteMessage).not.toHaveBeenCalled();
   });
 
@@ -2001,6 +2000,41 @@ describe("draft stream initial message debounce", () => {
   });
 
   describe("minInitialChars threshold", () => {
+    it.each([false, true])(
+      "sends short complete progress and resumes after clear (richMessages=%s)",
+      async (richMessages) => {
+        const api = createMockApi();
+        const stream = createDraftStream(api, { richMessages, minInitialChars: 30 });
+        const send = richMessages ? api.raw.sendRichMessage : api.sendMessage;
+        const progress = (text: string) => ({
+          text,
+          complete: true as const,
+          ...(richMessages ? { richMessage: buildTelegramRichMarkdown(text) } : {}),
+        });
+
+        stream.updatePreview(progress("0/1 complete"));
+        await stream.flush();
+        expect(send).toHaveBeenCalledOnce();
+
+        await stream.clear();
+        stream.forceNewMessage();
+        stream.update("Hi");
+        await stream.flush();
+        expect(send).toHaveBeenCalledOnce();
+
+        stream.updatePreview(progress("1/1 complete"));
+        await stream.flush();
+        expect(send).toHaveBeenCalledTimes(2);
+
+        stream.update("Done");
+        await stream.stop();
+        const edits = richMessages ? api.raw.editMessageText : api.editMessageText;
+        expect(edits).toHaveBeenCalled();
+        await vi.runOnlyPendingTimersAsync();
+        expect(api.deleteMessage).toHaveBeenCalledOnce();
+      },
+    );
+
     it("does not send first message below threshold", async () => {
       const api = createMockApi();
       const stream = createDebouncedStream(api);

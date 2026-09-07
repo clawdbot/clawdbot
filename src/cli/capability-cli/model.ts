@@ -16,7 +16,7 @@ import {
   listProfilesForProvider,
   loadAuthProfileStoreForRuntime,
 } from "../../agents/auth-profiles.js";
-import { updateAuthProfileStoreWithLock } from "../../agents/auth-profiles/store.js";
+import { updateAuthProfileStoreWithLock } from "../../agents/auth-profiles/store-runtime.js";
 import { buildExplicitSessionIdSessionKey } from "../../agents/command/session.js";
 import { DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import { canonicalizeCaseOnlyCatalogModelRef } from "../../agents/model-selection.js";
@@ -39,11 +39,9 @@ import { runCommandWithRuntime } from "../cli-utils.js";
 import { getModelsCommandSecretTargetIds } from "../command-secret-targets.js";
 import { collectOption } from "../program/helpers.js";
 import type { CapabilityEnvelope, CapabilityTransport } from "./metadata.js";
+import { emitJsonOrText, formatEnvelopeForText, providerSummaryText } from "./output.js";
 import {
-  emitJsonOrText,
-  formatEnvelopeForText,
   providerHasGenericConfig,
-  providerSummaryText,
   requireProviderModelOverride,
   resolveCapabilityAgentOption,
   resolveCapabilityProviderAgentId,
@@ -53,7 +51,12 @@ import {
 } from "./shared.js";
 
 const LOCAL_MODEL_RUN_SYSTEM_PROMPT = "You are a personal assistant running inside OpenClaw.";
-const HEIC_MODEL_RUN_MIMES = new Set(["image/heic", "image/heif"]);
+const HEIC_MODEL_RUN_MIMES = new Set([
+  "image/heic",
+  "image/heic-sequence",
+  "image/heif",
+  "image/heif-sequence",
+]);
 
 async function loadModelCatalogForInspection(cfg: OpenClawConfig, agentId?: string) {
   const prepared = await loadPreparedModelCatalog({ config: cfg, agentId, readOnly: true });

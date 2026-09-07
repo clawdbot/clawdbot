@@ -2,10 +2,13 @@
 summary: "Adds xAI model provider support to OpenClaw."
 read_when:
   - You are installing, configuring, or auditing the xai plugin
-title: "xAI plugin"
+title: "xAI plugin reference"
 ---
 
-# xAI plugin
+<!-- Generated file. Do not edit by hand.
+Run `pnpm plugins:inventory:gen` to rebuild it. Hand-written text survives only
+between the openclaw-plugin-reference:manual-start and
+openclaw-plugin-reference:manual-end comment markers. -->
 
 Adds xAI model provider support to OpenClaw.
 
@@ -16,7 +19,8 @@ Adds xAI model provider support to OpenClaw.
 
 ## Surface
 
-providers: `xai`; contracts: `imageGenerationProviders`, `mediaUnderstandingProviders`, `realtimeTranscriptionProviders`, `realtimeVoiceProviders`, `speechProviders`, `tools`, `videoGenerationProviders`, `webSearchProviders`
+- Providers: `xai`
+- Contracts: `imageGenerationProviders`, `mediaUnderstandingProviders`, `realtimeTranscriptionProviders`, `realtimeVoiceProviders`, `speechProviders`, `tools`, `usageProviders`, `videoGenerationProviders`, `webSearchProviders`
 
 ## Related docs
 

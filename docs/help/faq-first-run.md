@@ -14,6 +14,42 @@ and troubleshooting see the main [FAQ](/help/faq).
 ## Quick start and first-run setup
 
 <AccordionGroup>
+  <Accordion title="Recommended way to install and set up OpenClaw">
+    ```bash
+    curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash
+    ```
+
+    The installer starts guided onboarding for you, so there is no separate
+    onboarding command to run. When onboarding finishes, press **Ctrl+C** to
+    stop the foreground Gateway and install the background service:
+
+    ```bash
+    openclaw gateway install
+    ```
+
+    Prefer the classic step-by-step wizard and a service install in one
+    command? Run `openclaw onboard --install-daemon` instead of the two
+    commands above. That flag selects the classic flow, so you do not see the
+    guided **Quick start** and **Custom setup** choice.
+
+    From source (contributors/dev):
+
+    ```bash
+    git clone https://github.com/openclaw/openclaw.git
+    cd openclaw
+    pnpm install
+    pnpm build
+    pnpm ui:build
+    openclaw onboard
+    ```
+
+    No global install yet? Run `pnpm openclaw onboard` instead. If Control UI assets are
+    missing, onboarding tries to build them itself, falling back to `pnpm ui:build`.
+
+  </Accordion>
+
+<a id="i-am-stuck" />
+
   <Accordion title="I am stuck, fastest way to get unstuck">
     Use a local AI agent that can **see your machine**. Most "I'm stuck" cases are
     **local config or environment issues** a remote helper cannot inspect, so this beats
@@ -53,41 +89,6 @@ and troubleshooting see the main [FAQ](/help/faq).
 
   </Accordion>
 
-  <Accordion title="Heartbeat keeps skipping. What do the skip reasons mean?">
-    | Skip reason | Meaning |
-    | --- | --- |
-    | `quiet-hours` | Outside the configured active-hours window |
-    | `empty-heartbeat-file` | Heartbeat monitor scratch exists but only has blank, comment, header, fence, or empty-checklist scaffolding |
-    | `alerts-disabled` | All heartbeat visibility is off (`showOk`, `showAlerts`, and `useIndicator` all disabled) |
-
-    Older heartbeat `tasks:` blocks migrate to independently scheduled cron jobs with `openclaw doctor --fix`.
-
-    Docs: [Heartbeat](/gateway/heartbeat), [Automation](/automation).
-
-  </Accordion>
-
-  <Accordion title="Recommended way to install and set up OpenClaw">
-    ```bash
-    curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash
-    openclaw onboard --install-daemon
-    ```
-
-    From source (contributors/dev):
-
-    ```bash
-    git clone https://github.com/openclaw/openclaw.git
-    cd openclaw
-    pnpm install
-    pnpm build
-    pnpm ui:build
-    openclaw onboard
-    ```
-
-    No global install yet? Run `pnpm openclaw onboard` instead. If Control UI assets are
-    missing, onboarding tries to build them itself, falling back to `pnpm ui:build`.
-
-  </Accordion>
-
   <Accordion title="How do I open the dashboard after onboarding?">
     Onboarding opens your browser to a clean (non-tokenized) dashboard URL right after
     setup and prints the link in the summary. Keep that tab open; if it did not launch,
@@ -114,6 +115,19 @@ and troubleshooting see the main [FAQ](/help/faq).
 
   </Accordion>
 
+  <Accordion title="Heartbeat keeps skipping. What do the skip reasons mean?">
+    | Skip reason | Meaning |
+    | --- | --- |
+    | `quiet-hours` | Outside the configured active-hours window |
+    | `empty-heartbeat-file` | Heartbeat monitor scratch exists but only has blank, comment, header, fence, or empty-checklist scaffolding |
+    | `alerts-disabled` | All heartbeat visibility is off (`showOk`, `showAlerts`, and `useIndicator` all disabled) |
+
+    Older heartbeat `tasks:` blocks migrate to independently scheduled cron jobs with `openclaw doctor --fix`.
+
+    Docs: [Heartbeat](/gateway/heartbeat), [Automation](/automation).
+
+  </Accordion>
+
   <Accordion title="Why are there two exec approval configs for chat approvals?">
     They control different layers:
 
@@ -126,7 +140,7 @@ and troubleshooting see the main [FAQ](/help/faq).
     You rarely need both:
 
     - If the chat already supports commands and replies, same-chat `/approve` works through the shared path.
-    - When a supported native channel can infer approvers safely, OpenClaw auto-enables DM-first native approvals if `channels.<channel>.execApprovals.enabled` is unset or `"auto"`.
+    - For supported native clients, set `channels.<channel>.execApprovals.enabled: "auto"` or `true` and configure approvers or the channel's supported owner identity. Discord and Slack require explicit enablement; Telegram treats unset as `"auto"`.
     - When native approval cards/buttons are available, that UI is primary; only mention a manual `/approve` command if the tool result says chat approvals are unavailable.
     - Use `approvals.exec` only when prompts must also reach other chats or explicit ops rooms.
     - Use `channels.<channel>.execApprovals.target: "channel"` or `"both"` only when you want approval prompts posted back into the originating room/topic.
@@ -138,8 +152,8 @@ and troubleshooting see the main [FAQ](/help/faq).
   </Accordion>
 
   <Accordion title="What runtime do I need?">
-    Node **22.22.3+**, **24.15+**, or **25.9+** is required (Node 26 recommended). `pnpm` is the repo package manager.
-    Bun can install dependencies and run package scripts, but it cannot run the OpenClaw CLI or Gateway because it lacks `node:sqlite`.
+    Node **22.22.3+**, **24.15+**, or **25.9+** is the primary and default runtime (Node 26 recommended). `pnpm` is the repo package manager.
+    Bun 1.4+ builds with WAL-reset-safe `node:sqlite` can run the CLI, Gateway, and managed node host as an explicit opt-in.
   </Accordion>
 
   <Accordion title="Does it run on Raspberry Pi?">
@@ -181,7 +195,8 @@ and troubleshooting see the main [FAQ](/help/faq).
     That screen depends on the Gateway being reachable and authenticated. The TUI also sends
     "Wake up, my friend!" automatically on first hatch when a model provider is configured. If
     you skipped model/auth setup, onboarding shows a "Model auth missing" note and opens the
-    TUI without sending anything — add a provider with `openclaw configure --section model`.
+    TUI without sending anything — add a provider by running `openclaw onboard` again.
+    That is the one command for changing the model provider or its authentication.
     If you see the wake-up line with **no reply** and tokens stay at 0, the agent never ran.
 
     1. Restart the Gateway:
@@ -329,7 +344,7 @@ and troubleshooting see the main [FAQ](/help/faq).
     The wizard shows this timeline up front. Skip optional steps and return later with
     `openclaw configure`.
 
-    Hanging? See [I am stuck](#quick-start-and-first-run-setup) above.
+    Hanging? See [I am stuck](#i-am-stuck) above.
 
   </Accordion>
 
@@ -465,19 +480,30 @@ and troubleshooting see the main [FAQ](/help/faq).
   </Accordion>
 
   <Accordion title="What does onboarding actually do?">
-    `openclaw onboard` is the recommended setup path. In **local mode** it walks through:
+    `openclaw onboard` is the recommended setup path. On a fresh local install it
+    offers two lanes after a one-line pointer to the [security guide](/gateway/security):
 
-    1. **Model/Auth** - provider OAuth, API keys, or manual auth (including local options like LM Studio); pick a default model.
-    2. **Workspace** - location + bootstrap files.
-    3. **Gateway** - port, bind address, auth mode, Tailscale exposure.
-    4. **Channels** - built-in and official plugin chat channels: iMessage, Discord, Feishu, Google Chat, Mattermost, Microsoft Teams, QQ Bot, Signal, Slack, Telegram, WhatsApp, and more.
-    5. **Web search** - configures an optional search provider.
-    6. **Skills** - installs recommended skills and optional dependencies.
-    7. **Daemon** - LaunchAgent (macOS), systemd user unit (Linux/WSL2), or native Windows Scheduled Task.
-    8. **Health check** - starts the Gateway and verifies it is running.
+    - **Quick start** detects the AI access you already have, waits for you to
+      choose a connection, verifies that one choice with a real completion,
+      prepares the agent workspace, and then starts the Gateway in the
+      foreground and opens the browser dashboard. It uses the default agent
+      name `main` and full access, and skips memory import and app
+      recommendations. Choose **Skip for now** in the picker to prepare the
+      local baseline and exit without starting the Gateway or AI chat.
+    - **Custom setup** runs the same guided flow with the telemetry choice,
+      agent name, access mode, and optional setup prompts kept as questions.
 
-    It sets duration expectations up front and warns if your configured model is unknown
-    or missing auth. Full breakdown: [Onboarding (CLI)](/start/wizard).
+    Both lanes require an explicit provider choice before any live completion,
+    provider installation, model selection, or credential write.
+
+    The classic step-by-step wizard is still available. Run
+    `openclaw onboard --classic` for its Workspace, Model/Auth, Gateway,
+    Channels, Web search, Skills, Daemon, and Health check steps. The step list
+    is in [Onboarding (CLI)](/start/wizard#what-classic-onboarding-configures).
+
+    Quick start is not offered for configured installs, remote Gateway chat
+    setup, non-interactive runs, or runs with `--skip-ui` or `--tui`.
+    Full breakdown: [Onboarding (CLI)](/start/wizard).
 
   </Accordion>
 
@@ -675,9 +701,10 @@ and troubleshooting see the main [FAQ](/help/faq).
   </Accordion>
 
   <Accordion title="Can I use Bun?">
-    You can use Bun to install dependencies or run package scripts. The OpenClaw CLI and
-    Gateway require **Node** because the canonical state store uses `node:sqlite`; Bun does
-    not provide that API.
+    Yes. Node remains the primary, default, and recommended runtime, but Bun 1.4+
+    with WAL-reset-safe `node:sqlite` can run the CLI, Gateway, and managed node
+    host as an explicit opt-in. Bun can also run package scripts; use
+    `pnpm install` for dependency installation.
   </Accordion>
 
   <Accordion title="Telegram: what goes in allowFrom?">

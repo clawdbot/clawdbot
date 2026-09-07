@@ -6,6 +6,13 @@ private let chatSessionActionsLogger = Logger(
     category: "OpenClawChat")
 
 extension OpenClawChatViewModel {
+    var canRequestSessionCompact: Bool {
+        !self.isCompacting &&
+            !self.isSending &&
+            !self.hasBlockingRunActivity &&
+            !self.isAborting
+    }
+
     struct SessionBranchSwitchActivity: Equatable {
         let session: SessionSnapshot
         let generation: UInt64
@@ -362,6 +369,7 @@ extension OpenClawChatViewModel {
                     expectedSessionID: nil,
                     label: .some(nextLabel),
                     category: nil,
+                    color: nil,
                     pinned: nil,
                     archived: nil,
                     unread: nil)
@@ -726,6 +734,24 @@ extension OpenClawChatViewModel {
         }
     }
 
+    public func setSessionColor(key: String, color: String?) async {
+        do {
+            let routeLease = await self.transport.acquireSessionMutationRouteLease()
+            guard let routeLease else { throw OpenClawChatTransportSendError.notDispatched }
+            try await routeLease.patchSession(
+                key: key,
+                label: nil,
+                category: nil,
+                color: .some(color),
+                pinned: nil,
+                archived: nil,
+                unread: nil)
+            self.refreshSessions(limit: Self.sessionListFetchLimit)
+        } catch {
+            self.errorText = error.localizedDescription
+        }
+    }
+
     public func setSessionPinned(key: String, pinned: Bool) {
         let previous = self.sessions
         if let index = self.sessions.firstIndex(where: { $0.key == key }) {
@@ -740,6 +766,7 @@ extension OpenClawChatViewModel {
                     expectedSessionID: nil,
                     label: nil,
                     category: nil,
+                    color: nil,
                     pinned: pinned,
                     archived: nil,
                     unread: nil)
@@ -775,6 +802,7 @@ extension OpenClawChatViewModel {
                     expectedSessionID: expectedSessionID,
                     label: nil,
                     category: nil,
+                    color: nil,
                     pinned: nil,
                     archived: true,
                     unread: nil)
@@ -810,6 +838,7 @@ extension OpenClawChatViewModel {
                 expectedSessionID: expectedSessionID,
                 label: nil,
                 category: nil,
+                color: nil,
                 pinned: nil,
                 archived: false,
                 unread: nil)
@@ -831,7 +860,8 @@ extension OpenClawChatViewModel {
               let entry = self.currentSessionEntry() ?? fallbackEntry,
               let revision = self.unreadPatchGuard.shouldPatch(
                   key: self.sessionMutationIdentity(for: entry.key, listedKey: entry.key),
-                  unread: entry.unread)
+                  unread: entry.unread,
+                  markedUnreadAt: entry.markedUnreadAt)
         else { return }
         let identityKey = self.sessionMutationIdentity(for: entry.key, listedKey: entry.key)
         let routeLease = Task { await self.transport.acquireSessionMutationRouteLease() }
@@ -839,6 +869,7 @@ extension OpenClawChatViewModel {
             routeLease: routeLease,
             queueKey: identityKey,
             routeKey: entry.key,
+            expectedMarkedUnreadAt: .some(entry.markedUnreadAt),
             unread: false)
         do {
             try await operation.value
@@ -847,9 +878,7 @@ extension OpenClawChatViewModel {
                 unread: false,
                 revision: revision)
             else { return }
-            if let index = self.sessions.firstIndex(where: { $0.key == entry.key }) {
-                self.sessions[index].unread = false
-            }
+            self.refreshSessions()
         } catch {
             guard self.unreadPatchGuard.patchFailed(key: identityKey, revision: revision) else { return }
             chatSessionActionsLogger.error(

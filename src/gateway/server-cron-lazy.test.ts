@@ -87,6 +87,52 @@ describe("createLazyGatewayCronState", () => {
     expect(cron["readJob"]).toHaveBeenCalledWith("demo");
   });
 
+  it("does not load cron solely to prepare a watcher handoff", async () => {
+    const lazy = createLazyGatewayCronState(createParams());
+
+    await expect(lazy.prepareExitWatcherHandoff?.()).resolves.toBeUndefined();
+    expect(hoisted.buildGatewayCronService).not.toHaveBeenCalled();
+  });
+
+  it("preserves a watcher owner when hot reload overtakes lazy startup", async () => {
+    const finishStart = deferred();
+    const cron = createCronService();
+    cron.start = vi.fn(async () => await finishStart.promise);
+    const watchers = {
+      reconcile: vi.fn(),
+      cancel: vi.fn(),
+      cancelAll: vi.fn(async () => {}),
+      activeJobIds: vi.fn(() => ["watched-job"]),
+      updateHandlers: vi.fn(),
+    };
+    const stopOwner = vi.fn(async () => {});
+    const prepareExitWatcherHandoff = vi.fn(async () => ({
+      current: () => watchers,
+      adopt: vi.fn(),
+      stopOwner,
+    }));
+    hoisted.setState({
+      ...createCronState(cron),
+      prepareExitWatcherHandoff,
+    });
+    const lazy = createLazyGatewayCronState(createParams());
+
+    const start = lazy.cron.start();
+    await vi.waitFor(() => expect(cron["start"]).toHaveBeenCalledOnce());
+    const handoff = await lazy.prepareExitWatcherHandoff?.();
+    expect(handoff?.current()).toBe(watchers);
+
+    await handoff?.stopOwner();
+    finishStart.resolve();
+    await start;
+    await handoff?.stopOwner();
+
+    expect(prepareExitWatcherHandoff).toHaveBeenCalledOnce();
+    expect(stopOwner).toHaveBeenCalledOnce();
+    expect(watchers.cancelAll).not.toHaveBeenCalled();
+    expect(cron["stop"]).not.toHaveBeenCalled();
+  });
+
   it("forwards run payload overrides to the loaded cron service", async () => {
     const cron = createCronService();
     hoisted.setState(createCronState(cron));
@@ -343,11 +389,10 @@ describe("createLazyGatewayCronState", () => {
     hoisted.setState(state);
 
     const lazy = createLazyGatewayCronState(createParams());
-    const cfg = { agents: { defaults: { heartbeat: { every: "5m" } } } } as OpenClawConfig;
-    await lazy.reconcileHeartbeatJobs(cfg);
+    await lazy.reconcileSystemJobs();
 
     expect(hoisted.buildGatewayCronService).toHaveBeenCalledTimes(1);
-    expect(state.reconcileHeartbeatJobs).toHaveBeenCalledExactlyOnceWith(cfg);
+    expect(state.reconcileSystemJobs).toHaveBeenCalledExactlyOnceWith();
   });
 
   it("forwards watcher reconciliation and teardown hooks through the proxy", async () => {
@@ -358,7 +403,6 @@ describe("createLazyGatewayCronState", () => {
     const lazy = createLazyGatewayCronState(createParams());
 
     // Teardown before load must not force the heavy import.
-    lazy.stopExitWatchers();
     await lazy.stopStreamWatchers();
     expect(hoisted.buildGatewayCronService).not.toHaveBeenCalled();
 
@@ -367,9 +411,7 @@ describe("createLazyGatewayCronState", () => {
     expect(state.reconcileExitWatchers).toHaveBeenCalledTimes(1);
     expect(state.reconcileStreamWatchers).toHaveBeenCalledTimes(1);
 
-    lazy.stopExitWatchers();
     await lazy.stopStreamWatchers();
-    expect(state.stopExitWatchers).toHaveBeenCalledTimes(1);
     expect(state.stopStreamWatchers).toHaveBeenCalledTimes(1);
   });
 
@@ -406,10 +448,9 @@ function createCronState(cron: GatewayCronServiceContract): GatewayCronState {
     storePath: "/tmp/openclaw-cron.json",
     cronEnabled: true,
     reconcileExitWatchers: vi.fn(async () => {}),
-    stopExitWatchers: vi.fn(),
     reconcileStreamWatchers: vi.fn(async () => {}),
     stopStreamWatchers: vi.fn(async () => {}),
-    reconcileHeartbeatJobs: vi.fn(async () => {}),
+    reconcileSystemJobs: vi.fn(async () => "converged" as const),
   } satisfies GatewayCronState;
 }
 
@@ -428,6 +469,9 @@ function createCronService(): GatewayCronServiceContract {
     remove: vi.fn(async () => ({ ok: true }) as never),
     removeStaleJobFamily: vi.fn(async () => 0),
     removeAgentJobsTransactional: vi.fn(async (_agentId, commit) => await commit()),
+    quiesceJobs: vi.fn(async (_jobs, commitGuard) => {
+      commitGuard();
+    }),
     run: vi.fn(async () => ({ ok: true, ran: false, reason: "invalid-spec" }) as never),
     enqueueRun: vi.fn(async () => ({ ok: true, ran: false, reason: "invalid-spec" }) as never),
     getJob: vi.fn(() => undefined),

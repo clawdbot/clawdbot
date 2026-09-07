@@ -1072,6 +1072,7 @@ describe("dispatchAndStartWorkboardCards", () => {
         ],
       },
     });
+    expect((await store.get(card.id))?.agentId).toBeUndefined();
     expect((await store.get(card.id))?.metadata?.claim).toBeUndefined();
   });
 });

@@ -126,14 +126,19 @@ function retirePluginRegistryIfUnused(registry: PluginRegistry | null): boolean 
 function syncPluginAgentEventBridge(): void {
   state.agentEventBridgeUnsubscribe?.();
   state.agentEventBridgeUnsubscribe = undefined;
-  if (!state.activeRegistry) {
+  const registry = asPluginRegistry(state.activeRegistry);
+  if (!registry) {
     return;
   }
+  const version = state.activeVersion;
   state.agentEventBridgeUnsubscribe = onAgentEvent((event) => {
-    const registry = asPluginRegistry(state.activeRegistry);
-    if (registry) {
-      dispatchPluginAgentEventSubscriptions({ registry, event });
-    }
+    dispatchPluginAgentEventSubscriptions({
+      registry,
+      event,
+      // The registry object can become active again after rollback. Its version
+      // keeps already-dispatched callback authority bound to this exact cutover.
+      isLive: () => state.activeRegistry === registry && state.activeVersion === version,
+    });
   });
 }
 
@@ -200,16 +205,34 @@ export function restoreActivePluginRegistrySnapshot(
   });
 }
 
+/** Rolls back a staged registry without reactivating the prior committed generation. */
+export function rollbackStagedPluginRegistry(
+  snapshot: ReturnType<typeof captureActivePluginRegistrySnapshot>,
+): void {
+  installActivePluginRegistry({
+    registry: snapshot.activeRegistry,
+    key: snapshot.key,
+    runtimeSubagentMode: snapshot.runtimeSubagentMode,
+    workspaceDir: snapshot.workspaceDir,
+    // Staging never retired the prior registry. Reactivating it here would mint a
+    // new epoch and revoke closures that remained authoritative through rollback.
+    activateRegistry: false,
+  });
+}
+
 function installActivePluginRegistry(params: {
   registry: PluginRegistry | null;
   key: string | null;
   runtimeSubagentMode: RegistryState["runtimeSubagentMode"];
   workspaceDir: string | null;
   retirePrevious?: boolean;
+  activateRegistry?: boolean;
 }): void {
   const previousRegistry = asPluginRegistry(state.activeRegistry);
   state.activeRegistry = params.registry;
-  markPluginRegistryActive(params.registry);
+  if (params.activateRegistry !== false) {
+    markPluginRegistryActive(params.registry);
+  }
   state.activeVersion += 1;
   if (params.registry) {
     settlePreparedMessageToolCatalog(params.registry, state.activeVersion);
@@ -241,22 +264,26 @@ export function getActivePluginRegistryWorkspaceDir(): string | undefined {
   return state.workspaceDir ?? undefined;
 }
 
+/** Reads registration/request/active registry precedence without initializing a cold runtime. */
+export function getPluginRegistryForContext(): PluginRegistry | null {
+  return (
+    state.registrationContext?.registry ??
+    getPluginRuntimeGatewayRequestScope()?.pluginRegistry ??
+    getActivePluginRegistry()
+  );
+}
+
 export function requireActivePluginRegistry(): PluginRegistry {
-  if (state.registrationContext) {
-    return state.registrationContext.registry;
+  const registry = getPluginRegistryForContext();
+  if (registry) {
+    return registry;
   }
-  const scopedRegistry = getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
-  if (scopedRegistry) {
-    return scopedRegistry;
-  }
-  if (!state.activeRegistry) {
-    state.activeRegistry = createEmptyPluginRegistry();
-    markPluginRegistryActive(state.activeRegistry);
-    state.activeVersion += 1;
-    settlePreparedMessageToolCatalog(state.activeRegistry, state.activeVersion);
-    syncPluginAgentEventBridge();
-  }
-  return asPluginRegistry(state.activeRegistry)!;
+  state.activeRegistry = createEmptyPluginRegistry();
+  markPluginRegistryActive(state.activeRegistry);
+  state.activeVersion += 1;
+  settlePreparedMessageToolCatalog(state.activeRegistry, state.activeVersion);
+  syncPluginAgentEventBridge();
+  return state.activeRegistry;
 }
 
 /** Binds unchanged direct SDK facades to the registry currently running synchronous register(). */
@@ -264,9 +291,10 @@ export function withPluginRegistrationContext<T>(
   registry: PluginRegistry,
   pluginId: string,
   run: () => T,
+  handlers?: Pick<NonNullable<RegistryState["registrationContext"]>, "registerMemoryCapability">,
 ): T {
   const previous = state.registrationContext;
-  state.registrationContext = { registry, pluginId };
+  state.registrationContext = { registry, pluginId, ...handlers };
   try {
     return run();
   } finally {
@@ -319,10 +347,6 @@ export function getActivePluginChannelRegistryVersion(): number {
 }
 
 export function getActivePluginGatewayCommandRegistry(): PluginRegistry | null {
-  return asPluginRegistry(state.activeRegistry);
-}
-
-export function getActivePluginGatewayNodePolicyRegistry(): PluginRegistry | null {
   return asPluginRegistry(state.activeRegistry);
 }
 

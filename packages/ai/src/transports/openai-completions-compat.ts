@@ -48,13 +48,14 @@ type DetectedOpenAICompletionsCompat = {
 
 export type ResolvedOpenAICompletionsCompat = Omit<
   Required<OpenAICompletionsCompat>,
-  "cacheControlFormat" | "openRouterRouting" | "sendSessionAffinityHeaders"
+  "cacheControlFormat" | "openRouterRouting" | "sendSessionAffinityHeaders" | "reasoningEffortMap"
 > & {
   cacheControlFormat?: OpenAICompletionsCompat["cacheControlFormat"];
   openRouterRouting?: OpenAICompletionsCompat["openRouterRouting"];
   sessionAffinity: OpenAICompletionsSessionAffinity;
   visibleReasoningDetailTypes: string[];
   requiresNonEmptyUserOrAssistantMessage: boolean;
+  configuredSupportsLongCacheRetention?: boolean;
 };
 
 function isDefaultRouteProvider(provider: string | undefined, ...ids: string[]) {
@@ -107,6 +108,7 @@ function resolveOpenAICompletionsCompatDefaults(
     endpointClass === "deepseek-native" ||
     endpointClass === "mistral-public" ||
     endpointClass === "opencode-native" ||
+    endpointClass === "opencode-go-native" ||
     endpointClass === "xai-native" ||
     isXiaomi ||
     isZai ||
@@ -159,11 +161,16 @@ function resolveOpenAICompletionsCompatDefaults(
     requiresReasoningContentOnAssistantMessages: isDeepSeek || isXiaomi,
     requiresNonEmptyUserOrAssistantMessage: isModelStudioLike,
     cacheControlFormat:
-      provider === "openrouter" && modelId?.startsWith("anthropic/") === true
+      (isModelStudioLike && endpointClass !== "custom") ||
+      (modelId?.toLowerCase().startsWith("anthropic/") === true &&
+        (endpointClass === "openrouter" ||
+          (isDefaultRoute && provider === "openrouter") ||
+          provider === "deepinfra"))
         ? "anthropic"
         : undefined,
     sessionAffinityFormat: isOpenRouterLike ? "openrouter" : "openai",
     supportsLongCacheRetention:
+      !isModelStudioLike &&
       provider !== "cloudflare-workers-ai" &&
       provider !== "cloudflare-ai-gateway" &&
       knownProviderFamily !== "together" &&
@@ -242,7 +249,7 @@ function resolveSessionAffinity(
 
 /** Applies explicit model overrides once on top of the canonical transport defaults. */
 export function resolveOpenAICompletionsCompat(
-  model: Model<"openai-completions">,
+  model: Pick<Model<"openai-completions">, "id" | "provider" | "baseUrl" | "compat">,
   resolveCapabilities?: (input: AiProviderRequestPolicyInput) => ProviderRequestCapabilities,
 ): ResolvedOpenAICompletionsCompat {
   const { defaults } = detectOpenAICompletionsCompat(model, resolveCapabilities);
@@ -273,6 +280,7 @@ export function resolveOpenAICompletionsCompat(
     supportsPromptCacheKey: configured?.supportsPromptCacheKey ?? false,
     supportsLongCacheRetention:
       configured?.supportsLongCacheRetention ?? defaults.supportsLongCacheRetention,
+    configuredSupportsLongCacheRetention: configured?.supportsLongCacheRetention,
     visibleReasoningDetailTypes:
       configured && "visibleReasoningDetailTypes" in configured
         ? ((configured as { visibleReasoningDetailTypes?: string[] }).visibleReasoningDetailTypes ??

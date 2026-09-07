@@ -1,5 +1,6 @@
 import { asOptionalRecord as asResultRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { GatewayErrorDetailCodes } from "../../../packages/gateway-protocol/src/gateway-error-details.js";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/schema/error-codes.js";
 import { stripPlainTextToolCallBlocks } from "../../../packages/tool-call-repair/src/index.js";
 import {
@@ -13,7 +14,6 @@ import { dispatchChannelMessageAction } from "../../channels/plugins/message-act
 import type {
   ChannelId,
   ChannelMessageActionName,
-  ChannelPlugin,
   ChannelThreadingToolContext,
 } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -28,7 +28,6 @@ import { formatErrorMessage } from "../errors.js";
 import { throwIfAborted } from "./abort.js";
 import type {
   MessageActionGateway,
-  MessageActionInput,
   MessageActionResult,
   ResolvedActionContext,
 } from "./message-action-contracts.js";
@@ -44,9 +43,7 @@ import { executePollAction } from "./outbound-send-service.js";
 import {
   beginTerminalSourceReplyDelivery,
   cancelTerminalSourceReplyDelivery,
-  isCurrentSourceReplyActionName,
   isDeliveredCurrentSourceReply,
-  isDeliveredCurrentSourceReplyAction,
   reconcileTerminalSourceReplyDelivery,
 } from "./source-reply-mirror.js";
 
@@ -60,49 +57,30 @@ const loadMessageActionGatewayRuntime = createLazyRuntimeModule(
 
 export function annotateSourceDelivery<T extends MessageActionResult>(
   result: T,
-  params: {
-    cfg: OpenClawConfig;
-    actionParams: Record<string, unknown>;
-    channel: ChannelId;
-    accountId?: string | null;
-    input: MessageActionInput;
-    agentId?: string;
-    replyToIsExplicit: boolean;
-  },
+  ctx: ResolvedActionContext,
+  replyToIsExplicit: boolean,
 ): T {
   // Current-source identity comes from the authorized route and delivery receipt,
   // not the reply mode; automatic runs also use this marker to avoid false fallbacks.
-  // Reply-type actions and polls are visible source replies too: leaving them
-  // unmarked made dispatch send the no-visible-reply fallback after a delivered
-  // reply or poll.
-  const isReplyActionResult =
-    result.kind === "action" && isCurrentSourceReplyActionName(result.action);
-  if (result.kind !== "send" && result.kind !== "poll" && !isReplyActionResult) {
-    return result;
-  }
-  const authorization = params.input.messageActionAuthorization;
-  if (!authorization?.toolContext) {
+  const authorization = ctx.input.messageActionAuthorization;
+  if (result.kind === "broadcast" || !authorization?.toolContext) {
     return result;
   }
   const mirrorParams = {
-    action: isReplyActionResult ? result.action : result.kind === "poll" ? "poll" : "send",
-    channel: params.channel,
-    actionParams: params.actionParams,
-    cfg: params.cfg,
-    accountId: params.accountId,
-    currentAccountId: authorization.requesterAccountId ?? params.input.defaultAccountId,
-    sessionKey: params.input.sessionKey,
-    sessionId: params.input.sessionId,
-    agentId: params.agentId,
+    action: result.action,
+    channel: ctx.channel,
+    actionParams: ctx.params,
+    cfg: ctx.cfg,
+    accountId: ctx.accountId,
+    currentAccountId: authorization.requesterAccountId ?? ctx.input.defaultAccountId,
+    sessionKey: ctx.input.sessionKey,
+    sessionId: ctx.input.sessionId,
+    agentId: ctx.agentId,
     toolContext: authorization.toolContext,
     deliveredPayload: result.payload,
-    replyToIsExplicit: params.replyToIsExplicit,
+    replyToIsExplicit,
   };
-  if (
-    isReplyActionResult
-      ? !isDeliveredCurrentSourceReplyAction(mirrorParams)
-      : !isDeliveredCurrentSourceReply(mirrorParams)
-  ) {
+  if (!isDeliveredCurrentSourceReply(mirrorParams)) {
     return result;
   }
   const payload = asResultRecord(result.payload);
@@ -213,6 +191,21 @@ function isConfirmedGatewayMessageActionRejection(error: unknown): boolean {
   );
 }
 
+export function projectGatewayQueuedDeliveryResult(error: unknown) {
+  if (!(error instanceof Error) || error.name !== "GatewayClientRequestError") {
+    return undefined;
+  }
+  const details = asResultRecord(asResultRecord(error)?.details);
+  if (details?.code !== GatewayErrorDetailCodes.OUTBOUND_DELIVERY_QUEUED) {
+    return undefined;
+  }
+  return {
+    status: "delivery_queued",
+    delivered: false as const,
+    message: `Delivery is pending: ${error.message}. The gateway owns retry or reconciliation; delivery is not yet confirmed. Do not resend it.`,
+  };
+}
+
 async function resolveGatewayActionIdempotencyKey(idempotencyKey?: string): Promise<string> {
   if (idempotencyKey) {
     return idempotencyKey;
@@ -284,62 +277,55 @@ export async function applyMessageCrossContextMarker(params: {
   });
 }
 
-export async function executeGatewayAction(params: {
-  cfg: OpenClawConfig;
-  params: Record<string, unknown>;
-  channel: ChannelId;
-  channelPlugin?: ChannelPlugin;
-  action: ChannelMessageActionName;
-  reply?: OutboundReplyFacts;
-  accountId?: string | null;
-  dryRun: boolean;
-  gateway?: MessageActionGateway;
-  input: MessageActionInput;
-  agentId?: string;
-  result: (payload: unknown) => MessageActionResult;
-}): Promise<MessageActionResult | null> {
-  if (params.dryRun || !params.gateway) {
+export async function executeGatewayAction(
+  ctx: ResolvedActionContext,
+  params: {
+    action: ChannelMessageActionName;
+    reply?: OutboundReplyFacts;
+    result: (payload: unknown) => MessageActionResult;
+  },
+): Promise<MessageActionResult | null> {
+  if (ctx.dryRun || !ctx.gateway) {
     return null;
   }
-  if (!params.channelPlugin?.actions?.handleAction) {
+  if (!ctx.channelPlugin?.actions?.handleAction) {
     return null;
   }
   const executionMode =
-    params.channelPlugin.actions.resolveExecutionMode?.({ action: params.action }) ?? "local";
+    ctx.channelPlugin.actions.resolveExecutionMode?.({ action: params.action }) ?? "local";
   if (executionMode !== "gateway") {
     return null;
   }
   const conversationReadOrigin = normalizeConversationReadInvocationOrigin(
-    params.input.conversationReadOrigin,
+    ctx.input.conversationReadOrigin,
   );
   const idempotencyKey = await resolveGatewayActionIdempotencyKey(
-    normalizeOptionalString(params.params.idempotencyKey),
+    normalizeOptionalString(ctx.params.idempotencyKey),
   );
   const callerOwnsTerminalReceipt =
-    params.gateway.terminalSourceReplyReceiptOwner === "caller" &&
-    params.input.sourceReplyFinal === true;
+    ctx.gateway.terminalSourceReplyReceiptOwner === "caller" && ctx.input.sourceReplyFinal === true;
   // Resolve local capability/auth preflight before arming a durable send intent.
   // A failure here proves the RPC never reached the gateway.
-  const agentRuntimeIdentityToken = await params.gateway.resolveAgentRuntimeIdentityToken?.({
-    sourceReplyFinal: params.input.sourceReplyFinal,
-    sourceReplyToolCallId: params.input.sourceReplyToolCallId,
+  const agentRuntimeIdentityToken = await ctx.gateway.resolveAgentRuntimeIdentityToken?.({
+    sourceReplyFinal: ctx.input.sourceReplyFinal,
+    sourceReplyToolCallId: ctx.input.sourceReplyToolCallId,
   });
   const sourceReplyMirror = {
     action: params.action,
-    channel: params.channel,
-    actionParams: params.params,
-    cfg: params.cfg,
-    accountId: params.accountId,
+    channel: ctx.channel,
+    actionParams: ctx.params,
+    cfg: ctx.cfg,
+    accountId: ctx.accountId,
     currentAccountId:
-      params.input.messageActionAuthorization?.requesterAccountId ?? params.input.defaultAccountId,
-    sessionKey: params.input.sourceReplySessionKey ?? params.input.sessionKey,
-    sessionId: params.input.sessionId,
-    agentId: params.agentId,
-    toolContext: params.input.messageActionAuthorization?.toolContext,
+      ctx.input.messageActionAuthorization?.requesterAccountId ?? ctx.input.defaultAccountId,
+    sessionKey: ctx.input.sourceReplySessionKey ?? ctx.input.sessionKey,
+    sessionId: ctx.input.sessionId,
+    agentId: ctx.agentId,
+    toolContext: ctx.input.messageActionAuthorization?.toolContext,
     replyToIsExplicit: params.reply?.source === "explicit",
     idempotencyKey,
-    sourceReplyFinal: params.input.sourceReplyFinal,
-    toolCallId: params.input.sourceReplyToolCallId,
+    sourceReplyFinal: ctx.input.sourceReplyFinal,
+    toolCallId: ctx.input.sourceReplyToolCallId,
   };
   const terminalDeliveryStart = callerOwnsTerminalReceipt
     ? await beginTerminalSourceReplyDelivery(sourceReplyMirror)
@@ -352,23 +338,23 @@ export async function executeGatewayAction(params: {
   let payload: unknown;
   try {
     payload = await callGatewayMessageAction<unknown>({
-      gateway: params.gateway,
-      abortSignal: params.input.abortSignal,
+      gateway: ctx.gateway,
+      abortSignal: ctx.input.abortSignal,
       agentRuntimeIdentityToken,
       onUnknownDeliveryOutcome: () => {
         hadUnknownDeliveryOutcome = true;
       },
       actionParams: {
-        channel: params.channel,
+        channel: ctx.channel,
         action: params.action,
-        params: params.params,
+        params: ctx.params,
         ...(params.reply ? { reply: params.reply } : {}),
-        accountId: params.accountId ?? undefined,
-        senderIsOwner: params.input.senderIsOwner,
-        sessionKey: params.input.sessionKey,
-        sessionId: params.input.sessionId,
-        inboundTurnKind: params.input.inboundEventKind,
-        agentId: params.agentId,
+        accountId: ctx.accountId ?? undefined,
+        senderIsOwner: ctx.input.senderIsOwner,
+        sessionKey: ctx.input.sessionKey,
+        sessionId: ctx.input.sessionId,
+        inboundTurnKind: ctx.input.inboundEventKind,
+        agentId: ctx.agentId,
         ...(conversationReadOrigin === "direct-operator" ? { conversationReadOrigin } : {}),
         idempotencyKey,
       },
@@ -395,8 +381,8 @@ export async function executeGatewayAction(params: {
       // The pre-send intent remains durable. Return the provider result so the
       // model cannot retry an external effect with an unknown outcome.
       log.warn("Terminal source reply receipt reconciliation failed.", {
-        channel: params.channel,
-        sessionKey: params.input.sessionKey,
+        channel: ctx.channel,
+        sessionKey: ctx.input.sessionKey,
         error: formatErrorMessage(error),
       });
     }
@@ -405,18 +391,8 @@ export async function executeGatewayAction(params: {
 }
 
 export async function executeMessagePoll(ctx: ResolvedActionContext): Promise<MessageActionResult> {
-  const {
-    cfg,
-    params,
-    channel,
-    channelPlugin,
-    accountId,
-    dryRun,
-    gateway,
-    input,
-    agentId,
-    abortSignal,
-  } = ctx;
+  const { cfg, params, channel, channelPlugin, accountId, dryRun, input, agentId, abortSignal } =
+    ctx;
   throwIfAborted(abortSignal);
   const action: ChannelMessageActionName = "poll";
   const to = readToolStringParam(params, "to", { required: true });
@@ -444,17 +420,8 @@ export async function executeMessagePoll(ctx: ResolvedActionContext): Promise<Me
     preferPresentation: false,
   });
 
-  const gatewayPluginAction = await executeGatewayAction({
-    cfg,
-    params,
-    channel,
-    channelPlugin,
+  const gatewayPluginAction = await executeGatewayAction(ctx, {
     action,
-    accountId,
-    dryRun,
-    gateway,
-    input,
-    agentId,
     result: (payload) => ({
       kind: "poll",
       channel,
@@ -467,37 +434,27 @@ export async function executeMessagePoll(ctx: ResolvedActionContext): Promise<Me
   });
   const pollReplyToIsExplicit = Boolean(readToolStringParam(params, "replyTo"));
   if (gatewayPluginAction) {
-    return annotateSourceDelivery(gatewayPluginAction, {
-      cfg,
-      actionParams: params,
-      channel,
-      accountId,
-      input,
-      agentId,
-      replyToIsExplicit: pollReplyToIsExplicit,
-    });
+    return annotateSourceDelivery(gatewayPluginAction, ctx, pollReplyToIsExplicit);
   }
 
   const poll = await executePollAction({
     ctx: {
-      cfg,
-      channel,
-      plugin: channelPlugin,
-      params,
-      idempotencyKey: ctx.idempotencyKey,
-      accountId: accountId ?? undefined,
-      agentId,
-      requesterAccountId: input.requesterAccountId ?? undefined,
-      requesterSenderId: input.requesterSenderId ?? undefined,
-      conversationReadOrigin: normalizeConversationReadInvocationOrigin(
-        input.conversationReadOrigin,
-      ),
-      sessionKey: input.sessionKey,
-      sessionId: input.sessionId,
-      inboundEventKind: input.inboundEventKind,
-      gateway,
-      toolContext: input.toolContext,
-      dryRun,
+      ...ctx,
+      // Poll actions expose requester IDs and turn context, without send-only
+      // authority or media grants. Preserve that plugin boundary independently.
+      mediaAccess: undefined,
+      input: {
+        cfg,
+        action,
+        params,
+        requesterAccountId: input.requesterAccountId,
+        requesterSenderId: input.requesterSenderId,
+        conversationReadOrigin: input.conversationReadOrigin,
+        sessionKey: input.sessionKey,
+        sessionId: input.sessionId,
+        inboundEventKind: input.inboundEventKind,
+        toolContext: input.toolContext,
+      },
       silent: silent ?? undefined,
     },
     resolveCorePoll: () => {
@@ -508,6 +465,10 @@ export async function executeMessagePoll(ctx: ResolvedActionContext): Promise<Me
       if (options.length < 2) {
         throw new Error("pollOption requires at least two values");
       }
+      let content = readToolStringParam(params, "message", { allowEmpty: true, trim: false });
+      if (content !== undefined && !content.trim()) {
+        content = "";
+      }
       const allowMultiselect = readBooleanParam(params, "pollMulti") ?? false;
       const durationHours = readPositiveIntegerParam(params, "pollDurationHours", {
         message: "pollDurationHours must be a positive integer",
@@ -516,7 +477,7 @@ export async function executeMessagePoll(ctx: ResolvedActionContext): Promise<Me
       return {
         to,
         question,
-        content: readToolStringParam(params, "message", { allowEmpty: true }) ?? undefined,
+        content,
         options,
         maxSelections: resolvePollMaxSelections(options.length, allowMultiselect),
         durationHours: durationHours ?? undefined,
@@ -537,15 +498,8 @@ export async function executeMessagePoll(ctx: ResolvedActionContext): Promise<Me
       pollResult: poll.pollResult,
       dryRun,
     },
-    {
-      cfg,
-      actionParams: params,
-      channel,
-      accountId,
-      input,
-      agentId,
-      replyToIsExplicit: pollReplyToIsExplicit,
-    },
+    ctx,
+    pollReplyToIsExplicit,
   );
 }
 
@@ -596,7 +550,9 @@ export async function executeMessagePlugin(
   // gateway or local dispatch to keep both execution modes on the same topic.
   const targetForThreading =
     normalizeOptionalString(params.to) ?? normalizeOptionalString(params.channelId) ?? "";
-  if (targetForThreading) {
+  // File downloads authorize caller-supplied resource scope. Ambient threading
+  // must not silently narrow a channel-only request to the current thread.
+  if (targetForThreading && action !== "download-file") {
     resolveAndApplyOutboundThreadId(params, {
       cfg,
       to: targetForThreading,
@@ -608,17 +564,8 @@ export async function executeMessagePlugin(
     });
   }
 
-  const gatewayPluginAction = await executeGatewayAction({
-    cfg,
-    params,
-    channel,
-    channelPlugin,
+  const gatewayPluginAction = await executeGatewayAction(ctx, {
     action,
-    accountId,
-    dryRun,
-    gateway,
-    input,
-    agentId,
     result: (payload) => ({
       kind: "action",
       channel,
@@ -631,15 +578,7 @@ export async function executeMessagePlugin(
   const replyToIsExplicit = Boolean(readToolStringParam(params, "replyTo"));
   if (gatewayPluginAction) {
     // Gateway-owned actions must execute where the live channel runtime exists.
-    return annotateSourceDelivery(gatewayPluginAction, {
-      cfg,
-      actionParams: params,
-      channel,
-      accountId,
-      input,
-      agentId,
-      replyToIsExplicit,
-    });
+    return annotateSourceDelivery(gatewayPluginAction, ctx, replyToIsExplicit);
   }
 
   const authorization = input.messageActionAuthorization;
@@ -683,14 +622,7 @@ export async function executeMessagePlugin(
       toolResult: handled,
       dryRun,
     },
-    {
-      cfg,
-      actionParams: params,
-      channel,
-      accountId,
-      input,
-      agentId,
-      replyToIsExplicit,
-    },
+    ctx,
+    replyToIsExplicit,
   );
 }

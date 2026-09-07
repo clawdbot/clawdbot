@@ -7,14 +7,42 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import JSON5 from "json5";
 import { resolveEffectiveHomeDir } from "../src/infra/home-dir.js";
-import { deleteTestEnvValue, setTestEnvValue } from "../src/test-utils/env.js";
+import { SUPERVISOR_HINT_ENV_VARS } from "../src/infra/supervisor-markers.js";
+import { captureFullEnv, deleteTestEnvValue, setTestEnvValue } from "../src/test-utils/env.js";
+import { readTestHomeSource, resolveTestCorepackHome } from "./test-home-context.mts";
+import {
+  isTruthyTestEnvValue as isTruthyEnvValue,
+  LIVE_TEST_TRIGGER_ENV_KEYS,
+  resolveTestHomePolicy,
+} from "./test-home-policy.mts";
 
 type RestoreEntry = { key: string; value: string | undefined };
 type InstallTestEnvOptions =
   | { mode?: "live-aware"; loadProfileEnv?: boolean }
   | { mode: "hermetic" };
 
-const LIVE_TEST_TRIGGER_ENV_KEYS = ["LIVE", "OPENCLAW_LIVE_TEST", "OPENCLAW_LIVE_GATEWAY"] as const;
+const ISOLATED_TEST_CREDENTIAL_ENV_KEYS = [
+  "TELEGRAM_BOT_TOKEN",
+  "DISCORD_BOT_TOKEN",
+  "SLACK_BOT_TOKEN",
+  "SLACK_APP_TOKEN",
+  "SLACK_USER_TOKEN",
+  "TWILIO_ACCOUNT_SID",
+  "TWILIO_AUTH_TOKEN",
+  "TWILIO_PHONE_NUMBER",
+  "TWILIO_SMS_FROM",
+  "TWILIO_MESSAGING_SERVICE_SID",
+  "COPILOT_GITHUB_TOKEN",
+  "GH_TOKEN",
+  "GITHUB_TOKEN",
+] as const;
+const ISOLATED_TEST_SERVICE_ENV_KEYS = [
+  ...SUPERVISOR_HINT_ENV_VARS,
+  "OPENCLAW_WRAPPER",
+  "OPENCLAW_GATEWAY_SERVICE_PID",
+  "OPENCLAW_SERVICE_MANAGED_ENV_KEYS",
+  "OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER",
+] as const;
 const HERMETIC_TEST_ENV_KEYS = [
   ...LIVE_TEST_TRIGGER_ENV_KEYS,
   "OPENCLAW_LIVE_USE_REAL_HOME",
@@ -47,22 +75,6 @@ type ConfigValidationApi = typeof import("../src/config/validation.js");
 
 let cachedLegacyConfigCompatApi: LegacyConfigCompatApi | undefined;
 let cachedConfigValidationApi: ConfigValidationApi | undefined;
-
-function isTruthyEnvValue(value: string | undefined): boolean {
-  if (!value) {
-    return false;
-  }
-  switch (value.trim().toLowerCase()) {
-    case "":
-    case "0":
-    case "false":
-    case "no":
-    case "off":
-      return false;
-    default:
-      return true;
-  }
-}
 
 function restoreEnv(entries: RestoreEntry[]): void {
   for (const { key, value } of entries) {
@@ -126,10 +138,21 @@ function loadProfileEnv(homeDir = os.homedir()): void {
     return applied;
   };
   try {
+    // Skip ambient startup files, which can reset HOME or load an unselected profile.
+    // Only this reader gets the source HOME; the test process stays isolated.
     const output = execFileSync(
       "/bin/bash",
-      ["-lc", `set -a; source "${profilePath}" >/dev/null 2>&1; env -0`],
-      { encoding: "utf8" },
+      [
+        "--norc",
+        "-c",
+        'set -a; source "$1" >/dev/null 2>&1; env -0',
+        "openclaw-test-profile",
+        profilePath,
+      ],
+      {
+        encoding: "utf8",
+        env: { ...process.env, HOME: homeDir, USERPROFILE: homeDir, BASH_ENV: undefined },
+      },
     );
     const applied = countAppliedEntries(output.split("\0").filter(Boolean));
     if (applied > 0 && !isTruthyEnvValue(process.env.OPENCLAW_LIVE_TEST_QUIET)) {
@@ -195,6 +218,7 @@ function resolveRestoreEntries(): RestoreEntry[] {
     { key: "XDG_DATA_HOME", value: process.env.XDG_DATA_HOME },
     { key: "XDG_STATE_HOME", value: process.env.XDG_STATE_HOME },
     { key: "XDG_CACHE_HOME", value: process.env.XDG_CACHE_HOME },
+    { key: "COREPACK_HOME", value: process.env.COREPACK_HOME },
     { key: "OPENCLAW_STATE_DIR", value: process.env.OPENCLAW_STATE_DIR },
     { key: "OPENCLAW_CONFIG_PATH", value: process.env.OPENCLAW_CONFIG_PATH },
     { key: "OPENCLAW_GATEWAY_PORT", value: process.env.OPENCLAW_GATEWAY_PORT },
@@ -204,24 +228,17 @@ function resolveRestoreEntries(): RestoreEntry[] {
     { key: "OPENCLAW_CANVAS_HOST_PORT", value: process.env.OPENCLAW_CANVAS_HOST_PORT },
     { key: "OPENCLAW_TEST_HOME", value: process.env.OPENCLAW_TEST_HOME },
     { key: "OPENCLAW_AGENT_DIR", value: process.env.OPENCLAW_AGENT_DIR },
-    { key: "TELEGRAM_BOT_TOKEN", value: process.env.TELEGRAM_BOT_TOKEN },
-    { key: "DISCORD_BOT_TOKEN", value: process.env.DISCORD_BOT_TOKEN },
-    { key: "SLACK_BOT_TOKEN", value: process.env.SLACK_BOT_TOKEN },
-    { key: "SLACK_APP_TOKEN", value: process.env.SLACK_APP_TOKEN },
-    { key: "SLACK_USER_TOKEN", value: process.env.SLACK_USER_TOKEN },
-    { key: "COPILOT_GITHUB_TOKEN", value: process.env.COPILOT_GITHUB_TOKEN },
-    { key: "GH_TOKEN", value: process.env.GH_TOKEN },
-    { key: "GITHUB_TOKEN", value: process.env.GITHUB_TOKEN },
+    { key: "PI_CODING_AGENT_DIR", value: process.env.PI_CODING_AGENT_DIR },
+    ...ISOLATED_TEST_CREDENTIAL_ENV_KEYS.map((key) => ({ key, value: process.env[key] })),
+    ...ISOLATED_TEST_SERVICE_ENV_KEYS.map((key) => ({ key, value: process.env[key] })),
     { key: "NODE_OPTIONS", value: process.env.NODE_OPTIONS },
   ];
 }
 
-function createIsolatedTestHome(restore: RestoreEntry[]): {
-  cleanup: () => void;
-  tempHome: string;
-} {
-  const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-test-home-"));
-
+function initializeIsolatedTestEnv(tempHome: string): void {
+  // Corepack's installed toolchain is independent of application state. Bind its
+  // upstream cache default before isolating HOME/XDG so nested pnpm stays offline.
+  setTestEnvValue("COREPACK_HOME", resolveTestCorepackHome(process.env));
   setTestEnvValue("HOME", tempHome);
   setTestEnvValue("USERPROFILE", tempHome);
   setTestEnvValue("OPENCLAW_TEST_HOME", tempHome);
@@ -233,24 +250,27 @@ function createIsolatedTestHome(restore: RestoreEntry[]): {
   deleteTestEnvValue("OPENCLAW_HOME");
   // Ensure test runs never touch the developer's real config/state, even if they have overrides set.
   deleteTestEnvValue("OPENCLAW_CONFIG_PATH");
-  // Prefer deriving state dir from HOME so nested tests that change HOME also isolate correctly.
+  // Derive all state, including SQLite, from this unique HOME so cleanup owns it.
+  // Leave the override unset so nested HOME scopes also isolate their state.
   deleteTestEnvValue("OPENCLAW_STATE_DIR");
+  // Model status still honors the shipped legacy selector; isolate both agent-dir keys.
   deleteTestEnvValue("OPENCLAW_AGENT_DIR");
+  deleteTestEnvValue("PI_CODING_AGENT_DIR");
   // Prefer test-controlled ports over developer overrides (avoid port collisions across tests/workers).
   deleteTestEnvValue("OPENCLAW_GATEWAY_PORT");
   deleteTestEnvValue("OPENCLAW_BRIDGE_ENABLED");
   deleteTestEnvValue("OPENCLAW_BRIDGE_HOST");
   deleteTestEnvValue("OPENCLAW_BRIDGE_PORT");
   deleteTestEnvValue("OPENCLAW_CANVAS_HOST_PORT");
-  // Avoid leaking real GitHub/Copilot tokens into non-live test runs.
-  deleteTestEnvValue("TELEGRAM_BOT_TOKEN");
-  deleteTestEnvValue("DISCORD_BOT_TOKEN");
-  deleteTestEnvValue("SLACK_BOT_TOKEN");
-  deleteTestEnvValue("SLACK_APP_TOKEN");
-  deleteTestEnvValue("SLACK_USER_TOKEN");
-  deleteTestEnvValue("COPILOT_GITHUB_TOKEN");
-  deleteTestEnvValue("GH_TOKEN");
-  deleteTestEnvValue("GITHUB_TOKEN");
+  // Ambient channel credentials can activate real plugins even with an isolated HOME.
+  for (const key of ISOLATED_TEST_CREDENTIAL_ENV_KEYS) {
+    deleteTestEnvValue(key);
+  }
+  // A test worker is not the parent Gateway's service. Retaining its identity
+  // selects in-band lifecycle guards and detached restart handoffs in fixtures.
+  for (const key of ISOLATED_TEST_SERVICE_ENV_KEYS) {
+    deleteTestEnvValue(key);
+  }
   // Avoid leaking local dev tooling flags into tests (e.g. --inspect).
   deleteTestEnvValue("NODE_OPTIONS");
 
@@ -263,17 +283,6 @@ function createIsolatedTestHome(restore: RestoreEntry[]): {
   setTestEnvValue("XDG_DATA_HOME", path.join(tempHome, ".local", "share"));
   setTestEnvValue("XDG_STATE_HOME", path.join(tempHome, ".local", "state"));
   setTestEnvValue("XDG_CACHE_HOME", path.join(tempHome, ".cache"));
-
-  const cleanup = () => {
-    restoreEnv(restore);
-    try {
-      fs.rmSync(tempHome, { recursive: true, force: true });
-    } catch {
-      // ignore cleanup errors
-    }
-  };
-
-  return { cleanup, tempHome };
 }
 
 function ensureParentDir(targetPath: string): void {
@@ -395,10 +404,6 @@ function sanitizeLiveConfig(raw: string): string {
 }
 
 function copyLiveAuthProfiles(realStateDir: string, tempStateDir: string): void {
-  const agentsDir = path.join(realStateDir, "agents");
-  if (!fs.existsSync(agentsDir)) {
-    return;
-  }
   const liveAuthStageScript = path.resolve(
     path.dirname(fileURLToPath(import.meta.url)),
     "helpers",
@@ -410,6 +415,8 @@ function copyLiveAuthProfiles(realStateDir: string, tempStateDir: string): void 
     process.execPath,
     ["--import", "tsx", liveAuthStageScript, realStateDir, tempStateDir],
     {
+      // Resolve repo-owned imports independently of an external fixture's cwd.
+      cwd: path.resolve(path.dirname(liveAuthStageScript), "../.."),
       env: { ...process.env, NODE_OPTIONS: undefined },
       stdio: "pipe",
     },
@@ -478,41 +485,76 @@ export function installTestEnv(options?: InstallTestEnvOptions): {
   cleanup: () => void;
   tempHome: string;
 } {
-  const hermetic = options?.mode === "hermetic";
-  const live = !hermetic && LIVE_TEST_TRIGGER_ENV_KEYS.some((key) => process.env[key] === "1");
-  const allowRealHome = !hermetic && isTruthyEnvValue(process.env.OPENCLAW_LIVE_USE_REAL_HOME);
-  const realHome = process.env.HOME ?? os.homedir();
-  const liveEnvSnapshot = { ...process.env };
-
-  const requestedProfileLoad = options?.mode === "hermetic" ? false : options?.loadProfileEnv;
-  const shouldLoadProfileEnv = requestedProfileLoad ?? (live || allowRealHome);
-  if (shouldLoadProfileEnv) {
-    loadProfileEnv(realHome);
-  }
-
-  if (live && allowRealHome) {
-    return { cleanup: () => {}, tempHome: realHome };
-  }
-
-  const restore = resolveRestoreEntries();
-  const testEnv = createIsolatedTestHome(restore);
-
-  if (hermetic) {
-    for (const key of HERMETIC_TEST_ENV_KEYS) {
-      deleteTestEnvValue(key);
+  const {
+    hermetic,
+    live,
+    allowRealHome,
+    loadProfileEnv: shouldLoadProfileEnv,
+  } = resolveTestHomePolicy(
+    process.env,
+    options?.mode,
+    options?.mode === "hermetic" ? false : options?.loadProfileEnv,
+  );
+  const sourceHome = live || shouldLoadProfileEnv ? readTestHomeSource(process.env) : undefined;
+  const realHome = sourceHome ?? process.env.HOME ?? os.homedir();
+  const liveEnvSnapshot = {
+    ...process.env,
+    ...(sourceHome === undefined ? {} : { HOME: sourceHome, USERPROFILE: sourceHome }),
+  };
+  const rollback = captureFullEnv();
+  let tempHome: string | undefined;
+  const removeHome = () => {
+    if (!tempHome) {
+      return;
     }
-    // Keep non-isolated workers on this checkout's manifests, never a caller's
-    // staged plugin tree or a sibling worktree resolved through shared node_modules.
-    setTestEnvValue("OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR", "1");
-    setTestEnvValue(
-      "OPENCLAW_BUNDLED_PLUGINS_DIR",
-      path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "extensions"),
-    );
-  } else if (live) {
-    stageLiveTestState({ env: liveEnvSnapshot, realHome, tempHome: testEnv.tempHome });
-  }
+    try {
+      fs.rmSync(tempHome, { recursive: true, force: true });
+    } catch {
+      // ignore cleanup errors
+    }
+  };
 
-  return testEnv;
+  try {
+    if (shouldLoadProfileEnv) {
+      loadProfileEnv(realHome);
+    }
+
+    if (live && allowRealHome) {
+      return { cleanup: () => {}, tempHome: realHome };
+    }
+
+    const restore = resolveRestoreEntries();
+    tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-test-home-"));
+    initializeIsolatedTestEnv(tempHome);
+
+    if (hermetic) {
+      for (const key of HERMETIC_TEST_ENV_KEYS) {
+        deleteTestEnvValue(key);
+      }
+      // Keep non-isolated workers on this checkout's manifests, never a caller's
+      // staged plugin tree or a sibling worktree resolved through shared node_modules.
+      setTestEnvValue("OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR", "1");
+      setTestEnvValue(
+        "OPENCLAW_BUNDLED_PLUGINS_DIR",
+        path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "extensions"),
+      );
+    } else if (live) {
+      stageLiveTestState({ env: liveEnvSnapshot, realHome, tempHome });
+    }
+
+    return {
+      tempHome,
+      cleanup: () => {
+        restoreEnv(restore);
+        removeHome();
+      },
+    };
+  } catch (error) {
+    // Successful live setup keeps profile additions; failed setup restores the caller exactly.
+    rollback.restore();
+    removeHome();
+    throw error;
+  }
 }
 
 export function withIsolatedTestHome(options?: InstallTestEnvOptions): {

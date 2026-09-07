@@ -2,7 +2,6 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { listSlackReactions } from "@openclaw/slack/api.js";
 import { extractGatewayMessageText } from "../../gateway-log-sentinel.js";
 import { formatApprovalResultValue } from "../shared/live-approval-result.js";
 import { asPlainRecord } from "./slack-live.config.js";
@@ -14,6 +13,7 @@ import {
   type SlackQaScenarioMetadata,
   type SlackQaWebClient as WebClient,
 } from "./slack-live.contracts.js";
+import { loadSlackQaRuntime } from "./slack-plugin.runtime.js";
 
 export function resolveCodexFileApprovalTargetPath(token: string) {
   return path.join(os.homedir(), `.openclaw-qa-codex-file-approval-${token.toLowerCase()}.txt`);
@@ -76,6 +76,7 @@ export async function waitForSlackReaction(params: {
   sutUserId: string;
   timeoutMs: number;
 }) {
+  const { listSlackReactions } = loadSlackQaRuntime();
   const deadline = Date.now() + params.timeoutMs;
   while (true) {
     const reactions = await listSlackReactions(params.channelId, params.messageId, {

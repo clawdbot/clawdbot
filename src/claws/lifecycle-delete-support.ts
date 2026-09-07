@@ -1,8 +1,12 @@
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
+import {
+  isPathOwnedBySurvivingAgent,
+  readAgentDeleteDatabaseRegistry,
+  resolveSurvivingDatabaseFilePaths,
+} from "../agents/agent-delete-databases.js";
 import { findOverlappingWorkspaceAgentIds } from "../agents/agent-delete-safety.js";
 import { listAgentEntries, resolveAgentDir } from "../agents/agent-scope.js";
 import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../agents/workspace-bootstrap-read.js";
@@ -23,29 +27,35 @@ import { pruneAgentConfig } from "../commands/agents.config.js";
 import { moveToTrash } from "../commands/cleanup-utils.js";
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveCronJobConfigRevision } from "../cron/config-revision.js";
+import { loadedCronStoreFromRows } from "../cron/store/row-codec.js";
+import type { CronJobRow } from "../cron/store/schema.js";
+import { isSystemMonitorDeclaration } from "../cron/system-owned-declaration.js";
 import { root as fsSafeRoot, FsSafeError } from "../infra/fs-safe.js";
+import {
+  compileSqliteQueryBindings,
+  executeSqliteQuerySync,
+  getNodeSqliteKysely,
+} from "../infra/kysely-sync.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { unregisterOpenClawAgentDatabases } from "../state/openclaw-agent-db-registry.js";
+import type { OpenClawStateDatabase } from "../state/openclaw-state-db-contract.js";
+import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
+import type { DB } from "../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
+import type { ClawMonitorCleanupGateway, ClawMonitorSnapshot } from "./monitor-cleanup-contract.js";
 import { deleteCachedClawInstallSchemaVersion } from "./provenance-runtime-read.js";
 import type { PersistedClawInstall } from "./provenance.js";
 import type { PersistedClawWorkspaceFile } from "./workspace.js";
 
-type WorkspaceFileRow = {
-  schema_version: string;
-  agent_id: string;
-  workspace: string;
-  target_path: string;
-  source_path: string;
-  content_digest: string;
-  status: PersistedClawWorkspaceFile["status"];
-  created_at_ms: number | bigint;
-  updated_at_ms: number | bigint;
-};
+type ClawRemovalDatabase = Pick<
+  DB,
+  "claw_workspace_files" | "claw_package_refs" | "claw_installs" | "cron_jobs"
+>;
 
 export class ClawRemoveError extends Error {
   constructor(
@@ -55,46 +65,6 @@ export class ClawRemoveError extends Error {
     super(message);
     this.name = "ClawRemoveError";
   }
-}
-
-function clawStateTableExists(db: DatabaseSync, name: string): boolean {
-  return Boolean(
-    db /* sqlite-allow-raw: schema probe for optional Claw state tables. */
-      .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?")
-      .get(name),
-  );
-}
-
-function rowToWorkspaceFile(row: WorkspaceFileRow): PersistedClawWorkspaceFile {
-  return {
-    schemaVersion: row.schema_version as PersistedClawWorkspaceFile["schemaVersion"],
-    agentId: row.agent_id,
-    workspace: row.workspace,
-    path: row.target_path,
-    sourcePath: row.source_path,
-    contentDigest: row.content_digest,
-    status: row.status,
-    createdAtMs: Number(row.created_at_ms),
-    updatedAtMs: Number(row.updated_at_ms),
-  };
-}
-
-export function readAllClawWorkspaceFiles(
-  options: OpenClawStateDatabaseOptions,
-): PersistedClawWorkspaceFile[] {
-  const database = openOpenClawStateDatabase(options);
-  if (!clawStateTableExists(database.db, "claw_workspace_files")) {
-    return [];
-  }
-  const rows = database.db /* sqlite-allow-raw: read-only Claw workspace-file orphan inventory. */
-    .prepare(
-      `SELECT schema_version, agent_id, workspace, target_path, source_path,
-              content_digest, status, created_at_ms, updated_at_ms
-         FROM claw_workspace_files
-        ORDER BY agent_id, target_path`,
-    )
-    .all() as WorkspaceFileRow[];
-  return rows.map(rowToWorkspaceFile);
 }
 
 export function synthesizeOrphanInstall(params: {
@@ -128,14 +98,19 @@ export function synthesizeOrphanInstall(params: {
   };
 }
 
-export function deletionEffects(config: OpenClawConfig, agentId: string, fallbackWorkspace = "") {
+export function deletionEffects(
+  config: OpenClawConfig,
+  agentId: string,
+  fallbackWorkspace = "",
+  env?: NodeJS.ProcessEnv,
+) {
   const agent = listAgentEntries(config).find((candidate) => candidate.id === agentId);
   const pruned = pruneAgentConfig(config, agentId);
   const workspace = agent?.workspace ?? fallbackWorkspace;
-  const agentDir = resolveAgentDir(config, agentId);
-  const sessionsDir = resolveSessionTranscriptsDirForAgent(agentId);
+  const agentDir = resolveAgentDir(config, agentId, env);
+  const sessionsDir = resolveSessionTranscriptsDirForAgent(agentId, env);
   const workspaceSharedWith = workspace
-    ? findOverlappingWorkspaceAgentIds(config, agentId, workspace)
+    ? findOverlappingWorkspaceAgentIds(config, agentId, workspace, env)
     : [];
   return {
     pruned,
@@ -143,16 +118,18 @@ export function deletionEffects(config: OpenClawConfig, agentId: string, fallbac
     agentDir,
     sessionsDir,
     workspaceSharedWith,
-    workspaceRetained: workspaceSharedWith.length > 0,
   };
 }
 
-type AttachedCronJob = {
+export type AttachedCronJob = {
   id: string;
   name: string;
   enabled: boolean;
   agentId: string | null;
   ownerAgentId: string | null;
+  storeKey: string;
+  declarationKey: string | null;
+  revision?: string;
 };
 
 /** Inventories cron jobs that would retain a reference to a removed agent. */
@@ -160,34 +137,61 @@ export function readAttachedCronJobs(
   agentId: string,
   options: OpenClawStateDatabaseOptions,
 ): AttachedCronJob[] {
-  const database = openOpenClawStateDatabase(options);
-  if (!clawStateTableExists(database.db, "cron_jobs")) {
+  const { db } = openOpenClawStateDatabase(options);
+  if (!tableExists(db, "cron_jobs")) {
     return [];
   }
-  return database.db /* sqlite-allow-raw: read-only cron references for Claw removal planning. */
-    .prepare(
-      `SELECT job_id AS id, name, enabled, agent_id AS agentId, owner_agent_id AS ownerAgentId
-         FROM cron_jobs
-        WHERE agent_id = ? OR owner_agent_id = ?
-        ORDER BY job_id`,
-    )
-    .all(agentId, agentId)
-    .map((row) => {
-      const value = row as {
-        id: string;
-        name: string;
-        enabled: number;
-        agentId: string | null;
-        ownerAgentId: string | null;
-      };
-      return {
-        id: value.id,
-        name: value.name,
-        enabled: value.enabled === 1,
-        agentId: value.agentId,
-        ownerAgentId: value.ownerAgentId,
-      };
-    });
+  const { compiled, bind } = compileSqliteQueryBindings<string>((parameter) => {
+    const boundAgentId = parameter((value) => value);
+    return getNodeSqliteKysely<ClawRemovalDatabase>(db)
+      .selectFrom("cron_jobs")
+      .selectAll()
+      .where((eb) =>
+        eb.or([eb("agent_id", "=", boundAgentId), eb("owner_agent_id", "=", boundAgentId)]),
+      )
+      .orderBy("job_id")
+      .orderBy("store_key");
+  });
+  const rows =
+    db /* sqlite-allow-raw: preserve native inventory errors outside the write-transaction owner. */
+      .prepare(compiled.sql)
+      .all(...bind(agentId)) as CronJobRow[];
+  return rows.map((row) => {
+    const job = loadedCronStoreFromRows([row]).store.jobs[0];
+    return {
+      id: row.job_id,
+      name: row.name,
+      enabled: row.enabled === 1,
+      agentId: row.agent_id,
+      ownerAgentId: row.owner_agent_id,
+      storeKey: row.store_key,
+      declarationKey: row.declaration_key,
+      revision: job ? resolveCronJobConfigRevision(job) : undefined,
+    };
+  });
+}
+
+/** Offline preview keeps local blockers; only a serving owner can make a monitor removable. */
+export async function readClawRemoveCronInventory(
+  agentId: string,
+  options: OpenClawStateDatabaseOptions & { monitorGateway?: ClawMonitorCleanupGateway },
+) {
+  let attachedJobs = readAttachedCronJobs(agentId, options);
+  let monitors: ClawMonitorSnapshot[] = [];
+  let inspectionUnavailable = false;
+  if (attachedJobs.some((job) => isSystemMonitorDeclaration(job.declarationKey ?? undefined))) {
+    inspectionUnavailable = true;
+    if (options.monitorGateway) {
+      try {
+        monitors = await options.monitorGateway.inspect(agentId);
+        inspectionUnavailable = false;
+      } catch {
+        // An unavailable/uncorroborated owner grants no removal scope.
+      }
+      attachedJobs = readAttachedCronJobs(agentId, options);
+    }
+  }
+  return { attachedJobs, monitors, inspectionUnavailable };
 }
 
 export type ClawCleanupTargets = {
@@ -249,17 +253,28 @@ export async function cleanupClawAgentFilesystem(params: {
   runtime: RuntimeEnv;
   trashPath?: ClawTrashPath;
   retainWorkspace?: boolean;
+  stateDatabase?: OpenClawStateDatabaseOptions;
 }): Promise<string[]> {
   const errors: string[] = [];
   const trashPath = params.trashPath ?? moveToTrash;
-  const workspaceSharedWith = params.targets.workspaceDir
-    ? findOverlappingWorkspaceAgentIds(
-        params.nextConfig,
-        params.agentId,
-        params.targets.workspaceDir,
-      )
-    : [];
-  if (params.targets.workspaceDir && !params.retainWorkspace && workspaceSharedWith.length === 0) {
+  const survivingDatabaseFilePaths = resolveSurvivingDatabaseFilePaths(
+    readAgentDeleteDatabaseRegistry(params.stateDatabase),
+    params.agentId,
+    params.stateDatabase?.env,
+  );
+  const sharedWithSurvivor = (pathname: string) =>
+    isPathOwnedBySurvivingAgent(
+      params.nextConfig,
+      params.agentId,
+      pathname,
+      survivingDatabaseFilePaths,
+      params.stateDatabase?.env,
+    );
+  if (
+    params.targets.workspaceDir &&
+    !params.retainWorkspace &&
+    !sharedWithSurvivor(params.targets.workspaceDir)
+  ) {
     const legacyPlan = prepareLegacyWorkspaceStateReset(params.targets.workspaceDir);
     const statePlan = prepareWorkspaceStateDeletion(params.targets.workspaceDir);
     const workspaceRemoved = await trashPath(params.targets.workspaceDir, params.runtime);
@@ -277,10 +292,16 @@ export async function cleanupClawAgentFilesystem(params: {
       errors.push(`Could not trash workspace ${params.targets.workspaceDir}.`);
     }
   }
-  if (!(await trashPath(params.targets.agentDir, params.runtime))) {
+  if (
+    !sharedWithSurvivor(params.targets.agentDir) &&
+    !(await trashPath(params.targets.agentDir, params.runtime))
+  ) {
     errors.push(`Could not trash agent state ${params.targets.agentDir}.`);
   }
-  if (!(await trashPath(params.targets.sessionsDir, params.runtime))) {
+  if (
+    !sharedWithSurvivor(params.targets.sessionsDir) &&
+    !(await trashPath(params.targets.sessionsDir, params.runtime))
+  ) {
     errors.push(`Could not trash session transcripts ${params.targets.sessionsDir}.`);
   }
   return errors;
@@ -459,36 +480,59 @@ export async function removeClawWorkspaceFile(
 export function releaseClawRemoveRows(
   agentId: string,
   files: RemovedWorkspaceFile[],
-  complete: boolean,
+  cleanupErrors: string[],
+  assertCurrent: (database: OpenClawStateDatabase) => void,
+  completeDeletion: (database: OpenClawStateDatabase) => void,
   options: OpenClawStateDatabaseOptions,
-): void {
-  if (complete) {
-    // Keep the install record as the retry owner until database discovery is released.
-    unregisterOpenClawAgentDatabases({ agentId, env: options.env });
-  }
-  runOpenClawStateWriteTransaction(({ db }) => {
-    if (clawStateTableExists(db, "claw_workspace_files")) {
-      for (const file of files.filter((candidate) => candidate.action !== "error")) {
-        db /* sqlite-allow-raw: remove one owned Claw workspace-file row. */
-          .prepare("DELETE FROM claw_workspace_files WHERE agent_id = ? AND target_path = ?")
-          .run(agentId, file.path);
+): boolean {
+  const complete = cleanupErrors.length === 0;
+  try {
+    runOpenClawStateWriteTransaction((database) => {
+      assertCurrent(database);
+      if (complete) {
+        // Discovery and owned rows must retire under the same current-operation transaction.
+        unregisterOpenClawAgentDatabases({ agentId, env: options.env, database });
       }
+      const { db } = database;
+      const query = getNodeSqliteKysely<ClawRemovalDatabase>(db);
+      if (tableExists(db, "claw_workspace_files")) {
+        for (const file of files.filter((candidate) => candidate.action !== "error")) {
+          executeSqliteQuerySync(
+            db,
+            query
+              .deleteFrom("claw_workspace_files")
+              .where("agent_id", "=", agentId)
+              .where("target_path", "=", file.path),
+          );
+        }
+      }
+      // Partial removals keep both the journal fence and install retry owner intact.
+      if (!complete) {
+        return;
+      }
+      if (tableExists(db, "claw_package_refs")) {
+        executeSqliteQuerySync(
+          db,
+          query.deleteFrom("claw_package_refs").where("agent_id", "=", agentId),
+        );
+      }
+      if (tableExists(db, "claw_installs")) {
+        executeSqliteQuerySync(
+          db,
+          query.deleteFrom("claw_installs").where("agent_id", "=", agentId),
+        );
+      }
+      // Complete removals release the fence and retry owner in the same transaction.
+      completeDeletion(database);
+    }, options);
+    if (complete) {
+      deleteCachedClawInstallSchemaVersion(agentId, options);
     }
-    if (!complete) {
-      return;
+  } catch (error) {
+    if (complete) {
+      throw error;
     }
-    if (clawStateTableExists(db, "claw_package_refs")) {
-      db /* sqlite-allow-raw: release package refs for a removed Claw agent. */
-        .prepare("DELETE FROM claw_package_refs WHERE agent_id = ?")
-        .run(agentId);
-    }
-    if (clawStateTableExists(db, "claw_installs")) {
-      db /* sqlite-allow-raw: remove the completed Claw install owner row. */
-        .prepare("DELETE FROM claw_installs WHERE agent_id = ?")
-        .run(agentId);
-    }
-  }, options);
-  if (complete) {
-    deleteCachedClawInstallSchemaVersion(agentId, options);
+    cleanupErrors.push(coerceErrorMessage(error));
   }
+  return complete;
 }

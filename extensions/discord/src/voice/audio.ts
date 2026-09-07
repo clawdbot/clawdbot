@@ -1,6 +1,4 @@
-// Discord plugin module implements audio behavior.
 import { spawn } from "node:child_process";
-import fs from "node:fs/promises";
 import { Transform, type Readable, type TransformCallback } from "node:stream";
 import { StringDecoder } from "node:string_decoder";
 import {
@@ -19,6 +17,7 @@ import { tempWorkspace, resolvePreferredOpenClawTmpDir } from "openclaw/plugin-s
 const SAMPLE_RATE = 48_000;
 const CHANNELS = 2;
 const BIT_DEPTH = 16;
+export const VOICE_WAV_HEADER_BYTES = 44;
 const FFMPEG_ERROR_OUTPUT_BYTES = 8_192;
 const DISCORD_OPUS_FRAME_SIZE = 960;
 const DISCORD_OPUS_FRAME_BYTES = DISCORD_OPUS_FRAME_SIZE * CHANNELS * (BIT_DEPTH / 8);
@@ -38,9 +37,10 @@ const FFMPEG_PCM_ARGUMENTS = [
   String(CHANNELS),
 ];
 
-type OpusDecoder = {
-  decode: (buffer: Buffer) => Buffer | Promise<Buffer>;
-  free?: () => Promise<void> | void;
+type OpusDecodeCallbacks = {
+  onError?: (err: unknown) => void;
+  onVerbose: (message: string) => void;
+  onWarn: (message: string) => void;
 };
 
 let warnedOpusMissing = false;
@@ -48,7 +48,7 @@ let warnedOpusMissing = false;
 function buildWavBuffer(pcm: Buffer): Buffer {
   const blockAlign = (CHANNELS * BIT_DEPTH) / 8;
   const byteRate = SAMPLE_RATE * blockAlign;
-  const header = Buffer.alloc(44);
+  const header = Buffer.alloc(VOICE_WAV_HEADER_BYTES);
   header.write("RIFF", 0);
   header.writeUInt32LE(36 + pcm.length, 4);
   header.write("WAVE", 8);
@@ -65,40 +65,7 @@ function buildWavBuffer(pcm: Buffer): Buffer {
   return Buffer.concat([header, pcm]);
 }
 
-async function createOpusDecoder(params: {
-  onWarn: (message: string) => void;
-}): Promise<{ decoder: OpusDecoder; name: string } | null> {
-  let decoder: LibopusDecoder;
-  try {
-    decoder = await createLibopusDecoder({
-      channels: CHANNELS,
-      sampleRate: SAMPLE_RATE,
-    });
-  } catch (err) {
-    const failure = formatErrorMessage(err);
-    if (!warnedOpusMissing) {
-      warnedOpusMissing = true;
-      params.onWarn(
-        `discord voice: no usable opus decoder available (libopus-wasm: ${failure}); cannot decode voice audio`,
-      );
-    }
-    return null;
-  }
-  return {
-    name: "libopus-wasm",
-    decoder: {
-      decode: (buffer) =>
-        pcmInt16ToBuffer(
-          decoder.decode(buffer, {
-            maxFrameSize: DISCORD_OPUS_FRAME_SIZE,
-          }),
-        ),
-      free: () => decoder.free(),
-    },
-  };
-}
-
-export function createDiscordOpusEncodeStream(): Transform {
+export function createDiscordOpusEncodeStream(): DiscordOpusEncodeStream {
   return new DiscordOpusEncodeStream();
 }
 
@@ -175,83 +142,81 @@ export function createDiscordOpusPlaybackStream(input: Readable | string): Reada
 
 class DiscordOpusEncodeStream extends Transform {
   #buffer = Buffer.alloc(0);
-  #encoder: LibopusEncoder | null = null;
-  #encoderPromise: Promise<LibopusEncoder> | null = null;
+  #encoder!: LibopusEncoder;
+  readonly #packetPcmBytes = new WeakMap<Buffer, number>();
 
   constructor() {
     super({ readableObjectMode: true });
   }
 
-  async #getEncoder(): Promise<LibopusEncoder> {
-    if (!this.#encoderPromise) {
-      this.#encoderPromise = createLibopusEncoder({
-        application: Application.Audio,
-        channels: CHANNELS,
-        sampleRate: SAMPLE_RATE,
-      });
-    }
-    if (!this.#encoder) {
-      this.#encoder = await this.#encoderPromise;
-    }
-    return this.#encoder;
+  override _construct(done: (error?: Error | null) => void): void {
+    // Node defers transforms and destruction until construction settles, so a late
+    // encoder is released by _destroy without processing cancelled playback.
+    void createLibopusEncoder({
+      application: Application.Audio,
+      channels: CHANNELS,
+      sampleRate: SAMPLE_RATE,
+    }).then(
+      (encoder) => {
+        this.#encoder = encoder;
+        done();
+      },
+      (err: unknown) => done(err instanceof Error ? err : new Error(formatErrorMessage(err))),
+    );
   }
 
   override _transform(chunk: Buffer, _encoding: BufferEncoding, done: TransformCallback): void {
-    void (async () => {
-      try {
-        const encoder = await this.#getEncoder();
-        this.#buffer =
-          this.#buffer.length > 0 ? Buffer.concat([this.#buffer, chunk]) : Buffer.from(chunk);
-        while (this.#buffer.length >= DISCORD_OPUS_FRAME_BYTES) {
-          const frame = this.#buffer.subarray(0, DISCORD_OPUS_FRAME_BYTES);
-          this.#buffer = this.#buffer.subarray(DISCORD_OPUS_FRAME_BYTES);
-          this.push(
-            Buffer.from(
-              encoder.encode(frame, {
-                frameSize: DISCORD_OPUS_FRAME_SIZE,
-              }),
-            ),
-          );
-        }
-        done();
-      } catch (err) {
-        done(err instanceof Error ? err : new Error(formatErrorMessage(err)));
+    try {
+      this.#buffer =
+        this.#buffer.length > 0 ? Buffer.concat([this.#buffer, chunk]) : Buffer.from(chunk);
+      while (this.#buffer.length >= DISCORD_OPUS_FRAME_BYTES) {
+        const frame = this.#buffer.subarray(0, DISCORD_OPUS_FRAME_BYTES);
+        this.#buffer = this.#buffer.subarray(DISCORD_OPUS_FRAME_BYTES);
+        this.#encodeFrame(frame);
       }
-    })();
+      done();
+    } catch (err) {
+      done(err instanceof Error ? err : new Error(formatErrorMessage(err)));
+    }
   }
 
-  override _final(done: TransformCallback): void {
-    void (async () => {
-      try {
-        if (this.#buffer.length > 0) {
-          const encoder = await this.#getEncoder();
-          const frame = Buffer.alloc(DISCORD_OPUS_FRAME_BYTES);
-          this.#buffer.copy(frame);
-          this.#buffer = Buffer.alloc(0);
-          this.push(
-            Buffer.from(
-              encoder.encode(frame, {
-                frameSize: DISCORD_OPUS_FRAME_SIZE,
-              }),
-            ),
-          );
-        }
-        this.#freeEncoder();
-        done();
-      } catch (err) {
-        done(err instanceof Error ? err : new Error(formatErrorMessage(err)));
-      }
-    })();
+  override _flush(done: TransformCallback): void {
+    try {
+      this.flushPartialFrame();
+      done();
+    } catch (err) {
+      done(err instanceof Error ? err : new Error(formatErrorMessage(err)));
+    }
+  }
+
+  flushPartialFrame(): boolean {
+    if (this.destroyed || this.#buffer.length === 0) {
+      return false;
+    }
+    const pcmBytes = this.#buffer.length;
+    const frame = Buffer.alloc(DISCORD_OPUS_FRAME_BYTES);
+    this.#buffer.copy(frame);
+    this.#buffer = Buffer.alloc(0);
+    this.#encodeFrame(frame, pcmBytes);
+    return true;
+  }
+
+  takePcmBytes(packet: Buffer): number {
+    const bytes = this.#packetPcmBytes.get(packet) ?? 0;
+    this.#packetPcmBytes.delete(packet);
+    return bytes;
   }
 
   override _destroy(err: Error | null, done: (error?: Error | null) => void): void {
-    this.#freeEncoder();
+    this.#encoder?.free();
+    this.#buffer = Buffer.alloc(0);
     done(err);
   }
 
-  #freeEncoder(): void {
-    this.#encoder?.free();
-    this.#encoder = null;
+  #encodeFrame(frame: Buffer, pcmBytes = frame.length): void {
+    const packet = Buffer.from(this.#encoder.encode(frame, { frameSize: DISCORD_OPUS_FRAME_SIZE }));
+    this.#packetPcmBytes.set(packet, pcmBytes);
+    this.push(packet);
   }
 }
 
@@ -259,63 +224,46 @@ function pcmInt16ToBuffer(pcm: Int16Array): Buffer {
   return Buffer.from(pcm.buffer, pcm.byteOffset, pcm.byteLength);
 }
 
-export async function decodeOpusStream(
-  stream: Readable,
-  params: {
-    onError?: (err: unknown) => void;
-    onVerbose: (message: string) => void;
-    onWarn: (message: string) => void;
-  },
-): Promise<Buffer> {
-  const selected = await createOpusDecoder({ onWarn: params.onWarn });
-  if (!selected) {
-    return Buffer.alloc(0);
-  }
-  params.onVerbose(`opus decoder: ${selected.name}`);
-  const chunks: Buffer[] = [];
-  try {
-    for await (const chunk of stream) {
-      if (!chunk || !(chunk instanceof Buffer) || chunk.length === 0) {
-        continue;
-      }
-      const decoded = await selected.decoder.decode(chunk);
-      if (decoded && decoded.length > 0) {
-        chunks.push(Buffer.from(decoded));
-      }
-    }
-  } catch (err) {
-    params.onError?.(err);
-    if (shouldLogVerbose()) {
-      logVerbose(`discord voice: opus decode failed: ${formatErrorMessage(err)}`);
-    }
-  } finally {
-    await selected.decoder.free?.();
-  }
-  return chunks.length > 0 ? Buffer.concat(chunks) : Buffer.alloc(0);
-}
-
 export async function decodeOpusStreamChunks(
   stream: Readable,
-  params: {
-    onChunk: (pcm48kStereo: Buffer) => void;
-    onError?: (err: unknown) => void;
-    onVerbose: (message: string) => void;
-    onWarn: (message: string) => void;
+  params: OpusDecodeCallbacks & {
+    onChunk: (pcm48kStereo: Buffer, packet: Buffer) => void | Promise<void>;
   },
 ): Promise<void> {
-  const selected = await createOpusDecoder({ onWarn: params.onWarn });
-  if (!selected) {
+  try {
+    for await (const { pcm, packet } of decodeOpusFrames(stream, params)) {
+      await params.onChunk(pcm, packet);
+    }
+  } catch (err) {
+    params.onError?.(err);
+  }
+}
+
+async function* decodeOpusFrames(
+  stream: Readable,
+  params: OpusDecodeCallbacks,
+): AsyncGenerator<{ pcm: Buffer; packet: Buffer }> {
+  let decoder: LibopusDecoder;
+  try {
+    decoder = await createLibopusDecoder({ channels: CHANNELS, sampleRate: SAMPLE_RATE });
+  } catch (err) {
+    if (!warnedOpusMissing) {
+      warnedOpusMissing = true;
+      params.onWarn(
+        `discord voice: no usable opus decoder available (libopus-wasm: ${formatErrorMessage(err)}); cannot decode voice audio`,
+      );
+    }
     return;
   }
-  params.onVerbose(`opus decoder: ${selected.name}`);
+  params.onVerbose("opus decoder: libopus-wasm");
   try {
     for await (const chunk of stream) {
       if (!chunk || !(chunk instanceof Buffer) || chunk.length === 0) {
         continue;
       }
-      const decoded = await selected.decoder.decode(chunk);
-      if (decoded && decoded.length > 0) {
-        params.onChunk(Buffer.from(decoded));
+      const decoded = decoder.decode(chunk, { maxFrameSize: DISCORD_OPUS_FRAME_SIZE });
+      if (decoded.length > 0) {
+        yield { pcm: pcmInt16ToBuffer(decoded), packet: chunk };
       }
     }
   } catch (err) {
@@ -324,7 +272,7 @@ export async function decodeOpusStreamChunks(
       logVerbose(`discord voice: opus decode failed: ${formatErrorMessage(err)}`);
     }
   } finally {
-    await selected.decoder.free?.();
+    decoder.free();
   }
 }
 
@@ -369,24 +317,20 @@ function estimateDurationSeconds(pcm: Buffer): number {
 
 export async function writeVoiceWavFile(
   pcm: Buffer,
-): Promise<{ path: string; durationSeconds: number }> {
+): Promise<{ path: string; durationSeconds: number; cleanup: () => Promise<void> }> {
   const workspace = await tempWorkspace({
     rootDir: resolvePreferredOpenClawTmpDir(),
     prefix: "discord-voice-",
   });
-  scheduleTempCleanup(workspace.dir);
-  const wav = buildWavBuffer(pcm);
-  const filePath = await workspace.write("segment.wav", wav);
-  return { path: filePath, durationSeconds: estimateDurationSeconds(pcm) };
-}
-
-function scheduleTempCleanup(tempDir: string, delayMs: number = 30 * 60 * 1000): void {
-  const timer = setTimeout(() => {
-    fs.rm(tempDir, { recursive: true, force: true }).catch((err: unknown) => {
-      if (shouldLogVerbose()) {
-        logVerbose(`discord voice: temp cleanup failed for ${tempDir}: ${formatErrorMessage(err)}`);
-      }
-    });
-  }, delayMs);
-  timer.unref();
+  try {
+    const filePath = await workspace.write("segment.wav", buildWavBuffer(pcm));
+    return {
+      path: filePath,
+      durationSeconds: estimateDurationSeconds(pcm),
+      cleanup: () => workspace[Symbol.asyncDispose](),
+    };
+  } catch (error) {
+    await workspace.cleanup();
+    throw error;
+  }
 }

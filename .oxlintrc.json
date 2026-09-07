@@ -226,7 +226,6 @@
   "ignorePatterns": [
     "dist/",
     "dist-runtime/",
-    "docs/_layouts/",
     // Intentional negative-test corpora contain parser and lint violations by contract.
     ".agents/skills/autoreview/tests/fixtures/**",
     "test/fixtures/oxlint-boundary-guards/**",
@@ -393,6 +392,20 @@
       "files": ["extensions/copilot/src/attempt-transcript-journal.test.ts"],
       "rules": {
         "max-lines": ["error", { "max": 1200, "skipBlankLines": true, "skipComments": true }]
+      }
+    },
+    {
+      "files": ["**/*.{ts,tsx,mts,cts}"],
+      "rules": {
+        // tsgo owns TypeScript type/value namespace validity; no-var still rejects var declarations.
+        "eslint/no-redeclare": "off"
+      }
+    },
+    {
+      "files": ["extensions/qa-lab/src/web-runtime.ts"],
+      "rules": {
+        // Scenario scripts need page-global declarations, unlike Playwright's expression evaluation.
+        "eslint/no-eval": ["error", { "allowIndirect": true }]
       }
     }
   ]

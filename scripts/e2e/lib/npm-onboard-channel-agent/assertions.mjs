@@ -1,12 +1,15 @@
 // Assertions for npm onboard channel-agent E2E scenarios.
 import fs from "node:fs";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import {
   assertAgentReplyContainsMarker,
   assertOpenAiRequestLogUsed,
 } from "../agent-turn-output.mjs";
-import { assertOpenAiEnvAuthProfileStore } from "../auth-profile-store-assertions.mjs";
+import {
+  assertNoLegacyPrimaryAuthRows,
+  assertOpenAiEnvAuthProfileStore,
+  readCanonicalAuthProfileStoreText,
+} from "../auth-profile-store-assertions.mjs";
 import { readPositiveIntEnv } from "../env-limits.mjs";
 import {
   applyMockOpenAiModelConfig,
@@ -77,44 +80,16 @@ function extractStatusSection(text, title) {
   return stripAnsi(section.join("\n"));
 }
 
-function readSharedAuthProfileStoreText(stateDir) {
-  const dbPath = path.join(stateDir, "state", "openclaw.sqlite");
-  if (!fs.existsSync(dbPath)) {
-    return "";
-  }
-  let db;
-  try {
-    db = new DatabaseSync(dbPath, { readOnly: true });
-    const row = db
-      .prepare("SELECT store_json FROM auth_profile_stores WHERE store_key = ?")
-      .get("shared");
-    return typeof row?.store_json === "string" ? row.store_json : "";
-  } catch {
-    return "";
-  } finally {
-    db?.close();
-  }
-}
-
 function assertOnboardState() {
   const home = process.argv[3];
   const stateDir = path.join(home, ".openclaw");
   const configPath = path.join(stateDir, "openclaw.json");
-  const legacyAuthDatabase = path.join(
-    stateDir,
-    "agents",
-    "main",
-    "agent",
-    "openclaw-agent.sqlite",
-  );
 
   if (!fs.existsSync(configPath)) {
     throw new Error("onboard did not write openclaw.json");
   }
-  if (fs.existsSync(legacyAuthDatabase)) {
-    throw new Error("onboard created the retired main-agent auth database");
-  }
-  const authStoreText = readSharedAuthProfileStoreText(stateDir);
+  assertNoLegacyPrimaryAuthRows(stateDir);
+  const authStoreText = readCanonicalAuthProfileStoreText(stateDir);
   if (!authStoreText) {
     throw new Error("onboard did not persist auth profile store");
   }

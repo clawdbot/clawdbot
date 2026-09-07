@@ -1,9 +1,9 @@
 // Real-Chromium coverage keeps automation condition authoring aligned with Gateway contracts.
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
 import type { ApplicationContext } from "../app/context.ts";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -13,7 +13,13 @@ const suite = createControlUiE2eSuite({
   unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
 });
 
-const proofDirectory = process.env.OPENCLAW_TRIGGER_UI_PROOF_DIR;
+const proofDirectoryParent = process.env.OPENCLAW_TRIGGER_UI_PROOF_DIR;
+let proofDirectory: string | undefined;
+beforeEach(() => {
+  proofDirectory = proofDirectoryParent
+    ? createControlUiE2eArtifactDir("cron-trigger-authoring", proofDirectoryParent)
+    : undefined;
+});
 const proofStage = process.env.OPENCLAW_TRIGGER_UI_PROOF_STAGE ?? "after";
 type CronTriggerTestApp = HTMLElement & { runtime?: { context: ApplicationContext } };
 
@@ -68,7 +74,6 @@ async function captureProof(page: Page, name: string) {
   if (!proofDirectory) {
     return;
   }
-  await mkdir(proofDirectory, { recursive: true });
   await page.screenshot({
     animations: "disabled",
     path: path.join(proofDirectory, `${proofStage}-${name}.png`),
@@ -223,25 +228,34 @@ suite.define(() => {
         await expect.poll(() => triggerToggle.count()).toBe(1);
         await captureTriggerCapabilityProof(page, "05-unsaved-disable-keeps-active-trigger");
 
-        const saveResult = await page.evaluate(async () => {
+        await page.evaluate(() => {
           const config = (document.querySelector("openclaw-app") as CronTriggerTestApp).runtime
             ?.context.runtimeConfig;
           if (!config) {
             throw new Error("Runtime config capability is unavailable");
           }
           config.setWritesSuspended(false);
-          const saved = await config.save();
-          return {
-            dirty: config.state.configFormDirty,
-            needsApply: config.state.configNeedsApply,
-            saved,
-          };
+          // Observe this long-lived save through Gateway/state boundaries; returning its
+          // promise through CDP lets Chromium collect it under full-shard memory pressure.
+          void config.save();
         });
-        expect(saveResult).toEqual({ dirty: false, needsApply: true, saved: true });
         const savedRequest = await gateway.waitForRequest("config.set");
         expect(JSON.parse(String((savedRequest.params as { raw?: string }).raw))).toEqual({
           cron: { triggers: { enabled: false } },
         });
+        await expect
+          .poll(() =>
+            page.evaluate(() => {
+              const config = (document.querySelector("openclaw-app") as CronTriggerTestApp).runtime
+                ?.context.runtimeConfig;
+              return {
+                dirty: config?.state.configFormDirty,
+                needsApply: config?.state.configNeedsApply,
+                saving: config?.state.configSaving,
+              };
+            }),
+          )
+          .toEqual({ dirty: false, needsApply: true, saving: false });
         expect(await gateway.getRequests("config.apply")).toHaveLength(0);
         await expect.poll(() => triggerToggle.count()).toBe(1);
         await captureTriggerCapabilityProof(page, "06-saved-unapplied-keeps-active-trigger");

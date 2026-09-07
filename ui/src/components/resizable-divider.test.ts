@@ -269,6 +269,37 @@ describe("resizable-divider", () => {
     expect(resized).not.toHaveBeenCalled();
   });
 
+  it("ends only the owner gesture when pointer capture is lost", async () => {
+    const divider = await renderDivider();
+    const resized = vi.fn();
+    const resizeEnded = vi.fn();
+    const capturedPointers = new Set<number>();
+    divider.setPointerCapture = vi.fn((pointerId) => capturedPointers.add(pointerId));
+    divider.releasePointerCapture = vi.fn((pointerId) => capturedPointers.delete(pointerId));
+    divider.hasPointerCapture = vi.fn((pointerId) => capturedPointers.has(pointerId));
+    divider.addEventListener("resize", resized);
+    divider.addEventListener("resize-end", resizeEnded);
+
+    dispatchPointer(divider, "pointerdown", 100, 7);
+    dispatchPointer(document, "pointermove", 120, 7);
+    dispatchPointer(divider, "lostpointercapture", 120, 8);
+
+    expect([...divider.classList]).toEqual(["dragging"]);
+    expect(resized).not.toHaveBeenCalled();
+    expect(resizeEnded).not.toHaveBeenCalled();
+
+    capturedPointers.delete(7);
+    dispatchPointer(divider, "lostpointercapture", 120, 7);
+
+    expectLastResizeRatio(resized, 0.65);
+    expectLastResizeRatio(resizeEnded, 0.65);
+    expect([...divider.classList]).toEqual([]);
+
+    dispatchPointer(divider, "pointerdown", 120, 8);
+    expect(capturedPointers.has(8)).toBe(true);
+    dispatchPointer(document, "pointerup", 120, 8);
+  });
+
   it("commits the final pointer position when disconnected", async () => {
     const divider = await renderDivider();
     const resized = vi.fn();

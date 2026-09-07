@@ -1,6 +1,5 @@
 import { OPENCLAW_DATABASE_SCHEMA_DOCS_URL } from "../state/openclaw-state-db-contract.js";
-import { VERSION } from "../version.js";
-import { resolveCommitHash } from "./git-commit.js";
+import { resolveRuntimeServiceCommit, VERSION } from "../version.js";
 import { resolveOpenClawPackageRootSync } from "./openclaw-root.js";
 
 type SqliteUserVersionReader = {
@@ -9,8 +8,15 @@ type SqliteUserVersionReader = {
 
 const SQLITE_SCHEMA_VERSION_ERROR_NAME = "SqliteSchemaVersionError";
 
+export class SqliteSchemaVersionError extends Error {
+  override name = SQLITE_SCHEMA_VERSION_ERROR_NAME;
+}
+
 export function isSqliteSchemaVersionError(error: unknown): error is Error {
-  return error instanceof Error && error.name === SQLITE_SCHEMA_VERSION_ERROR_NAME;
+  return (
+    error instanceof SqliteSchemaVersionError ||
+    (error instanceof Error && error.name === SQLITE_SCHEMA_VERSION_ERROR_NAME)
+  );
 }
 
 export function readSqliteUserVersion(db: SqliteUserVersionReader): number {
@@ -19,15 +25,12 @@ export function readSqliteUserVersion(db: SqliteUserVersionReader): number {
 }
 
 /**
- * Name the refusing install the way `--version` does, plus the root it runs from.
- * The path is the only part an operator can always act on: one release version
- * string spans many commits, and a linked source checkout reports its git HEAD
- * even when the built output actually executing is older.
+ * Name the refusing build from immutable loaded metadata, plus its install root.
+ * The path remains actionable when multiple installs share a version or build.
  */
 export function describeRunningOpenClawBuild(): string {
-  const moduleUrl = import.meta.url;
-  const commit = resolveCommitHash({ moduleUrl });
-  const root = resolveOpenClawPackageRootSync({ moduleUrl });
+  const commit = resolveRuntimeServiceCommit();
+  const root = resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url });
   const identity = commit ? `OpenClaw ${VERSION} (${commit})` : `OpenClaw ${VERSION}`;
   return root ? `${identity} installed at ${root}` : identity;
 }
@@ -38,13 +41,11 @@ export function createNewerSqliteSchemaVersionError(
   schemaVersion: number,
   supportedVersion: number,
 ): Error {
-  const error = new Error(
-    `${databaseLabel} ${pathname} uses newer schema version ${schemaVersion}; this build supports ${supportedVersion}. ` +
-      `Refused by ${describeRunningOpenClawBuild()}. ` +
-      "Identify installs by that path: one version string spans many builds, and a linked source checkout reports its git HEAD even when its built output is older. " +
-      `Run a build that supports schema ${schemaVersion} or newer against this state directory — rebuild or update the install above — or point this build at a different OPENCLAW_STATE_DIR. ` +
+  return new SqliteSchemaVersionError(
+    "This OpenClaw build cannot open your existing data.\n" +
+      `${databaseLabel} ${pathname} uses newer schema version ${schemaVersion}; this build supports ${supportedVersion}.\n` +
+      `Refused by ${describeRunningOpenClawBuild()}.\n` +
+      `Use a build that supports schema ${schemaVersion} or newer with this state directory. To start fresh with this build, point OPENCLAW_STATE_DIR at a separate directory.\n` +
       `See ${OPENCLAW_DATABASE_SCHEMA_DOCS_URL}.`,
   );
-  error.name = SQLITE_SCHEMA_VERSION_ERROR_NAME;
-  return error;
 }

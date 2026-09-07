@@ -1,9 +1,11 @@
 // Discord tests cover monitor plugin behavior.
+import { GatewayDispatchEvents } from "discord-api-types/v10";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
 import { createRequireRecord, typedCases } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ChannelType, type Guild } from "./internal/discord.js";
+import { mapGatewayDispatchData } from "./internal/gateway-dispatch.js";
 import {
   allowListMatches,
   type DiscordGuildEntryResolved,
@@ -1097,6 +1099,86 @@ describe("discord DM reaction handling", () => {
     expect(enqueueSystemEventSpy).toHaveBeenCalledOnce();
     const text = firstMockArg(enqueueSystemEventSpy, "enqueueSystemEvent");
     expect(text).toContain("Discord reaction removed: 👍 by user-42 on");
+  });
+
+  it.each([
+    {
+      action: "added",
+      event: GatewayDispatchEvents.MessageReactionAdd,
+      Listener: DiscordReactionListener,
+    },
+    {
+      action: "removed",
+      event: GatewayDispatchEvents.MessageReactionRemove,
+      Listener: DiscordReactionRemoveListener,
+    },
+  ])("preserves distinct normal and super reactions when $action", async (testCase) => {
+    channelRuntimeModule.resetSystemEventsForTest();
+    enqueueSystemEventSpy.mockImplementation((text: string, options: { sessionKey: string }) =>
+      channelRuntimeModule.enqueueSystemEvent(text, options),
+    );
+
+    try {
+      const fetchMessage = vi.fn(async () => ({
+        id: "msg-1",
+        channel_id: "channel-1",
+        author: { id: "bot-1", username: "bot", discriminator: "0" },
+      }));
+      const client = Object.assign(
+        makeReactionClient({ channelType: ChannelType.GuildText, channelName: "general" }),
+        { rest: { get: fetchMessage } },
+      );
+      const listener = new testCase.Listener(makeReactionListenerParams());
+      const gatewayEvent = {
+        user_id: "user-1",
+        channel_id: "channel-1",
+        message_id: "msg-1",
+        guild_id: "guild-123",
+        emoji: { id: null, name: "👍" },
+        ...(testCase.action === "added"
+          ? { member: { user: { id: "user-1", username: "actor", discriminator: "0" }, roles: [] } }
+          : {}),
+      };
+
+      for (const reaction of [
+        { burst: false, type: 0 },
+        { burst: true, type: 1 },
+        { burst: false, type: 0 },
+        { burst: true, type: 1 },
+      ]) {
+        await listener.handle(
+          mapGatewayDispatchData(client, testCase.event, {
+            ...gatewayEvent,
+            ...reaction,
+          }) as DiscordReactionEvent,
+          client,
+        );
+      }
+
+      const events = channelRuntimeModule.peekSystemEventEntries("discord:acc-1:dm:user-1");
+      const actor = testCase.action === "added" ? "actor" : "user-1";
+      expect(events.map(({ text, contextKey }) => ({ text, contextKey }))).toEqual([
+        {
+          text: `Discord reaction ${testCase.action}: 👍 by ${actor} on guild-123 #general msg msg-1 from bot`,
+          contextKey: `discord:reaction:${testCase.action}:msg-1:user-1:👍`,
+        },
+        {
+          text: `Discord super reaction ${testCase.action}: 👍 by ${actor} on guild-123 #general msg msg-1 from bot`,
+          contextKey: `discord:reaction:${testCase.action}:msg-1:user-1:👍:burst`,
+        },
+      ]);
+      expect(fetchMessage).toHaveBeenCalledTimes(4);
+      expect(fetchMessage).toHaveBeenCalledWith("/channels/channel-1/messages/msg-1");
+      expect(resolveAgentRouteMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          guildId: "guild-123",
+          peer: { kind: "channel", id: "channel-1" },
+        }),
+      );
+    } finally {
+      enqueueSystemEventSpy.mockReset();
+      channelRuntimeModule.resetSystemEventsForTest();
+    }
   });
 
   it("blocks DM reactions when dmPolicy is disabled", async () => {

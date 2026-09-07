@@ -10,7 +10,12 @@ import type { ThemeMode } from "../app/theme.ts";
 import { t } from "../i18n/index.ts";
 import { normalizeAgentLabel } from "../lib/agents/display.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
+import {
+  formatKeyboardShortcutCombo,
+  KEYBOARD_SHORTCUT_COMBOS,
+} from "../lib/keyboard-shortcut-catalog.ts";
 import { openExternalUrlSafe } from "../lib/open-external-url.ts";
+import type { PresenceViewer } from "../lib/presence-users.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import {
   DEBUG_OVERLAY_SHORTCUT_LABEL,
@@ -19,6 +24,7 @@ import {
 import { renderAgentSelectAvatar, renderAgentSelectCopy } from "./agent-select.ts";
 import { icons, type IconName } from "./icons.ts";
 import "./sidebar-build-chip.ts";
+import "./viewer-facepile.ts";
 import {
   consumeDropdownKeyboardDismissal,
   syncDropdownItemRadio,
@@ -167,7 +173,7 @@ type AgentMenuAgent = {
 };
 
 type SidebarAgentMenuParams = {
-  position: { x: number; top: number } | null;
+  position: { x: number; top: number };
   basePath: string;
   activeId: string;
   activeName: string;
@@ -177,7 +183,6 @@ type SidebarAgentMenuParams = {
   connected: boolean;
   openMode: "hover" | "click";
   agentUnreadCount: (agentId: string) => number;
-  agentApprovalCount: (agentId: string) => number;
   onPointerEnter: () => void;
   onPointerLeave: () => void;
   onAfterShow: () => void;
@@ -189,12 +194,12 @@ type SidebarAgentMenuParams = {
 };
 
 type SidebarIdentityMenuParams = {
-  position: { x: number; bottom: number; width: number } | null;
+  position: { x: number; bottom: number; width: number };
   canPairDevice: boolean;
   basePath: string;
   gatewayVersion: string | null;
-  selfName?: string;
-  selfEmail?: string;
+  updateAttentionDismissed: boolean;
+  profileViewer?: PresenceViewer;
   offline: boolean;
   themeMode: ThemeMode;
   triggerWidth: number;
@@ -204,10 +209,6 @@ type SidebarIdentityMenuParams = {
   onPairMobile: () => void;
   onRetryConnect?: () => void;
 };
-
-function isApplePlatform(): boolean {
-  return /Mac|iPhone|iPad|iPod/u.test(globalThis.navigator?.platform ?? "");
-}
 
 function sidebarAgentMenuRows(params: {
   agents: readonly AgentMenuAgent[];
@@ -233,17 +234,12 @@ function renderAgentRow(agent: AgentMenuAgent, params: SidebarAgentMenuParams) {
   const label = normalizeAgentLabel(agent, identity);
   const active = agentId === params.activeId;
   const unread = active ? 0 : params.agentUnreadCount(agentId);
-  const approvals = params.agentApprovalCount(agentId);
-  const approvalLabel = t(
-    approvals === 1 ? "execApproval.agentPendingOne" : "execApproval.agentPending",
-    { count: String(approvals) },
-  );
   const option = { value: agentId, label, agent };
   return html`
     <wa-dropdown-item
-      class="sidebar-customize-menu__item sidebar-agent-menu__agent-switch agent-select__option ${active
-        ? "sidebar-agent-menu__agent-switch--active"
-        : ""}"
+      class="sidebar-customize-menu__item sidebar-agent-menu__agent-switch agent-select__option ${
+        active ? "sidebar-agent-menu__agent-switch--active" : ""
+      }"
       value=${`${AGENT_VALUE_PREFIX}${encodeURIComponent(agentId)}`}
       type="checkbox"
       role="menuitemradio"
@@ -256,21 +252,15 @@ function renderAgentRow(agent: AgentMenuAgent, params: SidebarAgentMenuParams) {
         </span>
         ${renderAgentSelectCopy(option)}
         <span class="sidebar-agent-menu__agent-status">
-          ${approvals > 0
-            ? html`<span
-                class="sidebar-agent-approval-count"
-                aria-label=${approvalLabel}
-                title=${approvalLabel}
-                >${approvals}</span
-              >`
-            : nothing}
-          ${unread > 0
-            ? html`<span
-                class="session-unread-dot"
-                role="img"
-                aria-label=${t("sessionsView.unread")}
-              ></span>`
-            : nothing}
+          ${
+            unread > 0
+              ? html`<span
+                  class="session-unread-dot"
+                  role="img"
+                  aria-label=${t("sessionsView.unread")}
+                ></span>`
+              : nothing
+          }
         </span>
       </span>
     </wa-dropdown-item>
@@ -309,244 +299,264 @@ function renderIdentityMenuHelpSubmenu() {
 
 export function renderSidebarAgentMenu(params: SidebarAgentMenuParams) {
   const position = params.position;
-  if (!position) {
-    return nothing;
-  }
   const { activeId, activeName, agents } = params;
   const rows = sidebarAgentMenuRows(params);
   return html`
-    <openclaw-menu-surface>
-      <wa-dropdown
-        class="sidebar-customize-menu sidebar-agent-menu"
-        .open=${true}
-        placement="bottom-start"
-        .distance=${0}
-        aria-label=${t("agentChip.menuLabel")}
-        @pointerenter=${params.onPointerEnter}
-        @pointerleave=${params.onPointerLeave}
-        @wa-select=${(event: CustomEvent<{ item: HTMLElement & { value?: string } }>) => {
-          event.preventDefault();
-          const item = event.detail.item;
-          if (item.dataset.nativeNavigation) {
-            delete item.dataset.nativeNavigation;
-            params.onClose(false);
-            return;
-          }
-          const value = item.value;
-          if (!value) {
-            return;
-          }
+    <wa-dropdown
+      class="sidebar-customize-menu sidebar-agent-menu"
+      data-chat-autotype-exempt
+      .open=${true}
+      placement="bottom-start"
+      .distance=${0}
+      aria-label=${t("agentChip.menuLabel")}
+      @pointerenter=${params.onPointerEnter}
+      @pointerleave=${params.onPointerLeave}
+      @wa-select=${(event: CustomEvent<{ item: HTMLElement & { value?: string } }>) => {
+        event.preventDefault();
+        const item = event.detail.item;
+        if (item.dataset.nativeNavigation) {
+          delete item.dataset.nativeNavigation;
           params.onClose(false);
-          if (value.startsWith(AGENT_VALUE_PREFIX)) {
-            params.onSwitchAgent(decodeURIComponent(value.slice(AGENT_VALUE_PREFIX.length)));
-            return;
-          }
-          switch (value) {
-            case `${COMMAND_VALUE_PREFIX}capabilities`:
-              params.onAskCapabilities(activeId);
-              break;
-            case `${COMMAND_VALUE_PREFIX}agent-settings`:
-              params.onNavigate("agents", {
-                pathname: pathForAgentPanel(activeId, null, params.basePath),
-              });
-              break;
-            case `${COMMAND_VALUE_PREFIX}new-agent`:
-              params.onNavigate("custodian", { search: "?intent=new-agent" });
-              break;
-          }
-        }}
-        @wa-after-show=${(event: Event) => {
-          if (!(event.currentTarget instanceof HTMLElement)) {
-            return;
-          }
-          params.onAfterShow();
-          if (params.openMode === "hover") {
-            return;
-          }
-          focusActiveAgentMenuItem(event.currentTarget);
-        }}
-        @keydown=${(event: KeyboardEvent) => {
-          if (moveSidebarMenuFocus(event)) {
-            return;
-          }
-          if (typeaheadSidebarMenuFocus(event)) {
-            return;
-          }
-          const item =
-            event.target instanceof HTMLElement
-              ? event.target.closest<HTMLElement>(
-                  ".sidebar-agent-menu__agent-grid > wa-dropdown-item:not([disabled])",
-                )
-              : null;
-          if ((event.key === "Enter" || event.key === " ") && item) {
-            event.preventDefault();
-            event.stopPropagation();
-            item.click();
-            return;
-          }
-          trackDropdownKeyboardDismissal(event, params.onTabAway);
-        }}
-        @wa-after-hide=${(event: Event) => closeMenuAfterOwnDropdownHide(event, params.onClose)}
-      >
-        <button
-          slot="trigger"
-          type="button"
-          tabindex="-1"
-          aria-hidden="true"
-          aria-label=${t("agentChip.menuLabel")}
-          style="position: fixed; left: ${position.x}px; top: ${position.top}px; width: 1px; height: 1px; opacity: 0; pointer-events: none;"
-        ></button>
-        ${agents.length > 1
+          return;
+        }
+        const value = item.value;
+        if (!value) {
+          return;
+        }
+        params.onClose(false);
+        if (value.startsWith(AGENT_VALUE_PREFIX)) {
+          params.onSwitchAgent(decodeURIComponent(value.slice(AGENT_VALUE_PREFIX.length)));
+          return;
+        }
+        switch (value) {
+          case `${COMMAND_VALUE_PREFIX}capabilities`:
+            params.onAskCapabilities(activeId);
+            break;
+          case `${COMMAND_VALUE_PREFIX}agent-settings`:
+            params.onNavigate("agents", {
+              pathname: pathForAgentPanel(activeId, null, params.basePath),
+            });
+            break;
+          case `${COMMAND_VALUE_PREFIX}new-agent`:
+            params.onNavigate("custodian", { search: "?intent=new-agent" });
+            break;
+        }
+      }}
+      @wa-after-show=${(event: Event) => {
+        if (!(event.currentTarget instanceof HTMLElement)) {
+          return;
+        }
+        params.onAfterShow();
+        if (params.openMode === "hover") {
+          return;
+        }
+        focusActiveAgentMenuItem(event.currentTarget);
+      }}
+      @keydown=${(event: KeyboardEvent) => {
+        if (moveSidebarMenuFocus(event)) {
+          return;
+        }
+        if (typeaheadSidebarMenuFocus(event)) {
+          return;
+        }
+        const item =
+          event.target instanceof HTMLElement
+            ? event.target.closest<HTMLElement>(
+                ".sidebar-agent-menu__agent-grid > wa-dropdown-item:not([disabled])",
+              )
+            : null;
+        if ((event.key === "Enter" || event.key === " ") && item) {
+          event.preventDefault();
+          event.stopPropagation();
+          item.click();
+          return;
+        }
+        trackDropdownKeyboardDismissal(event, params.onTabAway);
+      }}
+      @wa-after-hide=${(event: Event) => closeMenuAfterOwnDropdownHide(event, params.onClose)}
+    >
+      <button
+        slot="trigger"
+        type="button"
+        tabindex="-1"
+        aria-hidden="true"
+        aria-label=${t("agentChip.menuLabel")}
+        style="position: fixed; left: ${position.x}px; top: ${position.top}px; width: 1px; height: 1px; opacity: 0; pointer-events: none;"
+      ></button>
+      ${
+        agents.length > 1
           ? html`
               <div class="sidebar-customize-menu__title">${t("agentChip.agents")}</div>
               <div class="sidebar-agent-menu__agent-grid">
                 ${rows.map((entry) => renderAgentRow(entry, params))}
               </div>
             `
-          : nothing}
-        <div class="sidebar-customize-menu__separator" role="separator"></div>
-        <wa-dropdown-item class="sidebar-customize-menu__item" value="command:new-agent">
-          <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.users}</span>
-          <span class="sidebar-customize-menu__text">${t("custodian.newAgent")}</span>
-        </wa-dropdown-item>
-        <wa-dropdown-item
-          class="sidebar-customize-menu__item"
-          value="command:capabilities"
-          ?disabled=${!params.connected}
-        >
-          <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.bot}</span>
-          <span class="sidebar-customize-menu__text">
-            ${t("agentChip.whatCanAgentDo", { name: activeName })}
-          </span>
-        </wa-dropdown-item>
-        <wa-dropdown-item class="sidebar-customize-menu__item" value="command:agent-settings">
-          <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.users}</span>
-          <span class="sidebar-customize-menu__text">${t("agentChip.agentSettings")}</span>
-        </wa-dropdown-item>
-      </wa-dropdown>
-    </openclaw-menu-surface>
+          : nothing
+      }
+      <div class="sidebar-customize-menu__separator" role="separator"></div>
+      <wa-dropdown-item class="sidebar-customize-menu__item" value="command:new-agent">
+        <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.users}</span>
+        <span class="sidebar-customize-menu__text">${t("custodian.newAgent")}</span>
+      </wa-dropdown-item>
+      <wa-dropdown-item
+        class="sidebar-customize-menu__item"
+        value="command:capabilities"
+        ?disabled=${!params.connected}
+      >
+        <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.bot}</span>
+        <span class="sidebar-customize-menu__text">
+          ${t("agentChip.whatCanAgentDo", { name: activeName })}
+        </span>
+      </wa-dropdown-item>
+      <wa-dropdown-item class="sidebar-customize-menu__item" value="command:agent-settings">
+        <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.users}</span>
+        <span class="sidebar-customize-menu__text">${t("agentChip.agentSettings")}</span>
+      </wa-dropdown-item>
+    </wa-dropdown>
   `;
 }
 
 export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams) {
   const position = params.position;
-  if (!position) {
-    return nothing;
-  }
-  const profileLabel = params.selfEmail ?? params.selfName;
+  const profileName = params.profileViewer?.name ?? params.profileViewer?.email ?? t("nav.owner");
+  const avatarUser = {
+    id: "owner",
+    watchedSessions: [],
+    ...params.profileViewer,
+    name: profileName,
+  };
+  const profileEmail =
+    params.profileViewer?.email && params.profileViewer.email !== profileName
+      ? params.profileViewer.email
+      : null;
   return html`
-    <openclaw-menu-surface>
-      <wa-dropdown
-        class="sidebar-customize-menu sidebar-identity-menu"
-        style=${`--sidebar-identity-menu-min-width: ${params.triggerWidth}px`}
-        .open=${true}
-        placement="top-start"
-        .distance=${0}
-        aria-label=${t("profilePage.identity.menuLabel")}
-        @wa-select=${(event: CustomEvent<{ item: HTMLElement & { value?: string } }>) => {
-          event.preventDefault();
-          const item = event.detail.item;
-          if (item.dataset.nativeNavigation) {
-            delete item.dataset.nativeNavigation;
-            params.onClose(false);
-            return;
-          }
-          const value = item.value;
-          if (!value) {
-            return;
-          }
+    <wa-dropdown
+      class="sidebar-customize-menu sidebar-identity-menu"
+      style=${`--sidebar-identity-menu-min-width: ${params.triggerWidth}px`}
+      .open=${true}
+      placement="top-start"
+      .distance=${0}
+      aria-label=${t("profilePage.identity.menuLabel")}
+      @wa-select=${(event: CustomEvent<{ item: HTMLElement & { value?: string } }>) => {
+        event.preventDefault();
+        const item = event.detail.item;
+        if (item.dataset.nativeNavigation) {
+          delete item.dataset.nativeNavigation;
           params.onClose(false);
-          if (value.startsWith(LINK_VALUE_PREFIX)) {
-            openExternalUrlSafe(decodeURIComponent(value.slice(LINK_VALUE_PREFIX.length)));
-            return;
-          }
-          switch (value) {
-            case `${COMMAND_VALUE_PREFIX}profile`:
-              params.onNavigate("profile", { hash: "#settings-profile-identity" });
-              break;
-            case `${COMMAND_VALUE_PREFIX}settings`:
-              params.onNavigate("appearance");
-              break;
-            case `${COMMAND_VALUE_PREFIX}usage`:
-              params.onNavigate("usage");
-              break;
-            case `${COMMAND_VALUE_PREFIX}pair-mobile`:
-              params.onPairMobile();
-              break;
-            case `${COMMAND_VALUE_PREFIX}apps`:
-              params.onNavigate("apps");
-              break;
-            case `${COMMAND_VALUE_PREFIX}debug-overlay`:
-              requestDebugOverlayToggle();
-              break;
-            case `${COMMAND_VALUE_PREFIX}retry-connect`:
-              params.onRetryConnect?.();
-              break;
-          }
-        }}
-        @keydown=${(event: KeyboardEvent) => {
-          if (!moveSidebarMenuFocus(event)) {
-            trackDropdownKeyboardDismissal(event, params.onTabAway);
-          }
-        }}
-        @wa-after-hide=${(event: Event) => closeMenuAfterOwnDropdownHide(event, params.onClose)}
+          return;
+        }
+        const value = item.value;
+        if (!value) {
+          return;
+        }
+        params.onClose(false);
+        if (value.startsWith(LINK_VALUE_PREFIX)) {
+          openExternalUrlSafe(decodeURIComponent(value.slice(LINK_VALUE_PREFIX.length)));
+          return;
+        }
+        switch (value) {
+          case `${COMMAND_VALUE_PREFIX}profile`:
+            params.onNavigate("profile", { hash: "#settings-profile-identity" });
+            break;
+          case `${COMMAND_VALUE_PREFIX}settings`:
+            params.onNavigate("appearance");
+            break;
+          case `${COMMAND_VALUE_PREFIX}usage`:
+            params.onNavigate("usage");
+            break;
+          case `${COMMAND_VALUE_PREFIX}pair-mobile`:
+            params.onPairMobile();
+            break;
+          case `${COMMAND_VALUE_PREFIX}apps`:
+            params.onNavigate("apps");
+            break;
+          case `${COMMAND_VALUE_PREFIX}debug-overlay`:
+            requestDebugOverlayToggle();
+            break;
+          case `${COMMAND_VALUE_PREFIX}retry-connect`:
+            params.onRetryConnect?.();
+            break;
+        }
+      }}
+      @keydown=${(event: KeyboardEvent) => {
+        if (!moveSidebarMenuFocus(event)) {
+          trackDropdownKeyboardDismissal(event, params.onTabAway);
+        }
+      }}
+      @wa-after-hide=${(event: Event) => closeMenuAfterOwnDropdownHide(event, params.onClose)}
+    >
+      <button
+        slot="trigger"
+        type="button"
+        tabindex="-1"
+        aria-hidden="true"
+        aria-label=${t("profilePage.identity.menuLabel")}
+        style="position: fixed; left: ${position.x}px; bottom: ${position.bottom}px; width: 1px; height: 1px; opacity: 0; pointer-events: none;"
+      ></button>
+      <wa-dropdown-item
+        class="sidebar-customize-menu__item sidebar-identity-menu__header"
+        value="command:profile"
       >
-        <button
-          slot="trigger"
-          type="button"
-          tabindex="-1"
-          aria-hidden="true"
-          aria-label=${t("profilePage.identity.menuLabel")}
-          style="position: fixed; left: ${position.x}px; bottom: ${position.bottom}px; width: 1px; height: 1px; opacity: 0; pointer-events: none;"
-        ></button>
-        ${profileLabel
-          ? html`<wa-dropdown-item class="sidebar-identity-menu__header" value="command:profile">
-                ${profileLabel}
-              </wa-dropdown-item>
-              <div class="sidebar-customize-menu__separator" role="separator"></div>`
-          : nothing}
-        <wa-dropdown-item class="sidebar-customize-menu__item" value="command:settings">
-          <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.settings}</span>
-          <span class="sidebar-customize-menu__text">${t("nav.settings")}</span>
-          <span slot="details" class="session-menu__shortcut" aria-hidden="true"
-            >${isApplePlatform() ? "⌘⇧," : "Ctrl+Shift+,"}</span
-          >
-        </wa-dropdown-item>
-        <wa-dropdown-item class="sidebar-customize-menu__item" value="command:usage">
-          <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.coins}</span>
-          <span class="sidebar-customize-menu__text">${titleForRoute("usage")}</span>
-        </wa-dropdown-item>
-        <wa-dropdown-item
-          class="sidebar-customize-menu__item sidebar-pair-mobile"
-          value="command:pair-mobile"
-          ?disabled=${!params.canPairDevice}
-          title=${params.canPairDevice ? nothing : t("devices.pairing.adminRequired")}
+        <span slot="icon" class="sidebar-identity-menu__avatar" aria-hidden="true">
+          <openclaw-viewer-avatar .user=${avatarUser} variant="footer"></openclaw-viewer-avatar>
+        </span>
+        <span class="sidebar-identity-menu__identity">
+          <span class="sidebar-identity-menu__name" title=${profileName}>${profileName}</span>
+          ${
+            profileEmail
+              ? html`<span class="sidebar-identity-menu__email" title=${profileEmail}
+                  >${profileEmail}</span
+                >`
+              : nothing
+          }
+        </span>
+      </wa-dropdown-item>
+      <div class="sidebar-customize-menu__separator" role="separator"></div>
+      <wa-dropdown-item class="sidebar-customize-menu__item" value="command:settings">
+        <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.settings}</span>
+        <span class="sidebar-customize-menu__text">${t("nav.settings")}</span>
+        <kbd slot="details" class="session-menu__shortcut" aria-hidden="true"
+          >${formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.appearanceSettings)}</kbd
         >
-          <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.smartphone}</span>
-          <span class="sidebar-customize-menu__text">${t("devices.pairing.button")}</span>
-        </wa-dropdown-item>
-        <wa-dropdown-item class="sidebar-customize-menu__item" value="command:apps">
-          <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.layoutGrid}</span>
-          <span class="sidebar-customize-menu__text">${t("agentChip.getApps")}</span>
-        </wa-dropdown-item>
-        <wa-dropdown-item class="sidebar-customize-menu__item" value="command:debug-overlay">
-          <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.activity}</span>
-          <span class="sidebar-customize-menu__text">${t("debug.overlay.title")}</span>
-          <span slot="details" class="session-menu__shortcut" aria-hidden="true"
-            >${DEBUG_OVERLAY_SHORTCUT_LABEL}</span
-          >
-        </wa-dropdown-item>
-        <wa-dropdown-item
-          class="sidebar-customize-menu__item sidebar-identity-menu__help"
-          value="command:help"
+      </wa-dropdown-item>
+      <wa-dropdown-item class="sidebar-customize-menu__item" value="command:usage">
+        <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.coins}</span>
+        <span class="sidebar-customize-menu__text">${titleForRoute("usage")}</span>
+      </wa-dropdown-item>
+      <div class="sidebar-customize-menu__separator" role="separator"></div>
+      <wa-dropdown-item
+        class="sidebar-customize-menu__item sidebar-pair-mobile"
+        value="command:pair-mobile"
+        ?disabled=${!params.canPairDevice}
+        title=${params.canPairDevice ? nothing : t("devices.pairing.adminRequired")}
+      >
+        <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.smartphone}</span>
+        <span class="sidebar-customize-menu__text">${t("devices.pairing.button")}</span>
+      </wa-dropdown-item>
+      <wa-dropdown-item class="sidebar-customize-menu__item" value="command:apps">
+        <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.layoutGrid}</span>
+        <span class="sidebar-customize-menu__text">${t("agentChip.getApps")}</span>
+      </wa-dropdown-item>
+      <wa-dropdown-item class="sidebar-customize-menu__item" value="command:debug-overlay">
+        <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.activity}</span>
+        <span class="sidebar-customize-menu__text">${t("debug.overlay.title")}</span>
+        <span slot="details" class="session-menu__shortcut" aria-hidden="true"
+          >${DEBUG_OVERLAY_SHORTCUT_LABEL}</span
         >
-          <span slot="icon" class="nav-item__icon" aria-hidden="true"
-            >${icons.circleQuestionMark}</span
-          >
-          <span class="sidebar-customize-menu__text">${t("agentChip.help")}</span>
-          ${renderIdentityMenuHelpSubmenu()}
-        </wa-dropdown-item>
-        ${params.offline
+      </wa-dropdown-item>
+      <div class="sidebar-customize-menu__separator" role="separator"></div>
+      <wa-dropdown-item
+        class="sidebar-customize-menu__item sidebar-identity-menu__help"
+        value="command:help"
+      >
+        <span slot="icon" class="nav-item__icon" aria-hidden="true"
+          >${icons.circleQuestionMark}</span
+        >
+        <span class="sidebar-customize-menu__text">${t("agentChip.help")}</span>
+        ${renderIdentityMenuHelpSubmenu()}
+      </wa-dropdown-item>
+      ${
+        params.offline
           ? html`<div class="sidebar-customize-menu__separator" role="separator"></div>
               <wa-dropdown-item
                 class="sidebar-customize-menu__item sidebar-identity-menu__retry"
@@ -554,22 +564,24 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams) {
               >
                 <span class="sidebar-customize-menu__text">${t("connection.retryNow")}</span>
               </wa-dropdown-item>`
-          : nothing}
-        <div class="sidebar-customize-menu__separator" role="separator"></div>
-        <div class="sidebar-identity-menu__footer">
-          <openclaw-sidebar-build-chip
-            .basePath=${params.basePath}
-            .gatewayVersion=${params.gatewayVersion}
-            .onNavigate=${(routeId: "about") => {
-              params.onClose();
-              params.onNavigate(routeId);
-            }}
-          ></openclaw-sidebar-build-chip>
-          <span class="sidebar-mode-switch">
-            <openclaw-theme-mode-toggle .mode=${params.themeMode}></openclaw-theme-mode-toggle>
-          </span>
-        </div>
-      </wa-dropdown>
-    </openclaw-menu-surface>
+          : nothing
+      }
+      <div class="sidebar-customize-menu__separator" role="separator"></div>
+      <div class="sidebar-identity-menu__footer">
+        <openclaw-sidebar-build-chip
+          .variant=${"identity"}
+          .basePath=${params.basePath}
+          .gatewayVersion=${params.gatewayVersion}
+          .updateAttentionDismissed=${params.updateAttentionDismissed}
+          .onNavigate=${(routeId: "about") => {
+            params.onClose();
+            params.onNavigate(routeId);
+          }}
+        ></openclaw-sidebar-build-chip>
+        <span class="sidebar-mode-switch">
+          <openclaw-theme-mode-toggle .mode=${params.themeMode}></openclaw-theme-mode-toggle>
+        </span>
+      </div>
+    </wa-dropdown>
   `;
 }

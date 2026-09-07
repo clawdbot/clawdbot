@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import {
   captureUiProof,
   createSessionManagementE2eSuite,
@@ -18,11 +19,7 @@ suite.define(() => {
       defaultBranch: "main",
       repositoryStatus: "git",
     };
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       methodResponses: {
@@ -56,7 +53,7 @@ suite.define(() => {
       await group.waitFor({ state: "visible", timeout: 10_000 });
       await group.locator(".sidebar-recent-sessions__head").hover();
       await group.getByRole("button", { name: "Group options for Client work" }).click();
-      await page.getByRole("menuitem", { name: "New session defaults…" }).click();
+      await page.getByRole("menuitem", { name: "New session defaults" }).click();
       await page.evaluate(async () => customElements.whenDefined("wa-popover"));
       const dialog = page.locator(
         `openclaw-modal-dialog[label='New session defaults for "Client work"']`,
@@ -109,7 +106,7 @@ suite.define(() => {
             };
           })
           .toEqual({ horizontal: true, vertical: true });
-        await captureUiProof(page, `group-defaults-folder-picker-${viewport.name}.png`);
+        await captureUiProof(suite, page, `group-defaults-folder-picker-${viewport.name}.png`);
       }
       await folderPicker.getByRole("button", { name: "Use this folder" }).click();
       await page.setViewportSize({ height: 900, width: 1280 });
@@ -127,11 +124,11 @@ suite.define(() => {
       const modeDropdown = environment.locator("wa-dropdown.session-group-defaults__mode-dropdown");
       const modeTrigger = modeDropdown.locator("#session-group-defaults-mode-trigger");
       await expect.poll(() => modeTrigger.getAttribute("data-value")).toBe("local");
-      await expect.poll(() => modeTrigger.textContent()).toContain("Runs directly");
+      await expect.poll(() => modeTrigger.textContent()).toContain("Current checkout");
       expect((await modeTrigger.boundingBox())?.height).toBeCloseTo(56, 1);
       await modeTrigger.click();
       const worktreeOption = modeDropdown.getByRole("menuitemradio", {
-        name: /Worktree.*isolated Git worktree/i,
+        name: /New worktree.*isolated Git worktree/i,
       });
       await expect.poll(() => worktreeOption.locator('[slot="icon"]').count()).toBe(1);
       await page.keyboard.press("Escape");
@@ -151,7 +148,7 @@ suite.define(() => {
       });
 
       await group.locator(".sidebar-recent-sessions__head").hover();
-      await group.getByRole("button", { name: "New session in Client work" }).click();
+      await group.getByRole("link", { name: "New session in Client work" }).click();
       await page.locator(".new-session-page__message").waitFor();
       await expect.poll(() => new URL(page.url()).searchParams.get("group")).toBe("Client work");
       await expect
@@ -165,7 +162,7 @@ suite.define(() => {
         repoRoot: groupCwd,
       });
       await expect
-        .poll(() => page.locator("#new-session-detail-trigger").getAttribute("data-worktree"))
+        .poll(() => page.locator("#new-session-checkout-trigger").getAttribute("data-worktree"))
         .toBe("true");
 
       await page.locator(".new-session-page__message").fill("prepare the client release");
@@ -182,72 +179,74 @@ suite.define(() => {
     }
   });
 
-  it("blocks saving a worktree default until repository inspection succeeds", async () => {
-    const groupCwd = "/home/peter/client-work";
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      methodResponses: {
-        "sessions.list": sessionsListResponse([]),
-        "worktrees.branches": {
-          branches: [],
-          repositoryStatus: "unavailable",
+  it.each(["/home/peter/client-work", ""])(
+    "blocks saving a worktree default until repository inspection succeeds (%s)",
+    async (groupCwd) => {
+      const context = await suite.browser.newContext(createControlUiE2eContextOptions());
+      const page = await context.newPage();
+      const gateway = await installMockGateway(page, {
+        methodResponses: {
+          "sessions.list": sessionsListResponse([]),
+          "worktrees.branches": {
+            branches: [],
+            repositoryStatus: "unavailable",
+          },
         },
-      },
-      sessionGroups: ["Client work"],
-      sessionGroupDefaults: { "Client work": { cwd: groupCwd, worktree: true } },
-      workspace: "/home/peter/openclaw",
-      workspaceGit: true,
-    });
-
-    try {
-      await page.goto(`${suite.server.baseUrl}chat`);
-      const group = page.locator('[data-session-section="category:Client work"]');
-      await group.waitFor({ state: "visible", timeout: 10_000 });
-      await group.locator(".sidebar-recent-sessions__head").hover();
-      await group.getByRole("button", { name: "Group options for Client work" }).click();
-      await page.getByRole("menuitem", { name: "New session defaults…" }).click();
-      const dialog = page.locator(
-        `openclaw-modal-dialog[label='New session defaults for "Client work"']`,
-      );
-      await dialog.waitFor({ state: "visible" });
-
-      const environment = dialog.locator("[data-session-group-environment]");
-      await expect.poll(() => environment.textContent()).toContain("Couldn't verify Git");
-      const save = dialog.getByRole("button", { name: "Save" });
-      await expect.poll(() => save.isDisabled()).toBe(true);
-      expect(await gateway.getRequests("sessions.groups.update")).toHaveLength(0);
-
-      await gateway.setMethodResponse("worktrees.branches", {
-        branches: [{ kind: "local", name: "main" }],
-        defaultBranch: "main",
-        repositoryStatus: "git",
+        sessionGroups: ["Client work"],
+        sessionGroupDefaults: { "Client work": { cwd: groupCwd, worktree: true } },
+        workspace: "/home/peter/openclaw",
+        workspaceGit: true,
       });
-      await dialog.getByRole("button", { name: "Retry" }).click();
-      const modeTrigger = dialog.locator("#session-group-defaults-mode-trigger");
-      await expect.poll(() => modeTrigger.getAttribute("data-value")).toBe("worktree");
-      await expect.poll(() => save.isEnabled()).toBe(true);
-      await save.click();
-      expect((await gateway.waitForRequest("sessions.groups.update")).params).toMatchObject({
-        name: "Client work",
-        cwd: groupCwd,
-        worktree: true,
-      });
-    } finally {
-      await context.close();
-    }
-  });
+
+      try {
+        await page.goto(`${suite.server.baseUrl}chat`);
+        const group = page.locator('[data-session-section="category:Client work"]');
+        await group.waitFor({ state: "visible", timeout: 10_000 });
+        await group.locator(".sidebar-recent-sessions__head").hover();
+        await group.getByRole("button", { name: "Group options for Client work" }).click();
+        await page.getByRole("menuitem", { name: "New session defaults" }).click();
+        const dialog = page.locator(
+          `openclaw-modal-dialog[label='New session defaults for "Client work"']`,
+        );
+        await dialog.waitFor({ state: "visible" });
+
+        const environment = dialog.locator("[data-session-group-environment]");
+        await expect
+          .poll(() => environment.getAttribute("data-session-group-environment"))
+          .not.toBe("checking");
+        await captureUiProof(
+          suite,
+          page,
+          `group-defaults-${groupCwd ? "folder" : "workspace"}.png`,
+        );
+        await expect.poll(() => environment.textContent()).toContain("Couldn't verify Git");
+        const save = dialog.getByRole("button", { name: "Save" });
+        await expect.poll(() => save.isDisabled()).toBe(true);
+        expect(await gateway.getRequests("sessions.groups.update")).toHaveLength(0);
+
+        await gateway.setMethodResponse("worktrees.branches", {
+          branches: [{ kind: "local", name: "main" }],
+          defaultBranch: "main",
+          repositoryStatus: "git",
+        });
+        await dialog.getByRole("button", { name: "Retry" }).click();
+        const modeTrigger = dialog.locator("#session-group-defaults-mode-trigger");
+        await expect.poll(() => modeTrigger.getAttribute("data-value")).toBe("worktree");
+        await expect.poll(() => save.isEnabled()).toBe(true);
+        await save.click();
+        expect((await gateway.waitForRequest("sessions.groups.update")).params).toMatchObject({
+          name: "Client work",
+          cwd: groupCwd || null,
+          worktree: true,
+        });
+      } finally {
+        await context.close();
+      }
+    },
+  );
 
   it("omits the group category for a legacy Gateway", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       featureMethods: ["sessions.create", "sessions.groups.list"],
@@ -278,11 +277,7 @@ suite.define(() => {
   it("revalidates an open group route when its defaults or identity change", async () => {
     const initialCwd = "/home/peter/client-work";
     const refreshedCwd = "/home/peter/refreshed-client-work";
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     await installMockGateway(page, {
       methodResponses: {
@@ -326,7 +321,7 @@ suite.define(() => {
 
       await expect.poll(() => project.textContent()).toContain("refreshed-client-work");
       await expect
-        .poll(() => page.locator("#new-session-detail-trigger").getAttribute("data-worktree"))
+        .poll(() => page.locator("#new-session-checkout-trigger").getAttribute("data-worktree"))
         .toBe("false");
       await expect
         .poll(() => page.locator(".new-session-page__message").inputValue())
@@ -358,11 +353,7 @@ suite.define(() => {
   });
 
   it("fails an open group route closed while remote catalog invalidation is unresolved", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       methodResponses: {
@@ -425,11 +416,7 @@ suite.define(() => {
 
   it("keeps rejected group defaults editable and allows retry", async () => {
     const groupCwd = "/home/peter/client-work";
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       deferredMethods: ["sessions.groups.update"],
@@ -453,7 +440,7 @@ suite.define(() => {
       await group.waitFor({ state: "visible", timeout: 10_000 });
       await group.locator(".sidebar-recent-sessions__head").hover();
       await group.getByRole("button", { name: "Group options for Client work" }).click();
-      await page.getByRole("menuitem", { name: "New session defaults…" }).click();
+      await page.getByRole("menuitem", { name: "New session defaults" }).click();
       const dialog = page.locator(
         `openclaw-modal-dialog[label='New session defaults for "Client work"']`,
       );
@@ -462,7 +449,9 @@ suite.define(() => {
       const modeTrigger = modeDropdown.locator("#session-group-defaults-mode-trigger");
       await modeTrigger.waitFor({ state: "visible" });
       await modeTrigger.click();
-      await modeDropdown.getByRole("menuitemradio", { name: /Local.*Runs directly/i }).click();
+      await modeDropdown
+        .getByRole("menuitemradio", { name: /Current checkout.*Works in the selected folder/i })
+        .click();
       await dialog.getByRole("button", { name: "Save" }).click();
       await gateway.waitForRequest("sessions.groups.update");
       await gateway.rejectDeferred("sessions.groups.update", {
@@ -482,10 +471,10 @@ suite.define(() => {
       await dialog.waitFor({ state: "detached" });
 
       await group.locator(".sidebar-recent-sessions__head").hover();
-      await group.getByRole("button", { name: "New session in Client work" }).click();
-      await page.locator("#new-session-detail-trigger").waitFor();
+      await group.getByRole("link", { name: "New session in Client work" }).click();
+      await page.locator("#new-session-checkout-trigger").waitFor();
       await expect
-        .poll(() => page.locator("#new-session-detail-trigger").getAttribute("data-worktree"))
+        .poll(() => page.locator("#new-session-checkout-trigger").getAttribute("data-worktree"))
         .toBe("false");
     } finally {
       await context.close();
@@ -494,11 +483,7 @@ suite.define(() => {
 
   it("offers retry when authoritative group defaults are unavailable", async () => {
     const groupCwd = "/home/peter/client-work";
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       deferredMethods: ["sessions.groups.defaults"],
@@ -583,11 +568,7 @@ suite.define(() => {
   });
 
   it("blocks a missing group until a fresh catalog retry resolves it", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       methodResponses: { "sessions.list": sessionsListResponse([]) },

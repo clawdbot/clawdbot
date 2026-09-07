@@ -49,6 +49,7 @@ async function runDirectiveStatus(
   } = overrides;
   const result = await handleDirectiveOnly({
     cfg: migratePersistedImplicitMainRoster(overrideCfg ?? cfg).config as OpenClawConfig,
+    agentId: "main",
     directives: parseInlineSessionDirectives(body),
     sessionEntry: effectiveSessionEntry,
     sessionStore: effectiveSessionStore,
@@ -164,6 +165,7 @@ describe("directive behavior", () => {
   it("enforces per-agent elevated restrictions and status visibility", async () => {
     const { text: deniedText } = await runDirectiveStatus("/elevated on", {
       sessionKey: "agent:restricted:main",
+      agentId: "restricted",
       elevatedEnabled: false,
       elevatedAllowed: false,
       elevatedFailures: [
@@ -180,6 +182,7 @@ describe("directive behavior", () => {
   it("applies per-agent allowlist requirements before allowing elevated", async () => {
     const { text: deniedText } = await runDirectiveStatus("/elevated on", {
       sessionKey: "agent:work:main",
+      agentId: "work",
       elevatedEnabled: true,
       elevatedAllowed: false,
       elevatedFailures: [
@@ -193,6 +196,7 @@ describe("directive behavior", () => {
 
     const { text: allowedText } = await runDirectiveStatus("/elevated on", {
       sessionKey: "agent:work:main",
+      agentId: "work",
       elevatedEnabled: true,
       elevatedAllowed: true,
     });
