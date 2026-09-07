@@ -4,6 +4,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -12,6 +13,18 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
+
+// The release policy page is an index over docs/reference/releasing/*. Read the
+// whole set so these assertions follow the content instead of a single file path.
+function readReleasingDocs() {
+  return [
+    readFileSync("docs/reference/RELEASING.md", "utf8"),
+    ...readdirSync("docs/reference/releasing")
+      .filter((name) => name.endsWith(".md"))
+      .sort()
+      .map((name) => readFileSync(`docs/reference/releasing/${name}`, "utf8")),
+  ].join("\n");
+}
 
 const workflowPath = ".github/workflows/openclaw-npm-release.yml";
 const preflightWorkflowPath = ".github/workflows/openclaw-npm-preflight.yml";
@@ -383,7 +396,7 @@ describe("minimal npm extended-stable workflow", () => {
 
   it("lets main promote only the canonical immutable extended-stable candidate", () => {
     const parsed = workflow();
-    const releaseDocs = readFileSync("docs/reference/RELEASING.md", "utf8");
+    const releaseDocs = readReleasingDocs();
     const input = parsed.on?.workflow_dispatch?.inputs?.release_candidate_branch;
     expect(input).toMatchObject({ default: "", required: false, type: "string" });
 

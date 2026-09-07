@@ -2540,6 +2540,20 @@
                 "group": "Release process",
                 "pages": [
                   "reference/RELEASING",
+                  {
+                    "group": "Release runbook",
+                    "pages": [
+                      "reference/releasing/versioning",
+                      "reference/releasing/preflight",
+                      "reference/releasing/regular-release",
+                      "reference/releasing/test-boxes",
+                      "reference/releasing/publish-automation",
+                      "reference/releasing/beta-latest-sequence",
+                      "reference/releasing/main-closeout",
+                      "reference/releasing/extended-stable",
+                      "reference/releasing/npm-workflow-inputs"
+                    ]
+                  },
                   "reference/full-release-validation",
                   "reference/release-performance-sweep"
                 ]

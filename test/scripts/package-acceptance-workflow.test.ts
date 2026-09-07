@@ -31,6 +31,18 @@ import {
 } from "../helpers/release-workflow-timeouts.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
+// The release policy page is an index over docs/reference/releasing/*. Read the
+// whole set so these assertions follow the content instead of a single file path.
+function readReleasingDocs() {
+  return [
+    readFileSync("docs/reference/RELEASING.md", "utf8"),
+    ...readdirSync("docs/reference/releasing")
+      .filter((name) => name.endsWith(".md"))
+      .sort()
+      .map((name) => readFileSync(`docs/reference/releasing/${name}`, "utf8")),
+  ].join("\n");
+}
+
 const PACKAGE_ACCEPTANCE_WORKFLOW = ".github/workflows/package-acceptance.yml";
 const LIVE_E2E_WORKFLOW = ".github/workflows/openclaw-live-and-e2e-checks-reusable.yml";
 const INSTALL_SMOKE_REUSABLE_WORKFLOW = ".github/workflows/install-smoke-reusable.yml";
@@ -10944,7 +10956,7 @@ promote_windows_release_assets
     ].join("\n");
     const androidWorkflow = readFileSync(ANDROID_RELEASE_WORKFLOW, "utf8");
     const androidDocs = readFileSync("docs/platforms/android.md", "utf8");
-    const releaseDocs = readFileSync("docs/reference/RELEASING.md", "utf8");
+    const releaseDocs = readReleasingDocs();
     const approvalScript = readFileSync("scripts/validate-release-publish-approval.mjs", "utf8");
     const androidJob = workflowJob(ANDROID_RELEASE_WORKFLOW, "publish_signed_android_apk");
     const setupNode = workflowStep(androidJob, "Setup Node environment");
@@ -11999,7 +12011,8 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
     const nightly = readFileSync(".agents/skills/release-openclaw-nightly/SKILL.md", "utf8");
     const releaseCi = readFileSync(".agents/skills/release-openclaw-ci/SKILL.md", "utf8");
     // The CI page is an index over docs/ci/*. Read the whole set so this
-    // assertion follows the content instead of a single file path.
+    // assertion follows the content instead of a single file path. The release
+    // policy page is an index over docs/reference/releasing/* for the same reason.
     const ciDocs = [
       readFileSync("docs/ci.md", "utf8"),
       ...readdirSync("docs/ci")
@@ -12008,7 +12021,7 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
         .map((name) => readFileSync(`docs/ci/${name}`, "utf8")),
     ].join("\n");
     const fullReleaseDocs = readFileSync("docs/reference/full-release-validation.md", "utf8");
-    const releasingDocs = readFileSync("docs/reference/RELEASING.md", "utf8");
+    const releasingDocs = readReleasingDocs();
 
     expect(nightly).toContain('-f expected_sha="$SHA"');
     for (const text of [releaseCi, fullReleaseDocs, releasingDocs]) {

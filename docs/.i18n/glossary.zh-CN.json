@@ -2300,6 +2300,46 @@
     "target": "Gateway 协议身份验证"
   },
   {
+    "source": "Version naming and cadence",
+    "target": "版本命名与节奏"
+  },
+  {
+    "source": "Release preflight",
+    "target": "发布预检"
+  },
+  {
+    "source": "Regular release checklist",
+    "target": "常规发布清单"
+  },
+  {
+    "source": "Release test boxes",
+    "target": "发布测试箱"
+  },
+  {
+    "source": "Release publish automation",
+    "target": "发布推送自动化"
+  },
+  {
+    "source": "Beta and latest release sequence",
+    "target": "Beta 与 latest 发布序列"
+  },
+  {
+    "source": "Stable main closeout",
+    "target": "稳定版 main 收尾"
+  },
+  {
+    "source": "Extended-stable monthly release",
+    "target": "Extended-stable 月度发布"
+  },
+  {
+    "source": "NPM workflow inputs",
+    "target": "NPM 工作流输入"
+  },
+  {
+    "source": "Full release validation",
+    "target": "完整发布验证"
+  },
+  {
     "source": "Slack setup",
     "target": "Slack 设置"
   },
