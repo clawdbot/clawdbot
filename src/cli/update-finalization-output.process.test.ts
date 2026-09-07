@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
 import { listUpdateRuns } from "../infra/update-run-ledger.js";
 import { isPidAlive } from "../shared/pid-alive.js";
 import { formatCliProcessFailure, runCliProcessChild } from "./cli-process-child.test-helpers.js";
@@ -93,34 +94,38 @@ describe.each(["repair", "finalize"])("update %s process output", (command) => {
       const readRun = () =>
         listUpdateRuns({ limit: 1 }, { env: { HOME: root, OPENCLAW_STATE_DIR: state } })[0];
       let observedPhaseStart: ReturnType<typeof readRun> | undefined;
+      let phaseObservationError: unknown;
       const result = await runCliProcessChild({
         ...(scenario === "phase-hang"
           ? {
-              interact: async (
-                child: import("node:child_process").ChildProcessWithoutNullStreams,
-              ) => {
+              interact: (child: import("node:child_process").ChildProcessWithoutNullStreams) => {
                 child.stdin.end();
-                await new Promise<void>((resolve, reject) => {
-                  let stderr = "";
-                  const onData = (chunk: string) => {
-                    stderr += chunk;
-                    if (!stderr.includes("fixture configSnapshot entered")) {
-                      return;
-                    }
-                    child.stderr.off("data", onData);
-                    try {
-                      observedPhaseStart = readRun();
-                      resolve();
-                    } catch (error) {
-                      reject(new Error("Could not read the phase-start ledger", { cause: error }));
-                    }
-                  };
-                  child.stderr.on("data", onData);
-                });
+                // Observation must not keep the test waiting after an earlier phase exits.
+                let stderr = "";
+                const onData = (chunk: string) => {
+                  stderr += chunk;
+                  if (!stderr.includes("fixture configSnapshot entered")) {
+                    return;
+                  }
+                  child.stderr.off("data", onData);
+                  try {
+                    observedPhaseStart = readRun();
+                  } catch (error) {
+                    phaseObservationError = error;
+                  }
+                };
+                child.stderr.on("data", onData);
               },
             }
           : {}),
-        nodeArgs: ["--import", "tsx", fixture, scenario, ...args],
+        nodeArgs: [
+          "--import",
+          "tsx",
+          fixture,
+          JSON.stringify(runtimeProcessEntrypoints),
+          scenario,
+          ...args,
+        ],
         env: {
           ESBUILD_WORKER_THREADS: "0",
           PATH: path.dirname(process.execPath),
@@ -160,7 +165,8 @@ describe.each(["repair", "finalize"])("update %s process output", (command) => {
       }
       if (blockedPhase) {
         if (scenario === "phase-hang") {
-          expect(observedPhaseStart?.steps).toContainEqual(
+          expect(phaseObservationError, failure).toBeUndefined();
+          expect(observedPhaseStart?.steps, failure).toContainEqual(
             expect.objectContaining({
               step: "finalize:configSnapshot",
               status: "in_progress",
