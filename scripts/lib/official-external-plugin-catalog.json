@@ -357,6 +357,29 @@
       }
     },
     {
+      "name": "@openclaw/gandr-speech",
+      "description": "OpenClaw Gandr speech plugin.",
+      "source": "official",
+      "kind": "plugin",
+      "openclaw": {
+        "plugin": {
+          "id": "gandr",
+          "label": "Gandr"
+        },
+        "contracts": {
+          "speechProviders": [
+            "gandr"
+          ]
+        },
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/gandr-speech",
+          "npmSpec": "@openclaw/gandr-speech",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.6.8"
+        }
+      }
+    },
+    {
       "name": "@openclaw/google-meet",
       "description": "OpenClaw Google Meet participant plugin",
       "source": "official",

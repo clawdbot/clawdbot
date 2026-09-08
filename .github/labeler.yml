@@ -560,6 +560,11 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/huggingface/**"
+"extensions: gandr":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/gandr/**"
+          - "docs/providers/gandr.md"
 "extensions: inworld":
   - changed-files:
       - any-glob-to-any-file:
