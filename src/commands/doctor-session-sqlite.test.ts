@@ -1,4 +1,5 @@
 // Doctor session SQLite tests exercise real temp stores and per-agent SQLite files.
+import { AsyncResource } from "node:async_hooks";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
@@ -3101,6 +3102,8 @@ describe("runDoctorSessionSqlite", () => {
     );
     const agentDatabase = await import("../state/openclaw-agent-db.js");
     const migrate = agentDatabase.migrateOpenClawAgentDatabaseForMaintenance;
+    // The competitor must not inherit the maintenance authority being revoked.
+    const claimCompetingLease = AsyncResource.bind(claimOpenClawAgentDatabaseLease);
     let competingLeaseId: string | undefined;
     const repair = vi
       .spyOn(agentDatabase, "migrateOpenClawAgentDatabaseForMaintenance")
@@ -3111,7 +3114,7 @@ describe("runDoctorSessionSqlite", () => {
           .db.prepare("DELETE FROM state_leases WHERE scope = ? AND lease_key = ?")
           .run(AGENT_DATABASE_MAINTENANCE_LEASE.scope, AGENT_DATABASE_MAINTENANCE_LEASE.key);
         expect(removed.changes).toBe(1);
-        competingLeaseId = claimOpenClawAgentDatabaseLease({
+        competingLeaseId = claimCompetingLease({
           agentId: "later",
           path: laterPath,
           env: store.env,
