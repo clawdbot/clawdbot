@@ -349,7 +349,7 @@ docker_e2e_run_with_harness \
   -v "$ARTIFACT_DIR:/tmp/openclaw-upgrade-survivor-artifacts" \
   -v "$HARNESS_ROOT_DIR/scripts/e2e/lib/clawhub-fixture-server.cjs:/tmp/openclaw-clawhub-fixture-server.cjs:ro" \
   -v "$HARNESS_ROOT_DIR/scripts/e2e/lib/upgrade-survivor/config-parking.mjs:/tmp/openclaw-config-parking.mjs:ro" \
-  ${UPGRADE_ASSERTION_ARGS[@]+"${UPGRADE_ASSERTION_ARGS[@]}"} \
+  ${UPGRADE_SCENARIO_ARGS[@]+"${UPGRADE_SCENARIO_ARGS[@]}"} \
   ${DOCKER_E2E_PACKAGE_ARGS[@]+"${DOCKER_E2E_PACKAGE_ARGS[@]}"} \
   ${DOCKER_RUN_USER_ARGS[@]+"${DOCKER_RUN_USER_ARGS[@]}"} \
   "$IMAGE_NAME" \

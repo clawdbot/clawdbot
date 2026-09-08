@@ -5914,7 +5914,8 @@ grep -Fxq preserved "$TMPDIR/caller-fd"
     expectTextToIncludeAll(codexRunner, [
       "scripts/e2e/lib/codex-on-demand/doctor-checks.mjs",
       'if [ -n "$CODEX_DOCTOR_CHECKS" ]',
-      "if [ -f scripts/e2e/lib/codex-on-demand/doctor-checks.mjs ]",
+      "OPENCLAW_CODEX_DOCTOR_CHECKS_ENABLED=$CODEX_DOCTOR_CHECKS_ENABLED",
+      'if [ "$OPENCLAW_CODEX_DOCTOR_CHECKS_ENABLED" = "1" ]',
     ]);
 
     const onboardingRunner = readFileSync(NPM_ONBOARD_CHANNEL_AGENT_DOCKER_E2E_PATH, "utf8");
@@ -5931,10 +5932,12 @@ grep -Fxq preserved "$TMPDIR/caller-fd"
       '-v "$UPGRADE_SCENARIO_DIR:/app/scripts/e2e/lib/upgrade-survivor:ro"',
       '-v "$UPGRADE_RUNNER:/tmp/openclaw-upgrade-survivor-run.sh:ro"',
     ]);
+    expect(upgradeRunner).not.toContain("UPGRADE_ASSERTION_ARGS");
 
     const updateRunner = readFileSync(UPDATE_CHANNEL_SWITCH_DOCKER_E2E_PATH, "utf8");
     expect(updateRunner).toContain('assert-dirty-update "$git_root" "$fixture_sha"');
-    expect(updateRunner).not.toContain('if [ "$dirty_status" -eq 0 ]');
+    expect(updateRunner).toContain('[ "$OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT" != "1" ]');
+    expect(updateRunner).toContain('[ "$dirty_status" -ne 1 ]');
   });
 
   it("serves the version-matched Codex candidate during package onboarding", () => {

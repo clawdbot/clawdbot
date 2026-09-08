@@ -17,6 +17,10 @@ CODEX_DOCTOR_CHECKS="$(openclaw_resolve_frozen_target_file "$TARGET_ROOT_DIR" \
   scripts/e2e/lib/codex-on-demand/doctor-checks.mjs \
   "$ROOT_DIR/scripts/e2e/lib/codex-on-demand/doctor-checks.mjs" \
   "")"
+CODEX_DOCTOR_CHECKS_ENABLED=0
+if [ -n "$CODEX_DOCTOR_CHECKS" ]; then
+  CODEX_DOCTOR_CHECKS_ENABLED=1
+fi
 
 IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-codex-on-demand-e2e" OPENCLAW_CODEX_ON_DEMAND_E2E_IMAGE)"
 DOCKER_TARGET="${OPENCLAW_CODEX_ON_DEMAND_DOCKER_TARGET:-bare}"
@@ -89,6 +93,7 @@ if ! docker_e2e_run_with_harness \
   -v "${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$ROOT_DIR}/extensions/codex/package.json:/tmp/openclaw-candidate-codex-package.json:ro" \
   "${CODEX_CONTRACT_MOUNT_ARGS[@]}" \
   -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
+  -e "OPENCLAW_CODEX_DOCTOR_CHECKS_ENABLED=$CODEX_DOCTOR_CHECKS_ENABLED" \
   -e "OPENCLAW_TEST_STATE_SCRIPT_B64=$OPENCLAW_TEST_STATE_SCRIPT_B64" \
   "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
   -i "$IMAGE_NAME" bash -s >"$run_log" 2>&1 <<'EOF'; then
@@ -166,7 +171,7 @@ openclaw onboard --non-interactive --accept-risk \
 openclaw plugins list --json >/tmp/openclaw-plugins-list.json
 openclaw plugins inspect codex --runtime --json >/tmp/openclaw-codex-inspect.json
 node scripts/e2e/lib/codex-on-demand/assertions.mjs
-if [ -f scripts/e2e/lib/codex-on-demand/doctor-checks.mjs ]; then
+if [ "$OPENCLAW_CODEX_DOCTOR_CHECKS_ENABLED" = "1" ]; then
   node scripts/e2e/lib/codex-on-demand/doctor-checks.mjs
 fi
 
