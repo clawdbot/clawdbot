@@ -165,12 +165,20 @@ export function createOpenAIResponsesClient(
   turnHeaders?: Record<string, string>,
   sessionId?: string,
   fetchOverride?: typeof globalThis.fetch,
+  cacheRetention?: OpenAIResponsesOptions["cacheRetention"],
 ) {
   return new OpenAI({
     apiKey,
     baseURL: resolveOpenAIClientBaseUrl(model),
     dangerouslyAllowBrowser: true,
-    defaultHeaders: buildOpenAIClientHeaders(model, context, optionHeaders, turnHeaders, sessionId),
+    defaultHeaders: buildOpenAIClientHeaders(
+      model,
+      context,
+      optionHeaders,
+      turnHeaders,
+      sessionId,
+      cacheRetention,
+    ),
     fetch: fetchOverride ?? buildGuardedModelFetch(model),
     ...buildOpenAISdkClientOptions(model),
   });
@@ -234,6 +242,7 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
               options?.headers,
               websocketSessionPolicy?.headers,
               options?.sessionId,
+              options?.cacheRetention,
             )
           : undefined;
         const client = config.createClient(
@@ -246,6 +255,7 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
           compactRequest
             ? createBoundedOpenAIResponsesCompactionFetch(buildGuardedModelFetch(model))
             : undefined,
+          options?.cacheRetention,
         );
         const nativeAstra =
           model.id === "gpt-6-astra" && supportsNativeOpenAIResponsesEndpoint(model);
@@ -350,6 +360,7 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
               options?.headers,
               turnState?.headers,
               sessionId,
+              options?.cacheRetention,
             ),
             request: params as ResponsesContinuationRequest,
             restoreRequest: () =>

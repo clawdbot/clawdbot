@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
 import { streamSimpleGoogle } from "../providers/google.js";
 import type { Model } from "../types.js";
+import { createOpenAIResponsesTransportStreamFn } from "./openai-responses-client.js";
 import { createBoundaryAwareStreamFnForModel } from "./provider-transport-stream.js";
 
 const initialHost = getAiTransportHost();
@@ -99,5 +100,48 @@ describe("managed OpenCode conversation headers at fetch egress", () => {
       expect(requests).toHaveLength(1);
       expect(requests[0]?.headers.get("x-opencode-session")).toBe(testCase.expected);
     }
+  });
+});
+
+describe("managed OpenAI Responses session headers at fetch egress", () => {
+  it.each([
+    { cacheRetention: "short", expected: "conversation-a" },
+    { cacheRetention: "none", expected: null },
+  ] as const)("honors the proxy opt-in with cacheRetention=$cacheRetention", async (testCase) => {
+    const requests: Request[] = [];
+    const captureFetch: typeof fetch = async (input, init) => {
+      requests.push(new Request(input, init));
+      return new Response(JSON.stringify({ error: { message: "request captured" } }), {
+        status: 400,
+        headers: { "content-type": "application/json" },
+      });
+    };
+    configureAiTransportHost({ ...initialHost, buildModelFetch: () => captureFetch });
+
+    const stream = await createOpenAIResponsesTransportStreamFn()(
+      {
+        id: "test-model",
+        name: "Test model",
+        api: "openai-responses",
+        provider: "openai-proxy",
+        baseUrl: "https://responses-proxy.example.test/v1",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 128_000,
+        maxTokens: 128,
+        compat: { sendSessionIdHeader: true },
+      },
+      { messages: [{ role: "user", content: "hello", timestamp: 1 }] },
+      {
+        apiKey: "test-key",
+        sessionId: "conversation-a",
+        cacheRetention: testCase.cacheRetention,
+      },
+    );
+    await stream.result();
+
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.headers.get("session_id")).toBe(testCase.expected);
   });
 });
