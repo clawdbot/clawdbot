@@ -224,6 +224,14 @@ see [Testing updates and plugins](/help/testing-updates-plugins).
 
 Release checks call Package Acceptance with `source=artifact`, the prepared release package artifact, `suite_profile=custom`, `docker_lanes='doctor-switch update-channel-switch skill-install update-corrupt-plugin upgrade-survivor published-upgrade-survivor root-managed-vps-upgrade update-restart-auth plugins-offline plugin-update plugin-binding-command-escape'`, and `telegram_mode=mock-openai`. This keeps package migration, update, live ClawHub skill install, stale-plugin-dependency cleanup, configured-plugin install repair, offline plugin, plugin-update, and Telegram proof on the same resolved package tarball. Set `release_package_spec` on Full Release Validation or OpenClaw Release Checks after publishing a beta to run the same matrix against the shipped npm package without rebuilding; set `package_acceptance_package_spec` only when Package Acceptance needs a different package from the rest of release validation. Cross-OS release checks still cover OS-specific onboarding, installer, and platform behavior; package/update product validation should start with Package Acceptance.
 
+Upgrade-survivor assertion ownership follows the selected target's release train,
+read from its immutable package metadata after source-identity validation.
+Extended-stable targets retain their shipped scenario runner, assertions, and
+fixtures; regular targets keep the trusted scenario together, including its
+serving-turn/post-inference assertions.
+The historical baseline does not select the assertion owner. Invalid target
+versions and unsupported extended-stable correction versions fail before Docker.
+
 The `published-upgrade-survivor` Docker lane validates one published package baseline per scenario. In Package Acceptance, the resolved `package-under-test` tarball is always the candidate and `published_upgrade_survivor_baseline` selects the fallback published baseline, defaulting to `openclaw@latest`; failed-lane rerun commands preserve that baseline. Current source release checks set `published_upgrade_survivor_baselines=supported-lines` for `legacy-operator-state`: npm's current `latest`, the preceding stable version, `extended-stable` when that tag exists, and the documented oldest supported baseline `2026.6.34`. The resolver reads `npm view openclaw versions` and `npm view openclaw dist-tags` at run time, pins exact versions before fanout, and deduplicates overlapping lines. Normal current-source release checks retain `base` and add `legacy-operator-state`; release soak selects `reported-issues`, including legacy operator state and the existing issue-shaped fixtures.
 
 Expanded release qualification requires the candidate's `YYYY.M.PATCH` base version
@@ -385,6 +393,7 @@ including generated plugin assets and local build metadata, and install their
 own Chromium and sandbox prerequisites. Each group has four test slots, so long
 UI shards start together without waiting for Gateway declarations or tests.
 A failed producer blocks its own consumers; other diagnostics continue.
+
 Gateway shards retain the existing
 four fresh-process boundaries and two-worker limit. Each UI shard runs its
 bundled files with up to two workers, then its private-server, real-Gateway, and
@@ -394,9 +403,14 @@ existing 90-minute job deadline is unchanged. Local `pnpm test:e2e` still runs
 its suite commands sequentially; each UI command uses the same project policy.
 
 This removes seven builds per invocation and raises peak test concurrency from
-six to eight. Release checks use GitHub-hosted runners, so this adds no
-Blacksmith registrations there. A standalone Blacksmith invocation can register
-eleven runners: two producers and nine test jobs. Producer artifact identities
+six to eight. Release checks route the full Gateway build and four Gateway test
+shards to the existing `blacksmith-32vcpu-ubuntu-2404` profile through
+`gateway_repo_e2e_use_github_hosted_runners: false`. This uses five Blacksmith
+registrations per campaign, with at most four Gateway test runners at once;
+UI, plugin, and other live-suite routing stays unchanged. Other callers default
+the Gateway option to true and retain their overall hosted-runner choice.
+A standalone Blacksmith invocation can register eleven runners: two producers
+and nine test jobs. Producer artifact identities
 survive consumer-only retries; consumers never select an artifact by their own
 current attempt number.
 

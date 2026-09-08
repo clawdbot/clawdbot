@@ -1396,6 +1396,7 @@ jobs:
       live_advisory: ${{ needs.resolve_target.outputs.release_profile == 'beta' }}
       ref: ${{ needs.resolve_target.outputs.revision }}
       include_repo_e2e: true
+      gateway_repo_e2e_use_github_hosted_runners: false
       include_release_path_suites: false
       include_openwebui: false
       include_live_suites: true
