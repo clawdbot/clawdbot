@@ -3,7 +3,7 @@ import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-i
 import { resolveRequestUrl } from "openclaw/plugin-sdk/request-url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../api.js";
-import { createRuntime } from "./channel.sendPayload.test-support.js";
+import { createRuntime } from "./outbound-harness.test-support.js";
 import { lineOutboundAdapter } from "./outbound.js";
 import {
   createPendingLineResponse,

@@ -14,6 +14,13 @@ describe("resolveLineDurableReplyOptions", () => {
       }),
     ).toEqual({
       to: "U123",
+      // Requiring reconciliation is what earns this send a durable intent id, so a
+      // send interrupted mid-flight can be resolved instead of stranded.
+      requiredCapabilities: {
+        text: true,
+        messageSendingHooks: true,
+        reconcileUnknownSend: true,
+      },
     });
   });
 
@@ -29,7 +36,7 @@ describe("resolveLineDurableReplyOptions", () => {
     ).toBe(false);
   });
 
-  it("keeps rich, media, and non-final replies on the legacy path", () => {
+  it("keeps rich and media replies on the legacy path", () => {
     expect(
       resolveLineDurableReplyOptions({
         payload: { text: "hello", channelData: { line: { quickReplies: ["One"] } } },
@@ -46,10 +53,21 @@ describe("resolveLineDurableReplyOptions", () => {
         replyTokenUsed: true,
       }),
     ).toBe(false);
+  });
+
+  it("keeps non-final and empty replies on the legacy path", () => {
     expect(
       resolveLineDurableReplyOptions({
         payload: { text: "hello" },
         infoKind: "block",
+        to: "U123",
+        replyTokenUsed: true,
+      }),
+    ).toBe(false);
+    expect(
+      resolveLineDurableReplyOptions({
+        payload: { text: "" },
+        infoKind: "final",
         to: "U123",
         replyTokenUsed: true,
       }),
