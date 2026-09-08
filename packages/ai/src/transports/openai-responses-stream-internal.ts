@@ -46,7 +46,7 @@ import type {
   ResponsesStreamOptions,
   ResponsesStreamOutputMessage,
 } from "./openai-responses-stream-types-internal.js";
-import { transportAbortError } from "./transport-stream-shared.js";
+import { IncompleteToolCallError, transportAbortError } from "./transport-stream-shared.js";
 
 export type { OpenAIResponsesStreamEvent } from "./openai-responses-stream-types-internal.js";
 
@@ -670,8 +670,11 @@ export async function processResponsesStream<TApi extends Api>(
           resolveCompletedResponsesToolCall(incompleteToolCall);
         }
         if (event.type === "response.incomplete" && streamingToolCalls.hasActive()) {
-          throw new Error(
-            output.errorMessage ?? "Responses stream completed with unresolved tool calls",
+          if (output.errorMessage) {
+            throw new Error(output.errorMessage);
+          }
+          throw new IncompleteToolCallError(
+            "Responses stream completed with unresolved tool calls",
           );
         }
         if (event.type === "response.completed" || output.stopReason === "length") {
