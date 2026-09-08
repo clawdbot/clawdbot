@@ -10,11 +10,9 @@ source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
 source "$ROOT_DIR/scripts/lib/frozen-target-compat.sh"
 
 TARGET_ROOT_DIR="$(cd "${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$ROOT_DIR}" && pwd)"
-CORRUPT_UPDATE_SCENARIO="$ROOT_DIR/scripts/e2e/lib/plugin-update/corrupt-update-scenario.sh"
-if openclaw_prepare_frozen_target_context "$TARGET_ROOT_DIR" &&
-  openclaw_frozen_target_source_has_path "$TARGET_ROOT_DIR" scripts/e2e/lib/plugin-update/corrupt-update-scenario.sh; then
-  CORRUPT_UPDATE_SCENARIO="$TARGET_ROOT_DIR/scripts/e2e/lib/plugin-update/corrupt-update-scenario.sh"
-fi
+CORRUPT_UPDATE_SCENARIO="$(openclaw_resolve_frozen_target_file "$TARGET_ROOT_DIR" \
+  scripts/e2e/lib/plugin-update/corrupt-update-scenario.sh \
+  "$ROOT_DIR/scripts/e2e/lib/plugin-update/corrupt-update-scenario.sh")"
 
 IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-update-corrupt-plugin-e2e" OPENCLAW_UPDATE_CORRUPT_PLUGIN_E2E_IMAGE)"
 SKIP_BUILD="${OPENCLAW_UPDATE_CORRUPT_PLUGIN_E2E_SKIP_BUILD:-0}"

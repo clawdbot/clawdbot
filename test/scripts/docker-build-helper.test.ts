@@ -3002,8 +3002,8 @@ docker_e2e_docker_run_cmd run demo
 
     expectTextToIncludeAll(runner, [
       'openclaw_resolve_frozen_core_harness_capabilities "$TARGET_ROOT_DIR"',
-      'openclaw_prepare_frozen_target_context "$TARGET_ROOT_DIR"',
-      'openclaw_frozen_target_source_has_path "$TARGET_ROOT_DIR" scripts/e2e/lib/release-typed-onboarding/scenario.sh',
+      'openclaw_resolve_frozen_target_file "$TARGET_ROOT_DIR"',
+      "scripts/e2e/lib/release-typed-onboarding/scenario.sh",
       '-v "$SCENARIO_PATH:/app/scripts/e2e/lib/release-typed-onboarding/scenario.sh:ro"',
     ]);
   });
@@ -5905,9 +5905,9 @@ grep -Fxq preserved "$TMPDIR/caller-fd"
         "scripts/e2e/lib/plugin-update/corrupt-update-scenario.sh",
       ],
       [KITCHEN_SINK_PLUGIN_DOCKER_E2E_PATH, "scripts/e2e/lib/kitchen-sink-plugin/assertions.mjs"],
-    ]) {
+    ] as const) {
       const runner = readFileSync(runnerPath, "utf8");
-      expect(runner).toContain(`openclaw_frozen_target_source_has_path`);
+      expect(runner).toContain(`openclaw_resolve_frozen_target_file`);
       expect(runner).toContain(`${assertionPath}:ro`);
     }
   });

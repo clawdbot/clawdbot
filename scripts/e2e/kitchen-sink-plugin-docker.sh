@@ -6,11 +6,9 @@ source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
 source "$ROOT_DIR/scripts/lib/frozen-target-compat.sh"
 
 TARGET_ROOT_DIR="$(cd "${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$ROOT_DIR}" && pwd)"
-KITCHEN_SINK_ASSERTIONS="$ROOT_DIR/scripts/e2e/lib/kitchen-sink-plugin/assertions.mjs"
-if openclaw_prepare_frozen_target_context "$TARGET_ROOT_DIR" &&
-  openclaw_frozen_target_source_has_path "$TARGET_ROOT_DIR" scripts/e2e/lib/kitchen-sink-plugin/assertions.mjs; then
-  KITCHEN_SINK_ASSERTIONS="$TARGET_ROOT_DIR/scripts/e2e/lib/kitchen-sink-plugin/assertions.mjs"
-fi
+KITCHEN_SINK_ASSERTIONS="$(openclaw_resolve_frozen_target_file "$TARGET_ROOT_DIR" \
+  scripts/e2e/lib/kitchen-sink-plugin/assertions.mjs \
+  "$ROOT_DIR/scripts/e2e/lib/kitchen-sink-plugin/assertions.mjs")"
 IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-kitchen-sink-plugin-e2e" OPENCLAW_KITCHEN_SINK_PLUGIN_E2E_IMAGE)"
 OPENCLAW_DOCKER_E2E_LOG_PRINT_BYTES="$(
   docker_e2e_read_positive_int_env OPENCLAW_DOCKER_E2E_LOG_PRINT_BYTES 65536

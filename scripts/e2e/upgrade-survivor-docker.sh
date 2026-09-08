@@ -50,11 +50,12 @@ source "$HARNESS_ROOT_DIR/scripts/lib/frozen-target-compat.sh"
 source "$HARNESS_ROOT_DIR/scripts/e2e/lib/prepublish-plugin-registry.sh"
 
 UPGRADE_ASSERTION_ARGS=()
-if openclaw_prepare_frozen_target_context "$ROOT_DIR" &&
-  openclaw_frozen_target_source_has_path "$ROOT_DIR" scripts/e2e/lib/upgrade-survivor/assertions.mjs; then
+UPGRADE_ASSERTIONS="$(openclaw_resolve_frozen_target_file \
+  "$ROOT_DIR" scripts/e2e/lib/upgrade-survivor/assertions.mjs)"
+if [ -n "$UPGRADE_ASSERTIONS" ]; then
   # Upgrade survival is defined by the selected release's shipped state contract.
   UPGRADE_ASSERTION_ARGS+=(
-    -v "$ROOT_DIR/scripts/e2e/lib/upgrade-survivor/assertions.mjs:/app/scripts/e2e/lib/upgrade-survivor/assertions.mjs:ro"
+    -v "$UPGRADE_ASSERTIONS:/app/scripts/e2e/lib/upgrade-survivor/assertions.mjs:ro"
   )
 fi
 

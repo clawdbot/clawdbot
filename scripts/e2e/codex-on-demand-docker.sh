@@ -10,11 +10,9 @@ source "$ROOT_DIR/scripts/e2e/lib/prepublish-plugin-registry.sh"
 source "$ROOT_DIR/scripts/lib/frozen-target-compat.sh"
 
 TARGET_ROOT_DIR="$(cd "${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$ROOT_DIR}" && pwd)"
-CODEX_ASSERTIONS="$ROOT_DIR/scripts/e2e/lib/codex-on-demand/assertions.mjs"
-if openclaw_prepare_frozen_target_context "$TARGET_ROOT_DIR" &&
-  openclaw_frozen_target_source_has_path "$TARGET_ROOT_DIR" scripts/e2e/lib/codex-on-demand/assertions.mjs; then
-  CODEX_ASSERTIONS="$TARGET_ROOT_DIR/scripts/e2e/lib/codex-on-demand/assertions.mjs"
-fi
+CODEX_ASSERTIONS="$(openclaw_resolve_frozen_target_file "$TARGET_ROOT_DIR" \
+  scripts/e2e/lib/codex-on-demand/assertions.mjs \
+  "$ROOT_DIR/scripts/e2e/lib/codex-on-demand/assertions.mjs")"
 
 IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-codex-on-demand-e2e" OPENCLAW_CODEX_ON_DEMAND_E2E_IMAGE)"
 DOCKER_TARGET="${OPENCLAW_CODEX_ON_DEMAND_DOCKER_TARGET:-bare}"

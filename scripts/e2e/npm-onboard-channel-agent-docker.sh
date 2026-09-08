@@ -10,11 +10,9 @@ source "$ROOT_DIR/scripts/e2e/lib/prepublish-plugin-registry.sh"
 source "$ROOT_DIR/scripts/lib/frozen-target-compat.sh"
 
 TARGET_ROOT_DIR="$(cd "${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$ROOT_DIR}" && pwd)"
-ONBOARD_ASSERTIONS="$ROOT_DIR/scripts/e2e/lib/npm-onboard-channel-agent/assertions.mjs"
-if openclaw_prepare_frozen_target_context "$TARGET_ROOT_DIR" &&
-  openclaw_frozen_target_source_has_path "$TARGET_ROOT_DIR" scripts/e2e/lib/npm-onboard-channel-agent/assertions.mjs; then
-  ONBOARD_ASSERTIONS="$TARGET_ROOT_DIR/scripts/e2e/lib/npm-onboard-channel-agent/assertions.mjs"
-fi
+ONBOARD_ASSERTIONS="$(openclaw_resolve_frozen_target_file "$TARGET_ROOT_DIR" \
+  scripts/e2e/lib/npm-onboard-channel-agent/assertions.mjs \
+  "$ROOT_DIR/scripts/e2e/lib/npm-onboard-channel-agent/assertions.mjs")"
 
 IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-npm-onboard-channel-agent-e2e" OPENCLAW_NPM_ONBOARD_E2E_IMAGE)"
 DOCKER_TARGET="${OPENCLAW_NPM_ONBOARD_DOCKER_TARGET:-bare}"
