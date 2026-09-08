@@ -70,16 +70,7 @@ interface SidebarMenusControllerState {
 
 export type SidebarFilterMenuView = "root" | "specific-owner";
 
-type SidebarMenusRenderer = {
-  renderSidebarAgentMenuForController(controller: SidebarMenusController): unknown;
-  renderSidebarCatalogViewMenuForController(controller: SidebarMenusController): unknown;
-  renderSidebarCustomizeMenuForController(controller: SidebarMenusController): unknown;
-  renderSidebarIdentityMenuForController(controller: SidebarMenusController): unknown;
-  renderSidebarMoreMenuForController(controller: SidebarMenusController): unknown;
-  renderSidebarSessionGroupMenuForController(controller: SidebarMenusController): unknown;
-  renderSidebarSessionMenuForController(controller: SidebarMenusController): unknown;
-  renderSidebarSessionSortMenuForController(controller: SidebarMenusController): unknown;
-};
+type SidebarMenusRenderer = typeof import("./sidebar-menus-render.ts");
 
 interface SidebarMenusControllerHost
   extends ReactiveControllerHost, SessionOrganizerControllerHost {
