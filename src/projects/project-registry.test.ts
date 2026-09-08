@@ -205,7 +205,7 @@ describe("project registry", () => {
   });
 
   it.runIf(process.platform !== "win32")(
-    "does not run checkout hooks while refreshing managed refs",
+    "isolates refresh from checkout hooks and late transport config",
     async () => {
       const root = tempDirs.make("openclaw-project-refresh-hooks-");
       const source = await initializeRepository(root, "source");
@@ -224,8 +224,24 @@ describe("project registry", () => {
       const sourceHead = (
         await execFileAsync("git", ["-C", source, "rev-parse", "HEAD"])
       ).stdout.trim();
+      const mkdtemp = fs.mkdtemp.bind(fs);
+      const stagedMutation = vi.spyOn(fs, "mkdtemp").mockImplementationOnce(async (prefix) => {
+        const staging = await mkdtemp(prefix);
+        await execFileAsync("git", [
+          "-C",
+          target,
+          "config",
+          "url.file:///does-not-exist/.insteadOf",
+          source,
+        ]);
+        return staging;
+      });
 
-      await refreshProjectCheckout({ url: source, target });
+      try {
+        await refreshProjectCheckout({ url: source, target });
+      } finally {
+        stagedMutation.mockRestore();
+      }
 
       await expect(fs.stat(marker)).rejects.toMatchObject({ code: "ENOENT" });
       expect(
