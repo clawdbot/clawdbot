@@ -49,6 +49,23 @@ If you paste a setup code from **Devices → Pair device → Copy setup code** i
 
 Local onboarding generates a Gateway secret in token mode by default, without a token/password picker, and preserves existing password mode. Use `--gateway-auth password` or `--gateway-password <value>` for explicit password setup; Tailscale Funnel requires password mode. If the Gateway starts in token mode without a configured token, it generates an ephemeral runtime token for that process instead. The runtime token is not written to config, so it cannot be recovered and a loopback browser without that token is rejected. Run `openclaw doctor --generate-gateway-token`, restart the Gateway, then run `openclaw gateway auth-token --show` in an interactive terminal and paste the output into **Gateway secret**.
 
+## Agents home
+
+Open **Agents** in the sidebar, choose **All agents** in the agent switcher, or
+visit `/agents` to see your configured agents as a roster. Each card shows the
+agent's identity, model, current work status, last activity, and a preview from its
+main chat. **Open chat** opens that agent's
+main session. Working agents appear first, followed by the most recently active.
+
+**Manage agents** opens `/settings/agents`. **New agent** opens the existing
+agent creation flow when available, or agent settings otherwise. `/agents` now
+opens the roster; agent configuration remains at `/settings/agents`.
+
+Activity and previews refresh on session events and Gateway reconnects. Each
+refresh reads at most 300 recent sessions; older sessions outside that window
+do not contribute to the cards. When a main session is absent from the window,
+its agent's most recent session supplies the preview.
+
 ## What each page covers
 
 - [Connect and pair](/web/control-ui/connect-and-pair) — pair a browser or phone, reach the UI over Tailscale, and fix a blank page.

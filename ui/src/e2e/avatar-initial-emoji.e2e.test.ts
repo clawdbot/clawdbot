@@ -138,7 +138,7 @@ suite.define(() => {
           },
         });
 
-        const response = await page.goto(`${suite.server.baseUrl}agents`);
+        const response = await page.goto(`${suite.server.baseUrl}settings/agents`);
         expect(response?.status()).toBe(200);
         await gateway.waitForRequest("agents.list");
         const agentSelect = page.locator("openclaw-agents-page openclaw-agent-select");

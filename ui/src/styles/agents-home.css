@@ -1,0 +1,143 @@
+.agents-home {
+  padding: 0 24px 24px;
+}
+
+.agents-home__header .content-header {
+  max-height: none;
+  padding: 4px 24px 16px;
+}
+
+.agents-home__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr));
+  gap: 16px;
+}
+
+.agents-home__card,
+.agents-home__skeleton {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 24px;
+  background: var(--card);
+}
+
+.agents-home__card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 16px;
+  min-width: 0;
+  color: var(--text);
+  text-decoration: none;
+}
+
+.agents-home__card:hover,
+.agents-home__card:focus-visible {
+  border-color: var(--accent);
+  text-decoration: none;
+}
+
+.agents-home__identity {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: 100%;
+}
+
+.agents-home__avatar {
+  width: 56px;
+  height: 56px;
+  flex: none;
+  overflow: hidden;
+  border-radius: var(--radius-md);
+  background: var(--bg-accent);
+  font-size: 28px;
+}
+
+.agents-home__avatar img,
+.agents-home__avatar span {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.agents-home__avatar span {
+  display: grid;
+  place-items: center;
+}
+
+.agents-home__avatar img:not([hidden]) + span {
+  display: none;
+}
+
+.agents-home__name {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.agents-home__name h2 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.agents-home__name p,
+.agents-home__preview {
+  margin: 0;
+  color: var(--muted);
+}
+
+.agents-home__model,
+.agents-home__preview {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agents-home__model,
+.agents-home__working {
+  padding: 4px 8px;
+  border-radius: var(--radius-md);
+  font-size: 12px;
+  background: var(--bg-accent);
+}
+
+.agents-home__working {
+  color: var(--ok);
+}
+
+.agents-home__activity {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.agents-home__open {
+  margin-top: auto;
+}
+
+.agents-home__skeleton {
+  min-height: 250px;
+  background: var(--bg-accent);
+}
+
+.agents-home__empty {
+  padding: 48px 24px;
+  text-align: center;
+}
+
+@media (max-width: 560px) {
+  .agents-home {
+    padding: 0 16px 16px;
+  }
+
+  .agents-home__header .content-header {
+    flex-direction: column;
+    align-items: stretch;
+    padding-inline: 16px;
+  }
+
+  .agents-home__header .page-header-actions {
+    justify-content: flex-start;
+    flex-wrap: wrap;
+  }
+}

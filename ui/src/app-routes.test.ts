@@ -18,6 +18,7 @@ describe("application router registration", () => {
   it("serves the table's canonical paths and aliases", () => {
     for (const route of router.routes) {
       expect(route.path, `path for route "${route.id}"`).toBe(pathForRoute(route.id));
+      expect(router.routeIdFromPath(route.path), `registered path "${route.path}"`).toBe(route.id);
       for (const alias of route.aliases ?? []) {
         expect(routeIdFromPath(alias, ""), `alias "${alias}"`).toBe(route.id);
       }

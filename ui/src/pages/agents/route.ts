@@ -1,6 +1,5 @@
 import type { RouteLocation } from "@openclaw/uirouter";
 import { definePage } from "@openclaw/uirouter";
-import { html } from "lit";
 import type { AgentsListResult } from "../../api/types.ts";
 import { routePageSpec } from "../../app-route-paths.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
@@ -39,11 +38,7 @@ export const page = definePage({
     const route = resolveAgentsRouteLocation(location, context.basePath).location;
     return `${route.pathname}\u0000${route.search}\u0000${route.hash}`;
   },
+  // Cached selections must settle without a module-loading delay that retains stale controls.
   loader: (context: ApplicationContext, { location }) => loadAgentsRouteData(context, location),
-  component: () =>
-    import("./agents-page.ts").then(() => ({
-      header: true,
-      render: (data: AgentsRouteData | undefined) =>
-        html`<openclaw-agents-page .routeData=${data}></openclaw-agents-page>`,
-    })),
+  component: () => import("./agents-page.ts"),
 });

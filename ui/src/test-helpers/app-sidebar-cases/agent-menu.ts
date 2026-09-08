@@ -221,6 +221,7 @@ describe("AppSidebar agent chip", () => {
     ).toEqual([
       "agent:main",
       "agent:research",
+      "command:all-agents",
       "command:new-agent",
       "command:capabilities",
       "command:agent-settings",
@@ -463,7 +464,7 @@ describe("AppSidebar agent chip", () => {
     expect(sidebar.querySelector(".sidebar-agent-menu")).toBe(firstMenu);
   });
 
-  it("collapses a single-agent roster to the three agent actions", async () => {
+  it("collapses a single-agent roster to the four agent actions", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar } = await mountSidebar(
       gateway,
@@ -489,10 +490,18 @@ describe("AppSidebar agent chip", () => {
       [...(menu?.children ?? [])]
         .filter((element) => element.localName === "wa-dropdown-item")
         .map((element) => element.getAttribute("value")),
-    ).toEqual(["command:new-agent", "command:capabilities", "command:agent-settings"]);
+    ).toEqual([
+      "command:all-agents",
+      "command:new-agent",
+      "command:capabilities",
+      "command:agent-settings",
+    ]);
   });
 
-  it("navigates to the agents settings page with the active agent preselected", async () => {
+  it.each([
+    { label: "All agents", navigation: ["agents-home", undefined] },
+    { label: "Agent settings", navigation: ["agents", { pathname: "/settings/agents/main" }] },
+  ])("navigates to $label and closes the agent menu", async ({ label, navigation }) => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar } = await mountSidebar(
       gateway,
@@ -507,13 +516,13 @@ describe("AppSidebar agent chip", () => {
 
     sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__main")?.click();
     await sidebar.updateComplete;
-    const settingsRow = [
+    const actionRow = [
       ...sidebar.querySelectorAll<HTMLElement>(".sidebar-agent-menu wa-dropdown-item"),
-    ].find((row) => row.textContent?.includes("Agent settings"));
-    expect(settingsRow).toBeDefined();
-    settingsRow?.click();
+    ].find((row) => row.textContent?.includes(label));
+    expect(actionRow).toBeDefined();
+    actionRow?.click();
     await sidebar.updateComplete;
-    expect(onNavigate).toHaveBeenCalledWith("agents", { pathname: "/settings/agents/main" });
+    expect(onNavigate).toHaveBeenCalledWith(...navigation);
     expect(sidebar.querySelector(".sidebar-agent-menu")).toBeNull();
   });
 

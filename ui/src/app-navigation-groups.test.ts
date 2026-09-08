@@ -144,7 +144,13 @@ describe("sidebar entries", () => {
     }
   });
   it("keeps operational destinations visible by default", () => {
-    expect(DEFAULT_SIDEBAR_ENTRIES).toEqual(["route:dashboards", "route:cron", "route:plugins"]);
+    expect(DEFAULT_SIDEBAR_ENTRIES).toEqual([
+      "route:agents-home",
+      "route:dashboards",
+      "route:cron",
+      "route:plugins",
+    ]);
+    expect(isSettingsNavigationRoute("agents-home")).toBe(false);
   });
 
   it("drops retired routes from persisted entries", () => {
