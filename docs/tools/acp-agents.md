@@ -546,7 +546,7 @@ Two ways to start an ACP session:
 </ParamField>
 <ParamField path="mode" type='"run" | "session"' default="run">
   `"run"` is one-shot; `"session"` is persistent. If `thread: true` and
-  `mode` is omitted, OpenClaw may default to persistent behaviour per
+  `mode` is omitted, OpenClaw may default to persistent behavior per
   runtime path. `mode: "session"` requires `thread: true`.
 </ParamField>
 <ParamField path="cwd" type="string">
