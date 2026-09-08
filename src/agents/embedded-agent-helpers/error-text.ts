@@ -232,7 +232,7 @@ export function formatAssistantErrorText(
     return formatRawAssistantErrorForUi(raw);
   }
 
-  const transportCopy = formatTransportErrorCopy(raw);
+  const transportCopy = formatTransportErrorCopy(msg.errorCode ? `${raw} ${msg.errorCode}` : raw);
   if (transportCopy) {
     return transportCopy;
   }
