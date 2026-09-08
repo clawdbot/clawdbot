@@ -11,7 +11,7 @@ import {
   createSandboxSshConfig,
 } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
-import { createOpenShellSandboxBackendFactory } from "./backend.js";
+import { buildOpenShellSandboxName, createOpenShellSandboxBackendFactory } from "./backend.js";
 import { resolveOpenShellPluginConfig } from "./config.js";
 
 const OPENCLAW_OPENSHELL_E2E = process.env.OPENCLAW_E2E_OPENSHELL === "1";
@@ -497,7 +497,9 @@ describe("openshell sandbox backend e2e", () => {
       const allowPolicyPath = path.join(rootDir, "allow-policy.yaml");
       const scopeSuffix = `${process.pid}-${Date.now()}`;
       const scopeKey = `session:openshell-e2e-deny:${scopeSuffix}`;
-      const allowSandboxName = `openclaw-policy-allow-${scopeSuffix}`;
+      const allowSandboxName = buildOpenShellSandboxName(
+        `session:openshell-e2e-allow:${scopeSuffix}`,
+      );
       let hostPolicyServer: HostPolicyServer | null | undefined;
       const sandboxCfg = {
         mode: "all" as const,
