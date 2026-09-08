@@ -4,6 +4,7 @@
  * Routes models that need OpenClaw-managed proxy/TLS/local-service semantics onto built-in transport implementations.
  */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveOpencodeSessionHeaders } from "../llm/providers/session-affinity.js";
 import type { Api, Model } from "../llm/types.js";
 import { resolveProviderStreamFn } from "../plugins/provider-runtime.js";
 import { createAnthropicMessagesTransportStreamFn } from "./anthropic-transport-stream.js";
@@ -82,21 +83,35 @@ function createSupportedTransportStreamFn(
   model: Model,
   ctx?: ProviderTransportStreamContext,
 ): StreamFn | undefined {
+  let streamFn: StreamFn | undefined;
   switch (model.api) {
     case "openai-responses":
     case "openai-chatgpt-responses":
-      return createOpenAIResponsesTransportStreamFn();
+      streamFn = createOpenAIResponsesTransportStreamFn();
+      break;
     case "openai-completions":
-      return createOpenAICompletionsTransportStreamFn();
+      streamFn = createOpenAICompletionsTransportStreamFn();
+      break;
     case "azure-openai-responses":
-      return createAzureOpenAIResponsesTransportStreamFn();
+      streamFn = createAzureOpenAIResponsesTransportStreamFn();
+      break;
     case "anthropic-messages":
-      return createAnthropicMessagesTransportStreamFn();
+      streamFn = createAnthropicMessagesTransportStreamFn();
+      break;
     case "google-generative-ai":
-      return createProviderOwnedGoogleTransportStreamFn(model, ctx);
+      streamFn = createProviderOwnedGoogleTransportStreamFn(model, ctx);
+      break;
     default:
       return undefined;
   }
+  if (!streamFn) {
+    return undefined;
+  }
+  return (selectedModel, context, options) =>
+    streamFn(selectedModel, context, {
+      ...options,
+      headers: resolveOpencodeSessionHeaders(selectedModel, options),
+    });
 }
 
 function hasOpenClawTransportRequirement(model: Model): boolean {
