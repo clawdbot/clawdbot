@@ -138,6 +138,82 @@ function bundledPluginSweepLane(index: number): ReturnType<typeof summarizeLane>
 }
 
 describe("scripts/lib/docker-e2e-plan", () => {
+  const literalFirstHopPostbuild = String.raw`const LEGACY_CLI_EXIT_COMPAT_CHUNKS = [
+  // v2026.8.2 and the exact d413210 build load these after replacing dist/.
+  // Remove only after both source artifacts fall outside the supported upgrade window.
+  {
+    dest: "dist/shared-Y6bNiw2w.js",
+    contents: LEGACY_UPDATE_NODE_RUNNER_COMPAT_CHUNK,
+  },
+  {
+    dest: "dist/shared-DTaQo6Hi.js",
+    contents: LEGACY_UPDATE_NODE_RUNNER_COMPAT_CHUNK,
+  },
+  {
+    dest: "dist/memory-state-CcqRgDZU.js",
+    contents: "export function hasMemoryRuntime() {\n  return false;\n}\n",
+  },
+  {
+    dest: "dist/memory-state-DwGdReW4.js",
+    contents: "export function hasMemoryRuntime() {\n  return false;\n}\n",
+  },
+];`;
+
+  it.each(["literal", "mapped"])(
+    "retains first-hop coverage for supported %s postbuild output declarations without executing target code",
+    (shape) => {
+      const targetRoot = tempDirs.make("openclaw-first-hop-target-");
+      mkdirSync(join(targetRoot, "scripts"));
+      const source =
+        shape === "literal"
+          ? literalFirstHopPostbuild
+          : readFileSync("scripts/runtime-postbuild.mts", "utf8");
+      writeFileSync(
+        join(targetRoot, "scripts/runtime-postbuild.mts"),
+        `throw new Error("must not execute target");\n${source}`,
+      );
+      const plan = planFor({
+        selectedLaneNames: ["update-first-hop-compat"],
+        upgradeSurvivorTargetRoot: targetRoot,
+      });
+      expect(plan.lanes.map((lane) => lane.name)).toEqual(["update-first-hop-compat"]);
+      expect(plan.omittedUnsupportedLanes).toEqual([]);
+    },
+  );
+
+  it.each([
+    ["literal", "shared-Y6bNiw2w.js"],
+    ["literal", "shared-DTaQo6Hi.js"],
+    ["mapped", "shared-Y6bNiw2w.js"],
+    ["mapped", "shared-DTaQo6Hi.js"],
+    ["unrelated", ""],
+    ["absent", ""],
+  ])(
+    "does not infer first-hop support from %s with missing or unrelated outputs %s",
+    (shape, missing) => {
+      const targetRoot = tempDirs.make("openclaw-missing-first-hop-target-");
+      mkdirSync(join(targetRoot, "scripts"));
+      if (shape !== "absent") {
+        const source =
+          shape === "mapped"
+            ? readFileSync("scripts/runtime-postbuild.mts", "utf8")
+            : literalFirstHopPostbuild;
+        writeFileSync(
+          join(targetRoot, "scripts/runtime-postbuild.mts"),
+          shape === "unrelated"
+            ? source.replace("const LEGACY_CLI_EXIT_COMPAT_CHUNKS", "const UNRELATED_OUTPUTS")
+            : source.replaceAll(missing, "missing.js"),
+        );
+      }
+      const plan = planFor({
+        selectedLaneNames: ["update-first-hop-compat"],
+        upgradeSurvivorTargetRoot: targetRoot,
+      });
+      expect(plan.lanes).toEqual([]);
+      expect(plan.omittedUnsupportedLanes).toEqual(["update-first-hop-compat"]);
+    },
+  );
+
   it.each([
     ["catalog", "docker-package-install", {}, 0, ""],
     ["missing package", "docker-package-install", { needsPackage: false }, 1, "package Docker"],

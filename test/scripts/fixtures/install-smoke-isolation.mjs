@@ -787,7 +787,7 @@ async function containment(root, harness) {
       "-c",
       workflowStep(harness, "qr_package_install_smoke", "Run QR package install smoke").run,
     ],
-    37,
+    1,
   );
   for (const probe of assertLogBoundary(qrLog)) {
     assertGuestProbe(probe);
@@ -852,14 +852,19 @@ async function registryProof(root, harness, name) {
         "--security-opt",
         "no-new-privileges",
         "--user",
-        "node",
+        `${process.getuid()}:${process.getgid()}`,
         "--entrypoint",
         "bash",
         "-v",
         `${config.registry}:/registry:ro`,
         "openclaw-install-candidate-packager:local",
         "-lc",
-        `npm install --prefix /tmp/consumer --ignore-scripts ${quote(`/registry/${entry.tarball}`)} >/dev/null`,
+        `set -euo pipefail
+umask 077
+HOME="$(mktemp -d /tmp/openclaw-registry-consumer.XXXXXX)"
+export HOME
+export npm_config_cache="$HOME/.npm"
+npm install --prefix "$HOME/consumer" --ignore-scripts ${quote(`/registry/${entry.tarball}`)} >/dev/null`,
       ],
       { timeout: 10 * 60_000 },
     );

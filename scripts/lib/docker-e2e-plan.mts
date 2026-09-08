@@ -57,7 +57,12 @@ export const RELEASE_PATH_PROFILE = "release-path";
 type LiveMode = "all" | "only" | "skip";
 type DockerProfile = typeof DEFAULT_PROFILE | typeof RELEASE_PATH_PROFILE;
 type UpgradeSurvivorExpansion = { lanes: DockerE2eLane[]; omittedLaneNames: string[] };
-const UPDATE_FIRST_HOP_COMPAT_OUTPUTS = ["shared-DTaQo6Hi.js", "shared-Y6bNiw2w.js"];
+// Inert postbuild declarations: shipped 9.1/9.2 literal outputs and the mapped
+// catalog that followed. Selection must not execute a frozen target's build code.
+const UPDATE_FIRST_HOP_COMPAT_CATALOGS = new Set([
+  "3a07518cac2a3f92c0ecb73e177ced4ae3350872be59c8c9a1871c2f0e3c0773",
+  "edf5302a5bb101f2a2efaf9735cd0ae90081bd1b693e0c77a1f8e56ada865096",
+]);
 const IOS_WATCH_RELAY_COMMANDS = ['"watch.status"', '"watch.notify"'];
 type DockerE2ePlanOptions = {
   allowFrozenTargetScenarioOmissions?: boolean;
@@ -304,7 +309,17 @@ function supportsUpdateFirstHopCompatForTarget(targetRoot: string | undefined): 
     return false;
   }
   const source = readFileSync(runtimePostbuild, "utf8");
-  return UPDATE_FIRST_HOP_COMPAT_OUTPUTS.every((name) => source.includes(`dest: "dist/${name}"`));
+  const startMarker = "const LEGACY_CLI_EXIT_COMPAT_CHUNKS = [";
+  const start = source.indexOf(startMarker);
+  if (start < 0 || source.lastIndexOf(startMarker) !== start) {
+    return false;
+  }
+  const end = source.indexOf("\n];", start + startMarker.length);
+  if (end < 0) {
+    return false;
+  }
+  const block = source.slice(start, end + 3);
+  return UPDATE_FIRST_HOP_COMPAT_CATALOGS.has(createHash("sha256").update(block).digest("hex"));
 }
 
 function supportsMobilePairingReconnectForTarget(targetRoot: string | undefined): boolean {

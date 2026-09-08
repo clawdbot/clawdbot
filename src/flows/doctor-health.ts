@@ -4,7 +4,7 @@ import { intro as clackIntro, outro as clackOutro } from "@clack/prompts";
 import { stylePromptTitle } from "../../packages/terminal-core/src/prompt-style.js";
 import type { DoctorOptions } from "../commands/doctor-prompter.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
-import { formatDoctorStateRepairFailure } from "../infra/state-repair-message.js";
+import { DoctorUnreadableStateDatabaseError } from "../infra/state-repair-message.js";
 import {
   captureUpdateDoctorConfigWrites,
   UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE,
@@ -61,11 +61,9 @@ async function assertDoctorDatabaseSchemasCompatible(scope?: "state") {
     (database) => database.kind === "state",
   );
   if (unreadableStateDatabase) {
-    throw new Error(
-      formatDoctorStateRepairFailure(
-        `shared state database is unreadable at ${unreadableStateDatabase.path}: ${unreadableStateDatabase.reason}`,
-        "Stop OpenClaw processes, then restore this file from a verified backup; the unreadable database was left unchanged.",
-      ),
+    throw new DoctorUnreadableStateDatabaseError(
+      unreadableStateDatabase.path,
+      unreadableStateDatabase.reason,
     );
   }
   return databaseSchemas;

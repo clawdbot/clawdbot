@@ -91,8 +91,8 @@ describe("installed plugin index install-record persistence", () => {
               { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } },
             );
           }
-          const { DatabaseSync } = requireNodeSqlite();
-          const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
+          const { StatementSync } = requireNodeSqlite();
+          const iterate = vi.spyOn(StatementSync.prototype, "iterate");
           const readRecords = () =>
             expect(readPersistedInstalledPluginIndexInstallRecordsSync({ stateDir })).toEqual(
               records,
@@ -113,11 +113,16 @@ describe("installed plugin index install-record persistence", () => {
           }
 
           expect(
-            prepare.mock.calls.filter(([sql]) =>
-              /SELECT\s+"?value_json"?\s+FROM\s+"?config_machine_state"?\s+WHERE\s+"?state_key"?\s*=/i.test(
-                sql,
-              ),
-            ),
+            iterate.mock.calls.filter((params, index) => {
+              const statement = iterate.mock.contexts[index];
+              return (
+                statement instanceof StatementSync &&
+                params.includes("plugins.installedIndex") &&
+                /SELECT\s+"?value_json"?\s+FROM\s+"?config_machine_state"?\s+WHERE\s+"?state_key"?\s*=/i.test(
+                  statement.sourceSQL,
+                )
+              );
+            }),
           ).toHaveLength(1);
         },
       );
