@@ -39,6 +39,25 @@ openclaw_prepare_frozen_target_context() {
   fi
 }
 
+openclaw_resolve_frozen_target_file() {
+  local source_root="${1:?missing selected source root}" \
+    relative_path="${2:?missing selected relative path}" \
+    fallback_path="${3:-}" context_status=0
+
+  openclaw_prepare_frozen_target_context "$source_root" || context_status=$?
+  case "$context_status" in
+    0)
+      if openclaw_frozen_target_source_has_path "$source_root" "$relative_path"; then
+        printf '%s\n' "$source_root/$relative_path"
+        return
+      fi
+      ;;
+    1) ;;
+    *) return "$context_status" ;;
+  esac
+  printf '%s\n' "$fallback_path"
+}
+
 openclaw_frozen_target_source_has_path() {
   local source_root="${1:?missing selected source root}" relative_path="${2:?missing relative path}"
   git -C "$source_root" cat-file -e "$OPENCLAW_SELECTED_SHA:$relative_path" 2>/dev/null

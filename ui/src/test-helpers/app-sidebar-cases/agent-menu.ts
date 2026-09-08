@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { AgentsListResult } from "../../api/types.ts";
 import { createAgentIdentityCapability } from "../../lib/agents/identity.ts";
+import { setAvatarGatewayOrigin } from "../../lib/identity-avatar-context.ts";
 import {
   SESSION_COMPOSER_FOCUS_PARAM,
   SESSION_FACE_PREFERENCE_PARAM,
@@ -618,5 +619,66 @@ describe("AppSidebar agent chip", () => {
         ".sidebar-agent-menu wa-dropdown-item.sidebar-agent-menu__agent-switch",
       ),
     ).toHaveLength(12);
+  });
+
+  it("loads switcher avatar tiles through the authenticated avatar loader", async () => {
+    const avatarRoute = "/avatar/research?v=140879";
+    const createObjectURL = vi.fn(() => "blob:agent-avatar");
+    vi.stubGlobal(
+      "URL",
+      class extends URL {
+        static override createObjectURL = createObjectURL;
+        static override revokeObjectURL = vi.fn();
+      },
+    );
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      blob: async () => new Blob(["avatar"], { type: "image/png" }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    setAvatarGatewayOrigin(globalThis.location.origin, ["secret-token"]);
+    try {
+      const { sidebar } = await mountSidebar(
+        createGateway({} as GatewayBrowserClient),
+        createSessions("main", ["agent:main:main"]),
+        "panel",
+        {
+          ...TWO_AGENTS,
+          agents: [
+            { id: "main", identity: { name: "Molty", emoji: "🦞" } },
+            { id: "research", identity: { avatarUrl: avatarRoute } },
+          ],
+        },
+      );
+      sidebar.connected = true;
+      await sidebar.updateComplete;
+
+      sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__main")?.click();
+      await sidebar.updateComplete;
+      const menu = sidebar.querySelector(".sidebar-agent-menu");
+      expect(menu).not.toBeNull();
+      const researchRow = [
+        ...(menu?.querySelectorAll<HTMLElement>(".sidebar-agent-menu__agent-switch") ?? []),
+      ].find((row) => row.textContent?.includes("research"));
+      expect(researchRow).toBeDefined();
+
+      await vi.waitFor(() => {
+        expect(
+          researchRow
+            ?.querySelector<HTMLImageElement>("img.agent-select__avatar")
+            ?.getAttribute("src"),
+        ).toBe("blob:agent-avatar");
+      });
+      expect(createObjectURL).toHaveBeenCalledTimes(1);
+      expect(fetchMock).toHaveBeenCalledWith(
+        `${globalThis.location.origin}/avatar/research?v=140879`,
+        expect.objectContaining({
+          headers: { Authorization: "Bearer secret-token" },
+        }),
+      );
+    } finally {
+      setAvatarGatewayOrigin(null);
+      vi.unstubAllGlobals();
+    }
   });
 });

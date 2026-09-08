@@ -104,7 +104,9 @@ const mocks = vi.hoisted(() => ({
   resolveMemorySearchConfig: vi.fn<
     typeof import("../agents/memory-search.js").resolveMemorySearchConfig
   >(() => null),
-  loadModelCatalog: vi.fn(async () => []),
+  loadModelCatalog: vi.fn<
+    typeof import("../agents/prepared-model-catalog.js").loadPreparedModelCatalog
+  >(async () => []),
   prepareSimpleCompletionModelForAgent: vi.fn(async () => ({
     selection: {
       provider: "openai",
@@ -914,6 +916,84 @@ describe("capability cli", () => {
 
     await runCapability("model", "list");
     expect(mocks.runtime.log).toHaveBeenCalledWith("No results found.");
+  });
+
+  it.each([
+    ["list", []],
+    ["inspect", ["--model", "catalog-fixture/work-model"]],
+  ] as const)("shows the requested agent's model in infer model %s", async (command, args) => {
+    mocks.loadConfig.mockReturnValue({
+      agents: {
+        ownership: "explicit",
+        defaults: { systemAgent: { agentId: "main" } },
+        entries: { main: {}, work: {} },
+      },
+    });
+    const workModel = { provider: "catalog-fixture", id: "work-model", name: "Work model" };
+    mocks.loadModelCatalog.mockImplementation(async (params) =>
+      params?.agentId === "work"
+        ? [workModel]
+        : [{ provider: "catalog-fixture", id: "main-model", name: "Main model" }],
+    );
+
+    await runCap("infer", "model", "--agent", "work", command, ...args, "--json");
+
+    expect(mocks.runtime.writeJson).toHaveBeenCalledWith(
+      command === "list" ? [workModel] : workModel,
+    );
+  });
+
+  it.each(["list", "inspect"])(
+    "rejects an unknown agent before infer model %s returns another agent's model",
+    async (command) => {
+      mocks.loadConfig.mockReturnValue({
+        agents: { ownership: "explicit", entries: { main: {}, work: {} } },
+      });
+
+      await expect(
+        runCap(
+          "infer",
+          "model",
+          "--agent",
+          "retired",
+          command,
+          ...(command === "inspect" ? ["--model", "openai/gpt-5.4"] : []),
+          "--json",
+        ),
+      ).rejects.toThrow("exit 1");
+
+      expectRuntimeErrorContains('Unknown agent id "retired"');
+      expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
+    },
+  );
+
+  it("canonicalizes an infer model run override using the requested agent's catalog", async () => {
+    mocks.loadConfig.mockReturnValue({
+      agents: { ownership: "explicit", entries: { main: {}, work: {} } },
+    });
+    mocks.loadModelCatalog.mockImplementation(async (params) =>
+      params?.agentId === "work"
+        ? [{ provider: "catalog-fixture", id: "Work-Model", name: "Work model" }]
+        : [],
+    );
+
+    await runCap(
+      "infer",
+      "model",
+      "--agent",
+      "work",
+      "run",
+      "--model",
+      "catalog-fixture/WORK-MODEL",
+      "--prompt",
+      "hello",
+      "--json",
+    );
+
+    expect(firstPreparedModelParams()).toMatchObject({
+      agentId: "work",
+      modelRef: "catalog-fixture/Work-Model",
+    });
   });
 
   it("reports model providers configured through their environment key", async () => {

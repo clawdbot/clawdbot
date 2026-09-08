@@ -110,6 +110,31 @@ describe("generate-npm-package-lock", () => {
     });
   });
 
+  it("preserves range selectors containing comparison operators", () => {
+    expect(
+      normalizeOverrides({
+        "undici@>=7.0.0 <8.0.0": "7.29.1",
+        "undici@>=8.0.0 <8.9.0": "8.10.2",
+      }),
+    ).toEqual({
+      "undici@>=7.0.0 <8.0.0": "7.29.1",
+      "undici@>=8.0.0 <8.9.0": "8.10.2",
+    });
+  });
+
+  it("preserves version selectors on both sides of parent-child overrides", () => {
+    expect(
+      normalizeOverrides({
+        "bar>foo@1": "2",
+        "bar@>=1 <2>@scope/unused": "-",
+        "bar@>=1 <2>@scope/foo@>=3 <4": "4",
+      }),
+    ).toEqual({
+      bar: { "foo@1": "2" },
+      "bar@>=1 <2": { "@scope/foo@>=3 <4": "4" },
+    });
+  });
+
   it.each([false, true])(
     "retains parent and child overrides during normalization (childrenFirst=%s)",
     (childrenFirst) => {

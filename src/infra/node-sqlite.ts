@@ -92,6 +92,8 @@ function assertSafeSqliteRuntime(sqlite: typeof import("node:sqlite")): void {
 export function requireNodeSqlite(): typeof import("node:sqlite") {
   installProcessWarningFilter();
   try {
+    // Bun follow-up: Revalidate close/dispose file release after oven-sh/bun#40005 ships.
+    // Bun 1.4.2 retains native statements after close; node:sqlite exposes no finalizer.
     const sqlite = require("node:sqlite") as typeof import("node:sqlite");
     assertSafeSqliteRuntime(sqlite);
     return sqlite;

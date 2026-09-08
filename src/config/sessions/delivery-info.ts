@@ -12,7 +12,11 @@ import {
 import { getRuntimeConfig } from "../io.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { resolveSessionStorePathCore } from "./paths.js";
-import { openSessionEntryReadView, type SessionEntryReadView } from "./session-accessor.js";
+import {
+  loadExactSessionEntryReadOnly,
+  openSessionEntryReadView,
+  type SessionEntryReadView,
+} from "./session-accessor.js";
 import {
   foldedSessionKeyAliasCandidates,
   hasMismatchedCaseSensitiveDeliveryProof,
@@ -22,6 +26,33 @@ import {
 import { resolveAllAgentSessionStoreTargetsSync } from "./targets.js";
 import { parseSessionThreadInfo } from "./thread-info.js";
 import type { SessionEntry } from "./types.js";
+
+/** Reads only the current session; missing delivery must not widen into alias discovery. */
+export function readExactSessionDeliveryContext(params: {
+  cfg: OpenClawConfig;
+  sessionKey: string | undefined;
+  sessionId?: string;
+}) {
+  const sessionKey = params.sessionKey?.trim();
+  if (!sessionKey) {
+    return undefined;
+  }
+  try {
+    const { agentId, canonicalKey } = resolveSessionStoreIdentity({ cfg: params.cfg, sessionKey });
+    const entry = loadExactSessionEntryReadOnly({
+      storePath: resolveSessionStorePathCore(params.cfg.session?.store, { agentId }),
+      sessionKey: canonicalKey,
+      projection: "list",
+    })?.entry;
+    if (params.sessionId && entry?.sessionId !== params.sessionId) {
+      return undefined;
+    }
+    return deliveryContextFromSession(entry);
+  } catch {
+    // A missing or unreadable store leaves the caller's existing inferred route intact.
+    return undefined;
+  }
+}
 
 /**
  * Extracts the routable delivery context and thread id for a persisted session key.

@@ -64,6 +64,12 @@ bun pm trust baileys protobufjs
 
 ## Caveats
 
+Bun 1.4.2 can retain SQLite statement handles and WAL/shared-memory files after
+`DatabaseSync.close()` or `Symbol.dispose()`. Use Node when database files must
+be released promptly after closing. This is a temporary runtime workaround while
+the [upstream close fix](https://github.com/oven-sh/bun/pull/40005) is pending;
+OpenClaw cannot finalize these handles through Bun's public `node:sqlite` API.
+
 On macOS, Bun uses Apple's system SQLite, which omits native extension loading.
 OpenClaw can open ordinary agent databases without extension loading when that
 library meets the WAL safety floor. For native `sqlite-vec` KNN memory queries on

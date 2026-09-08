@@ -54,6 +54,7 @@ const OPENAI_COMPAT_CONTEXT_WINDOW_FIELDS = [
   "context_length",
   "context_window",
   "context_size",
+  "max_model_len",
 ] as const;
 
 function readOpenAICompatibleContextWindow(
@@ -342,12 +343,24 @@ export async function discoverOpenAICompatibleLocalModels(
     return [];
   }
 
+  const topLevelContextByModelId = new Map<string, number>();
+  for (const { model } of result.rows) {
+    const modelId = normalizeOptionalString(model.id);
+    const contextWindow = readOpenAICompatibleContextWindow(model);
+    if (modelId && contextWindow !== undefined) {
+      topLevelContextByModelId.set(modelId, contextWindow);
+    }
+  }
+
   return result.rows.flatMap(({ model, props }) => {
     const modelId = normalizeOptionalString(model.id);
     if (!modelId) {
       return [];
     }
     const meta = asOptionalRecord(model.meta);
+    const parentId = normalizeOptionalString(model.parent);
+    const parentContextWindow =
+      parentId && parentId !== modelId ? topLevelContextByModelId.get(parentId) : undefined;
     const generationSettings = asOptionalRecord(props?.default_generation_settings);
     const runtimeContextTokens =
       readPositiveInteger(generationSettings?.n_ctx) ?? readPositiveInteger(props?.n_ctx);
@@ -361,6 +374,7 @@ export async function discoverOpenAICompatibleLocalModels(
         params.contextWindow ??
         readPositiveInteger(meta?.n_ctx_train) ??
         readOpenAICompatibleContextWindow(model) ??
+        parentContextWindow ??
         SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
       maxTokens: params.maxTokens ?? SELF_HOSTED_DEFAULT_MAX_TOKENS,
       ...(runtimeContextTokens ? { contextTokens: runtimeContextTokens } : {}),

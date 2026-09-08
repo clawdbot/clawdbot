@@ -1,6 +1,7 @@
 // Cron validation tests cover channel target validation against plugin
 // prefixes/aliases and runtime config for cron delivery destinations.
 
+import { performance } from "node:perf_hooks";
 import { expectDefined } from "@openclaw/normalization-core";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -17,6 +18,10 @@ import {
   claimAgentRunDelegatedAuthority,
   releaseAgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
+import {
+  areDiagnosticsEnabledForProcess,
+  setDiagnosticsEnabledForProcess,
+} from "../../infra/diagnostic-events.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   createChannelTestPluginBase,
@@ -29,6 +34,7 @@ import {
 } from "../cron-creator-authority-grant.js";
 import type { CronCreatorAuthorityGrant } from "../cron-creator-authority-grant.types.js";
 import { getGatewayProcessInstanceId } from "../process-instance.js";
+import * as cronCallerScope from "./cron-caller-scope.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
 const cronLogger = createNoopLogger();
@@ -286,6 +292,7 @@ function createCronContext(currentJobs?: CronJob | CronJob[]) {
     },
     logGateway: {
       info: vi.fn(),
+      warn: vi.fn(),
     },
     cronStorePath: "cron-validation-test.json",
     getRuntimeConfig: () => getRuntimeConfig(),
@@ -304,10 +311,11 @@ async function invokeCron(
     currentJob?: CronJob;
     context?: ReturnType<typeof createCronContext>;
     client?: GatewayClient;
+    respond?: ReturnType<typeof vi.fn>;
   } = {},
 ) {
   const context = options.context ?? createCronContext(options.currentJob);
-  const respond = vi.fn();
+  const respond = options.respond ?? vi.fn();
   await expectDefined(
     cronHandlers[method],
     "cronHandlers[method] test invariant",
@@ -945,6 +953,172 @@ describe("cron method validation", () => {
     const error = respond.mock.calls.at(-1)?.[2];
     expect(String(error?.message)).toContain("cron job not found: missing");
     expect(String(error?.message)).not.toContain("automation not found");
+  });
+
+  describe("cron.list request diagnostics", () => {
+    let clock = 0;
+    let previousDiagnostics: boolean;
+    beforeEach(() => {
+      previousDiagnostics = areDiagnosticsEnabledForProcess();
+      setDiagnosticsEnabledForProcess(true);
+      clock = 0;
+      vi.spyOn(performance, "now").mockImplementation(() => clock);
+    });
+    afterEach(() => {
+      setDiagnosticsEnabledForProcess(previousDiagnostics);
+      vi.restoreAllMocks();
+    });
+
+    it.each([false, true])(
+      "attributes scoped inventory attempts without leaking hidden job data (unstable: %s)",
+      async (unstable) => {
+        const jobs = Array.from({ length: 201 }, (_, index) =>
+          createCronJob({ id: `private-job-${index}`, agentId: index === 200 ? "ops" : "other" }),
+        );
+        const context = createCronContext(jobs);
+        const listPage = context.cron.listPage.getMockImplementation()!;
+        context.cron.listPage.mockImplementation(async (opts) => {
+          clock += 600;
+          const page = await listPage(opts);
+          return unstable && opts?.offset === 200
+            ? { ...page, snapshotRevision: "changed-before-second-page" }
+            : page;
+        });
+        const matches = cronCallerScope.cronJobMatchesCallerScope;
+        vi.spyOn(cronCallerScope, "cronJobMatchesCallerScope").mockImplementation((params) => {
+          clock += 1;
+          return matches(params);
+        });
+        const respond = vi.fn();
+        const invocation = invokeCron(
+          "cron.list",
+          { compact: true, limit: 1 },
+          { context, client: callerClient("ops"), respond },
+        );
+        if (unstable) {
+          await expect(invocation).rejects.toThrow(
+            new Error("cron.list changed repeatedly while applying caller scope"),
+          );
+          expect(respond).not.toHaveBeenCalled();
+        } else {
+          await invocation;
+          expect(respond).toHaveBeenCalledExactlyOnceWith(
+            true,
+            expect.objectContaining({
+              jobs: [expect.objectContaining({ id: "private-job-200" })],
+              total: 1,
+              hasMore: false,
+            }),
+            undefined,
+          );
+        }
+        expect(context.cron.listPage.mock.calls.map(([opts]) => opts?.offset)).toEqual(
+          unstable ? [0, 200, 0, 200, 0, 200] : [0, 200],
+        );
+        expect(context.logGateway.warn).toHaveBeenCalledExactlyOnceWith("cron: slow list request", {
+          operation: "cron.list",
+          elapsedMs: unstable ? 4200 : 1401,
+          phaseDurationsMs: unstable
+            ? { setup: 0, listing: 4200 }
+            : { setup: 0, listing: 1401, projection: 0, response: 0, handlerExit: 0 },
+          sourcePageMs: unstable ? 3600 : 1200,
+          sourcePageCount: unstable ? 6 : 2,
+          scopeAttemptCount: unstable ? 3 : 1,
+          handlerOutcome: unstable ? "threw" : "returned",
+          responseOutcome: unstable ? "none" : "ok",
+          compact: true,
+          previewsRequested: false,
+          scopeApplied: true,
+          ...(!unstable ? { returnedCount: 1 } : {}),
+          scopeProcessingMs: unstable ? 600 : 201,
+        });
+      },
+    );
+
+    it.each([
+      [{}, true],
+      [{ compact: true }, false],
+      [{ includeDeliveryPreviews: false }, false],
+    ] as const)(
+      "attributes previews without making bypassed reads eager: %j",
+      async (params, previewsRequested) => {
+        const context = createCronContext(createCronJob());
+        const listPage = context.cron.listPage.getMockImplementation()!;
+        context.cron.listPage.mockImplementation(async (opts) => {
+          clock += 1100;
+          return await listPage(opts);
+        });
+        const previews = { "cron-1": { label: "private-preview", detail: "private-destination" } };
+        resolveCronDeliveryPreviews.mockImplementation(async () => {
+          clock += 400;
+          return previews;
+        });
+        const { respond } = await invokeCron("cron.list", params, { context });
+        expect(respond).toHaveBeenCalledTimes(1);
+        expect(respond.mock.calls[0]).toEqual([true, expect.any(Object), undefined]);
+        const payload = requireRecord(respond.mock.calls[0]?.[1], "cron list response");
+        expect(resolveCronDeliveryPreviews).toHaveBeenCalledTimes(previewsRequested ? 1 : 0);
+        if (previewsRequested) {
+          expect(payload.deliveryPreviews).toBe(previews);
+        } else {
+          expect(payload).not.toHaveProperty("deliveryPreviews");
+        }
+        expect(context.logGateway.warn).toHaveBeenCalledExactlyOnceWith("cron: slow list request", {
+          operation: "cron.list",
+          elapsedMs: previewsRequested ? 1500 : 1100,
+          phaseDurationsMs: {
+            setup: 0,
+            listing: 1100,
+            projection: 0,
+            ...(previewsRequested ? { previews: 400 } : {}),
+            response: 0,
+            handlerExit: 0,
+          },
+          sourcePageMs: 1100,
+          sourcePageCount: 1,
+          scopeAttemptCount: 0,
+          handlerOutcome: "returned",
+          responseOutcome: "ok",
+          compact: "compact" in params,
+          previewsRequested,
+          scopeApplied: false,
+          returnedCount: 1,
+        });
+      },
+    );
+
+    it.each(["page", "response"] as const)(
+      "preserves a %s error when the diagnostic sink throws",
+      async (source) => {
+        const context = createCronContext(createCronJob());
+        const failure = new Error("original failure");
+        const listPage = context.cron.listPage.getMockImplementation()!;
+        context.cron.listPage.mockImplementation(async (opts) => {
+          clock = 1100;
+          if (source === "page") {
+            throw failure;
+          }
+          return await listPage(opts);
+        });
+        const respond = vi.fn(() => {
+          throw failure;
+        });
+        context.logGateway.warn.mockImplementation(() => {
+          throw new Error("diagnostic failure");
+        });
+        await expect(invokeCron("cron.list", { compact: true }, { context, respond })).rejects.toBe(
+          failure,
+        );
+        expect(respond).toHaveBeenCalledTimes(source === "response" ? 1 : 0);
+        expect(context.logGateway.warn).toHaveBeenCalledExactlyOnceWith(
+          "cron: slow list request",
+          expect.objectContaining({
+            handlerOutcome: "threw",
+            responseOutcome: source === "page" ? "none" : "threw",
+          }),
+        );
+      },
+    );
   });
 
   it.each([

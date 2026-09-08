@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 
@@ -12,6 +13,7 @@ const emptyPluginMetadataSnapshot = {
 
 const mocks = vi.hoisted(() => ({
   loadPreparedModelCatalogSnapshot: vi.fn(),
+  loadScopedModelCatalogSnapshot: vi.fn(),
   normalizeProviderResolvedModelWithPlugin: vi.fn(() => undefined),
 }));
 
@@ -39,9 +41,12 @@ vi.mock("../../plugins/provider-runtime.js", () => ({
   normalizeProviderResolvedModelWithPlugin: mocks.normalizeProviderResolvedModelWithPlugin,
 }));
 
+import { buildModelListRows } from "./list.rows.js";
+vi.mock("./list.scoped-catalog.js", () => ({
+  loadScopedListModelCatalogSnapshot: mocks.loadScopedModelCatalogSnapshot,
+}));
+
 import { resolveConfiguredEntries } from "./list.configured.js";
-import { appendConfiguredModelRowSources } from "./list.row-sources.js";
-import type { ModelRow } from "./list.types.js";
 import { createModelCatalogProviderAliasCanonicalizer } from "./provider-aliases.js";
 
 afterEach(() => {
@@ -259,10 +264,8 @@ describe("configured model list rows", () => {
       availability: provider === "z.ai",
       routeResolution: null,
     }));
-    const rows: ModelRow[] = [];
-
-    await appendConfiguredModelRowSources({
-      rows,
+    const rows = await buildModelListRows({
+      includePreparedCatalog: false,
       entries,
       context: {
         cfg,
@@ -313,10 +316,8 @@ describe("configured model list rows", () => {
       },
     };
     const { entries } = resolveConfiguredEntries(cfg);
-    const rows: ModelRow[] = [];
-
-    await appendConfiguredModelRowSources({
-      rows,
+    const rows = await buildModelListRows({
+      includePreparedCatalog: false,
       entries,
       context: {
         cfg,
@@ -387,10 +388,8 @@ describe("configured model list rows", () => {
       },
     };
     const { entries } = resolveConfiguredEntries(cfg);
-    const rows: ModelRow[] = [];
-
-    await appendConfiguredModelRowSources({
-      rows,
+    const rows = await buildModelListRows({
+      includePreparedCatalog: false,
       entries,
       context: {
         cfg,
@@ -423,5 +422,122 @@ describe("configured model list rows", () => {
     });
     // The catalog is a single committed generation; configured and catalog rows share one load.
     expect(mocks.loadPreparedModelCatalogSnapshot).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("local catalog source precedence characterization", () => {
+  it("keeps mixed source order, authored metadata, and registry authority in the all view", async () => {
+    const shared: import("../../llm/types.js").Model = {
+      provider: "acme",
+      id: "shared",
+      name: "Registry shared",
+      api: "openai-completions",
+      baseUrl: "https://models.example.test/v1",
+      input: ["text"],
+      reasoning: false,
+      contextWindow: 8192,
+      maxTokens: 2048,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    };
+    mocks.loadScopedModelCatalogSnapshot.mockReturnValueOnce({
+      entries: [
+        { ...shared, name: "Prepared duplicate", contextWindow: 4096 },
+        { ...shared, id: "a-prepared", name: "Prepared only", contextWindow: 16384 },
+      ],
+      routeVariants: [],
+      staticEntries: [{ ...shared, id: "static-only", name: "Static only", contextWindow: 24576 }],
+    });
+    const rows = await buildModelListRows({
+      includePreparedCatalog: true,
+      entries: [],
+      registryModels: [{ ...shared, id: "z-registry", name: "Registry only" }, shared],
+      context: {
+        agentDir: "/tmp/openclaw-agent",
+        canonicalizeProvider: normalizeProviderId,
+        filter: {},
+        cfg: {
+          models: {
+            providers: {
+              acme: {
+                api: "openai-completions",
+                baseUrl: "https://models.example.test/v1",
+                models: [
+                  {
+                    id: "shared",
+                    name: "Authored shared",
+                    input: ["text", "image"],
+                    reasoning: false,
+                    contextWindow: 64000,
+                    maxTokens: 2048,
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  },
+                  {
+                    id: "authored-only",
+                    name: "Authored only",
+                    input: ["text"],
+                    reasoning: false,
+                    contextWindow: 32768,
+                    maxTokens: 2048,
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  },
+                ],
+              },
+            },
+          },
+        },
+        authIndex: { evaluateModelAuth: () => ({ availability: true, routeResolution: null }) },
+        providerDiscoveryProviderIds: ["acme"],
+        configuredByKey: new Map([
+          [
+            "acme/shared",
+            {
+              key: "acme/shared",
+              ref: { provider: "acme", model: "shared" },
+              tags: new Set(["configured"]),
+              aliases: ["shared-alias"],
+            },
+          ],
+        ]),
+        discoveredKeys: new Set(["acme/shared", "acme/z-registry"]),
+        availableKeys: new Set(),
+      },
+    });
+
+    expect(rows).toMatchObject([
+      {
+        key: "acme/shared",
+        name: "Authored shared",
+        input: "text+image",
+        contextWindow: 64000,
+        available: false,
+        tags: ["configured", "alias:shared-alias"],
+      },
+      {
+        key: "acme/z-registry",
+        name: "Registry only",
+        contextWindow: 8192,
+        available: false,
+      },
+      {
+        key: "acme/a-prepared",
+        name: "Prepared only",
+        contextWindow: 16384,
+        available: true,
+      },
+      {
+        key: "acme/static-only",
+        name: "Static only",
+        contextWindow: 24576,
+        available: true,
+      },
+      {
+        key: "acme/authored-only",
+        name: "Authored only",
+        contextWindow: 32768,
+        available: true,
+      },
+    ]);
+    expect(mocks.loadScopedModelCatalogSnapshot).toHaveBeenCalledOnce();
+    expect(mocks.loadPreparedModelCatalogSnapshot).not.toHaveBeenCalled();
   });
 });

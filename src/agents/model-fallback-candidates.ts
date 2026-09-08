@@ -15,6 +15,8 @@ import {
   getActivePluginRegistryWorkspaceDirFromState,
   getPluginRegistryState,
 } from "../plugins/runtime-state.js";
+import { getPluginRegistryForContext } from "../plugins/runtime/gateway-request-scope.js";
+import { getPluginRuntimeGenerationRegistry } from "../plugins/runtime/generation-state.js";
 import { resolveAgentConfig } from "./agent-scope-config.js";
 import {
   allowsPluginModelNormalization,
@@ -42,6 +44,8 @@ import {
 
 const MAX_FALLBACK_CANDIDATE_CACHE_ENTRIES = 256;
 const fallbackCandidateCache = new Map<string, ModelFallbackCandidate[]>();
+const fallbackContextIds = new WeakMap<object, number>();
+let nextFallbackContextId = 0;
 const log = createSubsystemLogger("model-selection");
 
 type ModelCandidateChainParams = ModelManifestNormalizationContext & {
@@ -56,14 +60,7 @@ type ModelCandidateChainParams = ModelManifestNormalizationContext & {
   allowPluginNormalization?: boolean;
 };
 
-function createModelCandidateCollector(): {
-  candidates: ModelFallbackCandidate[];
-  addCandidate: (
-    candidate: ModelCandidate,
-    routeOrigin: ModelFallbackRouteOrigin,
-    routeResolution: ModelFallbackRouteResolution,
-  ) => void;
-} {
+function createModelCandidateCollector() {
   const seen = new Set<string>();
   const candidates: ModelFallbackCandidate[] = [];
 
@@ -162,27 +159,30 @@ export function resolveModelCandidateChain(
   params: ModelCandidateChainParams,
 ): ModelFallbackCandidate[] {
   const cacheKey = resolveFallbackCandidateCacheKey(params);
-  if (cacheKey) {
-    const cached = fallbackCandidateCache.get(cacheKey);
-    if (cached) {
-      return cached.map(cloneModelCandidate);
-    }
+  if (!cacheKey) {
+    return resolveFallbackCandidatesUncached(params);
+  }
+  const cached = fallbackCandidateCache.get(cacheKey);
+  if (cached) {
+    return cached.map((candidate) => Object.assign({}, candidate));
   }
   const candidates = resolveFallbackCandidatesUncached(params);
-  if (cacheKey) {
-    fallbackCandidateCache.set(cacheKey, candidates.map(cloneModelCandidate));
-    pruneMapToMaxSize(fallbackCandidateCache, MAX_FALLBACK_CANDIDATE_CACHE_ENTRIES);
-  }
+  fallbackCandidateCache.set(
+    cacheKey,
+    candidates.map((candidate) => Object.assign({}, candidate)),
+  );
+  pruneMapToMaxSize(fallbackCandidateCache, MAX_FALLBACK_CANDIDATE_CACHE_ENTRIES);
   return candidates;
 }
 
-function cloneModelCandidate(candidate: ModelFallbackCandidate): ModelFallbackCandidate {
-  return {
-    provider: candidate.provider,
-    model: candidate.model,
-    routeOrigin: candidate.routeOrigin,
-    routeResolution: candidate.routeResolution,
-  };
+function getFallbackContextId(value: object): number {
+  const existing = fallbackContextIds.get(value);
+  if (existing !== undefined) {
+    return existing;
+  }
+  const id = nextFallbackContextId++;
+  fallbackContextIds.set(value, id);
+  return id;
 }
 
 function resolveFallbackCandidateCacheKey(params: ModelCandidateChainParams): string | null {
@@ -214,6 +214,7 @@ function resolveFallbackCandidateCacheKey(params: ModelCandidateChainParams): st
     return null;
   }
   const registryState = getPluginRegistryState();
+  const registry = getPluginRuntimeGenerationRegistry() ?? getPluginRegistryForContext();
   const agentConfig =
     params.cfg && params.agentId ? resolveAgentConfig(params.cfg, params.agentId) : undefined;
   return JSON.stringify({
@@ -234,6 +235,10 @@ function resolveFallbackCandidateCacheKey(params: ModelCandidateChainParams): st
       workspaceDir,
     }),
     pluginMetadataFingerprint: pluginMetadata?.configFingerprint ?? null,
+    // Fingerprints omit executable hooks and narrowed metadata views. Weak ids
+    // isolate both without retaining retired registries or growing the cache bound.
+    pluginMetadataIdentity: pluginMetadata ? getFallbackContextId(pluginMetadata) : null,
+    pluginRegistryIdentity: registry ? getFallbackContextId(registry) : null,
     pluginRegistryKey: registryState?.key ?? null,
     pluginRegistryVersion: registryState?.activeVersion ?? null,
     pluginWorkspaceDir: workspaceDir ?? null,
