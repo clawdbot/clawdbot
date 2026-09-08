@@ -212,7 +212,7 @@ export class BrowserPanelStream {
           this.lastFailures.set(attempt.targetId, Date.now());
           // Fallback: request a one-shot screenshot to replace the stale frame,
           // and schedule a follow-up ensure() after the existing backoff window.
-          void this.host.refreshView(attempt.targetId, attempt.epoch);
+          void this.host.refreshView(attempt.targetId);
           this.scheduleRetry(attempt.targetId, attempt.epoch);
         },
       });
