@@ -111,6 +111,11 @@ describe("requestCodexAppServerJson sandbox guard", () => {
       response: { marketplaces: [], marketplaceLoadErrors: [] },
     },
     {
+      method: "experimentalFeature/list" as const,
+      requestParams: {},
+      response: { data: [], nextCursor: null },
+    },
+    {
       method: "config/batchWrite" as const,
       requestParams: {
         edits: [

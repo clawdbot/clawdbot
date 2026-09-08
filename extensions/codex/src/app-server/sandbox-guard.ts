@@ -28,6 +28,7 @@ const DIRECT_METHOD_POLICIES = new Map<string, DirectMethodPolicy>([
   ["config/read", "allowed-control-plane"],
   ["config/value/write", "allowed-control-plane"],
   ["environment/add", "allowed-control-plane"],
+  ["experimentalFeature/list", "allowed-control-plane"],
   ["experimentalFeature/enablement/set", "allowed-control-plane"],
   ["feedback/upload", "allowed-control-plane"],
   ["hooks/list", "allowed-control-plane"],

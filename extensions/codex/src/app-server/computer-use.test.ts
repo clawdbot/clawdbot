@@ -1743,6 +1743,63 @@ describe("Codex Computer Use setup", () => {
     ).toHaveLength(3);
   });
 
+  it("fails fast when Codex native plugins are disabled", async () => {
+    vi.useFakeTimers();
+    const request = createComputerUseRequest({
+      installed: false,
+      nativePluginsEnabled: false,
+      marketplaceAvailableAfterListCalls: Number.POSITIVE_INFINITY,
+    });
+    const install = installCodexComputerUse({
+      pluginConfig: { computerUse: {} },
+      request,
+    });
+    const pending = expectSetupErrorStatus(install, {
+      ready: false,
+      reason: "marketplace_missing",
+      message: expect.stringContaining("features.plugins = false"),
+    });
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    await pending;
+
+    expect(requestCalls(request).filter(([method]) => method === "plugin/list")).toHaveLength(1);
+    expect(
+      requestCalls(request).filter(([method]) => method === "experimentalFeature/list"),
+    ).toHaveLength(1);
+    expectRequestMethodNotCalled(request, "plugin/install");
+    await expect(install).rejects.toThrow("/codex computer-use install");
+  });
+
+  it("keeps waiting for marketplace discovery when the feature list does not report plugins", async () => {
+    vi.useFakeTimers();
+    const request = createComputerUseRequest({
+      installed: false,
+      nativePluginsEnabled: "absent",
+      marketplaceAvailableAfterListCalls: 3,
+    });
+    const installed = installCodexComputerUse({
+      pluginConfig: { computerUse: {} },
+      request,
+    });
+
+    await vi.advanceTimersByTimeAsync(4_000);
+
+    expectStatusFields(await installed, { ready: true, reason: "ready" });
+    expect(requestCalls(request).filter(([method]) => method === "plugin/list")).toHaveLength(3);
+    expect(
+      requestCalls(request).filter(([method]) => method === "experimentalFeature/list"),
+    ).toHaveLength(1);
+  });
+
+  it("does not read native plugin state when the marketplace is immediately available", async () => {
+    const request = createComputerUseRequest({ installed: false });
+
+    await installCodexComputerUse({ pluginConfig: { computerUse: {} }, request });
+
+    expectRequestMethodNotCalled(request, "experimentalFeature/list");
+  });
+
   it("prefers the official Computer Use marketplace when multiple matches are present", async () => {
     const request = createMultiMarketplaceComputerUseRequest();
 
@@ -1766,6 +1823,7 @@ describe("Codex Computer Use setup", () => {
 function createComputerUseRequest(params: {
   installed: boolean;
   enabled?: boolean;
+  nativePluginsEnabled?: boolean | "absent";
   marketplaceAvailableAfterListCalls?: number;
   liveTestFailures?: number;
   reloadFailures?: number;
@@ -1791,7 +1849,18 @@ function createComputerUseRequest(params: {
     pluginSummary(installed, marketplaceName, enabled, source, params.remoteMarketplace?.pluginId);
   return vi.fn(async (method: string, requestParams?: unknown) => {
     if (method === "experimentalFeature/enablement/set") {
-      return { enablement: { plugins: true } };
+      return {
+        enablement: params.nativePluginsEnabled === false ? {} : { plugins: true },
+      };
+    }
+    if (method === "experimentalFeature/list") {
+      return {
+        data:
+          params.nativePluginsEnabled === "absent"
+            ? []
+            : [{ name: "plugins", enabled: params.nativePluginsEnabled ?? true }],
+        nextCursor: null,
+      };
     }
     if (method === "marketplace/add") {
       return {

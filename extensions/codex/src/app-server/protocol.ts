@@ -691,6 +691,11 @@ type CodexAppServerRequestParamsOverride = {
   "config/read": CodexConfigReadParams;
   "config/value/write": CodexConfigValueWriteParams;
   "environment/add": { environmentId: string; execServerUrl: string };
+  "experimentalFeature/list": {
+    cursor?: string | null;
+    limit?: number | null;
+    threadId?: string | null;
+  };
   "plugin/installed": CodexPluginInstalledParams;
   "plugin/install": CodexPluginInstallParams;
   "plugin/list": CodexPluginListParams;
@@ -734,6 +739,10 @@ type CodexAppServerRequestResultMap = {
   "configRequirements/read": CodexConfigRequirementsReadResponse;
   "config/value/write": CodexConfigWriteResponse;
   "environment/add": JsonValue;
+  "experimentalFeature/list": {
+    data: Array<{ name: string; enabled: boolean }>;
+    nextCursor?: string | null;
+  };
   "experimentalFeature/enablement/set": JsonValue;
   "feedback/upload": JsonValue;
   "hooks/list": CodexHooksListResponse;
