@@ -28,6 +28,15 @@ export function resolveMcpEnvReferences(
       }
       return replacement;
     });
+    // RFC 7230 §3.2.6: HTTP header field values must be pure ASCII.
+    // Node.js undici enforces this at fetch-time and crashes the calling
+    // process with "Cannot convert argument to a ByteString" if a value
+    // contains characters outside 0x00-0x7F. Surface this at config-load
+    // time so the existing mcpManualItems "unresolved-secrets" warning
+    // names the bad value before the plugin tries to use it.
+    if (/[^\x00-\x7F]/.test(resolved)) {
+      unresolved = true;
+    }
     return { unresolved, value: resolved };
   }
   if (Array.isArray(value)) {
