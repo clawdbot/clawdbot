@@ -466,9 +466,17 @@ describe("Codex auth product proof", () => {
         // A metadata patch alone does not prove the selected profile reaches native execution.
         await runConfiguredTurn("qa-codex-profile-binding-pinned");
 
-        await instance.state.writeAuthProfiles({ version: 1, profiles: {} });
-        // Publish this offline write through the supported activation boundary before the next turn.
-        await expect(client.request("secrets.reload", {})).resolves.toMatchObject({ ok: true });
+        await expect(
+          client.request("models.authLogout", {
+            provider: "openai",
+            agentId: "main",
+            profileIds: [MISSING_PROFILE_ID],
+          }),
+        ).resolves.toEqual({
+          provider: "openai",
+          removedProfiles: [MISSING_PROFILE_ID],
+          abortedRunIds: [],
+        });
         await fs.writeFile(requestLog, "", "utf8");
         events.length = 0;
         await client.request("sessions.messages.subscribe", { key: sessionKey });
