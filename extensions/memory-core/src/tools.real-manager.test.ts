@@ -178,6 +178,56 @@ describe("memory_search real manager", () => {
     }
   });
 
+  it.each(["before", "after"] as const)(
+    "recovers when the memory manager closes %s retrieval without rebuilding its index",
+    async (closeAt) => {
+      const cfg = fixture.createConfig({ vectorEnabled: false, minScore: 0 });
+      const manager = await fixture.getFreshManager(cfg);
+      await manager.sync({ reason: "cli", force: true });
+      const db = openOpenClawAgentDatabase({ agentId: "main" }).db;
+      const embeddingCalls = fixture.provider.embedBatchCalls;
+      const search = manager.search.bind(manager);
+      const close = async () => {
+        await manager.close();
+        expect(db.isOpen).toBe(true);
+        expect(db.prepare("SELECT 1 FROM memory_index_chunks LIMIT 1").get()).toBeDefined();
+      };
+      const searchSpy = vi.spyOn(manager, "search").mockImplementationOnce(async (...args) => {
+        if (closeAt === "before") {
+          await close();
+        }
+        const results = await search(...args);
+        if (closeAt === "after") {
+          await close();
+        }
+        return results;
+      });
+      const getSpy = vi.spyOn(MemoryIndexManager, "get");
+      try {
+        const tool = createMemorySearchTool({ config: cfg, agentId: "main" });
+        if (!tool) {
+          throw new Error("memory_search tool missing");
+        }
+        const result = await tool.execute("closed-memory-manager", {
+          query: "alpha",
+          corpus: "memory",
+        });
+        expect(result.details).not.toHaveProperty("error");
+        expect(result.details).toMatchObject({
+          results: [expect.objectContaining({ path: "memory/2026-01-12.md" })],
+        });
+        expect(result.details).not.toHaveProperty("unavailable");
+        expect(fixture.provider.embedBatchCalls).toBe(embeddingCalls);
+        expect(
+          getSpy.mock.calls.filter(([params]) => (params.purpose ?? "default") === "default"),
+        ).toHaveLength(2);
+      } finally {
+        getSpy.mockRestore();
+        searchSpy.mockRestore();
+      }
+    },
+  );
+
   it("attributes a persisted provenance mismatch to OpenClaw", async () => {
     const cfg = fixture.createConfig({
       provider: "none",
@@ -249,6 +299,7 @@ describe("memory_search real manager", () => {
       expect(primary.details).toMatchObject({
         disabled: true,
         unavailable: true,
+        error: "index was built for model old-embed, expected new-embed",
         action,
       });
 
