@@ -4,6 +4,7 @@ import { stripAnsi } from "../../../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../../config/types.plugins.js";
 import type { PluginCapabilityConsentHandler } from "../../../plugins/capability-consent.js";
+import { resolvePluginInstallOwnerMigrations } from "../../../plugins/install-transaction.js";
 import {
   normalizePluginsConfig,
   resolveEffectiveEnableState,
@@ -177,6 +178,10 @@ async function repairMissingPluginInstallsWithLease(
   const failedPlugins = new Map<string, PluginUpdateOutcome | undefined>();
   const repairedPluginIds = new Set<string>();
   const deferredPluginIds = new Set<string>();
+  // Retired duplicate aliases committed by the updater in this same run, keyed
+  // by alias id. Restoring their original missing records would undo the
+  // updater's duplicate retirement (see #136025).
+  const retiredDuplicateAliasMigrations = new Map<string, string>();
   const preferNpmInstalls = isLegacyPackageUpdateDoctorPass(env);
   let nextRecords = records;
   const normalizedPluginConfig = normalizePluginsConfig(params.cfg.plugins);
@@ -322,12 +327,27 @@ async function repairMissingPluginInstallsWithLease(
         recordFailure(outcome.pluginId, [outcome.message], outcome.code);
       }
     }
+    // The updater validates the canonical payload before recording an owner
+    // migration. Only honor migrations whose canonical target was repaired in
+    // this same result; anything else keeps the previous restore behavior.
+    const committedOwnerMigrations =
+      resolvePluginInstallOwnerMigrations(updateResult) ?? {};
+    for (const [aliasPluginId, canonicalPluginId] of Object.entries(committedOwnerMigrations)) {
+      if (repairedPluginIds.has(canonicalPluginId)) {
+        retiredDuplicateAliasMigrations.set(aliasPluginId, canonicalPluginId);
+      }
+    }
     if (repairedPluginIds.size > 0) {
       nextRecords = { ...(updateResult.config.plugins?.installs ?? nextRecords) };
       for (const [pluginId, record] of missingRecordedPlugins) {
-        if (!repairedPluginIds.has(pluginId)) {
+        if (!repairedPluginIds.has(pluginId) && !retiredDuplicateAliasMigrations.has(pluginId)) {
           nextRecords[pluginId] = record;
         }
+      }
+      for (const [aliasPluginId, canonicalPluginId] of retiredDuplicateAliasMigrations) {
+        changes.push(
+          `Kept retired duplicate "${aliasPluginId}" install record removed; "${canonicalPluginId}" is the canonical plugin id.`,
+        );
       }
     }
   }
@@ -335,6 +355,9 @@ async function repairMissingPluginInstallsWithLease(
   const missingPluginIds = new Set(
     [...params.pluginIds].filter((pluginId) => {
       if (deferredPluginIds.has(pluginId)) {
+        return false;
+      }
+      if (retiredDuplicateAliasMigrations.has(pluginId)) {
         return false;
       }
       const hasRecord = Object.hasOwn(nextRecords, pluginId);

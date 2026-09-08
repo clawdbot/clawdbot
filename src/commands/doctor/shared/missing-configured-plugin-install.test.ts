@@ -5381,5 +5381,110 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     expect(mocks.writePersistedInstalledPluginIndexInstallRecords).not.toHaveBeenCalled();
     expect(result).toEqual({ changes: [], warnings: [], records: {} });
   });
+
+  it("keeps a retired duplicate alias removed when the updater commits an owner migration", async () => {
+    // Regression for #136025: Doctor restored the retired `qqbot` alias right
+    // after the updater replaced it with canonical `openclaw-qqbot`.
+    const canonicalDir = tempDirs.make("openclaw-doctor-canonical-");
+    const canonicalRecord = {
+      source: "npm",
+      spec: "@tencent-connect/openclaw-qqbot@2.0.1",
+      version: "2.0.1",
+      installPath: canonicalDir,
+    };
+    const aliasRecord = {
+      source: "npm",
+      spec: "@openclaw/qqbot@1.9.0",
+      version: "1.9.0",
+      installPath: path.join(tempDirs.make("openclaw-doctor-alias-"), "missing"),
+    };
+    const updatedCanonical = { ...canonicalRecord, version: "2.0.3" };
+    mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue({
+      qqbot: aliasRecord,
+      "openclaw-qqbot": canonicalRecord,
+    });
+    const { attachPluginInstallOwnerMigrations } = await import(
+      "../../../plugins/install-transaction.js"
+    );
+    mocks.updateNpmInstalledPlugins.mockImplementation(async () =>
+      attachPluginInstallOwnerMigrations(
+        {
+          config: { plugins: { installs: { "openclaw-qqbot": updatedCanonical } } },
+          changed: true,
+          outcomes: [
+            { pluginId: "openclaw-qqbot", status: "updated", message: "Updated openclaw-qqbot." },
+            {
+              pluginId: "qqbot",
+              status: "skipped",
+              message:
+                'Removed duplicate "qqbot" install record; "openclaw-qqbot" is the canonical plugin id.',
+            },
+          ],
+        },
+        { qqbot: "openclaw-qqbot" },
+      ),
+    );
+
+    const result = await repairConfiguredPlugins({
+      plugins: {
+        entries: { qqbot: { enabled: true }, "openclaw-qqbot": { enabled: true } },
+      },
+    });
+
+    expect(result.records).not.toHaveProperty("qqbot");
+    expect(result.records["openclaw-qqbot"]).toMatchObject({ version: "2.0.3" });
+    expect(result.changes).toEqual(
+      expect.arrayContaining([expect.stringContaining('Retired duplicate "qqbot"')]),
+    );
+    expect(result.repairedPluginIds ?? []).toContain("openclaw-qqbot");
+    expect(result.repairedPluginIds ?? []).not.toContain("qqbot");
+    expect(mocks.installPluginFromNpmSpec).not.toHaveBeenCalled();
+    expect(mocks.writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith(
+      result.records,
+      expect.any(Object),
+    );
+  });
+
+  it("preserves original records when a canonical update fails without an owner migration", async () => {
+    // Negative control for #136025: without committed migration metadata the
+    // retired-alias path must not fire and nothing may be persisted.
+    const canonicalDir = tempDirs.make("openclaw-doctor-canonical-failed-");
+    const records = {
+      qqbot: {
+        source: "npm",
+        spec: "@openclaw/qqbot@1.9.0",
+        version: "1.9.0",
+        installPath: path.join(tempDirs.make("openclaw-doctor-alias-failed-"), "missing"),
+      },
+      "openclaw-qqbot": {
+        source: "npm",
+        spec: "@tencent-connect/openclaw-qqbot@2.0.1",
+        version: "2.0.1",
+        installPath: canonicalDir,
+      },
+    };
+    mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue(records);
+    mocks.updateNpmInstalledPlugins.mockImplementation(async ({ config }: { config: unknown }) => ({
+      config,
+      changed: false,
+      outcomes: [
+        { pluginId: "openclaw-qqbot", status: "error", message: "Canonical update failed." },
+        {
+          pluginId: "qqbot",
+          status: "skipped",
+          message: 'Kept duplicate "qqbot" install record because "openclaw-qqbot" did not complete.',
+        },
+      ],
+    }));
+
+    const result = await repairConfiguredPlugins({
+      plugins: {
+        entries: { qqbot: { enabled: true }, "openclaw-qqbot": { enabled: true } },
+      },
+    });
+
+    expect(result.records).toEqual(records);
+    expect(mocks.writePersistedInstalledPluginIndexInstallRecords).not.toHaveBeenCalled();
+  });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
