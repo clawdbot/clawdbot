@@ -390,6 +390,8 @@ jobs:
     permissions:
       actions: read
       contents: read
+    outputs:
+      scorecard_passed: ${{ steps.validate_evidence.outputs.scorecard_passed }}
     steps:
       - name: Checkout selected ref
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -464,6 +466,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Validate QA evidence manifest
+        id: validate_evidence
         env:
           QA_EVIDENCE_PATH: ${{ steps.evidence.outputs.qa_evidence_path }}
           TARGET_SHA: ${{ needs.validate_selected_ref.outputs.selected_revision }}
@@ -525,6 +528,37 @@ jobs:
           if (profilePlanSha256 !== manifest.profilePlanSha256) {
             throw new Error("QA evidence profilePlan digest does not match the manifest");
           }
+
+          const counts = { pass: 0, fail: 0, blocked: 0, skipped: 0 };
+          for (const entry of evidence.entries) {
+            counts[entry.result.status] += 1;
+          }
+          const scorecardPassed =
+            manifest.qaPassed === true && counts.fail === 0 && counts.blocked === 0;
+          fs.appendFileSync(
+            process.env.GITHUB_OUTPUT,
+            [
+              `scorecard_passed=${scorecardPassed}`,
+              `failed_count=${counts.fail}`,
+              `blocked_count=${counts.blocked}`,
+              `passed_count=${counts.pass}`,
+              `skipped_count=${counts.skipped}`,
+              "",
+            ].join("\n"),
+          );
+          fs.appendFileSync(
+            process.env.GITHUB_STEP_SUMMARY,
+            [
+              "### Maturity scorecard result",
+              "",
+              `- Passed: \`${counts.pass}\``,
+              `- Failed: \`${counts.fail}\``,
+              `- Blocked: \`${counts.blocked}\``,
+              `- Skipped: \`${counts.skipped}\``,
+              `- Overall: **${scorecardPassed ? "PASS" : "FAIL"}**`,
+              "",
+            ].join("\n"),
+          );
           NODE
 
       - name: Ensure maturity scorecard agent key exists
@@ -655,7 +689,7 @@ jobs:
             "${allow_failures_args[@]}"
 
       - name: Upload generated PR files
-        if: ${{ inputs.publish_pull_request }}
+        if: ${{ inputs.publish_pull_request && steps.validate_evidence.outputs.scorecard_passed == 'true' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: maturity-scorecard-pr-${{ github.run_id }}-${{ github.run_attempt }}
@@ -674,6 +708,19 @@ jobs:
           retention-days: 30
           if-no-files-found: error
 
+      - name: Require zero failed or blocked scenarios
+        env:
+          BLOCKED_COUNT: ${{ steps.validate_evidence.outputs.blocked_count }}
+          FAILED_COUNT: ${{ steps.validate_evidence.outputs.failed_count }}
+          SCORECARD_PASSED: ${{ steps.validate_evidence.outputs.scorecard_passed }}
+        run: |
+          set -euo pipefail
+          if [[ "$SCORECARD_PASSED" != "true" ]]; then
+            echo "::error title=Maturity scorecard failed::${FAILED_COUNT} failed and ${BLOCKED_COUNT} blocked scenarios. Generated PR publication was blocked."
+            exit 1
+          fi
+          echo "Maturity scorecard passed with zero failed or blocked scenarios."
+
   publish_generated_pr:
     name: Publish generated maturity PR
     needs:
@@ -684,6 +731,7 @@ jobs:
       ${{ inputs.publish_pull_request &&
         needs.publisher_preflight.result == 'success' &&
         needs.publish.result == 'success' &&
+        needs.publish.outputs.scorecard_passed == 'true' &&
         github.event_name == 'workflow_dispatch' &&
         github.workflow_ref == 'openclaw/openclaw/.github/workflows/maturity-scorecard.yml@refs/heads/main' &&
         needs.validate_selected_ref.outputs.workflow_file_path == '.github/workflows/maturity-scorecard.yml' &&
