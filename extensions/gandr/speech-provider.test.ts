@@ -46,15 +46,15 @@ describe("gandr speech provider", () => {
   });
 
   it("sorts after every existing automatic provider choice", () => {
-    // Volcengine is the last bundled provider at 90; a configured Gandr must not
+    // Local CLI is the last bundled provider at 1000; a configured Gandr must not
     // outrank an existing automatic choice.
     const provider = buildGandrSpeechProvider();
-    const existing = { id: "volcengine", autoSelectOrder: 90 };
+    const existing = { id: "tts-local-cli", autoSelectOrder: 1000 };
     const ordered = [provider, existing].toSorted(
       (left, right) => (left.autoSelectOrder ?? 0) - (right.autoSelectOrder ?? 0),
     );
-    expect(GANDR_AUTO_SELECT_ORDER).toBeGreaterThan(90);
-    expect(ordered.map((entry) => entry.id)).toEqual(["volcengine", "gandr"]);
+    expect(GANDR_AUTO_SELECT_ORDER).toBeGreaterThan(1000);
+    expect(ordered.map((entry) => entry.id)).toEqual(["tts-local-cli", "gandr"]);
   });
 
   it("normalizes provider-owned speech config with Gandr defaults", () => {

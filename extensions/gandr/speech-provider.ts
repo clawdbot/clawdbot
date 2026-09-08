@@ -16,9 +16,9 @@ import {
   listGandrVoices,
 } from "./tts.js";
 
-// Behind every bundled provider (Volcengine sits at 90): configuring Gandr must
-// never replace an automatic choice that already works.
-export const GANDR_AUTO_SELECT_ORDER = 95;
+// Behind every bundled provider, including Local CLI at 1000: configuring Gandr
+// must never replace an automatic choice that already works.
+export const GANDR_AUTO_SELECT_ORDER = 1010;
 
 export function buildGandrSpeechProvider(): SpeechProviderPlugin {
   // Configuration, directives, guarded HTTP, bounded reads and cleanup all
