@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { listBundledPluginPackArtifacts } from "../scripts/lib/bundled-plugin-build-entries.mjs";
+import { RUNTIME_DEPENDENCY_OWNERSHIP_RELATIVE_PATH } from "../scripts/lib/runtime-dependency-ownership-contract.mts";
 import {
   buildPublishedInstallCommandArgs,
   buildPublishedInstallScenarios,
@@ -1085,14 +1086,19 @@ describe("collectInstalledRootDependencyManifestErrors", () => {
     source: string;
     fileName?: string;
     companions: Array<{ id: string; name?: string; dependencies: Record<string, string> }>;
+    ownership?: unknown;
+    version?: string;
   }): { installRoot: string; packageRoot: string } {
     const installRoot = makeInstalledPackageRoot();
     const packageRoot = join(installRoot, "openclaw");
     writePackageFile(packageRoot, "package.json", {
       name: "openclaw",
-      version: "2026.7.33",
+      version: params.version ?? "2026.7.33",
       dependencies: {},
     });
+    if (params.ownership !== undefined) {
+      writePackageFile(packageRoot, RUNTIME_DEPENDENCY_OWNERSHIP_RELATIVE_PATH, params.ownership);
+    }
     for (const companion of params.companions) {
       writePackageFile(installRoot, `@openclaw/${companion.id}/package.json`, {
         name: companion.name ?? `@openclaw/${companion.id}`,
@@ -1172,6 +1178,76 @@ describe("collectInstalledRootDependencyManifestErrors", () => {
 
     try {
       expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toStrictEqual([]);
+    } finally {
+      rmSync(installRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("uses emitted build ownership for current companion imports", () => {
+    const { installRoot, packageRoot } = makeCompanionImportFixture({
+      companions: [{ id: "discord", dependencies: { "@discordjs/voice": "0.19.2" } }],
+      ownership: {
+        formatVersion: 1,
+        dependencies: {
+          "@discordjs/voice": { root: false, extensions: ["discord"] },
+        },
+      },
+      source: 'const voice = require("@discordjs/voice");\nexport { voice };\n',
+      version: "2026.9.8",
+    });
+
+    try {
+      expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toStrictEqual([]);
+    } finally {
+      rmSync(installRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("does not let legacy comments override emitted root ownership", () => {
+    const { installRoot, packageRoot } = makeCompanionImportFixture({
+      companions: [{ id: "discord", dependencies: { "@discordjs/voice": "0.19.2" } }],
+      ownership: {
+        formatVersion: 1,
+        dependencies: {
+          "@discordjs/voice": { root: true, extensions: ["discord"] },
+        },
+      },
+      source: [
+        "//#region extensions/discord/src/voice.js",
+        'const voice = require("@discordjs/voice");',
+        "//#endregion",
+        "export { voice };",
+        "",
+      ].join("\n"),
+      version: "2026.9.8",
+    });
+
+    try {
+      expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toEqual([
+        "installed package root is missing declared runtime dependency '@discordjs/voice' for dist importers: companion-runtime.js. Add it to package.json dependencies/optionalDependencies.",
+      ]);
+    } finally {
+      rmSync(installRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects malformed emitted ownership metadata", () => {
+    const { installRoot, packageRoot } = makeCompanionImportFixture({
+      companions: [{ id: "discord", dependencies: { "@discordjs/voice": "0.19.2" } }],
+      ownership: {
+        formatVersion: 1,
+        dependencies: {
+          "@discordjs/voice": { root: false, extensions: ["discord", "discord"] },
+        },
+      },
+      source: 'require("@discordjs/voice");\n',
+      version: "2026.9.8",
+    });
+
+    try {
+      expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toEqual([
+        expect.stringContaining("installed package runtime dependency ownership is invalid"),
+      ]);
     } finally {
       rmSync(installRoot, { recursive: true, force: true });
     }

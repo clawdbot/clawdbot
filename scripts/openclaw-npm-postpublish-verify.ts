@@ -40,6 +40,11 @@ import {
   packageNameFromSpecifier,
 } from "./lib/plugin-package-dependencies.mts";
 import { classifyReleaseTrain } from "./lib/release-version.mjs";
+import {
+  parseRuntimeDependencyOwnership,
+  RUNTIME_DEPENDENCY_OWNERSHIP_RELATIVE_PATH,
+  type RuntimeDependencyOwnership,
+} from "./lib/runtime-dependency-ownership-contract.mts";
 import { runInstalledWorkspaceBootstrapSmoke } from "./lib/workspace-bootstrap-smoke.mts";
 import { parseReleaseVersion, resolveNpmCommandInvocation } from "./openclaw-npm-release-check.ts";
 import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "./windows-cmd-helpers.mjs";
@@ -77,6 +82,7 @@ const PUBLISHED_BUNDLED_RUNTIME_SIDECAR_PATHS = BUNDLED_RUNTIME_SIDECAR_PATHS.fi
 );
 const NODE_BUILTIN_MODULES = new Set(builtinModules.map((name) => name.replace(/^node:/u, "")));
 const MAX_INSTALLED_ROOT_PACKAGE_JSON_BYTES = 1024 * 1024;
+const MAX_RUNTIME_DEPENDENCY_OWNERSHIP_BYTES = 1024 * 1024;
 const MAX_INSTALLED_ROOT_DIST_JS_BYTES = 6 * 1024 * 1024;
 const MAX_INSTALLED_WORKER_DEPLOY_DIST_JS_BYTES = 80 * 1024 * 1024;
 // Keep the dependency scan bounded while allowing headroom for generated root chunks.
@@ -721,6 +727,12 @@ export function collectInstalledRootDependencyManifestErrors(packageRoot: string
   const bundledExtensionRuntimeDependencyOwners =
     collectBundledExtensionRuntimeDependencyOwners(packageRoot);
   const companionManifestCache = new Map<string, InstalledPackageJson | null>();
+  const runtimeDependencyOwnership = readRuntimeDependencyOwnership(packageRoot);
+  if (runtimeDependencyOwnership.error) {
+    return [runtimeDependencyOwnership.error];
+  }
+  const useLegacyRegionOwnership =
+    rootPackageJson.version === "2026.7.33" && runtimeDependencyOwnership.ownership === null;
 
   for (const filePath of distFiles.files) {
     const file = readInstalledRootDistJavaScriptFile(packageRoot, filePath);
@@ -733,20 +745,29 @@ export function collectInstalledRootDependencyManifestErrors(packageRoot: string
         `installed package root dist file '${file.relativePath}' could not be parsed for runtime dependency verification: ${parsedSpecifiers.error}.`,
       ];
     }
-    const extensionOwners = collectGeneratedExtensionImportOwners(
-      file.source,
-      parsedSpecifiers.imports,
-      parsedSpecifiers.comments,
-    );
+    const legacyExtensionOwners = useLegacyRegionOwnership
+      ? collectGeneratedExtensionImportOwners(
+          file.source,
+          parsedSpecifiers.imports,
+          parsedSpecifiers.comments,
+        )
+      : new Map<number, string | undefined>();
     for (const runtimeImport of parsedSpecifiers.imports) {
       const specifier = runtimeImport.specifier;
       const dependencyName = packageNameFromSpecifier(specifier);
-      const extensionId = extensionOwners.get(runtimeImport.start);
+      const extensionId = legacyExtensionOwners.get(runtimeImport.start);
       if (
         !dependencyName ||
         NODE_BUILTIN_MODULES.has(dependencyName) ||
         OPTIONAL_OR_EXTERNALIZED_RUNTIME_IMPORTS.has(dependencyName) ||
         declaredRuntimeDeps.has(dependencyName) ||
+        isContractOwnedRuntimeImport({
+          dependencyName,
+          ownership: runtimeDependencyOwnership.ownership,
+          packageRoot,
+          bundledOwnersByDependency: bundledExtensionRuntimeDependencyOwners,
+          companionManifestCache,
+        }) ||
         isBundledExtensionOwnedRuntimeImport({
           dependencyName,
           extensionId,
@@ -773,6 +794,63 @@ export function collectInstalledRootDependencyManifestErrors(packageRoot: string
       return `installed package root is missing declared runtime dependency '${dependencyName}' for dist importers: ${importerList.join(", ")}. Add it to package.json dependencies/optionalDependencies.`;
     })
     .toSorted((left, right) => left.localeCompare(right));
+}
+
+function readRuntimeDependencyOwnership(packageRoot: string): {
+  error?: string;
+  ownership: RuntimeDependencyOwnership | null;
+} {
+  const ownershipPath = join(packageRoot, RUNTIME_DEPENDENCY_OWNERSHIP_RELATIVE_PATH);
+  if (!existsSync(ownershipPath)) {
+    return { ownership: null };
+  }
+  try {
+    const stat = lstatSync(ownershipPath);
+    if (!stat.isFile() || stat.size > MAX_RUNTIME_DEPENDENCY_OWNERSHIP_BYTES) {
+      throw new Error(
+        `ownership artifact must be a regular file no larger than ${MAX_RUNTIME_DEPENDENCY_OWNERSHIP_BYTES} bytes`,
+      );
+    }
+    const ownership = parseRuntimeDependencyOwnership(
+      JSON.parse(readFileSync(ownershipPath, "utf8")) as unknown,
+    );
+    if (!ownership) {
+      throw new Error("ownership artifact does not match the supported schema");
+    }
+    return { ownership };
+  } catch (error) {
+    return {
+      ownership: null,
+      error: `installed package runtime dependency ownership is invalid: ${RUNTIME_DEPENDENCY_OWNERSHIP_RELATIVE_PATH}: ${formatErrorMessage(error)}.`,
+    };
+  }
+}
+
+function isContractOwnedRuntimeImport(params: {
+  bundledOwnersByDependency: Map<string, Set<string>>;
+  companionManifestCache: Map<string, InstalledPackageJson | null>;
+  dependencyName: string;
+  ownership: RuntimeDependencyOwnership | null;
+  packageRoot: string;
+}): boolean {
+  const owners = params.ownership?.dependencies[params.dependencyName];
+  if (!owners || owners.root || owners.extensions.length === 0) {
+    return false;
+  }
+  return owners.extensions.every(
+    (extensionId) =>
+      isBundledExtensionOwnedRuntimeImport({
+        dependencyName: params.dependencyName,
+        extensionId,
+        ownersByDependency: params.bundledOwnersByDependency,
+      }) ||
+      isInstalledCompanionExtensionOwnedRuntimeImport({
+        dependencyName: params.dependencyName,
+        extensionId,
+        packageRoot: params.packageRoot,
+        manifestCache: params.companionManifestCache,
+      }),
+  );
 }
 
 function collectGeneratedExtensionImportOwners(
