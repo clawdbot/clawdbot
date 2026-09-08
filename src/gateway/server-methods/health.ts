@@ -197,6 +197,8 @@ export const healthHandlers: GatewayRequestHandlers = {
       rssBytes: memory.rss,
       heapUsedBytes: memory.heapUsed,
       heapTotalBytes: memory.heapTotal,
+      externalBytes: memory.external,
+      arrayBuffersBytes: memory.arrayBuffers,
     };
     respond(true, status, undefined);
   },

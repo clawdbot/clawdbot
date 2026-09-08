@@ -60,6 +60,9 @@ export type StatusSummary = {
     rssBytes: number;
     heapUsedBytes: number;
     heapTotalBytes: number;
+    externalBytes?: number;
+    /** Included in externalBytes, not an additional memory category. */
+    arrayBuffersBytes?: number;
   };
   linkChannel?: {
     id: ChannelId;

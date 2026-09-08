@@ -4,8 +4,9 @@ import { writeFile } from "node:fs/promises";
 import { createServer as createHttpServer } from "node:http";
 import { createServer as createRawServer, type Socket } from "node:net";
 import { performance } from "node:perf_hooks";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { testing } from "../../scripts/bench-gateway-concurrency.ts";
+import { readGatewayMemory } from "../../scripts/lib/gateway-bench-probes.ts";
 import { withTempDir } from "../../src/test-utils/temp-dir.js";
 
 type BenchmarkRun = Parameters<typeof testing.summarizeRuns>[0][number];
@@ -39,6 +40,91 @@ function createBenchmarkRun(overrides: Partial<BenchmarkRun> = {}): BenchmarkRun
 }
 
 describe("gateway concurrency benchmark script", () => {
+  it.each([
+    {
+      name: "populated",
+      fields: { externalBytes: 2_621_440, arrayBuffersBytes: 1_572_864 },
+      expected: { externalMb: 2.5, arrayBuffersMb: 1.5 },
+    },
+    {
+      name: "zero",
+      fields: { externalBytes: 0, arrayBuffersBytes: 0 },
+      expected: { externalMb: 0, arrayBuffersMb: 0 },
+    },
+    { name: "missing", fields: {}, expected: {} },
+    {
+      name: "external-only",
+      fields: { externalBytes: 2_621_440 },
+      expected: { externalMb: 2.5 },
+    },
+    {
+      name: "ArrayBuffers-only",
+      fields: { arrayBuffersBytes: 1_572_864 },
+      expected: { arrayBuffersMb: 1.5 },
+    },
+    {
+      name: "invalid",
+      fields: { externalBytes: "unknown", arrayBuffersBytes: Number.POSITIVE_INFINITY },
+      expected: {},
+    },
+  ])("preserves $name optional Gateway memory in MiB", async ({ fields, expected }) => {
+    const rpc = vi.fn().mockResolvedValue({
+      processMemory: {
+        heapTotalBytes: 1_310_720,
+        heapUsedBytes: 524_288,
+        rssBytes: 3_145_728,
+        ...fields,
+      },
+    });
+
+    const sample = await readGatewayMemory(rpc, performance.now());
+
+    expect(rpc).toHaveBeenCalledExactlyOnceWith("status", { includeChannelSummary: false });
+    expect(sample).toEqual({
+      atMs: expect.any(Number),
+      heapTotalMb: 1.25,
+      heapUsedMb: 0.5,
+      rssMb: 3,
+      ...expected,
+    });
+  });
+
+  it("summarizes only observed optional memory values and complete growth pairs", () => {
+    const memory = createBenchmarkRun().memory;
+    const runs = [
+      {
+        before: { externalMb: 2, arrayBuffersMb: 1 },
+        after: { externalMb: 5, arrayBuffersMb: 2 },
+      },
+      {
+        before: { externalMb: 0, arrayBuffersMb: 0 },
+        after: { externalMb: 0, arrayBuffersMb: 0 },
+      },
+      {
+        before: { externalMb: 8, arrayBuffersMb: 3 },
+        after: { externalMb: 6, arrayBuffersMb: 1.5 },
+      },
+      { before: { externalMb: 100 }, after: { arrayBuffersMb: 6 } },
+      { before: { arrayBuffersMb: 8 }, after: { externalMb: 9 } },
+      { before: {}, after: {} },
+    ].map(({ before, after }) =>
+      createBenchmarkRun({
+        memory: {
+          ...memory,
+          before: { ...memory.before, ...before },
+          after: { ...memory.after, ...after },
+        },
+      }),
+    );
+
+    expect(testing.summarizeRuns(runs)).toMatchObject({
+      gatewayExternalMb: { count: 4, max: 9, p50: 5, p95: 9, p99: 9 },
+      gatewayExternalGrowthMb: { count: 3, max: 3, p50: 0, p95: 3, p99: 3 },
+      gatewayArrayBuffersMb: { count: 4, max: 6, p50: 1.5, p95: 6, p99: 6 },
+      gatewayArrayBuffersGrowthMb: { count: 3, max: 1, p50: 0, p95: 1, p99: 1 },
+    });
+  });
+
   it("parses benchmark controls without booting a gateway", () => {
     expect(
       testing.parseOptions([
@@ -208,6 +294,10 @@ describe("gateway concurrency benchmark script", () => {
       });
 
     expect(testing.summarizeRuns([createRun(2, [10, 20]), createRun(1, [30])])).toMatchObject({
+      gatewayExternalMb: null,
+      gatewayExternalGrowthMb: null,
+      gatewayArrayBuffersMb: null,
+      gatewayArrayBuffersGrowthMb: null,
       gatewayHeapGrowthMb: { count: 2, max: 20, p50: 20, p95: 20, p99: 20 },
       gatewayPeakRssMb: { count: 2, max: 210, p50: 210, p95: 210, p99: 210 },
       gatewayRssGrowthMb: { count: 2, max: 20, p50: 20, p95: 20, p99: 20 },
