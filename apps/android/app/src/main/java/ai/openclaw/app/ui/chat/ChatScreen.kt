@@ -523,21 +523,29 @@ internal fun ChatScreen(
         viewModel.isCurrentChatComposerOwner(expected) && (canChangeThinking() || canChangeFastMode(expected))
       }
     }
+  val backgroundTasks =
+    remember(viewModel, pickerActivity, pickerView, lifecycleOwner) {
+      ChatModelPickerSessionOwner(pickerActivity, pickerView, lifecycleOwner.lifecycle) { expected ->
+        viewModel.isCurrentChatComposerOwner(expected)
+      }
+    }
   rememberWindowDisplayFeatureState { publication ->
     modelPicker.publishFeatures(publication)
     effortPicker.publishFeatures(publication)
+    backgroundTasks.publishFeatures(publication)
   }
   SideEffect {
     modelPicker.refreshTarget()
     effortPicker.refreshTarget()
+    backgroundTasks.refreshTarget()
   }
-  DisposableEffect(modelPicker, effortPicker) {
+  DisposableEffect(modelPicker, effortPicker, backgroundTasks) {
     onDispose {
       modelPicker.dispose()
       effortPicker.dispose()
+      backgroundTasks.dispose()
     }
   }
-  var showBackgroundTasks by rememberSaveable { mutableStateOf(false) }
   var showBranchSwitcher by rememberSaveable { mutableStateOf(false) }
   var detailsExpanded by rememberSaveable { mutableStateOf(false) }
   var sendMessageTooLong by rememberSaveable(composerOwner) { mutableStateOf(false) }
@@ -847,7 +855,7 @@ internal fun ChatScreen(
       },
       onOpenBackgroundTasks = {
         dismissDetails()
-        showBackgroundTasks = true
+        backgroundTasks.open(composerOwner, sessionKey)
       },
       onOpenBranchSwitcher = {
         dismissDetails()
@@ -1241,12 +1249,15 @@ internal fun ChatScreen(
       },
     )
   }
-  if (showBackgroundTasks) {
-    BackgroundTasksSheet(
-      viewModel = viewModel,
-      agentId = sessionAgentId,
-      onDismiss = { showBackgroundTasks = false },
-    )
+  backgroundTasks.visible?.let { opening ->
+    key(opening) {
+      BackgroundTasksSheet(
+        viewModel = viewModel,
+        opening = opening,
+        admit = { backgroundTasks.admit(opening) },
+        onDismiss = { if (backgroundTasks.admit(opening)) backgroundTasks.retire(opening) },
+      )
+    }
   }
 }
 

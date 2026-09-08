@@ -710,6 +710,8 @@ class ChatController internal constructor(
   val commands: StateFlow<List<ChatCommandEntry>> = _commands.asStateFlow()
 
   suspend fun listBackgroundTasks(agentId: String): List<BackgroundTask> {
+    val lease = captureRequestLease(cacheScope()) ?: throw GatewayRequestNotEnqueued("not connected")
+
     suspend fun request(
       statuses: List<String>?,
       limit: Int,
@@ -720,19 +722,39 @@ class ChatController internal constructor(
           put("limit", JsonPrimitive(limit))
           statuses?.let { values -> put("status", JsonArray(values.map(::JsonPrimitive))) }
         }
-      return parseBackgroundTasks(json, requestGateway("tasks.list", params.toString()))
+      if (!lease.isCurrent()) throw GatewayRequestNotEnqueued("background task connection changed")
+      val response =
+        lease.request("tasks.list", params.toString()) { enqueue ->
+          if (!lease.isCurrent()) throw GatewayRequestNotEnqueued("background task connection changed")
+          enqueue()
+        }
+      if (!lease.isCurrent()) throw GatewayRequestNotEnqueued("background task connection changed")
+      return parseBackgroundTasks(json, response)
     }
 
     val active = request(listOf("queued", "running"), limit = 100)
     val recent = request(listOf("completed", "failed", "cancelled", "timed_out"), limit = 50)
-    return mergeBackgroundTasks(active, recent)
+    val tasks = mergeBackgroundTasks(active, recent)
+    if (!lease.isCurrent()) throw GatewayRequestNotEnqueued("background task connection changed")
+    return tasks
   }
 
   suspend fun getBackgroundTask(taskId: String): BackgroundTask {
+    val lease = captureRequestLease(cacheScope()) ?: throw GatewayRequestNotEnqueued("not connected")
     val params = buildJsonObject { put("taskId", JsonPrimitive(taskId)) }
-    val root = json.parseToJsonElement(requestGateway("tasks.get", params.toString())).jsonObject
-    return root["task"]?.let(::parseBackgroundTask)
-      ?: error("Gateway returned no background task")
+    if (!lease.isCurrent()) throw GatewayRequestNotEnqueued("background task connection changed")
+    val response =
+      lease.request("tasks.get", params.toString()) { enqueue ->
+        if (!lease.isCurrent()) throw GatewayRequestNotEnqueued("background task connection changed")
+        enqueue()
+      }
+    if (!lease.isCurrent()) throw GatewayRequestNotEnqueued("background task connection changed")
+    val root = json.parseToJsonElement(response).jsonObject
+    val task =
+      root["task"]?.let(::parseBackgroundTask)
+        ?: error("Gateway returned no background task")
+    if (!lease.isCurrent()) throw GatewayRequestNotEnqueued("background task connection changed")
+    return task
   }
 
   private data class LiveRunTelemetryState(

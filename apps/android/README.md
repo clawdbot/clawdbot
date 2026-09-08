@@ -66,14 +66,19 @@ menu, it closes without choosing an action. Reopen it explicitly when space
 permits; it does not reopen automatically when the layout recovers. Dismissing
 the menu does not reset Chat's draft, editor, or reader state.
 
-Chat's Model picker, its Permissions page, and Thinking effort sheet initially
+Chat's Model picker, its Permissions page, Thinking effort, and Background tasks sheets initially
 use the largest safe region with usable sheet space, not the trigger's region.
 They keep that region while it remains usable. Valid geometry changes retain
 the same sheet and local state. An invalid opening closes without selecting an
 option and stays closed until explicitly reopened.
 
-Background-task and branch-switching sheets and other dialogs, sheets, and
-popup menus are not fold-adapted yet.
+Background tasks remains an agent-wide, read-only list and detail view. Safe
+layout changes retain the opening and its reading state. Switching Gateway,
+agent, or chat closes it; a same-owner disconnect leaves read errors visible
+with Refresh available.
+
+Branch-switching sheets and other dialogs, sheets, and popup menus are not
+fold-adapted yet.
 
 ## Wear OS companion
 
