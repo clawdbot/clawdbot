@@ -70,6 +70,7 @@ export async function sendMatrixMessage(
     replyToId?: string;
     threadId?: string;
     audioAsVoice?: boolean;
+    emote?: boolean;
   } = {},
 ) {
   if (!opts.cfg) {
@@ -83,6 +84,7 @@ export async function sendMatrixMessage(
     replyToId: opts.replyToId,
     threadId: opts.threadId,
     audioAsVoice: opts.audioAsVoice,
+    emote: opts.emote,
     accountId: opts.accountId ?? undefined,
     client: opts.client,
     timeoutMs: opts.timeoutMs,

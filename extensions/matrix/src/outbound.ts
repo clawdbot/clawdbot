@@ -40,6 +40,7 @@ const MATRIX_PRESENTATION_CAPABILITIES = {
 } satisfies NonNullable<ChannelOutboundAdapter["presentationCapabilities"]>;
 
 type MatrixChannelData = {
+  emote?: boolean;
   extraContent?: MatrixExtraContentFields;
 };
 
@@ -175,8 +176,12 @@ export const matrixOutbound: ChannelOutboundAdapter = {
       ...(replyToIdSource !== undefined ? { replyToIdSource } : {}),
       ...(replyToMode !== undefined ? { replyToMode } : {}),
     });
+    const emote = resolveMatrixChannelData(payload).emote === true;
     const urls = resolveSendableOutboundReplyParts(payload).mediaUrls;
     const payloadText = resolveMatrixPayloadText(payload);
+    if (emote && urls.length > 0) {
+      throw new Error("Matrix emote sends cannot include media");
+    }
     if (urls.length > 0) {
       const sentResults: Awaited<ReturnType<typeof sendMessageMatrix>>[] = [];
       const lastResult = await sendPayloadMediaSequence({
@@ -233,6 +238,7 @@ export const matrixOutbound: ChannelOutboundAdapter = {
       deliveryPartCount: 1,
       onPlatformSendDispatch,
       extraContent: resolveMatrixExtraContent(payload),
+      ...(emote ? { emote: true } : {}),
       onDeliveryResult: resolveMatrixDeliveryProgress(onDeliveryResult),
     });
     return attachChannelToResult("matrix", toMatrixOutboundResult(result));

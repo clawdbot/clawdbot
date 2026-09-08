@@ -1,4 +1,5 @@
 // Matrix plugin module implements actions behavior.
+import { readBooleanParam } from "openclaw/plugin-sdk/boolean-param";
 import {
   createActionGate,
   readPositiveIntegerParam,
@@ -11,7 +12,10 @@ import type {
   ChannelMessageActionName,
   ChannelMessageToolSchemaContribution,
 } from "openclaw/plugin-sdk/channel-contract";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asOptionalRecord,
+  normalizeLowercaseStringOrEmpty,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { extractToolSend } from "openclaw/plugin-sdk/tool-send";
 import { Type } from "typebox";
 import { requiresExplicitMatrixDefaultAccount } from "./account-selection.js";
@@ -62,6 +66,21 @@ const MATRIX_PROFILE_MEDIA_PROPERTIES = {
   ),
 } as const;
 const MATRIX_PROFILE_MEDIA_SOURCE_PARAMS = Object.freeze(["avatarUrl", "avatarPath"]);
+
+function buildMatrixSendToolSchema(): ChannelMessageToolSchemaContribution {
+  return {
+    actions: ["send"],
+    visibility: "all-configured",
+    properties: {
+      emote: Type.Optional(
+        Type.Boolean({
+          description:
+            "Send Matrix text as an /me-style m.emote event. Emote sends are text-only; omit for a normal message.",
+        }),
+      ),
+    },
+  };
+}
 
 function createMatrixExposedActions(params: {
   gate: ReturnType<typeof createActionGate>;
@@ -146,6 +165,9 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
     });
     const listedActions = Array.from(actions);
     const schema: ChannelMessageToolSchemaContribution[] = [];
+    if (actions.has("send")) {
+      schema.push(buildMatrixSendToolSchema());
+    }
     if (actions.has("set-profile")) {
       schema.push(buildMatrixProfileToolSchema());
     }
@@ -182,7 +204,25 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
       cfg: ctx.cfg as CoreConfig,
       accountId: ctx.accountId,
     });
-    return account && createActionGate(account.config.actions)("messages") ? payload : null;
+    if (!account || !createActionGate(account.config.actions)("messages")) {
+      return null;
+    }
+    if (readBooleanParam(ctx.params ?? {}, "emote") !== true) {
+      return payload;
+    }
+
+    const channelData = asOptionalRecord(payload.channelData);
+    const matrixData = asOptionalRecord(channelData?.matrix);
+    return {
+      ...payload,
+      channelData: {
+        ...channelData,
+        matrix: {
+          ...matrixData,
+          emote: true,
+        },
+      },
+    };
   },
   handleAction: async (ctx: ChannelMessageActionContext) => {
     const { handleMatrixAction } = await import("./tool-actions.runtime.js");
@@ -232,6 +272,7 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
           : typeof params.audioAsVoice === "boolean"
             ? params.audioAsVoice
             : undefined;
+      const emote = readBooleanParam(params, "emote");
       return await dispatch({
         action: "sendMessage",
         to,
@@ -240,6 +281,7 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
         replyToId: replyTo ?? undefined,
         threadId: threadId ?? undefined,
         audioAsVoice,
+        ...(emote === true ? { emote: true } : {}),
       });
     }
 
