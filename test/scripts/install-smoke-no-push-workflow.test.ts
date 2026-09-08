@@ -1,12 +1,11 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+import { workflowStep } from "./fixtures/install-smoke-isolation.mjs";
 
 const INSTALL_SMOKE = ".github/workflows/install-smoke.yml";
 const INSTALL_SMOKE_REUSABLE = ".github/workflows/install-smoke-reusable.yml";
@@ -67,7 +66,333 @@ function step(workflowJob: WorkflowJob, name: string): WorkflowStep {
   return found!;
 }
 
+describe("candidate smoke log isolation", () => {
+  const surfaces = [
+    ["root_dockerfile_image", "Build local root Dockerfile smoke image"],
+    ["qr_package_install_smoke", "Run QR package install smoke"],
+    ["root_dockerfile_smokes", "Run root Dockerfile CLI smoke"],
+    ["root_dockerfile_smokes", "Run agents delete shared workspace Docker CLI smoke"],
+    ["root_dockerfile_smokes", "Run Docker gateway network e2e"],
+    ["root_dockerfile_smokes", "Smoke test Dockerfile with matrix extension build arg"],
+    ["installer_smoke_update", "Run installer update docker tests"],
+    ["installer_smoke_update", "Run Rocky Linux installer smoke"],
+    ["installer_smoke_update", "Run Rocky Linux CLI installer smoke"],
+    ["installer_smoke_nonroot", "Run installer non-root docker tests"],
+  ];
+
+  it.each(surfaces)("%s / %s brackets stdout and stderr without hiding failure", (owner, name) => {
+    const command = step(job(readWorkflow(INSTALL_SMOKE_REUSABLE), owner), name).run;
+    expect(command).toBeDefined();
+    const tokens = new Set<string>();
+    for (const status of [0, 37, 143]) {
+      const result = spawnSync(
+        "/bin/bash",
+        [
+          "--noprofile",
+          "--norc",
+          "-e",
+          "-o",
+          "pipefail",
+          "-c",
+          `
+emit_candidate() {
+  printf '::add-mask::synthetic-candidate-output\\n'
+  printf '::error::synthetic-candidate-diagnostic\\n' >&2
+  if [[ "$FIXTURE_STATUS" == 143 ]]; then
+    kill -TERM "$$"
+  fi
+  return "$FIXTURE_STATUS"
+}
+timeout() { shift 2; "$@"; }
+docker() {
+  case "$1 \${2:-}" in
+    "buildx create"|"buildx rm"|"info ") return 0 ;;
+    "container inspect") return 1 ;;
+    "buildx build"|"run --rm") emit_candidate ;;
+    *) printf 'unexpected Docker fixture invocation\\n' >&2; return 99 ;;
+  esac
+}
+bash() { emit_candidate; }
+${command}
+`,
+        ],
+        {
+          encoding: "utf8",
+          timeout: 10_000,
+          env: {
+            PATH: process.env.PATH,
+            FIXTURE_STATUS: String(status),
+            GITHUB_RUN_ID: "123",
+            GITHUB_RUN_ATTEMPT: "1",
+            RUNNER_TEMP: "/synthetic-runner-temp",
+            CANDIDATE_DIR: "/synthetic-candidate",
+            PAYLOAD_DIR: "/synthetic-payload",
+            IMAGE_REF: "synthetic-image",
+          },
+        },
+      );
+      expect(result.status, result.stdout + result.stderr).toBe(status);
+      expect(result.stderr).toBe("");
+      const lines = result.stdout.trim().split("\n");
+      const token = lines[0]?.match(/^::stop-commands::([a-f0-9]{64})$/u)?.[1];
+      expect(token, result.stdout).toBeDefined();
+      expect(lines.at(-1)).toBe(`::${token}::`);
+      expect(lines.slice(1, -1)).toContain("::add-mask::synthetic-candidate-output");
+      expect(lines.slice(1, -1)).toContain("::error::synthetic-candidate-diagnostic");
+      tokens.add(token!);
+    }
+    expect(tokens.size).toBe(3);
+  });
+});
+
+describe("Bun workflow ownership", () => {
+  const sharedDirs = useAutoCleanupTempDirTracker(afterAll);
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+  let harness: string;
+  beforeAll(() => {
+    harness = sharedDirs.make("bun-workflow-harness-");
+    for (const name of [
+      "scripts/e2e",
+      "scripts/lib",
+      "scripts/docker",
+      "packages/normalization-core",
+    ]) {
+      cpSync(name, path.join(harness, name), { recursive: true });
+    }
+    mkdirSync(path.join(harness, ".git"));
+    writeFileSync(path.join(harness, ".git/config"), "synthetic Git credential canary");
+    writeFileSync(path.join(harness, ".npmrc"), "synthetic npm credential canary");
+    writeFileSync(path.join(harness, "scripts/lib/private-state.json"), "{}");
+  });
+
+  it.each([
+    { status: 0, expected: 0 },
+    { status: 37, expected: 37 },
+    { status: 124, expected: 124 },
+    { status: 143, expected: 143 },
+    { status: 0, inventoryFailure: true, expected: 1, retained: true },
+    { status: 0, removeFailure: true, expected: 1, retained: true },
+    { status: 0, lingering: true, expected: 1, retained: true },
+    { status: 37, removeFailure: true, expected: 37, retained: true },
+  ])("stages only trusted inputs and preserves cleanup outcome: %j", (scenario) => {
+    const root = tempDirs.make("bun-workflow-owner-");
+    symlinkSync(harness, path.join(root, ".release-harness"));
+    const bin = path.join(root, "bin");
+    const runnerTemp = path.join(root, "runner-temp");
+    mkdirSync(bin);
+    mkdirSync(runnerTemp);
+    const capture = path.join(root, "capture.json");
+    const calls = path.join(root, "calls.jsonl");
+    writeFileSync(
+      path.join(bin, "docker"),
+      `#!${process.execPath}
+const fs = require("node:fs");
+const path = require("node:path");
+const { spawnSync } = require("node:child_process");
+const args = process.argv.slice(2);
+const scenario = JSON.parse(process.env.SCENARIO);
+const state = process.env.CAPTURE + ".active";
+const name = "openclaw-bun-smoke-123-1";
+fs.appendFileSync(process.env.CALLS, JSON.stringify(args) + "\\n");
+if (args[0] === "run") {
+  fs.writeFileSync(state, "");
+  const mount = args.find(arg => arg.endsWith(":/harness:ro"));
+  const harness = mount.slice(0, -":/harness:ro".length);
+  const files = fs.readdirSync(harness, { recursive: true })
+    .filter(file => fs.lstatSync(path.join(harness, file)).isFile()).sort();
+  const env = { PATH: process.env.PATH, BUN_BIN: "/nonexistent-bun", MOCK_PORT: "invalid" };
+  const run = (command, argv) => {
+    const result = spawnSync(command, argv, { cwd: harness, encoding: "utf8", env });
+    return { status: result.status, stdout: result.stdout, stderr: result.stderr };
+  };
+  fs.writeFileSync(process.env.CAPTURE, JSON.stringify({
+    harness, files,
+    entry: run("/bin/bash", ["scripts/e2e/bun-global-install-smoke.sh"]),
+    assertions: run(process.execPath, ["scripts/e2e/lib/bun-global-install/assertions.mjs", "assert-bun-version", "1.4.0"]),
+    mock: run(process.execPath, ["scripts/e2e/mock-openai-server.mjs"])
+  }));
+  console.log("::add-mask::synthetic-candidate-output");
+  console.error("::error::synthetic-candidate-diagnostic");
+  if (scenario.status === 143) process.kill(process.ppid, "SIGTERM");
+  process.exit(scenario.status === 143 ? 0 : scenario.status);
+}
+if (args[0] === "container" && args[1] === "ls") {
+  if (scenario.inventoryFailure) process.exit(1);
+  console.log(name + "-unrelated");
+  if (fs.existsSync(state)) console.log(name);
+  process.exit(0);
+}
+if (args[0] === "rm") {
+  if (scenario.removeFailure) process.exit(1);
+  if (!scenario.lingering) fs.rmSync(state, { force: true });
+  process.exit(0);
+}
+if (args[0] === "container" && args[1] === "inspect") process.exit(1);
+if (args[0] === "info") process.exit(0);
+process.exit(99);
+`,
+      { mode: 0o755 },
+    );
+    const command = step(
+      job(readWorkflow(INSTALL_SMOKE_REUSABLE), "bun_global_install_smoke"),
+      "Run Bun global install candidate-payload smoke",
+    ).run;
+    const result = spawnSync(
+      "/bin/bash",
+      [
+        "--noprofile",
+        "--norc",
+        "-e",
+        "-o",
+        "pipefail",
+        "-c",
+        `timeout() { shift 2; "$@"; }\n${command}`,
+      ],
+      {
+        cwd: root,
+        encoding: "utf8",
+        timeout: 20_000,
+        env: {
+          PATH: `${bin}${path.delimiter}${process.env.PATH}`,
+          RUNNER_TEMP: runnerTemp,
+          GITHUB_RUN_ID: "123",
+          GITHUB_RUN_ATTEMPT: "1",
+          CAPTURE: capture,
+          CALLS: calls,
+          SCENARIO: JSON.stringify(scenario),
+          OPENCLAW_FS_SAFE_NATIVE_CONTRACT: "required",
+        },
+      },
+    );
+    expect(result.status, result.stdout + result.stderr).toBe(scenario.expected);
+    expect(result.stderr).toBe("");
+    const lines = result.stdout.trim().split("\n");
+    const token = lines[0]?.match(/^::stop-commands::([a-f0-9]{64})$/u)?.[1];
+    expect(token, result.stdout).toBeDefined();
+    expect(lines.at(-1)).toBe(`::${token}::`);
+    expect(lines.slice(1, -1)).toContain("::add-mask::synthetic-candidate-output");
+    expect(lines.slice(1, -1)).toContain("::error::synthetic-candidate-diagnostic");
+    const proof = JSON.parse(readFileSync(capture, "utf8"));
+    expect(proof.files).not.toContain(".git/config");
+    expect(proof.files).not.toContain(".npmrc");
+    expect(proof.files).not.toContain("scripts/lib/private-state.json");
+    expect(proof.harness).not.toBe(path.join(root, ".release-harness"));
+    expect(proof.entry.status).toBe(1);
+    expect(proof.entry.stderr).toContain("Bun is required");
+    expect(proof.entry.stderr).not.toContain("No such file");
+    expect(proof.assertions.status, proof.assertions.stderr).toBe(0);
+    expect(proof.mock.status).toBe(1);
+    expect(proof.mock.stderr).toContain("invalid MOCK_PORT");
+    expect(existsSync(proof.harness)).toBe(Boolean(scenario.retained));
+    const invocations: string[][] = readFileSync(calls, "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    expect(invocations.find((args) => args[0] === "run")).toContain(
+      "OPENCLAW_FS_SAFE_NATIVE_CONTRACT=required",
+    );
+    expect(invocations.some((args) => args[0] === "info" || args[1] === "inspect")).toBe(false);
+    const removals = invocations.filter((args) => args[0] === "rm");
+    expect(removals).toEqual(
+      scenario.inventoryFailure ? [] : [["rm", "-f", "openclaw-bun-smoke-123-1"]],
+    );
+    if (!scenario.inventoryFailure) {
+      expect(invocations.at(-1)?.slice(0, 2)).toEqual(["container", "ls"]);
+    }
+  });
+});
+
+describe("standalone installer isolation caller", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+  it.each([
+    { delta: {}, enabled: true },
+    { delta: { EVENT_NAME: "schedule" }, enabled: true },
+    {
+      delta: {
+        CALLER_WORKFLOW_REF:
+          "openclaw/openclaw/.github/workflows/openclaw-release-checks.yml@refs/heads/main",
+      },
+      enabled: false,
+    },
+    {
+      delta: {
+        CALLER_WORKFLOW_REF: "openclaw/openclaw/.github/workflows/other.yml@refs/heads/main",
+      },
+      enabled: false,
+    },
+    {
+      delta: {
+        CALLER_WORKFLOW_REF: "other/openclaw/.github/workflows/install-smoke.yml@refs/heads/main",
+      },
+      enabled: false,
+    },
+    {
+      delta: {
+        CALLER_WORKFLOW_REF: "openclaw/openclaw/.github/workflows/install-smoke.yml@refs/tags/v1",
+      },
+      enabled: false,
+    },
+    { delta: { CALLER_WORKFLOW_REF: "" }, enabled: false },
+    { delta: { CALLER_WORKFLOW_SHA: "invalid" }, enabled: false },
+    { delta: { CALLED_WORKFLOW_SHA: "b".repeat(40) }, enabled: false },
+    { delta: { TARGET_SHA: "b".repeat(40) }, enabled: false },
+    { delta: { FROZEN_TARGET: "true" }, enabled: false },
+    { delta: { RUN_BUN: "false" }, enabled: false },
+    { delta: { EVENT_NAME: "pull_request" }, enabled: false },
+  ])("admits only the canonical standalone caller: %j", ({ delta, enabled }) => {
+    const output = path.join(tempDirs.make("installer-caller-"), "output");
+    const result = spawnSync(
+      "bash",
+      [
+        "-e",
+        "-c",
+        workflowStep(path.resolve("."), "preflight", "Select standalone installer isolation proof")
+          .run,
+      ],
+      {
+        encoding: "utf8",
+        timeout: 5_000,
+        env: {
+          PATH: process.env.PATH,
+          GITHUB_OUTPUT: output,
+          CALLER_WORKFLOW_REF:
+            "openclaw/openclaw/.github/workflows/install-smoke.yml@refs/heads/main",
+          CALLER_WORKFLOW_SHA: "a".repeat(40),
+          CALLED_WORKFLOW_SHA: "a".repeat(40),
+          TARGET_SHA: "a".repeat(40),
+          EVENT_NAME: "workflow_dispatch",
+          FROZEN_TARGET: "false",
+          RUN_BUN: "true",
+          ...delta,
+        },
+      },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(readFileSync(output, "utf8")).toBe(`enabled=${enabled}\n`);
+  });
+
+  it("keeps fixed real proof cases serial and out of release callers and unit collection", () => {
+    const workflow = readWorkflow(INSTALL_SMOKE_REUSABLE);
+    const proof = job(workflow, "installer_isolation_proof");
+    expect(proof.if).toBe("needs.preflight.outputs.run_isolation_proof == 'true'");
+    expect(proof.needs).toEqual(["preflight", "installer_smoke_candidate_payload"]);
+    expect(proof.permissions).toEqual({ contents: "read", actions: "read" });
+    expect(proof["timeout-minutes"]).toBe(75);
+    expect(proof.strategy).toEqual({
+      "fail-fast": false,
+      "max-parallel": 1,
+      matrix: { case: ["containment", "package-registry", "registry-only", "empty-required"] },
+    });
+    expect(step(proof, "Prove installer isolation boundary").run).toContain(
+      "node .release-harness/test/scripts/fixtures/install-smoke-isolation.mjs",
+    );
+    expect(workflow.on?.workflow_call?.inputs).not.toHaveProperty("run_isolation_proof");
+  });
+});
+
 describe("install smoke no-push root image transport", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
   it("keeps schedule/manual orchestration read-only and delegates to the reusable core", () => {
     const workflow = readWorkflow(INSTALL_SMOKE);
     expect(workflow.on?.schedule).toBeDefined();
@@ -160,7 +485,11 @@ describe("install smoke no-push root image transport", () => {
     );
     expect(identityResult.status, identityResult.stderr).toBe(0);
     const workflowText = JSON.stringify(workflow);
-    expect(workflowText).not.toContain("${{ github.workflow_sha }}");
+    expect(workflowIdentity.env).not.toHaveProperty("CALLER_WORKFLOW_SHA");
+    expect(step(preflight, "Select standalone installer isolation proof").env).toMatchObject({
+      CALLER_WORKFLOW_SHA: "${{ github.workflow_sha }}",
+      CALLED_WORKFLOW_SHA: "${{ steps.workflow.outputs.workflow_sha }}",
+    });
     expect(workflowText).not.toContain("fromJSON(toJSON(job)).workflow_");
     const trustedJobs: string[] = [];
     for (const [jobName, workflowJob] of Object.entries(workflow.jobs)) {
@@ -181,6 +510,7 @@ describe("install smoke no-push root image transport", () => {
         "job.workflow_sha must be a full lowercase commit SHA",
       );
       expect(resolver.run, jobName).toContain('"fetch"');
+      expect(JSON.stringify(resolver)).not.toContain("${{ github.workflow_sha }}");
       expect(resolver.run, jobName).toContain(
         "`repository=${repository}\\nsha=${job.workflow_sha}\\n`",
       );
@@ -200,10 +530,12 @@ describe("install smoke no-push root image transport", () => {
       [
         "bun_global_install_smoke",
         "installer_smoke_candidate_payload",
+        "installer_isolation_proof",
         "installer_smoke_nonroot",
         "installer_smoke_nonroot_image",
         "installer_smoke_update",
         "installer_smoke_update_image",
+        "qr_package_install_smoke",
         "root_dockerfile_image",
         "root_dockerfile_smokes",
       ].toSorted(),
@@ -522,13 +854,14 @@ describe("install smoke no-push root image transport", () => {
           OPENCLAW_DOCKER_E2E_REPO_ROOT: repoRoot ?? "",
         },
       });
+      const diagnostics = result.stdout + result.stderr;
       if (source === "selected") {
-        expect(result.stderr).not.toContain("selected source checkout does not match");
-        expect(existsSync(dockerCalls), result.stderr).toBe(true);
+        expect(diagnostics).not.toContain("selected source checkout does not match");
+        expect(existsSync(dockerCalls), diagnostics).toBe(true);
         expect(readFileSync(dockerCalls, "utf8")).toContain("image inspect");
       } else {
         expect(result.status).toBe(2);
-        expect(result.stderr).toContain(
+        expect(diagnostics).toContain(
           "selected source checkout does not match OPENCLAW_SELECTED_SHA",
         );
         expect(existsSync(dockerCalls)).toBe(false);
@@ -716,21 +1049,64 @@ describe("install smoke no-push root image transport", () => {
     expect(bunVerify.run).toContain("install-smoke-candidate-payload.mts verify");
     expect(bunVerify.run).toContain('--run-id "$PRODUCER_RUN_ID"');
     expect(bunVerify.run).toContain('--run-attempt "$PRODUCER_RUN_ATTEMPT"');
-    expect(step(bunConsumer, "Install Bun for global smoke").run).toBe("npm install -g bun@1.4.0");
-    expect(step(bunConsumer, "Run Bun global install candidate-payload smoke")).toMatchObject({
-      "working-directory": ".release-harness",
-      env: {
-        OPENCLAW_BUN_GLOBAL_SMOKE_HOST_BUILD: "0",
-        OPENCLAW_BUN_GLOBAL_SMOKE_PACKAGE_TGZ:
-          "${{ runner.temp }}/install-smoke-candidate-payload/candidate.tgz",
-      },
-      run: "bash scripts/e2e/bun-global-install-smoke.sh",
-    });
+    const bunRun = step(bunConsumer, "Run Bun global install candidate-payload smoke");
+    expect(bunRun.run).toContain("docker run --rm --init");
+    expect(bunRun.run).toContain("--user node");
+    expect(bunRun.run).toContain("--cap-drop ALL");
+    expect(bunRun.run).toContain("--security-opt no-new-privileges");
+    expect(bunRun.run).toContain('-v "$harness_dir:/harness:ro"');
+    expect(bunRun.run).not.toContain('-v "$PWD/.release-harness:/harness:ro"');
+    expect(bunRun.run).toContain('-v "${RUNNER_TEMP}/install-smoke-candidate-payload:/payload:ro"');
+    expect(bunRun.run).toContain("npm install --prefix /tmp/bun-runtime bun@1.4.0");
+    expect(bunRun.run).toContain("exec bash /harness/scripts/e2e/bun-global-install-smoke.sh");
+    expect(bunRun.run).not.toContain("--env-file");
+    expect(bunRun.run).not.toContain("docker.sock");
     expect(JSON.stringify(bunConsumer)).not.toContain("root_dockerfile_image");
     expect(JSON.stringify(bunConsumer)).not.toContain("OPENCLAW_BUN_GLOBAL_SMOKE_DIST_IMAGE");
     expect(JSON.stringify(bunConsumer)).not.toContain(
       "./.release-harness/.github/actions/setup-node-env",
     );
+  });
+
+  it("keeps candidate launchers off the host and retains obsolete fast-path coverage", () => {
+    const workflow = readWorkflow(INSTALL_SMOKE_REUSABLE);
+    expect(workflow.jobs["install-smoke-fast"]).toBeUndefined();
+    expect(workflow.jobs["docker-e2e-fast"]).toBeUndefined();
+    expect(job(workflow, "preflight").outputs?.run_fast_install_smoke).toBeUndefined();
+    const qr = job(workflow, "qr_package_install_smoke");
+    expect(step(qr, "Checkout CLI").with).toMatchObject({
+      ref: "${{ needs.preflight.outputs.target_sha }}",
+      path: ".candidate",
+      "persist-credentials": false,
+    });
+    expect(step(qr, "Run QR package install smoke")).toMatchObject({
+      env: { OPENCLAW_DOCKER_E2E_REPO_ROOT: "${{ github.workspace }}/.candidate" },
+      run: expect.stringContaining("bash .release-harness/scripts/e2e/qr-import-docker.sh"),
+    });
+    const rootSmokes = job(workflow, "root_dockerfile_smokes");
+    for (const name of [
+      "Run root Dockerfile CLI smoke",
+      "Run agents delete shared workspace Docker CLI smoke",
+      "Run Docker gateway network e2e",
+      "Smoke test Dockerfile with matrix extension build arg",
+    ]) {
+      expect(step(rootSmokes, name).run).toBeTruthy();
+    }
+    const rootBuild = step(
+      job(workflow, "root_dockerfile_image"),
+      "Build local root Dockerfile smoke image",
+    );
+    expect(rootBuild.run).toContain("--driver docker-container");
+    expect(rootBuild.run).toContain('--builder "$builder"');
+    expect(rootBuild.run).toContain('docker buildx rm -f "$builder"');
+    for (const workflowJob of Object.values(workflow.jobs)) {
+      for (const candidate of workflowJob.steps ?? []) {
+        if (candidate.uses?.startsWith("./")) {
+          expect(candidate.uses).toMatch(/^\.\/\.release-harness\//u);
+        }
+        expect(candidate.run ?? "").not.toMatch(/(?:bash|source) (?:\.\/)?\.candidate\//u);
+      }
+    }
   });
 
   it("packages candidate code only in an isolated image and verifies the sealed payload", () => {
@@ -762,18 +1138,14 @@ describe("install smoke no-push root image transport", () => {
     expect(download.run).toContain(
       '"https://codeload.github.com/${TARGET_REPOSITORY}/tar.gz/${TARGET_SHA}"',
     );
-    const packageStep = step(producer, "Package candidate only inside pinned harness");
-    expect(packageStep.run).toContain("--user node");
-    expect(packageStep.run).toContain("--cap-drop ALL");
-    expect(packageStep.run).toContain("pnpm install --frozen-lockfile");
+    const packageStep = step(producer, "Package and seal candidate in pinned harness");
+    expect(packageStep.run).toContain(
+      "bash .release-harness/scripts/docker/pack-candidate-in-container.sh",
+    );
+    expect(packageStep.run).toContain('--harness-dir "$PWD/.release-harness"');
+    expect(packageStep.run).toContain('--harness-sha "$HARNESS_SHA"');
     expect(packageStep.run).not.toContain("github.token");
-    const seal = step(producer, "Seal candidate payload in clean pinned harness");
-    expect(seal.run).toContain("--network none");
-    expect(seal.run).toContain('install -d -m 0750 "$payload_dir"');
-    expect(seal.run).toContain('--user "$(id -u):$(id -g)"');
-    expect(seal.run).not.toContain('chmod 0777 "$payload_dir"');
-    expect(seal.run).toContain("install-smoke-candidate-payload.mts seal");
-    expect(seal.run).toContain("--harness-sha");
+    expect(packageStep.run).not.toContain("docker run");
 
     for (const consumerName of ["installer_smoke_update", "installer_smoke_nonroot"]) {
       const consumer = job(workflow, consumerName);
@@ -874,19 +1246,14 @@ describe("install smoke no-push root image transport", () => {
     const workflow = readWorkflow(INSTALL_SMOKE_REUSABLE);
     const packageCandidate = step(
       job(workflow, "installer_smoke_candidate_payload"),
-      "Package candidate only inside pinned harness",
+      "Package and seal candidate in pinned harness",
     );
     expect(packageCandidate.env).toMatchObject({
       ALLOW_UNRELEASED_CHANGELOG: "${{ inputs.allow_unreleased_changelog }}",
     });
-    expect(packageCandidate.run).toContain("--output-name candidate.tgz");
-    expect(packageCandidate.run).not.toContain("--pack-json");
-    expect(packageCandidate.run).toContain("scripts/package-openclaw-for-docker.mts");
     expect(packageCandidate.run).toContain(
-      "grep -Fq -- '--allow-unreleased-changelog' scripts/package-openclaw-for-docker.mts",
+      '--allow-unreleased-changelog "$ALLOW_UNRELEASED_CHANGELOG"',
     );
-    expect(packageCandidate.run).not.toContain("[[ -f scripts/package-openclaw-for-docker.mts ]]");
-    expect(packageCandidate.run).toContain("package_args+=(--allow-unreleased-changelog)");
     expect(JSON.stringify(job(workflow, "bun_global_install_smoke"))).not.toContain(
       "OPENCLAW_BUN_GLOBAL_SMOKE_ALLOW_UNRELEASED_CHANGELOG",
     );

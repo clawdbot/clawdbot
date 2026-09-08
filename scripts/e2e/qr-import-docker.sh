@@ -25,4 +25,9 @@ docker_build_run qr-import-build \
   "$SOURCE_ROOT"
 
 echo "Running qrcode import smoke..."
-run_logged qr-import-run docker_e2e_docker_run_cmd run --rm -t "$IMAGE_NAME" node -e "import('qrcode').then(async (m)=>{const q=m.default??m;process.stdout.write(await q.toString('qr-smoke',{small:true,type:'terminal'}))})"
+run_logged qr-import-run docker_e2e_docker_run_cmd run --rm -t \
+  --network none \
+  --cap-drop ALL \
+  --security-opt no-new-privileges \
+  --user appuser \
+  "$IMAGE_NAME" node -e "import('qrcode').then(async (m)=>{const q=m.default??m;process.stdout.write(await q.toString('qr-smoke',{small:true,type:'terminal'}))})"
