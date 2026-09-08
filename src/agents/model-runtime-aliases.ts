@@ -5,6 +5,7 @@ import { parseModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveProviderModelCatalogId } from "../plugins/provider-model-routes.js";
 import { resolveAgentDir } from "./agent-scope-config.js";
 import { resolveExplicitAuthOrderSelection } from "./auth-profiles/order.js";
 import { getPreparedRuntimeAuthProfileStoreSnapshotCore } from "./auth-profiles/runtime-snapshots.js";
@@ -112,7 +113,10 @@ function normalizeRuntimeModelRefForComparison(
   const canonicalProvider = normalizeProviderId(
     canonicalizeRuntimeAliasProvider(parsed.provider, options),
   );
-  return `${canonicalProvider}/${parsed.modelId}`;
+  const modelId =
+    resolveProviderModelCatalogId({ provider: canonicalProvider, modelId: parsed.modelId }) ??
+    parsed.modelId;
+  return `${canonicalProvider}/${modelId}`;
 }
 
 function normalizeRuntimeModelRefWithoutAlias(raw: string): string {

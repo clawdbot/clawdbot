@@ -6,6 +6,7 @@ import {
 } from "../config/model-provider-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderModelRouteCandidate } from "../plugin-sdk/provider-model-types.js";
+import { resolveProviderModelCatalogId } from "../plugins/provider-model-routes.js";
 import {
   PREPARED_THINKING_POLICY,
   type ThinkingCatalogPolicyCarrier,
@@ -63,6 +64,7 @@ export function resolveConfiguredModelCatalogOverrides(params: {
   }
   const normalizeConfiguredModelId = (modelId: string) =>
     params.policy?.resolveIdentity({ provider: params.entry.provider, id: modelId })?.key ??
+    resolveProviderModelCatalogId({ provider, modelId }) ??
     modelId.trim();
   const model = resolveMergedModelProviderModels({
     models: providerConfig.models,
@@ -152,7 +154,12 @@ export function projectModelCatalogEntryForRoute(params: {
   overrides?: ModelCatalogLogicalOverrides;
 }): ModelCatalogEntry {
   if (params.projection.kind === "unmanaged") {
-    return applyLogicalOverrides(params.entry, params.overrides);
+    const id = resolveProviderModelCatalogId({
+      provider: params.entry.provider,
+      modelId: params.entry.id,
+    });
+    const entry = id && id !== params.entry.id ? { ...params.entry, id } : params.entry;
+    return applyLogicalOverrides(entry, params.overrides);
   }
   const id =
     params.projection.policy.resolveIdentity(params.entry)?.id ??

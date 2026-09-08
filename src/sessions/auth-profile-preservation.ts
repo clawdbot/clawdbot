@@ -7,6 +7,7 @@ import {
   getRuntimeAuthProfileStoreSnapshot,
 } from "../agents/auth-profiles/store.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
+import { resolveModelProviderAuthConfig } from "../agents/model-auth-provider-route.js";
 import { resolveProviderIdForAuth } from "../agents/provider-auth-aliases.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { resolveCollapsedSessionAuthPinSource } from "../config/sessions/auth-profile-override-provenance.js";
@@ -124,7 +125,12 @@ export function applyModelOverrideWithAuthProfileCompatibility(params: {
     preserveAuthProfileOverride:
       !params.profileOverride &&
       shouldPreserveSessionAuthProfileOverride({
-        cfg: params.cfg,
+        cfg: resolveModelProviderAuthConfig({
+          config: params.cfg,
+          provider: params.selection.provider,
+          modelId: params.selection.model,
+          metadataSnapshot: params.metadataSnapshot,
+        }),
         agentDir: params.agentDir,
         entry: params.entry,
         currentProvider: params.currentProvider,

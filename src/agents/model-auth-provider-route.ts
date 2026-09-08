@@ -1,19 +1,44 @@
-import { projectModelProviderConfig } from "../config/model-provider-config.js";
+import {
+  findConfiguredProviderModel,
+  projectModelProviderConfig,
+  resolveMergedModelProviderConfig,
+} from "../config/model-provider-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   resolveProviderIdForAuth,
   type ProviderAuthAliasLookupParams,
 } from "./provider-auth-aliases.js";
 
-/** Endpoint-conditioned aliases follow the materialized model without changing route planning. */
+type ModelProviderAuthConfigParams = ProviderAuthAliasLookupParams & {
+  provider: string;
+  modelId?: string;
+  modelBaseUrl?: unknown;
+};
+
 export function resolveModelProviderAuthConfig(
-  params: ProviderAuthAliasLookupParams & { provider: string; modelBaseUrl?: unknown },
+  params: ModelProviderAuthConfigParams & { config: OpenClawConfig },
+): OpenClawConfig;
+export function resolveModelProviderAuthConfig(
+  params: ModelProviderAuthConfigParams,
+): OpenClawConfig | undefined;
+/** Endpoint-conditioned aliases follow the selected model before any auth state mutation. */
+export function resolveModelProviderAuthConfig(
+  params: ModelProviderAuthConfigParams,
 ): OpenClawConfig | undefined {
-  if (typeof params.modelBaseUrl !== "string") {
+  const modelBaseUrl =
+    params.modelBaseUrl ??
+    (params.modelId
+      ? findConfiguredProviderModel(
+          resolveMergedModelProviderConfig(params.config, params.provider),
+          params.provider,
+          params.modelId,
+        )?.baseUrl?.trim()
+      : undefined);
+  if (typeof modelBaseUrl !== "string" || !modelBaseUrl) {
     return params.config;
   }
   const config = projectModelProviderConfig(params.config, params.provider, {
-    baseUrl: params.modelBaseUrl,
+    baseUrl: modelBaseUrl,
   });
   return resolveProviderIdForAuth(params.provider, params) ===
     resolveProviderIdForAuth(params.provider, { ...params, config })

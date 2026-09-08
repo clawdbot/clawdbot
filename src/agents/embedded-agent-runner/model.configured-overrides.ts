@@ -3,6 +3,10 @@ import { normalizeConfiguredProviderCatalogModelId } from "@openclaw/model-catal
 import { asOptionalRecord as readModelParams } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { mergeModelCost } from "../../config/model-cost.js";
+import {
+  findConfiguredProviderModel,
+  matchesProviderScopedModelId,
+} from "../../config/model-provider-config.js";
 import { projectConfigOntoRuntimeSourceSnapshot } from "../../config/runtime-source-projection.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { Api, Model } from "../../llm/types.js";
@@ -104,27 +108,6 @@ export function resolveConfiguredProviderDefaultApi(params: {
   return normalized.api ?? "openai-completions";
 }
 
-function matchesProviderScopedModelId(params: {
-  candidateId?: string;
-  provider: string;
-  modelId: string;
-}): boolean {
-  const { candidateId, provider, modelId } = params;
-  if (candidateId === modelId) {
-    return true;
-  }
-  const slashIndex = candidateId?.indexOf("/") ?? -1;
-  if (!candidateId || slashIndex <= 0) {
-    return false;
-  }
-  const candidateProvider = candidateId.slice(0, slashIndex);
-  const candidateModelId = candidateId.slice(slashIndex + 1);
-  return (
-    candidateModelId === modelId &&
-    normalizeProviderId(candidateProvider) === normalizeProviderId(provider)
-  );
-}
-
 export function findInlineModelMatch(params: {
   providers: Record<string, InlineProviderConfig>;
   preparedModels?: readonly InlineModelEntry[];
@@ -168,16 +151,6 @@ function isModelsAddMetadataModel(params: {
 }) {
   return (
     (params.model as { metadataSource?: unknown } | undefined)?.metadataSource === "models-add"
-  );
-}
-
-export function findConfiguredProviderModel(
-  providerConfig: InlineProviderConfig | undefined,
-  provider: string,
-  modelId: string,
-) {
-  return providerConfig?.models?.find((candidate) =>
-    matchesProviderScopedModelId({ candidateId: candidate.id, provider, modelId }),
   );
 }
 

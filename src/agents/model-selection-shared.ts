@@ -16,6 +16,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { loadManifestMetadataSnapshot } from "../plugins/manifest-contract-eligibility.js";
+import { resolveProviderModelCatalogId } from "../plugins/provider-model-routes.js";
 import { getActivePluginRegistryWorkspaceDirFromState } from "../plugins/runtime-state.js";
 import { resolveAgentConfig } from "./agent-scope-config.js";
 import { resolveConfiguredProviderFallback } from "./configured-provider-fallback.js";
@@ -1648,7 +1649,8 @@ export type ModelVisibilityPolicy = {
 export function modelCatalogLogicalKey(entry: Pick<ModelCatalogEntry, "provider" | "id">): string {
   const provider = normalizeProviderId(entry.provider);
   const model = splitTrailingAuthProfile(entry.id).model;
-  return normalizeLowercaseStringOrEmpty(modelKey(provider, model));
+  const id = resolveProviderModelCatalogId({ provider, modelId: model }) ?? model;
+  return normalizeLowercaseStringOrEmpty(modelKey(provider, id));
 }
 
 export function dedupeModelCatalogEntries(

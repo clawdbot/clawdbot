@@ -9,6 +9,36 @@ type MergedModelProviderEntry = {
   providerConfig: ModelProviderConfig;
 };
 
+export function matchesProviderScopedModelId(params: {
+  candidateId?: string;
+  provider: string;
+  modelId: string;
+}): boolean {
+  const { candidateId, provider, modelId } = params;
+  if (candidateId === modelId) {
+    return true;
+  }
+  const slashIndex = candidateId?.indexOf("/") ?? -1;
+  if (!candidateId || slashIndex <= 0) {
+    return false;
+  }
+  return (
+    candidateId.slice(slashIndex + 1) === modelId &&
+    normalizeProviderId(candidateId.slice(0, slashIndex)) === normalizeProviderId(provider)
+  );
+}
+
+/** Uses the same authored row for transport materialization and early auth selection. */
+export function findConfiguredProviderModel(
+  providerConfig: { models?: ModelDefinitionConfig[] } | undefined,
+  provider: string,
+  modelId: string,
+) {
+  return providerConfig?.models?.find((candidate) =>
+    matchesProviderScopedModelId({ candidateId: candidate.id, provider, modelId }),
+  );
+}
+
 const BUILT_IN_MODEL_PROVIDER_OVERLAY_IDS = new Set([
   "amazon-bedrock",
   "amazon-bedrock-mantle",
