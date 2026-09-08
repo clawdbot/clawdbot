@@ -39,6 +39,23 @@ export class MissingEnvVarError extends Error {
   }
 }
 
+/** Maximum nesting depth for config JSON structures to prevent stack overflow. */
+export const MAX_CONFIG_JSON_NESTING_DEPTH = 512;
+
+/** Error thrown when config JSON nesting depth exceeds the maximum allowed. */
+export class ConfigNestingDepthError extends Error {
+  constructor(
+    public readonly measuredDepth: number,
+    public readonly path: string,
+  ) {
+    super(
+      `Config JSON nesting depth exceeds maximum of ${MAX_CONFIG_JSON_NESTING_DEPTH} ` +
+        `(measured ${measuredDepth} levels)${path ? ` at: ${path}` : ""}.`,
+    );
+    this.name = "ConfigNestingDepthError";
+  }
+}
+
 type EnvToken =
   | { kind: "escaped"; name: string; end: number }
   | { kind: "substitution"; name: string; end: number };
@@ -178,18 +195,31 @@ export function containsEnvVarReference(value: string): boolean {
   return false;
 }
 
+/**
+ * Recursively substitutes environment variables in a value with depth limiting.
+ * @param depth - Current nesting depth (internal use only)
+ * @throws {ConfigNestingDepthError} If nesting depth exceeds MAX_CONFIG_JSON_NESTING_DEPTH
+ */
 function substituteAny(
   value: unknown,
   env: NodeJS.ProcessEnv,
   path: string,
   opts?: SubstituteOptions,
+  depth = 0,
 ): unknown {
+  // Depth limit check to prevent stack overflow from deeply nested structures
+  if (depth > MAX_CONFIG_JSON_NESTING_DEPTH) {
+    throw new ConfigNestingDepthError(depth, path);
+  }
+
   if (typeof value === "string") {
     return substituteString(value, env, path, opts);
   }
 
   if (Array.isArray(value)) {
-    return value.map((item, index) => substituteAny(item, env, `${path}[${index}]`, opts));
+    return value.map((item, index) =>
+      substituteAny(item, env, `${path}[${index}]`, opts, depth + 1),
+    );
   }
 
   if (isPlainObject(value)) {
@@ -204,7 +234,7 @@ function substituteAny(
         : path
           ? `${path}.${key}`
           : key;
-      result[key] = substituteAny(val, env, childPath, opts);
+      result[key] = substituteAny(val, env, childPath, opts, depth + 1);
     }
     return result;
   }
@@ -221,11 +251,12 @@ function substituteAny(
  * @param opts - Options: `onMissing` callback to collect warnings instead of throwing.
  * @returns The config object with env vars substituted
  * @throws {MissingEnvVarError} If a referenced env var is not set or empty (unless `onMissing` is set)
+ * @throws {ConfigNestingDepthError} If the config nesting depth exceeds MAX_CONFIG_JSON_NESTING_DEPTH
  */
 export function resolveConfigEnvVars(
   obj: unknown,
   env: NodeJS.ProcessEnv = process.env,
   opts?: SubstituteOptions,
 ): unknown {
-  return substituteAny(obj, env, "", opts);
+  return substituteAny(obj, env, "", opts, 0);
 }

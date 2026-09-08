@@ -527,5 +527,22 @@ describe("resolveConfigEnvVars", () => {
 
       expectResolvedScenarios(scenarios);
     });
+
+    describe("nesting depth limit", () => {
+      it("rejects deeply nested arrays beyond MAX_CONFIG_JSON_NESTING_DEPTH", () => {
+        const deepArray = JSON.parse("[".repeat(600) + "]".repeat(600));
+        expect(() => resolveConfigEnvVars(deepArray, {})).toThrow(/nesting depth exceeds maximum/);
+      });
+
+      it("rejects deeply nested objects beyond MAX_CONFIG_JSON_NESTING_DEPTH", () => {
+        const deepObject = JSON.parse('{"a":'.repeat(600) + "1" + "}".repeat(600));
+        expect(() => resolveConfigEnvVars(deepObject, {})).toThrow(/nesting depth exceeds maximum/);
+      });
+
+      it("allows nesting within the limit", () => {
+        const shallowArray = JSON.parse("[".repeat(100) + "]".repeat(100));
+        expect(() => resolveConfigEnvVars(shallowArray, {})).not.toThrow();
+      });
+    });
   });
 });
