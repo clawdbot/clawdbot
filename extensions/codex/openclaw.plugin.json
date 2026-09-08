@@ -353,6 +353,16 @@
             "minimum": 1,
             "default": 60000
           },
+          "providerIds": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "^\\s*(?!(?:[cC][oO][nN][sS][tT][rR][uU][cC][tT][oO][rR]|[pP][rR][oO][tT][oO][tT][yY][pP][eE])\\s*$)[A-Za-z0-9][A-Za-z0-9_-]*\\s*$"
+            },
+            "default": ["codex", "openai"]
+          },
           "approvalPolicy": {
             "type": "string",
             "enum": ["never", "on-request", "on-failure", "untrusted"]
@@ -663,6 +673,11 @@
     "appServer.loopDetectionPreToolUseRelay": {
       "label": "Loop Detection Pre-tool Relay",
       "help": "Install the Codex PreToolUse subprocess used only for OpenClaw loop detection and its no-policy marker. Disable to reduce per-tool process fan-out; before-tool and trusted policy relays remain enforced.",
+      "advanced": true
+    },
+    "appServer.providerIds": {
+      "label": "Provider IDs",
+      "help": "OpenClaw provider IDs allowed to use the Codex app-server harness. Add custom Codex model-provider IDs only when they are configured in Codex.",
       "advanced": true
     },
     "appServer.requestTimeoutMs": {

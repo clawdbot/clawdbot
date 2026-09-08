@@ -3,6 +3,7 @@ import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { detectWindowsSpawnCommandInlineArgs } from "openclaw/plugin-sdk/windows-spawn";
 import { z } from "zod";
 import {
+  CODEX_APP_SERVER_PROVIDER_ID_PATTERN,
   CODEX_PLUGIN_MARKETPLACE_NAME_PATTERN,
   type CodexAppServerCommandSource,
   type CodexPluginConfig,
@@ -61,6 +62,9 @@ const codexAppServerExperimentalSchema = z
   })
   .strict();
 const codexAppServerRemoteWorkspaceRootSchema = z.string().trim().min(1);
+const codexAppServerProviderIdsSchema = z
+  .array(z.string().trim().regex(CODEX_APP_SERVER_PROVIDER_ID_PATTERN))
+  .min(1);
 const codexAppServerNetworkProxyDomainPermissionSchema = z.enum(["allow", "deny"]);
 const codexAppServerNetworkProxyUnixSocketPermissionSchema = z.enum(["allow", "none"]);
 const codexAppServerNetworkProxySchema = z
@@ -176,6 +180,7 @@ const codexPluginConfigSchema = z
         codeModeOnly: z.boolean().optional(),
         loopDetectionPreToolUseRelay: z.boolean().optional(),
         requestTimeoutMs: z.number().positive().optional(),
+        providerIds: codexAppServerProviderIdsSchema.optional(),
         approvalPolicy: codexAppServerApprovalPolicySchema.optional(),
         sandbox: codexAppServerSandboxSchema.optional(),
         approvalsReviewer: codexAppServerApprovalsReviewerSchema.optional(),
