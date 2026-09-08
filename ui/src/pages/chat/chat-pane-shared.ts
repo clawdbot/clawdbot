@@ -296,3 +296,44 @@ export function focusChatComposerFromPrintableKeydown(
   composer.focus({ preventScroll: true });
   event.stopImmediatePropagation();
 }
+
+export type ComposerFocusHost = {
+  readonly updateComplete: Promise<unknown>;
+  readonly isConnected: boolean;
+  querySelectorAll<E extends Element = Element>(selectors: string): NodeListOf<E>;
+};
+export type ComposerFocusPane = Element & { paneId?: string; sessionKey?: string };
+
+// When keyboard focus lives inside a removed split pane, move it into the
+// surviving pane composer; otherwise focus falls to an undefined document
+// location once the closed pane disappears (see #127323). Callers invoke this
+// synchronously before the close render commits: Lit applies DOM removals
+// asynchronously, so the closing pane is still present for the check below.
+export async function focusSurvivingComposer(
+  host: ComposerFocusHost,
+  closingPaneId: string,
+  sessionKey?: string,
+): Promise<void> {
+  const closing = [...host.querySelectorAll<ComposerFocusPane>("openclaw-chat-pane")].find(
+    (pane) => pane.paneId === closingPaneId,
+  );
+  if (!closing?.contains(document.activeElement)) {
+    return;
+  }
+  await host.updateComplete;
+  if (!host.isConnected) {
+    return;
+  }
+  const panes = [...host.querySelectorAll<ComposerFocusPane>("openclaw-chat-pane")];
+  const target =
+    (sessionKey
+      ? panes.find(
+          (pane) =>
+            pane.sessionKey !== undefined &&
+            areUiSessionKeysEquivalent(pane.sessionKey, sessionKey),
+        )
+      : undefined) ?? panes[0];
+  target
+    ?.querySelector<HTMLTextAreaElement>(CHAT_COMPOSER_TEXTAREA_SELECTOR)
+    ?.focus({ preventScroll: true });
+}
