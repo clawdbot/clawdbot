@@ -345,11 +345,13 @@ export async function updateNpmInstalledPlugins(params: {
     if (!params.dryRun && record.source === "npm" && currentVersion) {
       changed = (await repairRegisteredOpenClawHostLink({ pluginId, record, logger })) || changed;
     }
-    // Payload validation is filesystem work needed only to preserve state after metadata failures.
-    // Every failure path below ends this plugin iteration, so the result cannot be reused.
+    // Payload validation is filesystem work needed only to preserve state after a
+    // rejected candidate whose previous install survived. Every failure path below
+    // ends this plugin iteration, so the result cannot be reused.
     const hasRunnableInstalledPayloadForFailure = async (code?: string): Promise<boolean> => {
       if (
-        code !== PLUGIN_INSTALL_ERROR_CODE.NPM_METADATA_FAILURE ||
+        (code !== PLUGIN_INSTALL_ERROR_CODE.NPM_METADATA_FAILURE &&
+          code !== PLUGIN_INSTALL_ERROR_CODE.STAGED_ARTIFACT_FAILURE) ||
         !params.disableOnFailure ||
         params.dryRun ||
         currentVersion === undefined
@@ -513,7 +515,16 @@ export async function updateNpmInstalledPlugins(params: {
         });
         continue;
       }
-      recordFailure(pluginId, attempt.message);
+      // The installer's finally block restores the previous install before a thrown
+      // staged-artifact exception escapes, so the prior payload may still serve.
+      // hasRunnableInstalledNpmPayload fails closed for damaged or unreadable payloads,
+      // keeping security-rejected or corrupt installs disabled.
+      recordFailure(pluginId, attempt.message, {
+        code: PLUGIN_INSTALL_ERROR_CODE.STAGED_ARTIFACT_FAILURE,
+        installedPayloadRunnable: await hasRunnableInstalledPayloadForFailure(
+          PLUGIN_INSTALL_ERROR_CODE.STAGED_ARTIFACT_FAILURE,
+        ),
+      });
       continue;
     }
 
