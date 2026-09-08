@@ -2,6 +2,7 @@ import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "ope
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { isSilentReplyPayloadText } from "openclaw/plugin-sdk/reply-chunking";
 import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveDeliveredAnswerItemId } from "./event-projector-assistant-delivered-answer.js";
 import {
   createAssistantAsyncMessage as buildAssistantAsyncMessage,
   createAssistantCommentaryMessage as buildAssistantCommentaryMessage,
@@ -426,7 +427,16 @@ export class CodexAssistantProjection {
       this.supersedeVisibleAnswerCandidate();
       return;
     }
-    const itemId = authoritative?.id ?? this.visibleAnswerCandidateItemId;
+    let itemId = authoritative?.id ?? this.visibleAnswerCandidateItemId;
+    // turn/completed.items is a last-wins last_agent_message summary (codex-rs
+    // thread_state.rs track_current_turn_event), so a trailing silent token shadows
+    // the real answer here even though collectAssistantTexts() delivers it. Re-derive
+    // the selected item from the same precedence delivery uses.
+    const authoritativeText =
+      typeof authoritative?.text === "string" ? authoritative.text.trim() : undefined;
+    if (authoritativeText && isSilentReplyPayloadText(authoritativeText)) {
+      itemId = this.resolveDeliveredAnswerItemId() ?? itemId;
+    }
     if (!itemId) {
       return;
     }
@@ -604,6 +614,17 @@ export class CodexAssistantProjection {
     this.latestTerminalAssistantCandidateSuperseded = true;
     this.terminalAssistantCandidateEarlierActiveItemIds.clear();
     this.supersedeVisibleAnswerCandidate();
+  }
+
+  private resolveDeliveredAnswerItemId(): string | undefined {
+    return resolveDeliveredAnswerItemId({
+      assistantItemOrder: this.assistantItemOrder,
+      assistantPhaseByItem: this.assistantPhaseByItem,
+      assistantTextByItem: this.assistantTextByItem,
+      persistableAssistantBarrier: this.persistableAssistantBarrier,
+      isToolProgressEchoText: (itemId, text) => this.isToolProgressEchoText(itemId, text),
+      resolveFinalAssistantTextItemId: () => this.resolveFinalAssistantTextItem()?.itemId,
+    });
   }
 
   private resolveFinalAssistantTextItem(): { itemId: string; text: string } | undefined {
