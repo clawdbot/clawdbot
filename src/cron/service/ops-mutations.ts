@@ -20,10 +20,7 @@ import { cronSchedulingInputsEqual } from "../schedule-identity.js";
 import { removeCronJobBaseSession } from "../session-reaper.js";
 import { removeStaleCronJobFamilyRows } from "../store.js";
 import { createCronStreamSourceIdentity, cronStreamScheduleKey } from "../stream-schedule.js";
-import {
-  isSystemMonitorDeclaration,
-  systemOwnedDeclarationKeyNamespace,
-} from "../system-owned-declaration.js";
+import { systemOwnedDeclarationKeyNamespace } from "../system-owned-declaration.js";
 import { normalizeCronTaskRunJobId } from "../task-run-history.js";
 import type { CronJob, CronJobCreate, CronJobPatch, CronStoredJob } from "../types.js";
 import {
