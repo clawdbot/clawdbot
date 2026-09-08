@@ -46,6 +46,8 @@ openclaw onboard --flow import
 openclaw onboard --import-from hermes --import-source ~/.hermes
 openclaw onboard --skip-bootstrap
 openclaw onboard recommendations --json
+openclaw onboard recommendations --agent writer --json
+openclaw onboard recommendations --agent writer acknowledge
 openclaw onboard recommendations acknowledge
 openclaw onboard recommendations acknowledge --retry "<failed-id>"
 openclaw onboard recommendations refresh
@@ -61,6 +63,13 @@ labels. After the recommendation offer has been answered, the command returns
 an empty list and future onboarding runs skip the step entirely.
 `openclaw onboard recommendations refresh` clears the stored offer so the next
 onboarding run rescans installed apps and creates a new offer.
+
+Pass `--agent <id>` after `recommendations` to select a configured agent for
+reads, `acknowledge`, `acknowledge --retry`, or `refresh`. These operations use
+only that agent's workspace recommendations. Without the selector, the command
+keeps its existing default-agent behavior and asks you to select an agent when
+the owner is ambiguous. Blank or unknown agent IDs fail without changing the
+stored recommendations; use `openclaw agents list` to find configured IDs.
 
 Fresh workspaces defer the recommendation choice to the bootstrap conversation.
 After that conversation handles the user's choices,

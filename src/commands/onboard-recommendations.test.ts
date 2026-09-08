@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../runtime.js";
+import { createOnboardingRecommendationsStore } from "../state/onboarding-recommendations.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   acknowledgeOnboardRecommendationsCommand,
   onboardRecommendationsCommand,
@@ -13,6 +15,62 @@ function makeRuntime(): RuntimeEnv {
     exit: vi.fn(),
   };
 }
+
+describe.each([
+  {
+    operation: "read",
+    run: (agent: string, runtime: RuntimeEnv) =>
+      onboardRecommendationsCommand({ agent, json: true }, runtime),
+  },
+  {
+    operation: "acknowledge",
+    run: (agent: string, runtime: RuntimeEnv) =>
+      acknowledgeOnboardRecommendationsCommand({ agent }, runtime),
+  },
+  {
+    operation: "refresh",
+    run: (agent: string, runtime: RuntimeEnv) =>
+      refreshOnboardRecommendationsCommand({ agent }, runtime),
+  },
+])("onboard recommendations $operation selection", ({ run }) => {
+  it.each([
+    { agent: "", error: "--agent must not be blank" },
+    { agent: "   ", error: "--agent must not be blank" },
+    { agent: "writer!", error: 'Unknown agent id "writer!"' },
+  ])(
+    "rejects invalid selector '$agent' without changing the default offer",
+    async ({ agent, error }) => {
+      await withOpenClawTestState({ label: "recommendation-agent-selection" }, async (state) => {
+        await state.writeConfig({
+          agents: { entries: { writer: { workspace: state.workspaceDir } } },
+        });
+        const store = createOnboardingRecommendationsStore({ workspaceDir: state.workspaceDir });
+        const offer = store.writeOffer({
+          inventory: [{ label: "Legacy app" }],
+          matches: [
+            {
+              appLabel: "Legacy app",
+              candidateId: "legacy-app",
+              tier: "recommended",
+              reason: "Legacy offer",
+              candidate: {
+                id: "legacy-app",
+                displayName: "Legacy app",
+                summary: "Legacy offer",
+                source: "clawhub-skill",
+              },
+            },
+          ],
+          answered: false,
+          nowMs: 1,
+        });
+
+        expect(() => run(agent, makeRuntime())).toThrow(error);
+        expect(store.read()).toEqual(offer);
+      });
+    },
+  );
+});
 
 describe("onboard recommendations command", () => {
   it("returns stored matches as JSON without rescanning", () => {
@@ -260,7 +318,7 @@ describe("onboard recommendations command", () => {
     const runtime = makeRuntime();
     const clear = vi.fn(() => true);
 
-    refreshOnboardRecommendationsCommand(runtime, { clear });
+    refreshOnboardRecommendationsCommand({}, runtime, { clear });
 
     expect(clear).toHaveBeenCalledOnce();
     expect(runtime.log).toHaveBeenCalledWith(

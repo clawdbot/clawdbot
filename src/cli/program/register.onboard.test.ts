@@ -91,6 +91,26 @@ describe("registerOnboardCommand", () => {
     expect(setupWizardCommandMock).not.toHaveBeenCalled();
   });
 
+  it.each(["writer", "", "   ", "writer!"])(
+    "preserves explicit agent '%s' for command validation",
+    async (agent) => {
+      await runCli(["onboard", "recommendations", "--agent", agent, "--json"]);
+      expect(mocks.onboardRecommendationsCommand).toHaveBeenCalledWith(
+        { agent, json: true },
+        runtime,
+      );
+
+      await runCli(["onboard", "recommendations", "--agent", agent, "acknowledge"]);
+      expect(mocks.acknowledgeOnboardRecommendationsCommand).toHaveBeenCalledWith(
+        { agent, retry: undefined },
+        runtime,
+      );
+
+      await runCli(["onboard", "recommendations", "--agent", agent, "refresh"]);
+      expect(mocks.refreshOnboardRecommendationsCommand).toHaveBeenCalledWith({ agent }, runtime);
+    },
+  );
+
   it("routes the recommendations acknowledgement subcommand", async () => {
     await runCli(["onboard", "recommendations", "acknowledge"]);
 
@@ -121,7 +141,7 @@ describe("registerOnboardCommand", () => {
   it("routes the recommendations refresh subcommand", async () => {
     await runCli(["onboard", "recommendations", "refresh"]);
 
-    expect(mocks.refreshOnboardRecommendationsCommand).toHaveBeenCalledWith(runtime);
+    expect(mocks.refreshOnboardRecommendationsCommand).toHaveBeenCalledWith({}, runtime);
     expect(setupWizardCommandMock).not.toHaveBeenCalled();
   });
 

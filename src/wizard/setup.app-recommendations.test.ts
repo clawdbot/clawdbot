@@ -203,7 +203,7 @@ describe("setupAppRecommendations", () => {
     const log = vi.fn();
     const prompter = createPrompter();
 
-    refreshOnboardRecommendationsCommand(runtime, { clear });
+    refreshOnboardRecommendationsCommand({}, runtime, { clear });
     await setupAppRecommendations({
       config: {},
       prompter,

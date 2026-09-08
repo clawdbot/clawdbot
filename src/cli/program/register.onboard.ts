@@ -50,7 +50,7 @@ async function validateRecommendationParentOptions(
 ): Promise<boolean> {
   const unsupported = listExplicitOptionFlagsExcept(
     command,
-    json ? RECOMMENDATION_READ_PARENT_OPTIONS : NO_RECOMMENDATION_PARENT_OPTIONS,
+    json ? RECOMMENDATION_READ_PARENT_OPTIONS : RECOMMENDATION_MUTATION_PARENT_OPTIONS,
   );
   if (unsupported.length === 0) {
     return true;
@@ -65,7 +65,7 @@ async function validateRecommendationParentOptions(
 
 const AUTH_CHOICE_HELP = formatAuthChoiceChoicesForCli({ includeSkip: true });
 const RECOMMENDATION_READ_PARENT_OPTIONS = new Set(["json"]);
-const NO_RECOMMENDATION_PARENT_OPTIONS = new Set<string>();
+const RECOMMENDATION_MUTATION_PARENT_OPTIONS = new Set(["agent"]);
 
 type OnboardAuthFlag = {
   readonly cliOption: string;
@@ -316,6 +316,7 @@ export function registerOnboardCommand(program: Command): void {
   const recommendations = command
     .command("recommendations")
     .description("Read the app recommendations stored during onboarding")
+    .option("--agent <id>", "Agent whose onboarding recommendations should be used")
     .option("--json", "Output stored recommendation matches as JSON", false)
     .action(async (opts, recommendationsCommand: Command) => {
       const { defaultRuntime } = await import("../../runtime.js");
@@ -326,7 +327,11 @@ export function registerOnboardCommand(program: Command): void {
         }
         const { onboardRecommendationsCommand } =
           await import("../../commands/onboard-recommendations.js");
-        onboardRecommendationsCommand({ json }, defaultRuntime);
+        const agent = readStringValue(opts.agent);
+        onboardRecommendationsCommand(
+          { json, ...(agent !== undefined ? { agent } : {}) },
+          defaultRuntime,
+        );
       });
     });
 
@@ -345,7 +350,11 @@ export function registerOnboardCommand(program: Command): void {
         }
         const { acknowledgeOnboardRecommendationsCommand } =
           await import("../../commands/onboard-recommendations.js");
-        acknowledgeOnboardRecommendationsCommand({ retry: opts.retry }, defaultRuntime);
+        const agent = readStringValue(recommendations.opts().agent);
+        acknowledgeOnboardRecommendationsCommand(
+          { retry: opts.retry, ...(agent !== undefined ? { agent } : {}) },
+          defaultRuntime,
+        );
       });
     });
 
@@ -363,7 +372,8 @@ export function registerOnboardCommand(program: Command): void {
         }
         const { refreshOnboardRecommendationsCommand } =
           await import("../../commands/onboard-recommendations.js");
-        refreshOnboardRecommendationsCommand(defaultRuntime);
+        const agent = readStringValue(recommendations.opts().agent);
+        refreshOnboardRecommendationsCommand(agent !== undefined ? { agent } : {}, defaultRuntime);
       });
     });
 
