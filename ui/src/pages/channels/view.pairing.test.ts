@@ -1,6 +1,9 @@
 /* @vitest-environment jsdom */
+
 import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { SelectPicker } from "../../components/select-picker.ts";
+import { updatePickers, choosePickerValue } from "../../test-helpers/select-picker.ts";
 import {
   renderChannelPairingDetail,
   renderChannelPairingPrompt,
@@ -122,7 +125,7 @@ describe("channel DM access request views", () => {
     expect(errorContainer.querySelector(".callout")).toBeNull();
   });
 
-  it("uses the channel picker and clears the account filter when the channel changes", () => {
+  it("uses the channel picker and clears the account filter when the channel changes", async () => {
     const onPairingFilterChange = vi.fn();
     const base = createProps();
     const container = renderInto(
@@ -148,16 +151,17 @@ describe("channel DM access request views", () => {
       ),
     );
 
-    const selects = container.querySelectorAll<HTMLElement & { value: string }>("wa-select");
+    await updatePickers(container);
+    const selects = container.querySelectorAll<SelectPicker>("openclaw-select-picker");
     const channel = selects.item(0);
     const account = selects.item(1);
-    expect(channel?.querySelector('wa-option[value="whatsapp"] img')).not.toBeNull();
+    expect(channel?.querySelector('[role="option"][data-value="whatsapp"] img')).not.toBeNull();
     expect(selects).toHaveLength(2);
     expect(container.querySelectorAll("select.settings-select")).toHaveLength(0);
-    expect(account.querySelector("wa-option[selected]")?.getAttribute("value")).toBe("personal");
-    Object.defineProperty(channel, "value", { configurable: true, value: "telegram" });
-    channel.dispatchEvent(new Event("change", { bubbles: true }));
-    Reflect.deleteProperty(channel, "value");
+    expect(
+      account.querySelector('[role="option"][aria-selected="true"]')?.getAttribute("data-value"),
+    ).toBe("personal");
+    await choosePickerValue(channel, "telegram");
     expect(onPairingFilterChange).toHaveBeenCalledWith("telegram", null);
   });
 

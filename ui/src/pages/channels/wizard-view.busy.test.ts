@@ -3,6 +3,7 @@
 import { nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
+import { updatePickers } from "../../test-helpers/select-picker.ts";
 import type { ChannelWizardStep } from "./wizard-controller.ts";
 import { renderChannelWizard } from "./wizard-view.ts";
 
@@ -184,7 +185,7 @@ describe("renderChannelWizard busy controls", () => {
     },
   );
 
-  it("disables select choices while a step is running", () => {
+  it("disables select choices while a step is running", async () => {
     const select = renderStep({
       id: "select",
       type: "select",
@@ -194,12 +195,13 @@ describe("renderChannelWizard busy controls", () => {
         { label: "Beta", value: "beta" },
       ],
     });
-    const group = select.container.querySelector("wa-select");
+    await updatePickers(select.container);
+    const group = select.container.querySelector("openclaw-select-picker .picker-select__trigger");
     expect(group?.hasAttribute("disabled")).toBe(true);
-    expect(group?.querySelector('[slot="label"]')?.textContent).toBe("Pick one");
+    expect(group?.getAttribute("aria-label")).toBe("Pick one");
   });
 
-  it("shows the channel prompt inside an unselected channel picker", () => {
+  it("shows the channel prompt inside an unselected channel picker", async () => {
     const select = renderStep(
       {
         id: "channel",
@@ -213,9 +215,12 @@ describe("renderChannelWizard busy controls", () => {
       false,
     );
 
-    expect(select.container.querySelector("wa-select")?.getAttribute("placeholder")).toBe(
-      "Select a channel",
-    );
+    await updatePickers(select.container);
+    expect(
+      select.container
+        .querySelector("openclaw-select-picker .picker-select__trigger")
+        ?.textContent?.trim(),
+    ).toBe("Select a channel");
   });
 
   it("disables multiselect choices and submission while a step is running", () => {
@@ -259,7 +264,7 @@ describe("renderChannelWizard busy controls", () => {
     expect(text.onAnswer).not.toHaveBeenCalled();
   });
 
-  it("keeps controls enabled when no step request is running", () => {
+  it("keeps controls enabled when no step request is running", async () => {
     const text = renderStep(
       { id: "text", type: "text", message: "Enter a value", initialValue: "original" },
       false,
@@ -275,7 +280,8 @@ describe("renderChannelWizard busy controls", () => {
       },
       false,
     );
-    const picker = select.container.querySelector("wa-select");
+    await updatePickers(select.container);
+    const picker = select.container.querySelector("openclaw-select-picker .picker-select__trigger");
     expect(picker?.hasAttribute("disabled")).toBe(false);
   });
 });

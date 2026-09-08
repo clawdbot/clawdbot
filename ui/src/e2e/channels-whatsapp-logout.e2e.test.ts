@@ -9,6 +9,7 @@ import {
   waitForControlUiProofSurface,
 } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway, waitForConfirmModal } from "../test-helpers/control-ui-e2e.ts";
+import { selectPickerValue } from "../test-helpers/select-picker-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -549,15 +550,12 @@ suite.define(() => {
       await page.locator(".channels-detail").getByRole("button", { name: "Run setup" }).click();
       const wizard = page.locator(".channels-wizard");
       await gateway.deferNext("wizard.next");
-      const account = wizard.locator("wa-select");
-      await account.evaluate(async (select) => {
-        const picker = select as HTMLElement & { value: string; updateComplete: Promise<unknown> };
-        picker.value = "1";
-        await picker.updateComplete;
-        select.dispatchEvent(new Event("change", { bubbles: true }));
-      });
+      const account = wizard.locator("openclaw-select-picker");
+      await selectPickerValue(account, "1");
       await expect.poll(async () => gateway.getRequests("wizard.next")).toHaveLength(1);
-      await expect.poll(() => account.getAttribute("disabled")).not.toBeNull();
+      await expect
+        .poll(() => account.locator(".picker-select__trigger").getAttribute("disabled"))
+        .not.toBeNull();
       const busyButton = wizard.locator('button[aria-busy="true"]');
       await expect.poll(() => busyButton.getAttribute("disabled")).not.toBeNull();
       await expect.poll(() => busyButton.locator(".btn__label").textContent()).toBe("Continue");

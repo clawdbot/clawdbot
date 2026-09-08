@@ -1,6 +1,7 @@
 // Control UI tests cover Automations form select display state.
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { pickerValue as readPickerValue } from "../test-helpers/select-picker-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -61,36 +62,30 @@ suite.define(() => {
         await page.locator('[data-test-id="cron-new-task"]').click();
 
         const pickerValue = (selector: string) =>
-          page
-            .locator(selector)
-            .evaluate((element) => String((element as HTMLElement & { value?: string }).value));
-        const action = page.locator("wa-select#cron-payload-kind");
+          readPickerValue(page.locator(`openclaw-select-picker:has(${selector})`));
+        const action = page.locator("#cron-payload-kind");
         await action.waitFor({ state: "visible" });
         // Form defaults are agentTurn / isolated / minutes — none of which is
         // the first option of its select; the rendered selection must agree.
-        expect(await pickerValue("wa-select#cron-payload-kind")).toBe("agentTurn");
-        expect(await pickerValue("wa-select#cron-session-target")).toBe("isolated");
-        const unit = page.locator("wa-select").filter({
-          has: page.locator('[slot="label"]', { hasText: "Unit" }),
+        expect(await pickerValue("#cron-payload-kind")).toBe("agentTurn");
+        expect(await pickerValue("#cron-session-target")).toBe("isolated");
+        const unit = page.locator("openclaw-select-picker").filter({
+          has: page.getByRole("button", { name: /^Unit: /u }),
         });
-        expect(
-          await unit.evaluate((element) =>
-            String((element as HTMLElement & { value?: string }).value),
-          ),
-        ).toBe("minutes");
-        expect(await pickerValue("wa-select#cron-delivery-mode")).toBe("none");
-        expect(await page.locator("wa-select#cron-delivery-channel").count()).toBe(0);
+        expect(await readPickerValue(unit)).toBe("minutes");
+        expect(await pickerValue("#cron-delivery-mode")).toBe("none");
+        expect(await page.locator("#cron-delivery-channel").count()).toBe(0);
 
         await action.click();
         await page.getByRole("option", { name: "Post to main timeline", exact: true }).click();
-        await expect.poll(() => pickerValue("wa-select#cron-payload-kind")).toBe("systemEvent");
-        await expect.poll(() => pickerValue("wa-select#cron-session-target")).toBe("main");
+        await expect.poll(() => pickerValue("#cron-payload-kind")).toBe("systemEvent");
+        await expect.poll(() => pickerValue("#cron-session-target")).toBe("main");
 
-        const target = page.locator("wa-select#cron-session-target");
+        const target = page.locator("#cron-session-target");
         await target.click();
         await page.getByRole("option", { name: "Isolated session", exact: true }).click();
-        await expect.poll(() => pickerValue("wa-select#cron-session-target")).toBe("isolated");
-        await expect.poll(() => pickerValue("wa-select#cron-payload-kind")).toBe("agentTurn");
+        await expect.poll(() => pickerValue("#cron-session-target")).toBe("isolated");
+        await expect.poll(() => pickerValue("#cron-payload-kind")).toBe("agentTurn");
       },
     );
   });

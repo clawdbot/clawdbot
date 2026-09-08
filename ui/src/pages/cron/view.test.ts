@@ -1,5 +1,6 @@
 // Control UI tests cover the Automations (cron) list pane and select controls.
 import { describe, expect, it, vi } from "vitest";
+import { updatePickers } from "../../test-helpers/select-picker.ts";
 import {
   createCronViewJob as createJob,
   getElement,
@@ -410,34 +411,41 @@ describe("cron view list pane", () => {
 });
 
 describe("cron view selects", () => {
-  it("shows authoritative form values instead of first options in the create form", () => {
+  it("shows authoritative form values instead of first options in the create form", async () => {
     const container = renderView({ createOpen: true });
+    await updatePickers(container);
     const action = getElement(
       container,
-      "wa-select#cron-payload-kind",
+      "openclaw-select-picker:has(#cron-payload-kind)",
       HTMLElement,
-    ) as HTMLElement & {
-      value: string;
-    };
-    expect(action.querySelector("wa-option[selected]")?.getAttribute("value")).toBe("agentTurn");
+    );
+    expect(
+      action.querySelector('[role="option"][aria-selected="true"]')?.getAttribute("data-value"),
+    ).toBe("agentTurn");
     const runsIn = getElement(
       container,
-      "wa-select#cron-session-target",
+      "openclaw-select-picker:has(#cron-session-target)",
       HTMLElement,
-    ) as HTMLElement & { value: string };
-    expect(runsIn.querySelector("wa-option[selected]")?.getAttribute("value")).toBe("isolated");
-    const unit = Array.from(
-      container.querySelectorAll<HTMLElement & { value: string }>("wa-select"),
-    ).find((select) => select.querySelector('[slot="label"]')?.textContent === "Unit");
-    expect(unit?.querySelector("wa-option[selected]")?.getAttribute("value")).toBe("minutes");
+    );
+    expect(
+      runsIn.querySelector('[role="option"][aria-selected="true"]')?.getAttribute("data-value"),
+    ).toBe("isolated");
+    const unit = Array.from(container.querySelectorAll<HTMLElement>("openclaw-select-picker")).find(
+      (select) => select.querySelector('[role="listbox"]')?.getAttribute("aria-label") === "Unit",
+    );
+    expect(
+      unit?.querySelector('[role="option"][aria-selected="true"]')?.getAttribute("data-value"),
+    ).toBe("minutes");
     // The targetless create form keeps delivery internal until the operator
     // explicitly selects a channel delivery mode.
     const delivery = getElement(
       container,
-      "wa-select#cron-delivery-mode",
+      "openclaw-select-picker:has(#cron-delivery-mode)",
       HTMLElement,
-    ) as HTMLElement & { value: string };
-    expect(delivery.querySelector("wa-option[selected]")?.getAttribute("value")).toBe("none");
+    );
+    expect(
+      delivery.querySelector('[role="option"][aria-selected="true"]')?.getAttribute("data-value"),
+    ).toBe("none");
   });
 
   it("shows persisted non-first values in jobs filters and runs sort", () => {

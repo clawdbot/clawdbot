@@ -42,13 +42,14 @@ describe("Web Awesome control ownership", () => {
     ]);
   });
 
-  it("limits custom comboboxes to dynamic suggestion surfaces", () => {
+  it("limits custom comboboxes to approved searchable controls", () => {
     // Web Awesome Core has no combobox; its combobox is a paid Pro component.
     // This inventory tracks literal ARIA roles, not Web Awesome elements that own roles internally.
     expect(matchingFiles(/<[a-z][^>]*\srole=["'](?:combobox|listbox|option)["']/u)).toEqual([
       "components/command-palette.ts",
       "components/composer-menu.ts",
       "components/multi-select.ts",
+      "components/select-picker.ts",
       "pages/chat/components/chat-model-picker-options.ts",
       "pages/chat/components/chat-model-picker.ts",
       "pages/new-session/place-browser.ts",

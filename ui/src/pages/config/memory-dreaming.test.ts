@@ -2,6 +2,7 @@
 
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
+import { updatePickers } from "../../test-helpers/select-picker.ts";
 import { renderDreamingSettings } from "./memory-dreaming.ts";
 
 function renderInto(
@@ -108,7 +109,7 @@ describe("renderDreamingSettings", () => {
     expect(rowFor(container, "Lookback days").textContent).toContain("Using default: 2");
   });
 
-  it("shows the advanced execution model as the inherited model default", () => {
+  it("shows the advanced execution model as the inherited model default", async () => {
     const onPatch = vi.fn();
     const container = renderInto(
       {
@@ -117,10 +118,13 @@ describe("renderDreamingSettings", () => {
       },
       onPatch,
     );
+    await updatePickers(container);
     const row = rowFor(container, "Dreaming model");
 
     expect(row.textContent).toContain("Default: openai/gpt-5.6");
-    expect(row.querySelector('wa-option[value="anthropic/claude-sonnet"]')).not.toBeNull();
+    expect(
+      row.querySelector('[role="option"][data-value="anthropic/claude-sonnet"]'),
+    ).not.toBeNull();
     const custom = row.querySelector<HTMLInputElement>(".model-picker__custom");
     expect(custom?.hidden).toBe(false);
     if (custom) {

@@ -3778,7 +3778,7 @@ ui/src/components/mcp-server-form.ts	1
 ui/src/components/model-picker.ts	2
 ui/src/components/onboarding-memory-import.ts	1
 ui/src/components/panel-tab-strip.ts	4
-ui/src/components/select-picker.ts	3
+ui/src/components/select-picker.ts	2
 ui/src/components/sensitive-input.ts	2
 ui/src/components/session-data-controller.ts	1
 ui/src/components/session-data-scroll-controller.ts	1

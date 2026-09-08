@@ -7,6 +7,7 @@ import {
   type MockGatewayControls,
   type MockGatewayRequest,
 } from "../test-helpers/control-ui-e2e.ts";
+import { openPicker } from "../test-helpers/select-picker-e2e.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
@@ -797,20 +798,14 @@ suite.define(() => {
       await page.locator("#cron-name").fill("Model override task");
 
       const modelInput = page.locator("#cron-payload-model");
-      const modelPicker = page.locator("#cron-payload-model-picker");
-      const customValue = await modelPicker
-        .locator("wa-option", { hasText: "Custom model…" })
-        .getAttribute("value");
-      expect(customValue).not.toBeNull();
-      await modelPicker.evaluate((select, value) => {
-        (select as HTMLElement & { value: string }).value = String(value);
-        select.dispatchEvent(new Event("change", { bubbles: true }));
-      }, customValue);
+      const modelPicker = page.locator("openclaw-select-picker:has(#cron-payload-model-picker)");
+      await openPicker(modelPicker);
+      await modelPicker.getByRole("option", { name: "Custom model…", exact: true }).click();
       await modelInput.fill("openai/gpt-5.5");
       expect(
         await modelPicker
-          .locator("wa-option")
-          .evaluateAll((options) => options.map((option) => option.getAttribute("value"))),
+          .locator('[role="option"]')
+          .evaluateAll((options) => options.map((option) => option.getAttribute("data-value"))),
       ).toContain(configuredModel);
 
       await page.locator('[data-test-id="cron-submit"]').click();

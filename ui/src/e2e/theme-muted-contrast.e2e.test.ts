@@ -297,9 +297,9 @@ suite.define(() => {
           `${resolved}: actual rendered muted Appearance description, including ancestor backgrounds and opacity`,
         ).toBeGreaterThanOrEqual(4.5);
 
-        const picker = page.locator("#settings-font-chat");
-        await picker.click();
-        const selected = picker.locator("wa-option:state(selected)");
+        const picker = page.locator("openclaw-select-picker:has(#settings-font-chat)");
+        await picker.locator(".picker-select__trigger").click();
+        const selected = picker.locator('[role="option"][aria-selected="true"]');
         await selected.waitFor({ state: "visible" });
         const optionPaint = async (option: typeof selected) => {
           await option.evaluate(finishElementAnimations);
@@ -316,9 +316,9 @@ suite.define(() => {
             };
           });
         };
-        // Options are slotted into a shadow listbox: light-DOM ancestors miss its painted surface.
+        // Composite translucent option fills against the painted menu surface.
         const listboxBackground = await picker
-          .locator('[part="listbox"]')
+          .locator(".picker-select__menu")
           .evaluate((element) => getComputedStyle(element).backgroundColor);
         const assertOptionContrast = async (option: typeof selected) => {
           const paint = await optionPaint(option);
@@ -338,12 +338,12 @@ suite.define(() => {
           }
           return { paint, background, outline: optionColors.outline! };
         };
-        const selectedValue = await selected.getAttribute("value");
+        const selectedValue = await selected.getAttribute("data-value");
         const initialPaint = await optionPaint(selected);
         await page.keyboard.press("ArrowDown");
-        const current = picker.locator("wa-option:state(current)");
-        await expect.poll(() => current.getAttribute("value")).not.toBe(selectedValue);
-        expect(await selected.getAttribute("value")).toBe(selectedValue);
+        const current = picker.locator('[role="option"][data-active]');
+        await expect.poll(() => current.getAttribute("data-value")).not.toBe(selectedValue);
+        expect(await selected.getAttribute("data-value")).toBe(selectedValue);
         await expect
           .poll(async () => (await optionPaint(selected)).background)
           .toBe(initialPaint.background);
@@ -352,11 +352,11 @@ suite.define(() => {
         expect(focused.paint.outline).not.toBe("none");
         expect(focused.paint.outlineWidth).toBeGreaterThanOrEqual(2);
         expect(contrastRatio(focused.outline, focused.background)).toBeGreaterThanOrEqual(3);
-        await picker.locator('wa-option[value="system"]').hover();
-        await assertOptionContrast(picker.locator('wa-option[value="system"]'));
+        await picker.locator('[role="option"][data-value="system"]').hover();
+        await assertOptionContrast(picker.locator('[role="option"][data-value="system"]'));
         await page.keyboard.press("Escape");
         expect(new URL(page.url()).pathname).toBe("/settings/appearance");
-        expect(await selected.getAttribute("value")).toBe(selectedValue);
+        expect(await selected.getAttribute("data-value")).toBe(selectedValue);
 
         if (captureUiProof) {
           await mkdir(path.join(suite.artifactDir, "theme-muted-contrast"), { recursive: true });

@@ -15,6 +15,7 @@ import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/c
 import { i18n, t } from "../../i18n/index.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { choosePickerValue } from "../../test-helpers/select-picker.ts";
 import { ModelAccounts } from "./model-accounts.ts";
 
 const TEST_TAG = "test-openclaw-model-accounts";
@@ -180,7 +181,9 @@ async function mountAccounts(
       button(accounts, ".profile-auth-add-account").click();
       await vi.waitFor(() =>
         expect(
-          accounts.querySelector(`.profile-auth-provider wa-option[value="${providerId}"]`),
+          accounts.querySelector(
+            `.profile-auth-provider [role="option"][data-value="${providerId}"]`,
+          ),
         ).not.toBeNull(),
       );
       await select(accounts, ".profile-auth-provider", providerId);
@@ -213,9 +216,8 @@ async function input(accounts: ModelAccounts, selector: string, value: string) {
 }
 
 async function select(accounts: ModelAccounts, selector: string, value: string) {
-  const element = accounts.querySelector<HTMLElement & { value: string }>(selector)!;
-  element.value = value;
-  element.dispatchEvent(new Event("change", { bubbles: true }));
+  const element = accounts.querySelector<HTMLElement>(selector)!;
+  await choosePickerValue(element, value);
   await accounts.updateComplete;
 }
 

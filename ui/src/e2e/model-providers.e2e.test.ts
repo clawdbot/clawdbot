@@ -16,6 +16,10 @@ import {
   type MockGatewayControls,
   type MockGatewayRequest,
 } from "../test-helpers/control-ui-e2e.ts";
+import {
+  pickerValue as modelPickerValue,
+  selectPickerValue as selectModelPicker,
+} from "../test-helpers/select-picker-e2e.ts";
 
 const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
 const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
@@ -65,19 +69,6 @@ async function resolveConfigPatch(
 
 function providerConfig(value: string): { apiKey: string } {
   return Object.fromEntries([["apiKey", value]]) as { apiKey: string };
-}
-
-function modelPickerValue(locator: Locator) {
-  return locator.evaluate((element) => String((element as HTMLElement & { value?: string }).value));
-}
-
-async function selectModelPicker(locator: Locator, value: string) {
-  await locator.evaluate(async (element, next) => {
-    const select = element as HTMLElement & { value: string; updateComplete: Promise<unknown> };
-    select.value = next;
-    await select.updateComplete;
-    select.dispatchEvent(new Event("change", { bubbles: true }));
-  }, value);
 }
 
 async function captureProviderProof(fileName: string, content: Locator): Promise<void> {
@@ -261,7 +252,7 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       await expect
         .poll(() =>
           defaults
-            .locator("wa-select, wa-radio-group")
+            .locator(".picker-select__trigger, wa-radio-group")
             .evaluateAll((controls) =>
               controls.every((control) => control.hasAttribute("disabled")),
             ),
@@ -671,7 +662,11 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       ]);
       await expect.poll(async () => openaiCard.textContent()).toContain("API key set in config");
       await expect
-        .poll(() => modelPickerValue(page.locator(".model-providers__defaults wa-select").first()))
+        .poll(() =>
+          modelPickerValue(
+            page.locator(".model-providers__defaults openclaw-select-picker").first(),
+          ),
+        )
         .toBe("openai/gpt-5.5");
       if (recordVisuals) {
         await captureProviderProof("01-configured.png", openaiCard);
@@ -700,7 +695,7 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       expect(probe.params).toEqual({ provider: "openai", agentId: "main" });
       await expect.poll(async () => openaiCard.textContent()).toContain("87 ms");
 
-      const primary = page.locator(".model-providers__defaults wa-select").first();
+      const primary = page.locator(".model-providers__defaults openclaw-select-picker").first();
       const defaultPatchCount = (await gateway.getRequests("config.patch")).length;
       const updatedDefaultsConfig = {
         ...config,
@@ -827,7 +822,7 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
     try {
       await page.goto(`${server.baseUrl}settings/model-providers`);
       const defaults = page.locator(".model-providers__defaults");
-      const utility = page.locator("#model-providers-utility-model");
+      const utility = page.locator("openclaw-select-picker:has(#model-providers-utility-model)");
       await expect.poll(() => modelPickerValue(utility)).toBe("__openclaw_automatic_utility__");
       if (recordVisuals) {
         await captureProviderProof("utility-before.png", utility);
@@ -839,8 +834,7 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       ]) {
         const before = (await gateway.getRequests("config.patch")).length;
         await gateway.deferNext("config.patch");
-        await utility.click();
-        await utility.getByRole("option", { name: choice.label, exact: true }).click();
+        await selectModelPicker(utility, choice.value);
         const request = await gateway.waitForRequest("config.patch", { after: before });
         const patch = requestRaw(request);
         // The fixture commits the actual wire patch, not the expected selection.
@@ -869,7 +863,9 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
         await expect.poll(() => modelPickerValue(utility)).toBe(choice.value);
         await page.reload();
         await expect.poll(() => modelPickerValue(utility)).toBe(choice.value);
-        await expect.poll(() => modelPickerValue(defaults.locator("wa-select").first())).toBe("");
+        await expect
+          .poll(() => modelPickerValue(defaults.locator("openclaw-select-picker").first()))
+          .toBe("");
         if (recordVisuals) {
           await captureProviderProof(`utility-${choice.label}-reloaded.png`, utility);
         }
@@ -883,7 +879,7 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
           );
           await captureProviderProof(
             "utility-final.png",
-            page.locator("#model-providers-utility-model"),
+            page.locator("openclaw-select-picker:has(#model-providers-utility-model)"),
           );
         }
       } finally {
@@ -958,10 +954,14 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
         .poll(async () => (await agentPicker.locator(".agent-select__label").textContent())?.trim())
         .toBe("Writer");
       await expect
-        .poll(() => modelPickerValue(page.locator(".model-providers__defaults wa-select").first()))
+        .poll(() =>
+          modelPickerValue(
+            page.locator(".model-providers__defaults openclaw-select-picker").first(),
+          ),
+        )
         .toBe("openai/initial-model");
 
-      const primary = page.locator(".model-providers__defaults wa-select").first();
+      const primary = page.locator(".model-providers__defaults openclaw-select-picker").first();
       const savedConfig = {
         agents: { defaults: { model: "openai/saved-model" } },
       };
@@ -1017,7 +1017,11 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
         .poll(async () => (await gateway.getRequests("models.authStatus")).length)
         .toBeGreaterThan(authRequestCount);
       await expect
-        .poll(() => modelPickerValue(page.locator(".model-providers__defaults wa-select").first()))
+        .poll(() =>
+          modelPickerValue(
+            page.locator(".model-providers__defaults openclaw-select-picker").first(),
+          ),
+        )
         .toBe("openai/reconnected-model");
       await expect.poll(() => page.getByRole("alert").count()).toBe(0);
       await expect

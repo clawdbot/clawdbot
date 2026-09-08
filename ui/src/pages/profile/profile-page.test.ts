@@ -11,6 +11,7 @@ import type { AuthenticatedUser } from "../../app/user-profile.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import { setAvatarGatewayOrigin } from "../../lib/identity-avatar-context.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
+import { choosePickerValue } from "../../test-helpers/select-picker.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import type { ModelAccounts } from "./model-accounts.ts";
 import { createConnectedContext } from "./profile-page.test-support.ts";
@@ -122,10 +123,11 @@ function selectProfileAvatar(page: ParentNode) {
 
 async function startProfileSignIn(page: ParentNode) {
   page.querySelector<HTMLButtonElement>(".profile-auth-add-account")!.click();
-  await waitForFast(() => expect(page.querySelector('wa-option[value="openai"]')).not.toBeNull());
-  const picker = page.querySelector<HTMLElement & { value: string }>(".profile-auth-provider")!;
-  picker.value = "openai";
-  picker.dispatchEvent(new Event("change", { bubbles: true }));
+  await waitForFast(() =>
+    expect(page.querySelector('[role="option"][data-value="openai"]')).not.toBeNull(),
+  );
+  const picker = page.querySelector<HTMLElement>(".profile-auth-provider")!;
+  await choosePickerValue(picker, "openai");
   await waitForFast(() =>
     expect(page.querySelector<HTMLButtonElement>(".profile-auth-connect-start")?.disabled).toBe(
       false,

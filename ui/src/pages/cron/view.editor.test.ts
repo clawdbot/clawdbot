@@ -1,6 +1,7 @@
 // Control UI tests cover the Automations (cron) editor pane behavior.
 import { describe, expect, it, vi } from "vitest";
 import { DEFAULT_CRON_FORM } from "../../test-helpers/cron.ts";
+import { updatePickers, choosePickerValue } from "../../test-helpers/select-picker.ts";
 import {
   createCronViewJob as createJob,
   findToggleByLabel,
@@ -45,7 +46,7 @@ describe("cron view editor", () => {
     expect(onClosePanel).toHaveBeenCalledTimes(1);
   });
 
-  it("wires shared text and select controls without changing their field ownership", () => {
+  it("wires shared text and select controls without changing their field ownership", async () => {
     const onFormChange = vi.fn();
     const container = renderView({
       createOpen: true,
@@ -78,25 +79,24 @@ describe("cron view editor", () => {
       expect(onFormChange).toHaveBeenLastCalledWith({ [field]: field });
     }
 
+    await updatePickers(container);
     const channel = getElement(
       container,
-      "#cron-failure-alert-channel",
+      "openclaw-select-picker:has(#cron-failure-alert-channel)",
       HTMLElement,
-    ) as HTMLElement & {
-      value: string;
-    };
-    const optionValues = Array.from(channel.querySelectorAll("wa-option"), (option) =>
-      option.getAttribute("value"),
+    );
+    const optionValues = Array.from(channel.querySelectorAll('[role="option"]'), (option) =>
+      option.getAttribute("data-value"),
     );
     expect(optionValues).toContain("retired-channel");
-    expect(channel.querySelector('wa-option[value="telegram"] img')).not.toBeNull();
+    expect(channel.querySelector('[role="option"][data-value="telegram"] img')).not.toBeNull();
     const telegramOption = channel.querySelector<HTMLElement & { label?: string }>(
-      'wa-option[value="telegram"]',
+      '[role="option"][data-value="telegram"]',
     );
-    expect(telegramOption?.label).toBe("Telegram fallback");
-    Object.defineProperty(channel, "value", { configurable: true, value: "telegram" });
-    channel.dispatchEvent(new Event("change", { bubbles: true }));
-    Reflect.deleteProperty(channel, "value");
+    expect(telegramOption?.querySelector(".picker-select__label")?.textContent?.trim()).toBe(
+      "Telegram fallback",
+    );
+    await choosePickerValue(channel, "telegram");
     expect(onFormChange).toHaveBeenLastCalledWith({ failureAlertChannel: "telegram" });
   });
 
@@ -207,7 +207,7 @@ describe("cron view editor", () => {
     expect(onceText).toContain("2026");
   });
 
-  it("offers a Seconds interval unit so sub-minute cadences stay editable", () => {
+  it("offers a Seconds interval unit so sub-minute cadences stay editable", async () => {
     const container = renderView({
       createOpen: true,
       form: {
@@ -217,15 +217,16 @@ describe("cron view editor", () => {
         everyUnit: "seconds",
       },
     });
-    const unitSelect = Array.from(container.querySelectorAll("wa-select")).find(
-      (select) => select.querySelector('[slot="label"]')?.textContent === "Unit",
+    await updatePickers(container);
+    const unitSelect = Array.from(container.querySelectorAll("openclaw-select-picker")).find(
+      (select) => select.querySelector('[role="listbox"]')?.getAttribute("aria-label") === "Unit",
     );
     expect(unitSelect).toBeInstanceOf(HTMLElement);
     if (!unitSelect) {
       throw new Error("Expected the interval unit picker");
     }
-    const values = Array.from(unitSelect.querySelectorAll("wa-option"), (option) =>
-      option.getAttribute("value"),
+    const values = Array.from(unitSelect.querySelectorAll('[role="option"]'), (option) =>
+      option.getAttribute("data-value"),
     );
     expect(values).toEqual(["seconds", "minutes", "hours", "days"]);
   });
@@ -276,7 +277,7 @@ describe("cron view editor", () => {
     }
   });
 
-  it("renders supported delivery options and normalizes stale announce selection", () => {
+  it("renders supported delivery options and normalizes stale announce selection", async () => {
     // systemEvent + main session cannot announce; a stale announce selection
     // must render as none and the announce option must disappear.
     const container = renderView({
@@ -288,20 +289,26 @@ describe("cron view editor", () => {
         deliveryMode: "announce",
       },
     });
-    const delivery = getElement(container, "#cron-delivery-mode", HTMLElement);
-    const values = Array.from(delivery.querySelectorAll("wa-option"), (option) =>
-      option.getAttribute("value"),
+    await updatePickers(container);
+    const delivery = getElement(
+      container,
+      "openclaw-select-picker:has(#cron-delivery-mode)",
+      HTMLElement,
+    );
+    const values = Array.from(delivery.querySelectorAll('[role="option"]'), (option) =>
+      option.getAttribute("data-value"),
     );
     expect(values).toEqual(["webhook", "none"]);
     expect(container.querySelector("#cron-delivery-channel")).toBeNull();
   });
 
-  it("shows announce channel/to rows and webhook URL row per delivery mode", () => {
+  it("shows announce channel/to rows and webhook URL row per delivery mode", async () => {
     const announce = renderView({
       createOpen: true,
       channels: ["telegram"],
       form: { ...DEFAULT_CRON_FORM, deliveryMode: "announce" },
     });
+    await updatePickers(announce);
     expect(announce.querySelector("#cron-delivery-channel")).not.toBeNull();
     expect(announce.querySelector("#cron-delivery-to")).not.toBeNull();
 
@@ -742,7 +749,7 @@ describe("cron view editor", () => {
     expect(onToggle).toHaveBeenCalledWith(job, true);
   });
 
-  it("renders model-picker suggestions with the remaining text datalists", () => {
+  it("renders model-picker suggestions with the remaining text datalists", async () => {
     const container = renderView({
       createOpen: true,
       agentSuggestions: ["main"],
@@ -761,20 +768,25 @@ describe("cron view editor", () => {
     ]) {
       expect(container.querySelector(`datalist#${id}`)).not.toBeNull();
     }
-    const model = getElement(container, "#cron-payload-model-picker", HTMLElement);
-    expect(model.querySelector('wa-option[value="openai/gpt-5.2"]')).not.toBeNull();
+    await updatePickers(container);
+    const model = getElement(
+      container,
+      "openclaw-select-picker:has(#cron-payload-model-picker)",
+      HTMLElement,
+    );
+    expect(model.querySelector('[role="option"][data-value="openai/gpt-5.2"]')).not.toBeNull();
     expect(model.querySelector('[data-provider-icon="codex"]')).not.toBeNull();
     expect(container.querySelector<HTMLInputElement>("#cron-payload-model")?.hidden).toBe(true);
     // The inherit option must resolve to a real catalog string — a missing key
     // renders the raw "common.default" literal to every locale.
-    const inheritText = model.querySelector('wa-option[value=""]')?.textContent ?? "";
+    const inheritText = model.querySelector('[role="option"][data-value=""]')?.textContent ?? "";
     expect(inheritText).toContain("Default");
     expect(inheritText).not.toContain("common.default");
   });
 });
 
 describe("failure alert field inheritance controls", () => {
-  it("offers the stored inheritance choice for alert mode and forwards it unchanged", () => {
+  it("offers the stored inheritance choice for alert mode and forwards it unchanged", async () => {
     const onFormChange = vi.fn();
     const container = renderView({
       createOpen: true,
@@ -785,13 +797,16 @@ describe("failure alert field inheritance controls", () => {
       },
       onFormChange,
     });
-    const mode = getElement(container, "#cron-failure-alert-delivery-mode", HTMLElement);
-    const inherit = mode.querySelector('wa-option[value=""]');
+    await updatePickers(container);
+    const mode = getElement(
+      container,
+      "openclaw-select-picker:has(#cron-failure-alert-delivery-mode)",
+      HTMLElement,
+    );
+    const inherit = mode.querySelector('[role="option"][data-value=""]');
 
     expect(inherit?.textContent).toContain("Inherit global setting");
-    Object.defineProperty(mode, "value", { configurable: true, value: "" });
-    mode.dispatchEvent(new Event("change", { bubbles: true }));
-    Reflect.deleteProperty(mode, "value");
+    await choosePickerValue(mode, "");
 
     expect(onFormChange).toHaveBeenCalledWith({ failureAlertDeliveryMode: "" });
   });

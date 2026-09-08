@@ -79,14 +79,14 @@ suite.define(() => {
         await waitForControlUiSettingsTakeover(page);
         const section = page.locator("#settings-appearance-sidebar");
         await section.getByRole("heading", { name: "Session observer" }).waitFor();
-        const picker = section.locator("wa-select.model-picker__select");
+        const picker = section.locator("openclaw-select-picker.model-picker__select");
         await picker.waitFor();
         await expect.poll(async () => (await gateway.getRequests("models.list")).length).toBe(1);
         if (initiallyUnavailable) {
           await section.getByText("Explicit model catalog unavailable", { exact: true }).waitFor();
         } else {
           await picker
-            .locator("wa-option")
+            .locator('[role="option"]')
             .filter({ hasText: "Old model" })
             .waitFor({ state: "attached" });
         }
@@ -104,9 +104,9 @@ suite.define(() => {
           .getByText("Explicit model catalog unavailable", { exact: true })
           .isVisible()
           .catch(() => false);
-        const initialOptions = (await picker.locator("wa-option").allTextContents()).map((text) =>
-          text.trim(),
-        );
+        const initialOptions = (
+          await picker.locator('[role="option"] .picker-select__label').allTextContents()
+        ).map((text) => text.trim());
         if (captureUiProof) {
           // The settings section exceeds the viewport; keep its current field scroll.
           await picker.scrollIntoViewIfNeeded();
@@ -167,11 +167,13 @@ suite.define(() => {
           .getByText("Explicit model catalog unavailable", { exact: true })
           .isVisible()
           .catch(() => false);
-        await picker.click();
-        await expect.poll(() => picker.getAttribute("open")).not.toBeNull();
-        const finalOptions = (await picker.locator("wa-option").allTextContents()).map((text) =>
-          text.trim(),
-        );
+        await picker.locator(".picker-select__trigger").click();
+        await expect
+          .poll(() => picker.locator(".picker-select__trigger").getAttribute("aria-expanded"))
+          .toBe("true");
+        const finalOptions = (
+          await picker.locator('[role="option"] .picker-select__label').allTextContents()
+        ).map((text) => text.trim());
         if (captureUiProof) {
           await page.evaluate((requestCount) => {
             const cue = document.querySelector<HTMLElement>("#session-observer-proof-cue");
@@ -201,7 +203,7 @@ suite.define(() => {
           "GPT Recovered",
         ]);
 
-        await picker.getByRole("option", { name: "GPT Recovered", exact: true }).click();
+        await picker.locator('[role="option"][data-value="openai/gpt-recovered"]').click();
         const patchRequest = await gateway.waitForRequest("config.patch");
         expect(JSON.parse(String((patchRequest.params as { raw?: unknown }).raw))).toEqual({
           agents: { defaults: { utilityModel: "openai/gpt-recovered" } },

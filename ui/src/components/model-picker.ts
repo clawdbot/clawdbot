@@ -52,6 +52,7 @@ export function renderModelPicker(params: ModelPickerParams) {
         disabled: params.disabled,
         title: params.title,
         placement: params.placement,
+        searchable: true,
         className: `model-picker__select ${params.className ?? ""}`,
         onOpen: params.onOpen,
         renderLeading: (option) =>

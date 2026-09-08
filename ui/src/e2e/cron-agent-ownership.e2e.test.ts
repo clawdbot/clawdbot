@@ -53,9 +53,9 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}cron`);
         await page.locator('[data-test-id="cron-new-task"]').click();
         await page.locator("#cron-name").fill("Keep this draft");
-        const picker = page.locator("#cron-payload-model-picker");
-        await picker.click();
-        await page.getByRole("option", { name: "fixture/old", exact: true }).waitFor();
+        const picker = page.locator("openclaw-select-picker:has(#cron-payload-model-picker)");
+        await picker.locator(".picker-select__trigger").click();
+        await picker.locator('[role="option"][data-value="fixture/old"]').waitFor();
         await page.screenshot({ path: path.join(suite.artifactDir, "initial.png") });
         await page.keyboard.press("Escape");
         // Finish the hide animation before a later click reopens the picker.
@@ -63,10 +63,12 @@ suite.define(() => {
 
         await gateway.setMethodResponse("models.list", models("fixture/new"));
         await gateway.emitGatewayEvent("chat.metadata.changed", {});
-        await expect.poll(() => picker.locator('wa-option[value="fixture/new"]').count()).toBe(1);
-        expect(await picker.locator('wa-option[value="fixture/old"]').count()).toBe(0);
-        await picker.click();
-        await page.getByRole("option", { name: "fixture/new", exact: true }).waitFor();
+        await expect
+          .poll(() => picker.locator('[role="option"][data-value="fixture/new"]').count())
+          .toBe(1);
+        expect(await picker.locator('[role="option"][data-value="fixture/old"]').count()).toBe(0);
+        await picker.locator(".picker-select__trigger").click();
+        await picker.locator('[role="option"][data-value="fixture/new"]').waitFor();
         await page.screenshot({ path: path.join(suite.artifactDir, "refreshed.png") });
         await page.keyboard.press("Escape");
         await picker.getByRole("listbox").waitFor({ state: "hidden" });
@@ -76,12 +78,14 @@ suite.define(() => {
         });
         await gateway.emitGatewayEvent("config.changed", {});
         await page.getByText("Model suggestions unavailable", { exact: true }).waitFor();
-        expect(await picker.locator('wa-option[value="fixture/new"]').count()).toBe(1);
+        expect(await picker.locator('[role="option"][data-value="fixture/new"]').count()).toBe(1);
         await page.screenshot({ path: path.join(suite.artifactDir, "failed-refresh.png") });
 
         await gateway.setMethodResponse("models.list", { models: [] });
         await gateway.emitGatewayEvent("chat.metadata.changed", {});
-        await expect.poll(() => picker.locator('wa-option[value="fixture/new"]').count()).toBe(0);
+        await expect
+          .poll(() => picker.locator('[role="option"][data-value="fixture/new"]').count())
+          .toBe(0);
         await expect
           .poll(() => page.getByText("Model suggestions unavailable", { exact: true }).count())
           .toBe(0);

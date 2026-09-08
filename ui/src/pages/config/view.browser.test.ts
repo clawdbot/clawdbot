@@ -1,10 +1,12 @@
 // Control UI tests cover config behavior.
 import { render } from "lit";
 import { beforeAll, describe, expect, it, vi } from "vitest";
-import "../../styles.css";
 import type { ThemeMode, ThemeName } from "../../app/theme.ts";
 import { renderConfigForm } from "../../components/config-form.ts";
+import "../../styles.css";
+import type { SelectPicker } from "../../components/select-picker.ts";
 import { warmJson5 } from "../../lib/json5-runtime.ts";
+import { updatePickers, choosePickerValue } from "../../test-helpers/select-picker.ts";
 import { renderBrowserLinkPreferencesRow } from "./browser-link-preferences.ts";
 import { createConfigViewState, renderConfig, type ConfigProps } from "./view.ts";
 
@@ -301,7 +303,7 @@ describe("config view", () => {
     return container.textContent?.replace(/\s+/g, " ").trim() ?? "";
   }
 
-  it("names the theme's chat face and maps typography sentinels back to unset overrides", () => {
+  it("names the theme's chat face and maps typography sentinels back to unset overrides", async () => {
     const { container, props } = renderConfigView({
       theme: "dash",
       fontUi: "geist",
@@ -310,27 +312,27 @@ describe("config view", () => {
       activeSection: "__appearance__",
       includeSections: ["__appearance__"],
     });
-    const ui = queryRequired(container, "#settings-font-ui", HTMLElement) as HTMLElement & {
-      value: string;
-    };
-    const chat = queryRequired(container, "#settings-font-chat", HTMLElement) as HTMLElement & {
-      value: string;
-    };
-    expect(ui.querySelector('wa-option[value="theme"]')?.textContent).toContain("Dash · DM Sans");
-    expect(chat.querySelector('wa-option[value="theme"]')?.textContent).toContain(
+    await updatePickers(container);
+    const ui = queryRequired(container, "#settings-font-ui", HTMLElement).closest<SelectPicker>(
+      "openclaw-select-picker",
+    )!;
+    const chat = queryRequired(container, "#settings-font-chat", HTMLElement).closest<SelectPicker>(
+      "openclaw-select-picker",
+    )!;
+    expect(ui.querySelector('[role="option"][data-value="theme"]')?.textContent).toContain(
+      "Dash · DM Sans",
+    );
+    expect(chat.querySelector('[role="option"][data-value="theme"]')?.textContent).toContain(
       "Dash · Fraunces",
     );
     expect(ui.closest(".settings-row")?.textContent).toContain("Saved to your profile");
-    expect(ui.querySelectorAll("wa-option")).toHaveLength(11);
-    expect(chat.querySelectorAll("wa-option")).toHaveLength(11);
-    Object.defineProperty(ui, "value", { configurable: true, value: "lora" });
-    ui.dispatchEvent(new Event("change"));
+    expect(ui.querySelectorAll('[role="option"]')).toHaveLength(11);
+    expect(chat.querySelectorAll('[role="option"]')).toHaveLength(11);
+    await choosePickerValue(ui, "lora");
     expect(props.setFontUi).toHaveBeenLastCalledWith("lora");
-    Object.defineProperty(ui, "value", { configurable: true, value: "theme" });
-    ui.dispatchEvent(new Event("change"));
+    await choosePickerValue(ui, "theme");
     expect(props.setFontUi).toHaveBeenLastCalledWith(undefined);
-    Object.defineProperty(chat, "value", { configurable: true, value: "theme" });
-    chat.dispatchEvent(new Event("change"));
+    await choosePickerValue(chat, "theme");
     expect(props.setFontChat).toHaveBeenLastCalledWith(undefined);
   });
 
