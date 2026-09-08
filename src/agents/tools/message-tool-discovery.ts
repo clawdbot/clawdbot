@@ -1,6 +1,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sortUniqueStrings, uniqueValues } from "@openclaw/normalization-core/string-normalization";
 import type { ChatType } from "../../channels/chat-type.js";
+import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
 import {
   getChannelPlugin,
   getLoadedChannelPlugin,
@@ -16,7 +17,10 @@ import {
 } from "../../channels/plugins/message-action-discovery.js";
 import type { ChannelMessageCapability } from "../../channels/plugins/message-capabilities.js";
 import type { ChannelMessageActionName } from "../../channels/plugins/types.public.js";
+import { readExactSessionDeliveryContext } from "../../config/sessions/delivery-info.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { stripTargetProviderPrefix } from "../../infra/outbound/channel-target-prefix.js";
+import { actionHasTarget } from "../../infra/outbound/message-action-spec.js";
 import { resolveAllowedMessageActions } from "../../infra/outbound/outbound-policy.js";
 import { normalizeAccountId, parseSessionDeliveryRoute } from "../../routing/session-key.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
@@ -48,6 +52,7 @@ type MessageActionDiscoveryInput = Omit<ChannelMessageActionDiscoveryInput, "cfg
 
 type MessageToolCurrentContextOptions = {
   agentSessionKey?: string;
+  sessionId?: string;
   currentChannelId?: string;
   currentChannelProvider?: string;
   currentChatType?: ChatType;
@@ -78,8 +83,63 @@ function resolveSessionDeliveryChatType(peerKind: string): ChatType | undefined 
   return undefined;
 }
 
+type MessageToolDeliveryRequest = {
+  config: OpenClawConfig;
+  action: ChannelMessageActionName;
+  params: Record<string, unknown>;
+  accountId?: string;
+};
+
+function recoverSessionCanonicalPeerId(params: {
+  channel: string;
+  peerId: string;
+  sessionKey?: string;
+  sessionId?: string;
+  request?: MessageToolDeliveryRequest;
+}): string {
+  const { request } = params;
+  if (
+    !request ||
+    normalizeOptionalString(request.params.target) ||
+    (Array.isArray(request.params.targets) && request.params.targets.length > 0) ||
+    actionHasTarget(request.action, request.params, { channel: params.channel })
+  ) {
+    return params.peerId;
+  }
+  const plugin = getChannelPlugin(params.channel);
+  if (plugin?.messaging?.targetIdComparison !== "case-sensitive") {
+    return params.peerId;
+  }
+  const delivery = readExactSessionDeliveryContext({
+    cfg: request.config,
+    sessionKey: params.sessionKey,
+    sessionId: params.sessionId,
+  });
+  const accountId =
+    request.accountId ??
+    resolveChannelDefaultAccountId({
+      plugin,
+      cfg: request.config,
+    });
+  if (
+    normalizeMessageChannel(delivery?.channel) !== params.channel ||
+    normalizeAccountId(delivery?.accountId) !== normalizeAccountId(accountId)
+  ) {
+    return params.peerId;
+  }
+  const storedTo = normalizeOptionalString(delivery?.to);
+  const canonical = storedTo
+    ? stripTargetProviderPrefix(storedTo, params.channel, delivery?.channel ?? "")
+    : undefined;
+  return canonical && canonical.toLowerCase() === params.peerId.toLowerCase()
+    ? canonical
+    : params.peerId;
+}
+
 function inferDeliveryFromSessionKey(
   sessionKey: string | undefined,
+  request?: MessageToolDeliveryRequest,
+  sessionId?: string,
 ): InferredSessionDelivery | null {
   const route = parseSessionDeliveryRoute(sessionKey);
   if (!route) {
@@ -90,16 +150,26 @@ function inferDeliveryFromSessionKey(
     return null;
   }
   const accountId = route.accountId ? resolveAgentAccountId(route.accountId) : undefined;
+  const peerId = recoverSessionCanonicalPeerId({
+    request,
+    channel,
+    peerId: route.peerId,
+    sessionKey,
+    sessionId,
+  });
   return {
     accountId,
     channel,
     chatType: resolveSessionDeliveryChatType(route.peerKind),
     threadId: route.threadId,
-    to: formatSessionDeliveryTarget(channel, route.peerKind, route.peerId),
+    to: formatSessionDeliveryTarget(channel, route.peerKind, peerId),
   };
 }
 
-export function resolveEffectiveCurrentChannelContext(options?: MessageToolCurrentContextOptions): {
+export function resolveEffectiveCurrentChannelContext(
+  options?: MessageToolCurrentContextOptions,
+  request?: MessageToolDeliveryRequest,
+): {
   accountId?: string;
   currentChannelId?: string;
   currentChatType?: ChatType;
@@ -111,7 +181,7 @@ export function resolveEffectiveCurrentChannelContext(options?: MessageToolCurre
   const currentChannelId = options?.currentChannelId;
   const sessionDelivery =
     normalizeMessageChannel(currentChannelProvider) === INTERNAL_MESSAGE_CHANNEL
-      ? inferDeliveryFromSessionKey(options?.agentSessionKey)
+      ? inferDeliveryFromSessionKey(options?.agentSessionKey, request, options?.sessionId)
       : null;
 
   if (!sessionDelivery?.to) {
