@@ -67,7 +67,7 @@ Use the group chat command:
 - `/activation mention`
 - `/activation always`
 
-Only owner numbers (from `channels.whatsapp.allowFrom`, or the bot's own E.164 when unset) can change this; `/activation` from anyone else is ignored and stored as context only. Send `/status` as a standalone message in the group to see the current activation mode.
+Only the command owner can change this: the sender must match `commands.ownerAllowFrom` (`openclaw pairing approve` bootstraps the first owner when that list is empty); channel `allowFrom` lists do not grant it. `/activation` from anyone else is ignored and stored as context only. See [Activation (owner-only)](/channels/groups#activation-owner-only). Send `/status` as a standalone message in the group to see the current activation mode.
 
 ## How to use
 
