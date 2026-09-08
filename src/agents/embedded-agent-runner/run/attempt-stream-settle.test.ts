@@ -9,21 +9,34 @@ import {
   type ProviderStreamOptions,
 } from "../../../../packages/ai/src/provider-types.js";
 import { createPluginMetadataSnapshot } from "../../../config/plugin-auto-enable.test-helpers.js";
+import { upsertSessionEntryCore } from "../../../config/sessions/session-accessor.js";
 import { bindStreamLlmRuntime } from "../../../llm/model-runtime-binding.js";
 import { createCodexNativeWebSearchWrapper } from "../../../llm/providers/stream-wrappers/openai.js";
 import { createAssistantMessageEventStream } from "../../../llm/utils/event-stream.js";
 import { attachRuntimePromptMediaFacts } from "../../../media/media-facts.js";
 import { withPluginRuntimeGenerationScope } from "../../../plugins/runtime/generation-scope.js";
 import type { StreamFn } from "../../runtime/index.js";
+import {
+  createAssistant,
+  createAssistantResultStream,
+  createTestSession,
+  registerAgentSessionLoopTestLifecycle,
+  testModel,
+} from "../../sessions/agent-session-loop-correctness.test-support.js";
 import { SessionManager } from "../../sessions/index.js";
 import { castAgentMessage } from "../../test-helpers/agent-message-fixtures.js";
+import { readLastCacheTtlTimestamp } from "../cache-ttl.js";
 import { testing as extraParamsTesting } from "../extra-params.test-support.js";
 import {
   clearEmbeddedSessionPromptStates,
   createToolResultPromptProjectionState,
   getEmbeddedSessionPromptState,
+  persistToolResultProjections,
+  serializeCacheTtlToolResultProjections,
 } from "../session-prompt-state.js";
+import { restoreCacheTtlToolResultProjections } from "../tool-result-truncation.js";
 import { RUN_LIVENESS_JOIN_TIMEOUT_MS } from "./abortable.js";
+import { submitEmbeddedAttemptPrompt } from "./attempt-prompt-submit.js";
 import {
   prepareEmbeddedAttemptTransport,
   settleEmbeddedAttemptStream,
@@ -207,6 +220,136 @@ describe("settleEmbeddedAttemptStream liveness", () => {
       );
     } finally {
       clearEmbeddedSessionPromptStates([sessionId, ...otherSessionIds]);
+    }
+  });
+});
+
+describe("attempt projection persistence through settlement", () => {
+  registerAgentSessionLoopTestLifecycle();
+
+  it("keeps one snapshot across unchanged dispatch, TTL settlement, and reopen", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-projection-settle-"));
+    const scope = {
+      agentId: "main",
+      sessionId: "projection-settle",
+      sessionKey: "agent:main:projection-settle",
+      storePath: path.join(dir, "sessions.json"),
+    };
+    const model = { ...testModel, provider: "anthropic", id: "claude-sonnet-4-6" };
+    try {
+      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+      let manager = SessionManager.open(scope, dir);
+      manager.appendMessage({ role: "user", content: "read file", timestamp: 1 });
+      manager.appendMessage(
+        createAssistant(
+          model,
+          [{ type: "toolCall", id: "read-1", name: "read", arguments: {} }],
+          "toolUse",
+        ),
+      );
+      const toolResult = {
+        role: "toolResult" as const,
+        toolCallId: "read-1",
+        toolName: "read",
+        content: [{ type: "text" as const, text: "x".repeat(6_000) }],
+        isError: false,
+        timestamp: 2,
+      };
+      manager.appendMessage(toolResult);
+      manager.appendMessage(createAssistant(model, [{ type: "text", text: "read complete" }]));
+      let previousSnapshot: ReturnType<typeof serializeCacheTtlToolResultProjections> | undefined;
+      for (let turn = 0; turn < 3; turn++) {
+        const sessionPromptState = getEmbeddedSessionPromptState(scope.sessionId);
+        const projectionState = sessionPromptState.toolResults;
+        restoreCacheTtlToolResultProjections(projectionState, manager.getBranch());
+        if (previousSnapshot) {
+          expect(serializeCacheTtlToolResultProjections(projectionState)).toEqual(previousSnapshot);
+        }
+        const { session } = await createTestSession({ sessionManager: manager, model });
+        const input = createSettleFixture({
+          activeSession: session,
+          sessionManager: manager,
+          toolResultPromptProjectionState: projectionState,
+        });
+        input.attempt = {
+          ...input.attempt,
+          sessionId: scope.sessionId,
+          provider: model.provider,
+          modelId: model.id,
+          config: { agents: { defaults: { contextPruning: { mode: "cache-ttl" } } } },
+        };
+        const markers = () =>
+          manager
+            .getBranch()
+            .filter(
+              (entry) => entry.type === "custom" && entry.customType === "openclaw.cache-ttl",
+            );
+        const snapshotMarkers = () =>
+          markers().filter(
+            (entry) =>
+              entry.type === "custom" && Object.hasOwn(entry.data as object, "frozenToolResults"),
+          );
+        session.agent.streamFn = () => {
+          expect(snapshotMarkers()).toHaveLength(1);
+          return createAssistantResultStream(
+            createAssistant(model, [{ type: "text", text: "done" }]),
+          );
+        };
+        await submitEmbeddedAttemptPrompt({
+          attempt: input.attempt,
+          activeSession: session,
+          contextTokenBudget: 8_000,
+          images: [],
+          modelPrompt: "continue",
+          onFinalPromptText: () => {},
+          onSteeringAcknowledged: () => {},
+          persistToolResultProjections: async () => {
+            persistToolResultProjections(projectionState, (customType, data) =>
+              manager.appendCustomEntry(customType, data),
+            );
+          },
+          promptActiveSession: (prompt, options) => session.prompt(prompt, options),
+          runtimeOnly: false,
+          sessionPromptState,
+          systemPrompt: "test prompt",
+          toolResultAggregateMaxChars: 8_000,
+          toolResultMaxChars: 4_000,
+          toolResultPromptProjectionState: projectionState,
+          trajectoryRecorder: null,
+          transcriptLeafId: null,
+          transcriptPrompt: "continue",
+        });
+        const metadataSnapshot = createPluginMetadataSnapshot({
+          config: input.attempt.config,
+          manifestRegistry: { plugins: [], diagnostics: [] },
+        });
+        await withPluginRuntimeGenerationScope({ metadataSnapshot }, () =>
+          settleEmbeddedAttemptStream(input),
+        );
+        expect(snapshotMarkers()).toHaveLength(1);
+        expect(markers()).toHaveLength(turn + 2);
+        const touch = markers().at(-1);
+        expect(touch?.type === "custom" && touch.data).toEqual({
+          timestamp: expect.any(Number),
+          provider: model.provider,
+          modelId: model.id,
+        });
+        expect(
+          readLastCacheTtlTimestamp(manager, { provider: model.provider, modelId: model.id }),
+        ).toBe(touch?.type === "custom" && (touch.data as { timestamp: number }).timestamp);
+        expect(manager.getBranch()).toContainEqual(
+          expect.objectContaining({ type: "message", message: toolResult }),
+        );
+        previousSnapshot = serializeCacheTtlToolResultProjections(projectionState);
+        expect(previousSnapshot.frozenToolResults[0]?.texts?.[0]?.length).toBeLessThan(6_000);
+        session.dispose();
+        manager.flushPendingPersistence();
+        clearEmbeddedSessionPromptStates([scope.sessionId]);
+        manager = SessionManager.open(scope, dir);
+      }
+    } finally {
+      clearEmbeddedSessionPromptStates([scope.sessionId]);
+      await fs.rm(dir, { recursive: true, force: true });
     }
   });
 });

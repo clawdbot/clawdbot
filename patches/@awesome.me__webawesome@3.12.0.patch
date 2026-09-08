@@ -1,3 +1,179 @@
+diff --git a/dist/chunks/chunk.CWBSN34U.js b/dist/chunks/chunk.CWBSN34U.js
+index 5b1df53a771e31410852af7ea483db52edbc0140..dbb7dc5db6d83acaf9261846451ce86b9eb4cab6 100644
+--- a/dist/chunks/chunk.CWBSN34U.js
++++ b/dist/chunks/chunk.CWBSN34U.js
+@@ -43,9 +43,6 @@ import {
+ import {
+   size_styles_default
+ } from "./chunk.G5ZZIGWB.js";
+-import {
+-  waitForEvent
+-} from "./chunk.F25QOBDY.js";
+ import {
+   animateWithClass
+ } from "./chunk.L6CIKOFQ.js";
+@@ -74,6 +71,7 @@ var WaSelect = class extends WebAwesomeFormAssociatedElement {
+     this.selectionOrder = /* @__PURE__ */ new Map();
+     this.typeToSelectString = "";
+     this.slotChangePending = false;
++    this.openTransition = { open: false };
+     this.displayLabel = "";
+     this.selectedOptions = [];
+     this.name = "";
+@@ -294,7 +292,12 @@ var WaSelect = class extends WebAwesomeFormAssociatedElement {
+   }
+   disconnectedCallback() {
+     super.disconnectedCallback();
+-    this.removeOpenListeners();
++    this.openTransition.controller?.abort();
++    this.openTransition = { open: false };
++    this.popup?.popup?.classList.remove("show", "hide");
++    if (this.listbox) this.listbox.hidden = true;
++    if (this.popup) this.popup.active = false;
++    unregisterDismissible(this);
+     this.cachedOptions = null;
+   }
+   updateDefaultValue() {
+@@ -308,24 +311,6 @@ var WaSelect = class extends WebAwesomeFormAssociatedElement {
+       this._defaultValue = this.getAttribute("value") || null;
+     }
+   }
+-  addOpenListeners() {
+-    document.addEventListener("focusin", this.handleDocumentFocusIn);
+-    document.addEventListener("keydown", this.handleDocumentKeyDown);
+-    document.addEventListener("mousedown", this.handleDocumentMouseDown);
+-    registerDismissible(this);
+-    if (this.getRootNode() !== document) {
+-      this.getRootNode().addEventListener("focusin", this.handleDocumentFocusIn);
+-    }
+-  }
+-  removeOpenListeners() {
+-    document.removeEventListener("focusin", this.handleDocumentFocusIn);
+-    document.removeEventListener("keydown", this.handleDocumentKeyDown);
+-    document.removeEventListener("mousedown", this.handleDocumentMouseDown);
+-    unregisterDismissible(this);
+-    if (this.getRootNode() !== document) {
+-      this.getRootNode().removeEventListener("focusin", this.handleDocumentFocusIn);
+-    }
+-  }
+   handleFocus() {
+     this.displayInput.setSelectionRange(0, 0);
+   }
+@@ -588,6 +573,8 @@ var WaSelect = class extends WebAwesomeFormAssociatedElement {
+   handleDisabledChange() {
+     if (this.disabled && this.open) {
+       this.open = false;
++      // The open watcher has already run for this update.
++      this.handleOpenChange();
+     }
+   }
+   handleValueChange() {
+@@ -598,56 +585,72 @@ var WaSelect = class extends WebAwesomeFormAssociatedElement {
+     this.updateValidity();
+   }
+   async handleOpenChange() {
+-    if (this.open && !this.disabled) {
+-      this.setCurrentOption(this.selectedOptions[0] || this.getFirstOption());
+-      const waShowEvent = new WaShowEvent();
+-      this.dispatchEvent(waShowEvent);
+-      if (waShowEvent.defaultPrevented) {
+-        this.open = false;
+-        return;
+-      }
+-      this.addOpenListeners();
++    const open = this.open && !this.disabled;
++    if (!this.isConnected || this.openTransition.open === open) return this.openAnimation;
++    if (open) this.setCurrentOption(this.selectedOptions[0] || this.getFirstOption());
++    const event = open ? new WaShowEvent() : new WaHideEvent();
++    this.dispatchEvent(event);
++    if (event.defaultPrevented && !this.disabled) {
++      this.open = this.openTransition.open;
++      return this.openAnimation;
++    }
++    if (!this.isConnected || (this.open && !this.disabled) !== open) return this.openAnimation;
++    this.openTransition.controller?.abort();
++    this.openTransition = { open, controller: new AbortController() };
++    const { signal } = this.openTransition.controller;
++    const isCurrent = () => !signal.aborted && this.isConnected && (this.open && !this.disabled) === open;
++    if (open) {
++      document.addEventListener("focusin", this.handleDocumentFocusIn, { signal });
++      document.addEventListener("keydown", this.handleDocumentKeyDown, { signal });
++      document.addEventListener("mousedown", this.handleDocumentMouseDown, { signal });
++      registerDismissible(this);
++      const root = this.getRootNode();
++      if (root !== document) root.addEventListener("focusin", this.handleDocumentFocusIn, { signal });
+       this.listbox.hidden = false;
+       this.popup.active = true;
+       requestAnimationFrame(() => {
+-        this.setCurrentOption(this.currentOption);
++        if (isCurrent()) this.setCurrentOption(this.currentOption);
+       });
+-      await animateWithClass(this.popup.popup, "show");
+-      if (this.currentOption) {
++    } else {
++      unregisterDismissible(this);
++    }
++    // Retire the old animation before joining its cleanup; only the accepted
++    // transition may publish visibility, focus, or completion after an await.
++    this.popup.popup.classList.remove("show", "hide");
++    const previousAnimation = this.openAnimation;
++    this.openAnimation = (async () => {
++      await previousAnimation;
++      if (!isCurrent()) return;
++      await animateWithClass(this.popup.popup, open ? "show" : "hide");
++      if (!isCurrent()) return;
++      if (open && this.currentOption) {
+         scrollIntoView(this.currentOption, this.listbox, "vertical", "auto");
+       }
+-      this.dispatchEvent(new WaAfterShowEvent());
+-    } else {
+-      const waHideEvent = new WaHideEvent();
+-      this.dispatchEvent(waHideEvent);
+-      if (waHideEvent.defaultPrevented) {
+-        this.open = false;
+-        return;
++      if (!open) {
++        this.listbox.hidden = true;
++        this.popup.active = false;
+       }
+-      this.removeOpenListeners();
+-      await animateWithClass(this.popup.popup, "hide");
+-      this.listbox.hidden = true;
+-      this.popup.active = false;
+-      this.dispatchEvent(new WaAfterHideEvent());
+-    }
++      this.dispatchEvent(open ? new WaAfterShowEvent() : new WaAfterHideEvent());
++    })();
++    return this.openAnimation;
+   }
+   /** Shows the listbox. */
+   async show() {
+-    if (this.open || this.disabled) {
++    if (this.disabled) {
+       this.open = false;
+-      return void 0;
++      return;
+     }
++    if (!this.isConnected) return;
+     this.open = true;
+-    return waitForEvent(this, "wa-after-show");
++    await this.updateComplete;
++    return this.handleOpenChange();
+   }
+   /** Hides the listbox. */
+   async hide() {
+-    if (!this.open || this.disabled) {
+-      this.open = false;
+-      return void 0;
+-    }
+     this.open = false;
+-    return waitForEvent(this, "wa-after-hide");
++    if (!this.isConnected) return;
++    await this.updateComplete;
++    return this.openAnimation;
+   }
+   /** Sets focus on the control. */
+   focus(options) {
 diff --git a/dist/chunks/chunk.JZGJWX35.js b/dist/chunks/chunk.JZGJWX35.js
 index 593bac0b7708fc0e908f9f8de650e45f8b3610ec..66e09365025b0e593e38d8410c8019d660081e16 100644
 --- a/dist/chunks/chunk.JZGJWX35.js
@@ -785,6 +961,50 @@ index 1e458bc4c742d94cd58d688acde8a45f9c681763..477eac752d3d2c0a81ee3a59a80c09b8
      /** Notifies the parent dropdown that this item is opening its submenu */
      private notifyParentOfOpening;
      /** Closes the submenu. */
+diff --git a/dist/components/select/select.d.ts b/dist/components/select/select.d.ts
+index 9b4c748a83e5e990fd6eeb6367b37713b56773b2..f801fce20728a10630b6e47099a1054b464fb37c 100644
+--- a/dist/components/select/select.d.ts
++++ b/dist/components/select/select.d.ts
+@@ -66,6 +66,8 @@ export default class WaSelect extends WebAwesomeFormAssociatedElement {
+     static get validators(): import("../../internal/webawesome-form-associated-element.js").Validator<WebAwesomeFormAssociatedElement>[];
+     assumeInteractionOn: string[];
+     private cachedOptions;
++    private openTransition;
++    private openAnimation;
+     private readonly hasSlotController;
+     private readonly localize;
+     private selectionOrder;
+@@ -154,8 +156,6 @@ export default class WaSelect extends WebAwesomeFormAssociatedElement {
+     connectedCallback(): void;
+     disconnectedCallback(): void;
+     private updateDefaultValue;
+-    private addOpenListeners;
+-    private removeOpenListeners;
+     private handleFocus;
+     private handleDocumentFocusIn;
+     private handleDocumentKeyDown;
+diff --git a/dist/custom-elements.json b/dist/custom-elements.json
+index 4128d582ee76895db1e7a8b55349680d84bfa40f..51fa14f3ad1234ce8fc7991fd83b002b30238d92 100644
+--- a/dist/custom-elements.json
++++ b/dist/custom-elements.json
+@@ -27842,13 +27842,13 @@
+               "privacy": "private"
+             },
+             {
+-              "kind": "method",
+-              "name": "addOpenListeners",
++              "kind": "field",
++              "name": "openTransition",
+               "privacy": "private"
+             },
+             {
+-              "kind": "method",
+-              "name": "removeOpenListeners",
++              "kind": "field",
++              "name": "openAnimation",
+               "privacy": "private"
+             },
+             {
 diff --git a/dist/internal/animate.d.ts b/dist/internal/animate.d.ts
 index bedb1923179f2a73be2eaf24e8c1a3c35718683d..04dc1c15097ad58de31a8670e2c870d3a475b96f 100644
 --- a/dist/internal/animate.d.ts
@@ -1314,6 +1534,182 @@ index 20d309f89017ef7d1857f3b1c88216a88354fefd..ea0b8ee34255009d9d9e86605dbdc059
  }
  function parseDuration(duration) {
    duration = duration.toString().toLowerCase();
+diff --git a/dist-cdn/chunks/chunk.VVUBGO75.js b/dist-cdn/chunks/chunk.VVUBGO75.js
+index 79243983dd4273713e7d1cc5d7e9a7b103cb787c..b7007d1129565982cac88ea9878d78e47072e340 100644
+--- a/dist-cdn/chunks/chunk.VVUBGO75.js
++++ b/dist-cdn/chunks/chunk.VVUBGO75.js
+@@ -46,9 +46,6 @@ import {
+ import {
+   size_styles_default
+ } from "./chunk.JB5Y2AN3.js";
+-import {
+-  waitForEvent
+-} from "./chunk.F25QOBDY.js";
+ import {
+   animateWithClass
+ } from "./chunk.L6CIKOFQ.js";
+@@ -88,6 +85,7 @@ var WaSelect = class extends WebAwesomeFormAssociatedElement {
+     this.selectionOrder = /* @__PURE__ */ new Map();
+     this.typeToSelectString = "";
+     this.slotChangePending = false;
++    this.openTransition = { open: false };
+     this.displayLabel = "";
+     this.selectedOptions = [];
+     this.name = "";
+@@ -308,7 +306,12 @@ var WaSelect = class extends WebAwesomeFormAssociatedElement {
+   }
+   disconnectedCallback() {
+     super.disconnectedCallback();
+-    this.removeOpenListeners();
++    this.openTransition.controller?.abort();
++    this.openTransition = { open: false };
++    this.popup?.popup?.classList.remove("show", "hide");
++    if (this.listbox) this.listbox.hidden = true;
++    if (this.popup) this.popup.active = false;
++    unregisterDismissible(this);
+     this.cachedOptions = null;
+   }
+   updateDefaultValue() {
+@@ -322,24 +325,6 @@ var WaSelect = class extends WebAwesomeFormAssociatedElement {
+       this._defaultValue = this.getAttribute("value") || null;
+     }
+   }
+-  addOpenListeners() {
+-    document.addEventListener("focusin", this.handleDocumentFocusIn);
+-    document.addEventListener("keydown", this.handleDocumentKeyDown);
+-    document.addEventListener("mousedown", this.handleDocumentMouseDown);
+-    registerDismissible(this);
+-    if (this.getRootNode() !== document) {
+-      this.getRootNode().addEventListener("focusin", this.handleDocumentFocusIn);
+-    }
+-  }
+-  removeOpenListeners() {
+-    document.removeEventListener("focusin", this.handleDocumentFocusIn);
+-    document.removeEventListener("keydown", this.handleDocumentKeyDown);
+-    document.removeEventListener("mousedown", this.handleDocumentMouseDown);
+-    unregisterDismissible(this);
+-    if (this.getRootNode() !== document) {
+-      this.getRootNode().removeEventListener("focusin", this.handleDocumentFocusIn);
+-    }
+-  }
+   handleFocus() {
+     this.displayInput.setSelectionRange(0, 0);
+   }
+@@ -602,6 +587,8 @@ var WaSelect = class extends WebAwesomeFormAssociatedElement {
+   handleDisabledChange() {
+     if (this.disabled && this.open) {
+       this.open = false;
++      // The open watcher has already run for this update.
++      this.handleOpenChange();
+     }
+   }
+   handleValueChange() {
+@@ -612,56 +599,72 @@ var WaSelect = class extends WebAwesomeFormAssociatedElement {
+     this.updateValidity();
+   }
+   async handleOpenChange() {
+-    if (this.open && !this.disabled) {
+-      this.setCurrentOption(this.selectedOptions[0] || this.getFirstOption());
+-      const waShowEvent = new WaShowEvent();
+-      this.dispatchEvent(waShowEvent);
+-      if (waShowEvent.defaultPrevented) {
+-        this.open = false;
+-        return;
+-      }
+-      this.addOpenListeners();
++    const open = this.open && !this.disabled;
++    if (!this.isConnected || this.openTransition.open === open) return this.openAnimation;
++    if (open) this.setCurrentOption(this.selectedOptions[0] || this.getFirstOption());
++    const event = open ? new WaShowEvent() : new WaHideEvent();
++    this.dispatchEvent(event);
++    if (event.defaultPrevented && !this.disabled) {
++      this.open = this.openTransition.open;
++      return this.openAnimation;
++    }
++    if (!this.isConnected || (this.open && !this.disabled) !== open) return this.openAnimation;
++    this.openTransition.controller?.abort();
++    this.openTransition = { open, controller: new AbortController() };
++    const { signal } = this.openTransition.controller;
++    const isCurrent = () => !signal.aborted && this.isConnected && (this.open && !this.disabled) === open;
++    if (open) {
++      document.addEventListener("focusin", this.handleDocumentFocusIn, { signal });
++      document.addEventListener("keydown", this.handleDocumentKeyDown, { signal });
++      document.addEventListener("mousedown", this.handleDocumentMouseDown, { signal });
++      registerDismissible(this);
++      const root = this.getRootNode();
++      if (root !== document) root.addEventListener("focusin", this.handleDocumentFocusIn, { signal });
+       this.listbox.hidden = false;
+       this.popup.active = true;
+       requestAnimationFrame(() => {
+-        this.setCurrentOption(this.currentOption);
++        if (isCurrent()) this.setCurrentOption(this.currentOption);
+       });
+-      await animateWithClass(this.popup.popup, "show");
+-      if (this.currentOption) {
++    } else {
++      unregisterDismissible(this);
++    }
++    // Retire the old animation before joining its cleanup; only the accepted
++    // transition may publish visibility, focus, or completion after an await.
++    this.popup.popup.classList.remove("show", "hide");
++    const previousAnimation = this.openAnimation;
++    this.openAnimation = (async () => {
++      await previousAnimation;
++      if (!isCurrent()) return;
++      await animateWithClass(this.popup.popup, open ? "show" : "hide");
++      if (!isCurrent()) return;
++      if (open && this.currentOption) {
+         scrollIntoView(this.currentOption, this.listbox, "vertical", "auto");
+       }
+-      this.dispatchEvent(new WaAfterShowEvent());
+-    } else {
+-      const waHideEvent = new WaHideEvent();
+-      this.dispatchEvent(waHideEvent);
+-      if (waHideEvent.defaultPrevented) {
+-        this.open = false;
+-        return;
++      if (!open) {
++        this.listbox.hidden = true;
++        this.popup.active = false;
+       }
+-      this.removeOpenListeners();
+-      await animateWithClass(this.popup.popup, "hide");
+-      this.listbox.hidden = true;
+-      this.popup.active = false;
+-      this.dispatchEvent(new WaAfterHideEvent());
+-    }
++      this.dispatchEvent(open ? new WaAfterShowEvent() : new WaAfterHideEvent());
++    })();
++    return this.openAnimation;
+   }
+   /** Shows the listbox. */
+   async show() {
+-    if (this.open || this.disabled) {
++    if (this.disabled) {
+       this.open = false;
+-      return void 0;
++      return;
+     }
++    if (!this.isConnected) return;
+     this.open = true;
+-    return waitForEvent(this, "wa-after-show");
++    await this.updateComplete;
++    return this.handleOpenChange();
+   }
+   /** Hides the listbox. */
+   async hide() {
+-    if (!this.open || this.disabled) {
+-      this.open = false;
+-      return void 0;
+-    }
+     this.open = false;
+-    return waitForEvent(this, "wa-after-hide");
++    if (!this.isConnected) return;
++    await this.updateComplete;
++    return this.openAnimation;
+   }
+   /** Sets focus on the control. */
+   focus(options) {
 diff --git a/dist-cdn/chunks/chunk.W2C46OQX.js b/dist-cdn/chunks/chunk.W2C46OQX.js
 index da164574ce537b386894e751d6e9727cc9249d08..4625393889d6d1b92bddc212b8ba407843f70136 100644
 --- a/dist-cdn/chunks/chunk.W2C46OQX.js
@@ -1587,6 +1983,50 @@ index 1e458bc4c742d94cd58d688acde8a45f9c681763..477eac752d3d2c0a81ee3a59a80c09b8
      /** Notifies the parent dropdown that this item is opening its submenu */
      private notifyParentOfOpening;
      /** Closes the submenu. */
+diff --git a/dist-cdn/components/select/select.d.ts b/dist-cdn/components/select/select.d.ts
+index 9b4c748a83e5e990fd6eeb6367b37713b56773b2..f801fce20728a10630b6e47099a1054b464fb37c 100644
+--- a/dist-cdn/components/select/select.d.ts
++++ b/dist-cdn/components/select/select.d.ts
+@@ -66,6 +66,8 @@ export default class WaSelect extends WebAwesomeFormAssociatedElement {
+     static get validators(): import("../../internal/webawesome-form-associated-element.js").Validator<WebAwesomeFormAssociatedElement>[];
+     assumeInteractionOn: string[];
+     private cachedOptions;
++    private openTransition;
++    private openAnimation;
+     private readonly hasSlotController;
+     private readonly localize;
+     private selectionOrder;
+@@ -154,8 +156,6 @@ export default class WaSelect extends WebAwesomeFormAssociatedElement {
+     connectedCallback(): void;
+     disconnectedCallback(): void;
+     private updateDefaultValue;
+-    private addOpenListeners;
+-    private removeOpenListeners;
+     private handleFocus;
+     private handleDocumentFocusIn;
+     private handleDocumentKeyDown;
+diff --git a/dist-cdn/custom-elements.json b/dist-cdn/custom-elements.json
+index 4128d582ee76895db1e7a8b55349680d84bfa40f..51fa14f3ad1234ce8fc7991fd83b002b30238d92 100644
+--- a/dist-cdn/custom-elements.json
++++ b/dist-cdn/custom-elements.json
+@@ -27842,13 +27842,13 @@
+               "privacy": "private"
+             },
+             {
+-              "kind": "method",
+-              "name": "addOpenListeners",
++              "kind": "field",
++              "name": "openTransition",
+               "privacy": "private"
+             },
+             {
+-              "kind": "method",
+-              "name": "removeOpenListeners",
++              "kind": "field",
++              "name": "openAnimation",
+               "privacy": "private"
+             },
+             {
 diff --git a/dist-cdn/internal/animate.d.ts b/dist-cdn/internal/animate.d.ts
 index bedb1923179f2a73be2eaf24e8c1a3c35718683d..04dc1c15097ad58de31a8670e2c870d3a475b96f 100644
 --- a/dist-cdn/internal/animate.d.ts

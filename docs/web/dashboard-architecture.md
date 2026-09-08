@@ -78,6 +78,12 @@ Principles:
   so widget frames, browser views, terminals, and chat drafts survive a swap.
   The task toolbar and side-panel tab header align above their respective panes
   in left/right layouts; stacked layouts keep each header above its own pane.
+- **Navigation retention:** one connected session-page owner retains up to three
+  recent sessions per pane across task navigation and visits to other routes.
+  Hidden pages relinquish foreground activity, viewer presence, focus, and commands.
+  Chat and dashboard route loaders share the same Gateway/authentication scope as
+  the mounted views; connection-owner changes retire both, while ordinary reconnects
+  preserve them. Cached successful routes render during background refresh.
 - **Drag:** user drags widgets; grid auto-compacts (widgets float up, neighbors
   reflow). Resize by handle snaps to size steps. No pixel placement — for
   anyone.

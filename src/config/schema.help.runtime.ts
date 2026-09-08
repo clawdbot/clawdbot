@@ -296,7 +296,7 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "nodeHost.workerRuns.isolation":
     'Select the worker-session process boundary: "none" runs directly on the node host (default); "container" requires a working Docker-compatible engine and never falls back to host execution.',
   "nodeHost.workerRuns.containerImage":
-    'Optional Node 22+ image for container-isolated workers (default: "node:22-slim"). Use a digest-pinned, private-registry, or preloaded image when needed; missing images are pulled on first use.',
+    'Optional Node 24.16+ or 26.1+ image for container-isolated workers (default: "node:24.19.0-slim"). Use a digest-pinned, private-registry, or preloaded image when needed; missing images are pulled on first use.',
   "nodeHost.browserProxy":
     "Groups browser-proxy settings for exposing local browser control through node routing. Enable only when remote node workflows need your local browser profiles.",
   "nodeHost.browserProxy.enabled":

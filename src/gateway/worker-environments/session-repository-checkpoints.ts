@@ -78,12 +78,16 @@ function assertBase(
   return workspace.baseCommit;
 }
 
-async function refObject(root: string, ref: string): Promise<string | undefined> {
-  const output = await requireWorkspaceResultGit(root, [
-    "for-each-ref",
-    "--format=%(refname) %(objectname)",
-    ref,
-  ]);
+async function refObject(
+  root: string,
+  ref: string,
+  baseEnv?: NodeJS.ProcessEnv,
+): Promise<string | undefined> {
+  const output = await requireWorkspaceResultGit(
+    root,
+    ["for-each-ref", "--format=%(refname) %(objectname)", ref],
+    { baseEnv },
+  );
   return output
     .split("\n")
     .find((line) => line.startsWith(`${ref} `))
@@ -371,13 +375,13 @@ export async function stageSessionRepositoryCheckpoint(
       verify,
       discard,
       publish: async () => {
-        await withWorkspaceResultRefMutation(root, async () => {
+        await withWorkspaceResultRefMutation(root, async (baseEnv) => {
           const updates: string[] = [];
           for (const [target, expected] of [
             [ref, objectId],
             [publicationRef(ref), companionId],
           ] as const) {
-            const existing = await refObject(root, target);
+            const existing = await refObject(root, target, baseEnv);
             if (existing !== undefined && existing !== expected) {
               throw new Error("Repository checkpoint identity already contains a different result");
             }
@@ -387,11 +391,10 @@ export async function stageSessionRepositoryCheckpoint(
           }
           assertRevision();
           if (updates.length) {
-            await requireWorkspaceResultGit(
-              root,
-              ["update-ref", "--stdin", "-z"],
-              Buffer.from(updates.join("")),
-            );
+            await requireWorkspaceResultGit(root, ["update-ref", "--stdin", "-z"], {
+              input: Buffer.from(updates.join("")),
+              baseEnv,
+            });
           }
         });
         // Publish immutable artifacts before the SQLite pointer: if the commit

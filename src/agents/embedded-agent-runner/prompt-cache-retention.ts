@@ -50,7 +50,9 @@ export function resolveCacheRetention(
   const compatEligible =
     compat?.supportsPromptCacheKey === true || compat?.cacheControlFormat === "anthropic";
 
-  if (!family && !googleEligible && !openAIEligible && !compatEligible) {
+  // Bedrock's provider owner decides model eligibility and checkpoint TTLs.
+  const bedrockEligible = modelApi === "bedrock-converse-stream";
+  if (!family && !googleEligible && !openAIEligible && !compatEligible && !bedrockEligible) {
     return undefined;
   }
 

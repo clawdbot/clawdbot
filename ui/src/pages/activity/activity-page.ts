@@ -593,6 +593,7 @@ class ActivityPage extends OpenClawLightDomElement {
         connected: this.context.gateway.snapshot.phase === "connected",
         result: this.sessionActivity.result,
         loading: this.sessionActivity.loading,
+        incomplete: this.sessionActivity.incomplete,
         error: this.sessionActivity.error,
         onRetry: () => this.syncSessionActivity("retry"),
       })}

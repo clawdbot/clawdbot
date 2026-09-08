@@ -324,7 +324,7 @@ beforeEach(async () => {
   // These channel-only snapshots are not model fixtures; the real publication boundary is
   // exercised in server-secrets-reload.model-runtime.test.ts.
   vi.spyOn(modelRuntimeReload, "refreshModelRuntimeAfterHotReload").mockResolvedValue(undefined);
-  resetPreparedModelRuntimeSnapshotsForTest();
+  await resetPreparedModelRuntimeSnapshotsForTest();
   delete process.env.OPENCLAW_SKIP_CHANNELS;
   delete process.env.OPENCLAW_SKIP_PROVIDERS;
   secretStoreMocks.deleteEntry.mockReset();
@@ -339,7 +339,7 @@ afterEach(async () => {
   }
   auxiliaries.length = 0;
   vi.restoreAllMocks();
-  resetPreparedModelRuntimeSnapshotsForTest();
+  await resetPreparedModelRuntimeSnapshotsForTest();
   clearSecretsRuntimeSnapshot();
   await fixture?.cleanup();
   fixture = undefined;

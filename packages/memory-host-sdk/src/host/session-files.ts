@@ -59,6 +59,8 @@ const SESSION_EXPORT_CONTENT_WRAP_CHARS = 800;
 const SESSION_ENTRY_PARSE_YIELD_LINES = 250;
 const MAX_DATE_TIMESTAMP_MS = 8_640_000_000_000_000;
 const DIRECT_CRON_PROMPT_RE = /^\[cron:[^\]]+\]\s*/;
+const SESSION_RESET_RECALL_CUTOFF = Symbol.for("openclaw.memory.sessionResetRecallCutoff");
+type SessionResetRecallCutoff = ReturnType<typeof resolveSessionResetRecallCutoff>;
 
 export type SessionFileEntry = {
   path: string;
@@ -106,6 +108,60 @@ type SessionTranscriptClassification = {
   dreamingNarrativeTranscriptPaths: ReadonlySet<string>;
   cronRunTranscriptPaths: ReadonlySet<string>;
 };
+
+function hashSessionEntrySnapshot(params: {
+  content: string;
+  lineMap: readonly number[];
+  messageTimestampsMs: readonly number[];
+  lineProvenance: readonly MemoryEntryProvenance[];
+  resetRecallCutoff: SessionResetRecallCutoff;
+}): string {
+  const snapshot =
+    params.content +
+    "\n" +
+    params.lineMap.join(",") +
+    "\n" +
+    params.messageTimestampsMs.join(",") +
+    "\n" +
+    JSON.stringify(params.lineProvenance) +
+    "\n" +
+    JSON.stringify(params.resetRecallCutoff);
+  return hashText(snapshot);
+}
+
+function readSessionEntryResetRecallCutoff(entry: SessionFileEntry): SessionResetRecallCutoff {
+  const value: unknown = Object.getOwnPropertyDescriptor(entry, SESSION_RESET_RECALL_CUTOFF)?.value;
+  if (!value || typeof value !== "object" || !("state" in value)) {
+    return { state: "invalid" };
+  }
+  if (value.state === "absent" || value.state === "invalid") {
+    return { state: value.state };
+  }
+  if (value.state === "valid" && "cutoffLine" in value && typeof value.cutoffLine === "number") {
+    return { state: "valid", cutoffLine: value.cutoffLine };
+  }
+  return { state: "invalid" };
+}
+
+export function matchesSessionEntryPrefixHash(
+  entry: SessionFileEntry,
+  lineCount: number,
+  expectedHash: string,
+): boolean {
+  const lines = entry.content ? entry.content.split("\n") : [];
+  if (!Number.isInteger(lineCount) || lineCount < 0 || lineCount > lines.length) {
+    return false;
+  }
+  const resetRecallCutoff = readSessionEntryResetRecallCutoff(entry);
+  const prefix = {
+    content: lines.slice(0, lineCount).join("\n"),
+    lineMap: entry.lineMap.slice(0, lineCount),
+    messageTimestampsMs: entry.messageTimestampsMs.slice(0, lineCount),
+    lineProvenance: entry.lineProvenance.slice(0, lineCount),
+  };
+  // Content alone is insufficient: rewrites and resets can retain the same rendered text.
+  return hashSessionEntrySnapshot({ ...prefix, resetRecallCutoff }) === expectedHash;
+}
 
 type SessionTranscriptStoreEntry = {
   sessionFile?: unknown;
@@ -782,17 +838,13 @@ export async function buildSessionEntry(
       absPath,
       mtimeMs,
       size,
-      hash: hashText(
-        content +
-          "\n" +
-          lineMap.join(",") +
-          "\n" +
-          messageTimestampsMs.join(",") +
-          "\n" +
-          JSON.stringify(lineProvenance) +
-          "\n" +
-          JSON.stringify(sqliteSource?.resetRecallCutoff ?? { state: "absent" }),
-      ),
+      hash: hashSessionEntrySnapshot({
+        content,
+        lineMap,
+        messageTimestampsMs,
+        lineProvenance,
+        resetRecallCutoff: sqliteSource?.resetRecallCutoff ?? { state: "absent" },
+      }),
       content,
       lineMap,
       messageTimestampsMs,
@@ -801,7 +853,7 @@ export async function buildSessionEntry(
       ...(generatedByDreamingNarrative ? { generatedByDreamingNarrative: true } : {}),
       ...(generatedByCronRun ? { generatedByCronRun: true } : {}),
     };
-    Object.defineProperty(entry, Symbol.for("openclaw.memory.sessionResetRecallCutoff"), {
+    Object.defineProperty(entry, SESSION_RESET_RECALL_CUTOFF, {
       configurable: false,
       enumerable: false,
       value: sqliteSource?.resetRecallCutoff ?? { state: "absent" },

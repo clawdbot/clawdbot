@@ -9,8 +9,12 @@ import {
 import { readPackageVersion } from "./package-json.js";
 import {
   createPackageIntegrityReader,
-  type PackageIntegrityFingerprint,
+  type PackageRootIntegrityFingerprint,
 } from "./package-update-integrity.js";
+import {
+  activateStagedNpmPackageRoot,
+  createNpmPackageRootLinkLifecycle,
+} from "./package-update-npm-root.js";
 import { movePathWithCopyFallback } from "./replace-file.js";
 import {
   resolveNpmGlobalPrefixLayoutFromGlobalRoot,
@@ -152,27 +156,6 @@ async function pathEntriesMatch(left: string, right: string): Promise<boolean> {
   return leftContents.equals(rightContents);
 }
 
-async function activateStagedNpmPackageRoot(source: string, destination: string): Promise<void> {
-  const stat = await fs.lstat(source);
-  if (!stat.isSymbolicLink()) {
-    await movePathWithCopyFallback({
-      from: source,
-      sourceHardlinks: PACKAGE_MANAGER_SWAP_SOURCE_HARDLINKS,
-      to: destination,
-    });
-    return;
-  }
-
-  // npm represents global local-directory installs as relative symlinks. Moving
-  // one changes its meaning, so activate the same canonical source explicitly.
-  const canonicalSource = await fs.realpath(source);
-  await fs.symlink(
-    canonicalSource,
-    destination,
-    process.platform === "win32" ? "junction" : undefined,
-  );
-}
-
 export async function swapStagedPackageInstall(params: {
   stage: StagedPackageInstall;
   installTarget: ResolvedGlobalInstallTarget;
@@ -249,7 +232,8 @@ export async function swapStagedPackageInstall(params: {
   let hadPackage = false;
   let previousVersion: string | null = null;
   let previousDistFiles: string[] | undefined;
-  let previousTree: PackageIntegrityFingerprint | undefined;
+  let previousRoot: PackageRootIntegrityFingerprint | undefined;
+  let rootLink: ReturnType<typeof createNpmPackageRootLinkLifecycle> | undefined;
   let packageBackedUp = false;
   let displacedCandidateRoot: string | undefined;
   const baseline = createPackageIntegrityReader(params.timeoutMs);
@@ -269,11 +253,16 @@ export async function swapStagedPackageInstall(params: {
     await reader.observe(fromBackup ? "retained" : "restored", async () => {
       if (
         hadPackage
-          ? !previousTree ||
-            !isDeepStrictEqual(await reader.tree(root, targetSwapRoot), previousTree)
+          ? !previousRoot ||
+            !isDeepStrictEqual(
+              await reader.rootEntry(root, targetSwapRoot, previousRoot.kind),
+              previousRoot,
+            )
           : !fromBackup && (await reader.exists(root))
       ) {
-        throw new Error("Package rollback verification failed: retained package tree changed");
+        throw new Error(
+          `Package rollback verification failed: retained package ${previousRoot?.kind === "link" ? "link" : "tree"} changed`,
+        );
       }
       for (const shim of shims) {
         const target = fromBackup ? shim.backup : shim.destination;
@@ -337,7 +326,13 @@ export async function swapStagedPackageInstall(params: {
       try {
         await verifyNpmRecovery(targetSwapRoot, false);
         // Returning to absence cannot establish a verified previous runtime.
-        packageRollbackVerified = hadPackage && messages.length === 0;
+        packageRollbackVerified =
+          hadPackage && previousRoot?.kind === "directory" && messages.length === 0;
+        if (previousRoot?.kind === "link" && messages.length === 0) {
+          messages.push(
+            `${rollback.length > 0 ? "Restored" : "Verified"} the npm package link and affected launchers; external checkout runtime integrity is unverified.`,
+          );
+        }
       } catch (error) {
         packageRollbackVerified = false;
         messages.push(formatErrorMessage(error));
@@ -398,8 +393,16 @@ export async function swapStagedPackageInstall(params: {
     if (hadPackage && !native) {
       // Unreadable or unbounded rollback material must fail while the old
       // package is still live, before beforeActivate may stop its service.
-      previousTree = await baseline.tree(targetSwapRoot);
-      previousVersion = previousTree.version;
+      previousRoot = await baseline.rootEntry(targetSwapRoot);
+      previousVersion = previousRoot.kind === "directory" ? previousRoot.tree.version : null;
+      if (previousRoot.kind === "link") {
+        rootLink = createNpmPackageRootLinkLifecycle({
+          liveRoot: targetSwapRoot,
+          backupRoot,
+          fingerprint: previousRoot,
+          timeoutMs: params.timeoutMs,
+        });
+      }
     }
     if (hadPackage && previousVersion && native) {
       previousDistFiles =
@@ -560,8 +563,12 @@ export async function swapStagedPackageInstall(params: {
               name: "global install backup retention",
             };
           }
+          const linkRetention = rootLink ? await rootLink.retire() : null;
+          if (linkRetention) {
+            return { ...step(1, null, linkRetention), name: "global install backup retention" };
+          }
           completed = true;
-          if (hadPackage) {
+          if (hadPackage && previousRoot?.kind !== "link") {
             await discardBackup(backupRoot, "old package");
           }
           if (shimBackupDir) {
@@ -570,6 +577,7 @@ export async function swapStagedPackageInstall(params: {
         },
       });
     }
+    await rootLink?.assertLiveUnchanged();
     // A native refusal must still allow the unchanged Gateway to restart.
     // Mark mutation only now: a copy-fallback move can fail after partial publication,
     // and only a completed backup permits restoration.
@@ -585,12 +593,18 @@ export async function swapStagedPackageInstall(params: {
           sourceHardlinks: PACKAGE_MANAGER_SWAP_SOURCE_HARDLINKS,
           to: backupRoot,
         });
+      } else if (rootLink) {
+        const acquisition = await rootLink.acquire();
+        if (!acquisition.acquired) {
+          activePackageRoot = null;
+          throw new Error(acquisition.error);
+        }
       } else {
         await fs.rename(targetSwapRoot, backupRoot);
       }
       activePackageRoot = null;
       packageBackedUp = true;
-      packageRollbackVerified = true;
+      packageRollbackVerified = native !== undefined || previousRoot?.kind === "directory";
     }
     rollback.push(async () => {
       if (!native && hadPackage) {
@@ -690,7 +704,11 @@ export async function swapStagedPackageInstall(params: {
       };
     }
     const cleanup = [
-      hadPackage && !retained ? await discardBackup(backupRoot, "old package") : null,
+      hadPackage && !retained
+        ? rootLink
+          ? await rootLink.retire()
+          : await discardBackup(backupRoot, "old package")
+        : null,
       shimBackupDir && !retained ? await discardBackup(shimBackupDir, "shim backup") : null,
     ];
     return {

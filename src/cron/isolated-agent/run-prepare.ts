@@ -15,7 +15,6 @@ import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveCreatorSandbox } from "../../gateway/operator-role-policy.js";
 import type { SourceDeliveryPlan } from "../../infra/outbound/source-delivery-plan.js";
-import type { PluginRegistry } from "../../plugins/registry-types.js";
 import { isCronSessionKey, parseAgentSessionKey } from "../../routing/session-key.js";
 import {
   AGENT_HARNESS_SESSION_ID_LOCKED_MESSAGE,
@@ -137,7 +136,6 @@ export type PreparedCronRunContext = {
    * the LLM idle watchdog can honor the cron's per-run choice.
    */
   runTimeoutOverrideMs?: number;
-  pluginRegistry?: PluginRegistry;
   preparedModelRuntimeLease: PreparedModelRuntimeLease;
 };
 
@@ -709,7 +707,6 @@ export async function prepareCronRunContext(params: {
         timeoutMs,
         preflightDiagnostics,
         runTimeoutOverrideMs,
-        pluginRegistry: preparedModelRuntimeLease.snapshot.pluginRegistry,
         preparedModelRuntimeLease,
       },
     };

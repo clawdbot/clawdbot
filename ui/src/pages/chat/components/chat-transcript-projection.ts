@@ -257,12 +257,10 @@ export function projectChatTranscript(
     props.userId,
   );
   const isDirectThread = defaultAvatarPlacement === "footer";
-  // Precedence: explicit prop, subagent classification/spawnedBy/key → none, direct → footer, else gutter.
+  // Precedence: explicit prop, subagent classification/key → none, direct → footer, else gutter.
   const avatarPlacement =
     props.avatarPlacement ??
-    (activeSession?.classification === "subagent" ||
-    activeSession?.spawnedBy ||
-    isSubagentSessionKey(props.sessionKey)
+    (activeSession?.classification === "subagent" || isSubagentSessionKey(props.sessionKey)
       ? "none"
       : defaultAvatarPlacement);
   const showLoadingSkeleton = props.loading && chatItems.length === 0 && !hasTypingActors;
@@ -300,6 +298,7 @@ export function projectChatTranscript(
     embedSandboxMode: props.embedSandboxMode ?? "scripts",
     allowExternalEmbedUrls: props.allowExternalEmbedUrls ?? false,
     fetchLinkFavicon: props.fetchLinkFavicon,
+    githubRepo: props.githubRepo,
     showAssistantAvatar: avatarPlacement === "gutter" && Boolean(assistantIdentity.avatar),
   } satisfies StreamGroupOptions;
   const streamGroupOptions = {
@@ -679,6 +678,8 @@ export function projectChatTranscript(
     props.embedSandboxMode ?? "scripts",
     props.allowExternalEmbedUrls ?? false,
     Boolean(props.fetchLinkFavicon),
+    props.githubRepo?.owner,
+    props.githubRepo?.repo,
     threadContextWindow,
     Boolean(props.onSetReply),
     Boolean(props.onRetryQueuedMessage),

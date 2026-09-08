@@ -14,6 +14,7 @@ import {
   type ContextEngineSessionTarget,
 } from "../../../context-engine/types.js";
 import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
+import { retireSessionMcpRuntime } from "../../agent-bundle-mcp-manager-api.js";
 import { listActiveProcessSessionReferences } from "../../bash-process-references.js";
 import { resolveProcessToolScopeKey } from "../../bash-process-scope.js";
 import { SessionManager } from "../../sessions/session-manager.js";
@@ -460,10 +461,23 @@ export function createEmbeddedRunCompactionRuntime(input: {
       });
       assertAdmittedActive();
       sessionPromptState.capturePreparedCompactionTarget(successor);
-      onAccepted?.();
-      sessionPromptState.notifyCompactionSessionAdopted(currentTarget.sessionId);
-      assertAdmittedActive();
-      return successor.sessionId !== currentTarget.sessionId ? currentTarget.sessionId : undefined;
+      try {
+        onAccepted?.();
+        sessionPromptState.notifyCompactionSessionAdopted(currentTarget.sessionId);
+        assertAdmittedActive();
+        return successor.sessionId !== currentTarget.sessionId
+          ? currentTarget.sessionId
+          : undefined;
+      } finally {
+        if (successor.sessionId !== currentTarget.sessionId) {
+          await retireSessionMcpRuntime({
+            sessionId: currentTarget.sessionId,
+            reason: "compaction-session-end",
+            retainAcrossReuse: true,
+            preserveActiveLeases: true,
+          });
+        }
+      }
     }
     const writerFence = sessionPromptState.sessionWriterFence;
     const recordAccepted = (accepted: AcceptedCompactionSuccessor) => {

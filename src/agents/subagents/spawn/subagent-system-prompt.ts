@@ -20,6 +20,7 @@ const COMPLETION_NOTES = {
 
 export function buildSubagentSpawnEnvelope(params: {
   completionMode: SubagentCompletionMode;
+  soleCollectorChild?: boolean;
   spawnMode: "run" | "session";
   task: string;
   requesterSessionKey?: string;
@@ -128,6 +129,9 @@ export function buildSubagentSpawnEnvelope(params: {
       ? undefined
       : [
           completionNote,
+          params.completionMode === "collector" && params.soleCollectorChild
+            ? "This is the only collector child in its group so far; unless more parallel children follow, an ordinary spawn (omit collect) is simpler and can be steered."
+            : undefined,
           params.completionMode === "announce"
             ? "Continue any independent work. Wait for completion events for ALL required children before your final answer; never busy-poll. If a completion arrives after your final answer, reply ONLY with NO_REPLY."
             : undefined,

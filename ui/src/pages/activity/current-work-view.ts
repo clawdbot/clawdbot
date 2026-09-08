@@ -24,6 +24,7 @@ type CurrentWorkProps = {
   connected: boolean;
   result?: SessionsListResult;
   loading: boolean;
+  incomplete: boolean;
   error?: string;
   onRetry: () => void;
 };
@@ -77,7 +78,7 @@ export function renderCurrentWork(props: CurrentWorkProps) {
     ? t("activity.currentWork.disconnected")
     : props.error
       ? t("activity.currentWork.loadFailed")
-      : !props.result
+      : !props.result || (rows.length === 0 && props.incomplete)
         ? t("activity.currentWork.loading")
         : rows.length === 0
           ? t("activity.currentWork.empty")

@@ -1,4 +1,3 @@
-// Media Core module implements inbound path policy behavior.
 import path from "node:path";
 
 const WILDCARD_SEGMENT = "*";

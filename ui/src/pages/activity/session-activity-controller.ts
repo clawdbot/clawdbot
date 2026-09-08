@@ -23,10 +23,11 @@ const CURRENT_WORK_CHANGE_LIMIT = 1_000;
 export class SessionActivityController implements ReactiveController {
   result?: SessionsListResult;
   error?: string;
+  incomplete = false;
   private requestState: "idle" | "loading" | "retrying" = "idle";
 
   get loading(): boolean {
-    return this.requestState !== "idle";
+    return this.requestState !== "idle" || this.incomplete;
   }
 
   get retrying(): boolean {
@@ -69,6 +70,7 @@ export class SessionActivityController implements ReactiveController {
     this.pending?.abort();
     this.pending = undefined;
     this.requestState = "idle";
+    this.incomplete = false;
     this.error = undefined;
     this.client = null;
     this.queryKey = undefined;
@@ -175,7 +177,9 @@ export class SessionActivityController implements ReactiveController {
         const change = readCurrentWorkChange(payload);
         if (change) {
           if (this.result) {
-            this.result = reconcileCurrentWork(this.result, [change]).result;
+            const next = reconcileCurrentWork(this.result, [change]);
+            this.result = next.result;
+            this.incomplete ||= next.requiresRefresh;
             this.host.requestUpdate();
           }
           if (this.pending) {
@@ -250,6 +254,7 @@ export class SessionActivityController implements ReactiveController {
     this.error = undefined;
     if (!sameQuery) {
       this.result = undefined;
+      this.incomplete = false;
     }
     this.refreshPending = false;
     this.host.requestUpdate();
@@ -259,10 +264,12 @@ export class SessionActivityController implements ReactiveController {
         if (this.pending === pending) {
           if (filters === "current") {
             const next = reconcileCurrentWork(result, this.pendingChanges);
-            if (this.changesOverflowed || next.requiresRefresh) {
-              // Conflicting run identities cannot certify an in-flight snapshot.
+            this.incomplete = this.changesOverflowed || next.requiresRefresh;
+            if (this.incomplete) {
               this.eventRefresh.schedule();
-            } else {
+            }
+            // Missing membership needs catch-up, but does not invalidate known rows.
+            if (!this.changesOverflowed && next.canPublish) {
               this.result = next.result;
             }
           } else {
@@ -274,6 +281,7 @@ export class SessionActivityController implements ReactiveController {
         if (this.pending === pending && !pending.signal.aborted) {
           if (filters === "current") {
             this.result = undefined;
+            this.incomplete = false;
           }
           this.error = error instanceof Error ? error.message : String(error);
         }

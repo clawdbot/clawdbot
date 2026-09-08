@@ -1,4 +1,5 @@
 /** Core-private spawned-session ownership lookup; not a published plugin SDK subpath. */
+import { redactIdentifier } from "@openclaw/normalization-core/node-crypto";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { normalizeLowercaseStringOrEmpty } from "../../packages/normalization-core/src/string-coerce.js";
 import { normalizeTrimmedStringList } from "../../packages/normalization-core/src/string-normalization.js";
@@ -12,7 +13,6 @@ import { GatewayClientRequestError } from "../gateway/client.js";
 import { GatewaySecretRefUnavailableError } from "../gateway/credentials.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { logWarn } from "../logger.js";
-import { redactIdentifier } from "../logging/redact-identifier.js";
 import {
   isAcpSessionKey,
   isIncognitoSessionKey,

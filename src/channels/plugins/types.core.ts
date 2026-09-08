@@ -760,6 +760,12 @@ export type ChannelMessageActionContext = {
   deliveryRetryOwner?: "caller";
   /** Reports concrete platform sends before a later multi-send action can fail. */
   onDeliveryResult?: ChannelMessageSendPollContext["onDeliveryResult"];
+  /** Host-owned live authority check; never read from model-controlled params. */
+  onPlatformSendDispatch?: () => Promise<void>;
+  /** Revalidate the same owner synchronously after waits and immediately before platform I/O. */
+  assertDirectAdapterHandoff?: () => void;
+  /** Ephemeral-authority sends must not enter replayable recovery. */
+  skipQueue?: boolean;
 };
 
 export type ChannelToolSend = {

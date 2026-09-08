@@ -3,7 +3,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SkillStatusEntry } from "../../api/types.ts";
 import type { SessionToolOverrides } from "../../lib/sessions/patch.ts";
 import { readOwnEntry } from "../../lib/sessions/tool-overrides.ts";
-import { loadSkillStatusReport } from "../../lib/skills/index.ts";
+import { loadSkillStatusReport } from "../../lib/skills/status-report.ts";
 import type { ChatComposerMenuSkill } from "./components/chat-composer-plus-menu.ts";
 
 export function composerWebSearchBaseEnabled(config: Record<string, unknown> | null): boolean {

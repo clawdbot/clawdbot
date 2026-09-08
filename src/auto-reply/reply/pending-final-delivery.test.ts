@@ -6,12 +6,12 @@ import {
 } from "../../agents/internal-runtime-context.js";
 import { setReplyPayloadMetadata } from "../reply-payload.js";
 import { markInboundContextLabel } from "./inbound-context-marker.js";
+import { sanitizePendingFinalDeliveryText } from "./pending-final-delivery-state.js";
 import {
   buildRecoverablePendingFinalDeliveryText,
   normalizePendingFinalDeliveryPayloads,
   normalizePendingFinalRecoveryPayloads,
   resolvePendingFinalDeliveryCompletion,
-  sanitizePendingFinalDeliveryText,
 } from "./pending-final-delivery.js";
 
 describe("resolvePendingFinalDeliveryCompletion", () => {

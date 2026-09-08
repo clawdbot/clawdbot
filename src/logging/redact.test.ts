@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { withEnv } from "../test-utils/env.js";
+import { replacePatternBounded } from "./redact-bounded.js";
 import {
   DEFAULT_REDACT_PATTERNS,
   TOOL_PAYLOAD_AMBIGUOUS_ASSIGNMENT_PATTERNS,
@@ -42,6 +43,42 @@ afterEach(() => {
     fs.rmSync(dir, { force: true, recursive: true });
   }
   tempDirs = [];
+});
+
+describe("bounded replacement output", () => {
+  it.each<[RegExp, string, string]>([
+    [/aaaa/g, "blue", "bluebbbbcccc"],
+    [/bbbb/g, "blue", "aaaabluecccc"],
+    [/cccc/g, "blue", "aaaabbbbblue"],
+    [/none/g, "blue", "aaaabbbbcccc"],
+    [/aaaa/g, "", "bbbbcccc"],
+  ])("preserves complete output for %s", (pattern, replacement, expected) => {
+    expect(
+      replacePatternBounded("aaaabbbbcccc", pattern, () => replacement, {
+        chunkThreshold: 4,
+        chunkSize: 4,
+      }),
+    ).toBe(expected);
+  });
+
+  it("keeps calling a stateful replacer after unchanged results", () => {
+    const calls: Array<{ match: string; offset: number; input: string }> = [];
+    const output = replacePatternBounded(
+      "red red red",
+      /red/g,
+      (match, offset, input) => {
+        calls.push({ match, offset, input });
+        return calls.length === 3 ? "blue" : match;
+      },
+      { chunkThreshold: 4, chunkSize: 4 },
+    );
+    expect(output).toBe("red red blue");
+    expect(calls).toEqual([
+      { match: "red", offset: 0, input: "red " },
+      { match: "red", offset: 0, input: "red " },
+      { match: "red", offset: 0, input: "red" },
+    ]);
+  });
 });
 
 describe("default redact pattern ownership", () => {

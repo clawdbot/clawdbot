@@ -230,7 +230,7 @@ describe.runIf(process.platform !== "win32")("CUA MCP proxy transport", () => {
     });
 
     expect(endpoint.requests[0]).toMatchObject({
-      id: 1,
+      id: 0,
       method: "initialize",
       params: {
         protocolVersion: "2025-06-18",
@@ -349,7 +349,7 @@ describe.runIf(process.platform !== "win32")("CUA MCP proxy transport", () => {
       "invalid response id",
     ],
     [
-      JSON.stringify({ jsonrpc: "2.0", id: 1, result: { protocolVersion: "2024-11-05" } }) + "\n",
+      JSON.stringify({ jsonrpc: "2.0", id: 0, result: { protocolVersion: "2024-11-05" } }) + "\n",
       "incompatible protocol version",
     ],
   ])("fails closed for %s", async (response, message) => {
@@ -439,7 +439,7 @@ describe.runIf(process.platform !== "win32")("CUA MCP proxy transport", () => {
           JSON.stringify({
             jsonrpc: "2.0",
             id: request.id,
-            error: { message: "fixture refusal" },
+            error: { code: -32000, message: "fixture refusal" },
           }) + "\n",
         );
       } else if (request.method === "tools/call") {
@@ -449,7 +449,7 @@ describe.runIf(process.platform !== "win32")("CUA MCP proxy transport", () => {
     const driver = createCuaMcpDriver(endpoint);
     onTestFinished(() => driver.dispose());
     await expect(driver.callTool("list_windows", { fail: true })).rejects.toThrow(
-      "COMPUTER_DRIVER_ERROR: CUA MCP request failed: fixture refusal",
+      "COMPUTER_DRIVER_ERROR: CUA MCP request failed: MCP error -32000: fixture refusal",
     );
     expect(driver.isAvailable()).toBe(true);
     await expect(driver.callTool("list_windows", {})).resolves.toMatchObject({ isError: false });

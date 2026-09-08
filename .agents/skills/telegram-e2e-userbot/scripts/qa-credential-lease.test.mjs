@@ -7,6 +7,57 @@ const env = {
   OPENCLAW_QA_CONVEX_SECRET_CI: "ci-secret",
 };
 
+test("a resumed event loop cannot use a lease whose confirmation expired", async () => {
+  const operations = [];
+  const lease = await acquireQaLease({
+    kind: "telegram-test-userbot",
+    leaseTtlMs: 100,
+    heartbeatIntervalMs: 10,
+    env,
+    fetchImpl: async (url) => {
+      operations.push(url.split("/").at(-1));
+      return Response.json(
+        url.endsWith("/acquire")
+          ? { status: "ok", credentialId: "synthetic", leaseToken: "synthetic", payload: {} }
+          : { status: "ok" },
+      );
+    },
+  });
+  // Timers cannot run during this suspension; the caller checks before yielding.
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 150);
+  assert.throws(() => lease.assertHealthy(), /confirmation expired/u);
+  await lease.abandon();
+  assert.deepEqual(operations, ["acquire", "heartbeat"]);
+});
+
+test("release immediately revokes retained access even while the broker reply is pending", async () => {
+  let finishRelease;
+  const lease = await acquireQaLease({
+    kind: "telegram-test-userbot",
+    env,
+    fetchImpl: async (url) => {
+      if (url.endsWith("/acquire"))
+        return Response.json({
+          status: "ok",
+          credentialId: "synthetic",
+          leaseToken: "synthetic",
+          payload: {},
+        });
+      if (url.endsWith("/release"))
+        return new Promise((resolve) => {
+          finishRelease = () => resolve(Response.json({ status: "ok" }));
+        });
+      return Response.json({ status: "ok" });
+    },
+  });
+  const pending = lease.release();
+  assert.throws(() => lease.assertHealthy(), /released/u);
+  assert.match((await lease.whenUnhealthy).message, /released/u);
+  await new Promise((resolve) => setImmediate(resolve));
+  finishRelease();
+  await pending;
+});
+
 test("uses the authenticated Convex CLI when broker variables are absent", async () => {
   const cliCalls = [];
   const brokerCalls = [];

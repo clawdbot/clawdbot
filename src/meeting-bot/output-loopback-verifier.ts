@@ -176,7 +176,7 @@ export function createMeetingOutputLoopbackVerifier(options: {
     nextInputStartSample = Math.max(0, inputSampleCount - rescanTailSamples);
   };
 
-  const consumePendingOutput = (allowShortReference: boolean) => {
+  const consumePendingOutput = () => {
     const pendingBytes = pendingOutputPcm.byteLength;
     for (let end = pendingBytes; end >= fullReferenceBytes; end -= fullReferenceBytes) {
       const candidate = pendingOutputPcm.subarray(end - fullReferenceBytes, end);
@@ -201,13 +201,6 @@ export function createMeetingOutputLoopbackVerifier(options: {
       pendingBytes > fullReferenceBytes
         ? pendingOutputPcm.subarray(pendingBytes - fullReferenceBytes)
         : pendingOutputPcm;
-    if (!outputFingerprint && allowShortReference && pendingOutputPcm.byteLength > 0) {
-      const fingerprint = createOutputFingerprint(pendingOutputPcm, fullReferenceBytes);
-      if (fingerprint) {
-        pendingOutputPcm = Buffer.alloc(0);
-        refreshFingerprint(fingerprint);
-      }
-    }
   };
 
   return {
@@ -299,10 +292,8 @@ export function createMeetingOutputLoopbackVerifier(options: {
       }
       const decoded = decodeMeetingAudio(audio, options.audioFormat);
       pendingOutputPcm = Buffer.concat([pendingOutputPcm, decoded]);
-      if (!outputFingerprint) {
-        consumePendingOutput(true);
-      } else if (pendingOutputPcm.byteLength >= fullReferenceBytes) {
-        consumePendingOutput(false);
+      if (!outputFingerprint || pendingOutputPcm.byteLength >= fullReferenceBytes) {
+        consumePendingOutput();
       }
     },
     getHealth(): MeetingOutputLoopbackHealth {

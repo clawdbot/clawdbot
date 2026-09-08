@@ -255,10 +255,16 @@ describe("scripts/test-extension.mts", () => {
     ["reporter", ["--reporter=json"]],
     ["output file", ["--outputFile=results.json"]],
     ["shard", ["--shard=1/2"]],
+    ["retry with shard", ["--retry=1", "--shard=1/2"]],
+    ["retry with report", ["--retry=1", "--reporter=json"]],
+    ["missing retry value", ["--retry"]],
+    ["invalid retry value", ["--retry=invalid"]],
+    ["missing exclude value", ["--exclude"]],
     ["bail", ["--bail=2"]],
     ["changed", ["--changed=origin/main"]],
     ["exclude", ["--exclude=extensions/matrix/src/**"]],
-    ["retry", ["--retry=1"]],
+    ["one-or-more extglob exclude", ["--exclude=extensions/matrix/src/+(a).test.ts"]],
+    ["exactly-one extglob exclude", ["--exclude=extensions/matrix/src/@(a).test.ts"]],
   ])("keeps Matrix %s runs in one process", (_name, vitestArgs) => {
     const root = bundledPluginRoot("matrix");
 
@@ -761,7 +767,7 @@ export default {root:${JSON.stringify(root)},cacheDir:${JSON.stringify(path.join
       const expectedHome = realHomeReplay ? JSON.stringify(home) : "path.join(tmpdir(), 'home')";
       writeFileSync(
         path.join(root, "selected.test.mjs"),
-        `import {homedir,tmpdir} from 'node:os';import path from 'node:path';import {test,expect} from 'vitest';test('selected native case',()=>{expect(process.env.HOME).toBe(${expectedHome});expect(homedir()).toBe(${expectedHome});});`,
+        `import {homedir,tmpdir} from 'node:os';import path from 'node:path';import {test,expect} from 'vitest';let attempts=0;test('selected native case',()=>{expect(++attempts).toBe(2);expect(process.env.HOME).toBe(${expectedHome});expect(homedir()).toBe(${expectedHome});});`,
       );
       for (const name of ["excluded", "unrelated"]) {
         writeFileSync(
@@ -774,6 +780,7 @@ export default {root:${JSON.stringify(root)},cacheDir:${JSON.stringify(path.join
         homeMode: realHomeReplay ? "live-aware" : undefined,
         args: [
           "--configLoader=native",
+          "--retry=1",
           "--reporter=verbose",
           "--reporter=json",
           `--outputFile=${report}`,
@@ -1001,6 +1008,34 @@ await new Promise(()=>{});export default {};`,
     expect(runParams.targets).toContain("codex/src/app-server/client.test.ts");
   });
 
+  it.each([
+    ["--retry=1", "--exclude", "extensions/codex/src/app-server/run-attempt.test.ts"],
+    ["--retry", "1", "--exclude=extensions/codex/src/app-server/run-attempt.test.ts"],
+  ])("preserves Codex process bounds with release options %j", async (...vitestArgs) => {
+    const runGroup = vi.fn<(params: RunGroupParams) => Promise<number>>().mockResolvedValue(0);
+    const excluded = "extensions/codex/src/app-server/run-attempt.test.ts";
+    const expectedFiles = listExtensionTestFilesForRoots([bundledPluginRoot("codex")])
+      .filter((file) => file !== excluded)
+      .map((file) => file.replace(/^extensions\//u, ""));
+
+    const result = await runExtensionBatchPlan(
+      resolveExtensionBatchPlan({ cwd: process.cwd(), extensionIds: ["codex"] }),
+      { runGroup, vitestArgs },
+    );
+
+    expect(result).toBe(0);
+    const calls = runGroup.mock.calls.map(([params]) => params);
+    expect(calls).toHaveLength(Math.ceil(expectedFiles.length / 12));
+    expect(calls.every((call) => call.targets.length <= 12)).toBe(true);
+    expect(calls.flatMap((call) => call.targets)).toEqual(expectedFiles);
+    for (const call of calls) {
+      expect(parseCLI(["vitest", "run", ...call.args]).options).toMatchObject({
+        retry: 1,
+        exclude: ["codex/src/app-server/run-attempt.test.ts"],
+      });
+    }
+  });
+
   it("runs Matrix extension batches in bounded sequential processes", async () => {
     const runGroup = vi.fn<(params: RunGroupParams) => Promise<number>>().mockResolvedValue(0);
     const expectedFiles = listExtensionTestFilesForRoots([bundledPluginRoot("matrix")]).map(
@@ -1042,7 +1077,6 @@ await new Promise(()=>{});export default {};`,
     ["--bail=2"],
     ["--changed=origin/main"],
     ["--exclude=extensions/matrix/src/**"],
-    ["--retry=1"],
   ])("keeps Matrix extension batch mode %s in one process", async (vitestArg) => {
     const runGroup = vi.fn<() => Promise<number>>().mockResolvedValue(0);
 

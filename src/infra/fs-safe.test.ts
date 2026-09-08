@@ -45,6 +45,7 @@ async function runWriteOpenRace(params: {
   runWrite: () => Promise<void>;
 }): Promise<void> {
   await withRealpathSymlinkRebindRace({
+    realpathApi: "native-sync",
     shouldFlip: (realpathInput) => realpathInput.endsWith(path.join("slot", "target.txt")),
     symlinkPath: params.slotPath,
     symlinkTarget: params.outsideDir,
@@ -570,6 +571,7 @@ describe("fs-safe", () => {
       });
 
       await withRealpathSymlinkRebindRace({
+        realpathApi: "native-sync",
         shouldFlip: (realpathInput) => realpathInput.endsWith(path.join("slot")),
         symlinkPath: slot,
         symlinkTarget: outside,
@@ -600,6 +602,7 @@ describe("fs-safe", () => {
       });
 
       await withRealpathSymlinkRebindRace({
+        realpathApi: "native-sync",
         shouldFlip: (realpathInput) => realpathInput.endsWith(path.join("slot")),
         symlinkPath: slot,
         symlinkTarget: outside,

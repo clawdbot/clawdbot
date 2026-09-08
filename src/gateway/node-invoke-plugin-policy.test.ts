@@ -851,7 +851,7 @@ describe("applyPluginNodeInvokePolicy", () => {
     await expectApprovalResolution(resultPromise, manager, record);
   });
 
-  it("sends an iOS cleanup wake when a plugin policy approval expires", async (testContext) => {
+  it("sends an iOS cleanup wake through the current delivery owner", async (testContext) => {
     const manager = createTestApprovalManager<PluginApprovalRequestPayload>(testContext, {
       approvalKind: "plugin",
     });
@@ -869,13 +869,17 @@ describe("applyPluginNodeInvokePolicy", () => {
 
     const resultPromise = invokeDemoPolicy(context, createOperatorClient());
     const record = await expectSinglePendingApproval(manager);
+    const replacementExpired = vi.fn(async () => {});
+    context.pluginApprovalIosPushDelivery = { handleExpired: replacementExpired };
     manager.expire(record.id, "timeout");
 
     await expect(resultPromise).resolves.toStrictEqual({
       ok: true,
       payload: { id: record.id, decision: null },
     });
-    expect(handleExpired).toHaveBeenCalledWith(expect.objectContaining({ id: record.id }));
+    expect(handleExpired).not.toHaveBeenCalled();
+    expect(replacementExpired).toHaveBeenCalledWith(expect.objectContaining({ id: record.id }));
+    expect(replacementExpired.mock.contexts).toEqual([context.pluginApprovalIosPushDelivery]);
   });
 
   it("ignores approval routes from unsigned node.invoke clients", async (testContext) => {

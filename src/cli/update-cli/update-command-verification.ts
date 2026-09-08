@@ -5,7 +5,6 @@ import type { UpdateRepairValidation } from "../../infra/update-repair-protocol.
 import { recordUpdateRunStep, recordUpdateRunVerification } from "../../infra/update-run-ledger.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { defaultRuntime } from "../../runtime.js";
-import { replaceCliName, resolveCliName } from "../cli-name.js";
 import { formatCliCommand } from "../command-format.js";
 import { resolveGatewayRestartProbeContext } from "../daemon-cli/restart-health-probe.js";
 import {
@@ -152,7 +151,7 @@ export async function verifyUpdatedGateway(params: {
         ]
       : []),
     `Restart log: ${resolveGatewayRestartLogPath(params.serviceEnv)}`,
-    `Run \`${replaceCliName(formatCliCommand("openclaw gateway status --deep"), resolveCliName())}\` for details.`,
+    `Run \`${formatCliCommand("openclaw gateway status --deep")}\` for details.`,
     ...formatPostUpdateGatewayRecoveryInstructions(params.result),
   ];
   const reason = health.versionMismatch

@@ -101,7 +101,7 @@ describe("runLinkUnderstanding", () => {
       } as MsgContext,
     });
 
-    expect(result).toEqual({ urls: [], outputs: [] });
+    expect(result).toEqual([]);
     expect(fetchWithSsrFGuard).not.toHaveBeenCalled();
     expect(runCommandWithTimeout).not.toHaveBeenCalled();
   });
@@ -117,7 +117,7 @@ describe("runLinkUnderstanding", () => {
       signal: controller.signal,
     });
 
-    expect(result.outputs).toEqual(["summarized page"]);
+    expect(result).toEqual(["summarized page"]);
     expect(fetchWithSsrFGuard).toHaveBeenCalledWith(
       expect.objectContaining({
         auditContext: "link-understanding",
@@ -190,12 +190,11 @@ describe("runLinkUnderstanding", () => {
     };
     const before = structuredClone(context);
 
-    const result = await applyLinkUnderstanding({
+    await applyLinkUnderstanding({
       cfg: cfg({ type: "cli", command: "summarize" }),
       ctx: context,
     });
 
-    expect(result.outputs).toEqual([]);
     expect(context).toEqual(before);
     expect(runCommandWithTimeout).not.toHaveBeenCalled();
   });
@@ -212,7 +211,7 @@ describe("runLinkUnderstanding", () => {
       ctx: ctx("see http://192.168.1.64.nip.io:8888/aws-iam-credentials"),
     });
 
-    expect(result.outputs).toEqual(["guarded page body"]);
+    expect(result).toEqual(["guarded page body"]);
     expect(fetchWithSsrFGuard).toHaveBeenCalledOnce();
     expect(runCommandWithTimeout).not.toHaveBeenCalled();
   });
@@ -236,7 +235,7 @@ describe("runLinkUnderstanding", () => {
       ctx: ctx(`see ${url}`),
     });
 
-    expect(result.outputs).toEqual([]);
+    expect(result).toEqual([]);
     expect(runCommandWithTimeout).not.toHaveBeenCalled();
   });
 
@@ -287,7 +286,7 @@ describe("runLinkUnderstanding", () => {
         cfg: cfg({ type: "cli", command: "summarize" }),
         signal: controller.signal,
       }),
-    ).resolves.toEqual({ urls: ["https://example.com/page"], outputs: [] });
+    ).resolves.toBeUndefined();
 
     expect(fetchWithSsrFGuard).not.toHaveBeenCalled();
     expect(runCommandWithTimeout).not.toHaveBeenCalled();
@@ -312,7 +311,7 @@ describe("runLinkUnderstanding", () => {
       signal: controller.signal,
     });
 
-    expect(result.outputs).toEqual(["second summary"]);
+    expect(result).toEqual(["second summary"]);
     for (const [index, command] of ["summarize-a", "summarize-b"].entries()) {
       expect(runCommandWithTimeout).toHaveBeenNthCalledWith(
         index + 1,

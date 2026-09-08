@@ -62,6 +62,8 @@ async function withPersistedOrphanBoundary(
     detachLeaf?: boolean;
     restartRecovery?: boolean;
     suppressNextUserMessagePersistence?: boolean;
+    idempotencyKey?: string;
+    excludeFromContext?: boolean;
   },
   run: (fixture: {
     input: Parameters<typeof prepareEmbeddedAttemptSessionBoundary>[0];
@@ -86,6 +88,8 @@ async function withPersistedOrphanBoundary(
       role: "user",
       content: "orphan wake",
       timestamp: 1,
+      ...(options.idempotencyKey ? { idempotencyKey: options.idempotencyKey } : {}),
+      ...(options.excludeFromContext ? { excludeFromContext: true } : {}),
       ...(options.detachLeaf
         ? { provenance: { kind: "inter_session", sourceTool: "subagent_announce" } }
         : {}),
@@ -334,6 +338,27 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
           releaseWorker?.();
           await Promise.all([outcome, waitForSessionTranscriptIndexReconcile(databaseOptions)]);
         }
+      },
+    );
+  });
+
+  it("keeps an excluded admitted user out of an internal retry's model input", async () => {
+    await withPersistedOrphanBoundary(
+      {
+        parent: true,
+        metadata: true,
+        suppressNextUserMessagePersistence: true,
+        excludeFromContext: true,
+      },
+      async ({ input, orphanId, target }) => {
+        const before = loadTranscriptEventsSync(target);
+        expect(before).toEqual(expect.arrayContaining([expect.objectContaining({ id: orphanId })]));
+        Object.assign(input.attempt, { skipPreparedUserTurnMessage: true });
+        const boundary = await prepareEmbeddedAttemptSessionBoundary(input);
+
+        expect(boundary.orphanRepair).toBeUndefined();
+        expect(input.activeSession.agent.state.messages).toEqual([]);
+        expect(loadTranscriptEventsSync(target)).toEqual(before);
       },
     );
   });
@@ -871,24 +896,51 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
   });
 
   it.each([
-    { name: "suppressed restart recovery", suppressNextUserMessagePersistence: true },
-    { name: "ordinary unsuppressed repair", suppressNextUserMessagePersistence: false },
-  ])("keeps one canonical user turn for $name", async ({ suppressNextUserMessagePersistence }) => {
-    const interrupted = "interrupted user wake";
+    {
+      name: "suppressed restart recovery",
+      suppressNextUserMessagePersistence: true,
+      internalContinuation: false,
+    },
+    {
+      name: "ordinary unsuppressed repair",
+      suppressNextUserMessagePersistence: false,
+      internalContinuation: false,
+    },
+    {
+      name: "an internal retry after the admitted user was persisted",
+      suppressNextUserMessagePersistence: true,
+      internalContinuation: true,
+    },
+  ])("keeps one canonical user turn for $name", async (testCase) => {
+    const { suppressNextUserMessagePersistence, internalContinuation } = testCase;
     const recoveryPrompt = "gateway restart recovery";
-    const mergedPrompt = `${interrupted}\n\n${recoveryPrompt}`;
     await withPersistedOrphanBoundary(
       {
         parent: true,
         metadata: true,
-        restartRecovery: suppressNextUserMessagePersistence,
+        restartRecovery: suppressNextUserMessagePersistence && !internalContinuation,
         suppressNextUserMessagePersistence,
+        idempotencyKey: internalContinuation ? "orphan-projection:user" : undefined,
       },
       async ({ input, manager, orphanId, target }) => {
         input.attempt.prompt = recoveryPrompt;
+        if (internalContinuation) {
+          const persistedUser = manager
+            .buildSessionContext()
+            .messages.find((message) => message.role === "user");
+          expect(persistedUser).toBeDefined();
+          Object.assign(input.attempt, { skipPreparedUserTurnMessage: true });
+          input.attempt.userTurnTranscriptRecorder = {
+            hasPersisted: () => true,
+            getPersistedMessage: () => persistedUser,
+          } as NonNullable<typeof input.attempt.userTurnTranscriptRecorder>;
+        }
         const boundary = await prepareEmbeddedAttemptSessionBoundary(input);
 
         expect(boundary.orphanRepair?.removeLeaf).toBe(!suppressNextUserMessagePersistence);
+        expect(boundary.orphanRepair?.contextEnginePrompt).toContain("orphan wake");
+        expect(boundary.orphanRepair?.contextEnginePrompt).toContain(recoveryPrompt);
+        const mergedPrompt = boundary.orphanRepair!.contextEnginePrompt;
         const appendedUser = manager.appendMessage({
           role: "user",
           content: mergedPrompt,

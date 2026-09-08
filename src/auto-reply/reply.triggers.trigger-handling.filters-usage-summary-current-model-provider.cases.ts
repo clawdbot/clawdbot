@@ -10,7 +10,7 @@ import {
 } from "../../test/helpers/auto-reply/trigger-handling-test-harness.js";
 import { listSessionEntriesCore } from "../config/sessions/session-accessor.js";
 
-type GetReplyFromConfig = typeof import("./reply.js").getReplyFromConfig;
+type GetReplyFromConfig = typeof import("./reply/get-reply.js").getReplyFromConfig;
 
 const usageMocks = getProviderUsageMocks();
 
