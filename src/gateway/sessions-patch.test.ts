@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import type { SessionCreatedActor } from "../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
+import { contextBudgetStatusFixture } from "../config/sessions/context-budget.test-support.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -1519,12 +1520,14 @@ describe("gateway sessions patch", () => {
               ? undefined
               : mainStoreEntry({
                   sessionId: sessionState === "existing" ? "sess-context" : undefined,
+                  contextBudgetStatus: contextBudgetStatusFixture(),
                 }),
           patch: { key: MAIN_SESSION_KEY, contextWindow: "200k" },
           loadGatewayModelCatalog,
         }),
       );
       expect(entry.contextWindow).toBe("200k");
+      expect(entry.contextBudgetStatus).toBeUndefined();
       expect(entry.liveModelSwitchPending).toBe(sessionState === "existing" ? true : undefined);
 
       const invalid = await runPatch({

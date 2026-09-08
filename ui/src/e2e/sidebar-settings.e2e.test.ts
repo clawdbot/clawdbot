@@ -378,7 +378,7 @@ suite.define(() => {
       await page.keyboard.press("Control+Shift+,");
       await waitForControlUiSettingsTakeover(page);
       await page.locator('.settings-sidebar__item[href="/settings/connection"]').click();
-      await page.getByLabel("Gateway Token", { exact: true }).fill("replacement-owner-token");
+      await page.getByLabel("Gateway secret", { exact: true }).fill("replacement-owner-token");
       await page.getByRole("button", { name: "Connect", exact: true }).click();
       await expect
         .poll(() =>
@@ -455,7 +455,7 @@ suite.define(() => {
     }
   });
 
-  it("keeps Gateway access fields editable by their visible labels", async () => {
+  it("keeps Gateway connection fields editable by their visible labels", async () => {
     const context = await suite.newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -470,50 +470,45 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server.baseUrl}settings/connection`);
 
-      const gatewayUrl = page.getByLabel("WebSocket URL", { exact: true });
-      const gatewayToken = page.getByLabel("Gateway Token", { exact: true });
-      const password = page.getByLabel("Password (not stored)", { exact: true });
-      const sessionKey = page.getByLabel("Default Session Key", { exact: true });
+      const gatewayUrl = page.getByLabel("Gateway URL", { exact: true });
+      const credential = page.getByLabel("Gateway secret", { exact: true });
+      const sessionKey = page.getByLabel("Default session", { exact: true });
 
-      for (const input of [gatewayUrl, gatewayToken, password, sessionKey]) {
+      for (const input of [gatewayUrl, credential, sessionKey]) {
         await input.waitFor({ state: "visible" });
         expect(await input.isEditable()).toBe(true);
       }
 
       await gatewayUrl.fill("ws://gateway.example.test:18789");
-      await gatewayToken.fill("browser-proof-token");
-      await password.fill("browser-proof-password");
+      await credential.fill("browser-proof-secret");
       await sessionKey.fill("browser-proof-session");
 
       expect(await gatewayUrl.inputValue()).toBe("ws://gateway.example.test:18789");
-      expect(await gatewayToken.inputValue()).toBe("browser-proof-token");
-      expect(await password.inputValue()).toBe("browser-proof-password");
+      expect(await credential.inputValue()).toBe("browser-proof-secret");
       expect(await sessionKey.inputValue()).toBe("browser-proof-session");
 
-      await page.getByRole("button", { name: "Toggle password visibility", exact: true }).click();
-      expect(await password.getAttribute("type")).toBe("text");
-      expect(await password.inputValue()).toBe("browser-proof-password");
-      expect(await password.isEditable()).toBe(true);
+      await page.getByRole("button", { name: "Toggle secret visibility", exact: true }).click();
+      expect(await credential.getAttribute("type")).toBe("text");
+      expect(await credential.inputValue()).toBe("browser-proof-secret");
+      expect(await credential.isEditable()).toBe(true);
 
       await gateway.waitForRequest("system.info");
       const reads = (await gateway.getRequests("system.info")).length;
       const connections = (await gateway.getRequests("connect")).length;
-      await page.getByRole("button", { name: "Toggle token visibility", exact: true }).click();
       await gateway.deferNext("connect");
       await gateway.closeLatest(1012, "synthetic reconnect");
       const notice = page.locator('.connection-action-block[role="status"]');
       await notice.waitFor();
-      expect(await gatewayToken.getAttribute("type")).toBe("password");
-      expect(await password.getAttribute("type")).toBe("password");
+      expect(await credential.getAttribute("type")).toBe("password");
       await gateway.waitForRequest("connect", { after: connections });
       await gateway.resolveDeferred("connect");
       await notice.waitFor({ state: "hidden" });
       await gateway.waitForRequest("system.info", { after: reads });
+      expect(await credential.getAttribute("type")).toBe("password");
 
       for (const [input, value] of [
         [gatewayUrl, "ws://gateway.example.test:18789"],
-        [gatewayToken, "browser-proof-token"],
-        [password, "browser-proof-password"],
+        [credential, "browser-proof-secret"],
         [sessionKey, "browser-proof-session"],
       ] as const) {
         expect(await input.inputValue()).toBe(value);

@@ -1,14 +1,7 @@
-export type Period = "day" | "week" | "month";
+import type { z } from "zod";
+import type { reportDocumentSchema, summaryDocumentSchema } from "./store-schema.js";
 
-/** Report window. Day windows are UTC [00:00, 24:00); weeks are ISO weeks (Monday start); months are calendar months. */
-export type PeriodDescriptor = {
-  period: Period;
-  /** "2026-08-20" | "2026-W34" | "2026-08" */
-  key: string;
-  sinceMs: number;
-  untilMs: number;
-  title: string;
-};
+export type { Period, PeriodDescriptor } from "./periods.js";
 
 export type ActivityWindow = { sinceMs: number; untilMs: number };
 
@@ -41,47 +34,11 @@ export type Roster = {
   byDiscordId: Map<string, Person>;
 };
 
-export type GithubItemKind =
-  | "commit"
-  | "pr_opened"
-  | "pr_merged"
-  | "pr_closed"
-  | "issue_opened"
-  | "issue_closed"
-  | "issue_comment"
-  | "review_comment"
-  | "security_advisory";
+export type GithubItemKind = GithubItem["kind"];
 
-export type GithubItem = {
-  kind: GithubItemKind;
-  /** "owner/name" */
-  repo: string;
-  number?: number;
-  title: string;
-  url: string;
-  atMs: number;
-  /** GitHub login credited for this item (merged_by for pr_merged, comment author for comments, commit author for commits). */
-  actor: string;
-  /** Logins from Co-authored-by trailers (commits only). */
-  coauthors?: string[];
-  /** Raw comment body, used only for duplicate collapsing and ignore patterns; never rendered. */
-  body?: string;
-};
+export type GithubItem = PersonReport["github"]["items"][number];
 
-export type GithubCounts = {
-  total: number;
-  commits: number;
-  prsOpened: number;
-  prsMerged: number;
-  prsClosed: number;
-  issuesOpened: number;
-  issuesClosed: number;
-  issueComments: number;
-  reviewComments: number;
-  securityAdvisories: number;
-  /** "owner/name" -> count */
-  repos: Record<string, number>;
-};
+export type GithubCounts = ReportDocument["totals"]["github"];
 
 export type DiscordMessage = {
   channelId: string;
@@ -95,81 +52,16 @@ export type DiscordMessage = {
   content: string;
 };
 
-type DiscordExcerpt = { channel: string; atMs: number; excerpt: string };
-
-type DiscordCounts = {
-  total: number;
-  /** channel name -> count */
-  channels: Record<string, number>;
-  excerpts: DiscordExcerpt[];
-};
-
-type PersonSummary = {
-  text: string;
-  confidence: "high" | "medium" | "low";
-  source: "model" | "fallback";
-};
-
-export type PersonReport = {
-  login: string;
-  display: string;
-  affiliation?: string;
-  roleGroup?: string;
-  roleLabel?: string;
-  access: string[];
-  areas: string[];
-  /** Other GitHub logins mapped to this person. */
-  aliases: string[];
-  github: GithubCounts & { items: GithubItem[] };
-  discord: DiscordCounts;
-  summary?: PersonSummary;
-};
+export type PersonReport = ReportDocument["members"][number];
 
 /** Non-member GitHub actor (external contributor or unmapped account): counts only, never excerpts. */
-export type OtherActor = { login: string; github: GithubCounts };
+export type OtherActor = ReportDocument["otherActors"][number];
 
-export type SourceStatus = {
-  ok: boolean;
-  warnings: string[];
-  /** True when the source could not cover the whole window (e.g. archive/API stops early). */
-  stale?: boolean;
-  /** Diagnostic counters, e.g. apiCalls, rateLimitRemaining, reposScanned, searchSplits. */
-  stats: Record<string, number | string>;
-};
+export type SourceStatus = ReportDocument["sources"]["github"];
 
-export type ReportDocument = {
-  version: 1;
-  period: PeriodDescriptor;
-  generatedAtMs: number;
-  status: "partial" | "closed";
-  orgs: string[];
-  memberCount: number;
-  activeMembers: number;
-  totals: {
-    github: GithubCounts;
-    discord: { messages: number; channels: Record<string, number> };
-  };
-  /** Sorted by activity descending; quiet members last. */
-  members: PersonReport[];
-  otherActors: OtherActor[];
-  /** Discord authors that produced messages but map to no member (id + count only). */
-  unmatchedDiscord: Array<{ authorId: string; messages: number }>;
-  sources: { github: SourceStatus; discord?: SourceStatus };
-  truncated?: boolean;
-};
+export type ReportDocument = z.infer<typeof reportDocumentSchema>;
 
-export type SummaryDocument = {
-  source: "model" | "fallback";
-  warnings?: string[];
-  model?: string;
-  generatedAtMs: number;
-  /** Markdown: 2-3 sentence overview followed by 4-6 "- **Workstream:** ..." bullets. */
-  globalSummary: string;
-  /** 4-7 one-line bullets naming concrete work streams. */
-  highlights: string[];
-  /** sha256 of the evidence digest; regeneration is skipped while unchanged. */
-  fingerprint: string;
-};
+export type SummaryDocument = z.infer<typeof summaryDocumentSchema>;
 
 type SourceLogger = {
   debug?: (message: string, meta?: Record<string, unknown>) => void;

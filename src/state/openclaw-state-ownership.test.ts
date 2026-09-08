@@ -252,7 +252,10 @@ describe("external shared-state ownership", () => {
     const fixture = claimFixture();
     const home = tempDirs.make("openclaw-state-ownership-doctor-");
     const snapshotStaging = vi.spyOn(sqliteReadonlyLocation, "prepareSqliteReadOnlyLocationSync");
-    const runPreflight = async (env: NodeJS.ProcessEnv) =>
+    const runPreflight = async (
+      env: NodeJS.ProcessEnv,
+      skipPristineStartupStateMigrations: boolean,
+    ) =>
       await withEnvAsync(
         {
           HOME: home,
@@ -267,12 +270,14 @@ describe("external shared-state ownership", () => {
             migrateLegacyConfig: false,
             migrateState: true,
             observe: false,
-            skipPristineStartupStateMigrations: true,
+            skipPristineStartupStateMigrations,
           }),
       );
     try {
-      await expect(runPreflight(fixture.unmarkedEnv)).rejects.toThrow(OpenClawStateOwnershipError);
-      await expect(runPreflight(fixture.externalEnv)).resolves.toBeDefined();
+      await expect(runPreflight(fixture.unmarkedEnv, false)).rejects.toThrow(
+        OpenClawStateOwnershipError,
+      );
+      await expect(runPreflight(fixture.externalEnv, true)).resolves.toBeDefined();
       expect(snapshotStaging).not.toHaveBeenCalled();
     } finally {
       snapshotStaging.mockRestore();

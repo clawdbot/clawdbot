@@ -16,6 +16,7 @@ export function createLazyChannelApprovalNativeRuntimeAdapter<
   TPendingEntry = unknown,
   TBinding = unknown,
   TFinalPayload = unknown,
+  TCapabilityBoundary extends boolean = false,
 >(params: {
   load: () => Promise<
     ChannelApprovalNativeRuntimeAdapter<
@@ -29,15 +30,19 @@ export function createLazyChannelApprovalNativeRuntimeAdapter<
   isConfigured: ChannelApprovalNativeAvailabilityAdapter["isConfigured"];
   shouldHandle: ChannelApprovalNativeAvailabilityAdapter["shouldHandle"];
   eventKinds?: readonly ChannelApprovalKind[];
+  /** Erases payload types only when registering with the non-generic channel capability. */
+  capabilityBoundary?: TCapabilityBoundary;
   /** @deprecated Trusted compatibility override; omit to derive ownership from the payload. */
   resolveApprovalKind?: ChannelApprovalNativeRuntimeAdapter["resolveApprovalKind"];
-}): ChannelApprovalNativeRuntimeAdapter<
-  TPendingPayload,
-  TPreparedTarget,
-  TPendingEntry,
-  TBinding,
-  TFinalPayload
-> {
+}): TCapabilityBoundary extends true
+  ? ChannelApprovalNativeRuntimeAdapter
+  : ChannelApprovalNativeRuntimeAdapter<
+      TPendingPayload,
+      TPreparedTarget,
+      TPendingEntry,
+      TBinding,
+      TFinalPayload
+    > {
   const loadRuntime = createLazyRuntimeModule(params.load);
   let loadedRuntime: ChannelApprovalNativeRuntimeAdapter<
     TPendingPayload,
@@ -136,5 +141,14 @@ export function createLazyChannelApprovalNativeRuntimeAdapter<
         loadedRuntime?.observe?.onDuplicateSkipped?.(runtimeParams),
       onDelivered: (runtimeParams) => loadedRuntime?.observe?.onDelivered?.(runtimeParams),
     },
-  };
+    // `capabilityBoundary` opts into the non-generic registration contract;
+    // otherwise this object preserves every type inferred from `load`.
+    // SAFETY: the conditional return type selects exactly those two representations.
+  } satisfies ChannelApprovalNativeRuntimeAdapter<
+    TPendingPayload,
+    TPreparedTarget,
+    TPendingEntry,
+    TBinding,
+    TFinalPayload
+  > as never; // SAFETY: the conditional return selects typed or capability-boundary form.
 }

@@ -412,6 +412,7 @@ suite.define(() => {
             kind: "direct",
             label:
               "An extremely long single-line session title that keeps going and going far past the sidebar width",
+            incognito: true,
             updatedAt: 1,
             hasActiveRun: false,
             status: "done",
@@ -531,9 +532,7 @@ suite.define(() => {
         };
         return {
           atoms: Array.from(
-            row.querySelectorAll(
-              ".sidebar-recent-session__details-endcap :is(svg, .session-unread-dot)",
-            ),
+            row.querySelectorAll(".sidebar-recent-session__details-endcap svg"),
             (element) => {
               const box = element.getBoundingClientRect();
               return { bottom: box.bottom, left: box.left, right: box.right, top: box.top };
@@ -543,14 +542,15 @@ suite.define(() => {
           busyHeight: row.getBoundingClientRect().height,
           endcap: rect(".sidebar-recent-session__details-endcap"),
           name: rect(".sidebar-recent-session__name"),
-          unread: rect(".session-unread-dot"),
-          state: rect(".session-row-state"),
+          unread: rect(".sidebar-session-indicator .session-unread-dot"),
+          lead: rect(".sidebar-session-indicator"),
           subtitle: rect(".sidebar-recent-session__subtitle"),
         };
       });
       const plain = await plainRow.evaluate((row) => ({
         height: row.getBoundingClientRect().height,
         singleLine: row.classList.contains("sidebar-recent-session--single-line"),
+        nameLeft: row.querySelector(".sidebar-recent-session__name")!.getBoundingClientRect().left,
       }));
 
       // A row with no secondary metadata no longer reserves the second line: it
@@ -564,15 +564,24 @@ suite.define(() => {
         (layout.subtitle.top + layout.subtitle.bottom) / 2,
         1,
       );
-      expect((layout.state.top + layout.state.bottom) / 2).toBeCloseTo(
-        (layout.subtitle.top + layout.subtitle.bottom) / 2,
+      expect((layout.unread.top + layout.unread.bottom) / 2).toBeCloseTo(
+        (layout.lead.top + layout.lead.bottom) / 2,
         1,
       );
-      expect(layout.state.left).toBeGreaterThanOrEqual(layout.endcap.left);
-      expect(layout.state.right).toBeLessThanOrEqual(layout.endcap.right);
-      expect(layout.unread.left).toBeGreaterThanOrEqual(layout.endcap.left);
-      expect(layout.unread.right).toBeLessThanOrEqual(layout.endcap.right);
-      expect(layout.atoms).toHaveLength(2);
+      expect((layout.unread.left + layout.unread.right) / 2).toBeCloseTo(
+        (layout.lead.left + layout.lead.right) / 2,
+        1,
+      );
+      expect(layout.unread.right - layout.unread.left).toBe(7);
+      expect(layout.unread.height).toBe(7);
+      expect(layout.unread.left).toBeGreaterThanOrEqual(layout.lead.left);
+      expect(layout.unread.right).toBeLessThanOrEqual(layout.lead.right);
+      expect(layout.unread.top).toBeGreaterThanOrEqual(layout.lead.top);
+      expect(layout.unread.bottom).toBeLessThanOrEqual(layout.lead.bottom);
+      expect(layout.lead.right).toBeLessThanOrEqual(layout.name.left);
+      expect(layout.name.left).toBeCloseTo(plain.nameLeft, 1);
+      expect(await busyRow.locator(".session-row-state").count()).toBe(0);
+      expect(layout.atoms).toHaveLength(1);
       for (const atom of layout.atoms) {
         expect(atom.left).toBeGreaterThanOrEqual(layout.endcap.left);
         expect(atom.right).toBeLessThanOrEqual(layout.endcap.right);
@@ -580,27 +589,34 @@ suite.define(() => {
         expect(atom.bottom).toBeLessThanOrEqual(layout.endcap.bottom);
       }
 
-      // A long title must truncate instead of crushing the collapsed row's icon
-      // endcap: unread icons keep their intrinsic width and stay
-      // inside the row, exactly like the two-line endcap under a long subtitle.
+      // Long titles must not crush either the leading unread dot or trailing metadata.
       const longRow = page.locator(`.sidebar-recent-session[data-session-key="${longKey}"]`);
       const longLayout = await longRow.evaluate((row) => {
         const endcap = row.querySelector(".sidebar-recent-session__details-endcap");
         const name = row.querySelector(".sidebar-recent-session__name");
-        if (!endcap || !name) {
+        const lead = row.querySelector(".sidebar-session-indicator");
+        const unread = lead?.querySelector(".session-unread-dot");
+        if (!endcap || !name || !lead || !unread) {
           throw new Error("Missing long-title session row fixture");
         }
         const endcapBox = endcap.getBoundingClientRect();
         const rowBox = row.getBoundingClientRect();
+        const rect = (element: Element) => {
+          const { x, y, left, right, top, bottom, width, height } = element.getBoundingClientRect();
+          return { x, y, left, right, top, bottom, width, height };
+        };
         return {
           atoms: Array.from(
-            endcap.querySelectorAll(":scope :is(svg, .session-unread-dot)"),
+            endcap.querySelectorAll(":scope svg"),
             (element) => element.getBoundingClientRect().width,
           ),
           endcapWidth: endcapBox.width,
           endcapRight: endcapBox.right,
           nameOverflowing: name.scrollWidth > name.clientWidth,
           rowRight: rowBox.right,
+          lead: rect(lead),
+          unread: rect(unread),
+          nameLeft: name.getBoundingClientRect().left,
           singleLine: row.classList.contains("sidebar-recent-session--single-line"),
         };
       });
@@ -610,11 +626,31 @@ suite.define(() => {
       const intrinsicAtomWidth = longLayout.atoms.reduce((sum, width) => sum + width, 0);
       expect(intrinsicAtomWidth).toBeGreaterThan(0);
       expect(longLayout.endcapWidth).toBeGreaterThanOrEqual(intrinsicAtomWidth);
+      expect(longLayout.unread.width).toBe(7);
+      expect(longLayout.unread.height).toBe(7);
+      expect(longLayout.unread.x + longLayout.unread.width / 2).toBeCloseTo(
+        longLayout.lead.x + longLayout.lead.width / 2,
+        1,
+      );
+      expect(longLayout.unread.y + longLayout.unread.height / 2).toBeCloseTo(
+        longLayout.lead.y + longLayout.lead.height / 2,
+        1,
+      );
+      expect(longLayout.unread.left).toBeGreaterThanOrEqual(longLayout.lead.left);
+      expect(longLayout.unread.right).toBeLessThanOrEqual(longLayout.lead.right);
+      expect(longLayout.unread.top).toBeGreaterThanOrEqual(longLayout.lead.top);
+      expect(longLayout.unread.bottom).toBeLessThanOrEqual(longLayout.lead.bottom);
+      expect(longLayout.lead.right).toBeLessThanOrEqual(longLayout.nameLeft);
+      expect(longLayout.nameLeft).toBeCloseTo(plain.nameLeft, 1);
 
       const unreadRow = page.locator(`.sidebar-recent-session[data-session-key="${unreadKey}"]`);
-      const unreadDot = unreadRow.locator(".session-unread-dot");
+      const unreadBadge = unreadRow.locator(
+        ".sidebar-session-indicator .session-glyph__badge--unread",
+      );
       const unreadTitle = unreadRow.locator(".sidebar-recent-session__name");
-      await unreadDot.waitFor({ state: "visible" });
+      await unreadBadge.waitFor({ state: "visible" });
+      const restingBadge = await unreadBadge.boundingBox();
+      const restingTitle = await unreadTitle.boundingBox();
       const restingWidth = await unreadTitle.evaluate((element) => element.clientWidth);
       await unreadRow.hover();
       if (captureUiProofEnabled) {
@@ -626,22 +662,26 @@ suite.define(() => {
           await takeControlUiElementScreenshot(page, shellNav, [unreadRow]),
         );
       }
-      await unreadDot.waitFor({ state: "hidden" });
+      await unreadBadge.waitFor({ state: "visible" });
+      expect(await unreadBadge.boundingBox()).toEqual(restingBadge);
+      expect((await unreadTitle.boundingBox())?.x).toBe(restingTitle?.x);
       const hoverWidth = await unreadTitle.evaluate((element) => element.clientWidth);
       const actionReserve = await unreadRow.evaluate((element) =>
         Number.parseFloat(
           getComputedStyle(element).getPropertyValue("--session-row-actions-reserve"),
         ),
       );
-      // Collapsing the unread track gives its width back to the title; merely
-      // making the dot transparent would still squeeze the text by the full reserve.
-      expect(restingWidth - hoverWidth).toBeLessThan(actionReserve);
+      // The leading badge stays fixed while the title reserves the full action width.
+      expect(restingWidth - hoverWidth).toBeCloseTo(actionReserve, 0);
       await page.mouse.move(900, 400);
-      await unreadDot.waitFor({ state: "visible" });
+      await unreadBadge.waitFor({ state: "visible" });
       await unreadRow.locator("[data-session-menu]").focus();
-      await unreadDot.waitFor({ state: "hidden" });
+      await unreadBadge.waitFor({ state: "visible" });
+      expect(await unreadBadge.boundingBox()).toEqual(restingBadge);
+      expect((await unreadTitle.boundingBox())?.x).toBe(restingTitle?.x);
+      expect(await unreadTitle.evaluate((element) => element.clientWidth)).toBe(hoverWidth);
       await sidebarResizer.focus();
-      await unreadDot.waitFor({ state: "visible" });
+      await unreadBadge.waitFor({ state: "visible" });
 
       await busyRow.hover();
       await expect

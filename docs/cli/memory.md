@@ -52,6 +52,9 @@ configured, falls back to the default agent.
 | `--json`    | Print JSON.                                                                                                                                                                                                                                                                      |
 | `--verbose` | Emit detailed per-phase logs.                                                                                                                                                                                                                                                    |
 
+With local llama.cpp embeddings, `--deep` and `--index` also show available
+server, model, capability, and endpoint diagnostics.
+
 If the `Dreaming` line stays `off` even with `dreaming.enabled: true`, or
 scheduled sweeps never seem to run, the managed dreaming cron depends on the
 default agent's heartbeat firing to trigger reconciliation. See

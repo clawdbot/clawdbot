@@ -6,7 +6,7 @@ import type { LogLevel } from "../../logging/levels.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveCliArgvInvocation } from "../argv-invocation.js";
 import { getVerboseFlag, isHelpOrVersionInvocation } from "../argv.js";
-import { resolveCliName } from "../cli-name.js";
+import { CLI_NAME } from "../cli-name.js";
 import {
   applyCliExecutionStartupPresentation,
   ensureCliExecutionBootstrap,
@@ -32,11 +32,10 @@ function setProcessTitleForCommand(actionCommand: Command) {
     current = current.parent;
   }
   const name = current.name();
-  const cliName = resolveCliName();
-  if (!name || name === cliName) {
+  if (!name || name === CLI_NAME) {
     return;
   }
-  process.title = `${cliName}-${name}`;
+  process.title = `${CLI_NAME}-${name}`;
 }
 
 function shouldAllowInvalidConfigForAction(actionCommand: Command, commandPath: string[]): boolean {
@@ -205,10 +204,7 @@ export function registerPreActionHooks(program: Command, programVersion: string)
       const { resolveGatewayRunOptions } = await import("../gateway-cli/run-options.js");
       const resolvedOptions = resolveGatewayRunOptions(actionCommand.opts(), actionCommand);
       allowInvalid ||= resolvedOptions.allowUnconfigured === true;
-      const opts = {
-        force: resolvedOptions.force === true,
-        reset: resolvedOptions.reset === true,
-      };
+      const opts = resolvedOptions;
       const shouldBootstrap = await prepareGatewayRunBootstrap({ opts, runtime: defaultRuntime });
       if (!shouldBootstrap) {
         return;

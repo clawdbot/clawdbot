@@ -390,7 +390,10 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
     const fixture = createInput();
     const result = prepareEmbeddedAttemptPromptContext({
       ...fixture.input,
-      heartbeatOutcomeContext: "Latest silent heartbeat outcome: deployment finished",
+      attempt: {
+        ...fixture.input.attempt,
+        currentInboundContext: { text: "Latest silent heartbeat outcome: deployment finished" },
+      },
     });
 
     expect(result.promptForSession).toBe("Visible request");

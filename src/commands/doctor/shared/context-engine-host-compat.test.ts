@@ -6,7 +6,7 @@ import {
   registerContextEngineForOwner,
 } from "../../../context-engine/registry.js";
 import type { ContextEngine, ContextEngineHostCapability } from "../../../context-engine/types.js";
-import { loadPluginRegistryHandle } from "../../../plugins/loader.js";
+import { acquirePluginRegistryForInspection } from "../../../plugins/loader.js";
 import { createEmptyPluginRegistry } from "../../../plugins/registry-empty.js";
 import {
   collectContextEngineHostCompatibilityWarnings,
@@ -36,7 +36,7 @@ vi.mock("../../../context-engine/init.js", () => ({
 }));
 
 vi.mock("../../../plugins/loader.js", () => ({
-  loadPluginRegistryHandle: vi.fn(),
+  acquirePluginRegistryForInspection: vi.fn(),
 }));
 
 let engineCounter = 0;
@@ -114,7 +114,10 @@ describe("doctor context-engine host compatibility", () => {
           lifecycle: "readOnlyDiscovery",
         });
       }
-      vi.mocked(loadPluginRegistryHandle).mockReturnValue(registry);
+      vi.mocked(acquirePluginRegistryForInspection).mockImplementation(async () => ({
+        registry,
+        release: async () => undefined,
+      }));
       const cfg = configWithEngine(id);
       const params = { cfg, doctorFixCommand: "openclaw doctor --fix" };
       const warnings = await collectContextEngineHostCompatibilityWarnings(params);

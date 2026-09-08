@@ -1882,6 +1882,7 @@
     {"id":"native.apple.cfcd671a54b772db","source":"Browser import requires Local mode","surface":"apple","sites":[{"kind":"ui-localized-call","path":"apps/macos/Sources/OpenClaw/BrowserProfileImportModel.swift"}]},
     {"id":"native.apple.70c05e8289e9b917","source":"Browser import unavailable","surface":"apple","sites":[{"kind":"ui-localized-call","path":"apps/macos/Sources/OpenClaw/BrowserProfileImportModel.swift"}]},
     {"id":"native.apple.c4826797af1aff18","source":"Browser logins imported","surface":"apple","sites":[{"kind":"ui-localized-call","path":"apps/macos/Sources/OpenClaw/BrowserProfileImportBannerView.swift"}]},
+    {"id":"native.apple.0644a7702bb80de1","source":"Browser sign-in expired. Reconnect this Gateway.","surface":"apple","sites":[{"kind":"conditional-branch","path":"apps/macos/Sources/OpenClaw/MacControlLiveOwner.swift"}]},
     {"id":"native.apple.d85980958d4a09a7","source":"Bubbling","surface":"apple","sites":[{"kind":"ui-localized-call","path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWorkingProgress.swift"}]},
     {"id":"native.apple.26fd12b42c3d33b5","source":"CLI","surface":"apple","sites":[{"kind":"ui-call","path":"apps/macos/Sources/OpenClaw/DebugSettings.swift"}]},
     {"id":"native.apple.19ab2b90949fa777","source":"CLI install failed","surface":"apple","sites":[{"kind":"conditional-branch","path":"apps/macos/Sources/OpenClaw/CLIInstallPrompter.swift"}]},

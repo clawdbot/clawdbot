@@ -18,8 +18,8 @@ Azure's request shape automatically.
 Realtime voice uses a separate configuration path
 (`plugins.entries.voice-call.config.realtime.providers.openai.azureEndpoint`)
 and is not affected by `models.providers.openai.baseUrl`. See the **Realtime
-voice** accordion under [Voice and speech](/providers/openai/voice-and-speech)
-for its Azure settings.
+voice** accordion under [Voice and speech](/providers/openai/voice-and-speech) for its Azure
+settings.
 </Note>
 
 Use Azure OpenAI when:
@@ -120,11 +120,11 @@ Azure portal.
 <Note>
 Azure OpenAI uses native transport and compat behavior but does not receive
 OpenClaw's hidden attribution headers - see the **Native vs OpenAI-compatible
-routes** accordion under [Advanced configuration](/providers/openai/advanced).
+routes** accordion under [Advanced configuration](/providers/openai/advanced#advanced-configuration).
 
 For chat or Responses traffic on Azure (beyond image generation), use the
 onboarding flow or a dedicated Azure provider config; `openai.baseUrl` alone
 does not pick up the Azure API/auth shape. A separate
-`azure-openai-responses/*` provider exists; see the
-[Server-side compaction accordion](/providers/openai/advanced#server-side-compaction-responses-api).
+`azure-openai-responses/*` provider exists; see the Server-side compaction
+accordion below.
 </Note>

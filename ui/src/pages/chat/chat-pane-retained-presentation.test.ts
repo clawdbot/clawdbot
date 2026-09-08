@@ -2,7 +2,9 @@
 /* @vitest-environment-options {"url":"http://chat-pane-retained.test/"} */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { SessionWorkspaceGetResult } from "../../api/types.ts";
 import { chatInputOwnerForContext } from "../../app/chat-input-owner.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
@@ -23,8 +25,15 @@ import {
   focusChatComposerFromPrintableKeydown,
   preparePaneSessionHandoff,
 } from "./chat-pane-shared.ts";
-import { createTestChatPane, type TestChatPane } from "./chat-pane.test-support.ts";
+import {
+  createGatewayBrowserClientFixture,
+  createSessionCapabilityFixture,
+  createTestChatPane,
+  type TestChatPane,
+} from "./chat-pane.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
+import { createPageState } from "./chat-state-page.ts";
+import { openSessionWorkspaceFile } from "./components/chat-session-workspace.ts";
 import { readTaskTranscript, type TaskDetailHost } from "./components/chat-task-detail-state.ts";
 import {
   isSidebarSlotVisible,
@@ -366,6 +375,59 @@ describe("chat pane retained presentation lifecycle", () => {
     expect(detailHost.taskDetailState).toBeUndefined();
     expect(announcement.getAttribute("aria-live")).toBe("off");
   });
+
+  it.each(["hidden", "disconnected"] as const)(
+    "does not restore a pending file preview after its retained pane is %s",
+    async (retirement) => {
+      vi.stubGlobal("localStorage", createStorageMock());
+      const file = createDeferred<SessionWorkspaceGetResult>();
+      const getFile = vi.fn(() => file.promise);
+      const client = createGatewayBrowserClientFixture();
+      const { pane, requestUpdate } = createTestChatPane({
+        client,
+        sessions: createSessionCapabilityFixture({ getFile }),
+      });
+      const state = createPageState(
+        pane.context,
+        { invalidate: requestUpdate, afterCommit: () => () => {} },
+        pane,
+      );
+      state.client = client;
+      state.connected = true;
+      state.connectionEpoch = pane.connectionGeneration;
+      state.sessionKey = "agent:main:current";
+      pane.sessionKey = state.sessionKey;
+      pane.state = state;
+      pane.chatState.attach(state);
+      pane.active = true;
+
+      openSessionWorkspaceFile(state, { path: "README.md" });
+      expect(getFile).toHaveBeenCalledExactlyOnceWith(state.sessionKey, "README.md", {
+        agentId: "main",
+      });
+      expect(isSidebarSlotVisible(state.sidebarLayout, "detail")).toBe(true);
+
+      if (retirement === "hidden") {
+        pane.presented = false;
+      } else {
+        pane.disconnectedCallback();
+      }
+      expect(state.sidebarContent).toBeNull();
+      file.resolve({
+        sessionKey: state.sessionKey,
+        file: {
+          kind: "read",
+          path: "README.md",
+          name: "README.md",
+          missing: false,
+          content: "This retired preview must not return.",
+        },
+      });
+      await file.promise;
+
+      expect(state.sidebarContent).toBeNull();
+    },
+  );
 
   it.each([false, true])(
     "stages a created-session draft only when its pane accepts navigation (%s)",

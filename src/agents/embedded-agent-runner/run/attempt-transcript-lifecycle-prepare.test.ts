@@ -24,6 +24,7 @@ import { createAssistantErrorTranscript } from "../../assistant-error-transcript
 import { installSessionToolResultGuard } from "../../session-tool-result-guard.js";
 import { SessionManager } from "../../sessions/session-manager.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
+import { rewriteTranscriptEntriesInSessionManager } from "../transcript-rewrite.js";
 import { prepareEmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-lifecycle-prepare.js";
 import type { PreparedEmbeddedRunInput } from "./execution-context.js";
 import { preparePersistedCurrentUserTurn } from "./pre-persisted-user-turn.js";
@@ -350,15 +351,74 @@ describe("admitted lazy session writer", () => {
     });
   });
 
-  it("does not let a retained manager write after its initial admission closes", async () => {
+  it.each(["active", "closed", "replaced"] as const)(
+    "uses the original manager admission for transcript rewrites (%s)",
+    async (state) => {
+      await withInitialWriter(async ({ admission, manager, replaceAdmission, target }) => {
+        const entryId = manager.appendMessage(userMessage);
+        const before = loadTranscriptEventsSync(target);
+        if (state === "closed") {
+          admission.close();
+        } else if (state === "replaced") {
+          await replaceAdmission();
+        }
+        const rewrite = () =>
+          runWithoutOwnedSessionTranscriptWrites(() =>
+            rewriteTranscriptEntriesInSessionManager({
+              sessionManager: manager,
+              replacements: [
+                { entryId, message: { ...userMessage, content: "Rewritten user turn" } },
+              ],
+            }),
+          );
+        if (state === "active") {
+          expect(rewrite().changed).toBe(true);
+          expect(SessionManager.open(target).getBranch()).toMatchObject([
+            { type: "message", message: { content: "Rewritten user turn" } },
+          ]);
+        } else {
+          expect(rewrite).toThrow();
+          expect(loadTranscriptEventsSync(target)).toEqual(before);
+          expect(manager.getBranch()).toMatchObject([{ type: "message", message: userMessage }]);
+        }
+      });
+    },
+  );
+
+  it.each(["append", "trim", "branch"] as const)(
+    "does not let a retained manager %s after its initial admission closes",
+    async (operation) => {
+      await withInitialWriter(async ({ admission, manager, target }) => {
+        const first = manager.appendMessage(userMessage);
+        const before = loadTranscriptEventsSync(target);
+        admission.close();
+        if (operation === "branch") {
+          await expect(
+            runWithoutOwnedSessionTranscriptWrites(() => manager.createBranchedSession(first)),
+          ).rejects.toThrow("admitted run authority is no longer active");
+        } else {
+          expect(() =>
+            runWithoutOwnedSessionTranscriptWrites(() =>
+              operation === "append"
+                ? manager.appendMessage(userMessage)
+                : manager.removeTrailingEntries(() => true),
+            ),
+          ).toThrow("admitted run authority is no longer active");
+        }
+        expect(loadTranscriptEventsSync(target)).toEqual(before);
+        expect(loadSessionEntry(target)?.sessionId).toBe(target.sessionId);
+      });
+    },
+  );
+
+  it("retains its initial admission even before the first append", async () => {
     await withInitialWriter(async ({ admission, manager, target }) => {
-      manager.appendMessage(userMessage);
-      const before = loadTranscriptEventsSync(target);
       admission.close();
       expect(() =>
         runWithoutOwnedSessionTranscriptWrites(() => manager.appendMessage(userMessage)),
       ).toThrow("admitted run authority is no longer active");
-      expect(loadTranscriptEventsSync(target)).toEqual(before);
+      expect(loadTranscriptEventsSync(target)).toEqual([]);
+      expect(loadSessionEntry(target)).toBeUndefined();
     });
   });
 });

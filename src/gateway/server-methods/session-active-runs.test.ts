@@ -17,6 +17,7 @@ import {
   createReplyOperation,
   markReplyOperationExecutionStarted,
 } from "../../auto-reply/reply/reply-run-registry.js";
+import { admitReplyTurn } from "../../auto-reply/reply/reply-turn-admission.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { registerAgentRunCapacityWait } from "../../infra/agent-run-capacity-wait.js";
 import {
@@ -610,6 +611,44 @@ it("resolves projected ownerless bare runs through the stable default owner", ()
     clearAgentRunContext("projected-ownerless");
   }
 });
+
+it.each(["agent:main:command", "global"])(
+  "keeps an adopted reply's global alias with its captured agent (source=%s)",
+  async (sourceKey) => {
+    const sessionId = "adopted-global-session";
+    const operation = createReplyOperation({
+      sessionKey: sourceKey,
+      sessionId,
+      agentId: "main",
+      resetTriggered: false,
+    });
+    try {
+      const admission = await admitReplyTurn({
+        sessionKey: "global",
+        sessionId,
+        agentId: "ops",
+        kind: "visible",
+        resetTriggered: false,
+        adoptOperation: operation,
+      });
+      expect(admission.status).toBe("owned");
+      for (const agentId of ["main", "ops"]) {
+        expect(
+          resolveVisibleActiveSessionRunState({
+            context: {},
+            requestedKey: `agent:${agentId}:main`,
+            canonicalKey: "global",
+            sessionId,
+            agentId,
+            defaultAgentId: "main",
+          }).active,
+        ).toBe(agentId === "ops");
+      }
+    } finally {
+      operation.complete();
+    }
+  },
+);
 
 it("projects only recorded capacity waits as queued and preserves independent running owners", () => {
   const sessionKey = "agent:main:capacity-wait";

@@ -423,6 +423,7 @@ export async function readTrackedClawHubSkillSlugs(workspaceDir: string): Promis
 export async function untrackClawHubSkill(
   workspaceDir: string,
   slug: string,
+  beforePersistentApply?: () => void,
 ): Promise<() => Promise<void>> {
   const trackedSlug = normalizeTrackedSkillSlug(slug);
   const lock = await readClawHubSkillsLockfile(workspaceDir);
@@ -431,6 +432,7 @@ export async function untrackClawHubSkill(
     return async () => undefined;
   }
   delete lock.skills[trackedSlug];
+  beforePersistentApply?.();
   await writeClawHubSkillsLockfile(workspaceDir, lock);
   return async () => {
     const current = await readClawHubSkillsLockfile(workspaceDir);

@@ -4,7 +4,7 @@ import type { ProviderCatalogContext } from "openclaw/plugin-sdk/provider-catalo
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
 import { projectBasetenLiveModels, resolveBasetenDynamicModel } from "./models.js";
-import { applyBasetenConfig } from "./onboard.js";
+import { applyBasetenSetupConfig } from "./onboard.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { buildStaticBasetenProvider } from "./provider-catalog.js";
 import { createBasetenThinkingWrapper } from "./stream.js";
@@ -21,7 +21,7 @@ export default defineSingleProviderPluginEntry({
     label: "Baseten",
     docsPath: "/providers/baseten",
     manifestAuth: {
-      applyConfig: applyBasetenConfig,
+      applyConfig: applyBasetenSetupConfig,
       noteTitle: "Baseten",
       noteMessage: [
         "Baseten hosts Thinking Machines Lab's Inkling and other frontier models behind one OpenAI-compatible API.",

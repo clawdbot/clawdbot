@@ -148,6 +148,9 @@ const pluginConversationBindingMocks = vi.hoisted(() => ({
   shownFallbackNoticeBindingIds: new Set<string>(),
 }));
 const sessionStoreMocks = vi.hoisted(() => ({
+  databaseEntryLoader: undefined as
+    | typeof import("../../config/sessions/session-accessor.sqlite-entry.js").loadSessionEntryWithDatabase
+    | undefined,
   currentEntry: undefined as Record<string, unknown> | undefined,
   entriesBySessionKey: new Map<string, Record<string, unknown>>(),
   loadSessionEntry: vi.fn((..._args: unknown[]) => sessionStoreMocks.currentEntry),
@@ -541,6 +544,20 @@ vi.mock("./dispatch-from-config.runtime.js", () => ({
   resolveSessionStorePathCore: sessionStoreMocks.resolveSessionStorePathCore,
   triggerInternalHook: internalHookMocks.triggerInternalHook,
   updateSessionStoreEntry: sessionStoreMocks.updateSessionStoreEntry,
+}));
+vi.mock("../../config/sessions/session-accessor.sqlite-entry.js", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("../../config/sessions/session-accessor.sqlite-entry.js")
+  >()),
+  loadSessionEntryWithDatabase: (
+    ...args: Parameters<NonNullable<typeof sessionStoreMocks.databaseEntryLoader>>
+  ) =>
+    sessionStoreMocks.databaseEntryLoader
+      ? sessionStoreMocks.databaseEntryLoader(...args)
+      : {
+          entry: sessionStoreMocks.loadSessionEntry(...args),
+          databaseClaim: undefined,
+        },
 }));
 vi.mock("../../config/sessions/session-accessor.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../config/sessions/session-accessor.js")>();

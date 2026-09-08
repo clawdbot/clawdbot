@@ -31,10 +31,15 @@ export async function disposeActiveTuiFixtures(): Promise<void> {
   }
 }
 
-export async function startTuiFixture(opts: { env?: NodeJS.ProcessEnv; execPath?: string } = {}) {
+export async function startTuiFixture(
+  opts: { env?: NodeJS.ProcessEnv; execPath?: string; holdStartupHistory?: boolean } = {},
+) {
   const tempDir = await mkdtemp(path.join(tmpdir(), "openclaw-tui-pty-"));
   const scriptPath = await writeTuiPtyFixtureScript(tempDir);
   const logPath = path.join(tempDir, "fixture-log.jsonl");
+  const startupHistoryReleasePath = opts.holdStartupHistory
+    ? path.join(tempDir, "startup-history.release")
+    : undefined;
   const execPath = opts.execPath ?? process.execPath;
   const run = startPty(execPath, resolveRuntimeWorkerArgv(pathToFileURL(scriptPath), execPath), {
     activeRuns,
@@ -44,14 +49,35 @@ export async function startTuiFixture(opts: { env?: NodeJS.ProcessEnv; execPath?
       OPENCLAW_TUI_PTY_LOG_PATH: logPath,
       NO_COLOR: undefined,
       ...opts.env,
+      OPENCLAW_TUI_PTY_STARTUP_RELEASE_PATH: startupHistoryReleasePath,
     },
     exitTimeoutMs: EXIT_TIMEOUT_MS,
     outputTimeoutMs: OUTPUT_TIMEOUT_MS,
   });
 
+  let releaseStartupHistoryPromise: Promise<void> | undefined;
+  const releaseStartupHistory = () => {
+    releaseStartupHistoryPromise ??= startupHistoryReleasePath
+      ? writeFile(startupHistoryReleasePath, "")
+      : Promise.resolve();
+    return releaseStartupHistoryPromise;
+  };
+  if (startupHistoryReleasePath) {
+    const dispose = run.dispose;
+    // Suite cleanup must release held initialization even when its test never runs.
+    run.dispose = async () => {
+      try {
+        await releaseStartupHistory();
+      } finally {
+        await dispose();
+      }
+    };
+  }
+
   return {
     run,
     logPath,
+    releaseStartupHistory,
     waitForLogEntry: async (predicate: (entry: FixtureLogEntry) => boolean, timeoutMs?: number) =>
       await waitForFixtureLogEntry(logPath, predicate, timeoutMs ?? OUTPUT_TIMEOUT_MS, run.output),
     cleanup: async () => {
@@ -460,6 +486,7 @@ export async function writeTuiPtyFixtureScript(dir: string) {
               : null;
           const delayMs =
             rapidSwitchMarker === "A" ? 500 : rapidSwitchMarker === "B" ? 40 : startupDelayMs;
+          ${TUI_PTY_STARTUP_SESSION_FIXTURE.historyBarrier}
           if (delayMs > 0) {
             await new Promise((resolve) => setTimeout(resolve, delayMs));
           }

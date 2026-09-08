@@ -135,6 +135,48 @@ once per immutable index. Mutable management indexes remain uncached. Lookup
 methods and install-record results remain caller-owned; enablement and trust are
 evaluated from the current operation's policy rather than stored in these facts.
 
+Outside a retained generation, reusing a loaded plugin requires the
+selected ID, origin, root, entry point, and artifact-selection inputs to agree.
+The loader records source/build selection and any executed setup entry on the loaded owner. Explicit manifest
+and discovery source selections, including admitted sidecars, also participate in the loader cache key. Raw
+discovery additionally needs matching load identity before active reuse because
+its manifest winners have not been established. Retained generations remain
+authoritative, including empty selections. Source/build views may share an owner
+only when the loader resolves them to the same execution root and entry under
+the retained preference. Path names or matching
+entry stems alone do not establish ownership. Runtime reuse and loading share
+the existing lifecycle-owned artifact facts and final execution step, including
+executed setup entries. Discovery and artifact identity retain their selected paths.
+
+Bounded loaded-owner lookups retain the owner's artifact policy when no preference
+is specified. An explicit preference is checked; exact loader requests apply the
+full cache identity and cold-load defaults.
+
+Provider lookup uses an explicit caller workspace first, then the workspace
+recorded by its metadata snapshot, including an explicitly shared-root scope.
+Only narrowed metadata views without a workspace field inherit the active
+workspace. The registry's existing load context retains its workspace so a request or active
+registry from another workspace cannot replace a prepared selection.
+
+Provider hooks share the canonical provider registry selection. Declared providers
+reserve their names, while provider-triggered helpers still activate beside them.
+Required load owners and eligible hook receivers are captured separately in that
+selection. Declared provider owners need matching physical records and provider
+registrations before reuse; activation-only helpers may have no provider rows,
+but need a successfully completed runtime registration pass. A setup-only pass
+cannot prove their runtime contributions are complete. References without a
+static owner select only their matching runtime aliases within the requested scope.
+Loaded aliases can identify owners to reload, but only the selected registry's
+current registrations determine alias receivers.
+Loaded-only failover inspection never discovers or activates plugins. When it uses
+registry-owned metadata, the caller's discovery and policy inputs must match the
+recorded fingerprint. The loader captures normalized registration inputs, including
+paired source config, once; later metadata updates preserve that record. Ordinary
+lookups reuse callbacks only when those inputs match; retained generations stay
+authoritative. Model-reference parsing reads the same declared-owner facts
+from the registry or retained request scope, so a failed declared provider cannot
+be replaced by another provider's hook alias.
+
 Provider auth aliases are normalized and indexed with the snapshot. Lookups
 select among those prepared candidates using the current workspace trust config;
 they do not cache trust decisions or credentials. Callers supplying a partial
@@ -337,9 +379,16 @@ releases its lease without classifying the healthy process as a startup failure.
 
 Normalization dispatch is hook-specific:
 
-- `normalizeModelId` uses the matched provider hook's non-empty result. If none
-  is returned, OpenClaw applies manifest-declared model-ID normalization; it does
-  not try other providers' normalization hooks.
+- Model references apply manifest-declared model-ID normalization once before
+  `normalizeModelId` dispatch. The matched provider hook can refine that prepared
+  model ID; an empty result keeps it unchanged. OpenClaw does not try other
+  providers' normalization hooks or reapply manifest rules afterward.
+  Reference parsing reads the selected runtime registry without activating
+  plugins. Executable normalization requires a prepared runtime owner; reads
+  without one use static manifest policies only.
+  A directly registered provider owns its ID; compatibility aliases match only
+  when no literal provider exists, preserving alias-only routes and explicit
+  API-owner eligibility.
 - `normalizeTransport` tries the matched provider first. Only if that does not
   change `api` or `baseUrl` and the provider has no `models.providers.<id>` entry
   does it try other transport hooks, stopping at the first change.

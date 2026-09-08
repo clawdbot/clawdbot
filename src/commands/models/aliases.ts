@@ -6,7 +6,12 @@ import { normalizeAgentModelMapForConfig } from "../../config/model-input.js";
 import { type RuntimeEnv, writeRuntimeJson, writeRuntimeStdout } from "../../runtime.js";
 import { normalizeAlias } from "./alias-name.js";
 import { loadModelsConfig } from "./load-config.js";
-import { ensureFlagCompatibility, resolveModelTarget, updateConfig } from "./shared.js";
+import {
+  ensureFlagCompatibility,
+  resolveModelTarget,
+  upsertCanonicalModelConfigEntry,
+  updateConfig,
+} from "./shared.js";
 
 /** Lists configured model aliases as JSON, plain pairs, or human-readable rows. */
 export async function modelsAliasesListCommand(
@@ -56,32 +61,34 @@ export async function modelsAliasesAddCommand(
   const alias = normalizeAlias(aliasRaw);
   const normalizedAlias = alias.toLowerCase();
   let target = modelRaw;
-  await updateConfig((cfgLocal, context) => {
-    // Alias resolution must share the snapshot whose hash fences this write.
-    const resolved = resolveModelTarget({ raw: modelRaw, cfg: context.runtimeConfig });
-    const modelKey = `${resolved.provider}/${resolved.model}`;
-    target = modelKey;
-    const nextModels = { ...cfgLocal.agents?.defaults?.models };
-    // Model selection folds alias case, so case variants must not collide.
-    for (const [key, entry] of Object.entries(nextModels)) {
-      const existing = entry?.alias?.trim();
-      if (existing && existing.toLowerCase() === normalizedAlias && key !== modelKey) {
-        throw new Error(`Alias ${alias} already points to ${key}.`);
+  await updateConfig(
+    (cfgLocal, context) => {
+      // Alias resolution must share the snapshot whose hash fences this write.
+      const resolved = resolveModelTarget({ raw: modelRaw, cfg: context.runtimeConfig });
+      const nextModels = { ...cfgLocal.agents?.defaults?.models };
+      const modelKey = upsertCanonicalModelConfigEntry(nextModels, resolved, context);
+      target = modelKey;
+      // Model selection folds alias case, so case variants must not collide.
+      for (const [key, entry] of Object.entries(nextModels)) {
+        const existing = entry?.alias?.trim();
+        if (existing && existing.toLowerCase() === normalizedAlias && key !== modelKey) {
+          throw new Error(`Alias ${alias} already points to ${key}.`);
+        }
       }
-    }
-    const existing = nextModels[modelKey] ?? {};
-    nextModels[modelKey] = { ...existing, alias };
-    return {
-      ...cfgLocal,
-      agents: {
-        ...cfgLocal.agents,
-        defaults: {
-          ...cfgLocal.agents?.defaults,
-          models: nextModels,
+      nextModels[modelKey] = { ...nextModels[modelKey], alias };
+      return {
+        ...cfgLocal,
+        agents: {
+          ...cfgLocal.agents,
+          defaults: {
+            ...cfgLocal.agents?.defaults,
+            models: nextModels,
+          },
         },
-      },
-    };
-  });
+      };
+    },
+    (_cfg, context) => [resolveModelTarget({ raw: modelRaw, cfg: context.runtimeConfig })],
+  );
 
   logConfigUpdated(runtime);
   runtime.log(`Alias ${alias} -> ${target}`);

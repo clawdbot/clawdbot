@@ -1,4 +1,3 @@
-// Memory Host SDK module implements openclaw runtime auth behavior.
 import { requireApiKey } from "../../../../src/agents/model-auth-runtime-shared.js";
 import type { resolveApiKeyForProviderCore as ResolveApiKeyForProvider } from "../../../../src/agents/model-auth.js";
 

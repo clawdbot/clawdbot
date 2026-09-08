@@ -20,6 +20,32 @@ import {
   resolveDeliveryProvenCanonicalSessionKey,
 } from "./store-entry.js";
 
+export type SessionTranscriptContextVersion = {
+  generation: string | null;
+  rawSeq: number | null;
+};
+
+export function readTranscriptContextVersionInTransaction(
+  database: Pick<OpenClawAgentDatabase, "db">,
+  sessionId: string,
+) {
+  const db = getSessionKysely(database.db);
+  return executeSqliteQueryTakeFirstSync(
+    database.db,
+    db
+      .selectFrom("transcript_events")
+      .select((eb) => [
+        eb.fn.max<number | null>("seq").as("rawSeq"),
+        eb
+          .selectFrom("transcript_rewrite_watermarks")
+          .select("generation")
+          .where("session_id", "=", sessionId)
+          .as("generation"),
+      ])
+      .where("session_id", "=", sessionId),
+  )!;
+}
+
 function createTranscriptGeneration(): string {
   return randomUUID().replaceAll("-", "");
 }

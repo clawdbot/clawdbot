@@ -32,6 +32,35 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => {
 setupRunAttemptTestHooks();
 
 describe("Codex source-bound pending input", () => {
+  it("retains the resolved agent in a raw global registration", async () => {
+    registrations.mockClear();
+    const harness = createStartedThreadHarness();
+    const params = createTestParams();
+    params.agentId = "ops";
+    params.sessionKey = "global";
+    params.config = {
+      ...params.config,
+      agents: { list: [{ id: "main", default: true }, { id: "ops" }] },
+      session: { scope: "global" },
+    };
+    const run = runCodexAppServerAttempt(params);
+    try {
+      await harness.waitForMethod("turn/start");
+      await vi.waitFor(() => {
+        expect(registrations).toHaveBeenCalledWith(
+          params.sessionId,
+          expect.anything(),
+          "global",
+          params.sessionFile,
+          "ops",
+        );
+      }, fastWait);
+    } finally {
+      await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+      await run;
+    }
+  });
+
   it.each(["open", "closed", "reassigned"] as const)(
     "guards a Codex pending-question claim across registration: %s",
     async (transition) => {

@@ -25,10 +25,6 @@ type ZodSchemaWithToJsonSchema = ZodTypeAny & {
   toJSONSchema?: (params?: Record<string, unknown>) => unknown;
 };
 
-type ExtendableZodObject = ZodTypeAny & {
-  extend: (shape: Record<string, ZodTypeAny>) => ZodTypeAny;
-};
-
 /** Shared allowlist entry shape for channel sender/user ids. */
 const AllowFromEntrySchema = z.union([z.string(), z.number()]);
 /** Optional allowlist array used by channel config schema builders. */
@@ -113,12 +109,12 @@ export function buildNestedDmConfigSchema(extraShape?: ZodRawShape) {
 }
 
 /** Add `accounts` catchall and `defaultAccount` fields to a channel account schema. */
-export function buildCatchallMultiAccountChannelSchema<T extends ExtendableZodObject>(
+export function buildCatchallMultiAccountChannelSchema<T extends z.ZodObject>(
   accountSchema: T,
-): T {
-  return buildMultiAccountChannelSchema(accountSchema as unknown as z.ZodObject, {
+): MultiAccountChannelSchema<T, T, false> {
+  return buildMultiAccountChannelSchema(accountSchema, {
     accountsMode: "catchall",
-  }) as unknown as T;
+  });
 }
 
 type MultiAccountSchemaBaseOptions<TAccount extends ZodTypeAny, TOptional extends boolean> = {

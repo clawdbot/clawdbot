@@ -5,7 +5,6 @@ import {
   buildLiveModelFileProbeRetryContext,
   buildLiveModelImageProbeContext,
   fileProbeTextMatches,
-  imageProbeTextMatches,
   isLiveModelProbeEnabled,
   LIVE_MODEL_FILE_PROBE_TOKEN,
   modelSupportsImageInput,
@@ -178,9 +177,6 @@ describe("live model turn probes", () => {
   it("matches expected probe replies", () => {
     expect(fileProbeTextMatches(`The value is ${LIVE_MODEL_FILE_PROBE_TOKEN}.`)).toBe(true);
     expect(fileProbeTextMatches("amber")).toBe(false);
-    expect(imageProbeTextMatches("OK")).toBe(true);
-    expect(imageProbeTextMatches("blue")).toBe(false);
-    expect(imageProbeTextMatches('" or "Reply with exactly')).toBe(false);
   });
 
   it("retries one mismatched image reply and accepts only a matching retry", async () => {

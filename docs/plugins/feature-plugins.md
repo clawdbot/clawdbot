@@ -176,7 +176,10 @@ A composer replacement receives the current draft, admission state, disabled
 reason, and canonical `setDraft`, `send`, and optional `abort` operations. Use
 these operations instead of issuing a raw chat RPC. `send()` resolves `true`
 when admitted, `false` when rejected, or `undefined` for a local command or no
-submission. Show rejected submissions rather than clearing the draft.
+submission. Show rejected submissions rather than clearing the draft. Composer
+operations retire when the view stops being presented, even while its DOM and
+host lifetime survive. Use the fresh operations supplied by `update` when the
+view is presented again; previously captured operations remain retired.
 
 The host also exposes session and agent snapshots and operations, plugin page
 navigation, authenticated requests, and subscriptions. Session and agent

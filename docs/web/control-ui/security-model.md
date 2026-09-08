@@ -1,7 +1,8 @@
 ---
-summary: "Content security policy, authenticated media routes, and approval links"
+summary: "Content security policy, public transcript boundaries, authenticated media routes, and approval links"
 read_when:
   - Reviewing Control UI browser security
+  - Exposing public session links through a login proxy
   - Debugging a blocked avatar or assistant media request
   - Forwarding an approval link
 title: "Security model"
@@ -26,6 +27,26 @@ In practice:
 - Remote avatar URLs emitted by channel metadata are stripped at the Control UI's avatar helpers and replaced with the built-in logo/badge, so a compromised or malicious channel cannot force arbitrary remote image fetches from an operator browser.
 
 The browser-side CSP restriction itself is always on and not configurable.
+
+## Public transcript boundary
+
+The authenticated Control UI does not become public when a session is published.
+Public transcript links use the dedicated `/share/session?token=<opaque>` route;
+the encrypted token is the read capability and does not reveal the agent, session
+key, session ID, or publication ID. Anonymous visitors cannot use it to connect
+to the Gateway, send messages, invoke tools, or open other Control UI routes.
+
+The public renderer reads only user messages and assistant final-answer text.
+It omits tools, reasoning, files, images, widgets, hidden messages, and internal
+metadata, and applies credential-pattern redaction. Responses use a restrictive
+content security policy, `Cache-Control: no-store`, and `Referrer-Policy: no-referrer`.
+Treat the complete URL as public: anyone who receives it can read existing and
+future published text until the creator or a Gateway admin disables access.
+
+When a login proxy protects the host, bypass authentication only for the Control
+UI's `/share/*` namespace. Keep the WebSocket, bootstrap, API, dashboard, and all
+other routes protected. The detailed deployment, token, revocation, and restore
+contract is in [Public session transcripts](/web/urls#public-session-transcripts).
 
 ## Avatar route auth
 

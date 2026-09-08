@@ -2,6 +2,38 @@ import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveGatewayModelThinkingProfile } from "./session-utils-model.js";
 
+describe("Gateway all-null thinking map", () => {
+  it("preserves off as the default without selectable levels", () => {
+    const profile = resolveGatewayModelThinkingProfile({
+      cfg: {},
+      agentId: "main",
+      provider: "metadata-fixture",
+      model: "no-effort",
+      agentRuntime: "openclaw",
+      modelCatalog: [
+        {
+          provider: "metadata-fixture",
+          id: "no-effort",
+          name: "No selectable effort",
+          api: "openai-completions",
+          reasoning: true,
+          thinkingLevelMap: {
+            off: null,
+            minimal: null,
+            low: null,
+            medium: null,
+            high: null,
+            xhigh: null,
+            max: null,
+          },
+        },
+      ],
+    });
+
+    expect(profile).toEqual({ thinkingLevels: [], thinkingDefault: "off" });
+  });
+});
+
 describe.each([
   { agentRuntime: "openclaw", api: "openai-responses" as const },
   { agentRuntime: "codex", api: "openai-chatgpt-responses" as const },

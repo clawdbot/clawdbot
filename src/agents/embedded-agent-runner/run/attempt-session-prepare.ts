@@ -347,6 +347,7 @@ type SessionBoundaryAttempt = Pick<
   | "onUserMessagePersistenceInvalidated"
   | "operation"
   | "prompt"
+  | "skipPreparedUserTurnMessage"
   | "suppressNextUserMessagePersistence"
   | "trigger"
   | "userTurnTranscriptRecorder"
@@ -386,13 +387,19 @@ export async function prepareEmbeddedAttemptSessionBoundary(input: {
     : resolveOrphanRepairPlan({
         sessionManager,
         prompt: attempt.prompt,
-        preserveLeaf: isMainSessionRestartRecoveryInputProvenance(attempt.inputProvenance),
+        preserveLeaf:
+          attempt.skipPreparedUserTurnMessage === true ||
+          isMainSessionRestartRecoveryInputProvenance(attempt.inputProvenance),
         trigger: attempt.trigger,
       });
   // Admission can persist the turn before prompt preparation intentionally omits it.
   // Prefer the recorder-owned row so orphan repair cannot detach the canonical leaf.
-  const currentUserTurnMessage =
-    attempt.userTurnTranscriptRecorder?.getPersistedMessage?.() ?? input.preparedUserTurnMessage;
+  // Internal retries merge the durable orphan into model-only continuation
+  // context; they do not resubmit the admitted user prompt after removing it.
+  const currentUserTurnMessage = attempt.skipPreparedUserTurnMessage
+    ? undefined
+    : (attempt.userTurnTranscriptRecorder?.getPersistedMessage?.() ??
+      input.preparedUserTurnMessage);
   const reconciledCurrentUser =
     !preserveExactPrompt &&
     reconcilePrePersistedCurrentUserTurn({

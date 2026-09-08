@@ -1,10 +1,20 @@
 import { execFile, spawnSync } from "node:child_process";
 import path from "node:path";
+import { hasErrnoCode } from "./errno.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 
 export const SQLITE_READONLY_CHILD_ARG = "--openclaw-sqlite-readonly-child";
 const SQLITE_READONLY_STDERR_TAIL_CHARS = 4_000;
+// A 300 MiB synthetic database took 1.13–3.15 s to snapshot and <1 s to
+// integrity-check. Leave storage headroom after admission has excluded writers.
+export const SQLITE_INSPECTION_TIMEOUT_MS = 30_000;
+
+export function sqliteInspectionTimeoutError(operation: string, pathname: string): Error {
+  return new Error(
+    `SQLite ${operation} timed out after 30 seconds for ${pathname}. Stop the Gateway service and other OpenClaw processes using this database, then retry; if already stopped, check storage performance.`,
+  );
+}
 
 type SqliteReadOnlyWorkerResult = { ok: true; location: string } | { ok: false; message: string };
 type SqliteReadOnlyWorkerOutput = { failure?: string; stderr: string; stdout: string };
@@ -87,18 +97,35 @@ export function runSqliteReadOnlyWorker(
     const child = execFile(
       process.execPath,
       sqliteReadOnlyWorkerArgv(pathname, options.mode, options.stagingRoot),
-      { encoding: "utf8", signal: options.signal },
+      {
+        encoding: "utf8",
+        timeout: SQLITE_INSPECTION_TIMEOUT_MS,
+        killSignal: "SIGKILL",
+      },
       (error, stdout, stderr) => {
         output = {
-          failure: error ? `exited unsuccessfully: ${error.message}` : undefined,
+          failure: error
+            ? error.killed && error.signal === "SIGKILL" && error.code == null
+              ? sqliteInspectionTimeoutError("read-only snapshot", pathname).message
+              : `exited unsuccessfully: ${error.message}`
+            : undefined,
           stderr,
           stdout,
         };
       },
     );
+    // execFile does not forward killSignal for AbortSignal cancellation.
+    const abort = () => {
+      child.kill("SIGKILL");
+    };
+    options.signal?.addEventListener("abort", abort, { once: true });
+    if (options.signal?.aborted) {
+      abort();
+    }
     // execFile can report an abort/error before close. Ownership ends only
     // after the process and its pipes have closed, including failed launches.
     child.once("close", () => {
+      options.signal?.removeEventListener("abort", abort);
       try {
         options.signal?.throwIfAborted();
         resolve(readSqliteReadOnlyWorkerLocation(output));
@@ -109,12 +136,20 @@ export function runSqliteReadOnlyWorker(
   });
 }
 
-export function runSqliteReadOnlyWorkerSync(pathname: string): string {
-  const result = spawnSync(process.execPath, sqliteReadOnlyWorkerArgv(pathname, "sync"), {
-    encoding: "utf8",
-  });
+export function runSqliteReadOnlyWorkerSync(pathname: string, stagingRoot: string): string {
+  const result = spawnSync(
+    process.execPath,
+    sqliteReadOnlyWorkerArgv(pathname, "sync", stagingRoot),
+    {
+      encoding: "utf8",
+      timeout: SQLITE_INSPECTION_TIMEOUT_MS,
+      killSignal: "SIGKILL",
+    },
+  );
   const failure = result.error
-    ? `failed to start: ${result.error.message}`
+    ? hasErrnoCode(result.error, "ETIMEDOUT")
+      ? sqliteInspectionTimeoutError("read-only snapshot", pathname).message
+      : `failed to start: ${result.error.message}`
     : result.status === 0
       ? undefined
       : `exited with ${result.signal ? `signal ${result.signal}` : `code ${result.status}`}`;

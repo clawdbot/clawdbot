@@ -55,7 +55,6 @@ import {
   extractExecOutput,
   extractLiveExecOutput,
   hasMessagingRichContent,
-  hasTerminalControlCharacter,
   isAsyncStartedToolResult,
   isCronAddAction,
   isMiddlewareToolResultError,
@@ -98,6 +97,7 @@ import { readMcpAppChannelView } from "./mcp-ui-resource.js";
 import type { AgentEvent } from "./runtime/index.js";
 import {
   createToolValidationErrorSummary,
+  hasTerminalControlCharacter,
   summarizeToolValidationError,
 } from "./tool-error-summary.js";
 import { resolveFileMutationToolName } from "./tool-mutation-names.js";

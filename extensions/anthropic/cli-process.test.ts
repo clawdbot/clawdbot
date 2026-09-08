@@ -100,6 +100,11 @@ function attachLiveSession(context: CliBackendExecuteContext) {
   context.liveSession = {
     fingerprint: "synthetic-process-policy",
     current: () => current,
+    restart: async () => {
+      const previous = current;
+      previous?.close("restart");
+      await previous?.waitForExit();
+    },
     register: (handle) => {
       current = handle;
       sessions.add(handle);

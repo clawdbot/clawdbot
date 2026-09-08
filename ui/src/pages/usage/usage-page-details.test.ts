@@ -433,27 +433,55 @@ describe("UsagePage detail requests", () => {
     );
   });
 
-  it("refreshes the selected context and clears it when its report disappears", async () => {
+  it("refreshes selected details and clears context when its report disappears", async () => {
     const snapshot = cacheSnapshot("sessions", "fresh");
+    const timestamp = new Date().setHours(12, 0, 0, 0);
+    let turns = 2;
     let available = true;
     let report = "original-context";
     const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+      const totals = {
+        ...snapshot.result.totals,
+        input: turns * 100,
+        totalTokens: turns * 100,
+        totalCost: turns * 0.1,
+        inputCost: turns * 0.1,
+      };
       if (method === "sessions.usage") {
         const session = {
           key: "agent:main:context",
           label: "Context session",
           agentId: "main",
           hasContextWeight: available,
-          usage: snapshot.result.totals,
+          usage: totals,
         };
         return {
           ...snapshot.result,
+          totals,
           sessions: [params?.key ? { ...session, contextWeight: contextWeight(report) } : session],
         };
       }
-      return method === "usage.cost"
-        ? snapshot.costSummary
-        : { providers: [], logs: [], points: [] };
+      if (method === "sessions.usage.timeseries") {
+        return {
+          points: Array.from({ length: turns }, (_, index) => ({
+            timestamp: timestamp + index * 1_000,
+            input: 100,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 100,
+            cost: 0.1,
+            cumulativeTokens: (index + 1) * 100,
+            cumulativeCost: (index + 1) * 0.1,
+          })),
+        };
+      }
+      if (method === "sessions.usage.logs") {
+        return {
+          logs: [{ timestamp, role: "assistant", content: `${turns} completed turns` }],
+        };
+      }
+      return method === "usage.cost" ? { ...snapshot.costSummary, totals } : { providers: [] };
     });
     const page = await createPage({ request } as unknown as GatewayBrowserClient, true);
     await preloadUsage(page);
@@ -461,12 +489,18 @@ describe("UsagePage detail requests", () => {
     await vi.waitFor(() =>
       expect(page.querySelector(".context-details-panel")?.textContent).toContain(report),
     );
+    expect(page.querySelector(".timeseries-summary")?.textContent).toContain("200");
+    expect(page.querySelector(".session-log-content")?.textContent).toBe("2 completed turns");
 
+    turns = 3;
     report = "refreshed-context";
     refreshButton(page).click();
     await vi.waitFor(() =>
       expect(page.querySelector(".context-details-panel")?.textContent).toContain(report),
     );
+    expect(page.querySelector(".session-detail-stats")?.textContent).toContain("300");
+    expect.soft(page.querySelector(".timeseries-summary")?.textContent).toContain("300");
+    expect.soft(page.querySelector(".session-log-content")?.textContent).toBe("3 completed turns");
     const contextRequests = request.mock.calls.filter(
       ([method, params]) => method === "sessions.usage" && params?.key,
     ).length;

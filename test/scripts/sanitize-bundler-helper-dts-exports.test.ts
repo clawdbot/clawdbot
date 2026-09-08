@@ -1,9 +1,14 @@
-import { readFileSync } from "node:fs";
-import { describe, expect, it } from "vitest";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   findUndeclaredBundlerHelperDtsExports,
   sanitizeBundlerHelperDtsExports,
+  sanitizeBundlerHelperDtsExportTree,
 } from "../../scripts/lib/sanitize-bundler-helper-dts-exports.mts";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+
+const roots = useAutoCleanupTempDirTracker(afterEach);
 
 describe("sanitizeBundlerHelperDtsExports", () => {
   it("flags and removes an undeclared __exportAll named export", () => {
@@ -77,5 +82,23 @@ describe("sanitizeBundlerHelperDtsExports", () => {
     expect(sanitized.sourceText).toContain("DispatchReplyWithDispatcher as ui");
     expect(sanitized.sourceText).not.toContain("__exportAll");
     expect(findUndeclaredBundlerHelperDtsExports(sanitized.sourceText)).toEqual([]);
+  });
+
+  it("sanitizes declaration trees emitted by direct tsdown builds", () => {
+    const root = roots.make("bundler-helper-tree-");
+    const nested = join(root, "plugin-sdk");
+    mkdirSync(nested, { recursive: true });
+    const declaration = join(nested, "chunk.d.ts");
+    const runtime = join(nested, "chunk.js");
+    writeFileSync(
+      declaration,
+      "export declare const keep: number;\nexport { keep as k, __exportAll as ud };\n",
+    );
+    writeFileSync(runtime, "export const keep = 1;\n");
+
+    expect(sanitizeBundlerHelperDtsExportTree(root)).toBe(1);
+    expect(readFileSync(declaration, "utf8")).not.toContain("__exportAll");
+    expect(readFileSync(runtime, "utf8")).toContain("keep = 1");
+    expect(sanitizeBundlerHelperDtsExportTree(root)).toBe(0);
   });
 });

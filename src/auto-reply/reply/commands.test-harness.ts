@@ -66,13 +66,9 @@ export function configureInMemoryTaskRegistryStoreForTests(): void {
         tasks: new Map(),
         deliveryStates: new Map(),
       }),
-      saveSnapshot: () => {},
       upsertTaskWithDeliveryState: () => {},
-      upsertTask: () => {},
       deleteTaskWithDeliveryState: () => {},
-      deleteTask: () => {},
       upsertDeliveryState: () => {},
-      deleteDeliveryState: () => {},
       close: () => {},
     },
   });

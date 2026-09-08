@@ -132,6 +132,13 @@ receives it as a native hook attachment, while OpenClaw history preserves the or
 native session retains the context for resume; imported visible history and
 cross-provider fallback preludes do not copy private hook attachments.
 
+Saved session notes also reach fresh and resumed turns as quoted reference data.
+OpenClaw replays eligible notes from the active reset/compaction window, with a
+total limit of 2,000 weighted characters including framing. Newer notes take
+priority; omitted or truncated notes are marked. Notes may repeat because CLI
+bindings do not track which OpenClaw notes the native session has consumed.
+Transient runtime context and notes excluded from model context are not replayed.
+
 Keep Claude Code updated, especially if OpenClaw reports an incompatible
 installed executable:
 
@@ -167,7 +174,7 @@ the field and retry. Invalid questions do not prompt the user. If the user
 skips a valid question, Claude instead continues with its best judgment.
 
 When the effective exec ask setting is `on-miss` or `always`, OpenClaw relays
-native or extension tool requests as interactive approvals to the session's
+native or extension tool requests that need approval to the session's
 channel: **Allow once** permits the single call, **Allow always** permits that
 tool name for the same warm live session while each subsequent turn's policy
 and available tools still allow it, and **Deny**, a timeout, an unreachable
@@ -175,6 +182,37 @@ approval route, or a closed turn all deny the call. Grants stay in memory, end
 when that exact live session is replaced, and never apply to Bash. Policies
 that never prompt keep their existing behavior: `security: "deny"` rejects
 every request, and ask `off` with less than full security denies without asking.
+
+### Native Bash and the exec allowlist
+
+With `ask: "on-miss"`, the `claude-cli` backend checks native `Bash` commands
+against the agent's [exec allowlist](/tools/exec-approvals). For example:
+
+```bash
+openclaw approvals allowlist add --agent main /usr/local/bin/gog
+```
+
+OpenClaw reuses its exec shell evaluator and allows a call without prompting
+only when every command segment resolves to an explicitly allowlisted binary
+and can be fully classified and bound. Executables may be absolute paths or
+resolved through the CLI launch PATH with the agent's configured exec PATH
+prepends; approved input pins the
+resolved executable paths. Successful matches update allowlist usage metadata.
+Bindable misses prompt with the first unmatched segment or classification
+reason. Commands the approval binding guard cannot bind, including pipelines,
+command substitutions, subshells, write redirections, and unparsable syntax,
+remain denied before a prompt. Environment-prefix overrides, shell expansions,
+and `eval`/`exec`/`source` wrappers do not auto-allow.
+
+`ask: "always"` still prompts for allowlisted commands. `security: "deny"`
+still denies, and `ask: "off"` keeps the behavior described above. **Allow
+always** remains unavailable for Bash, and truncated Bash approval descriptions
+still fail closed.
+
+This is argument-level policy applied to the command Claude Code will run,
+not sandboxed execution by OpenClaw. Claude Code owns cwd, PATH, environment,
+and sandboxing. Use a [paired node](/nodes) or the embedded runtime with
+[sandboxing](/gateway/sandboxing) when sandboxed execution is required.
 
 ### Claude browser tools and 1Password sign-in
 
@@ -206,7 +244,7 @@ register a small wrapper backend plugin.
 - `claude-cli` defaults to `liveSession: "claude-stdio"`, `output: "jsonl"`, and `input: "stdin"`. The owning Anthropic plugin keeps one Claude Code subprocess warm for compatible consecutive agent turns through its direct CLI transport. If the gateway restarts or the idle process exits, OpenClaw resumes from the stored Claude session id. Stored session ids are verified against a readable project transcript before resume; a missing transcript clears the binding (logged as `reason=transcript-missing`) instead of silently starting a fresh session under `--resume`.
 - Stored CLI sessions are provider-owned continuity. Automatic reset is disabled by default; `/reset` and explicit daily or idle `session.reset` policies still cut them.
 - Fresh CLI sessions can recover OpenClaw history from the canonical session SQLite database when its independent account boundary matches the selected credential. Compacted recovery includes the latest summary, retained messages, and subsequent turns on the active branch. A backend can opt in to bounded recovery before compaction with `reseedFromRawTranscriptWhenUncompacted: true`, including after its native session binding is cleared. Recovery includes saved tool-result text and error markers; it does not execute past tools. The current user turn is sent once, outside the recovered history.
-- Helper runs with a caller-owned in-memory transcript use that history for hooks and fresh-session reseeding, including meaningful history before compaction. Empty memory stays empty even when the run carries another session's storage identity. Context-engine maintenance rewrites that same memory before the helper returns, even when the engine requests background maintenance. Durable transcripts retain their background maintenance path. An explicitly owned native CLI binding can still resume; resumed turns send the current prompt without injecting the memory history again.
+- Helper runs with a caller-owned in-memory transcript use that history for hooks, bounded session notes, and fresh-session reseeding, including meaningful history before compaction. Empty memory stays empty even when the run carries another session's storage identity. Context-engine maintenance rewrites that same memory before the helper returns, even when the engine requests background maintenance. Durable transcripts retain their background maintenance path. An explicitly owned native CLI binding can still resume; resumed turns send the current prompt and bounded session notes without replaying the conversation history.
 
 ### History account boundaries
 
@@ -216,7 +254,7 @@ Automatic durable recovery requires a resolved static credential or a named OAut
 
 This uses existing session metadata and transcript generation/sequence counters; no SQLite schema migration or transcript deletion occurs. Existing conversations are not backfilled from their latest native binding. Older binaries do not enforce this new recovery boundary. After a downgrade and subsequent transcript writes, upgrading again refuses automatic replay because those writes are not covered. Do not rely on a downgrade to preserve the new security behavior.
 
-Explicit caller-owned in-memory context remains caller-supplied input, not permission to read a durable conversation carrying the same identifiers. Authentication invalidations still refuse its recovery prompt. When automatic recovery is refused, the saved transcript remains intact; the next CLI process receives the current request without the saved history.
+Explicit caller-owned in-memory context remains caller-supplied input, not permission to read a durable conversation carrying the same identifiers. Authentication invalidations still refuse its recovery prompt and saved session notes. When automatic recovery is refused, the saved transcript remains intact; the next CLI process receives the current request without the saved history or notes.
 
 Serialization: `serialize: true` keeps same-lane runs ordered (most CLIs serialize on one provider lane). OpenClaw also drops stored CLI session reuse when the selected auth identity changes, including a changed auth profile id, static API key, static token, or OAuth account identity when the CLI exposes one; OAuth access/refresh token rotation alone does not cut the session. If a CLI has no stable OAuth account id, OpenClaw lets that CLI enforce its own resume permissions.
 

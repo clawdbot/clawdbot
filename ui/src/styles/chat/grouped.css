@@ -186,7 +186,8 @@
   pointer-events: auto;
 }
 
-.chat-group-footer--send-failure {
+/* Delivery recovery stays visible even when identity metadata is collapsed. */
+.chat-group-footer.chat-group-footer--send-failure {
   opacity: 1;
   pointer-events: auto;
 }

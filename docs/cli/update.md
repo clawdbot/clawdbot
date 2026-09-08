@@ -41,6 +41,8 @@ launcher scripts).
 
 Failed update and repair attempts enter [recovery triage](/cli/update#recover-a-failed-update)
 after service recovery and cleanup finish.
+A verified rollback does not start triage: the previous generation is running
+again, and the report keeps the failing check as the reason.
 
 After a final interactive update failure, **Diagnose update failure** and
 **Report update failure** are separate choices. Reporting first shows the exact
@@ -94,6 +96,12 @@ are labeled explicitly. The final report includes the outcome, recorded phase du
 verification facts, and recovery guidance. `--json` keeps stdout machine-readable and does not
 print progress steps.
 
+When switching from a dev checkout to a package, the updater replaces npm's
+install link and leaves the external checkout untouched. If activation fails,
+restoring that link and its launchers does not verify the mutable checkout's
+runtime. Recovery stays unverified and does not authorize an automatic restart;
+inspect the checkout and recovery report before restarting it.
+
 `--yes` also skips the optional shell-completion setup prompt. Existing
 completion profiles and caches are still repaired when needed; installing
 completion in a new shell profile remains an interactive choice.
@@ -101,6 +109,8 @@ completion in a new shell profile remains an interactive choice.
 `--tag` changes only this package update. A saved `update.channel` continues to
 govern later foreground and automatic updates, even after a one-off beta
 install. Use `--channel` to change that policy.
+
+For explicit package artifacts, configured plugin availability is checked against the privately staged package version before rehearsal or activation. `--dry-run` does not stage the artifact and reports that this check remains pending.
 
 For source checkouts, `--dry-run` previews the update flow without fetching Git
 refs or checking working-tree changes. The real update checks for uncommitted
@@ -153,9 +163,12 @@ openclaw triage --agent codex
 Use `openclaw triage --non-interactive` to collect diagnostics without starting
 an agent. Add `--update-result <path>` to include a saved update-failure artifact.
 
-Validation failures leave the serving Gateway untouched. After activation, a
+Validation failures leave the serving Gateway untouched. If stopping the managed
+service unloads it and then fails before activation, OpenClaw attempts to restore
+the verified original runtime after rechecking service ownership. After activation, a
 failed verification can [restore the previous package](/cli/update#validation-and-activation)
-when configuration content and database schema versions are unchanged. Preserve migrated state and
+when database schemas are unchanged and the config file still matches the
+candidate’s activation Doctor output. Preserve migrated state and
 history; replacing the code alone cannot undo a migration. The original
 failed update still exits nonzero after the agent finishes, even if the repair
 succeeds.
@@ -207,6 +220,30 @@ gets a separate `runId`.
 
 `openclaw update --json` includes `runId` and the `run` record. `openclaw update status --json`
 includes `activeRun` when a run is active and `lastRun` when history exists.
+When the active row has been inactive for more than 30 minutes and its recorded
+driver is verifiably dead, status also reports `abandonedRun` with its `runId`
+and reconciliation `rule`. Status remains read-only: the stored row stays in
+`activeRun` until the Gateway or explicit repair commits the outcome.
+Identityless rows are never reconciled automatically, even when their only
+step is `requested/in_progress`. For stale identityless rows, JSON includes
+`staleRun` with `runId` and `guidance`; human status and Doctor preflight report
+"no activity since &lt;time&gt;; if no update is running, run `openclaw update repair`
+or start a new `openclaw update`".
+
+An explicit new `openclaw update` (including `--dry-run`) supersedes the old row
+only when it is the sole active run, has no recorded driver identity, and has
+had no activity for more than 30 minutes. Admission atomically finishes that
+row as `failed` with reason `superseded` and a retained `reconcile:superseded`
+step, then creates the new run. Recent rows and rows with recorded identities
+are preserved. Inherited update continuations and automatic campaigns do not
+supersede legacy history. Configuration writes remain suspended until the
+active row is reconciled.
+
+OpenClaw 2026.9.2 can admit a new CLI update while an older row remains running;
+the stale row does not block updater admission. Upgrade normally, then run
+`openclaw update repair` from the updated installation if status still shows the
+old run. See [Updating](/install/updating#stale-update-history).
+
 Human output, chat completion notices, the Control UI update view, and the
 `openclaw status` update line use the same report, including on success. The report shows recorded facts; an absent verification fact
 means that check has not been observed.
@@ -233,6 +270,27 @@ Phases are `requested`, `staging`, `validating`, optional `repairing`, `activati
 automatic rollback cannot complete. Phase timings, repair attempts, and
 verification facts are included only when observed. Chat reports are limited to 1,500 characters;
 `update.runs.get` preserves the bounded record for detailed inspection.
+
+Current updaters record their process identities and refresh the ledger
+every 30 seconds during long build, install, and finalization phases. The Gateway checks for
+abandoned runs at startup and while following active updates. After more than
+30 minutes without step or heartbeat activity, verifiably dead recorded drivers
+allow the Gateway to finish the run as `failed` with reason `abandoned` and a
+`reconcile:abandoned` step naming the rule. A live, unreadable, or foreign-host
+driver prevents reconciliation. Each helper or finalization child records its
+own identity and retains earlier drivers, because detached children can outlive
+their parent. If process identity recording is unavailable, the update continues
+with one warning and the run requires explicit recovery. Known parent identities
+remain protected, and automatic reconciliation stays disabled for that run.
+Heartbeat write errors warn once per driver run and do not interrupt a running
+build, install, or finalization phase.
+
+Historical rows without a driver identity require explicit `update repair` or
+a new operator-started `openclaw update`.
+An old `requested` row alone does not prove that its updater exited: the 2026.9.2
+updater can still be waiting on package-manager or registry preflight before it
+records its first staging step. Stop an unrecorded old updater before explicitly
+recovering its stale row. See [Database schemas](/reference/database-schemas#update-run-ledger).
 
 The run records `downtimeMs` from the service stop request until a Gateway is
 verified running. Staging, candidate validation, and pre-activation repair are excluded. Verification
@@ -281,7 +339,33 @@ openclaw update repair --accept-capabilities
 | `--accept-capabilities`                          | Accept each plugin's reviewed capability changes while repairing plugin state.                                                                                                                                                                                                                   |
 | `--no-restart`                                   | Accepted for parity; repair never restarts the Gateway.                                                                                                                                                                                                                                          |
 
-`update repair` runs `openclaw doctor --fix`, reloads the repaired config and
+`update repair` first inspects stale update history. When the installed Gateway
+generation is healthy and the only remaining problem is an inactive ledger row,
+repair records `failed` / `abandoned` and exits successfully without Doctor,
+maintenance, or a service stop. It also acknowledges a Gateway-reconciled row
+once within 30 minutes of reconciliation. Later repair invocations use full
+finalization, so historical recovery cannot suppress plugin convergence.
+Explicit recovery permits identityless historical rows only
+after more than 30 minutes of inactivity; a recorded live or uninspectable driver
+still blocks recovery. JSON output identifies reconciled run IDs in
+`reconciledRuns`, with `status: "ok"`, `mode: "repair"`, and `restart: false`.
+
+Explicit channel or capability changes and known incomplete post-core work use
+full finalization. Recorded activation, restart, verification, or finalization steps require
+that convergence even if the Gateway has already reconciled the run. Repair
+checks newer abandoned history as well as active rows; an older stale row cannot
+hide unfinished work from a newer update. If the bounded history inspection is
+incomplete, repair also uses full finalization. If that
+work needs maintenance while the managed service is
+running, stop the service through its owner before retrying. Doctor cannot stop
+or restart the service on the update parent's behalf.
+Successful full finalization then reconciles the selected stale rows before
+reporting completion. Failed convergence leaves the selected rows intact. If any
+selected run resumes before reconciliation, the whole selection is preserved.
+Full finalization JSON includes `reconciledRuns` when stale rows were selected
+for recovery, listing the IDs reconciled by that invocation.
+
+For full finalization, `update repair` runs `openclaw doctor --fix`, reloads the repaired config and
 install records, syncs tracked plugins for the active update channel, updates
 managed npm plugin installs, repairs missing configured plugin payloads,
 refreshes the plugin registry, and writes converged install-record metadata.
@@ -331,6 +415,14 @@ remains alive ten seconds after its terminal JSON, stderr and the ledger
 record active resource types and unsettled disposer names, then the process
 exits with its recorded outcome. A retained handle cannot withhold the
 supervisor's result indefinitely.
+Both stall diagnostics also include `childProcesses`: up to eight descendant
+processes with `pid`, `parentPid`, and an executable name (`command`). Arguments,
+environment values, and executable paths are omitted. `childProcessesTruncated`
+indicates omitted entries; `childProcessInspection: "unavailable"` means the
+process list could not be read. A null `command` means that process's executable
+name was unavailable. Inspection runs only after a stall and adds at
+most one second to the exit bound. Phase-failure JSON includes the same fields.
+Preserve these diagnostics and the phase receipts when reporting a blocked child.
 Human repair can still wait for a recovery choice or repair agent; its exit grace
 starts after recovery finishes. Completion-cache refresh remains best effort
 when its child can be stopped within the phase budget. A phase that exceeds its
@@ -477,8 +569,11 @@ For targets that support candidate validation, the old Gateway keeps serving thr
 plugin resolution and compatibility planning. It also rehearses migrations and
 boots a canary with copied configuration and verified SQLite snapshots in an
 isolated temporary state directory. The copied database registry points to the
-copied agent databases. Channels, cron, automatic updates, and other side
-services are suppressed in this canary.
+copied agent databases. Installed plugin payloads and their dependencies are also
+copied; the rehearsal install records point to those copies, and their OpenClaw
+host links target the staged candidate. The live plugin files and host links stay
+unchanged. Channels, cron, automatic updates, and other side services are
+suppressed in this canary.
 
 Schema checks also use private SQLite copies so inspection does not create or
 modify WAL sidecars beside live databases. Each schema inspection has a
@@ -532,7 +627,7 @@ is verified. If activation fails before a working package is confirmed and rollb
 cannot be verified, finalization retains the backup and reports its location. Keep
 that backup and repair the installation before restarting, including for older
 targets without migration continuation. Automatic rollback requires that retained package, its pre-update verification, unchanged
-configuration content, and unchanged pre-existing shared and affected per-agent
+config content since the activation Doctor pass, and unchanged pre-existing shared and affected per-agent
 SQLite `user_version` values. A database first created during activation or
 verification is schema-neutral only at the candidate's supported version for its
 database kind; a missing pre-existing database or a new database at a foreign
@@ -541,10 +636,20 @@ previous package; unknown or incompatible support refuses rollback with
 `rollback-state-unverified`. The updater restores the previous generation and verifies
 it running before finishing `rolled-back`, preserving the failing check as its
 reason. See [Automatic rollback](/install/updating#automatic-schema-neutral-rollback)
-for the restoration and package-manager guards. A failure alone does not
+for the restoration and package-manager guards. The candidate’s own Doctor
+migrations in the main config file do not block rollback, including on a fresh
+install’s first update. Separate `$include` files must retain their pre-activation
+configuration content. Doctor must have consumed the captured pre-update config,
+and the current file must match its reported output. Restoration holds the normal config writer lock and
+rechecks the captured hash before writing.
+When needed, rollback replaces the main config with the exact bytes captured before
+Doctor and owner-only permissions (`0600`), including the previous writer stamp.
+Operator edits made after activation block
+restoration, including edits before Doctor reads the config or after its last write; the next action names the changed config file. A failure alone does not
 authorize restarting the candidate.
 
-If configuration content changed or the databases are not schema-neutral, automatic rollback is refused with
+If the config file changed after the activation Doctor pass or the databases are
+not schema-neutral, automatic rollback is refused with
 `state-migrated-no-rollback`. The updater enters `repairing` on the installed
 candidate, also used if rollback itself fails. If the previous package was
 already restored, repair targets that version. Between repair attempts, the
@@ -741,6 +846,14 @@ the sentinel.
 </Steps>
 
 ### Plugin sync details
+
+On stable updates, a configured OpenClaw-owned official plugin with no install
+record is repaired from the selected core release cohort. This also applies to
+`doctor --fix` after an earlier upgrade lost a formerly bundled plugin. Admission
+checks that package target before stopping the Gateway; post-core reconciliation
+installs it before restart. Existing install records retain their source and
+selector policy. Verified official packages use the existing
+[capability-consent exemption](/plugins/manage-plugins#capability-consent).
 
 Managed npm plugins on the beta channel select the newest version by semantic
 version order from their `beta` and `latest` dist-tags, using the same policy as
