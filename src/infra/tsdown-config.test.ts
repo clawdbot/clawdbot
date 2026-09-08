@@ -2,6 +2,7 @@
 import { readFileSync } from "node:fs";
 import { bundledPluginRoot } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
+import { collectRuntimeDependencyOwnership } from "../../scripts/lib/runtime-dependency-ownership-build-plugin.mts";
 import tsdownConfig from "../../tsdown.config.ts";
 
 type TsdownConfigEntry = {
@@ -332,5 +333,40 @@ describe("tsdown config", () => {
     configured?.("warn", log, (_level, forwardedLog) => handled.push(forwardedLog));
 
     expect(handled).toEqual([log]);
+  });
+});
+
+describe("runtime dependency ownership build contract", () => {
+  const rootDir = "/repo";
+  const collect = (sources: Record<string, string>) => {
+    const resolved = new Map(
+      Object.entries(sources).map(([file, source]) => [`${rootDir}/${file}`, source]),
+    );
+    return collectRuntimeDependencyOwnership({
+      rootDir,
+      moduleIds: [...resolved.keys()],
+      readSource: (id) => resolved.get(id) ?? "",
+    });
+  };
+
+  it("records extension dependencies without authorizing root-owned imports", () => {
+    expect(
+      collect({
+        "extensions/discord/src/voice.ts": 'require("@discordjs/voice");',
+        "extensions/msteams/src/graph.ts": 'import("@microsoft/teams.apps");',
+      }),
+    ).toEqual({
+      formatVersion: 1,
+      dependencies: {
+        "@discordjs/voice": { root: false, extensions: ["discord"] },
+        "@microsoft/teams.apps": { root: false, extensions: ["msteams"] },
+      },
+    });
+    expect(
+      collect({
+        "extensions/discord/src/voice.ts": 'import "@discordjs/voice";',
+        "src/root.ts": 'require("@discordjs/voice");',
+      }),
+    ).toEqual({ formatVersion: 1, dependencies: {} });
   });
 });
