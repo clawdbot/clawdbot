@@ -340,6 +340,8 @@ describe("loadSettings default gateway URL derivation", () => {
       sessionKey: "team",
       lastActiveSessionKey: "team",
     });
+    persistSessionToken(personal, "personal-token");
+    persistSessionToken(team, "team-token");
 
     expect(settingsKeyForGateway(personal)).not.toBe(settingsKeyForGateway(team));
     expect(loadSettings(personal)).toMatchObject({ gatewayUrl: personal, token: "personal-token" });
