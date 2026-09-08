@@ -11,7 +11,10 @@ import { withPluginRuntimePluginIdScope } from "./gateway-request-scope.js";
 import { createRuntimeLlm } from "./runtime-llm.runtime.js";
 
 const hoisted = vi.hoisted(() => ({
-  prepareSimpleCompletionModelForAgent: vi.fn(),
+  acquireSimpleCompletionModelForAgent:
+    vi.fn<
+      typeof import("../../agents/simple-completion-runtime.js").acquireSimpleCompletionModelForAgent
+    >(),
   completeWithPreparedSimpleCompletionModel: vi.fn(),
   resolveSimpleCompletionSelectionForAgent: vi.fn(),
   runIsolatedCompletion: vi.fn(),
@@ -22,7 +25,7 @@ vi.mock("../../agents/isolated-completion.js", () => ({
 }));
 
 vi.mock("../../agents/simple-completion-runtime.js", () => ({
-  prepareSimpleCompletionModelForAgent: hoisted.prepareSimpleCompletionModelForAgent,
+  acquireSimpleCompletionModelForAgent: hoisted.acquireSimpleCompletionModelForAgent,
   completeWithPreparedSimpleCompletionModel: hoisted.completeWithPreparedSimpleCompletionModel,
   resolveSimpleCompletionSelectionForAgent: hoisted.resolveSimpleCompletionSelectionForAgent,
 }));
@@ -69,7 +72,7 @@ function expectSingleCallFirstArg(mock: { mock: { calls: unknown[][] } }, expect
 describe("runtime.llm.complete isolated agent runtime", () => {
   beforeEach(() => {
     resetDiagnosticEventsForTest();
-    hoisted.prepareSimpleCompletionModelForAgent.mockReset();
+    hoisted.acquireSimpleCompletionModelForAgent.mockReset();
     hoisted.completeWithPreparedSimpleCompletionModel.mockReset();
     hoisted.resolveSimpleCompletionSelectionForAgent.mockReset();
     hoisted.runIsolatedCompletion.mockReset();
@@ -239,10 +242,11 @@ describe("runtime.llm.complete isolated agent runtime", () => {
       owner: { kind: "cli", id: "fixture-cli" },
       usage,
     });
-    hoisted.prepareSimpleCompletionModelForAgent.mockResolvedValueOnce({
+    hoisted.acquireSimpleCompletionModelForAgent.mockResolvedValueOnce({
+      release: vi.fn(),
       selection,
       model,
-      auth: {},
+      auth: { mode: "api-key", source: "fixture" },
     });
     hoisted.completeWithPreparedSimpleCompletionModel.mockResolvedValueOnce({
       content: [{ type: "text", text: "direct" }],

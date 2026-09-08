@@ -23,13 +23,16 @@ import type { PluginRuntime } from "./runtime/types.js";
 import { createBundledPluginRecord } from "./status.test-fixtures.js";
 
 const completionMocks = vi.hoisted(() => ({
-  prepareSimpleCompletionModelForAgent: vi.fn(),
+  acquireSimpleCompletionModelForAgent:
+    vi.fn<
+      typeof import("../agents/simple-completion-runtime.js").acquireSimpleCompletionModelForAgent
+    >(),
   completeWithPreparedSimpleCompletionModel: vi.fn(),
   resolveSimpleCompletionSelectionForAgent: vi.fn(),
 }));
 
 vi.mock("../agents/simple-completion-runtime.js", () => ({
-  prepareSimpleCompletionModelForAgent: completionMocks.prepareSimpleCompletionModelForAgent,
+  acquireSimpleCompletionModelForAgent: completionMocks.acquireSimpleCompletionModelForAgent,
   completeWithPreparedSimpleCompletionModel:
     completionMocks.completeWithPreparedSimpleCompletionModel,
   resolveSimpleCompletionSelectionForAgent:
@@ -132,8 +135,9 @@ function expectUnsupportedBindingApiResult(result: { text?: string }) {
 }
 
 beforeEach(() => {
-  completionMocks.prepareSimpleCompletionModelForAgent.mockReset();
-  completionMocks.prepareSimpleCompletionModelForAgent.mockResolvedValue({
+  completionMocks.acquireSimpleCompletionModelForAgent.mockReset();
+  completionMocks.acquireSimpleCompletionModelForAgent.mockResolvedValue({
+    release: vi.fn(),
     selection: {
       provider: "openai",
       modelId: "gpt-5.5",
@@ -144,6 +148,7 @@ beforeEach(() => {
       id: "gpt-5.5",
       name: "GPT-5.5",
       api: "openai",
+      baseUrl: "https://fixture.invalid/v1",
       input: ["text"],
       reasoning: false,
       contextWindow: 128_000,
@@ -1514,7 +1519,7 @@ describe("registerPluginCommand", () => {
       } as never,
     });
 
-    expect(completionMocks.prepareSimpleCompletionModelForAgent).toHaveBeenCalledWith(
+    expect(completionMocks.acquireSimpleCompletionModelForAgent).toHaveBeenCalledWith(
       expect.objectContaining({
         agentId: "ops",
       }),
@@ -1555,7 +1560,7 @@ describe("registerPluginCommand", () => {
       config: {} as never,
     });
 
-    expect(completionMocks.prepareSimpleCompletionModelForAgent).toHaveBeenCalledWith(
+    expect(completionMocks.acquireSimpleCompletionModelForAgent).toHaveBeenCalledWith(
       expect.objectContaining({
         agentId: "codex",
         preferredProfile: "openai:owner@example.com",

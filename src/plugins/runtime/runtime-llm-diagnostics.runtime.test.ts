@@ -9,13 +9,16 @@ import { markTrustedOtelDiagnosticListener } from "../../infra/diagnostic-otel-l
 import { createRuntimeLlm } from "./runtime-llm.runtime.js";
 
 const hoisted = vi.hoisted(() => ({
-  prepareSimpleCompletionModelForAgent: vi.fn(),
+  acquireSimpleCompletionModelForAgent:
+    vi.fn<
+      typeof import("../../agents/simple-completion-runtime.js").acquireSimpleCompletionModelForAgent
+    >(),
   completeWithPreparedSimpleCompletionModel: vi.fn(),
   resolveSimpleCompletionSelectionForAgent: vi.fn(),
 }));
 
 vi.mock("../../agents/simple-completion-runtime.js", () => ({
-  prepareSimpleCompletionModelForAgent: hoisted.prepareSimpleCompletionModelForAgent,
+  acquireSimpleCompletionModelForAgent: hoisted.acquireSimpleCompletionModelForAgent,
   completeWithPreparedSimpleCompletionModel: hoisted.completeWithPreparedSimpleCompletionModel,
   resolveSimpleCompletionSelectionForAgent: hoisted.resolveSimpleCompletionSelectionForAgent,
 }));
@@ -29,6 +32,7 @@ const cfg = {
 } satisfies OpenClawConfig;
 
 const preparedModel = {
+  release: vi.fn(),
   selection: {
     provider: "openai",
     modelId: "gpt-5.5",
@@ -39,6 +43,7 @@ const preparedModel = {
     id: "gpt-5.5",
     name: "gpt-5.5",
     api: "openai",
+    baseUrl: "https://fixture.invalid/v1",
     input: ["text"],
     reasoning: false,
     contextWindow: 128_000,
@@ -50,7 +55,10 @@ const preparedModel = {
     source: "test",
     mode: "api-key",
   },
-};
+} satisfies Extract<
+  Awaited<ReturnType<typeof hoisted.acquireSimpleCompletionModelForAgent>>,
+  { model: unknown }
+>;
 
 function captureUsageEvents() {
   const events: Array<{
@@ -77,10 +85,10 @@ function captureUsageEvents() {
 describe("runtime.llm.complete diagnostics", () => {
   beforeEach(() => {
     resetDiagnosticEventsForTest();
-    hoisted.prepareSimpleCompletionModelForAgent.mockReset();
+    hoisted.acquireSimpleCompletionModelForAgent.mockReset();
     hoisted.completeWithPreparedSimpleCompletionModel.mockReset();
     hoisted.resolveSimpleCompletionSelectionForAgent.mockReset();
-    hoisted.prepareSimpleCompletionModelForAgent.mockResolvedValue(preparedModel);
+    hoisted.acquireSimpleCompletionModelForAgent.mockResolvedValue(preparedModel);
     hoisted.resolveSimpleCompletionSelectionForAgent.mockReturnValue(preparedModel.selection);
     hoisted.completeWithPreparedSimpleCompletionModel.mockResolvedValue({
       content: [{ type: "text", text: "done" }],
