@@ -2,15 +2,14 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
-import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import {
-  createChannelTestPluginBase,
-  createTestRegistry,
-} from "../../test-utils/channel-plugins.js";
 import { buildPreparedModelsProviderData, handleModelsCommand } from "./commands-models.js";
+import {
+  createModelsTestRegistry,
+  setFastModelsCliBackendDeps,
+} from "./commands-models.test-support.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
 const modelCatalogMocks = vi.hoisted(() => ({ loadModelCatalog: vi.fn() }));
@@ -75,34 +74,6 @@ const pluginMetadataMocks = vi.hoisted(() => ({
 const MODELS_ADD_DEPRECATED_TEXT =
   "⚠️ /models add is deprecated. Use /models to browse providers and /model to switch models.";
 
-function setFastModelsCliBackendDeps(): void {
-  cliBackendsTesting.setDepsForTest({
-    resolvePluginSetupRegistry: () => ({
-      providers: [],
-      cliBackends: [],
-      configMigrations: [],
-      autoEnableProbes: [],
-      diagnostics: [],
-    }),
-    resolveRuntimeCliBackends: () => [
-      {
-        id: "claude-cli",
-        pluginId: "claude-cli",
-        modelProvider: "anthropic",
-        config: { command: "claude" },
-        bundleMcp: false,
-      },
-      {
-        id: "google-gemini-cli",
-        pluginId: "google-gemini-cli",
-        modelProvider: "google",
-        config: { command: "gemini" },
-        bundleMcp: false,
-      },
-    ],
-  });
-}
-
 vi.mock("../../agents/prepared-model-catalog.js", () => ({
   getPreparedModelCatalogOwnerSnapshot: () => undefined,
   loadProviderScopedThinkingCatalog: vi.fn(async () => []),
@@ -135,60 +106,6 @@ vi.mock("../../plugins/current-plugin-metadata-snapshot.js", async (importOrigin
   getCurrentPluginMetadataSnapshot: pluginMetadataMocks.getCurrent,
 }));
 
-const telegramModelsTestPlugin: ChannelPlugin = {
-  ...createChannelTestPluginBase({
-    id: "telegram",
-    label: "Telegram",
-    docsPath: "/channels/telegram",
-    capabilities: {
-      chatTypes: ["direct", "group", "channel", "thread"],
-      reactions: true,
-      threads: true,
-      media: true,
-      polls: true,
-      nativeCommands: true,
-      blockStreaming: true,
-    },
-  }),
-  commands: {
-    buildModelsProviderChannelData: ({ providers }) => ({
-      telegram: {
-        buttons: providers.map((provider) => [
-          {
-            text: provider.id,
-            callback_data: `models:${provider.id}`,
-          },
-        ]),
-      },
-    }),
-  },
-};
-
-const menuOnlyModelsTestPlugin: ChannelPlugin = {
-  ...createChannelTestPluginBase({
-    id: "menuonly",
-    label: "Menu Only",
-    capabilities: {
-      chatTypes: ["direct"],
-      nativeCommands: true,
-    },
-  }),
-  commands: {
-    buildModelsMenuChannelData: ({ providers }) => ({
-      menuonly: {
-        providerIds: providers.map((provider) => provider.id),
-        labels: providers.map((provider) => `${provider.id}:${provider.count}`),
-      },
-    }),
-  },
-};
-
-const textSurfaceModelsTestPlugins = (["discord", "whatsapp"] as const).map((id) => ({
-  pluginId: id,
-  plugin: createChannelTestPluginBase({ id }),
-  source: "test",
-}));
-
 beforeEach(() => {
   // Output assertions must not race the browse deadline on a busy test host.
   vi.useFakeTimers();
@@ -208,40 +125,7 @@ beforeEach(() => {
   modelProviderAuthMocks.authenticatedProviders = new Set(["anthropic", "google", "openai"]);
   modelProviderAuthMocks.selectedRoute = undefined;
   modelProviderAuthMocks.createProviderAuthChecker.mockClear();
-  const registry = createTestRegistry([
-    ...textSurfaceModelsTestPlugins,
-    {
-      pluginId: "telegram",
-      plugin: telegramModelsTestPlugin,
-      source: "test",
-    },
-    {
-      pluginId: "menuonly",
-      plugin: menuOnlyModelsTestPlugin,
-      source: "test",
-    },
-  ]);
-  registry.cliBackends = [
-    {
-      pluginId: "anthropic",
-      backend: {
-        id: "claude-cli",
-        modelProvider: "anthropic",
-        config: { command: "claude" },
-      },
-      source: "test",
-    },
-    {
-      pluginId: "google",
-      backend: {
-        id: "google-gemini-cli",
-        modelProvider: "google",
-        config: { command: "gemini" },
-      },
-      source: "test",
-    },
-  ];
-  setActivePluginRegistry(registry);
+  setActivePluginRegistry(createModelsTestRegistry());
 });
 
 afterEach(() => {
