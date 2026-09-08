@@ -55,7 +55,7 @@ function mockChatSuccess(): void {
   );
 }
 
-function createHandle(abort = vi.fn()): EmbeddedAgentQueueHandle {
+function createHandle(abort: () => void = () => {}): EmbeddedAgentQueueHandle {
   return {
     runId: "run-ops-colliding",
     abort,
@@ -71,13 +71,13 @@ describe("embedded abort agent scope (colliding sessionId)", () => {
   const opsKey = "agent:ops:telegram:direct:ops-user";
   const researchKey = "agent:research:telegram:direct:research-user";
   let handle: EmbeddedAgentQueueHandle;
-  let abortSpy: ReturnType<typeof vi.fn>;
+  let abortSpy: ReturnType<typeof vi.fn<() => void>>;
 
   beforeEach(() => {
     chatAbortMock.mockReset();
     loadSessionEntryMock.mockReset();
     runsTesting.resetActiveEmbeddedRuns();
-    abortSpy = vi.fn();
+    abortSpy = vi.fn<() => void>();
     handle = createHandle(abortSpy);
     setActiveEmbeddedRun(collidingSessionId, handle, opsKey, undefined, "ops");
   });
