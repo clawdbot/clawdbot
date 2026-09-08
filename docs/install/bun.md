@@ -95,6 +95,13 @@ floor and supports extension loading. An invalid override fails with an error
 explaining how to fix or unset it. Node and Bun on platforms other than macOS
 ignore this override; Gateway startup logs a warning when it is ignored.
 
+If you previously used a Bun preload script that calls `Database.setCustomSQLite()`,
+remove that preload and set `OPENCLAW_SQLITE_LIBRARY` to the same library path
+instead. Bun permits that hook only once per process; keeping the preload causes
+startup to fail with `SQLite already loaded`, even when both selections name the
+same library. The environment override lets OpenClaw select the library before
+opening databases and forward the path to the memory KNN child.
+
 Without a suitable library on macOS, Bun keeps Apple's system SQLite, which omits
 native extension loading. OpenClaw can open ordinary agent databases when that
 library meets the WAL safety floor. Memory search falls back to a batched
