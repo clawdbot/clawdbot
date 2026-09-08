@@ -6,6 +6,7 @@
 // HTTP fetch, so streaming-card entity calls are captured at the wire seam.
 // Refresh goldens with OPENCLAW_TRACE_UPDATE=1 (see delivery-trace harness docs).
 import {
+  createWireRecorder,
   deliveryTraceScenarios,
   expectDeliveryTraceMatchesGolden,
   runDeliveryTraceScenario,
@@ -433,6 +434,60 @@ const FEISHU_TRACE_SCENARIOS: readonly DeliveryTraceScenarioName[] = [
 ];
 
 describe("feishu delivery trace goldens", () => {
+  it("settles a normal final reply with its accepted card identity", async () => {
+    const recorder = createWireRecorder();
+    setupFeishuTrace(recorder, "final-only");
+    const errors: unknown[] = [];
+    const created = createFeishuReplyDispatcher({
+      cfg: {},
+      agentId: "agent",
+      runtime: {
+        log: () => {},
+        error: (error) => {
+          errors.push(error);
+        },
+        exit: (code) => {
+          throw new Error(`unexpected runtime exit ${code}`);
+        },
+      },
+      chatId: "oc-trace-chat",
+      sendTarget: "oc-trace-chat",
+      replyToMessageId: "om-inbound",
+    });
+    try {
+      await created.dispatcherOptions.onReplyStart?.();
+      const delivery = await created.delivery.deliver(
+        { text: "Completed answer." },
+        { kind: "final" },
+      );
+      expect(delivery?.finalization).toBeDefined();
+      const [, settled] = await Promise.all([
+        created.dispatcherOptions.onIdle?.(),
+        delivery?.finalization,
+      ]);
+      expect(settled).toMatchObject({
+        visibleReplySent: true,
+        content: "Completed answer.",
+        messageIds: ["om-1"],
+      });
+      expect(recorder.finish().filter((event) => event.kind === "im.message.reply")).toHaveLength(
+        1,
+      );
+      expect(
+        recorder
+          .finish()
+          .filter((event) => event.kind === "PATCH /cardkit/v1/cards/card-1/settings"),
+      ).toHaveLength(1);
+      expect(errors).toEqual([]);
+    } finally {
+      try {
+        await created.dispatcherOptions.onIdle?.();
+      } finally {
+        created.dispatcherOptions.onCleanup?.();
+      }
+    }
+  });
+
   it("updates the accepted card without a duplicate send when its message receipt is absent", async () => {
     const events = await runDeliveryTraceScenario({
       scenario: deliveryTraceScenarios["final-only"],
