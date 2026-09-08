@@ -168,6 +168,8 @@ export function hasPersistedIMessageEcho(params: {
   messageId?: string;
   skipIdShortCircuit?: boolean;
   includePendingText?: boolean;
+  requireTextMatchForId?: boolean;
+  messageIdMaxAgeMs?: number;
 }): boolean {
   const text = normalizeText(params.text);
   const mediaKey = resolveIMessageEchoMediaKey(params.media);
@@ -179,8 +181,19 @@ export function hasPersistedIMessageEcho(params: {
     if (entry.scope !== params.scope) {
       continue;
     }
-    if (messageId && entry.messageId === messageId) {
+    const messageIdWithinMaxAge =
+      params.messageIdMaxAgeMs == null ||
+      Math.max(0, Date.now() - entry.timestamp) <= params.messageIdMaxAgeMs;
+    if (
+      messageId &&
+      entry.messageId === messageId &&
+      messageIdWithinMaxAge &&
+      (!params.requireTextMatchForId || (text != null && entry.text === text))
+    ) {
       return true;
+    }
+    if (params.requireTextMatchForId) {
+      continue;
     }
     const hasConflictingMessageIds = Boolean(
       messageId && entry.messageId && messageId !== entry.messageId,
