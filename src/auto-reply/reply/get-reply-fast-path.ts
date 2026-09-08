@@ -215,6 +215,7 @@ export function initFastReplySessionState(params: {
     ...(normalizeOptionalString(ctx.GroupChannel)
       ? { groupChannel: normalizeOptionalString(ctx.GroupChannel) }
       : {}),
+    topicName: normalizeOptionalString(ctx.TopicName) ?? existingEntry?.topicName,
   };
   sessionStore[sessionKey] = sessionEntry;
   const sessionEntryHandle = createReplySessionEntryHandle({

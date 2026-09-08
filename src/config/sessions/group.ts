@@ -88,6 +88,7 @@ function shortenGroupId(value?: string) {
  */
 export function buildGroupDisplayTitle(params: {
   subject?: string;
+  topicName?: string;
   groupChannel?: string;
   space?: string;
 }): string | undefined {
@@ -98,13 +99,17 @@ export function buildGroupDisplayTitle(params: {
     const channelLabel = groupChannel.startsWith("#") ? groupChannel : `#${groupChannel}`;
     return space ? `${space} ${channelLabel}` : channelLabel;
   }
-  return subject ?? space ?? undefined;
+  return (
+    [subject ?? space, normalizeOptionalString(params.topicName)].filter(Boolean).join(" / ") ||
+    undefined
+  );
 }
 
 /** Builds a compact display label for group sessions from channel metadata or ids. */
 export function buildGroupDisplayName(params: {
   provider?: string;
   subject?: string;
+  topicName?: string;
   groupChannel?: string;
   space?: string;
   id?: string;
@@ -113,7 +118,7 @@ export function buildGroupDisplayName(params: {
   const providerKey = normalizeOptionalLowercaseString(params.provider) ?? "group";
   const groupChannel = normalizeOptionalString(params.groupChannel);
   const space = normalizeOptionalString(params.space);
-  const subject = normalizeOptionalString(params.subject);
+  const subject = buildGroupDisplayTitle({ subject: params.subject, topicName: params.topicName });
   const detail =
     (groupChannel && space
       ? `${space}${groupChannel.startsWith("#") ? "" : "#"}${groupChannel}`

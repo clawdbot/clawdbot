@@ -3,6 +3,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, beforeEach, describe, expect, onTestFinished, test, vi } from "vitest";
 import { writeAcpSessionMetaForMigration } from "../acp/runtime/session-meta.js";
 import { resolveExecDefaults } from "../agents/exec-defaults.js";
@@ -2644,6 +2645,110 @@ describe("gateway session utils", () => {
       entry,
     });
     expect(row.displayName).toBe("Engineering");
+  });
+
+  test("refreshes forum topic titles without replacing sessions or explicit labels", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-topic-session-title-"));
+    const storePath = path.join(dir, "sessions.json");
+    const cfg = { agents: { entries: { main: {} } } } satisfies OpenClawConfig;
+    const key = "agent:main:telegram:group:-1001234567890:topic:42";
+    const siblingKey = "agent:main:telegram:group:-1001234567890:topic:43";
+    const readStore = () =>
+      Object.fromEntries(
+        listSessionEntriesReadOnly({ agentId: "main", storePath }).map(
+          ({ sessionKey, entry }) => [sessionKey, entry] as const,
+        ),
+      );
+    const ctx = {
+      Provider: "telegram",
+      Surface: "telegram",
+      ChatType: "group",
+      From: "telegram:group:-1001234567890:topic:42",
+      To: "telegram:-1001234567890",
+      GroupSubject: "Project Team",
+      MessageThreadId: 42,
+      IsForum: true,
+    };
+    try {
+      for (const sessionKey of [key, siblingKey]) {
+        await replaceSessionEntry(
+          { sessionKey, storePath },
+          { sessionId: sessionKey, updatedAt: 1, chatType: "group", subject: "Project Team" },
+        );
+      }
+      await recordInboundSessionMeta({
+        storePath,
+        sessionKey: siblingKey,
+        ctx: {
+          ...ctx,
+          From: "telegram:group:-1001234567890:topic:43",
+          MessageThreadId: 43,
+          TopicName: "Releases",
+        },
+      });
+      for (const [topicName, title] of [
+        [undefined, "Project Team"],
+        ["  ", "Project Team"],
+        [" Planning ", "Project Team / Planning"],
+        ["Planning", "Project Team / Planning"],
+        ["Roadmap", "Project Team / Roadmap"],
+      ]) {
+        await recordInboundSessionMeta({
+          storePath,
+          sessionKey: key,
+          ctx: { ...ctx, TopicName: topicName },
+        });
+        closeSessionSqliteDatabasesForTest();
+        const store = readStore();
+        const entry = expectDefined(store[key], "topic session");
+        const row = buildGatewaySessionRow({ cfg, storePath, store, key, entry });
+        expect(row.displayName).toBe(title);
+        expect(entry.sessionId).toBe(key);
+        expect(entry.subject).toBe("Project Team");
+        expect(row.origin?.threadId).toBe(42);
+        const sibling = buildGatewaySessionRow({
+          cfg,
+          storePath,
+          store,
+          key: siblingKey,
+          entry: store[siblingKey],
+        });
+        expect(sibling.displayName).toBe("Project Team / Releases");
+      }
+      const store = readStore();
+      const previous = expectDefined(store[key], "topic session before sparse update");
+      await recordInboundSessionMeta({
+        storePath,
+        sessionKey: key,
+        ctx: { ...ctx, GroupSubject: undefined },
+      });
+      expect(readStore()[key]).toMatchObject({
+        subject: previous.subject,
+        displayName: previous.displayName,
+        topicName: "Roadmap",
+      });
+      await replaceSessionEntry(
+        { sessionKey: key, storePath },
+        { ...previous, label: "My planning chat" },
+      );
+      await recordInboundSessionMeta({
+        storePath,
+        sessionKey: key,
+        ctx: { ...ctx, TopicName: "Next" },
+      });
+      const labeledStore = readStore();
+      const labeledRow = buildGatewaySessionRow({
+        cfg,
+        storePath,
+        store: labeledStore,
+        key,
+        entry: labeledStore[key],
+      });
+      expect(labeledRow.displayName).toBe("My planning chat");
+    } finally {
+      closeSessionSqliteDatabasesForTest();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   test("refreshes a legacy Buzz UUID title from inbound room metadata", async () => {
