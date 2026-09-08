@@ -15,21 +15,6 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { sessionMutationHandlers } from "./sessions-mutations.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
-const sqliteTransactionLabels = vi.hoisted(() => [] as string[]);
-
-vi.mock("../../state/openclaw-agent-db.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../state/openclaw-agent-db.js")>();
-  const runOpenClawAgentWriteTransaction: typeof actual.runOpenClawAgentWriteTransaction = (
-    operation,
-    options,
-    transactionOptions,
-  ) => {
-    sqliteTransactionLabels.push(transactionOptions?.operationLabel ?? "agent.write");
-    return actual.runOpenClawAgentWriteTransaction(operation, options, transactionOptions);
-  };
-  return { ...actual, runOpenClawAgentWriteTransaction };
-});
-
 afterEach(() => {
   closeOpenClawAgentDatabasesForTest();
 });
@@ -199,7 +184,6 @@ test("sessions.patchMany archives 30 human sessions without transcript hydration
     });
     expect(statements.counts["transcript-full-hydration"]).toBe(1);
     statements.counts["transcript-full-hydration"] = 0;
-    sqliteTransactionLabels.length = 0;
     const originalExec = database.db.exec.bind(database.db);
     const transactionCounts = { begin: 0, commit: 0 };
     const execSpy = vi.spyOn(database.db, "exec").mockImplementation((sql) => {
@@ -291,11 +275,8 @@ test("sessions.patchMany archives 30 human sessions without transcript hydration
       expect(statements.counts["whole-store-projection"]).toBe(0);
       expect(statements.counts["transcript-full-hydration"]).toBe(0);
       // Archive attribution stays in the session-store batch; transcripts are untouched.
+      // Count the real database boundary, independent of prior module imports in shared shards.
       expect(transactionCounts).toEqual({ begin: 1, commit: 1 });
-      expect(
-        sqliteTransactionLabels.filter((label) => label === "session.entry-replacements"),
-      ).toHaveLength(1);
-      expect(sqliteTransactionLabels.filter((label) => label === "agent.write")).toHaveLength(0);
       expect(cronList).toHaveBeenCalledOnce();
       expect(cronUpdate.mock.calls.map(([id, patch]) => [id, patch])).toEqual([
         ["bound-first", { enabled: false }],

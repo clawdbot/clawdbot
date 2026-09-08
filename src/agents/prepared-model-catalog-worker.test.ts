@@ -1,14 +1,11 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
+import type { InstalledPluginIndex } from "../plugins/installed-plugin-index-types.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import {
   createPreparedModelCatalogWorkerInput,
   fingerprintPreparedModelWorkerRequest,
 } from "./prepared-model-catalog-worker.js";
 import type { PreparedModelRuntimeAgentFacts } from "./prepared-model-runtime.catalog-contract.js";
-
-vi.mock("../plugins/manifest-registry-installed.js", () => ({
-  resolveInstalledManifestRegistryIndexFingerprint: () => "test-plugin-index",
-}));
 
 describe("prepared model catalog worker input", () => {
   it("preserves captured auth identity and distinguishes source from built artifacts", () => {
@@ -65,7 +62,17 @@ describe("prepared model catalog worker input", () => {
       pluginMetadataSnapshot: {
         policyHash: "test-policy",
         configFingerprint: "test-config",
-        index: {} as never,
+        index: {
+          version: 1,
+          hostContractVersion: "test-host",
+          compatRegistryVersion: "test-compat",
+          migrationVersion: 1,
+          policyHash: "test-policy",
+          generatedAtMs: 0,
+          installRecords: {},
+          plugins: [],
+          diagnostics: [],
+        } satisfies InstalledPluginIndex,
         plugins: [],
       } as unknown as PluginMetadataSnapshot,
     };
