@@ -51,11 +51,10 @@ suite.define(() => {
 
       await composer.fill("Keep this /exec");
       await composer.press("Tab");
-      await composer.press("ArrowDown");
       await composer.press("Enter");
 
       const request = await gateway.waitForRequest("chat.send");
-      expect((request.params as { message?: unknown }).message).toBe("/exec host=gateway");
+      expect((request.params as { message?: unknown }).message).toBe("/exec host=auto");
       await expect.poll(() => composer.inputValue()).toBe("Keep this ");
     });
   });

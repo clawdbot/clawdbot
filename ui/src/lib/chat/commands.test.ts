@@ -340,6 +340,7 @@ describe("parseSlashCommand", () => {
 
   it("formats structured argument choices with the shared command serializer", () => {
     expect(requireCommandByName("exec").argOptions).toEqual([
+      "host=auto",
       "host=sandbox",
       "host=gateway",
       "host=node",

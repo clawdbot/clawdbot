@@ -567,8 +567,8 @@ export function buildBuiltinChatCommands(
     }),
     defineBuiltinCommand("exec", "Set exec defaults for this session.", "options", "power", {
       args: [
-        defineCommandArgument("host", "sandbox, gateway, or node", {
-          choices: ["sandbox", "gateway", "node"],
+        defineCommandArgument("host", "auto, sandbox, gateway, or node", {
+          choices: ["auto", "sandbox", "gateway", "node"],
         }),
         defineCommandArgument("security", "deny, allowlist, or full", {
           choices: ["deny", "allowlist", "full"],

@@ -4948,10 +4948,9 @@ describe("chat slash menu accessibility", () => {
 
     inputDraftAtEnd(container, "Please /exec");
     keydownComposer(container, "Tab");
-    keydownComposer(container, "ArrowDown");
     keydownComposer(container, "Enter");
 
-    expect(onSlashCommand).toHaveBeenCalledExactlyOnceWith("/exec host=gateway");
+    expect(onSlashCommand).toHaveBeenCalledExactlyOnceWith("/exec host=auto");
     expect(draft).toBe("Please ");
     expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe(draft);
     expect(onSend).not.toHaveBeenCalled();
