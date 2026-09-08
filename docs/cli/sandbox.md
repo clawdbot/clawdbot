@@ -31,6 +31,7 @@ Remove sandbox runtimes to force recreation with current config. Runtimes are re
 
 ```bash
 openclaw sandbox recreate --all
+openclaw sandbox recreate --all --mismatched # only image-mismatched runtimes
 openclaw sandbox recreate --agent mybot        # includes agent:mybot:* sub-sessions
 openclaw sandbox recreate --session "agent:main:main"
 openclaw sandbox recreate --browser --all      # only browser containers
@@ -43,9 +44,10 @@ Options:
 - `--session <key>`: recreate the runtime with this exact scope key (as shown by `sandbox list`); no short-name expansion
 - `--agent <id>`: recreate runtimes for one agent (matches `agent:<id>` and `agent:<id>:*`)
 - `--browser`: only affect browser containers
+- `--mismatched`: only affect image-backed runtimes whose current image differs from the configured image
 - `--force`: skip the confirmation prompt
 
-Pass exactly one of `--all`, `--session`, or `--agent`.
+Pass exactly one of `--all`, `--session`, or `--agent`. `--mismatched` is a modifier and does not select a scope by itself. It excludes SSH target and OpenShell source mismatches; use regular `recreate` when those settings change.
 
 For `ssh` and OpenShell `remote`, recreate matters more than with Docker: the remote workspace is canonical after the initial seed, `recreate` deletes that canonical remote workspace for the selected scope, and the next run reseeds it from the current local workspace.
 
@@ -77,7 +79,7 @@ Prefer `openclaw sandbox recreate` over manual backend-specific cleanup. It uses
 
 | Change                                                                                                                                                         | Command                                                             |
 | -------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
-| Container sandbox image update (`agents.defaults.sandbox.docker.image`)                                                                                        | `openclaw sandbox recreate --all`                                   |
+| Container sandbox image update (`agents.defaults.sandbox.docker.image`)                                                                                        | `openclaw sandbox recreate --all --mismatched`                      |
 | Sandbox config (`agents.defaults.sandbox.*`)                                                                                                                   | `openclaw sandbox recreate --all`                                   |
 | SSH target/auth (`agents.defaults.sandbox.ssh.{target,workspaceRoot,identityFile,certificateFile,knownHostsFile,identityData,certificateData,knownHostsData}`) | `openclaw sandbox recreate --all`                                   |
 | OpenShell source/policy/mode (`plugins.entries.openshell.config.{from,mode,policy}`)                                                                           | `openclaw sandbox recreate --all`                                   |

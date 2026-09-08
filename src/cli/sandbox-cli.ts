@@ -19,6 +19,7 @@ const SANDBOX_EXAMPLES = {
     ["openclaw sandbox list", "List all sandbox containers."],
     ["openclaw sandbox list --browser", "List only browser containers."],
     ["openclaw sandbox recreate --all", "Recreate all containers."],
+    ["openclaw sandbox recreate --all --mismatched", "Recreate image-mismatched runtimes."],
     ["openclaw sandbox recreate --session main", "Recreate a specific session."],
     ["openclaw sandbox recreate --agent mybot", "Recreate agent containers."],
     ["openclaw sandbox explain", "Explain effective sandbox config."],
@@ -33,6 +34,7 @@ const SANDBOX_EXAMPLES = {
     ["openclaw sandbox recreate --session main", "Recreate a specific session."],
     ["openclaw sandbox recreate --agent mybot", "Recreate a specific agent (includes sub-agents)."],
     ["openclaw sandbox recreate --browser --all", "Recreate only browser containers."],
+    ["openclaw sandbox recreate --all --mismatched", "Recreate image-mismatched runtimes."],
     ["openclaw sandbox recreate --all --force", "Skip confirmation."],
   ],
   explain: [
@@ -111,6 +113,7 @@ export function registerSandboxCli(program: Command) {
     .option("--session <key>", "Recreate container for specific session")
     .option("--agent <id>", "Recreate containers for specific agent")
     .option("--browser", "Only recreate browser containers", false)
+    .option("--mismatched", "Only recreate runtimes whose configured image does not match", false)
     .option("--force", "Skip confirmation prompt", false)
     .addHelpText(
       "after",
@@ -129,6 +132,8 @@ export function registerSandboxCli(program: Command) {
           "  --agent        Remove containers for agent (includes agent:id:* variants)",
         )}\n\n${theme.heading("Modifiers:")}\n${theme.muted(
           "  --browser      Only affect browser containers (not regular sandbox)",
+        )}\n${theme.muted(
+          "  --mismatched   Only affect runtimes with an image mismatch",
         )}\n${theme.muted("  --force        Skip confirmation prompt")}`,
     )
     .action(
@@ -139,6 +144,7 @@ export function registerSandboxCli(program: Command) {
             session: opts.session as string | undefined,
             agent: opts.agent as string | undefined,
             browser: Boolean(opts.browser),
+            mismatched: Boolean(opts.mismatched),
             force: Boolean(opts.force),
           },
           defaultRuntime,

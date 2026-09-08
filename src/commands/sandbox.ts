@@ -23,6 +23,7 @@ import {
   displayRecreateResult,
   displaySummary,
 } from "./sandbox-display.js";
+import { isImageBackedSandboxMismatch } from "./sandbox-runtime-filter.js";
 
 // --- Types ---
 
@@ -36,6 +37,7 @@ type SandboxRecreateOptions = {
   session?: string;
   agent?: string;
   browser: boolean;
+  mismatched?: boolean;
   force: boolean;
 };
 
@@ -138,6 +140,11 @@ async function fetchAndFilterContainers(opts: SandboxRecreateOptions): Promise<F
     const matchesAgent = createAgentMatcher(opts.agent);
     containers = containers.filter(matchesAgent);
     browsers = browsers.filter(matchesAgent);
+  }
+
+  if (opts.mismatched) {
+    containers = containers.filter(isImageBackedSandboxMismatch);
+    browsers = browsers.filter((browser) => !browser.imageMatch);
   }
 
   return { containers, browsers };
