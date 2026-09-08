@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 // Voice Call tests cover runtime plugin behavior.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -160,19 +161,6 @@ type RealtimeConsultToolHandler = (
   context: { partialUserTranscript?: string; abortSignal?: AbortSignal },
 ) => Promise<unknown>;
 
-function firstMockCall(calls: readonly unknown[][], label: string): unknown[] {
-  const call = calls.at(0);
-  if (!call) {
-    throw new Error(`expected ${label} call`);
-  }
-  return call;
-}
-
-function firstCallParam(calls: readonly unknown[][], label: string) {
-  const call = firstMockCall(calls, label);
-  return call[0];
-}
-
 type MockSessionEntry = {
   sessionId?: string;
   updatedAt?: number;
@@ -214,9 +202,9 @@ function createMockSessionRuntime(sessionStore: Record<string, unknown>) {
 const requireRecord = createRequireRecord("record", "expected-label-record");
 
 function requireRealtimeConsultToolHandler(): RealtimeConsultToolHandler {
-  const registeredToolHandler = firstMockCall(
-    mocks.realtimeHandlerRegisterToolHandler.mock.calls,
-    "realtime tool handler registration",
+  const registeredToolHandler = expectDefined<unknown[]>(
+    mocks.realtimeHandlerRegisterToolHandler.mock.calls.at(0),
+    "realtime tool handler registration call",
   );
   expect(registeredToolHandler[0]).toBe("openclaw_agent_consult");
   if (typeof registeredToolHandler[1] !== "function") {
@@ -674,7 +662,10 @@ describe("createVoiceCallRuntime lifecycle", () => {
     });
     expect(runEmbeddedAgent).toHaveBeenCalledOnce();
     const consultParams = requireRecord(
-      firstCallParam(runEmbeddedAgent.mock.calls as unknown[][], "embedded OpenClaw consult"),
+      expectDefined<unknown[]>(
+        runEmbeddedAgent.mock.calls.at(0),
+        "embedded OpenClaw consult call",
+      )[0],
       "embedded OpenClaw consult params",
     );
     expect(consultParams.agentId).toBe("support");
@@ -828,10 +819,10 @@ describe("createVoiceCallRuntime lifecycle", () => {
     });
     expect(runEmbeddedAgent).toHaveBeenCalledOnce();
     const consultParams = requireRecord(
-      firstCallParam(
-        runEmbeddedAgent.mock.calls as unknown[][],
-        "per-call embedded OpenClaw consult",
-      ),
+      expectDefined<unknown[]>(
+        runEmbeddedAgent.mock.calls.at(0),
+        "per-call embedded OpenClaw consult call",
+      )[0],
       "per-call embedded OpenClaw consult params",
     );
     expect(consultParams.sessionKey).toBe("agent:main:voice:call:call-1");
@@ -1000,10 +991,10 @@ describe("createVoiceCallRuntime lifecycle", () => {
     expect(agentRuntime.resolveThinkingDefault).not.toHaveBeenCalled();
     expect(runEmbeddedAgent).toHaveBeenCalledOnce();
     const consultParams = requireRecord(
-      firstCallParam(
-        runEmbeddedAgent.mock.calls as unknown[][],
-        "configured embedded OpenClaw consult",
-      ),
+      expectDefined<unknown[]>(
+        runEmbeddedAgent.mock.calls.at(0),
+        "configured embedded OpenClaw consult call",
+      )[0],
       "configured embedded OpenClaw consult params",
     );
     expect(consultParams.thinkLevel).toBe("ultra");
