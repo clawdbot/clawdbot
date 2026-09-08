@@ -17,6 +17,7 @@ import { projectInferenceRoute, sameDefaultInferenceRoute } from "./inference-ro
 import type { ActivateSetupInferenceDeps } from "./setup-inference-core.js";
 import {
   applyManualAuthConfig,
+  commitManualAuthProfiles,
   persistManualAuthProfiles,
   rollbackManualAuthProfiles,
 } from "./setup-inference-persist.js";
@@ -206,6 +207,58 @@ describe("prepared provider config commit", () => {
 });
 
 describe("manual auth rollback", () => {
+  it("preserves the primary activation failure when protected commit also fails", async () => {
+    const primaryError = new Error("synthetic activation failure");
+    const releaseError = new Error("synthetic protected release failure");
+    const message = "Activation failed and protected storage could not be released.";
+    const receipt = {
+      agentDir: "/synthetic/agent",
+      profiles: [],
+      insertedProfileIds: new Set<string>(),
+      protectedPersistence: {
+        profiles: [],
+        rollback: vi.fn(async () => {}),
+        commit: vi.fn(async () => {
+          throw releaseError;
+        }),
+      },
+    };
+
+    const failure = await commitManualAuthProfiles(receipt, { primaryError, message }).catch(
+      (error: unknown) => error,
+    );
+
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect(failure).toMatchObject({
+      message,
+      errors: [primaryError, releaseError],
+      cause: primaryError,
+    });
+  });
+
+  it("does not duplicate a shared activation and protected release failure", async () => {
+    const primaryError = new Error("synthetic shared failure");
+    const receipt = {
+      agentDir: "/synthetic/agent",
+      profiles: [],
+      insertedProfileIds: new Set<string>(),
+      protectedPersistence: {
+        profiles: [],
+        rollback: vi.fn(async () => {}),
+        commit: vi.fn(async () => {
+          throw primaryError;
+        }),
+      },
+    };
+
+    await expect(
+      commitManualAuthProfiles(receipt, {
+        primaryError,
+        message: "must not wrap the same failure twice",
+      }),
+    ).rejects.toBe(primaryError);
+  });
+
   it("keeps the persistence failure first when protected rollback also fails", async () => {
     const persistenceError = new Error("synthetic profile persistence failure");
     const rollbackError = new Error("synthetic protected rollback failure");

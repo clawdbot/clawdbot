@@ -454,6 +454,17 @@ export async function rollbackManualAuthProfiles(
 
 export async function commitManualAuthProfiles(
   receipt: ManualAuthPersistenceReceipt,
+  failure?: { primaryError: unknown; message: string },
 ): Promise<void> {
-  await receipt.protectedPersistence?.commit();
+  try {
+    await receipt.protectedPersistence?.commit();
+  } catch (releaseError) {
+    if (!failure || releaseError === failure.primaryError) {
+      throw releaseError;
+    }
+    // oxlint-disable-next-line preserve-caught-error -- AggregateError.errors retains releaseError; cause remains the primary activation failure.
+    throw new AggregateError([failure.primaryError, releaseError], failure.message, {
+      cause: failure.primaryError,
+    });
+  }
 }

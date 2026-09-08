@@ -368,10 +368,14 @@ export async function persistActivatedSetupInference(input: {
           !reconciledRuntime ||
           configReferencesManualAuthProfiles(reconciledRuntime, manualAuthReceipt)
         ) {
-          await commitManualAuthProfiles(manualAuthReceipt);
-          throw new SetupInferenceActivationIndeterminateError(
+          const indeterminateError = new SetupInferenceActivationIndeterminateError(
             "Inference activation could not confirm its config commit state. The verified credential was retained because the current config may reference it. Run openclaw doctor --fix before retrying.",
           );
+          await commitManualAuthProfiles(manualAuthReceipt, {
+            primaryError: indeterminateError,
+            message: `${indeterminateError.message} Protected storage could not be released.`,
+          });
+          throw indeterminateError;
         }
         const rolledBack = await rollbackManualAuthProfiles(manualAuthReceipt, deps);
         if (!rolledBack) {
@@ -383,7 +387,11 @@ export async function persistActivatedSetupInference(input: {
       throw error;
     }
     if (manualAuthReceipt) {
-      await commitManualAuthProfiles(manualAuthReceipt);
+      await commitManualAuthProfiles(manualAuthReceipt, {
+        primaryError: error,
+        message:
+          "Inference activation committed despite a post-write error, but protected storage could not be released.",
+      });
     }
     state.gatewayRestartRequired = pendingCodexInstall !== undefined;
     setupInferenceLog.warn(
