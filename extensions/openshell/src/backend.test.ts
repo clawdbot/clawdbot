@@ -30,12 +30,14 @@ describe("openshell backend env", () => {
 });
 
 describe("openshell sandbox names", () => {
-  it("generates Kubernetes-safe names from OpenClaw session scope keys", () => {
-    const name = buildOpenShellSandboxName("agent:somalley_alice:dashboard-8");
+  it("generates deterministic OpenShell-compatible names from session scope keys", () => {
+    const scopeKey = "agent:somalley_alice:dashboard-8";
+    const name = buildOpenShellSandboxName(scopeKey);
 
-    expect(name).toMatch(/^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/);
-    expect(name).toContain("somalley-alice");
-    expect(name).not.toContain("_");
-    expect(name.length).toBeLessThanOrEqual(63);
+    expect(name).toMatch(/^oc-[a-f0-9]{16}$/u);
+    expect(name).toHaveLength(19);
+    expect(buildOpenShellSandboxName(scopeKey)).toBe(name);
+    expect(buildOpenShellSandboxName("agent:other")).not.toBe(name);
+    expect(buildOpenShellSandboxName("   ")).toBe(buildOpenShellSandboxName("session"));
   });
 });
