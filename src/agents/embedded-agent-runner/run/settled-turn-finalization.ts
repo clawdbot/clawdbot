@@ -36,6 +36,7 @@ import {
 import { resolveSettledToolBatchEvidence } from "./incomplete-turn-recovery.js";
 import type { createEmbeddedRunLaneController } from "./lane-controller.js";
 import {
+  isEmbeddedRunTerminalTimeout,
   resolveEmbeddedRunAttemptTerminalOutcome,
   type EmbeddedRunTerminalState,
 } from "./terminal-outcome.js";
@@ -142,10 +143,15 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
 
   const runParams = input.terminalBase.runParams;
   const errorContext = input.terminalBase.activeErrorContext;
-  // A host summary cannot replace a tool failure. Keep its original warning
-  // when recovery produces no answer, including for silent helper runs.
+  // A host summary cannot replace a tool failure or an owner-recorded timeout.
+  // Keep the original outcome when recovery produces no answer, including for
+  // silent helper runs; a synthetic fallback would otherwise clear the timeout
+  // and report an aborted run as a delivered success.
+  const preserveOriginalTerminal =
+    Boolean(initial.attempt.lastToolError) ||
+    isEmbeddedRunTerminalTimeout(initial.terminalState.outcome);
   const terminalFallbackAllowed =
-    input.finalization.preparedAttempt.silentExpected !== true && !initial.attempt.lastToolError;
+    input.finalization.preparedAttempt.silentExpected !== true && !preserveOriginalTerminal;
   log.warn(
     `settled post-tool turn lacked a final answer: runId=${runParams.runId} sessionId=${runParams.sessionId} ` +
       `provider=${errorContext.provider}/${errorContext.model} — running isolated finalization`,
@@ -256,9 +262,9 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
       transcriptIdempotencyKey,
     });
   }
-  // Only an actual recovery replaces a failed tool turn's terminal ownership.
+  // Only an actual recovery replaces a failed or timed-out turn's terminal ownership.
   const completion =
-    finalizationOutcome !== "answered" && initial.attempt.lastToolError
+    finalizationOutcome !== "answered" && preserveOriginalTerminal
       ? initial
       : {
           attempt,

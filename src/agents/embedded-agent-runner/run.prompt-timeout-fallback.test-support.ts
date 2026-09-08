@@ -151,4 +151,87 @@ describe("runEmbeddedAgent prompt timeout fallback handoff", () => {
     });
     expect(mockedGetApiKeyForModel).toHaveBeenCalledTimes(1);
   });
+
+  it("reports the idle timeout when settled-write finalization produces no answer", async () => {
+    const toolUseAssistant = {
+      role: "assistant" as const,
+      stopReason: "toolUse" as const,
+      provider: "openai",
+      model: "gpt-5.4",
+      content: [
+        {
+          type: "toolCall",
+          id: "tool_write",
+          name: "write",
+          arguments: { path: "note.txt", content: "done" },
+        },
+      ],
+    };
+    const abortedAssistant = {
+      role: "assistant" as const,
+      stopReason: "aborted" as const,
+      provider: "openai",
+      model: "gpt-5.4",
+      content: [],
+    };
+    const emptyAssistant = {
+      role: "assistant" as const,
+      stopReason: "stop" as const,
+      provider: "openai",
+      model: "gpt-5.4",
+      content: [],
+    };
+    mockedClassifyFailoverReason.mockReturnValue("timeout");
+    mockedRunEmbeddedAttempt
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          assistantTexts: [],
+          terminal: { kind: "timeout", phase: "prompt", source: "idle" },
+          toolMetas: [{ toolName: "write", replaySafe: false }],
+          itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
+          messagesSnapshot: [
+            { role: "user", content: [{ type: "text", text: "Write note.txt" }] },
+            toolUseAssistant,
+            {
+              role: "toolResult",
+              toolCallId: "tool_write",
+              toolName: "write",
+              isError: false,
+            },
+            abortedAssistant,
+          ] as never,
+          lastAssistant: abortedAssistant as never,
+          currentAttemptAssistant: abortedAssistant as never,
+          currentAttemptReplayMetadata: {
+            hadPotentialSideEffects: true,
+            replaySafe: false,
+          },
+        }),
+      )
+      .mockResolvedValue(
+        makeAttemptResult({
+          assistantTexts: [],
+          lastAssistant: emptyAssistant as never,
+          currentAttemptAssistant: emptyAssistant as never,
+          currentAttemptCompletedAssistant: emptyAssistant as never,
+        }),
+      );
+
+    const result = await runEmbeddedAgent({
+      ...createOverflowRunParams(state),
+      provider: "openai",
+      model: "gpt-5.4",
+      runId: "run-post-tool-idle-finalization-empty",
+      config: createModelFallbackConfig("openai/gpt-5.4", ["anthropic/claude-opus-4-6"]),
+    });
+
+    // Initial attempt plus both tool-free finalization attempts; no replay, no fallback model.
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(3);
+    expect(result.meta.executionTrace?.fallbackUsed).not.toBe(true);
+    expect(result.meta.error).toMatchObject({ kind: "incomplete_turn" });
+    expect(result.payloads).toEqual([
+      { text: expect.stringContaining("model idle timeout"), isError: true },
+    ]);
+    expect(JSON.stringify(result.payloads)).not.toContain("no final summary was produced");
+  });
 });
