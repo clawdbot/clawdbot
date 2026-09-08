@@ -534,9 +534,7 @@ describe("scripts/test-projects changed-target routing", () => {
         [
           "test/scripts/direct-run-entrypoints.test.ts",
           "test/scripts/lint-status.test.ts",
-          ...(scriptPath === "scripts/lib/tsx-cli-shim.mjs"
-            ? ["test/scripts/tsx-cli-shim.test.ts"]
-            : []),
+          "test/scripts/local-check-runtime.test.ts",
         ],
       );
     },
