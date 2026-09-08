@@ -96,6 +96,8 @@ const VoiceCallNumberRouteConfigSchema = z
     agentId: z.string().min(1).optional(),
     /** Optional model override for voice responses for this number. */
     responseModel: z.string().optional(),
+    /** Optional ordered model fallbacks ("provider/model") tried on rate limit / provider error. */
+    responseModelFallbacks: z.array(z.string()).optional(),
     /** System prompt for voice responses for this number. */
     responseSystemPrompt: z.string().optional(),
     /** Timeout for response generation in ms for this number. */
@@ -480,6 +482,8 @@ export const VoiceCallConfigSchema = z
 
     /** Optional model override for generating voice responses. */
     responseModel: z.string().optional(),
+    /** Optional ordered model fallbacks ("provider/model") tried on rate limit / provider error. */
+    responseModelFallbacks: z.array(z.string()).optional(),
 
     /** System prompt for voice responses */
     responseSystemPrompt: z.string().optional(),

@@ -254,6 +254,11 @@
       "help": "Optional override. Falls back to the runtime default model when unset.",
       "advanced": true
     },
+    "responseModelFallbacks": {
+      "label": "Response Model Fallbacks",
+      "help": "Ordered fallback models (provider/model) tried when the primary model fails, e.g. on rate limit.",
+      "advanced": true
+    },
     "responseSystemPrompt": {
       "label": "Response System Prompt",
       "advanced": true
@@ -360,6 +365,12 @@
             },
             "responseModel": {
               "type": "string"
+            },
+            "responseModelFallbacks": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
             },
             "responseSystemPrompt": {
               "type": "string"
@@ -948,6 +959,12 @@
       },
       "responseModel": {
         "type": "string"
+      },
+      "responseModelFallbacks": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
       },
       "responseSystemPrompt": {
         "type": "string"

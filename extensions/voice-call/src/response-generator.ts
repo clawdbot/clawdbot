@@ -468,6 +468,7 @@ export async function generateVoiceResponse(
           },
           provider,
           model,
+          modelFallbacksOverride: voiceConfig.responseModelFallbacks,
           modelSelectionLocked,
           agentHarnessId: pinnedHarnessId,
           agentHarnessRuntimeOverride: pinnedHarnessId,
@@ -535,6 +536,18 @@ export async function generateVoiceResponse(
 
         if (!text && result.meta?.aborted) {
           return { text: null, deliveredEarly: false, error: "Response generation was aborted" };
+        }
+        if (!text && (result.payloads?.length ?? 0) === 0) {
+          // Provider refused or failed (e.g. HTTP 429 rate limit) with no
+          // output at all: surface it as an error so the webhook speaks a
+          // fallback instead of leaving the caller in dead air. Turns where
+          // the model intentionally says nothing ({"spoken":""}) still carry
+          // payloads, so they stay silent as designed.
+          return {
+            text: null,
+            deliveredEarly: false,
+            error: "Response generation produced no output",
+          };
         }
 
         return { text, deliveredEarly };
