@@ -23,7 +23,14 @@ function mockGoogleApiKeyAuth() {
   });
 }
 
-function installGoogleFetchMock() {
+function installGoogleFetchMock(params?: {
+  data?: string;
+  mimeType?: string;
+  inlineDataKey?: "inlineData" | "inline_data";
+}) {
+  const mimeType = params?.mimeType ?? "image/png";
+  const data = params?.data ?? "png-data";
+  const inlineDataKey = params?.inlineDataKey ?? "inlineData";
   const fetchMock = vi.fn().mockResolvedValue(
     jsonResponse({
       candidates: [
@@ -31,9 +38,9 @@ function installGoogleFetchMock() {
           content: {
             parts: [
               {
-                inlineData: {
-                  mimeType: "image/png",
-                  data: Buffer.from("png-data").toString("base64"),
+                [inlineDataKey]: {
+                  [inlineDataKey === "inlineData" ? "mimeType" : "mime_type"]: mimeType,
+                  data: Buffer.from(data).toString("base64"),
                 },
               },
             ],

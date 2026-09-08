@@ -6,7 +6,7 @@ import path from "node:path";
  *
  * Strictly fail-closed security gateway enforcing out-of-LLM security classification,
  * hardened Windows path protection, raw-parameter authorization digests, explicit user approval gates,
- * emergency stop protection, and secret-sanitized audit logging.
+ * emergency stop protection, bounded audit logging, and single-consumption request isolation.
  */
 
 export type GatewayClassification = "SAFE" | "APPROVAL_REQUIRED" | "BLOCKED";
@@ -67,11 +67,14 @@ const DEFAULT_CONFIG: SecurityGatewayConfig = {
   approvalTimeoutMs: 30_000,
 };
 
+const MAX_AUDIT_LOG_CAPACITY = 1000;
+
 // Global Gateway State
 let currentConfig: SecurityGatewayConfig = { ...DEFAULT_CONFIG };
 let emergencyStopTriggered = false;
 let emergencyStopReason: string | undefined = undefined;
 const pendingApprovals = new Map<string, PendingApprovalRequest>();
+const pendingApprovalQueue: PendingApprovalRequest[] = [];
 const auditLogs: SecurityAuditEvent[] = [];
 const registeredAbortControllers = new Set<AbortController>();
 
@@ -91,13 +94,16 @@ function resetLocalSecurityGatewayInternal(): void {
   currentConfig = { ...DEFAULT_CONFIG };
   emergencyStopTriggered = false;
   emergencyStopReason = undefined;
+
   for (const [, req] of pendingApprovals) {
     clearTimeout(req.timer);
     req.resolve("REJECTED_EMERGENCY_STOP");
   }
   pendingApprovals.clear();
+  pendingApprovalQueue.length = 0;
   auditLogs.length = 0;
   registeredAbortControllers.clear();
+  detachStdinController();
 }
 
 /** Internal clear emergency stop function. */
@@ -106,10 +112,7 @@ function clearEmergencyStopInternal(): void {
   emergencyStopReason = undefined;
 }
 
-/**
- * Registers operator handlers with the isolated operator module.
- * Can only be called once during process startup by local-security-gateway-operator.ts.
- */
+/** Registers operator handlers with the isolated operator module. */
 export function registerOperatorBridge(
   secretSymbol: Symbol,
   binder: {
@@ -153,6 +156,8 @@ export function triggerEmergencyStop(reason = "Emergency stop activated by opera
     req.resolve("REJECTED_EMERGENCY_STOP");
     pendingApprovals.delete(id);
   }
+  pendingApprovalQueue.length = 0;
+  detachStdinController();
 
   // Abort all active agent execution signals
   for (const controller of registeredAbortControllers) {
@@ -198,10 +203,6 @@ const SECRET_KEY_PATTERNS = [
 
 /**
  * Cycle-safe, throwing-getter-safe parameter sanitization for audit logs.
- * - Handles circular references (`[CIRCULAR_REFERENCE]`)
- * - Handles throwing property accessors (`[ERROR_READING_PROPERTY]`)
- * - Handles BigInt, Functions, Symbols, Arrays, null/undefined safely
- * - Redacts sensitive secret keys
  */
 export function sanitizeParameters(value: unknown, seen = new WeakSet<object>()): unknown {
   try {
@@ -263,7 +264,7 @@ export function sanitizeParameters(value: unknown, seen = new WeakSet<object>())
   }
 }
 
-/** Log a security audit event with sanitized parameters. */
+/** Log a security audit event with bounded retention. */
 export function logSecurityAuditEvent(event: Omit<SecurityAuditEvent, "eventId" | "sanitizedParams"> & { params: unknown }): void {
   const auditEntry: SecurityAuditEvent = {
     eventId: randomUUID(),
@@ -280,6 +281,10 @@ export function logSecurityAuditEvent(event: Omit<SecurityAuditEvent, "eventId" 
   };
 
   auditLogs.push(auditEntry);
+  if (auditLogs.length > MAX_AUDIT_LOG_CAPACITY) {
+    auditLogs.shift();
+  }
+
   if (currentConfig.auditLogger) {
     try {
       currentConfig.auditLogger(auditEntry);
@@ -313,13 +318,6 @@ const SENSITIVE_PATH_PATTERNS = [
 
 /**
  * Hardened Windows-aware path check.
- * - Handles percent-decoding safely (fails closed on URIError / malformed encoding).
- * - Bounded double-decoding for double-encoded traversal attempts.
- * - Checks absolute/relative paths, UNC paths (`\\server\share`), device paths (`\\.\`, `\\?\`),
- *   mixed slashes, path traversal sequences (`..`), null bytes, and sensitive Windows locations.
- *
- * NOTE: Lexical normalization cannot resolve OS-level symlinks or NTFS junctions that
- * point outside the working directory; filesystem operations must also obey OS ACLs.
  */
 export function isSensitivePath(targetPath: string): boolean {
   if (!targetPath || typeof targetPath !== "string") {
@@ -357,7 +355,7 @@ export function isSensitivePath(targetPath: string): boolean {
       }
       decoded = nextDecoded;
     } catch {
-      // Malformed URI encoding (e.g. "%", "%ZZ", incomplete sequences) -> FAIL CLOSED
+      // Malformed URI encoding -> FAIL CLOSED
       return true;
     }
   }
@@ -495,7 +493,6 @@ const APPROVAL_REQUIRED_TOOLS = new Set([
 
 /**
  * Classifies an action based strictly on tool name and structured parameters.
- * Uses generic security-safe reasons without leaking raw parameter values.
  */
 export function classifyAction(
   toolName: string,
@@ -555,7 +552,6 @@ export function classifyAction(
 
 /**
  * Recursively produces a deterministic canonical representation of an object.
- * Handles circular references safely without throwing.
  */
 function canonicalizeObject(obj: unknown, seen = new WeakSet<object>()): unknown {
   if (obj === null || typeof obj !== "object") {
@@ -584,8 +580,6 @@ function canonicalizeObject(obj: unknown, seen = new WeakSet<object>()): unknown
 
 /**
  * Calculates a deterministic authorization digest using ORIGINAL RAW parameters.
- * - Fails closed if parameters cannot be canonicalized (e.g. circular refs).
- * - Differs if any parameter or secret value changes!
  */
 export function calculateActionDigest(toolName: string, params: unknown): string {
   try {
@@ -619,10 +613,27 @@ export function isApprovalValidForParams(
   return pendingRequest.digest === currentDigest;
 }
 
+// Single-consumption Stdin Queue Controller
+let activeDataHandler: ((data: Buffer) => void) | undefined = undefined;
+
+function detachStdinController() {
+  if (activeDataHandler) {
+    try {
+      process.stdin.off("data", activeDataHandler);
+      if (process.stdin.isRaw) {
+        process.stdin.setRawMode(false);
+      }
+    } catch {
+      // Ignore terminal mode errors
+    }
+    activeDataHandler = undefined;
+  }
+}
+
 /**
  * Default local CLI interactive approval handler.
  * Controls:
- * - ENTER (\r or \n) = approve
+ * - ENTER (\r or \n) = approve EXACTLY ONE pending request
  * - 's' or 'S' = show details
  * - ESC (\x1b) = reject
  */
@@ -632,6 +643,7 @@ export async function defaultLocalApprovalHandler(
   const sanitizedParams = sanitizeParameters(request.params);
   console.log(`\n================ SECURITY GATEWAY APPROVAL REQUIRED ================`);
   console.log(`Tool:        ${request.toolName}`);
+  console.log(`Request ID:  ${request.id}`);
   console.log(`Summary:     ${JSON.stringify(sanitizedParams).slice(0, 100)}...`);
   console.log(`Controls:    [ENTER] = Approve | [S] = Show Details | [ESC] = Reject`);
   console.log(`Expires in:  ${Math.round((request.expiresAt - Date.now()) / 1000)} seconds`);
@@ -642,21 +654,23 @@ export async function defaultLocalApprovalHandler(
   }
 
   return new Promise<AuthorizationResult>((resolve) => {
+    detachStdinController();
+
     const onData = (data: Buffer) => {
       const str = data.toString("utf-8");
 
-      // ENTER (\r or \n) ONLY
+      // ENTER (\r or \n) ONLY - Consumes EXACTLY this request
       if (str === "\r" || str === "\n") {
-        cleanup();
-        console.log(`[Security Gateway] Action APPROVAL_GRANTED by operator (ENTER).`);
+        detachStdinController();
+        console.log(`[Security Gateway] Action APPROVAL_GRANTED for request ${request.id} (ENTER).`);
         resolve("APPROVAL_GRANTED");
         return;
       }
 
       // ESC (\x1b) ONLY
       if (str === "\x1b") {
-        cleanup();
-        console.log(`[Security Gateway] Action REJECTED_USER by operator (ESC).`);
+        detachStdinController();
+        console.log(`[Security Gateway] Action REJECTED_USER for request ${request.id} (ESC).`);
         resolve("REJECTED_USER");
         return;
       }
@@ -670,23 +684,14 @@ export async function defaultLocalApprovalHandler(
       }
     };
 
-    const cleanup = () => {
-      try {
-        process.stdin.off("data", onData);
-        if (process.stdin.isRaw) {
-          process.stdin.setRawMode(false);
-        }
-      } catch {
-        // Ignore terminal mode errors
-      }
-    };
+    activeDataHandler = onData;
 
     try {
       process.stdin.setRawMode(true);
       process.stdin.resume();
       process.stdin.on("data", onData);
     } catch {
-      cleanup();
+      detachStdinController();
       resolve("REJECTED_TIMEOUT");
     }
   });
@@ -802,6 +807,10 @@ export async function evaluateLocalSecurityGateway(args: {
   const timer = setTimeout(() => {
     if (pendingApprovals.has(reqId)) {
       pendingApprovals.delete(reqId);
+      const index = pendingApprovalQueue.findIndex((item) => item.id === reqId);
+      if (index !== -1) {
+        pendingApprovalQueue.splice(index, 1);
+      }
       approvalPromiseResolver("REJECTED_TIMEOUT");
     }
   }, currentConfig.approvalTimeoutMs);
@@ -818,6 +827,7 @@ export async function evaluateLocalSecurityGateway(args: {
   };
 
   pendingApprovals.set(reqId, pendingRequest);
+  pendingApprovalQueue.push(pendingRequest);
 
   const handler = currentConfig.approvalHandler || defaultLocalApprovalHandler;
 
@@ -826,6 +836,10 @@ export async function evaluateLocalSecurityGateway(args: {
       if (result && pendingApprovals.has(reqId)) {
         clearTimeout(timer);
         pendingApprovals.delete(reqId);
+        const index = pendingApprovalQueue.findIndex((item) => item.id === reqId);
+        if (index !== -1) {
+          pendingApprovalQueue.splice(index, 1);
+        }
         approvalPromiseResolver(result);
       }
     })
@@ -833,6 +847,10 @@ export async function evaluateLocalSecurityGateway(args: {
       if (pendingApprovals.has(reqId)) {
         clearTimeout(timer);
         pendingApprovals.delete(reqId);
+        const index = pendingApprovalQueue.findIndex((item) => item.id === reqId);
+        if (index !== -1) {
+          pendingApprovalQueue.splice(index, 1);
+        }
         approvalPromiseResolver("REJECTED_TIMEOUT");
       }
     });

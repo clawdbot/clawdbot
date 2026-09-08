@@ -19,10 +19,6 @@ import { resolveEmbeddedRunAttemptTerminalState } from "./terminal-outcome.js";
 type TransportDropScenario = {
   errorMessage?: string;
   errorBody?: string;
-  errorCode?: string;
-  errorType?: string;
-  completedAssistant?: AssistantMessage;
-  compactionEnabled?: boolean;
   content?: AssistantMessage["content"];
   diagnostics?: AssistantMessage["diagnostics"];
   activeCount?: number;
@@ -58,8 +54,6 @@ async function recoverAfterTransportDrop(scenario: TransportDropScenario = {}) {
     stopReason: "error",
     errorMessage: scenario.errorMessage ?? "WebSocket error",
     errorBody: scenario.errorBody,
-    errorCode: scenario.errorCode,
-    errorType: scenario.errorType,
     diagnostics:
       scenario.diagnostics ??
       ([
@@ -93,9 +87,6 @@ async function recoverAfterTransportDrop(scenario: TransportDropScenario = {}) {
     })) as never,
     lastAssistant: erroredAssistant,
     currentAttemptAssistant: erroredAssistant,
-    ...(scenario.completedAssistant
-      ? { currentAttemptCompletedAssistant: scenario.completedAssistant }
-      : {}),
     lastToolError: scenario.lastToolError,
     itemLifecycle: {
       startedCount: toolCalls.length,
@@ -155,12 +146,11 @@ async function recoverAfterTransportDrop(scenario: TransportDropScenario = {}) {
         provider: "openai",
         modelId: "gpt-5.6-luna",
         model: { id: "gpt-5.6-luna" },
-        genericCompactionRecoveryAllowed: scenario.compactionEnabled ?? false,
+        genericCompactionRecoveryAllowed: false,
         snapshot: () => ({
           thinkLevel: "off",
           agentHarness: { id: "openclaw" },
           outerContextTokenMeta: {},
-          contextTokenBudget: scenario.compactionEnabled ? 200_000 : undefined,
           pluginHarnessOwnsTransport: false,
         }),
       },
@@ -169,8 +159,7 @@ async function recoverAfterTransportDrop(scenario: TransportDropScenario = {}) {
         sessionIdUsed: attempt.sessionIdUsed,
         attemptAssistant: erroredAssistant,
         currentAttemptAssistant: erroredAssistant,
-        currentAttemptCompletedAssistant: scenario.completedAssistant,
-        assistantErrorText: erroredAssistant.errorMessage,
+        currentAttemptCompletedAssistant: undefined,
         terminalState,
         setTerminalLifecycleMeta: vi.fn(),
         attemptCompactionCount: 0,
@@ -185,12 +174,7 @@ async function recoverAfterTransportDrop(scenario: TransportDropScenario = {}) {
         continueFromCurrentTranscript,
       },
       failoverRetryController,
-      compactionRuntime: {
-        ...disabledCompactionRuntime,
-        assertRecoveryActive: () => {
-          throw new Error("overflow compaction requested");
-        },
-      },
+      compactionRuntime: disabledCompactionRuntime,
       contextRecoveryState,
       usageAccumulator: createUsageAccumulator(),
       lastRunPromptUsage: undefined,
@@ -216,48 +200,6 @@ async function recoverAfterTransportDrop(scenario: TransportDropScenario = {}) {
 }
 
 describe("recoverEmbeddedRunAttempt", () => {
-  it.each(["validation", "success"])(
-    "does not recover stale overflow after a completed %s response",
-    async (completed) => {
-      const completedAssistant = buildEmbeddedRunnerAssistant(
-        completed === "validation"
-          ? {
-              stopReason: "error",
-              errorMessage: "500 Unsupported parameter: context_length_exceeded",
-              errorType: "invalid_request_error",
-              errorCode: "unknown_parameter",
-            }
-          : { stopReason: "stop", content: [{ type: "text", text: "Done" }] },
-      );
-      const { recovery, markOwnedTranscriptRetry } = await recoverAfterTransportDrop({
-        errorMessage: "400 context overflow",
-        completedAssistant,
-        compactionEnabled: true,
-        diagnostics: [],
-        replaySafe: true,
-      });
-      expect(recovery).toEqual({ action: "proceed" });
-      expect(markOwnedTranscriptRetry).not.toHaveBeenCalled();
-    },
-  );
-
-  it("recovers the completed overflow instead of using another assistant's validation", async () => {
-    await expect(
-      recoverAfterTransportDrop({
-        errorMessage: "500 Unsupported parameter: timeout",
-        errorType: "invalid_request_error",
-        errorCode: "unknown_parameter",
-        completedAssistant: buildEmbeddedRunnerAssistant({
-          stopReason: "error",
-          errorMessage: "400 Your input exceeds the context window of this model",
-        }),
-        compactionEnabled: true,
-        diagnostics: [],
-        replaySafe: true,
-      }),
-    ).rejects.toThrow("overflow compaction requested");
-  });
-
   it.each([
     { errorMessage: "429 rate_limit_exceeded; Retry-After: 3600", delayMs: 3_600_000 },
     { errorMessage: "429 rate_limit_exceeded; Retry-After: 30 seconds", delayMs: 30_000 },

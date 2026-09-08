@@ -9,9 +9,7 @@ import {
   extractErrorHttpStatus,
   extractLeadingHttpStatus,
   extractProviderWrappedHttpStatus,
-  parseApiErrorInfo,
 } from "../../shared/assistant-error-format.js";
-import { classifyFailoverReasonFromCode } from "./classification-rules.js";
 import { INCOMPLETE_ASSISTANT_STREAM_RE } from "./message-patterns.js";
 import type { FailoverClassification, FailoverSignal } from "./signal.js";
 
@@ -163,25 +161,13 @@ export function classifyRateLimitWindow(
 export function shouldRetryFailoverSignal(params: {
   classification: FailoverClassification | null;
   hasTransientEvidence: boolean;
-  signal: Pick<FailoverSignal, "code" | "message" | "status">;
+  signal: Pick<FailoverSignal, "message" | "status">;
 }): boolean {
   if (!params.hasTransientEvidence) {
     return false;
   }
   const reason =
     params.classification?.kind === "reason" ? params.classification.reason : undefined;
-  const status = resolveRetrySignalStatus(params.signal);
-  // Preserve 4xx server-error retries unless a validation code proves rejection.
-  if (
-    reason === "format" &&
-    (status === undefined ||
-      (status >= 500 && status < 600) ||
-      (classifyFailoverReasonFromCode(params.signal.code) ??
-        classifyFailoverReasonFromCode(parseApiErrorInfo(params.signal.message)?.code)) ===
-        "format")
-  ) {
-    return false;
-  }
   const hasLongLimitWindow = classifyRateLimitWindow(params.signal.message).kind === "long";
   if (
     hasLongLimitWindow &&

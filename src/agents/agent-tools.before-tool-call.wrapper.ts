@@ -16,6 +16,8 @@ import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import { recordRunSkillUsage } from "../skills/runtime/run-usage.js";
 import {
+  evaluateLocalSecurityGateway,
+  isEmergencyStopActive,
   logToolExecutionCompleted,
   logToolExecutionStarted,
 } from "../security/local-security-gateway.js";
@@ -528,17 +530,45 @@ export function wrapToolWithBeforeToolCallHook(
           toolParams: executeParams,
         });
       }
+
+      // Mandatory Local Security Gateway Evaluation on FINAL post-finalizer execution shape
+      const gatewayEvaluation = await evaluateLocalSecurityGateway({
+        toolName: normalizedToolName,
+        params: executeParams,
+        ...(ctx?.runId && { runId: ctx.runId }),
+        ...(ctx?.sessionId && { sessionId: ctx.sessionId }),
+      });
+
+      if (!gatewayEvaluation.allowed) {
+        return await blockToolCall({
+          reason: gatewayEvaluation.reason,
+          deniedReason:
+            gatewayEvaluation.authorizationResult === "BLOCKED_POLICY"
+              ? "security-gateway-blocked"
+              : "security-gateway-rejected",
+          toolParams: executeParams,
+        });
+      }
+
       // Host capabilities can close while hooks, approval, validation, or
       // steering awaits. Recheck at the final synchronous source boundary.
       signal?.throwIfAborted();
+      if (isEmergencyStopActive()) {
+        return await blockToolCall({
+          reason: "Emergency stop active: Execution halted by operator.",
+          deniedReason: "security-gateway-rejected",
+          toolParams: executeParams,
+        });
+      }
+
       runAgentToolSourceExecutionGuard(tool);
       admitExecution?.();
       onImplementationStart?.();
       recordAdjustedParamsForToolCall(toolCallId, executeParams, ctx?.runId);
       const eventBase = buildEventBase(executeParams);
       recordToolExecutionStarted(toolCallId, ctx?.runId);
-      const gatewayClassification = outcome.gatewayClassification ?? "APPROVAL_REQUIRED";
-      const gatewayAuthorizationResult = outcome.gatewayAuthorizationResult ?? "APPROVAL_GRANTED";
+      const gatewayClassification = gatewayEvaluation.classification;
+      const gatewayAuthorizationResult = gatewayEvaluation.authorizationResult;
 
       logToolExecutionStarted({
         toolName: normalizedToolName,

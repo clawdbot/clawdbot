@@ -262,10 +262,7 @@ export function classifyFailoverClassificationFromHttpStatus(
     return toReasonClassification("overloaded");
   }
   if (status === 499 || (status >= 500 && status < 600)) {
-    // Gateways can wrap a deterministic request rejection in a 5xx response.
-    return messageReason === "overloaded" ||
-      messageReason === "server_error" ||
-      (status >= 500 && messageReason === "format")
+    return messageReason === "overloaded" || messageReason === "server_error"
       ? messageClassification
       : toReasonClassification("timeout");
   }
@@ -297,8 +294,6 @@ export function classifyFailoverReasonFromCode(raw: string | undefined): Failove
     return null;
   }
   switch (normalized) {
-    case "UNKNOWN_PARAMETER":
-      return "format";
     case "RESOURCE_EXHAUSTED":
     case "RATE_LIMIT":
     case "RATE_LIMITED":

@@ -225,14 +225,6 @@ export async function recoverEmbeddedRunAttempt(input: {
         providerPlugin: runtime.providerRuntimeHandle?.plugin,
       })
     : null;
-  const assistantOverflowClassification =
-    assistantOverflowCandidate === attemptAssistant
-      ? assistantFailure
-      : assistantOverflowCandidate?.stopReason === "error"
-        ? classifyFailoverSignal(buildAssistantFailoverSignal(assistantOverflowCandidate), {
-            providerPlugin: runtime.providerRuntimeHandle?.plugin,
-          })
-        : null;
   const failureReason = promptError
     ? resolveFailoverReasonFromError(promptError, preparedRuntime.provider)
     : assistantFailure?.kind === "reason"
@@ -363,13 +355,8 @@ export async function recoverEmbeddedRunAttempt(input: {
     aborted,
     signalOwnedInterruption,
     promptError,
-    assistantErrorText:
-      currentAttemptCompletedAssistant !== undefined
-        ? assistantOverflowCandidate?.errorMessage
-        : assistantErrorText,
-    assistantOverflowCandidate: assistantOverflowCandidate
-      ? { message: assistantOverflowCandidate, classification: assistantOverflowClassification }
-      : undefined,
+    assistantErrorText,
+    assistantOverflowCandidate,
     attemptCompactionCount,
     prepareCurrentTranscriptRetry: sessionPromptState.continueFromCurrentTranscript,
     markOwnedTranscriptRetry: sessionPromptState.markOwnedTranscriptRetry,

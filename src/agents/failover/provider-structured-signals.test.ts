@@ -77,7 +77,7 @@ describe("provider failover hook structured signals", () => {
       const message = makeAssistantMessageFixture({
         provider: "custom-route",
         errorMessage: "403 fixture refusal",
-        errorCode: "unknown_parameter",
+        errorCode: "PROVIDER_CODE",
         errorType: "PROVIDER_TYPE",
       });
       const copies = {
@@ -102,7 +102,7 @@ describe("provider failover hook structured signals", () => {
       expect(matchesContextOverflowError).toHaveBeenCalledWith({
         provider: "prepared-owner",
         status: 403,
-        code: "unknown_parameter",
+        code: "PROVIDER_CODE",
         errorType: "PROVIDER_TYPE",
         errorMessage: message.errorMessage,
       });
@@ -113,7 +113,7 @@ describe("provider failover hook structured signals", () => {
           expect.objectContaining({
             provider: "prepared-owner",
             status: 403,
-            code: "unknown_parameter",
+            code: "PROVIDER_CODE",
             errorType: "PROVIDER_TYPE",
           }),
         );

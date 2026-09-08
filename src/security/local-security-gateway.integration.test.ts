@@ -1,4 +1,27 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+// Isolate SQLite in-memory database for pure tool wrapper testing in test environments
+vi.mock("../infra/node-sqlite.js", () => ({
+  openNodeSqliteDatabase: vi.fn(() => ({
+    exec: vi.fn(),
+    prepare: vi.fn(() => ({
+      get: vi.fn(() => ({})),
+      all: vi.fn(() => []),
+      run: vi.fn(() => ({})),
+    })),
+    close: vi.fn(),
+  })),
+  requireNodeSqlite: vi.fn(() => ({
+    DatabaseSync: class {
+      exec() {}
+      prepare() {
+        return { get: () => ({}), all: () => [], run: () => ({}) };
+      }
+      close() {}
+    },
+  })),
+}));
+
 import { wrapToolWithBeforeToolCallHook } from "../agents/agent-tools.before-tool-call.wrapper.js";
 import type { AnyAgentTool } from "../agents/agent-tools.types.js";
 import {
