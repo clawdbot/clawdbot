@@ -22,6 +22,7 @@ import {
   unwrapModelHeaderSentinelsForProviderEgress,
   unwrapSecretSentinelsForProviderEgress,
 } from "../provider-secret-egress.js";
+import { agentRuntimeAuthPlanRequiresHostApiKey } from "../runtime-plan/auth.js";
 import { materializePreparedRuntimeModel } from "../runtime-plan/materialize-model.js";
 import {
   agentRuntimeAuthPlanMatchesTarget,
@@ -58,10 +59,6 @@ type InternalAgentHarnessCompactionOptions = {
 type HarnessCompactionResolvedAuth = { apiKey?: string };
 
 const log = createSubsystemLogger("agents/harness-compaction");
-
-function runtimePlanRequiresHostApiKey(plan?: AgentRuntimeAuthPlan): boolean {
-  return plan?.modelRoute?.authRequirement === "api-key";
-}
 
 function resolveHarnessCompactIdentity(params: CompactEmbeddedAgentSessionParams): {
   agentDir: string;
@@ -162,7 +159,7 @@ async function resolveHarnessCompactApiKey(params: {
     if (
       (reusableHarness.authBootstrap === "harness" ||
         reusableRuntimeAuthPlan.harnessAuthProvider) &&
-      !runtimePlanRequiresHostApiKey(reusableRuntimeAuthPlan)
+      !agentRuntimeAuthPlanRequiresHostApiKey(reusableRuntimeAuthPlan)
     ) {
       return fallbackResolution(reusableHarness, callerRuntimeModel, reusableRuntimeAuthPlan);
     }
@@ -232,6 +229,7 @@ async function resolveHarnessCompactApiKey(params: {
       harnessId: harness.id,
       harnessRuntime: harness.id,
       harnessAuthBootstrap: harness.authBootstrap,
+      harnessRequiresHostApiKey: harness.requiresHostApiKey?.(provider),
     });
   let preparation: PreparedAgentRuntimeAuth;
   if (reusableRuntimeAuthPlan) {
@@ -302,7 +300,7 @@ async function resolveHarnessCompactApiKey(params: {
       resolveAuth: async ({ attempt, model: attemptModel }) => {
         if (
           (harness.authBootstrap === "harness" || attempt.plan.harnessAuthProvider) &&
-          !runtimePlanRequiresHostApiKey(attempt.plan)
+          !agentRuntimeAuthPlanRequiresHostApiKey(attempt.plan)
         ) {
           return { plan: attempt.plan, auth: {} };
         }
@@ -500,7 +498,8 @@ export async function maybeCompactAgentHarnessSession(
   // Native runtimes own subscription login, but a provider-locked Platform
   // route must receive the exact host-prepared key selected for this attempt.
   const harnessOwnsAuth =
-    harness.authBootstrap === "harness" && !runtimePlanRequiresHostApiKey(resolvedRuntimeAuthPlan);
+    harness.authBootstrap === "harness" &&
+    !agentRuntimeAuthPlanRequiresHostApiKey(resolvedRuntimeAuthPlan);
   const resolvedApiKey = harnessOwnsAuth ? undefined : resolved.apiKey;
   const runtimeModel =
     harnessOwnsAuth && !resolvedRuntimeAuthPlan ? undefined : resolved.runtimeModel;

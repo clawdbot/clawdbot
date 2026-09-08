@@ -38,6 +38,7 @@ import {
 import { protectPreparedProviderRuntimeAuth } from "../../provider-runtime-auth-protection.js";
 import { unwrapSecretSentinelsForProviderEgress } from "../../provider-secret-egress.js";
 import { clampRuntimeAuthRefreshDelayMs } from "../../runtime-auth-refresh.js";
+import { assertRequiredHostApiKey } from "../../runtime-plan/auth.js";
 import { resolveAuthProfileFailureReason } from "./auth-profile-failure-policy.js";
 import type { AuthProfileFailurePolicy } from "./auth-profile-failure-policy.types.js";
 import {
@@ -144,6 +145,7 @@ export function createEmbeddedRunAuthController(params: {
   ): Promise<{
     runtimeModel: Model;
     authRequirement?: ProviderModelRouteAuthRequirement;
+    requiresHostApiKey?: boolean;
     allowAuthProfileFallback?: boolean;
     commit(): void;
   }>;
@@ -532,6 +534,11 @@ export function createEmbeddedRunAuthController(params: {
       preparedModel?.runtimeModel,
       preparedModel?.allowAuthProfileFallback,
     );
+    assertRequiredHostApiKey({
+      required: preparedModel?.requiresHostApiKey,
+      provider: (preparedModel?.runtimeModel ?? state.models.runtime).provider,
+      auth: apiKeyInfo,
+    });
     if (
       preparedModel?.authRequirement &&
       !providerModelRouteAcceptsAuthMode({

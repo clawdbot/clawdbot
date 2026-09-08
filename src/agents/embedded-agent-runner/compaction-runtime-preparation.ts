@@ -227,6 +227,7 @@ export async function prepareCompactionHarnessAuth(params: {
       harnessId: harness.id,
       harnessRuntime: harness.id,
       harnessAuthBootstrap: harness.authBootstrap,
+      harnessRequiresHostApiKey: harness.requiresHostApiKey?.(params.provider),
     });
   let runtimeAuthPreparation: PreparedAgentRuntimeAuth = params.reusableRuntimeAuthPlan
     ? {

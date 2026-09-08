@@ -6,6 +6,7 @@ import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { isProfileInCooldown } from "../auth-profiles/usage-state.js";
 import { getApiKeyForModelCore } from "../model-auth.js";
 import { providerModelRouteAcceptsAuthMode } from "../provider-model-route-auth.js";
+import { agentRuntimeAuthPlanRequiresHostApiKey, assertRequiredHostApiKey } from "./auth.js";
 import { shouldForceDirectAuthFallbackModelResolve } from "./credential-scoped-model.js";
 import { sameAgentRuntimeAuthModelRoute } from "./model-route.js";
 import {
@@ -199,14 +200,13 @@ export function scopeAuthProfileStoreToPreparedPlan(
   store: AuthProfileStore,
   plan: AgentRuntimeAuthPlan,
 ): AuthProfileStore {
-  const profileIds =
-    plan.modelRoute?.authRequirement === "api-key"
-      ? []
-      : [plan.forwardedAuthProfileId, ...(plan.forwardedAuthProfileCandidateIds ?? [])].filter(
-          (profileId, index, values): profileId is string => {
-            return Boolean(profileId?.trim()) && values.indexOf(profileId) === index;
-          },
-        );
+  const profileIds = agentRuntimeAuthPlanRequiresHostApiKey(plan)
+    ? []
+    : [plan.forwardedAuthProfileId, ...(plan.forwardedAuthProfileCandidateIds ?? [])].filter(
+        (profileId, index, values): profileId is string => {
+          return Boolean(profileId?.trim()) && values.indexOf(profileId) === index;
+        },
+      );
   return scopeAuthStoreToPreparedCandidates(store, profileIds);
 }
 
@@ -244,6 +244,11 @@ function assertResolvedAuthMatchesPreparedRoute(params: {
   plan: AgentRuntimeAuthPlan;
   auth: Awaited<ReturnType<typeof getApiKeyForModelCore>>;
 }): void {
+  assertRequiredHostApiKey({
+    required: params.plan.requiresHostApiKey,
+    provider: params.plan.providerForAuth,
+    auth: params.auth,
+  });
   const route = params.plan.modelRoute;
   if (
     !route ||

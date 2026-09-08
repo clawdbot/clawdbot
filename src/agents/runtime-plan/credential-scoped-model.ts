@@ -148,6 +148,7 @@ export function hasPreparedAuthAttemptModelMetadata(params: {
     (attempt) =>
       (params.providerUsesProfileScopedModelMetadata &&
         (attempt.kind === "profile" || Boolean(attempt.plan.forwardedAuthProfileId))) ||
+      attempt.plan.requiresHostApiKey === true ||
       Boolean(attempt.plan.modelRoute) ||
       attempt.allowAuthProfileFallback !== undefined,
   );
