@@ -23,7 +23,7 @@ jobs:
       workflow_sha: 009f929485cea13760d87bca66e5befb943765ad
       build_profile: full
       suites: '[{"name":"Diagnostic Gateway 3/4","command":"node .github/diagnostics/run-node-wire-cohort.mjs"}]'
-      use_github_hosted_runners: true
+      use_github_hosted_runners: false
       advisory: false
       allow_unreleased_changelog: false
       allow_frozen_target_scenario_omissions: true
