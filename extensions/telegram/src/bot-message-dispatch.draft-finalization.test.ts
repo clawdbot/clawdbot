@@ -293,7 +293,7 @@ describeTelegramDispatch("dispatchTelegramMessage draft-finalization", () => {
     expect(emitTelegramMessageSentHooks).not.toHaveBeenCalled();
   });
 
-  it("delivers a block-only answer when a native quote disables the draft stream", async () => {
+  it("delivers a quoted block-only answer after enabling the transient progress stream", async () => {
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
       await dispatcherOptions.deliver(
         { text: "quoted block-only answer", replyToId: "9001" },
@@ -314,7 +314,9 @@ describeTelegramDispatch("dispatchTelegramMessage draft-finalization", () => {
       telegramCfg: { streaming: { mode: "progress", progress: { toolProgress: true } } },
     });
 
-    expect(createTelegramDraftStream).not.toHaveBeenCalled();
+    expect(createTelegramDraftStream).toHaveBeenCalledWith(
+      expect.objectContaining({ replyToMode: "all" }),
+    );
     const delivery = expectDeliverRepliesParams({});
     expectRecordFields((delivery.replies as Array<unknown>)[0], {
       text: "quoted block-only answer",

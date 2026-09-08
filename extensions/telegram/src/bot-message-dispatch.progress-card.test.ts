@@ -62,6 +62,66 @@ describeTelegramDispatch("dispatchTelegramMessage progress cards", () => {
     },
   );
 
+  it.each(["first", "batched", "all"] as const)(
+    "shows progress cards in quoted forum-topic turns without consuming the %s final quote",
+    async (replyToMode) => {
+      const draft = createSequencedDraftStream();
+      createTelegramDraftStream.mockReturnValue(draft);
+      deliverReplies.mockResolvedValue({ delivered: true });
+      dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+        async ({ dispatcherOptions, replyOptions }) => {
+          await replyOptions?.onPlanUpdate?.({
+            phase: "update",
+            explanation: "Inspecting topic delivery",
+            steps: [{ step: "Verify progress", status: "in_progress" }],
+          });
+          await dispatcherOptions.deliver({ text: "Done", replyToId: "547" }, { kind: "final" });
+          return { queuedFinal: true };
+        },
+      );
+
+      const context = createContext({
+        isGroup: true,
+        threadSpec: { id: 547, scope: "forum" },
+        msg: {
+          message_id: 6993,
+          message_thread_id: 547,
+          is_topic_message: true,
+        } as never,
+        ctxPayload: {
+          MessageSid: "6993",
+          MessageThreadId: 547,
+          ReplyToId: "547",
+          ReplyToBody: "topic root",
+          ReplyToQuoteText: "topic root",
+          ReplyToIsQuote: true,
+        } as never,
+      });
+      await dispatchWithContext({
+        context,
+        replyToMode,
+        streamMode: "progress",
+        telegramCfg: {
+          streaming: { mode: "progress", progress: { label: false } },
+        },
+      });
+
+      expect(createTelegramDraftStream).toHaveBeenCalledWith(
+        expect.objectContaining({ replyToMode: "all" }),
+      );
+      expect(draft.updatePreview).toHaveBeenCalledWith(
+        expect.objectContaining({ text: expect.stringContaining("Verify progress") }),
+      );
+      expect(deliverReplies).toHaveBeenCalledWith(
+        expect.objectContaining({
+          replyQuoteMessageId: 547,
+          replyQuoteText: "topic root",
+          thread: { id: 547, scope: "forum" },
+        }),
+      );
+    },
+  );
+
   // The real compositor, renderer and transport expose short sends, stopped
   // streams and lifecycle resets at Telegram's stubbed network boundary.
   it.each(["progress", "partial", "block"] as const)(

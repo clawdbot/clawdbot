@@ -61,7 +61,11 @@ export function createDraftState(params: TurnConfig): TelegramDraftStateSlice {
   const previewAvailable =
     params.allowProviderPreview &&
     streamDeliveryEnabled &&
-    !(params.replyToMode !== "off" && params.replyQuoteText != null) &&
+    !(
+      params.streamMode !== "progress" &&
+      params.replyToMode !== "off" &&
+      params.replyQuoteText != null
+    ) &&
     !forceBlockStreamingForReasoning;
   const accountBlockStreamingEnabled = resolveChannelStreamingBlockEnabled(params.telegramCfg, {
     previewAvailable,
@@ -99,7 +103,12 @@ export function createDraftState(params: TurnConfig): TelegramDraftStateSlice {
           maxChars: draftMaxChars,
           thread: params.context.threadSpec,
           replyToMessageId: params.draftReplyToMessageId,
-          replyToMode: params.replyToMode,
+          // A progress preview is transient. Keep the selected quote available
+          // for the durable final instead of consuming first/batched ownership.
+          replyToMode:
+            params.streamMode === "progress" && params.replyQuoteText != null
+              ? "all"
+              : params.replyToMode,
           richMessages: params.telegramCfg.richMessages,
           linkPreview: params.telegramCfg.linkPreview,
           minInitialChars: DRAFT_MIN_INITIAL_CHARS,
