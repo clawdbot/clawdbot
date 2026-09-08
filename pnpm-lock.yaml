@@ -2202,6 +2202,10 @@ importers:
         version: link:../..
 
   extensions/volcengine:
+    dependencies:
+      ws:
+        specifier: 8.21.1
+        version: 8.21.1
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*

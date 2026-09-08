@@ -32,6 +32,14 @@
   "providerAuthAliases": {
     "volcengine-plan": "volcengine"
   },
+  "providerEndpoints": [
+    {
+      "endpointClass": "doubao-realtime",
+      "hosts": [
+        "openspeech.bytedance.com"
+      ]
+    }
+  ],
   "providerRequest": {
     "providers": {
       "volcengine": {
@@ -356,6 +364,9 @@
     "properties": {}
   },
   "contracts": {
+    "realtimeVoiceProviders": [
+      "doubao"
+    ],
     "speechProviders": [
       "volcengine",
       "bytedance",
