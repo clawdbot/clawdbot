@@ -945,6 +945,7 @@ function renderSessionsCard(
   const recentEntries = recentSessions
     .map((key) => sessionMap.get(key))
     .filter((entry) => entry !== undefined);
+  const displayedEntries = sessionsTab === "recent" ? recentEntries : sortedWithDir.slice(0, 50);
   const renderSessionBarRows = (entries: typeof sortedSessions) => {
     // Selection follows this rendered group, before a click reorders recently viewed sessions.
     const orderedKeys = entries.map((entry) => entry.session.key);
@@ -959,9 +960,9 @@ function renderSessionsCard(
       <div class="usage-panel sessions-card">
         <div class="sessions-card-header">
           <div class="sessions-card-count">
-            ${t("usage.sessions.shown", { count: String(sessions.length) })}
+            ${t("usage.sessions.shown", { count: String(displayedEntries.length) })}
             ${
-              totalSessions !== sessions.length
+              totalSessions !== displayedEntries.length
                 ? ` · ${t("usage.sessions.total", { count: String(totalSessions) })}`
                 : ""
             }
@@ -1042,23 +1043,25 @@ function renderSessionsCard(
         </div>
         ${
           sessionsTab === "recent"
-            ? recentEntries.length === 0
+            ? displayedEntries.length === 0
               ? html` <div class="usage-empty-block">${t("usage.sessions.noRecent")}</div> `
               : html`
                   <div class="session-bars session-bars--recent">
-                    ${renderSessionBarRows(recentEntries)}
+                    ${renderSessionBarRows(displayedEntries)}
                   </div>
                 `
-            : sessions.length === 0
+            : displayedEntries.length === 0
               ? html` <div class="usage-empty-block">${t("usage.sessions.noneInRange")}</div> `
               : html`
                   <div class="session-bars">
-                    ${renderSessionBarRows(sortedWithDir.slice(0, 50))}
+                    ${renderSessionBarRows(displayedEntries)}
                     ${
-                      sessions.length > 50
+                      sessions.length > displayedEntries.length
                         ? html`
                             <div class="usage-more-sessions">
-                              ${t("usage.sessions.more", { count: String(sessions.length - 50) })}
+                              ${t("usage.sessions.more", {
+                                count: String(sessions.length - displayedEntries.length),
+                              })}
                             </div>
                           `
                         : nothing
