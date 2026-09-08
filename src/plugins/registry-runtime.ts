@@ -99,7 +99,10 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
         });
       }
     })();
-    if (record.origin !== "bundled" || requireCurrentRuntimeRecord) {
+    if (
+      (record.origin !== "bundled" && record.trustedOfficialInstall !== true) ||
+      requireCurrentRuntimeRecord
+    ) {
       cache.set(record, channel);
       return channel;
     }
@@ -121,13 +124,18 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
       cache.set(record, channel);
       return channel;
     }
+    const resolveGatewayContext = getGatewayContextResolver(registryParams.runtime.subagent);
+    const isLive = () =>
+      ownsLiveRegistrySlot() && isPluginRecordLifecycleEpochActive(registry, record, epoch);
     const owner = Object.freeze({
       channelId: record.id,
       record,
       epoch,
-      resolveGatewayContext: getGatewayContextResolver(registryParams.runtime.subagent),
-      isLive: () =>
-        ownsLiveRegistrySlot() && isPluginRecordLifecycleEpochActive(registry, record, epoch),
+      // Retained contexts belong to this channel generation, even while its Gateway stays live.
+      resolveGatewayContext: resolveGatewayContext
+        ? () => (isLive() ? resolveGatewayContext() : undefined)
+        : undefined,
+      isLive,
     });
     const disposeOwner = registerChannelIngressHostOwner(owner);
     registeredAdmissionOwnerByRecord.set(record, {
@@ -142,7 +150,7 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
       params: Parameters<PluginRuntime["channel"]["inbound"]["buildContext"]>[0],
     ) => {
       // Audit provenance is passive: stale closures still build the message context,
-      // but only the exact live bundled owner may attach participant evidence.
+      // but only the exact live trusted owner may attach participant evidence.
       return buildHostContext(params as never);
     }) as unknown as PluginRuntime["channel"]["inbound"]["buildContext"];
     const scoped = {
