@@ -429,6 +429,54 @@ describe("OpenAI-compatible embedding destination credential ownership", () => {
     }
   });
 
+  it("does not select a profile when a provider-owned destination omits apiKey", async () => {
+    const agentDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-embedding-profile-only-"));
+    const profileId = "tenant-embeddings:profile-only";
+    try {
+      writePersistedAuthProfileStoreRaw(
+        {
+          version: 1,
+          profiles: {
+            [profileId]: {
+              type: "api_key",
+              provider: "tenant-embeddings",
+              key: "synthetic-profile-only-key",
+            },
+          },
+        },
+        agentDir,
+      );
+      const result = await openAICompatibleEmbeddingProviderAdapter.create({
+        config: {
+          auth: {
+            profiles: { [profileId]: { provider: "tenant-embeddings", mode: "api_key" } },
+            order: { "tenant-embeddings": [profileId] },
+          },
+          models: {
+            providers: {
+              "tenant-embeddings": {
+                api: "openai-completions",
+                baseUrl,
+                models: [],
+              },
+            },
+          },
+        },
+        agentDir,
+        provider: "tenant-embeddings",
+        model: "tenant-embeddings/fixture-model",
+      });
+
+      await expect(result.provider?.embed("hello")).resolves.toEqual(vector);
+      expect(requests).toHaveLength(1);
+      expect(requests[0]?.headers.authorization).toBeUndefined();
+    } finally {
+      closeAuthProfileReadPool({ kind: "root", rootPath: agentDir });
+      closeOpenClawAgentDatabases(agentDir);
+      await rm(agentDir, { force: true, recursive: true });
+    }
+  });
+
   it.each([
     {
       name: "profile reference",

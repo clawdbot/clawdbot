@@ -198,6 +198,8 @@ async function resolveConfiguredProviderApiKey(params: {
     path: `models.providers.${params.providerId}.apiKey`,
   });
   if (!apiKey) {
+    // An omitted or empty provider key does not opt this destination into profile discovery.
+    // Profile credentials require an explicit provider-entry binding below.
     return undefined;
   }
   const { resolveAgentDir, tryResolveAmbientOwnerAgentId } =
