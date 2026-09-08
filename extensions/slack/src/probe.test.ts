@@ -147,4 +147,62 @@ describe("probeSlack", () => {
       error: expect.any(String),
     });
   });
+
+  it("treats an HTTP 200 response with { ok: false, error: 'not_authed' } as an auth failure, not a successful connection", async () => {
+    authTestMock.mockResolvedValue({ ok: false, error: "not_authed" });
+
+    const result = await probeSlack("xoxp-invalid");
+
+    expect(result.ok).toBe(false);
+    expect(result.status).toBe(200);
+    expect(result.errorCode).toBe("not_authed");
+    expect(result.error).toContain("not_authed");
+    expect(result.error).toContain("Regenerate the token");
+  });
+
+  it("treats a thrown WebAPIPlatformError (the SDK's real behavior for { ok: false } bodies) the same way — status 200, clear remediation, not a generic error", async () => {
+    const platformError = new Error("An API error occurred: invalid_auth") as Error & {
+      code: string;
+      data: { ok: false; error: string };
+    };
+    platformError.code = "slack_webapi_platform_error";
+    platformError.data = { ok: false, error: "invalid_auth" };
+    authTestMock.mockRejectedValue(platformError);
+
+    const result = await probeSlack("xoxp-invalid");
+
+    expect(result.ok).toBe(false);
+    expect(result.status).toBe(200);
+    expect(result.errorCode).toBe("invalid_auth");
+    expect(result.error).toContain("Regenerate the token");
+  });
+
+  it("keeps non-auth platform errors (e.g. missing_scope) distinguishable — clear code, but no false 'regenerate token' remediation", async () => {
+    const platformError = new Error("An API error occurred: missing_scope") as Error & {
+      code: string;
+      data: { ok: false; error: string };
+    };
+    platformError.code = "slack_webapi_platform_error";
+    platformError.data = { ok: false, error: "missing_scope" };
+    authTestMock.mockRejectedValue(platformError);
+
+    const result = await probeSlack("xoxb-test");
+
+    expect(result.ok).toBe(false);
+    expect(result.status).toBe(200);
+    expect(result.errorCode).toBe("missing_scope");
+    expect(result.error).not.toContain("Regenerate the token");
+    expect(result.error).toContain("missing_scope");
+  });
+
+  it("keeps real network/timeout failures distinguishable from invalid-token failures (no HTTP response, no Slack error code)", async () => {
+    authTestMock.mockRejectedValue(new Error("ETIMEDOUT"));
+
+    const result = await probeSlack("xoxb-test");
+
+    expect(result.ok).toBe(false);
+    expect(result.status).toBeNull();
+    expect(result.errorCode).toBeUndefined();
+    expect(result.error).toContain("ETIMEDOUT");
+  });
 });

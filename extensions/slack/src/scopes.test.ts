@@ -65,4 +65,21 @@ describe("fetchSlackScopes", () => {
         "auth.test: invalid_auth | auth.scopes: unknown_method | apps.permissions.info: unknown_method",
     });
   });
+
+  it("surfaces a revoked/expired user token (SLACK_USER_TOKEN) with a clear regenerate-the-token message instead of a raw SDK error, when the SDK throws for the { ok: false } body", async () => {
+    const platformError = new Error("An API error occurred: token_revoked") as Error & {
+      code: string;
+      data: { ok: false; error: string };
+    };
+    platformError.code = "slack_webapi_platform_error";
+    platformError.data = { ok: false, error: "token_revoked" };
+    const apiCall = vi.fn().mockRejectedValue(platformError);
+    mockSlackClient(apiCall);
+
+    const result = await fetchSlackScopes("xoxp-revoked-user-token", 5000);
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("token_revoked");
+    expect(result.error).toContain("Regenerate the token");
+  });
 });
