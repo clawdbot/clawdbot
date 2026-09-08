@@ -4,12 +4,13 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { updateSessionGoalStatus } from "../../config/sessions/goals.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
   loadSessionEntry,
   upsertSessionEntryCore as upsertAccessorSessionEntry,
 } from "../../config/sessions/session-accessor.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
+import type { SessionEntry, SessionGoal } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createCreateGoalTool, createGetGoalTool, createUpdateGoalTool } from "./goal-tools.js";
 
@@ -199,5 +200,264 @@ describe("goal tools", () => {
       }),
     ]);
     expect(getSessionEntry({ storePath, sessionKey: "global" })?.goal?.status).toBe("complete");
+  });
+
+  it("lets the model pause and resume a goal it owns", async () => {
+    const { config, template } = await createStoreConfig();
+    const storePath = resolveSessionStorePathCore(template, { agentId: "research" });
+    const options = {
+      agentSessionKey: "global",
+      runSessionKey: "global",
+      sessionAgentId: "research",
+      config,
+    };
+    await upsertSessionEntry({
+      storePath,
+      sessionKey: "global",
+      entry: { sessionId: "sess-global", updatedAt: 1 },
+    });
+    await createCreateGoalTool(options).execute("call-create", {
+      objective: "Land the report once the upstream API ships",
+    });
+
+    const tool = createUpdateGoalTool(options);
+
+    const paused = await tool.execute("call-pause", {
+      status: "paused",
+      note: "waiting on upstream API release",
+    });
+    const pausedGoal = getSessionEntry({ storePath, sessionKey: "global" })?.goal;
+    expect(paused.details).toMatchObject({ status: "updated", goal: { status: "paused" } });
+    expect(pausedGoal?.status).toBe("paused");
+    expect(pausedGoal?.pausedAt).toBeTypeOf("number");
+    expect(pausedGoal?.lastStatusNote).toBe("waiting on upstream API release");
+
+    const resumed = await tool.execute("call-resume", { status: "active" });
+    const resumedGoal = getSessionEntry({ storePath, sessionKey: "global" })?.goal;
+    expect(resumed.details).toMatchObject({ status: "updated", goal: { status: "active" } });
+    expect(resumedGoal?.status).toBe("active");
+  });
+
+  // The model-facing active transition must be narrowed at the goal owner: an
+  // agent can only resume a goal it paused, not clear a user/system budget limit
+  // or retract a blocked state. Humans keep the full resume path.
+  describe("update_goal active transition is actor-scoped", () => {
+    async function seedGoal(
+      storePath: string,
+      status: SessionGoal["status"],
+      over: Partial<SessionGoal> = {},
+    ): Promise<void> {
+      await upsertSessionEntry({
+        storePath,
+        sessionKey: "global",
+        entry: {
+          sessionId: "sess-global",
+          updatedAt: 1,
+          goal: {
+            schemaVersion: 1,
+            id: "goal-1",
+            objective: "ship",
+            status,
+            createdAt: 1,
+            updatedAt: 1,
+            tokenStart: 0,
+            tokensUsed: 0,
+            continuationTurns: 0,
+            ...over,
+          },
+        },
+      });
+    }
+
+    const baseScope = {
+      sessionKey: "global",
+      storePath: "",
+      agentId: "research",
+    } as const;
+
+    it("rejects an agent resuming a blocked goal", async () => {
+      const { template } = await createStoreConfig();
+      const storePath = resolveSessionStorePathCore(template, { agentId: "research" });
+      await seedGoal(storePath, "blocked", { blockedAt: 1 });
+
+      await expect(
+        updateSessionGoalStatus({
+          ...baseScope,
+          storePath,
+          actor: { type: "agent", id: "global" },
+          status: "active",
+        }),
+      ).rejects.toThrow(/agents can only resume a paused goal/);
+      expect(getSessionEntry({ storePath, sessionKey: "global" })?.goal?.status).toBe("blocked");
+    });
+
+    it("rejects an agent resuming a budget-limited goal", async () => {
+      const { template } = await createStoreConfig();
+      const storePath = resolveSessionStorePathCore(template, { agentId: "research" });
+      await seedGoal(storePath, "budget_limited", {
+        tokenBudget: 20,
+        tokensUsed: 25,
+        budgetLimitedAt: 1,
+      });
+
+      await expect(
+        updateSessionGoalStatus({
+          ...baseScope,
+          storePath,
+          actor: { type: "agent", id: "global" },
+          status: "active",
+        }),
+      ).rejects.toThrow(/agents can only resume a paused goal/);
+      const goal = getSessionEntry({ storePath, sessionKey: "global" })?.goal;
+      expect(goal?.status).toBe("budget_limited");
+      expect(goal?.tokensUsed).toBe(25);
+    });
+
+    it("allows a human to resume a budget-limited goal (resets the window)", async () => {
+      const { template } = await createStoreConfig();
+      const storePath = resolveSessionStorePathCore(template, { agentId: "research" });
+      await seedGoal(storePath, "budget_limited", {
+        tokenBudget: 20,
+        tokensUsed: 25,
+        budgetLimitedAt: 1,
+      });
+
+      const goal = await updateSessionGoalStatus({
+        ...baseScope,
+        storePath,
+        actor: { type: "human" },
+        status: "active",
+      });
+      expect(goal.status).toBe("active");
+      expect(goal.tokensUsed).toBe(0);
+      expect(goal.budgetLimitedAt).toBeUndefined();
+    });
+
+    it("rejects an agent pausing a blocked goal (no pause-then-resume bypass)", async () => {
+      const { template } = await createStoreConfig();
+      const storePath = resolveSessionStorePathCore(template, { agentId: "research" });
+      await seedGoal(storePath, "blocked", { blockedAt: 1 });
+
+      await expect(
+        updateSessionGoalStatus({
+          ...baseScope,
+          storePath,
+          actor: { type: "agent", id: "global" },
+          status: "paused",
+        }),
+      ).rejects.toThrow(/agents can only pause an active goal/);
+      expect(getSessionEntry({ storePath, sessionKey: "global" })?.goal?.status).toBe("blocked");
+    });
+
+    it("rejects an agent pausing a budget-limited goal (no pause-then-resume bypass)", async () => {
+      const { template } = await createStoreConfig();
+      const storePath = resolveSessionStorePathCore(template, { agentId: "research" });
+      await seedGoal(storePath, "budget_limited", {
+        tokenBudget: 20,
+        tokensUsed: 25,
+        budgetLimitedAt: 1,
+      });
+
+      await expect(
+        updateSessionGoalStatus({
+          ...baseScope,
+          storePath,
+          actor: { type: "agent", id: "global" },
+          status: "paused",
+        }),
+      ).rejects.toThrow(/agents can only pause an active goal/);
+      const goal = getSessionEntry({ storePath, sessionKey: "global" })?.goal;
+      expect(goal?.status).toBe("budget_limited");
+      expect(goal?.tokensUsed).toBe(25);
+    });
+
+    it("allows an agent to pause an active goal", async () => {
+      const { template } = await createStoreConfig();
+      const storePath = resolveSessionStorePathCore(template, { agentId: "research" });
+      await seedGoal(storePath, "active");
+
+      const goal = await updateSessionGoalStatus({
+        ...baseScope,
+        storePath,
+        actor: { type: "agent", id: "global" },
+        status: "paused",
+      });
+      expect(goal.status).toBe("paused");
+      expect(goal.pausedAt).toBeTypeOf("number");
+    });
+
+    it("allows a human to pause a blocked goal (human keeps full pause path)", async () => {
+      const { template } = await createStoreConfig();
+      const storePath = resolveSessionStorePathCore(template, { agentId: "research" });
+      await seedGoal(storePath, "blocked", { blockedAt: 1 });
+
+      const goal = await updateSessionGoalStatus({
+        ...baseScope,
+        storePath,
+        actor: { type: "human" },
+        status: "paused",
+      });
+      expect(goal.status).toBe("paused");
+    });
+
+    it("rejects an agent resuming a paused goal with an exhausted budget", async () => {
+      const { template } = await createStoreConfig();
+      const storePath = resolveSessionStorePathCore(template, { agentId: "research" });
+      await seedGoal(storePath, "paused", {
+        tokenBudget: 20,
+        tokensUsed: 25,
+        pausedAt: 1,
+      });
+
+      await expect(
+        updateSessionGoalStatus({
+          ...baseScope,
+          storePath,
+          actor: { type: "agent", id: "global" },
+          status: "active",
+        }),
+      ).rejects.toThrow(/agents cannot resume a goal whose token budget is exhausted/);
+      const goal = getSessionEntry({ storePath, sessionKey: "global" })?.goal;
+      expect(goal?.status).toBe("paused");
+      expect(goal?.tokensUsed).toBe(25);
+    });
+
+    it("allows an agent to resume a paused goal under its budget", async () => {
+      const { template } = await createStoreConfig();
+      const storePath = resolveSessionStorePathCore(template, { agentId: "research" });
+      await seedGoal(storePath, "paused", {
+        tokenBudget: 20,
+        tokensUsed: 5,
+        pausedAt: 1,
+      });
+
+      const goal = await updateSessionGoalStatus({
+        ...baseScope,
+        storePath,
+        actor: { type: "agent", id: "global" },
+        status: "active",
+      });
+      expect(goal.status).toBe("active");
+      expect(goal.tokensUsed).toBe(5);
+    });
+
+    it("allows a human to resume a paused goal with an exhausted budget (resets the window)", async () => {
+      const { template } = await createStoreConfig();
+      const storePath = resolveSessionStorePathCore(template, { agentId: "research" });
+      await seedGoal(storePath, "paused", {
+        tokenBudget: 20,
+        tokensUsed: 25,
+        pausedAt: 1,
+      });
+
+      const goal = await updateSessionGoalStatus({
+        ...baseScope,
+        storePath,
+        actor: { type: "human" },
+        status: "active",
+      });
+      expect(goal.status).toBe("active");
+      expect(goal.tokensUsed).toBe(0);
+    });
   });
 });
