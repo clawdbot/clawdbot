@@ -7,7 +7,8 @@
   "scripts": {
     "dashboard": "convex dashboard",
     "deploy": "convex deploy",
-    "dev": "convex dev"
+    "dev": "convex dev",
+    "test": "node --test tests/*.test.mjs"
   },
   "dependencies": {
     "convex": "1.45.0",

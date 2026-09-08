@@ -4,6 +4,7 @@ import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { internalMutation, internalQuery } from "./_generated/server";
+import { normalizeTelegramFixtureReferences } from "./payload_validation";
 
 const LEASE_EVENT_RETENTION_MS = 2 * 24 * 60 * 60 * 1_000;
 const ADMIN_EVENT_RETENTION_MS = 30 * 24 * 60 * 60 * 1_000;
@@ -30,7 +31,12 @@ type ActorRole = "ci" | "maintainer";
 type CredentialStatus = "active" | "disabled";
 type ListStatus = CredentialStatus | "all";
 type LeaseEventType = "acquire" | "acquire_failed" | "release";
-type AdminEventType = "add" | "disable" | "disable_failed";
+type AdminEventType =
+  | "add"
+  | "disable"
+  | "disable_failed"
+  | "telegram_fixtures_update"
+  | "telegram_fixtures_update_failed";
 
 type BrokerErrorResult = {
   status: "error";
@@ -710,6 +716,120 @@ export const disableCredentialSet = internalMutation({
       status: "ok",
       changed: true,
       credential: toCredentialSummary(updated, false),
+    };
+  },
+});
+
+export const updateTelegramFixtures = internalMutation({
+  args: {
+    credentialId: v.id("credential_sets"),
+    sutBotId: v.string(),
+    testerUserId: v.string(),
+    expectedGroupId: v.string(),
+    expectedForumGroupId: v.optional(v.string()),
+    groupId: v.string(),
+    forumGroupId: v.string(),
+    actorId: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const nowMs = Date.now();
+    const actorId = normalizeActorId(args.actorId);
+    const row = await ctx.db.get(args.credentialId);
+    const reject = async (code: string, message: string) => {
+      await insertAdminEvent({
+        ctx,
+        eventType: "telegram_fixtures_update_failed",
+        actorRole: "maintainer",
+        actorId,
+        occurredAtMs: nowMs,
+        credentialId: args.credentialId,
+        ...(row ? { kind: row.kind } : {}),
+        code,
+        message,
+      });
+      return brokerError(code, message);
+    };
+    if (!row) {
+      return await reject("CREDENTIAL_NOT_FOUND", "Credential record does not exist.");
+    }
+    if (row.kind !== "telegram-test-userbot") {
+      return await reject(
+        "KIND_MISMATCH",
+        "Only Telegram Test Server userbot fixtures can be updated.",
+      );
+    }
+    if (row.status !== "active") {
+      return await reject("CREDENTIAL_DISABLED", "Disabled credential fixtures cannot be updated.");
+    }
+    if (leaseIsActive(row.lease, nowMs)) {
+      return await reject("LEASE_ACTIVE", "Credential is currently leased and cannot be updated.");
+    }
+    const resolved = await readCredentialPayload(ctx, row);
+    if (!resolved || typeof resolved !== "object" || Array.isArray(resolved)) {
+      return await reject("INVALID_PAYLOAD", "Credential payload must be an object.");
+    }
+    const payload = resolved as Record<string, unknown>;
+    if (payload.schemaVersion !== 1 || payload.environment !== "test") {
+      return await reject(
+        "INVALID_PAYLOAD",
+        "Credential must use the Telegram Test Server schema.",
+      );
+    }
+    if (payload.sutBotId !== args.sutBotId || payload.testerUserId !== args.testerUserId) {
+      return await reject("IDENTITY_MISMATCH", "Credential bot or tester identity changed.");
+    }
+    if (
+      payload.groupId !== args.expectedGroupId ||
+      payload.forumGroupId !== args.expectedForumGroupId
+    ) {
+      return await reject(
+        "FIXTURE_CONFLICT",
+        "Credential fixture references changed; read them again.",
+      );
+    }
+    const references = normalizeTelegramFixtureReferences(args);
+    if (
+      payload.groupId === references.groupId &&
+      payload.forumGroupId === references.forumGroupId
+    ) {
+      return { status: "ok", changed: false, credential: toCredentialSummary(row, false) };
+    }
+
+    // Convex commits the lease check, repacked payload and audit together. The
+    // existing marker/chunk protocol remains unchanged for every lease consumer.
+    const storage = createCredentialPayloadStorage({ ...payload, ...references });
+    const oldChunks = await ctx.db
+      .query("credential_payload_chunks")
+      .withIndex("by_credential_index", (q) => q.eq("credentialId", args.credentialId))
+      .collect();
+    for (const chunk of oldChunks) {
+      await ctx.db.delete(chunk._id);
+    }
+    for (const [index, data] of storage.chunks.entries()) {
+      await ctx.db.insert("credential_payload_chunks", {
+        credentialId: args.credentialId,
+        index,
+        data,
+        createdAtMs: nowMs,
+      });
+    }
+    await ctx.db.patch(args.credentialId, { payload: storage.payload, updatedAtMs: nowMs });
+    await insertAdminEvent({
+      ctx,
+      eventType: "telegram_fixtures_update",
+      actorRole: "maintainer",
+      actorId,
+      occurredAtMs: nowMs,
+      credentialId: args.credentialId,
+      kind: row.kind,
+    });
+    return {
+      status: "ok",
+      changed: true,
+      credential: toCredentialSummary(
+        { ...row, payload: storage.payload, updatedAtMs: nowMs },
+        false,
+      ),
     };
   },
 });

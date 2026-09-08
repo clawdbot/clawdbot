@@ -9,7 +9,13 @@ const leaseEventType = v.union(
   v.literal("acquire_failed"),
   v.literal("release"),
 );
-const adminEventType = v.union(v.literal("add"), v.literal("disable"), v.literal("disable_failed"));
+const adminEventType = v.union(
+  v.literal("add"),
+  v.literal("disable"),
+  v.literal("disable_failed"),
+  v.literal("telegram_fixtures_update"),
+  v.literal("telegram_fixtures_update_failed"),
+);
 
 export default defineSchema({
   credential_sets: defineTable({
