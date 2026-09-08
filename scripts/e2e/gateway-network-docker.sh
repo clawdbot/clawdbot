@@ -10,11 +10,11 @@ openclaw_prepare_frozen_target_context "$SOURCE_ROOT" && FROZEN_CONTEXT=1 || {
   context_status=$?
   [ "$context_status" -eq 1 ] || exit "$context_status"
 }
-LEGACY_GATEWAY_CLIENT=""
+LEGACY_GATEWAY_LIB=""
 if [[ "$FROZEN_CONTEXT" == "1" ]] &&
   openclaw_frozen_target_source_has_path "$SOURCE_ROOT" scripts/e2e/lib/gateway-network/client.mjs &&
   ! openclaw_frozen_target_source_has_path "$SOURCE_ROOT" scripts/e2e/lib/gateway-network/client.mts; then
-  LEGACY_GATEWAY_CLIENT="$SOURCE_ROOT/scripts/e2e/lib/gateway-network/client.mjs"
+  LEGACY_GATEWAY_LIB="$SOURCE_ROOT/scripts/e2e/lib"
 fi
 IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-gateway-network-e2e" OPENCLAW_GATEWAY_NETWORK_E2E_IMAGE)"
 SKIP_BUILD="${OPENCLAW_GATEWAY_NETWORK_E2E_SKIP_BUILD:-0}"
@@ -78,7 +78,7 @@ docker_e2e_docker_cmd network create "$NET_NAME" >/dev/null
 echo "Starting gateway container..."
 docker_e2e_harness_mount_args
 gateway_setup='node "$entry" config set gateway.controlUi.enabled false >/dev/null'
-if [[ -z "$LEGACY_GATEWAY_CLIENT" ]]; then
+if [[ -z "$LEGACY_GATEWAY_LIB" ]]; then
   gateway_setup+='; if [[ ! -f /tmp/gateway-network-configured ]]; then node "$entry" plugins enable admin-http-rpc >/dev/null; touch /tmp/gateway-network-configured; fi'
 fi
 docker_e2e_docker_cmd run -d \
@@ -101,16 +101,16 @@ if ! docker_e2e_wait_container_bash "$GW_NAME" 180 0.5 "source scripts/lib/openc
 fi
 
 echo "Running client container (connect + health)..."
-if [[ -n "$LEGACY_GATEWAY_CLIENT" ]]; then
+if [[ -n "$LEGACY_GATEWAY_LIB" ]]; then
   DOCKER_COMMAND_TIMEOUT="$CLIENT_TIMEOUT" run_logged gateway-network-client docker_e2e_docker_run_cmd run --rm \
     "${DOCKER_E2E_HARNESS_ARGS[@]}" \
     --network "$NET_NAME" \
     "${CLIENT_LIMIT_ENV_ARGS[@]}" \
-    -v "$LEGACY_GATEWAY_CLIENT:/tmp/openclaw-gateway-network-client.mjs:ro" \
+    -v "$LEGACY_GATEWAY_LIB:/tmp/openclaw-selected-e2e-lib:ro" \
     -e "GW_URL=ws://$GW_NAME:$PORT" \
     -e "GW_TOKEN=$TOKEN" \
     "$IMAGE_NAME" \
-    node /tmp/openclaw-gateway-network-client.mjs
+    node /tmp/openclaw-selected-e2e-lib/gateway-network/client.mjs
   echo "OK"
   exit 0
 fi
