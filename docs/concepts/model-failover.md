@@ -156,8 +156,26 @@ If no explicit order is configured, OpenClaw uses a round-robin order:
 OpenClaw **pins the automatically chosen auth profile per session** to keep provider caches warm. It does **not** rotate on every request. An automatic pin may rotate or clear when:
 
 - the session is reset (`/new` / `/reset`)
-- a compaction completes (compaction count increments)
+- a compaction completes (compaction count increments), unless disabled for that provider
 - the profile is in cooldown/disabled
+
+To keep a healthy automatic profile across compactions, set
+`auth.rotation.<provider>.onCompaction` to `false`:
+
+```json5
+{
+  auth: {
+    rotation: {
+      openai: { onCompaction: false },
+    },
+  },
+}
+```
+
+Omitting the setting or setting it to `true` preserves compaction-triggered
+rotation. This does not disable compaction, failure-driven rotation, cooldown
+recovery retries, or new-session selection. It also does not make `auth.order`
+a strict-priority policy or change user pins and physical-route isolation.
 
 Manual selection via `/model …@<profileId> -s` sets a **user override**. A valid user pin survives `/new`, `/reset`, session rollover, compaction, and cooldown windows. It remains the first preference when eligible; while that exact profile is in cooldown or disabled, OpenClaw tries the next eligible same-provider profile without replacing the stored pin. OpenClaw clears the pin when the profile disappears, no longer matches the selected provider, or the user selects another explicit profile. `/model default -s` clears the model override while retaining a compatible auth pin and clearing an incompatible one.
 

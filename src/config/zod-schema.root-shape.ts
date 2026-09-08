@@ -270,6 +270,9 @@ export const OpenClawSchemaShape = {
         )
         .optional(),
       order: z.record(z.string(), z.array(z.string())).optional(),
+      rotation: z
+        .record(z.string(), z.strictObject({ onCompaction: z.boolean().optional() }))
+        .optional(),
     })
     .optional(),
   accessGroups: AccessGroupsSchema,
