@@ -121,6 +121,46 @@ describe("worktrees gateway methods", () => {
     });
   });
 
+  it("forwards trimmed worktrees.remove/restore ids to the service", async () => {
+    const service = {
+      remove: vi.fn(async ({ id }: { id: string }) => {
+        // Mirror requireLiveRecord: padded ids miss the exact registry key.
+        if (id !== record.id) {
+          throw new Error(`unknown active worktree: ${id}`);
+        }
+        return { removed: true, snapshotRef: "refs/snapshot" };
+      }),
+      restore: vi.fn(async ({ id }: { id: string }) => {
+        if (id !== record.id) {
+          throw new Error(`unknown active worktree: ${id}`);
+        }
+        return { ...record, snapshotRef: "refs/snapshot" };
+      }),
+    };
+    const handlers = createWorktreesHandlers(service as never);
+
+    // Negative control: production service path rejects the untrimmed key.
+    await expect(service.remove({ id: ` ${record.id} ` } as never)).rejects.toThrow(
+      /unknown active worktree/,
+    );
+
+    expect(await call(handlers, "worktrees.remove", { id: ` ${record.id} `, force: true })).toEqual(
+      [true, { removed: true, snapshotRef: "refs/snapshot" }, undefined],
+    );
+    expect(service.remove).toHaveBeenCalledWith({
+      id: record.id,
+      reason: "manual-delete",
+      allowSnapshotLoss: true,
+    });
+
+    const restoreResult = expectDefined(
+      await call(handlers, "worktrees.restore", { id: ` ${record.id} ` }),
+      "worktree restore padded response",
+    );
+    expect(expectDefined(restoreResult[0], "worktree restore success flag")).toBe(true);
+    expect(service.restore).toHaveBeenCalledWith({ id: record.id });
+  });
+
   it("lists branches for admin clients and configured workspaces only", async () => {
     const service = {
       listRepositoryBranches: vi.fn(async () => ({

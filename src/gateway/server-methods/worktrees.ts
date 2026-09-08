@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
@@ -96,9 +97,15 @@ export function createWorktreesHandlers(service: WorktreeService): GatewayReques
         invalidParams(respond);
         return;
       }
+      // Exact registry lookup; clipboard/RPC padding must not fake "unknown worktree".
+      const id = normalizeOptionalString(params.id);
+      if (!id) {
+        invalidParams(respond);
+        return;
+      }
       try {
         const result = await service.remove({
-          id: params.id,
+          id,
           reason: "manual-delete",
           allowSnapshotLoss: params.force,
         });
@@ -126,7 +133,13 @@ export function createWorktreesHandlers(service: WorktreeService): GatewayReques
         invalidParams(respond);
         return;
       }
-      respond(true, await service.restore({ id: params.id }), undefined);
+      // Exact registry lookup; clipboard/RPC padding must not fake "unknown worktree".
+      const id = normalizeOptionalString(params.id);
+      if (!id) {
+        invalidParams(respond);
+        return;
+      }
+      respond(true, await service.restore({ id }), undefined);
     },
     "worktrees.branches": async (opts) => {
       const { params, respond } = opts;
