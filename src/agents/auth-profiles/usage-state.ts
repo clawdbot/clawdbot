@@ -42,7 +42,7 @@ export type AuthCooldownBypassConfig = Pick<OpenClawConfig, "auth">;
  * Resolves the normalized set of providers whose auth-profile cooldowns are
  * skipped: the built-in defaults plus `auth.cooldownBypassProviders`.
  */
-export function resolveAuthCooldownBypassProviders(cfg?: AuthCooldownBypassConfig): Set<string> {
+function resolveAuthCooldownBypassProviders(cfg?: AuthCooldownBypassConfig): Set<string> {
   const bypassed = new Set(DEFAULT_AUTH_COOLDOWN_BYPASS_PROVIDERS);
   for (const provider of cfg?.auth?.cooldownBypassProviders ?? []) {
     const normalized = normalizeProviderId(provider);

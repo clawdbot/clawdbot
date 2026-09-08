@@ -390,12 +390,10 @@ async function runWithModelFallbackInternal<T>(
       !candidateHarnessAuth.skipsProviderAuthCooldown
     ) {
       const profileIds = candidateAuthProfileIds;
-      const isAnyProfileAvailable = profileIds.some(
-        (id) =>
-          !authRuntime.isProfileInCooldown(authStore, id, undefined, candidate.model, params.cfg),
-      );
+      const inCooldown = (id: string) =>
+        authRuntime.isProfileInCooldown(authStore, id, undefined, candidate.model, params.cfg);
 
-      if (profileIds.length > 0 && !isAnyProfileAvailable) {
+      if (profileIds.length > 0 && profileIds.every(inCooldown)) {
         // All profiles for this provider are in cooldown.
         const now = Date.now();
         const probeThrottleKey = resolveProbeThrottleKey(candidate.provider, params.agentDir);

@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { setLoggerOverride } from "../../logging/logger.js";
 import type { AuthProfileStore, ProfileUsageStats } from "./types.js";
-import { resolveAuthCooldownBypassProviders, resolveProfileUnusableUntil } from "./usage-state.js";
+import { isAuthCooldownBypassedForProvider, resolveProfileUnusableUntil } from "./usage-state.js";
 import {
   clearAuthProfileCooldown,
   clearExpiredCooldowns,
@@ -198,20 +198,20 @@ describe("account-wide auth profile cooldowns", () => {
   });
 });
 
-describe("resolveAuthCooldownBypassProviders", () => {
+describe("isAuthCooldownBypassedForProvider", () => {
   it("adds normalized configured providers to the built-in set", () => {
-    const bypassed = resolveAuthCooldownBypassProviders({
-      auth: { cooldownBypassProviders: [" My-Gateway ", "", "anthropic"] },
-    });
+    const cfg = { auth: { cooldownBypassProviders: [" My-Gateway ", "", "anthropic"] } };
 
-    expect([...bypassed].toSorted()).toEqual(["anthropic", "kilocode", "my-gateway", "openrouter"]);
+    expect(isAuthCooldownBypassedForProvider("my-gateway", cfg)).toBe(true);
+    expect(isAuthCooldownBypassedForProvider("ANTHROPIC", cfg)).toBe(true);
+    expect(isAuthCooldownBypassedForProvider("openrouter", cfg)).toBe(true);
+    expect(isAuthCooldownBypassedForProvider("openai", cfg)).toBe(false);
+    expect(isAuthCooldownBypassedForProvider("", cfg)).toBe(false);
   });
 
   it("keeps the built-in set without config", () => {
-    expect([...resolveAuthCooldownBypassProviders()].toSorted()).toEqual([
-      "kilocode",
-      "openrouter",
-    ]);
+    expect(isAuthCooldownBypassedForProvider("kilocode")).toBe(true);
+    expect(isAuthCooldownBypassedForProvider("anthropic")).toBe(false);
   });
 });
 
