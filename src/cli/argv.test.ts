@@ -22,146 +22,137 @@ import {
 
 describe("argv helpers", () => {
   it.each([
-    {
-      name: "known command group help command help flag",
-      argv: ["node", "openclaw", "backup", "help", "--help"],
-      expected: ["node", "openclaw", "backup", "help"],
-    },
-    {
-      name: "known command group help command short help flag",
-      argv: ["node", "openclaw", "--profile", "work", "backup", "help", "-h"],
-      expected: ["node", "openclaw", "--profile", "work", "backup", "help"],
-    },
-    {
-      name: "leaf positional help remains untouched",
-      argv: ["node", "openclaw", "docs", "help", "--help"],
-      expected: ["node", "openclaw", "docs", "help", "--help"],
-    },
-    {
-      name: "known command group help target",
-      argv: ["node", "openclaw", "plugins", "help", "list"],
-      expected: ["node", "openclaw", "plugins", "list", "--help"],
-    },
-    {
-      name: "known command group help target help flag",
-      argv: ["node", "openclaw", "plugins", "help", "list", "--help"],
-      expected: ["node", "openclaw", "plugins", "list", "--help"],
-    },
-    {
-      name: "unknown plugin command group help target",
-      argv: ["node", "openclaw", "external-plugin", "help", "inspect"],
-      expected: ["node", "openclaw", "external-plugin", "inspect", "--help"],
-    },
-    {
-      name: "unknown plugin command group help target help flag",
-      argv: ["node", "openclaw", "external-plugin", "help", "inspect", "--help"],
-      expected: ["node", "openclaw", "external-plugin", "inspect", "--help"],
-    },
-    {
-      name: "generated help target with trailing root option",
-      argv: ["node", "openclaw", "memory", "help", "status", "--no-color"],
-      expected: ["node", "openclaw", "--no-color", "memory", "status", "--help"],
-    },
-    {
-      name: "extra help positionals remain untouched",
-      argv: ["node", "openclaw", "backup", "help", "missing", "extra", "--help"],
-      expected: ["node", "openclaw", "backup", "help", "missing", "extra", "--help"],
-    },
-    {
-      name: "terminator help flag remains untouched",
-      argv: ["node", "openclaw", "backup", "help", "--", "--help"],
-      expected: ["node", "openclaw", "backup", "help", "--", "--help"],
-    },
-  ])("normalizes generated help commands: $name", ({ argv, expected }) => {
+    [
+      "known command group help command help flag",
+      ["node", "openclaw", "backup", "help", "--help"],
+      ["node", "openclaw", "backup", "help"],
+    ],
+    [
+      "known command group help command short help flag",
+      ["node", "openclaw", "--profile", "work", "backup", "help", "-h"],
+      ["node", "openclaw", "--profile", "work", "backup", "help"],
+    ],
+    [
+      "leaf positional help remains untouched",
+      ["node", "openclaw", "docs", "help", "--help"],
+      ["node", "openclaw", "docs", "help", "--help"],
+    ],
+    [
+      "known command group help target",
+      ["node", "openclaw", "plugins", "help", "list"],
+      ["node", "openclaw", "plugins", "list", "--help"],
+    ],
+    [
+      "known command group help target help flag",
+      ["node", "openclaw", "plugins", "help", "list", "--help"],
+      ["node", "openclaw", "plugins", "list", "--help"],
+    ],
+    [
+      "unknown plugin command group help target",
+      ["node", "openclaw", "external-plugin", "help", "inspect"],
+      ["node", "openclaw", "external-plugin", "inspect", "--help"],
+    ],
+    [
+      "unknown plugin command group help target help flag",
+      ["node", "openclaw", "external-plugin", "help", "inspect", "--help"],
+      ["node", "openclaw", "external-plugin", "inspect", "--help"],
+    ],
+    [
+      "generated help target with trailing root option",
+      ["node", "openclaw", "memory", "help", "status", "--no-color"],
+      ["node", "openclaw", "--no-color", "memory", "status", "--help"],
+    ],
+    [
+      "extra help positionals remain untouched",
+      ["node", "openclaw", "backup", "help", "missing", "extra", "--help"],
+      ["node", "openclaw", "backup", "help", "missing", "extra", "--help"],
+    ],
+    [
+      "terminator help flag remains untouched",
+      ["node", "openclaw", "backup", "help", "--", "--help"],
+      ["node", "openclaw", "backup", "help", "--", "--help"],
+    ],
+  ])("normalizes generated help commands: %s", (_name, argv, expected) => {
     expect(normalizeGeneratedHelpCommandArgv(argv)).toEqual(expected);
   });
 
   it.each([
-    {
-      name: "root help target",
-      argv: ["node", "openclaw", "help", "plugins"],
-      expected: ["node", "openclaw", "plugins", "--help"],
-    },
-    {
-      name: "root help target with help flag",
-      argv: ["node", "openclaw", "help", "plugins", "--help"],
-      expected: ["node", "openclaw", "plugins", "--help"],
-    },
-    {
-      name: "root option before help target",
-      argv: ["node", "openclaw", "--profile", "work", "help", "memory"],
-      expected: ["node", "openclaw", "--profile", "work", "memory", "--help"],
-    },
-    {
-      name: "bare root help remains untouched",
-      argv: ["node", "openclaw", "help"],
-      expected: ["node", "openclaw", "help"],
-    },
-    {
-      name: "root help self-help remains untouched",
-      argv: ["node", "openclaw", "help", "--help"],
-      expected: ["node", "openclaw", "help", "--help"],
-    },
-    {
-      name: "nested root help target",
-      argv: ["node", "openclaw", "help", "plugins", "list"],
-      expected: ["node", "openclaw", "plugins", "list", "--help"],
-    },
-    {
-      name: "nested root help target with help flag",
-      argv: ["node", "openclaw", "help", "plugins", "list", "--help"],
-      expected: ["node", "openclaw", "plugins", "list", "--help"],
-    },
-    {
-      name: "nested root help target with trailing root option",
-      argv: ["node", "openclaw", "help", "memory", "status", "--no-color"],
-      expected: ["node", "openclaw", "--no-color", "memory", "status", "--help"],
-    },
-  ])("normalizes root help targets: $name", ({ argv, expected }) => {
+    [
+      "root help target",
+      ["node", "openclaw", "help", "plugins"],
+      ["node", "openclaw", "plugins", "--help"],
+    ],
+    [
+      "root help target with help flag",
+      ["node", "openclaw", "help", "plugins", "--help"],
+      ["node", "openclaw", "plugins", "--help"],
+    ],
+    [
+      "root option before help target",
+      ["node", "openclaw", "--profile", "work", "help", "memory"],
+      ["node", "openclaw", "--profile", "work", "memory", "--help"],
+    ],
+    [
+      "bare root help remains untouched",
+      ["node", "openclaw", "help"],
+      ["node", "openclaw", "help"],
+    ],
+    [
+      "root help self-help remains untouched",
+      ["node", "openclaw", "help", "--help"],
+      ["node", "openclaw", "help", "--help"],
+    ],
+    [
+      "nested root help target",
+      ["node", "openclaw", "help", "plugins", "list"],
+      ["node", "openclaw", "plugins", "list", "--help"],
+    ],
+    [
+      "nested root help target with help flag",
+      ["node", "openclaw", "help", "plugins", "list", "--help"],
+      ["node", "openclaw", "plugins", "list", "--help"],
+    ],
+    [
+      "nested root help target with trailing root option",
+      ["node", "openclaw", "help", "memory", "status", "--no-color"],
+      ["node", "openclaw", "--no-color", "memory", "status", "--help"],
+    ],
+  ])("normalizes root help targets: %s", (_name, argv, expected) => {
     expect(normalizeRootHelpTargetArgv(argv)).toEqual(expected);
   });
 
   it.each([
-    {
-      name: "subcommand trailing no-color",
-      argv: ["node", "openclaw", "doctor", "--no-color", "--post-upgrade", "--json"],
-      expected: ["node", "openclaw", "--no-color", "doctor", "--post-upgrade", "--json"],
-    },
-    {
-      name: "keeps existing root options first",
-      argv: ["node", "openclaw", "--profile", "work", "doctor", "--no-color", "--lint", "--json"],
-      expected: [
-        "node",
-        "openclaw",
-        "--profile",
-        "work",
-        "--no-color",
-        "doctor",
-        "--lint",
-        "--json",
-      ],
-    },
-    {
-      name: "keeps no-color after possible command option value",
-      argv: ["node", "openclaw", "doctor", "--lint", "--json", "--no-color"],
-      expected: ["node", "openclaw", "doctor", "--lint", "--json", "--no-color"],
-    },
-    {
-      name: "flag terminator leaves no-color positional",
-      argv: ["node", "openclaw", "doctor", "--", "--no-color"],
-      expected: ["node", "openclaw", "doctor", "--", "--no-color"],
-    },
-    {
-      name: "command option value remains literal",
-      argv: ["node", "openclaw", "agent", "--message", "--no-color"],
-      expected: ["node", "openclaw", "agent", "--message", "--no-color"],
-    },
-    {
-      name: "assigned command option value does not block no-color",
-      argv: ["node", "openclaw", "agent", "--message=hello", "--no-color"],
-      expected: ["node", "openclaw", "--no-color", "agent", "--message=hello"],
-    },
-  ])("normalizes root --no-color before command parsing: $name", ({ argv, expected }) => {
+    [
+      "subcommand trailing no-color",
+      ["node", "openclaw", "doctor", "--no-color", "--post-upgrade", "--json"],
+      ["node", "openclaw", "--no-color", "doctor", "--post-upgrade", "--json"],
+    ],
+    [
+      "keeps existing root options first",
+      ["node", "openclaw", "--profile", "work", "doctor", "--no-color", "--lint", "--json"],
+      ["node", "openclaw", "--profile", "work", "--no-color", "doctor", "--lint", "--json"],
+    ],
+    [
+      "keeps no-color after possible command option value",
+      ["node", "openclaw", "doctor", "--lint", "--json", "--no-color"],
+      ["node", "openclaw", "doctor", "--lint", "--json", "--no-color"],
+    ],
+    [
+      "flag terminator leaves no-color positional",
+      ["node", "openclaw", "doctor", "--", "--no-color"],
+      ["node", "openclaw", "doctor", "--", "--no-color"],
+    ],
+    [
+      "command option value remains literal",
+      ["node", "openclaw", "agent", "--message", "--no-color"],
+      ["node", "openclaw", "agent", "--message", "--no-color"],
+    ],
+    [
+      "assigned command option value does not block no-color",
+      ["node", "openclaw", "agent", "--message=hello", "--no-color"],
+      ["node", "openclaw", "--no-color", "agent", "--message=hello"],
+    ],
+  ])("normalizes root --no-color before command parsing: %s", (_name, argv, expected) => {
     expect(normalizeRootNoColorArgv(argv)).toEqual(expected);
   });
 
@@ -177,37 +168,37 @@ describe("argv helpers", () => {
   });
 
   it.each([
-    {
-      name: "subcommand trailing log-level",
-      argv: ["node", "openclaw", "doctor", "--log-level", "debug", "--json"],
-      expected: ["node", "openclaw", "--log-level", "debug", "doctor", "--json"],
-    },
-    {
-      name: "subcommand trailing log-level equals form",
-      argv: ["node", "openclaw", "doctor", "--log-level=trace", "--json"],
-      expected: ["node", "openclaw", "--log-level=trace", "doctor", "--json"],
-    },
-    {
-      name: "keeps existing root options first",
-      argv: ["node", "openclaw", "--profile", "work", "doctor", "--log-level", "debug"],
-      expected: ["node", "openclaw", "--profile", "work", "--log-level", "debug", "doctor"],
-    },
-    {
-      name: "keeps log-level after possible command option value",
-      argv: ["node", "openclaw", "agent", "--message", "--log-level", "debug"],
-      expected: ["node", "openclaw", "agent", "--message", "--log-level", "debug"],
-    },
-    {
-      name: "flag terminator leaves log-level positional",
-      argv: ["node", "openclaw", "nodes", "run", "--", "--log-level", "debug"],
-      expected: ["node", "openclaw", "nodes", "run", "--", "--log-level", "debug"],
-    },
-    {
-      name: "missing value remains command scoped",
-      argv: ["node", "openclaw", "doctor", "--log-level", "--json"],
-      expected: ["node", "openclaw", "doctor", "--log-level", "--json"],
-    },
-  ])("normalizes root --log-level before command parsing: $name", ({ argv, expected }) => {
+    [
+      "subcommand trailing log-level",
+      ["node", "openclaw", "doctor", "--log-level", "debug", "--json"],
+      ["node", "openclaw", "--log-level", "debug", "doctor", "--json"],
+    ],
+    [
+      "subcommand trailing log-level equals form",
+      ["node", "openclaw", "doctor", "--log-level=trace", "--json"],
+      ["node", "openclaw", "--log-level=trace", "doctor", "--json"],
+    ],
+    [
+      "keeps existing root options first",
+      ["node", "openclaw", "--profile", "work", "doctor", "--log-level", "debug"],
+      ["node", "openclaw", "--profile", "work", "--log-level", "debug", "doctor"],
+    ],
+    [
+      "keeps log-level after possible command option value",
+      ["node", "openclaw", "agent", "--message", "--log-level", "debug"],
+      ["node", "openclaw", "agent", "--message", "--log-level", "debug"],
+    ],
+    [
+      "flag terminator leaves log-level positional",
+      ["node", "openclaw", "nodes", "run", "--", "--log-level", "debug"],
+      ["node", "openclaw", "nodes", "run", "--", "--log-level", "debug"],
+    ],
+    [
+      "missing value remains command scoped",
+      ["node", "openclaw", "doctor", "--log-level", "--json"],
+      ["node", "openclaw", "doctor", "--log-level", "--json"],
+    ],
+  ])("normalizes root --log-level before command parsing: %s", (_name, argv, expected) => {
     expect(normalizeRootLogLevelArgv(argv)).toEqual(expected);
   });
 
@@ -234,124 +225,64 @@ describe("argv helpers", () => {
   });
 
   it.each([
-    {
-      name: "root help command",
-      argv: ["node", "openclaw", "help"],
-      expected: true,
-    },
-    {
-      name: "root help command with target",
-      argv: ["node", "openclaw", "help", "matrix"],
-      expected: true,
-    },
-    {
-      name: "nested help command",
-      argv: ["node", "openclaw", "matrix", "encryption", "help"],
-      expected: true,
-    },
-    {
-      name: "known subcommand root help command",
-      argv: ["node", "openclaw", "config", "help"],
-      expected: true,
-    },
-    {
-      name: "known leaf command positional help",
-      argv: ["node", "openclaw", "docs", "help"],
-      expected: false,
-    },
-    {
-      name: "known subcommand leaf positional help",
-      argv: ["node", "openclaw", "config", "set", "some.path", "help"],
-      expected: false,
-    },
-    {
-      name: "unknown plugin command help",
-      argv: ["node", "openclaw", "external-plugin", "tools", "help"],
-      expected: true,
-    },
-    {
-      name: "help flag",
-      argv: ["node", "openclaw", "matrix", "encryption", "--help"],
-      expected: true,
-    },
-    {
-      name: "help as option value",
-      argv: ["node", "openclaw", "agent", "--message", "help"],
-      expected: false,
-    },
-    {
-      name: "help after terminator",
-      argv: ["node", "openclaw", "nodes", "invoke", "--", "help"],
-      expected: false,
-    },
-    {
-      name: "implicit root help command after terminator",
-      argv: ["node", "openclaw", "--", "help", "config"],
-      expected: true,
-    },
-    {
-      name: "implicit parent help command after terminator",
-      argv: ["node", "openclaw", "config", "--", "help"],
-      expected: true,
-    },
-    {
-      name: "literal root help-looking command",
-      argv: ["node", "openclaw", "--", "--help"],
-      expected: false,
-    },
-    {
-      name: "literal parent help-looking command",
-      argv: ["node", "openclaw", "--", "config", "--help"],
-      expected: false,
-    },
-    {
-      name: "help flag after terminator",
-      argv: ["node", "openclaw", "nodes", "invoke", "--", "--help"],
-      expected: false,
-    },
-    {
-      name: "version flag after terminator",
-      argv: ["node", "openclaw", "nodes", "invoke", "--", "--version"],
-      expected: false,
-    },
-    {
-      name: "root version flag",
-      argv: ["node", "openclaw", "--version"],
-      expected: true,
-    },
-    {
-      name: "root short version flag",
-      argv: ["node", "openclaw", "-V"],
-      expected: true,
-    },
-    {
-      name: "root version alias after profile",
-      argv: ["node", "openclaw", "--profile", "work", "-v"],
-      expected: true,
-    },
-    {
-      name: "root version flag after profile",
-      argv: ["node", "openclaw", "--profile", "work", "--version"],
-      expected: true,
-    },
-    {
-      name: "version-pinned skill install",
-      argv: ["node", "openclaw", "skills", "install", "@owner/weather", "--version", "1.2.3"],
-      expected: false,
-    },
-    {
-      name: "version-pinned skill verification",
-      argv: ["node", "openclaw", "skills", "verify", "@owner/weather", "--version", "1.2.3"],
-      expected: false,
-    },
-    {
-      name: "equals-form version-pinned skill install",
-      argv: ["node", "openclaw", "skills", "install", "@owner/weather", "--version=1.2.3"],
-      expected: false,
-    },
-    {
-      name: "profiled version-pinned skill verification",
-      argv: [
+    ["root help command", ["node", "openclaw", "help"], true],
+    ["root help command with target", ["node", "openclaw", "help", "matrix"], true],
+    ["nested help command", ["node", "openclaw", "matrix", "encryption", "help"], true],
+    ["known subcommand root help command", ["node", "openclaw", "config", "help"], true],
+    ["known leaf command positional help", ["node", "openclaw", "docs", "help"], false],
+    [
+      "known subcommand leaf positional help",
+      ["node", "openclaw", "config", "set", "some.path", "help"],
+      false,
+    ],
+    ["unknown plugin command help", ["node", "openclaw", "external-plugin", "tools", "help"], true],
+    ["help flag", ["node", "openclaw", "matrix", "encryption", "--help"], true],
+    ["help as option value", ["node", "openclaw", "agent", "--message", "help"], false],
+    ["help after terminator", ["node", "openclaw", "nodes", "invoke", "--", "help"], false],
+    [
+      "implicit root help command after terminator",
+      ["node", "openclaw", "--", "help", "config"],
+      true,
+    ],
+    [
+      "implicit parent help command after terminator",
+      ["node", "openclaw", "config", "--", "help"],
+      true,
+    ],
+    ["literal root help-looking command", ["node", "openclaw", "--", "--help"], false],
+    ["literal parent help-looking command", ["node", "openclaw", "--", "config", "--help"], false],
+    ["help flag after terminator", ["node", "openclaw", "nodes", "invoke", "--", "--help"], false],
+    [
+      "version flag after terminator",
+      ["node", "openclaw", "nodes", "invoke", "--", "--version"],
+      false,
+    ],
+    ["root version flag", ["node", "openclaw", "--version"], true],
+    ["root short version flag", ["node", "openclaw", "-V"], true],
+    ["root version alias after profile", ["node", "openclaw", "--profile", "work", "-v"], true],
+    [
+      "root version flag after profile",
+      ["node", "openclaw", "--profile", "work", "--version"],
+      true,
+    ],
+    [
+      "version-pinned skill install",
+      ["node", "openclaw", "skills", "install", "@owner/weather", "--version", "1.2.3"],
+      false,
+    ],
+    [
+      "version-pinned skill verification",
+      ["node", "openclaw", "skills", "verify", "@owner/weather", "--version", "1.2.3"],
+      false,
+    ],
+    [
+      "equals-form version-pinned skill install",
+      ["node", "openclaw", "skills", "install", "@owner/weather", "--version=1.2.3"],
+      false,
+    ],
+    [
+      "profiled version-pinned skill verification",
+      [
         "node",
         "openclaw",
         "--profile",
@@ -362,28 +293,19 @@ describe("argv helpers", () => {
         "--version",
         "1.2.3",
       ],
-      expected: false,
-    },
-    {
-      name: "help for a version-pinned skill command",
-      argv: [
-        "node",
-        "openclaw",
-        "skills",
-        "verify",
-        "@owner/weather",
-        "--version",
-        "1.2.3",
-        "--help",
-      ],
-      expected: true,
-    },
-    {
-      name: "unknown root option does not turn version into root help",
-      argv: ["node", "openclaw", "--unknown", "--version"],
-      expected: false,
-    },
-  ])("detects help/version invocations: $name", ({ argv, expected }) => {
+      false,
+    ],
+    [
+      "help for a version-pinned skill command",
+      ["node", "openclaw", "skills", "verify", "@owner/weather", "--version", "1.2.3", "--help"],
+      true,
+    ],
+    [
+      "unknown root option does not turn version into root help",
+      ["node", "openclaw", "--unknown", "--version"],
+      false,
+    ],
+  ])("detects help/version invocations: %s", (_name, argv, expected) => {
     expect(isHelpOrVersionInvocation(argv)).toBe(expected);
   });
 
@@ -412,97 +334,37 @@ describe("argv helpers", () => {
   });
 
   it.each([
-    {
-      name: "root --version",
-      argv: ["node", "openclaw", "--version"],
-      expected: true,
-    },
-    {
-      name: "root -V",
-      argv: ["node", "openclaw", "-V"],
-      expected: true,
-    },
-    {
-      name: "root -v alias with profile",
-      argv: ["node", "openclaw", "--profile", "work", "-v"],
-      expected: true,
-    },
-    {
-      name: "subcommand version flag",
-      argv: ["node", "openclaw", "status", "--version"],
-      expected: false,
-    },
-    {
-      name: "unknown root flag with version",
-      argv: ["node", "openclaw", "--unknown", "--version"],
-      expected: false,
-    },
-  ])("detects root-only version invocations: $name", ({ argv, expected }) => {
+    ["root --version", ["node", "openclaw", "--version"], true],
+    ["root -V", ["node", "openclaw", "-V"], true],
+    ["root -v alias with profile", ["node", "openclaw", "--profile", "work", "-v"], true],
+    ["subcommand version flag", ["node", "openclaw", "status", "--version"], false],
+    ["unknown root flag with version", ["node", "openclaw", "--unknown", "--version"], false],
+  ])("detects root-only version invocations: %s", (_name, argv, expected) => {
     expect(isRootVersionInvocation(argv)).toBe(expected);
   });
 
   it.each([
-    {
-      name: "root --help",
-      argv: ["node", "openclaw", "--help"],
-      expected: true,
-    },
-    {
-      name: "root -h",
-      argv: ["node", "openclaw", "-h"],
-      expected: true,
-    },
-    {
-      name: "root --help with profile",
-      argv: ["node", "openclaw", "--profile", "work", "--help"],
-      expected: true,
-    },
-    {
-      name: "subcommand --help",
-      argv: ["node", "openclaw", "status", "--help"],
-      expected: false,
-    },
-    {
-      name: "help before subcommand token",
-      argv: ["node", "openclaw", "--help", "status"],
-      expected: false,
-    },
-    {
-      name: "help after -- terminator",
-      argv: ["node", "openclaw", "nodes", "invoke", "--", "device.status", "--help"],
-      expected: false,
-    },
-    {
-      name: "unknown root flag before help",
-      argv: ["node", "openclaw", "--unknown", "--help"],
-      expected: false,
-    },
-    {
-      name: "unknown root flag after help",
-      argv: ["node", "openclaw", "--help", "--unknown"],
-      expected: false,
-    },
-  ])("detects root-only help invocations: $name", ({ argv, expected }) => {
+    ["root --help", ["node", "openclaw", "--help"], true],
+    ["root -h", ["node", "openclaw", "-h"], true],
+    ["root --help with profile", ["node", "openclaw", "--profile", "work", "--help"], true],
+    ["subcommand --help", ["node", "openclaw", "status", "--help"], false],
+    ["help before subcommand token", ["node", "openclaw", "--help", "status"], false],
+    [
+      "help after -- terminator",
+      ["node", "openclaw", "nodes", "invoke", "--", "device.status", "--help"],
+      false,
+    ],
+    ["unknown root flag before help", ["node", "openclaw", "--unknown", "--help"], false],
+    ["unknown root flag after help", ["node", "openclaw", "--help", "--unknown"], false],
+  ])("detects root-only help invocations: %s", (_name, argv, expected) => {
     expect(isRootHelpInvocation(argv)).toBe(expected);
   });
 
   it.each([
-    {
-      name: "single command with trailing flag",
-      argv: ["node", "openclaw", "status", "--json"],
-      expected: ["status"],
-    },
-    {
-      name: "two-part command",
-      argv: ["node", "openclaw", "agents", "list"],
-      expected: ["agents", "list"],
-    },
-    {
-      name: "terminator cuts parsing",
-      argv: ["node", "openclaw", "status", "--", "ignored"],
-      expected: ["status"],
-    },
-  ])("extracts command path: $name", ({ argv, expected }) => {
+    ["single command with trailing flag", ["node", "openclaw", "status", "--json"], ["status"]],
+    ["two-part command", ["node", "openclaw", "agents", "list"], ["agents", "list"]],
+    ["terminator cuts parsing", ["node", "openclaw", "status", "--", "ignored"], ["status"]],
+  ])("extracts command path: %s", (_name, argv, expected) => {
     expect(getCommandPathWithRootOptions(argv, 2)).toEqual(expected);
   });
 
@@ -586,79 +448,41 @@ describe("argv helpers", () => {
   });
 
   it.each([
-    {
-      name: "returns first command token",
-      argv: ["node", "openclaw", "agents", "list"],
-      expected: "agents",
-    },
-    {
-      name: "returns null when no command exists",
-      argv: ["node", "openclaw"],
-      expected: null,
-    },
-    {
-      name: "skips known root option values",
-      argv: ["node", "openclaw", "--log-level", "debug", "status"],
-      expected: "status",
-    },
-  ])("returns primary command: $name", ({ argv, expected }) => {
+    ["returns first command token", ["node", "openclaw", "agents", "list"], "agents"],
+    ["returns null when no command exists", ["node", "openclaw"], null],
+    [
+      "skips known root option values",
+      ["node", "openclaw", "--log-level", "debug", "status"],
+      "status",
+    ],
+  ])("returns primary command: %s", (_name, argv, expected) => {
     expect(getPrimaryCommand(argv)).toBe(expected);
   });
 
   it.each([
-    {
-      name: "detects flag before terminator",
-      argv: ["node", "openclaw", "status", "--json"],
-      flag: "--json",
-      expected: true,
-    },
-    {
-      name: "ignores flag after terminator",
-      argv: ["node", "openclaw", "--", "--json"],
-      flag: "--json",
-      expected: false,
-    },
-  ])("parses boolean flags: $name", ({ argv, flag, expected }) => {
+    ["detects flag before terminator", ["node", "openclaw", "status", "--json"], "--json", true],
+    ["ignores flag after terminator", ["node", "openclaw", "--", "--json"], "--json", false],
+  ])("parses boolean flags: %s", (_name, argv, flag, expected) => {
     expect(hasFlag(argv, flag)).toBe(expected);
   });
 
   it.each([
-    {
-      name: "value in next token",
-      argv: ["node", "openclaw", "status", "--timeout", "5000"],
-      expected: "5000",
-    },
-    {
-      name: "value in equals form",
-      argv: ["node", "openclaw", "status", "--timeout=2500"],
-      expected: "2500",
-    },
-    {
-      name: "missing value",
-      argv: ["node", "openclaw", "status", "--timeout"],
-      expected: null,
-    },
-    {
-      name: "next token is another flag",
-      argv: ["node", "openclaw", "status", "--timeout", "--json"],
-      expected: null,
-    },
-    {
-      name: "flag appears after terminator",
-      argv: ["node", "openclaw", "--", "--timeout=99"],
-      expected: undefined,
-    },
-    {
-      name: "repeated flag uses final value",
-      argv: ["node", "openclaw", "status", "--timeout", "100", "--timeout=200"],
-      expected: "200",
-    },
-    {
-      name: "missing repeated value remains invalid",
-      argv: ["node", "openclaw", "status", "--timeout", "--timeout", "200"],
-      expected: null,
-    },
-  ])("extracts flag values: $name", ({ argv, expected }) => {
+    ["value in next token", ["node", "openclaw", "status", "--timeout", "5000"], "5000"],
+    ["value in equals form", ["node", "openclaw", "status", "--timeout=2500"], "2500"],
+    ["missing value", ["node", "openclaw", "status", "--timeout"], null],
+    ["next token is another flag", ["node", "openclaw", "status", "--timeout", "--json"], null],
+    ["flag appears after terminator", ["node", "openclaw", "--", "--timeout=99"], undefined],
+    [
+      "repeated flag uses final value",
+      ["node", "openclaw", "status", "--timeout", "100", "--timeout=200"],
+      "200",
+    ],
+    [
+      "missing repeated value remains invalid",
+      ["node", "openclaw", "status", "--timeout", "--timeout", "200"],
+      null,
+    ],
+  ])("extracts flag values: %s", (_name, argv, expected) => {
     expect(getFlagValue(argv, "--timeout")).toBe(expected);
   });
 
@@ -671,132 +495,88 @@ describe("argv helpers", () => {
   });
 
   it.each([
-    {
-      name: "missing flag",
-      argv: ["node", "openclaw", "status"],
-      expected: undefined,
-    },
-    {
-      name: "missing value",
-      argv: ["node", "openclaw", "status", "--timeout"],
-      expected: null,
-    },
-    {
-      name: "valid positive integer",
-      argv: ["node", "openclaw", "status", "--timeout", "5000"],
-      expected: 5000,
-    },
-    {
-      name: "valid signed decimal positive integer",
-      argv: ["node", "openclaw", "status", "--timeout", "+5000"],
-      expected: 5000,
-    },
-    {
-      name: "invalid integer",
-      argv: ["node", "openclaw", "status", "--timeout", "nope"],
-      expected: null,
-    },
-    {
-      name: "non-decimal integer",
-      argv: ["node", "openclaw", "status", "--timeout", "0x10"],
-      expected: null,
-    },
-    {
-      name: "partial integer",
-      argv: ["node", "openclaw", "status", "--timeout", "5s"],
-      expected: null,
-    },
-    {
-      name: "zero",
-      argv: ["node", "openclaw", "status", "--timeout", "0"],
-      expected: null,
-    },
-    {
-      name: "negative integer",
-      argv: ["node", "openclaw", "status", "--timeout", "-5"],
-      expected: null,
-    },
-    {
-      name: "repeated value uses final valid integer",
-      argv: ["node", "openclaw", "status", "--timeout", "nope", "--timeout", "5000"],
-      expected: 5000,
-    },
-    {
-      name: "repeated value rejects final invalid integer",
-      argv: ["node", "openclaw", "status", "--timeout", "5000", "--timeout", "nope"],
-      expected: null,
-    },
-  ])("parses positive integer flag values: $name", ({ argv, expected }) => {
+    ["missing flag", ["node", "openclaw", "status"], undefined],
+    ["missing value", ["node", "openclaw", "status", "--timeout"], null],
+    ["valid positive integer", ["node", "openclaw", "status", "--timeout", "5000"], 5000],
+    [
+      "valid signed decimal positive integer",
+      ["node", "openclaw", "status", "--timeout", "+5000"],
+      5000,
+    ],
+    ["invalid integer", ["node", "openclaw", "status", "--timeout", "nope"], null],
+    ["non-decimal integer", ["node", "openclaw", "status", "--timeout", "0x10"], null],
+    ["partial integer", ["node", "openclaw", "status", "--timeout", "5s"], null],
+    ["zero", ["node", "openclaw", "status", "--timeout", "0"], null],
+    ["negative integer", ["node", "openclaw", "status", "--timeout", "-5"], null],
+    [
+      "repeated value uses final valid integer",
+      ["node", "openclaw", "status", "--timeout", "nope", "--timeout", "5000"],
+      5000,
+    ],
+    [
+      "repeated value rejects final invalid integer",
+      ["node", "openclaw", "status", "--timeout", "5000", "--timeout", "nope"],
+      null,
+    ],
+  ])("parses positive integer flag values: %s", (_name, argv, expected) => {
     expect(getPositiveIntFlagValue(argv, "--timeout")).toBe(expected);
   });
 
   it.each([
-    {
-      name: "keeps plain node argv",
-      rawArgs: ["node", "openclaw", "status"],
-      expected: ["node", "openclaw", "status"],
-    },
-    {
-      name: "keeps version-suffixed node binary",
-      rawArgs: ["node-22", "openclaw", "status"],
-      expected: ["node-22", "openclaw", "status"],
-    },
-    {
-      name: "keeps windows versioned node exe",
-      rawArgs: ["node-22.2.0.exe", "openclaw", "status"],
-      expected: ["node-22.2.0.exe", "openclaw", "status"],
-    },
-    {
-      name: "keeps dotted node binary",
-      rawArgs: ["node-22.2", "openclaw", "status"],
-      expected: ["node-22.2", "openclaw", "status"],
-    },
-    {
-      name: "keeps dotted node exe",
-      rawArgs: ["node-22.2.exe", "openclaw", "status"],
-      expected: ["node-22.2.exe", "openclaw", "status"],
-    },
-    {
-      name: "keeps absolute versioned node path",
-      rawArgs: ["/usr/bin/node-22.2.0", "openclaw", "status"],
-      expected: ["/usr/bin/node-22.2.0", "openclaw", "status"],
-    },
-    {
-      name: "keeps node24 shorthand",
-      rawArgs: ["node24", "openclaw", "status"],
-      expected: ["node24", "openclaw", "status"],
-    },
-    {
-      name: "keeps absolute node24 shorthand",
-      rawArgs: ["/usr/bin/node24", "openclaw", "status"],
-      expected: ["/usr/bin/node24", "openclaw", "status"],
-    },
-    {
-      name: "keeps windows node24 exe",
-      rawArgs: ["node24.exe", "openclaw", "status"],
-      expected: ["node24.exe", "openclaw", "status"],
-    },
-    {
-      name: "keeps nodejs binary",
-      rawArgs: ["nodejs", "openclaw", "status"],
-      expected: ["nodejs", "openclaw", "status"],
-    },
-    {
-      name: "prefixes fallback when first arg is not a node launcher",
-      rawArgs: ["node-dev", "openclaw", "status"],
-      expected: ["node", "openclaw", "node-dev", "openclaw", "status"],
-    },
-    {
-      name: "prefixes fallback when raw args start at program name",
-      rawArgs: ["openclaw", "status"],
-      expected: ["node", "openclaw", "status"],
-    },
-    {
-      name: "keeps bun execution argv",
-      rawArgs: ["bun", "src/entry.ts", "status"],
-      expected: ["bun", "src/entry.ts", "status"],
-    },
-  ] as const)("builds parse argv from raw args: $name", ({ rawArgs, expected }) => {
+    ["keeps plain node argv", ["node", "openclaw", "status"], ["node", "openclaw", "status"]],
+    [
+      "keeps version-suffixed node binary",
+      ["node-22", "openclaw", "status"],
+      ["node-22", "openclaw", "status"],
+    ],
+    [
+      "keeps windows versioned node exe",
+      ["node-22.2.0.exe", "openclaw", "status"],
+      ["node-22.2.0.exe", "openclaw", "status"],
+    ],
+    [
+      "keeps dotted node binary",
+      ["node-22.2", "openclaw", "status"],
+      ["node-22.2", "openclaw", "status"],
+    ],
+    [
+      "keeps dotted node exe",
+      ["node-22.2.exe", "openclaw", "status"],
+      ["node-22.2.exe", "openclaw", "status"],
+    ],
+    [
+      "keeps absolute versioned node path",
+      ["/usr/bin/node-22.2.0", "openclaw", "status"],
+      ["/usr/bin/node-22.2.0", "openclaw", "status"],
+    ],
+    ["keeps node24 shorthand", ["node24", "openclaw", "status"], ["node24", "openclaw", "status"]],
+    [
+      "keeps absolute node24 shorthand",
+      ["/usr/bin/node24", "openclaw", "status"],
+      ["/usr/bin/node24", "openclaw", "status"],
+    ],
+    [
+      "keeps windows node24 exe",
+      ["node24.exe", "openclaw", "status"],
+      ["node24.exe", "openclaw", "status"],
+    ],
+    ["keeps nodejs binary", ["nodejs", "openclaw", "status"], ["nodejs", "openclaw", "status"]],
+    [
+      "prefixes fallback when first arg is not a node launcher",
+      ["node-dev", "openclaw", "status"],
+      ["node", "openclaw", "node-dev", "openclaw", "status"],
+    ],
+    [
+      "prefixes fallback when raw args start at program name",
+      ["openclaw", "status"],
+      ["node", "openclaw", "status"],
+    ],
+    [
+      "keeps bun execution argv",
+      ["bun", "src/entry.ts", "status"],
+      ["bun", "src/entry.ts", "status"],
+    ],
+  ] as const)("builds parse argv from raw args: %s", (_name, rawArgs, expected) => {
     const parsed = buildParseArgv([...rawArgs]);
     expect(parsed).toEqual([...expected]);
   });
