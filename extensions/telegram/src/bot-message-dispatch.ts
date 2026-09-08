@@ -238,10 +238,13 @@ function scheduleDmTopicLabel(params: {
   if (!isDmTopic || !params.isFirstTurnInSession) {
     return;
   }
-  const userMessage = truncateUtf16Safe(
-    context.ctxPayload.RawBody ?? context.ctxPayload.Body ?? "",
-    500,
-  );
+  // Captionless media keeps RawBody as "", while BodyForAgent may hold its transcript.
+  // Select the first nonblank candidate so one-shot topic naming does not silently vanish.
+  const labelSource =
+    [context.ctxPayload.RawBody, context.ctxPayload.BodyForAgent, context.ctxPayload.Body].find(
+      (candidate) => candidate?.trim(),
+    ) ?? "";
+  const userMessage = truncateUtf16Safe(labelSource, 500);
   if (!userMessage.trim()) {
     return;
   }
