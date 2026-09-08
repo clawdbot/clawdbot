@@ -295,6 +295,42 @@ describe("resolveSharedMatrixClient", () => {
     expect(mainClient.stop).toHaveBeenCalledTimes(1);
   });
 
+  it("does not create a replacement client before snapshot persistence finishes", async () => {
+    const mainAuth = authFor("main");
+    let finishPersistence: (() => void) | undefined;
+    const firstClient = {
+      ...createMockClient("first"),
+      stopAndPersist: vi.fn(
+        async () =>
+          await new Promise<void>((resolve) => {
+            finishPersistence = resolve;
+          }),
+      ),
+    };
+    const replacementClient = createMockClient("replacement");
+
+    resolveMatrixAuthMock.mockResolvedValue(mainAuth);
+    createMatrixClientMock
+      .mockResolvedValueOnce(firstClient)
+      .mockResolvedValueOnce(replacementClient);
+
+    await acquireSharedMatrixClient({ auth: mainAuth, startClient: false });
+    const release = releaseSharedClientInstance(
+      firstClient as unknown as import("../sdk.js").MatrixClient,
+      "persist",
+    );
+    await vi.waitFor(() => expect(firstClient.stopAndPersist).toHaveBeenCalledOnce());
+
+    const replacement = acquireSharedMatrixClient({ auth: mainAuth, startClient: false });
+    await Promise.resolve();
+    expect(createMatrixClientMock).toHaveBeenCalledOnce();
+
+    finishPersistence?.();
+    await expect(release).resolves.toBe(true);
+    await expect(replacement).resolves.toBe(replacementClient);
+    expect(createMatrixClientMock).toHaveBeenCalledTimes(2);
+  });
+
   it("rejects mismatched explicit account ids when auth is already resolved", async () => {
     await expect(
       resolveSharedMatrixClient({

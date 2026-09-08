@@ -25,6 +25,7 @@ type SharedMatrixClientState = {
 
 const sharedClientStates = new Map<string, SharedMatrixClientState>();
 const sharedClientPromises = new Map<string, Promise<SharedMatrixClientState>>();
+const sharedClientRetirements = new Map<string, Promise<void>>();
 
 function serializeDispatcherPolicyKey(auth: MatrixAuth): string {
   return JSON.stringify(auth.dispatcherPolicy ?? null);
@@ -175,6 +176,10 @@ async function resolveSharedMatrixClientState(
   const key = buildSharedClientKey(auth);
   const shouldStart = params.startClient !== false;
 
+  // A replacement generation must not restore the snapshot while the prior
+  // generation is still writing it during monitor shutdown.
+  await sharedClientRetirements.get(key);
+
   const existingState = sharedClientStates.get(key);
   if (existingState) {
     if (shouldStart) {
@@ -300,12 +305,22 @@ export async function releaseSharedClientInstance(
     return false;
   }
   deleteSharedClientState(state);
-  if (mode === "persist") {
-    await client.stopAndPersist();
-  } else if (mode === "discard") {
-    client.stopWithoutPersist();
-  } else {
-    client.stop();
+  const retirement = (async () => {
+    if (mode === "persist") {
+      await client.stopAndPersist();
+    } else if (mode === "discard") {
+      client.stopWithoutPersist();
+    } else {
+      client.stop();
+    }
+  })();
+  sharedClientRetirements.set(state.key, retirement);
+  try {
+    await retirement;
+  } finally {
+    if (sharedClientRetirements.get(state.key) === retirement) {
+      sharedClientRetirements.delete(state.key);
+    }
   }
   return true;
 }
