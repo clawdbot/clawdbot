@@ -486,7 +486,6 @@ describe("native app i18n inventory", () => {
       ]),
     );
     expect(entries.some((entry) => entry.source === "Save Profile")).toBe(true);
-    expect(entries.some((entry) => entry.source === "Creating...")).toBe(true);
     expect(entries.some((entry) => entry.source === "Permission required")).toBe(true);
     expect(entries.some((entry) => entry.source === "Needs setup")).toBe(true);
     expect(
@@ -557,15 +556,14 @@ describe("native app i18n inventory", () => {
     expect(entries.some((entry) => entry.source === "ask OpenClaw $prompt")).toBe(true);
     expect(entries.some((entry) => entry.source === "OpenClaw is paused")).toBe(true);
     expect(
-      entries.some((entry) => entry.source === "Choose system, light, or dark appearance"),
-    ).toBe(true);
-    expect(
       entries.some(
         (entry) =>
           hasSite(
             entry,
-            (site) => site.path === "apps/ios/Sources/Design/TalkRuntimeIssueBanner.swift",
-          ) && entry.source === "Details",
+            (site) =>
+              site.path ===
+              "apps/ios/Sources/Settings/DeviceSettings/IOSDeviceSettingsConsent.swift",
+          ) && entry.source === "Share Apple Health summaries with the Gateway?",
       ),
     ).toBe(true);
     expect(
@@ -573,8 +571,8 @@ describe("native app i18n inventory", () => {
         (entry) =>
           hasSite(
             entry,
-            (site) => site.path === "apps/ios/Sources/Design/TalkRuntimeIssueBanner.swift",
-          ) && entry.source === "Open Settings",
+            (site) => site.path === "apps/ios/Sources/Settings/DashboardPageScreen.swift",
+          ) && entry.source === "Done",
       ),
     ).toBe(true);
     expect(entries.some((entry) => entry.source === "No threads yet")).toBe(true);

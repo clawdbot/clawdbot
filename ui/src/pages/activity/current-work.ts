@@ -57,7 +57,7 @@ export function readCurrentWorkChange(payload: unknown): CurrentWorkChange | nul
 export function reconcileCurrentWork(
   result: SessionsListResult,
   changes: Iterable<CurrentWorkChange>,
-): { result: SessionsListResult; requiresRefresh: boolean } {
+): { result: SessionsListResult; requiresRefresh: boolean; canPublish: boolean } {
   const rows = new Map(
     result.sessions.map((row) => [currentWorkIdentity(row), { row, requiresRefresh: false }]),
   );
@@ -129,7 +129,7 @@ export function reconcileCurrentWork(
   }
   const current = [...rows.values()].filter(({ row }) => row.hasActiveRun === true);
   const sessions = current.map(({ row }) => row);
-  const requiresRefresh =
-    current.some((state) => state.requiresRefresh) || (!result.hasMore && unseenActive.size > 0);
-  return { result: { ...result, count: sessions.length, sessions }, requiresRefresh };
+  const canPublish = !current.some((state) => state.requiresRefresh);
+  const requiresRefresh = !canPublish || (!result.hasMore && unseenActive.size > 0);
+  return { result: { ...result, count: sessions.length, sessions }, requiresRefresh, canPublish };
 }

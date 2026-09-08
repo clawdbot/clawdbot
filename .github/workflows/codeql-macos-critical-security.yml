@@ -20,7 +20,7 @@ permissions:
 jobs:
   macos:
     name: Critical Security (macOS)
-    runs-on: blacksmith-12vcpu-macos-26
+    runs-on: macos-26
     timeout-minutes: 45
     steps:
       - name: Checkout

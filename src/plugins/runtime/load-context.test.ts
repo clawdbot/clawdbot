@@ -1,8 +1,10 @@
 // Load context tests cover agent and workspace context resolution for plugin runtimes.
+import { inspect } from "node:util";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createPluginCache, withPluginCache } from "../plugin-cache.js";
 import type { PluginMetadataSnapshot } from "../plugin-metadata-snapshot.types.js";
+import { createEmptyPluginRegistry } from "../registry-empty.js";
 
 const loadConfigMock = vi.fn<typeof import("../../config/config.js").loadConfig>();
 const applyPluginAutoEnableMock =
@@ -35,6 +37,7 @@ const metadataSnapshot: PluginMetadataSnapshot = {
   plugins: [],
   byPluginId: new Map(),
   normalizePluginId: (id) => id,
+  declaredProviderOwners: new Map(),
   owners: {
     channels: new Map(),
     channelConfigs: new Map(),
@@ -62,6 +65,8 @@ const resolveConfigWidePluginMetadataSnapshotMock = vi.fn(() => metadataSnapshot
 
 let resolvePluginRuntimeLoadContext: typeof import("./load-context.resolve.js").resolvePluginRuntimeLoadContext;
 let buildPluginRuntimeLoadOptions: typeof import("./load-context.js").buildPluginRuntimeLoadOptions;
+let setPluginRuntimeLoadContext: typeof import("./load-context.js").setPluginRuntimeLoadContext;
+let getPluginRuntimeLoadContext: typeof import("./load-context.js").getPluginRuntimeLoadContext;
 let clearRuntimeConfigSnapshot: typeof import("../../config/runtime-snapshot.js").clearRuntimeConfigSnapshot;
 let setRuntimeConfigSnapshot: typeof import("../../config/runtime-snapshot.js").setRuntimeConfigSnapshot;
 let clearPluginMetadataLifecycleCaches: typeof import("../plugin-metadata-lifecycle.js").clearPluginMetadataLifecycleCaches;
@@ -94,7 +99,8 @@ describe("resolvePluginRuntimeLoadContext", () => {
       await import("../../config/runtime-snapshot.js"));
     ({ clearPluginMetadataLifecycleCaches } = await import("../plugin-metadata-lifecycle.js"));
     ({ resolvePluginRuntimeLoadContext } = await import("./load-context.resolve.js"));
-    ({ buildPluginRuntimeLoadOptions } = await import("./load-context.js"));
+    ({ buildPluginRuntimeLoadOptions, setPluginRuntimeLoadContext, getPluginRuntimeLoadContext } =
+      await import("./load-context.js"));
   });
 
   beforeEach(() => {
@@ -311,6 +317,45 @@ describe("resolvePluginRuntimeLoadContext", () => {
       env,
     });
     expect(resolvePluginMetadataSnapshotMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps private load facts out of diagnostics while preserving registry copies", () => {
+    const configSentinel = "synthetic-private-config-sentinel";
+    const envSentinel = "synthetic-private-env-sentinel";
+    const config: OpenClawConfig = {
+      plugins: { entries: { demo: { config: { sentinel: configSentinel } } } },
+    };
+    const env = { HOME: "/tmp/openclaw-home", PRIVATE_CONTEXT_TEST: envSentinel };
+    const context = resolvePluginRuntimeLoadContext({ config, env });
+    const registry = createEmptyPluginRegistry();
+    setPluginRuntimeLoadContext(registry, context, "original-registration");
+    const bound = getPluginRuntimeLoadContext(registry);
+    expect(bound).toMatchObject(context);
+    expect(bound?.config).toBe(config);
+    expect(bound?.env).toBe(env);
+
+    const copy = { ...registry };
+    expect(getPluginRuntimeLoadContext(copy)).toBe(bound);
+    const reboundContext = {
+      ...context,
+      workspaceDir: "/rebound-workspace",
+      env: { ...env, PRIVATE_CONTEXT_TEST: `${envSentinel}-rebound` },
+    };
+    setPluginRuntimeLoadContext(copy, reboundContext, "replacement-registration");
+    expect(getPluginRuntimeLoadContext(copy)).toMatchObject({
+      ...reboundContext,
+      registrationConfigKey: "original-registration",
+    });
+    expect(getPluginRuntimeLoadContext(copy)?.env).toBe(reboundContext.env);
+    expect(getPluginRuntimeLoadContext(registry)).toBe(bound);
+
+    for (const carrier of [registry, copy]) {
+      for (const showHidden of [false, true]) {
+        const diagnostic = inspect(carrier, { depth: null, showHidden });
+        expect(diagnostic).not.toContain(configSentinel);
+        expect(diagnostic).not.toContain(envSentinel);
+      }
+    }
   });
 
   it("builds plugin load options from the shared runtime context", () => {

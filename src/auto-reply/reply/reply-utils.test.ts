@@ -932,7 +932,7 @@ describe("createTypingSignaler", () => {
     expect(typing.startTypingOnText).not.toHaveBeenCalled();
   });
 
-  it("does not start typing for media-only deltas", async () => {
+  it("does not start typing for non-renderable deltas", async () => {
     const typing = createMockTypingController();
     const signaler = createTypingSignaler({
       typing,
@@ -940,10 +940,15 @@ describe("createTypingSignaler", () => {
       isHeartbeat: false,
     });
 
-    await signaler.signalTextDelta(undefined);
+    for (const text of [undefined, "", " \t\n", SILENT_REPLY_TOKEN]) {
+      await signaler.signalTextDelta(text);
+      await signaler.signalMessageStart();
+      await signaler.signalToolStart();
+    }
 
     expect(typing.startTypingLoop).not.toHaveBeenCalled();
     expect(typing.startTypingOnText).not.toHaveBeenCalled();
+    expect(typing.refreshTypingTtl).not.toHaveBeenCalled();
   });
 
   it("suppresses tool-start typing in message mode until renderable text arrives", async () => {

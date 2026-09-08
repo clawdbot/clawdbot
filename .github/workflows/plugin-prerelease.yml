@@ -20,6 +20,11 @@ on:
         required: false
         default: ""
         type: string
+      allow_frozen_target_scenario_omissions:
+        description: Trusted opt-in to accept documented harness differences in a frozen target
+        required: false
+        default: false
+        type: boolean
       full_release_validation:
         description: Enable release-only Docker prerelease lanes from Full Release Validation
         required: false
@@ -993,6 +998,7 @@ jobs:
       docker_lanes: ${{ needs.preflight.outputs.plugin_prerelease_docker_lanes }}
       targeted_docker_lane_group_size: 2
       allow_unreleased_changelog: true
+      allow_frozen_target_scenario_omissions: ${{ inputs.allow_frozen_target_scenario_omissions }}
       include_live_suites: false
       live_models_only: false
       shared_image_artifact_namespace: plugin-prerelease

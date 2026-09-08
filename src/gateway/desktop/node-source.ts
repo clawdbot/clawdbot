@@ -6,6 +6,7 @@ import type { NodeRegistry, NodeSession } from "../node-registry.js";
 import { DesktopCredentialsRequiredError } from "./host-source-errors.js";
 import type { NodeDesktopStreamBroker } from "./node-stream-broker.js";
 import { mintDesktopObserverToken } from "./observe-bridge.js";
+import type { DesktopObserveRequester } from "./observe-requester.js";
 import type { RfbPreauthDescriptor } from "./rfb-preauth.js";
 import type { DesktopSessionRegistry } from "./session-registry.js";
 
@@ -155,6 +156,7 @@ export function createNodeDesktopService(params: {
     async observe(request: {
       nodeId: string;
       control: boolean;
+      requester?: DesktopObserveRequester;
       credentials?: { username?: string; password?: string };
     }): Promise<NodeDesktopObserveResult> {
       const node = params.nodeRegistry.get(request.nodeId);
@@ -263,6 +265,7 @@ export function createNodeDesktopService(params: {
           sourceKey,
           ownerEpoch: session.ownerEpoch,
           control: request.control,
+          requester: request.requester,
           attachment,
           preauth,
         });

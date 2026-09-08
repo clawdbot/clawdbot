@@ -29,6 +29,7 @@ import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../../process/gateway-work-admission.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { resolvePreferredSessionKeyForSessionIdMatches } from "../../sessions/session-id-resolution.js";
+import { retireSessionMcpRuntime } from "../agent-bundle-mcp-manager-api.js";
 import { resolveAgentRunSessionTarget } from "../run-session-target.js";
 import { captureSessionPlacementCompactionSuccessorAssertion } from "../session-placement-admission.js";
 import { log } from "./logger.js";
@@ -260,6 +261,14 @@ export async function acceptCompactionSuccessor(params: {
     log.warn(`compaction successor committed but publication failed: ${String(error)}`);
     return committed;
   } finally {
+    if (committed) {
+      await retireSessionMcpRuntime({
+        sessionId: currentTarget.sessionId,
+        reason: "compaction-session-end",
+        retainAcrossReuse: true,
+        preserveActiveLeases: true,
+      });
+    }
     if (committed && params.config) {
       try {
         emitCompactionSessionLifecycleHooks({

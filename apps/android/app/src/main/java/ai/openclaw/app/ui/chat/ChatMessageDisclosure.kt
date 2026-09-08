@@ -53,7 +53,7 @@ internal fun ChatMessageDisclosure(
   val scope = key(owner, selectionGeneration, catalogRevision) { rememberCoroutineScope() }
   var selected by remember(scope) { mutableStateOf<ChatMessageDisclosureRead?>(null) }
   var expanded by remember(scope) { mutableStateOf(false) }
-  val onManualNavigation = LocalChatReaderNavigation.current
+  val navigation = LocalChatReaderNavigation.current
   val selection = selected
   val active = selection?.takeIf { messages.any(it.message::matchesFullRead) }
   if (selection != null && active == null) {
@@ -81,7 +81,7 @@ internal fun ChatMessageDisclosure(
   ) {
     // Admission happens in the tap, before queued coroutine work can outlive this render.
     val admitted = prepareRead(message) ?: return
-    onManualNavigation()
+    navigation?.pause()
     if (retry || selected?.message?.matchesFullRead(message) != true) {
       selected?.job?.cancel()
       val next = ChatMessageDisclosureRead(message, admitted)
@@ -92,6 +92,7 @@ internal fun ChatMessageDisclosure(
   }
 
   fun close() {
+    navigation?.pause()
     expanded = false
     // Retry can replace the holder before recomposition; cancel it in this tap,
     // before a queued transport write can resume ahead of the next frame.

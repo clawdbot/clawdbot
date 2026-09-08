@@ -3,6 +3,8 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
+source "$ROOT_DIR/scripts/lib/frozen-target-compat.sh"
+SOURCE_ROOT="${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$ROOT_DIR}"
 IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-plugins-e2e" OPENCLAW_PLUGINS_E2E_IMAGE)"
 OPENCLAW_DOCKER_E2E_LOG_PRINT_BYTES="$(
   docker_e2e_read_positive_int_env OPENCLAW_DOCKER_E2E_LOG_PRINT_BYTES 65536
@@ -15,6 +17,8 @@ CLAW_HUB_PREFLIGHT_TIMEOUT_MS="$(
 )"
 PLUGINS_CLI_TIMEOUT="${OPENCLAW_PLUGINS_CLI_TIMEOUT:-180s}"
 
+openclaw_resolve_frozen_plugin_harness_capabilities "$SOURCE_ROOT"
+
 docker_e2e_build_or_reuse "$IMAGE_NAME" plugins
 
 OPENCLAW_TEST_STATE_SCRIPT_B64="$(docker_e2e_test_state_shell_b64 plugins empty)"
@@ -26,6 +30,7 @@ DOCKER_ENV_ARGS=(
   -e "OPENCLAW_PLUGINS_CLI_TIMEOUT=$PLUGINS_CLI_TIMEOUT"
   -e "OPENCLAW_TEST_STATE_SCRIPT_B64=$OPENCLAW_TEST_STATE_SCRIPT_B64"
 )
+openclaw_append_frozen_plugin_harness_docker_env
 for env_name in \
   OPENCLAW_PLUGIN_LIFECYCLE_TRACE \
   OPENCLAW_PLUGINS_E2E_CLAWHUB \

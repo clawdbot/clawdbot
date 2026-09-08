@@ -31,7 +31,6 @@ export async function withAcpManagerTaskStateDir(
         loadSnapshot: () => ({
           flows: new Map(),
         }),
-        saveSnapshot: () => {},
         upsertFlow: () => {},
         deleteFlow: () => {},
         close: () => {},

@@ -10,7 +10,7 @@ export type ResponsesConfigurationUpdate = {
   reasoning: { effort: string };
 };
 
-function isConfigurationUpdate(value: unknown): value is ResponsesConfigurationUpdate {
+export function isConfigurationUpdate(value: unknown): value is ResponsesConfigurationUpdate {
   return (
     isRecord(value) &&
     value.type === "configuration_update" &&

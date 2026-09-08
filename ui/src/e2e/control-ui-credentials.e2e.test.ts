@@ -89,7 +89,7 @@ async function rejectInitialConnect(
   await page.locator("openclaw-login-gate").waitFor();
 }
 
-describeControlUiE2e("Control UI token and password credentials E2E", () => {
+describeControlUiE2e("Control UI Gateway secret E2E", () => {
   beforeAll(async () => {
     if (!chromiumAvailable) {
       throw new Error(
@@ -111,7 +111,7 @@ describeControlUiE2e("Control UI token and password credentials E2E", () => {
     openContexts.clear();
   });
 
-  it("submits token and password credentials with visible acceptance and rejection recovery", async () => {
+  it("submits one secret for both authentication modes with visible acceptance and rejection recovery", async () => {
     const tokenFlow = await createCredentialPage();
     const tokenPageErrors: string[] = [];
     tokenFlow.page.on("pageerror", (error) => tokenPageErrors.push(String(error)));
@@ -122,7 +122,7 @@ describeControlUiE2e("Control UI token and password credentials E2E", () => {
       "unauthorized: gateway token required",
     );
 
-    const tokenInput = tokenFlow.page.getByLabel(/Gateway token/i);
+    const tokenInput = tokenFlow.page.getByLabel("Gateway secret", { exact: true });
     const tokenConnectCount = (await tokenFlow.gateway.getRequests("connect")).length;
     await tokenFlow.gateway.deferNext("connect");
     await tokenInput.fill("token-accepted-by-mock");
@@ -131,8 +131,8 @@ describeControlUiE2e("Control UI token and password credentials E2E", () => {
     const tokenConnect = await waitForNextConnect(tokenFlow.gateway, tokenConnectCount);
     expect(readConnectAuth(tokenConnect)).toMatchObject({
       token: "token-accepted-by-mock",
+      password: "token-accepted-by-mock",
     });
-    expect(readConnectAuth(tokenConnect)?.password).toBeUndefined();
     await tokenFlow.gateway.resolveDeferred("connect");
     await tokenFlow.page.locator("openclaw-app-shell").waitFor();
     expect(await tokenFlow.page.locator("openclaw-login-gate").count()).toBe(0);
@@ -156,7 +156,7 @@ describeControlUiE2e("Control UI token and password credentials E2E", () => {
       "unauthorized: gateway password required",
     );
 
-    const passwordInput = passwordFlow.page.getByLabel(/Password \(not stored\)/i);
+    const passwordInput = passwordFlow.page.getByLabel("Gateway secret", { exact: true });
     const rejectedConnectCount = (await passwordFlow.gateway.getRequests("connect")).length;
     await passwordFlow.gateway.deferNext("connect");
     await passwordInput.fill("password-rejected-by-mock");
@@ -164,9 +164,9 @@ describeControlUiE2e("Control UI token and password credentials E2E", () => {
 
     const rejectedConnect = await waitForNextConnect(passwordFlow.gateway, rejectedConnectCount);
     expect(readConnectAuth(rejectedConnect)).toMatchObject({
+      token: "password-rejected-by-mock",
       password: "password-rejected-by-mock",
     });
-    expect(readConnectAuth(rejectedConnect)?.token).toBeUndefined();
     await passwordFlow.gateway.rejectDeferred("connect", {
       code: "UNAUTHORIZED",
       details: { code: ConnectErrorDetailCodes.AUTH_PASSWORD_MISMATCH },
@@ -175,7 +175,9 @@ describeControlUiE2e("Control UI token and password credentials E2E", () => {
 
     const failure = passwordFlow.page.locator(".login-gate__failure");
     await failure.waitFor();
-    expect(await failure.getAttribute("role")).toBe("alert");
+    expect(await failure.getAttribute("role")).toBe("status");
+    expect(await failure.getAttribute("aria-live")).toBe("polite");
+    expect(await failure.textContent()).toContain("This Gateway expects its password");
     expect(
       (await failure.locator(".login-gate__failure-raw").textContent())?.toLowerCase(),
     ).toContain("gateway password mismatch");
@@ -197,9 +199,9 @@ describeControlUiE2e("Control UI token and password credentials E2E", () => {
 
     const recoveredConnect = await waitForNextConnect(passwordFlow.gateway, recoveredConnectCount);
     expect(readConnectAuth(recoveredConnect)).toMatchObject({
+      token: "password-accepted-by-mock",
       password: "password-accepted-by-mock",
     });
-    expect(readConnectAuth(recoveredConnect)?.token).toBeUndefined();
     await passwordFlow.gateway.resolveDeferred("connect");
     await passwordFlow.page.locator("openclaw-app-shell").waitFor();
     expect(await passwordFlow.page.locator("openclaw-login-gate").count()).toBe(0);

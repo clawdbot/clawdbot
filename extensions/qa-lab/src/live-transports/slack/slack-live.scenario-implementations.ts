@@ -6,6 +6,7 @@ import {
   SLACK_QA_REACTION_VERIFY_TIMEOUT_MS,
   SLACK_QA_NATIVE_DATA_VERIFY_TIMEOUT_MS,
   SLACK_QA_LOG_TAIL_TIMEOUT_MS,
+  type SlackObservedMessage,
   type SlackQaScenarioImplementation,
   type SlackQaScenarioContext,
 } from "./slack-live.contracts.js";
@@ -24,6 +25,13 @@ import {
   renderSlackTableAccessibleText,
   buildSlackProgressCommentaryRun,
 } from "./slack-live.scenario-fixtures.js";
+
+function findCapturedMessageId(params: {
+  messages: readonly SlackObservedMessage[];
+  marker: string;
+}) {
+  return params.messages.find((message) => message.text.includes(params.marker))?.ts;
+}
 
 export const slackQaCanaryScenario: SlackQaScenarioImplementation = {
   buildRun: (sutUserId) => {
@@ -329,6 +337,7 @@ export const slackQaChartPresentationNativeScenario: SlackQaScenarioImplementati
     const summaryText = `SLACK_QA_CHART_SUMMARY_${suffix}`;
     const finalMarker = `SLACK_QA_CHART_DONE_${suffix}`;
     const messageToolArgs = buildSlackChartMessageToolArgs(summaryText);
+    let messageId: string | undefined;
     return {
       expectReply: true,
       input: [
@@ -337,14 +346,21 @@ export const slackQaChartPresentationNativeScenario: SlackQaScenarioImplementati
         `After the chart send succeeds, reply with only this exact marker: ${finalMarker}`,
       ].join(" "),
       matchText: finalMarker,
+      captureBeforeReply: (messages) => {
+        messageId = findCapturedMessageId({ marker: summaryText, messages });
+        return messageId !== undefined;
+      },
       afterReply: async (_message, context) => {
+        if (!messageId) {
+          throw new Error("Slack native chart verification did not retain its message id");
+        }
         await waitForSlackStoredMessage({
           channelId: context.channelId,
           client: context.sutReadClient,
           description: "message with native chart",
           matchesMessage: (message) =>
             isExpectedSlackNativeChartMessage(message, renderSlackChartAccessibleText(summaryText)),
-          oldestTs: context.sentTs,
+          messageId,
           sutIdentity: context.sutIdentity,
           timeoutMs: SLACK_QA_NATIVE_DATA_VERIFY_TIMEOUT_MS,
         });
@@ -359,22 +375,32 @@ export const slackQaTablePresentationNativeScenario: SlackQaScenarioImplementati
   buildRun: (sutUserId) => {
     const suffix = randomUUID().slice(0, 8).toUpperCase();
     const summaryText = `SLACK_QA_TABLE_SUMMARY_${suffix}`;
+    const finalMarker = `SLACK_QA_TABLE_DONE_${suffix}`;
     const messageToolArgs = buildSlackTableMessageToolArgs(summaryText);
+    let messageId: string | undefined;
     return {
       expectReply: true,
       input: [
         `<@${sutUserId}> Slack native table QA check ${summaryText}.`,
         `Call the message tool exactly once with these exact arguments: ${JSON.stringify(messageToolArgs)}.`,
+        `After the table send succeeds, reply with only this exact marker: ${finalMarker}`,
       ].join(" "),
-      matchText: summaryText,
+      matchText: finalMarker,
+      captureBeforeReply: (messages) => {
+        messageId = findCapturedMessageId({ marker: summaryText, messages });
+        return messageId !== undefined;
+      },
       afterReply: async (_message, context) => {
+        if (!messageId) {
+          throw new Error("Slack native table verification did not retain its message id");
+        }
         await waitForSlackStoredMessage({
           channelId: context.channelId,
           client: context.sutReadClient,
           description: "message with native table",
           matchesMessage: (message) =>
             isExpectedSlackNativeTableMessage(message, renderSlackTableAccessibleText(summaryText)),
-          oldestTs: context.sentTs,
+          messageId,
           sutIdentity: context.sutIdentity,
           timeoutMs: SLACK_QA_NATIVE_DATA_VERIFY_TIMEOUT_MS,
         });

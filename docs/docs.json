@@ -1669,6 +1669,20 @@
                     "pages": [
                       "plugins/codex-computer-use",
                       "plugins/codex-harness",
+                      {
+                        "group": "Codex harness",
+                        "pages": [
+                          "plugins/codex-harness/placement",
+                          "plugins/codex-harness/routing",
+                          "plugins/codex-harness/configuration",
+                          "plugins/codex-harness/app-server",
+                          "plugins/codex-harness/config-fields",
+                          "plugins/codex-harness/commands",
+                          "plugins/codex-harness/runtime-behavior",
+                          "plugins/codex-harness/native-features",
+                          "plugins/codex-harness/troubleshooting"
+                        ]
+                      },
                       "plugins/codex-native-plugins",
                       "plugins/codex-supervision"
                     ]
@@ -1745,6 +1759,19 @@
                 "pages": [
                   "automation/index",
                   "automation/cron-jobs",
+                  {
+                    "group": "Automations",
+                    "pages": [
+                      "automation/cron-jobs/how-it-works",
+                      "automation/cron-jobs/schedules",
+                      "automation/cron-jobs/payloads",
+                      "automation/cron-jobs/delivery",
+                      "automation/cron-jobs/managing-jobs",
+                      "automation/cron-jobs/webhooks",
+                      "automation/cron-jobs/gmail",
+                      "automation/cron-jobs/troubleshooting"
+                    ]
+                  },
                   "automation/imap",
                   "automation/tasks",
                   "automation/taskflow",

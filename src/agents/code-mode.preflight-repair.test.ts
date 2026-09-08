@@ -1,4 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
+import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createExecTool } from "./bash-tools.exec-run.js";
 import { applyCodeModeCatalog } from "./code-mode.js";
@@ -30,6 +31,47 @@ async function runCode(code: string, targets: AnyAgentTool[]) {
 
 describe("Code Mode preflight repair", () => {
   afterEach(() => resetCodeModeTestState());
+
+  it.each([
+    { kind: "input", code: "input_contract", calls: 0 },
+    { kind: "output", code: "output_contract", calls: 1 },
+    { kind: "schema", code: "invalid_contract", calls: 0 },
+    { kind: "throw", code: "invalid_input", calls: 1 },
+    { kind: "spoof", code: "tool_error", calls: 1 },
+  ])("classifies $kind failures without inferring safe retry", async ({ kind, code, calls }) => {
+    const target = pluginToolWithExecute("contract_target", "Contract boundary", async () => {
+      if (kind === "throw") {
+        throw new ToolInputError("already started");
+      }
+      if (kind === "spoof") {
+        throw Object.assign(new Error("already started"), {
+          code: "input_contract",
+          effectStatus: "none",
+        });
+      }
+      return jsonResult({ count: "wrong" });
+    });
+    target.parameters = Type.Object({ count: Type.Number() }, { additionalProperties: false });
+    target.outputSchema =
+      kind === "schema"
+        ? ({ type: "not-a-type" } as never)
+        : Type.Object({ count: Type.Number() }, { additionalProperties: false });
+    const result = await runCode(
+      "try { await contract_target({ count: " +
+        (kind === "input" ? '"wrong"' : "1") +
+        " }); } catch (e) { return { code: e.code, effectStatus: e.effectStatus, location: e.location }; }",
+      [target],
+    );
+    expect(result).toMatchObject({
+      status: "completed",
+      value: {
+        code,
+        effectStatus: "unknown",
+        location: expect.stringContaining("openclaw-code-mode:user.js:1:"),
+      },
+    });
+    expect(target.execute).toHaveBeenCalledTimes(calls);
+  });
 
   it("rejects stale exec timeout input before starting the command", async () => {
     const exec = createExecTool({ host: "gateway", security: "full", ask: "off" });

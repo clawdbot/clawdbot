@@ -95,6 +95,32 @@ export async function openSessionSnapshotDatabase(): Promise<IDBDatabase | null>
   }
 }
 
+export async function readStoredChatSnapshotRecord(sessionKey: string): Promise<unknown> {
+  const database = await openSessionSnapshotDatabase();
+  if (!database) {
+    return undefined;
+  }
+  try {
+    return await new Promise<unknown>((resolve, reject) => {
+      const transaction = database.transaction(CHAT_SNAPSHOT_STORE_NAME, "readonly");
+      const request = transaction.objectStore(CHAT_SNAPSHOT_STORE_NAME).get(sessionKey);
+      transaction.addEventListener("complete", () => resolve(request.result));
+      transaction.addEventListener("error", () =>
+        reject(transaction.error ?? new Error("IndexedDB read failed")),
+      );
+      transaction.addEventListener("abort", () =>
+        reject(transaction.error ?? new Error("IndexedDB read aborted")),
+      );
+    });
+  } catch (error) {
+    debugSnapshotDatabase("resetting cache after IndexedDB read failure", error);
+    await resetSessionSnapshotDatabase(database);
+    return undefined;
+  } finally {
+    database.close();
+  }
+}
+
 export async function resetSessionSnapshotDatabase(database?: IDBDatabase | null): Promise<void> {
   database?.close();
   const factory = indexedDbFactory();

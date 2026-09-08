@@ -250,6 +250,10 @@ export function createCrabboxWorkerProvider(
       profile,
       options?.machineClass,
     );
+    const nodeRuntimeIdentity = options?.nodeRuntimeIdentity;
+    if (parsed.warmImage && !nodeRuntimeIdentity) {
+      throw new WorkerProviderError("Crabbox warm images require a prepared node runtime identity");
+    }
     const warmupTimeoutMs = parsed.desktop
       ? CRABBOX_DESKTOP_WARMUP_TIMEOUT_MS
       : CRABBOX_WARMUP_TIMEOUT_MS;
@@ -283,6 +287,7 @@ export function createCrabboxWorkerProvider(
         ...context,
         id: leaseId,
         profile: parsed,
+        nodeRuntimeIdentity,
         ...(project ? { projectKey: project.key } : {}),
         ...(project ? { assertCurrent: project.assertCurrent } : {}),
         signal: preparationSignal,

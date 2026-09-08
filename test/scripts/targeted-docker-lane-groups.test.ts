@@ -29,6 +29,139 @@ function expandedPlan(
 }
 
 describe("scripts/plan-targeted-docker-lane-groups", () => {
+  it.each([
+    { lane: "published-upgrade-survivor", scenario: "base" },
+    { lane: "update-migration", scenario: "plugin-deps-cleanup" },
+  ])(
+    "pairs supported lines with native operator state while preserving $scenario",
+    ({ lane, scenario }) => {
+      const groups = planTargetedDockerLaneGroups({
+        lanes: lane,
+        upgradeSurvivorBaseline: "openclaw@2026.9.1",
+        upgradeSurvivorBaselines: "2026.9.2 2026.9.1 2026.6.35 2026.6.34",
+        upgradeSurvivorScenarios: `${scenario} legacy-operator-state`,
+        upgradeSurvivorBaselineScope: "legacy-operator-state",
+      });
+      const actual = groups.flatMap((group) =>
+        expandedPlan(
+          group.docker_lanes,
+          group.published_upgrade_survivor_baselines ?? "",
+          group.published_upgrade_survivor_scenarios ?? "",
+        ).scheduledLanes.map((entry) => entry.name),
+      );
+      expect(actual.toSorted()).toEqual(
+        [
+          `${lane}-2026.9.1${scenario === "base" ? "" : `-${scenario}`}`,
+          ...["2026.9.2", "2026.9.1", "2026.6.35", "2026.6.34"].map(
+            (baseline) => `${lane}-${baseline}-legacy-operator-state`,
+          ),
+        ].toSorted(),
+      );
+      expect(groups).toHaveLength(4);
+      expect(new Set(actual).size).toBe(actual.length);
+      expect(groups.every((group) => group.timeout_minutes === 90)).toBe(true);
+    },
+  );
+
+  it("preserves every synthetic soak fixture once and keeps the three-scenario group cap", () => {
+    const synthetic = [
+      "base",
+      "acpx-openclaw-tools-bridge",
+      "feishu-channel",
+      "bootstrap-persona",
+      "channel-post-core-restore",
+      "plugin-deps-cleanup",
+      "configured-plugin-installs",
+      "stale-source-plugin-shadow",
+      "tilde-log-path",
+      "meeting-transcripts-sqlite",
+      "versioned-runtime-deps",
+      "cron-scheduled-authority",
+    ];
+    const groups = planTargetedDockerLaneGroups({
+      lanes: "published-upgrade-survivor",
+      upgradeSurvivorBaseline: "2026.9.1",
+      upgradeSurvivorBaselines: "2026.9.2 2026.9.1 2026.6.35 2026.6.34",
+      upgradeSurvivorScenarios: "reported-issues",
+      upgradeSurvivorBaselineScope: "legacy-operator-state",
+    });
+    const pairs = groups.flatMap((group) =>
+      (group.published_upgrade_survivor_scenarios ?? "")
+        .split(" ")
+        .map((scenario) => `${group.published_upgrade_survivor_baselines}:${scenario}`),
+    );
+    expect(pairs.toSorted()).toEqual(
+      [
+        ...synthetic.map((scenario) => `openclaw@2026.9.1:${scenario}`),
+        ...["2026.9.2", "2026.9.1", "2026.6.35", "2026.6.34"].map(
+          (baseline) => `openclaw@${baseline}:legacy-operator-state`,
+        ),
+      ].toSorted(),
+    );
+    expect(groups).toHaveLength(8);
+    expect(
+      groups.every(
+        (group) => (group.published_upgrade_survivor_scenarios ?? "").split(" ").length <= 3,
+      ),
+    ).toBe(true);
+  });
+
+  it("keeps an independently resolved predecessor outside the supported baseline set", () => {
+    const groups = planTargetedDockerLaneGroups({
+      lanes: "update-migration",
+      upgradeSurvivorBaseline: "2026.9.1",
+      upgradeSurvivorBaselines: "2026.9.2 2026.6.34",
+      upgradeSurvivorScenarios: "plugin-deps-cleanup legacy-operator-state",
+      upgradeSurvivorBaselineScope: "legacy-operator-state",
+    });
+    expect(
+      groups.map((group) => [
+        group.published_upgrade_survivor_baselines,
+        group.published_upgrade_survivor_scenarios,
+      ]),
+    ).toEqual([
+      ["openclaw@2026.9.2", "legacy-operator-state"],
+      ["openclaw@2026.6.34", "legacy-operator-state"],
+      ["openclaw@2026.9.1", "plugin-deps-cleanup"],
+    ]);
+  });
+
+  it.each([undefined, "", "openclaw@latest", "openclaw@beta"])(
+    "requires an exact predecessor for supported-line pairing (%s)",
+    (upgradeSurvivorBaseline) => {
+      expect(() =>
+        planTargetedDockerLaneGroups({
+          lanes: "published-upgrade-survivor",
+          upgradeSurvivorBaseline,
+          upgradeSurvivorBaselines: "2026.9.2 2026.9.1",
+          upgradeSurvivorScenarios: "base legacy-operator-state",
+          upgradeSurvivorBaselineScope: "legacy-operator-state",
+        }),
+      ).toThrow("requires an exact published predecessor");
+    },
+  );
+
+  it("retains the Cartesian product for explicit baseline lists", () => {
+    const baselines = "2026.9.2 2026.9.1";
+    const scenarios = "base legacy-operator-state";
+    const groups = planTargetedDockerLaneGroups({
+      lanes: "published-upgrade-survivor",
+      upgradeSurvivorBaseline: "2026.9.1",
+      upgradeSurvivorBaselines: baselines,
+      upgradeSurvivorScenarios: scenarios,
+    });
+    expect(
+      groups.flatMap(
+        (group) =>
+          expandedPlan(
+            group.docker_lanes,
+            group.published_upgrade_survivor_baselines ?? baselines,
+            group.published_upgrade_survivor_scenarios ?? scenarios,
+          ).scheduledLanes,
+      ),
+    ).toEqual(expandedPlan("published-upgrade-survivor", baselines, scenarios).scheduledLanes);
+  });
+
   it("keeps normal targeted lanes grouped by the configured group size", () => {
     expect(
       planTargetedDockerLaneGroups({

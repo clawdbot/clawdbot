@@ -1,5 +1,9 @@
 import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
+import {
+  rejectWebSocketUpgrade,
+  startWebSocketKeepalive,
+} from "openclaw/plugin-sdk/websocket-runtime";
 import { WebSocketServer } from "ws";
 import { attachBrowserScreencastViewer } from "./session.js";
 import { consumeBrowserScreencastToken } from "./tokens.js";
@@ -17,28 +21,11 @@ export async function handleBrowserScreencastUpgrade(
   }
   const params = consumeBrowserScreencastToken(url.searchParams.get("token") ?? "");
   if (!params || params.requesterSignal?.aborted || params.isRequesterCurrent?.() === false) {
-    try {
-      socket.write("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n");
-    } finally {
-      socket.destroy();
-    }
+    rejectWebSocketUpgrade(socket, { status: 401 });
     return true;
   }
   wss.handleUpgrade(req, socket, head, (ws) => {
-    let alive = true;
-    ws.on("pong", () => {
-      alive = true;
-    });
-    const pingTimer = setInterval(() => {
-      if (!alive) {
-        ws.terminate();
-        return;
-      }
-      alive = false;
-      ws.ping();
-    }, 25_000);
-    pingTimer.unref();
-    ws.once("close", () => clearInterval(pingTimer));
+    startWebSocketKeepalive(ws, () => ws.terminate());
     ws.on("error", () => ws.terminate());
     ws.on("message", (_data, binary) => {
       if (binary) {

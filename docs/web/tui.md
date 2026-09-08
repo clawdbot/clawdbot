@@ -109,7 +109,7 @@ Core:
 
 - `/help`
 - `/status` (Gateway-forwarded; shows session/model summary)
-- `/gateway-status` (alias `/gwstatus`; shows Gateway connection status directly)
+- `/gateway-status` (alias `/gwstatus`; shows Gateway version, channel configuration summaries, and sessions directly)
 - `/agent <id>` (or `/agents`)
 - `/session <key>` (or `/sessions`)
 - `/model <provider/model|default>` (or `/models`; `default` clears the session override)

@@ -506,6 +506,7 @@ describe("sendGatewayHello update detail scope", () => {
     });
     expectRedactedHelloSnapshot(context);
     expect(helloPayload(context)?.auth).toEqual({
+      method: "none",
       role: "operator",
       scopes: ["operator.pairing"],
       recoveryMigrationAllowed: true,

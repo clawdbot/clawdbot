@@ -19,6 +19,7 @@ export {
   isSessionArchiveArtifactName,
   isUsageCountedSessionTranscriptFileName,
   listSessionTranscriptCorpusEntriesForAgent,
+  matchesSessionEntryPrefixHash,
   parseCanonicalSessionSyncTargetFromPath,
   parseSqliteSessionFileMarker,
   parseUsageCountedSessionIdFromFileName,

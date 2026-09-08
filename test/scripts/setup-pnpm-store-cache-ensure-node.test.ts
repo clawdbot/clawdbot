@@ -72,7 +72,7 @@ if [[ -n "\${OPENCLAW_FAKE_CURL_FAIL_SUFFIX:-}" && "$url" == *"\${OPENCLAW_FAKE_
   exit 28
 fi
 if [[ "$url" == */index.json ]]; then
-  printf '%s\\n' '[{"version":"v24.15.0"}]'
+  printf '%s\\n' '[{"version":"v24.16.0"}]'
 elif [[ -n "$output" ]]; then
   : > "$output"
 else
@@ -163,15 +163,15 @@ describe("setup-pnpm-store-cache ensure-node", () => {
     const root = mkdtempSync(join(tmpdir(), "openclaw-ensure-node-"));
     try {
       const activeBin = join(root, "active", "bin");
-      const activeNode = writeFakeNode(activeBin, "24.15.0");
-      const result = runEnsureNode(root, "24.15.0", {
+      const activeNode = writeFakeNode(activeBin, "24.16.0");
+      const result = runEnsureNode(root, "24.16.0", {
         PATH: `${activeBin}:${process.env.PATH ?? ""}`,
         RUNNER_TOOL_CACHE: join(root, "missing-toolcache"),
       });
 
       expect(result.status).toBe(0);
-      expect(result.stdout).toContain(`Using active Node 24.15.0 at ${activeNode}`);
-      expect(result.stdout.trim().endsWith("24.15.0")).toBe(true);
+      expect(result.stdout).toContain(`Using active Node 24.16.0 at ${activeNode}`);
+      expect(result.stdout.trim().endsWith("24.16.0")).toBe(true);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -182,16 +182,16 @@ describe("setup-pnpm-store-cache ensure-node", () => {
     try {
       const activeBin = join(root, "active", "bin");
       writeFakeNode(activeBin, "20.20.0");
-      const toolcacheBin = join(root, "toolcache", "node", "24.15.0", "x64", "bin");
-      const toolcacheNode = writeFakeNode(toolcacheBin, "24.15.0");
-      const result = runEnsureNode(root, "24.15.0", {
+      const toolcacheBin = join(root, "toolcache", "node", "24.16.0", "x64", "bin");
+      const toolcacheNode = writeFakeNode(toolcacheBin, "24.16.0");
+      const result = runEnsureNode(root, "24.16.0", {
         PATH: `${activeBin}:${process.env.PATH ?? ""}`,
         RUNNER_TOOL_CACHE: join(root, "toolcache"),
       });
 
       expect(result.status).toBe(0);
-      expect(result.stdout).toContain(`Using Node 24.15.0 from ${toolcacheNode}`);
-      expect(result.stdout).toContain(`${toolcacheNode}\n24.15.0`);
+      expect(result.stdout).toContain(`Using Node 24.16.0 from ${toolcacheNode}`);
+      expect(result.stdout).toContain(`${toolcacheNode}\n24.16.0`);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -202,8 +202,8 @@ describe("setup-pnpm-store-cache ensure-node", () => {
     try {
       const activeBin = join(root, "active", "bin");
       writeFakeNode(activeBin, "22.22.3");
-      const toolcacheBin = join(root, "toolcache", "node", "24.15.0", "x64");
-      const toolcacheNode = writeFakeNode(toolcacheBin, "24.15.0");
+      const toolcacheBin = join(root, "toolcache", "node", "24.16.0", "x64");
+      const toolcacheNode = writeFakeNode(toolcacheBin, "24.16.0");
       const helperBin = join(root, "helpers");
       mkdirSync(helperBin, { recursive: true });
       const cygpath = join(helperBin, "cygpath");
@@ -215,7 +215,7 @@ if [[ "$1" == "-u" ]]; then
   exit 0
 fi
 if [[ "$1" == "-w" ]]; then
-  echo "C:\\\\hostedtoolcache\\\\windows\\\\node\\\\24.15.0\\\\x64"
+  echo "C:\\\\hostedtoolcache\\\\windows\\\\node\\\\24.16.0\\\\x64"
   exit 0
 fi
 exit 1
@@ -232,7 +232,7 @@ exit 1
             `export PATH=${JSON.stringify(`${helperBin}:${activeBin}:${process.env.PATH ?? ""}`)}`,
             `export GITHUB_PATH=${JSON.stringify(githubPath)}`,
             `source "${ensureNodeScript}"`,
-            `openclaw_prepend_node_bin "C:\\\\hostedtoolcache\\\\windows/node/24.15.0/x64"`,
+            `openclaw_prepend_node_bin "C:\\\\hostedtoolcache\\\\windows/node/24.16.0/x64"`,
             "command -v node",
             "node -p 'process.versions.node'",
             `cat "${githubPath}"`,
@@ -242,8 +242,8 @@ exit 1
       );
 
       expect(result.status).toBe(0);
-      expect(result.stdout).toContain(`${toolcacheNode}\n24.15.0`);
-      expect(result.stdout).toContain("C:\\hostedtoolcache\\windows\\node\\24.15.0\\x64");
+      expect(result.stdout).toContain(`${toolcacheNode}\n24.16.0`);
+      expect(result.stdout).toContain("C:\\hostedtoolcache\\windows\\node\\24.16.0\\x64");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -275,15 +275,15 @@ exit 1
     try {
       const activeBin = join(root, "active", "bin");
       writeFakeNode(activeBin, "20.20.0");
-      const toolcacheBin = join(root, "toolcache", "node", "24.15.0", "x64", "bin");
-      writeFakeNode(toolcacheBin, "24.15.0");
+      const toolcacheBin = join(root, "toolcache", "node", "24.16.0", "x64", "bin");
+      writeFakeNode(toolcacheBin, "24.16.0");
       const result = runEnsureNode(root, "24.x", {
         PATH: `${activeBin}:${process.env.PATH ?? ""}`,
         RUNNER_TOOL_CACHE: join(root, "toolcache"),
       });
 
       expect(result.status).toBe(0);
-      expect(result.stdout.trim().endsWith("24.15.0")).toBe(true);
+      expect(result.stdout.trim().endsWith("24.16.0")).toBe(true);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -314,37 +314,38 @@ exit 1
     }
   });
 
-  it("keeps the Node 22 wildcard at the supported minimum", () => {
+  it("keeps the Node 26 wildcard at the supported minimum", () => {
     const root = mkdtempSync(join(tmpdir(), "openclaw-ensure-node-"));
     try {
       const activeBin = join(root, "active", "bin");
-      writeFakeNode(activeBin, "22.18.0");
-      const toolcacheBin = join(root, "toolcache", "node", "22.22.3", "x64", "bin");
-      const toolcacheNode = writeFakeNode(toolcacheBin, "22.22.3");
-      const result = runEnsureNode(root, "22.x", {
+      writeFakeNode(activeBin, "26.0.0");
+      const toolcacheBin = join(root, "toolcache", "node", "26.1.0", "x64", "bin");
+      const toolcacheNode = writeFakeNode(toolcacheBin, "26.1.0");
+      const result = runEnsureNode(root, "26.x", {
         PATH: `${activeBin}:${process.env.PATH ?? ""}`,
         RUNNER_TOOL_CACHE: join(root, "toolcache"),
       });
 
       expect(result.status).toBe(0);
-      expect(result.stdout).toContain(`Using Node 22.22.3 from ${toolcacheNode}`);
-      expect(result.stdout.trim().endsWith("22.22.3")).toBe(true);
+      expect(result.stdout).toContain(`Using Node 26.1.0 from ${toolcacheNode}`);
+      expect(result.stdout.trim().endsWith("26.1.0")).toBe(true);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
 
-  it("rejects Node 22 wildcard matches below the supported minimum", () => {
-    expect(runVersionMatch("22.18.0", "22.x").status).toBe(1);
-    expect(runVersionMatch("22.22.2", "22.x").status).toBe(1);
-    expect(runVersionMatch("22.22.3", "22.x").status).toBe(0);
+  it("rejects unsupported release lines and Node 26 below the minimum", () => {
+    expect(runVersionMatch("26.0.0", "26.x").status).toBe(1);
+    expect(runVersionMatch("22.23.2", "22.x").status).toBe(1);
+    expect(runVersionMatch("25.9.0", "25.x").status).toBe(1);
+    expect(runVersionMatch("26.1.0", "26.x").status).toBe(0);
   });
 
-  it("enforces patched Node 24 and 25 wildcard minimums", () => {
+  it("enforces patched Node 24 and 26 wildcard minimums", () => {
     expect(runVersionMatch("24.14.1", "24.x").status).toBe(1);
-    expect(runVersionMatch("24.15.0", "24.x").status).toBe(0);
-    expect(runVersionMatch("25.8.1", "25.x").status).toBe(1);
-    expect(runVersionMatch("25.9.0", "25.x").status).toBe(0);
+    expect(runVersionMatch("24.16.0", "24.x").status).toBe(0);
+    expect(runVersionMatch("26.0.0", "26.x").status).toBe(1);
+    expect(runVersionMatch("26.1.0", "26.x").status).toBe(0);
   });
 
   it("replaces a rejected payload in the cached toolchain root instead of accreting", () => {
@@ -369,7 +370,7 @@ exit 1
             "openclaw_prepend_node_bin() { :; }",
             'openclaw_node_download_platform() { printf "linux-x64\\n"; }',
             "tar() { :; }",
-            `RUNNER_TEMP=${JSON.stringify(root)} openclaw_download_node "24.15.0"`,
+            `RUNNER_TEMP=${JSON.stringify(root)} openclaw_download_node "24.16.0"`,
           ].join("\n"),
         ],
         { encoding: "utf8", env: process.env },
@@ -377,7 +378,7 @@ exit 1
 
       expect(result.status, result.stderr).toBe(0);
       expect(existsSync(join(toolchainRoot, "v24.13.0-linux-x64"))).toBe(false);
-      expect(existsSync(join(toolchainRoot, "v24.15.0-linux-x64"))).toBe(true);
+      expect(existsSync(join(toolchainRoot, "v24.16.0-linux-x64"))).toBe(true);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -402,10 +403,10 @@ exit 1
             "openclaw_prepend_node_bin() { :; }",
             'openclaw_node_download_platform() { printf "win-x64\\n"; }',
             "pwsh() { :; }",
-            `RUNNER_TEMP=${JSON.stringify(root)} openclaw_download_node "24.15.0"`,
+            `RUNNER_TEMP=${JSON.stringify(root)} openclaw_download_node "24.16.0"`,
             'openclaw_node_download_platform() { printf "linux-x64\\n"; }',
             "tar() { :; }",
-            `RUNNER_TEMP=${JSON.stringify(root)} openclaw_download_node "24.15.0"`,
+            `RUNNER_TEMP=${JSON.stringify(root)} openclaw_download_node "24.16.0"`,
           ].join("\n"),
         ],
         { encoding: "utf8", env: process.env },
@@ -420,11 +421,11 @@ exit 1
         );
       }
       expect(curlCalls[0]).toContain("https://nodejs.org/dist/index.json");
-      expect(curlCalls[1]).toContain("https://nodejs.org/dist/v24.15.0/node-v24.15.0-win-x64.zip");
+      expect(curlCalls[1]).toContain("https://nodejs.org/dist/v24.16.0/node-v24.16.0-win-x64.zip");
       expect(curlCalls[2]).toContain(
-        "https://nodejs.org/dist/v24.15.0/node-v24.15.0-linux-x64.tar.xz",
+        "https://nodejs.org/dist/v24.16.0/node-v24.16.0-linux-x64.tar.xz",
       );
-      expect(existsSync(join(root, "node-v24.15.0-linux-x64.tar.xz"))).toBe(false);
+      expect(existsSync(join(root, "node-v24.16.0-linux-x64.tar.xz"))).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -447,14 +448,14 @@ exit 1
             `source "${ensureNodeScript}"`,
             "openclaw_prepend_node_bin() { :; }",
             'openclaw_node_download_platform() { printf "linux-x64\\n"; }',
-            `RUNNER_TEMP=${JSON.stringify(root)} openclaw_download_node "24.15.0"`,
+            `RUNNER_TEMP=${JSON.stringify(root)} openclaw_download_node "24.16.0"`,
           ].join("\n"),
         ],
         { encoding: "utf8", env: process.env },
       );
 
       expect(result.status).toBe(1);
-      expect(existsSync(join(root, "node-v24.15.0-linux-x64.tar.xz"))).toBe(false);
+      expect(existsSync(join(root, "node-v24.16.0-linux-x64.tar.xz"))).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

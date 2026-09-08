@@ -1,8 +1,19 @@
 import { z } from "zod";
-import type { Period, PeriodDescriptor } from "./types.js";
 
 export const DAY_MS = 86_400_000;
 export const periodSchema = z.enum(["day", "week", "month"]);
+
+export type Period = z.infer<typeof periodSchema>;
+
+/** Report window. Day windows are UTC [00:00, 24:00); weeks are ISO weeks (Monday start); months are calendar months. */
+export type PeriodDescriptor = {
+  period: Period;
+  /** "2026-08-20" | "2026-W34" | "2026-08" */
+  key: string;
+  sinceMs: number;
+  untilMs: number;
+  title: string;
+};
 
 function dateKey(ms: number): string {
   return new Date(ms).toISOString().slice(0, 10);

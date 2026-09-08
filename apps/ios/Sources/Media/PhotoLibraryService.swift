@@ -11,10 +11,6 @@ enum PhotoLibraryAccess {
     static func canRead(_ status: PHAuthorizationStatus) -> Bool {
         status == .authorized || status == .limited
     }
-
-    static func requestReadWrite() async -> PHAuthorizationStatus {
-        await PHPhotoLibrary.requestAuthorization(for: .readWrite)
-    }
 }
 
 final class PhotoLibraryService: PhotosServicing {

@@ -639,6 +639,29 @@ describe("optional media tool factory planning", () => {
     });
   });
 
+  it("rechecks workspace capability activation after the selected slot changes", () => {
+    const config: OpenClawConfig = {};
+    installSnapshot(config, [
+      {
+        ...createPlugin({
+          id: "workspace-image",
+          origin: "workspace",
+          contracts: { imageGenerationProviders: ["workspace-image"] },
+        }),
+        kind: "context-engine",
+      },
+    ]);
+    const authStore = createAuthStore(["workspace-image"]);
+    const available = () =>
+      resolveOptionalMediaToolFactoryPlan({ config, authStore }).imageGenerate;
+
+    expect(available()).toBe(false);
+    config.plugins = { slots: { contextEngine: "workspace-image" } };
+    expect(available()).toBe(true);
+    config.plugins = {};
+    expect(available()).toBe(false);
+  });
+
   it("keeps manifest-declared image provider auth aliases on the factory path", async () => {
     const config: OpenClawConfig = {};
     const plugins = [

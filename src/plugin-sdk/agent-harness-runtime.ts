@@ -36,11 +36,15 @@ import {
 } from "../agents/harness/structured-input.js";
 import type { SandboxFsBridge } from "../agents/sandbox/fs-bridge.js";
 import { inferToolMetaFromArgsCore } from "../agents/tool-display.js";
+import { createToolPolicyMatcher } from "../agents/tool-policy-match.js";
+import { expandToolGroups } from "../agents/tool-policy-shared.js";
 import {
   buildWatchedSessionsPromptLines,
   prepareWatchedSessionsPrompt,
 } from "../agents/watched-sessions-prompt.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveExecModePolicy } from "../infra/exec-approvals-core.js";
+import { maxAsk, minSecurity } from "../infra/exec-approvals-policy.js";
 import type { ImageContent } from "../llm/types.js";
 import { redactToolDetail } from "../logging/redact.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
@@ -48,6 +52,9 @@ import { truncateUtf16Safe } from "../utils.js";
 
 /** Default truncation limit for user-facing tool progress output. */
 export const TOOL_PROGRESS_OUTPUT_MAX_CHARS = 8_000;
+
+/** Core exec mode algebra for plugin-owned policy adapters. */
+export const execPolicy = Object.freeze({ resolveExecModePolicy, minSecurity, maxAsk });
 
 /**
  * Renders the Watched Sessions prompt block for plugin-owned harness prompts.
@@ -120,6 +127,7 @@ export const agentHarnessAttemptTerminal = {
   setFailure: setAgentRunAttemptTerminalFailure,
 };
 export { projectAgentHarnessTranscriptMessageForDisplay } from "../agents/harness/transcript-visibility.js";
+export { isOpenClawRuntimeContextCustomMessage } from "../agents/internal-runtime-context.js";
 export { restorePreparedUserTurnOperationalMetaForRuntime } from "../sessions/user-turn-transcript.metadata.js";
 export { fingerprintResolvedAuthProfileCredential } from "../agents/execution-auth-binding.js";
 export type {
@@ -391,21 +399,11 @@ export async function loadCodexBundleMcpThreadConfig(
   return load(params);
 }
 
-/** Load shared MCP request and subprocess ownership only when opening a connection. */
+/** Lazily load the strict MCP proxy client with core-owned framing, startup, and shutdown. */
 export const mcpStdioRuntime = Object.freeze({
   async load() {
-    const [{ createMcpStdioClient }, { OpenClawStdioClientTransport }, lifecycle] =
-      await Promise.all([
-        import("../agents/mcp-stdio-client.js"),
-        import("../agents/mcp-stdio-transport.js"),
-        import("../agents/mcp-client-lifecycle.js"),
-      ]);
-    return {
-      createMcpStdioClient,
-      OpenClawStdioClientTransport,
-      connectMcpClient: lifecycle.connectMcpClient,
-      disposeMcpClient: lifecycle.disposeMcpClient,
-    };
+    const { createMcpStdioClient } = await import("../agents/mcp-stdio-client.js");
+    return { createMcpStdioClient };
   },
 });
 
@@ -482,6 +480,7 @@ export async function materializeRequesterScopedMcpToolsForHarnessRun(
 
 export { resolveSandboxContext } from "../agents/sandbox.js";
 export type { SandboxContext, SandboxWorkspaceAccess } from "../agents/sandbox.js";
+export { splitSandboxBindSpec } from "../agents/sandbox/bind-spec.js";
 export {
   hasSandboxBindContainerPathAliases,
   hasSandboxBindReadonlyHostShadows,
@@ -660,3 +659,5 @@ export function classifyAgentHarnessTerminalOutcome(
 function hasVisibleAssistantText(assistantTexts: readonly string[]): boolean {
   return assistantTexts.some((text) => text.trim().length > 0);
 }
+
+export const toolPolicy = Object.freeze({ createToolPolicyMatcher, expandToolGroups });

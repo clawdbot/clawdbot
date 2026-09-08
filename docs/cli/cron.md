@@ -15,7 +15,7 @@ Run `openclaw automations --help` for the full command surface. See [Automations
 </Tip>
 
 <Note>
-All automation mutations (`add`/`create`, `update`/`edit`, `remove`, `run`) require `operator.admin`. Command-payload runs execute directly in the Gateway process, not as an agent `tools.exec` tool call; `tools.exec.*` and exec approvals still govern model-visible exec tools.
+All automation mutations (`add`/`create`, `edit`, `remove`, `run`) require `operator.admin`. Command-payload runs execute directly in the Gateway process, not as an agent `tools.exec` tool call; `tools.exec.*` and exec approvals still govern model-visible exec tools.
 </Note>
 
 Every automation subcommand accepts the shared Gateway connection options. Use

@@ -3947,6 +3947,68 @@ describe("runMemoryFlushIfNeeded", () => {
     },
   );
 
+  it.each(["tokens", "transcript_bytes"] as const)(
+    "records %s compaction before a queued continuation claims the session",
+    async (trigger) => {
+      const sessionKey = "agent:main:main";
+      const storePath = path.join(rootDir, "preflight-handoff.json");
+      const scope = { agentId: "main", sessionId: "session", sessionKey, storePath };
+      await upsertSessionEntryCore(scope, {
+        sessionId: "session",
+        updatedAt: 1,
+        totalTokens: 95_000,
+        totalTokensFresh: true,
+        totalTokensVersion: 1,
+        compactionCount: 0,
+        activeWriterRunId: "preflight",
+      });
+      const manager = SessionManager.open(scope, rootDir);
+      manager.appendMessage({
+        role: "user",
+        content: "Earlier discussion. ".repeat(100),
+        timestamp: 1,
+      });
+      const entry = loadSessionEntry(scope)!;
+      incrementCompactionCountMock.mockImplementation(incrementCompactionCount);
+      compactEmbeddedAgentSessionMock.mockImplementationOnce(async (_params, host) => {
+        await host?.onHostCompactionCommitted?.({
+          entry,
+          tokensAfter: 42,
+          compactionKind: "context-engine",
+        });
+        // The backend releases its lane before its caller's await resumes.
+        await upsertSessionEntryCore(scope, { activeWriterRunId: "queued-continuation" });
+        return {
+          ok: true,
+          compacted: true,
+          compactionKind: "context-engine",
+          result: { tokensAfter: 42 },
+        };
+      });
+
+      await expect(
+        runDefaultPreflight(entry, {
+          sessionKey,
+          storePath,
+          cfg: {
+            agents: {
+              defaults: {
+                compaction: {
+                  maxActiveTranscriptBytes: trigger === "transcript_bytes" ? "10b" : "100mb",
+                },
+              },
+            },
+          },
+        }),
+      ).resolves.toMatchObject({ compactionCount: 1 });
+      expect(loadSessionEntry(scope)).toMatchObject({
+        activeWriterRunId: "queued-continuation",
+        compactionCount: 1,
+      });
+      expect(incrementCompactionCountMock).toHaveBeenCalledOnce();
+    },
+  );
+
   it("persists Codex byte accounting before the accepted compactor returns", async () => {
     const storePath = path.join(rootDir, "sqlite-codex-held-accounting.json");
     const sessionKey = "agent:main:main";

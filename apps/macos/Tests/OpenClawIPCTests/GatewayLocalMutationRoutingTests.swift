@@ -21,7 +21,7 @@ struct GatewayLocalMutationRoutingTests {
             "OPENCLAW_GATEWAY_PASSWORD": nil,
         ]) {
             var canPersist = false
-            let state = AppState(preview: true, gatewayConfigSaver: { root in
+            let state = AppState(preview: true, gatewayConfigSaver: { root, _ in
                 canPersist && OpenClawConfigFile.saveDict(root)
             })
             try #require(state.remoteTransport == .direct)

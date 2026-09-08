@@ -531,7 +531,10 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
         activeRunIds: null,
       },
     });
-    expect(resolveEmbeddedAgentSessionProgressStateMock).toHaveBeenCalledWith("sess-main");
+    expect(resolveEmbeddedAgentSessionProgressStateMock).toHaveBeenCalledWith(
+      "sess-main",
+      expect.objectContaining({ agentId: "main" }),
+    );
   });
 
   it.each([

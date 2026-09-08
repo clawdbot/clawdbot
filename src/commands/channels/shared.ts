@@ -8,14 +8,14 @@ import { getChannelsCommandSecretTargetIds } from "../../cli/command-secret-targ
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
-import { requireValidConfig, requireValidConfigFileSnapshot } from "../config-validation.js";
+import { requireValidConfig, requireValidConfigForWrite } from "../config-validation.js";
 
 export type ChatChannel = ChannelId;
 
 export const NO_CONFIGURED_CHAT_CHANNELS_LINE =
   "- no configured chat channels (run `openclaw channels list --all` to see installable channels)";
 
-export { requireValidConfigFileSnapshot };
+export { requireValidConfigForWrite };
 
 /** Load valid channel command config with read-only secret resolution applied. */
 export async function requireValidChannelConfig(

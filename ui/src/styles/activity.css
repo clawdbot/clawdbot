@@ -949,15 +949,6 @@ a.activity-current-work__row:hover {
     margin-left: auto;
   }
 
-  .activity-feed__time-filter .settings-segmented__btn {
-    font-size: 0;
-  }
-
-  .activity-feed__time-filter .settings-segmented__btn::after {
-    content: attr(data-compact-label);
-    font-size: var(--control-ui-text-sm);
-  }
-
   .activity-feed__main {
     overflow: visible;
     padding: var(--space-4);

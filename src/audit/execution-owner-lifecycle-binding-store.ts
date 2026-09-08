@@ -18,7 +18,7 @@ type ExecutionOwnerLifecycleKind = "cron" | "task" | "flow";
 
 type ExecutionOwnerLifecycleDatabase = Pick<
   OpenClawStateDatabase,
-  "cron_run_receipts" | "execution_owner_lifecycle_bindings" | "flow_runs" | "task_runs"
+  "execution_owner_lifecycle_bindings"
 >;
 
 const SCHEMA_START = `CREATE TABLE IF NOT EXISTS ${EXECUTION_OWNER_LIFECYCLE_BINDING_TABLE} (`;
@@ -118,38 +118,4 @@ export function deleteExecutionOwnerLifecycleMetadata(params: {
       .where("owner_kind", "=", params.ownerKind)
       .where("owner_id", "in", params.ownerIds),
   );
-}
-
-/** Removes bindings whose canonical owner row was pruned in the same transaction. */
-export function pruneOrphanedExecutionOwnerLifecycleMetadata(
-  db: DatabaseSync,
-  ownerKind: ExecutionOwnerLifecycleKind,
-): void {
-  if (!tableExists(db, EXECUTION_OWNER_LIFECYCLE_BINDING_TABLE)) {
-    return;
-  }
-  const database = lifecycleDb(db);
-  const bindings = database
-    .deleteFrom(EXECUTION_OWNER_LIFECYCLE_BINDING_TABLE)
-    .where("owner_kind", "=", ownerKind);
-  if (ownerKind === "cron") {
-    executeSqliteQuerySync(
-      db,
-      bindings.where(
-        "owner_id",
-        "not in",
-        database.selectFrom("cron_run_receipts").select("receipt_id"),
-      ),
-    );
-  } else if (ownerKind === "task") {
-    executeSqliteQuerySync(
-      db,
-      bindings.where("owner_id", "not in", database.selectFrom("task_runs").select("task_id")),
-    );
-  } else {
-    executeSqliteQuerySync(
-      db,
-      bindings.where("owner_id", "not in", database.selectFrom("flow_runs").select("flow_id")),
-    );
-  }
 }

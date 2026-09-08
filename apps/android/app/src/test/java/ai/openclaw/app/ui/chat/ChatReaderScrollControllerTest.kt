@@ -6,6 +6,13 @@ import ai.openclaw.app.chat.ChatQuestionPrompt
 import ai.openclaw.app.gateway.QuestionAnswers
 import ai.openclaw.app.gateway.QuestionRecord
 import androidx.compose.runtime.saveable.SaverScope
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
@@ -334,6 +341,141 @@ class ChatReaderScrollControllerTest {
     assertNotEquals(pendingTimeline.latestContentVersion, unavailableTimeline.latestContentVersion)
     assertNotEquals(answeredWithoutValues.latestContentVersion, answeredWithValues.latestContentVersion)
   }
+
+  @Test
+  fun staleRowDisposalCannotCancelCurrentReaderAction() = assertRetiredRowCannotCancelCurrentReaderAction { _, row -> row.cancel() }
+
+  @Test
+  fun retiredRowLaunchCannotCancelCurrentReaderAction() =
+    assertRetiredRowCannotCancelCurrentReaderAction { scope, row ->
+      scope.cancel()
+      row.launch { error("Retired row ran") }
+    }
+
+  @Test
+  fun retiredRowPauseCannotCancelCurrentReaderAction() =
+    assertRetiredRowCannotCancelCurrentReaderAction { scope, row ->
+      scope.cancel()
+      row.pause()
+    }
+
+  @OptIn(ExperimentalCoroutinesApi::class)
+  @Test
+  fun rowCancellationBeforeDispatchReleasesNavigation() =
+    runTest {
+      val navigation = ChatReaderNavigation(backgroundScope)
+      val rowScope = CoroutineScope(coroutineContext + SupervisorJob())
+      val placement = CompletableDeferred<Unit>()
+      var revealed = false
+      try {
+        ChatReaderAction(rowScope, navigation).launch {
+          placement.await()
+          revealed = true
+        }
+        rowScope.cancel()
+        placement.complete(Unit)
+        runCurrent()
+        assertFalse("Disposed row must not reveal", revealed)
+        assertFalse("A never-started job must not retain navigation ownership", navigation.isNavigating)
+      } finally {
+        rowScope.cancel()
+      }
+    }
+
+  @OptIn(ExperimentalCoroutinesApi::class)
+  @Test
+  fun cancelledReaderRejectsStillLiveRowWithoutThrowingFromCallback() =
+    runTest {
+      val readerScope = CoroutineScope(coroutineContext + SupervisorJob())
+      val rowScope = CoroutineScope(coroutineContext + SupervisorJob())
+      val events = mutableListOf<String>()
+      val navigation = ChatReaderNavigation(readerScope, pauseFollowing = { events += "pause" })
+      try {
+        readerScope.cancel()
+        val request = navigation.launch(rowScope) { events += "reveal" }
+        runCurrent()
+        assertTrue("Retired reader returns a cancelled request", request.isCancelled)
+        assertTrue("Retired reader cannot pause or reveal", events.isEmpty())
+        assertFalse(navigation.isNavigating)
+      } finally {
+        readerScope.cancel()
+        rowScope.cancel()
+      }
+    }
+
+  @OptIn(ExperimentalCoroutinesApi::class)
+  private fun assertRetiredRowCannotCancelCurrentReaderAction(onRetiredAction: (CoroutineScope, ChatReaderAction) -> Unit) =
+    runTest {
+      val navigation = ChatReaderNavigation(backgroundScope)
+      val firstScope = CoroutineScope(coroutineContext + SupervisorJob())
+      val secondScope = CoroutineScope(coroutineContext + SupervisorJob())
+      val first = ChatReaderAction(firstScope, navigation)
+      val second = ChatReaderAction(secondScope, navigation)
+      val gate = CompletableDeferred<Unit>()
+      val events = mutableListOf<String>()
+      try {
+        first.launch {
+          try {
+            gate.await()
+            events += "old reveal"
+          } finally {
+            events += "old retired"
+          }
+        }
+        runCurrent()
+        second.launch {
+          gate.await()
+          events += "current reveal"
+        }
+        runCurrent()
+        onRetiredAction(firstScope, first)
+        gate.complete(Unit)
+        runCurrent()
+        assertEquals(listOf("old retired", "current reveal"), events)
+        assertFalse(navigation.isNavigating)
+      } finally {
+        firstScope.cancel()
+        secondScope.cancel()
+      }
+    }
+
+  @OptIn(ExperimentalCoroutinesApi::class)
+  @Test
+  fun closeAndReaderRetirementFencePendingNavigationWithoutPoisoningReuse() =
+    runTest {
+      val navigation = ChatReaderNavigation(backgroundScope)
+      val rowScope = CoroutineScope(coroutineContext + SupervisorJob())
+      val action = ChatReaderAction(rowScope, navigation)
+      val events = mutableListOf<String>()
+      try {
+        val closed = CompletableDeferred<Unit>()
+        action.launch {
+          closed.await()
+          events += "closed reveal"
+        }
+        runCurrent()
+        action.cancel()
+        closed.complete(Unit)
+        runCurrent()
+        assertTrue(events.isEmpty())
+        action.launch { events += "fresh reveal" }
+        runCurrent()
+        assertEquals(listOf("fresh reveal"), events)
+        val disposed = CompletableDeferred<Unit>()
+        action.launch {
+          disposed.await()
+          events += "disposed reveal"
+        }
+        runCurrent()
+        navigation.retire()
+        disposed.complete(Unit)
+        runCurrent()
+        assertEquals(listOf("fresh reveal"), events)
+        assertFalse(navigation.isNavigating)
+      } finally {
+        rowScope.cancel()
+      }
+    }
 
   private fun timeline(vararg messages: ChatMessage): ChatTimeline =
     buildChatTimeline(

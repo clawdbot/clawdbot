@@ -173,7 +173,6 @@ export function resolveAnthropicEphemeralCacheControl(
   return { type: "ephemeral", ...(ttl ? { ttl } : {}) };
 }
 
-/** Resolve the same cache capabilities and TTL for both Messages entry points. */
 export function resolveAnthropicCacheOptions(
   model: Model<"anthropic-messages">,
   cacheRetention?: "short" | "long" | "none",

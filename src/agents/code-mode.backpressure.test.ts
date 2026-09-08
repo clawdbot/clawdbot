@@ -256,7 +256,11 @@ it("preserves queued arguments, request IDs, and dependency order across partial
         snapshot: result.snapshot,
         pendingRequests: result.pendingRequests.slice(0, -1),
         settledRequests: [
-          { id: settled.id, ok: true, value: (settled.args[1] as { value: string }).value },
+          {
+            id: settled.id,
+            ok: true,
+            json: JSON.stringify((settled.args[1] as { value: string }).value),
+          },
         ],
       },
       10000,

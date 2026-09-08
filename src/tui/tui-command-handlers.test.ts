@@ -1144,6 +1144,7 @@ describe("tui command handlers", () => {
     const { handleCommand, getGatewayStatus, addSystem, addUser, sendChat } = createHarness({
       getGatewayStatus: vi.fn().mockResolvedValue({
         runtimeVersion: "1.2.3",
+        channelSummary: ["Telegram: not configured"],
         sessions: { count: 2, defaults: { model: "gpt-5.4", contextTokens: 200000 } },
       }),
     });
@@ -1155,6 +1156,7 @@ describe("tui command handlers", () => {
     expect(sendChat).not.toHaveBeenCalled();
     expect(addSystem).toHaveBeenCalledWith("Gateway status");
     expect(addSystem).toHaveBeenCalledWith("Version: 1.2.3");
+    expect(addSystem).toHaveBeenCalledWith("  Telegram: not configured");
   });
 
   it("returns to OpenClaw with an optional request", async () => {

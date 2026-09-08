@@ -37,7 +37,7 @@ let state: OpenClawTestState;
 describe("prepared model runtime snapshots", () => {
   beforeEach(async () => {
     state = await createOpenClawTestState({ label: "prepared-model-runtime" });
-    resetPreparedModelRuntimeHarness(state);
+    await resetPreparedModelRuntimeHarness(state);
   });
 
   it("materializes Claude CLI thinking capabilities on the prepared logical row", async () => {

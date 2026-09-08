@@ -2,6 +2,7 @@
 
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
+import { contextBudgetStatusFixture } from "../../../../src/config/sessions/context-budget.test-support.js";
 import type { SessionsListResult } from "../../api/types.ts";
 import { renderSessions, type SessionsProps } from "./view.ts";
 
@@ -1869,3 +1870,31 @@ describe("sessions view", () => {
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
+
+it("renders the sessions meter against its last-run prompt budget", async () => {
+  const container = document.createElement("div");
+  render(
+    renderSessions(
+      buildProps(
+        buildResult({
+          key: "agent:main:main",
+          kind: "direct",
+          updatedAt: 2,
+          totalTokens: 160_000,
+          contextTokens: 200_000,
+          contextBudgetStatus: contextBudgetStatusFixture(),
+        }),
+      ),
+    ),
+    container,
+  );
+  await Promise.resolve();
+  expect(container.querySelector(".session-context-meter")?.getAttribute("aria-label")).toBe(
+    "89% of last-run prompt budget used (160,000 / 180,000 tokens)",
+  );
+  expect(
+    container
+      .querySelector(".session-context-meter")
+      ?.classList.contains("session-context-meter--danger"),
+  ).toBe(true);
+});

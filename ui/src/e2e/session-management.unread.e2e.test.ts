@@ -33,6 +33,7 @@ suite.define(() => {
       methodResponses: {
         "sessions.list": sessionsListResponse([
           sessionRow(unreadKey, "Unread thread", 20, {
+            icon: "📬",
             markedUnreadAt: 1_800_000_000_001,
             unread: true,
           }),
@@ -47,9 +48,11 @@ suite.define(() => {
     try {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, otherKey));
       const unreadRow = page.locator(`[data-session-key="${unreadKey}"]`);
-      const unreadDot = unreadRow.locator(".session-unread-dot");
+      const unreadBadge = unreadRow.locator(
+        ".sidebar-session-indicator .session-glyph__badge--unread",
+      );
       await unreadRow.waitFor({ state: "visible", timeout: 10_000 });
-      await unreadDot.waitFor({ state: "visible" });
+      await unreadBadge.waitFor({ state: "visible" });
       await captureUiProof(suite, page, "optimistic-read-before.png");
       // Swarm hydration also lists sessions, but never refreshes the sidebar roster.
       const rosterRequests = async () =>
@@ -66,7 +69,7 @@ suite.define(() => {
       await waitForPatch(gateway, (params) => params.key === unreadKey && params.unread === false);
       patchHeld = true;
 
-      await unreadDot.waitFor({ state: "hidden", timeout: 2_000 });
+      await unreadBadge.waitFor({ state: "hidden", timeout: 2_000 });
       await expect
         .poll(async () =>
           (await gateway.getRequests("sessions.list")).map(
@@ -81,7 +84,7 @@ suite.define(() => {
       await gateway.resolveDeferred("sessions.patch");
       patchHeld = false;
       await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(unreadKey));
-      await unreadDot.waitFor({ state: "hidden" });
+      await unreadBadge.waitFor({ state: "hidden" });
       await captureUiProof(suite, page, "optimistic-read-settled.png");
     } finally {
       if (patchHeld) {
@@ -133,7 +136,7 @@ suite.define(() => {
       );
       expect(requireRecord(markUnread.params)).not.toHaveProperty("expectedMarkedUnreadAt");
 
-      await activeRow.locator(".session-unread-dot").waitFor();
+      await activeRow.locator(".sidebar-session-indicator .session-unread-dot").waitFor();
       await expectRequestCountStable(gateway, "sessions.patch", 1);
       await captureUiProof(suite, page, "manual-unread-marked.png");
 
@@ -150,7 +153,7 @@ suite.define(() => {
           markedUnreadAt: marker,
         },
       });
-      await activeRow.locator(".session-run-spinner").waitFor();
+      await activeRow.locator(".sidebar-session-indicator .session-glyph__ring").waitFor();
       await expectRequestCountStable(gateway, "sessions.patch", 1);
       await captureUiProof(suite, page, "manual-unread-running.png");
 
@@ -166,7 +169,7 @@ suite.define(() => {
           markedUnreadAt: marker,
         },
       });
-      await activeRow.locator(".session-unread-dot").waitFor();
+      await activeRow.locator(".sidebar-session-indicator .session-unread-dot").waitFor();
       await expectRequestCountStable(gateway, "sessions.patch", 1);
       await captureUiProof(suite, page, "manual-unread-complete.png");
 

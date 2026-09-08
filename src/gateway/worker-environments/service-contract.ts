@@ -5,6 +5,7 @@ import type {
   WorkerMachineOption,
   WorkerProfile,
 } from "../../plugins/capability-provider.types.js";
+import type { DesktopObserveRequester } from "../desktop/observe-requester.js";
 import type {
   WorkerPlacementMoveSource,
   WorkerPlacementMoveTarget,
@@ -81,6 +82,7 @@ export type WorkerEnvironmentServiceContract = {
   observeDesktop(request: {
     environmentId: string;
     control: boolean;
+    requester?: DesktopObserveRequester;
   }): Promise<WorkerDesktopObserveResult>;
   launchDesktopApp(request: {
     environmentId: string;

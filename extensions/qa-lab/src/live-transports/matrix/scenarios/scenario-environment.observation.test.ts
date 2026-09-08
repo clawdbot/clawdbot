@@ -51,7 +51,7 @@ describe("matrix scenario observation", () => {
           };
         }
         if (method === "config.patch") {
-          return { hash: "config-hash", noop: true, ok: true };
+          return { hash: "config-hash", changedPaths: [], noop: true, ok: true };
         }
         if (method === "channels.status") {
           return {

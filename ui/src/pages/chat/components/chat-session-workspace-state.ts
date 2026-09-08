@@ -14,7 +14,7 @@ import type {
   SessionWorkspaceHost,
   SessionWorkspaceState,
 } from "./chat-session-workspace-types.ts";
-import type { SidebarContent } from "./chat-sidebar.ts";
+import type { SidebarSelection } from "./chat-sidebar.ts";
 
 function resolvePaneAgent(state: SessionScopeHostWithKey): string {
   const normalizedKey = normalizeOptionalString(state.sessionKey)?.toLowerCase();
@@ -45,18 +45,18 @@ export function clearSessionWorkspaceTimers(state: SessionWorkspaceHost) {
 
 const checkoutSidebarContents = new WeakSet<object>();
 
-export function trackSessionCheckoutSidebar(content: SidebarContent) {
+export function trackSessionCheckoutSidebar(content: SidebarSelection) {
   checkoutSidebarContents.add(content);
 }
 
-export function openSessionCheckoutSidebar(state: SessionWorkspaceHost, content: SidebarContent) {
+export function openSessionCheckoutSidebar(state: SessionWorkspaceHost, content: SidebarSelection) {
   trackSessionCheckoutSidebar(content);
   state.handleOpenSidebar(content);
 }
 
 function clearSessionCheckoutSidebar(state: SessionWorkspaceHost) {
   if (state.sidebarContent && checkoutSidebarContents.has(state.sidebarContent)) {
-    state.handleOpenSidebar(null);
+    state.sidebarContent = null;
   }
 }
 

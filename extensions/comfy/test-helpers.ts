@@ -17,7 +17,6 @@ type ComfyCloudJobResponseOptions = {
   filename: string;
   outputKind: "gifs" | "images";
   promptId: string;
-  redirectLocation?: string;
 };
 
 export function buildComfyConfig(config: Record<string, unknown>): OpenClawConfig {

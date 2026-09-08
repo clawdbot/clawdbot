@@ -1,15 +1,21 @@
 import { writeSync } from "node:fs";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { UPDATE_RUN_ID_ENV } from "../../infra/update-control-plane-sentinel.js";
+import { readUpdateRunDriver, type UpdateRunDriver } from "../../infra/update-run-driver.js";
 import {
+  adoptUpdateRun,
   createUpdateRun,
   finishUpdateRun,
+  heartbeatUpdateRun,
   recordUpdateRunDiagnostic,
   recordUpdateRunStep,
 } from "../../infra/update-run-ledger.js";
+import { UPDATE_RUN_HEARTBEAT_MS } from "../../infra/update-run-timeouts.js";
 import { defaultRuntime } from "../../runtime.js";
 import { watchCliExitAfterOutput } from "../one-shot-exit.js";
 import { hasCliProcessScope } from "../runtime-cleanup-scope.js";
 import { getPendingCliDisposers } from "../runtime-cleanup.js";
+import { inspectUpdateFinalizationChildren } from "./update-finalization-processes.js";
 
 // Local metadata/backup/completion work gets 30s; Doctor gets 2m for migrations,
 // registry installs get 10m, and convergence gets 3m for Doctor + validation.
@@ -35,8 +41,10 @@ export class UpdateFinalizationLifecycle {
   }[] = [];
   root?: string;
   private runId?: string;
+  private driver?: UpdateRunDriver;
   private ledgerOptions?: { env: NodeJS.ProcessEnv };
   private ownsRun = false;
+  private warnedHeartbeat = false;
   private timer?: NodeJS.Timeout;
   private deferredExitWatch?: () => void;
   completed = false;
@@ -49,6 +57,7 @@ export class UpdateFinalizationLifecycle {
   ) {}
 
   attachLedger(): void {
+    this.driver = readUpdateRunDriver();
     const inherited = process.env[UPDATE_RUN_ID_ENV]?.trim();
     this.ledgerOptions = { env: { ...process.env } };
     this.runId = createUpdateRun(
@@ -56,6 +65,7 @@ export class UpdateFinalizationLifecycle {
       this.ledgerOptions,
     ).runId;
     this.ownsRun = !inherited;
+    adoptUpdateRun(this.runId, this.ledgerOptions);
     if (this.active) {
       recordUpdateRunStep(
         this.runId,
@@ -96,6 +106,21 @@ export class UpdateFinalizationLifecycle {
     const active = { phase, step: `finalize:${phase}`, startedAtMs };
     this.active = active;
     this.record(active, "in_progress", startedAtMs);
+    const heartbeat = setInterval(() => {
+      try {
+        if (this.runId) {
+          heartbeatUpdateRun(this.runId, this.driver, this.ledgerOptions);
+        }
+      } catch (error) {
+        if (!this.warnedHeartbeat) {
+          this.warnedHeartbeat = true;
+          console.warn(
+            `[update finalize] Could not refresh the update heartbeat; continuing: ${formatErrorMessage(error).slice(0, 500)}`,
+          );
+        }
+      }
+    }, UPDATE_RUN_HEARTBEAT_MS);
+    heartbeat.unref();
     const end = (result: Outcome) => {
       this.phaseTimings.push({
         phase,
@@ -111,15 +136,27 @@ export class UpdateFinalizationLifecycle {
         // Do not race and unwind a still-mutating phase. Kill owned subprocesses and
         // exit without yielding, so late awaits cannot write into an OCM rollback.
         try {
-          this.stopChildren();
+          let diagnostics: ReturnType<typeof inspectUpdateFinalizationChildren>;
+          try {
+            // The parent still owns the update; capture names before killing them.
+            // No result or rollback handoff can occur during this bounded synchronous read.
+            diagnostics = inspectUpdateFinalizationChildren();
+          } finally {
+            this.stopChildren();
+          }
           end("failed");
           const error = `Update finalization timed out in ${phase} after ${budgetMs}ms`;
           this.finishLedger(1, error);
           writeSync(2, `${error}\n`);
+          writeSync(
+            2,
+            `[update finalize] Stalled phase children: ${JSON.stringify(diagnostics)}\n`,
+          );
+          this.recordDiagnostic(JSON.stringify(diagnostics));
           if (this.json) {
             writeSync(
               1,
-              `${JSON.stringify({ status: "failed", mode: "finalize", root: this.root, restart: false, stuckPhase: phase, elapsedMs: Math.round(performance.now() - this.startedAt), error, phaseTimings: this.phaseTimings })}\n`,
+              `${JSON.stringify({ status: "failed", mode: "finalize", root: this.root, restart: false, stuckPhase: phase, elapsedMs: Math.round(performance.now() - this.startedAt), error, phaseTimings: this.phaseTimings, ...diagnostics })}\n`,
             );
           }
         } finally {
@@ -135,6 +172,7 @@ export class UpdateFinalizationLifecycle {
       end("failed");
       throw error;
     } finally {
+      clearInterval(heartbeat);
       clearTimeout(this.timer);
       this.active = undefined;
     }
@@ -150,6 +188,16 @@ export class UpdateFinalizationLifecycle {
         );
       } catch {
         defaultRuntime.error("[update finalize] Could not persist final outcome.");
+      }
+    }
+  }
+
+  private recordDiagnostic(diagnostic: string): void {
+    if (this.runId) {
+      try {
+        recordUpdateRunDiagnostic(this.runId, diagnostic, this.ledgerOptions);
+      } catch {
+        /* stderr still carries the diagnostic. */
       }
     }
   }
@@ -182,18 +230,13 @@ export class UpdateFinalizationLifecycle {
         const diagnostic = JSON.stringify({
           activeResources: [...new Set(process.getActiveResourcesInfo())].toSorted(),
           unsettledDisposers: getPendingCliDisposers(),
+          ...inspectUpdateFinalizationChildren(),
         });
         writeSync(
           2,
           `[update finalize] Process still alive after terminal output: ${diagnostic}\n`,
         );
-        if (this.runId) {
-          try {
-            recordUpdateRunDiagnostic(this.runId, diagnostic, this.ledgerOptions);
-          } catch {
-            /* stderr still carries the diagnostic. */
-          }
-        }
+        this.recordDiagnostic(diagnostic);
         this.stopChildren();
       });
     // Human repair may still await a recovery choice or agent after reporting failure.
