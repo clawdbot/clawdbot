@@ -1,5 +1,6 @@
 // Implements system prompt inspection commands for agent runtime sessions.
 import { isAcpRuntimeSpawnAvailable } from "../../acp/runtime/availability.js";
+import { resolveAgentWorkspaceDir } from "../../agents/agent-scope-config.js";
 import { createOpenClawCodingTools } from "../../agents/agent-tools.js";
 import { makeBootstrapWarn, resolveBootstrapContextForRun } from "../../agents/bootstrap-files.js";
 import type { EmbeddedContextFile } from "../../agents/embedded-agent-helpers.js";
@@ -25,7 +26,7 @@ import { resolveSkillsPrompt } from "../../skills/loading/workspace-skill-prompt
 import { resolveEmbeddedRunSkillEntries } from "../../skills/runtime/embedded-run-entries.js";
 import { getRemoteSkillEligibility } from "../../skills/runtime/remote.js";
 import { resolveReusableWorkspaceSkillSnapshot } from "../../skills/runtime/session-snapshot.js";
-import type { SkillEligibilityContext } from "../../skills/types.js";
+import type { SkillEligibilityContext, SkillSnapshot } from "../../skills/types.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
 
@@ -80,13 +81,32 @@ async function resolveCommandSkillsPrompt(params: {
   sandboxAgentId: string;
   sandboxed: boolean;
   sessionKey: string | undefined;
-  workspaceDir: string;
+  workspaceDir: string; // Preserve the caller's sandbox task root.
+  executionWorkspaceDir: string;
+  skillsSnapshot?: SkillSnapshot;
 }): Promise<string> {
+  let skillsSnapshot: SkillSnapshot;
+  try {
+    skillsSnapshot = resolveReusableWorkspaceSkillSnapshot({
+      workspaceDir: resolveAgentWorkspaceDir(params.config, params.agentId),
+      executionWorkspaceDir: params.executionWorkspaceDir,
+      config: params.config,
+      agentId: params.agentId,
+      eligibility: params.eligibility,
+      existingSnapshot: params.skillsSnapshot,
+      skillFilter: params.skillsSnapshot?.skillFilter,
+      skillOverrides: params.skillsSnapshot?.skillOverrides,
+      watch: false,
+    }).snapshot;
+  } catch {
+    return "";
+  }
   if (params.sandboxed) {
     try {
       // Sandboxed prompt inspection must not fall back to host skill snapshots:
       // those paths can be unreadable inside the container.
       const sandboxWorkspace = await ensureSandboxWorkspaceForSession({
+        skillsSnapshot,
         config: params.config,
         agentId: params.sandboxAgentId,
         sessionKey: params.sessionKey,
@@ -112,11 +132,15 @@ async function resolveCommandSkillsPrompt(params: {
             ...(sandboxWorkspace.skillsWorkspaceDir
               ? { skillsWorkspaceDir: sandboxWorkspace.skillsWorkspaceDir }
               : {}),
+            ...(sandboxWorkspace.skillUsagePaths
+              ? { skillUsagePaths: sandboxWorkspace.skillUsagePaths }
+              : {}),
             ...(sandboxWorkspace.workspaceAccess
               ? { workspaceAccess: sandboxWorkspace.workspaceAccess }
               : {}),
           },
           skillsAnchorWorkspace: sandboxWorkspace.workspaceDir,
+          skillsSnapshot,
         });
         const { shouldLoadSkillEntries, skillEntries, preserveEntryOrder } =
           resolveEmbeddedRunSkillEntries({
@@ -149,18 +173,7 @@ async function resolveCommandSkillsPrompt(params: {
     }
   }
 
-  try {
-    const skillsSnapshot = resolveReusableWorkspaceSkillSnapshot({
-      workspaceDir: params.workspaceDir,
-      config: params.config,
-      agentId: params.agentId,
-      eligibility: params.eligibility,
-      watch: false,
-    });
-    return skillsSnapshot.snapshot.prompt ?? "";
-  } catch {
-    return "";
-  }
+  return skillsSnapshot.prompt;
 }
 
 export async function resolveCommandsSystemPromptBundle(
@@ -208,6 +221,8 @@ export async function resolveCommandsSystemPromptBundle(
     sandboxed: sandboxRuntime.sandboxed,
     sessionKey: toolPolicySessionKey,
     workspaceDir,
+    executionWorkspaceDir: targetSessionEntry?.worktree?.canonicalWorkspaceDir ?? workspaceDir,
+    skillsSnapshot: targetSessionEntry?.skillsSnapshot,
   });
   const tools = (() => {
     try {

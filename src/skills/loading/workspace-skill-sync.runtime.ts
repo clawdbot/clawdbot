@@ -24,7 +24,7 @@ import { resolveSkillKey } from "./frontmatter.js";
 import { serializeByKey } from "./serialize.js";
 import { shouldSyncSkillPath } from "./skill-paths.js";
 import { resolveSkillTelemetrySource } from "./source.js";
-import { loadMergedWorkspaceSkills, loadWorkspaceSkills } from "./workspace-skill-loader.js";
+import { loadWorkspaceSkills } from "./workspace-skill-loader.js";
 
 const fsp = fs.promises;
 const skillsLogger = createSubsystemLogger("skills");
@@ -161,7 +161,7 @@ export async function syncWorkspaceSkills(params: {
         params.bundledSkillsDir,
         params.pluginSkillsDir,
         skillRoots?.agentWorkspaceDir,
-        skillRoots?.executionSkillsDir,
+        skillRoots?.executionWorkspaceDir,
         skillsSnapshot?.librarySelections,
       ]),
     );
@@ -200,9 +200,10 @@ export async function syncWorkspaceSkills(params: {
       ...(skillsSnapshot?.skillFilter ? { skillFilter: skillsSnapshot.skillFilter } : {}),
       ...(skillsSnapshot?.skillOverrides ? { skillOverrides: skillsSnapshot.skillOverrides } : {}),
     };
-    const entries = skillRoots
-      ? loadMergedWorkspaceSkills({ ...skillRoots, ...loadOptions })
-      : loadWorkspaceSkills(sourceDir, loadOptions);
+    const entries = loadWorkspaceSkills(skillRoots?.agentWorkspaceDir ?? sourceDir, {
+      ...loadOptions,
+      executionWorkspaceDir: skillRoots?.executionWorkspaceDir,
+    });
     if (skillsSnapshot?.librarySelections?.length) {
       const selectedNames = new Set(skillsSnapshot.skills.map((skill) => skill.name));
       entries.push(

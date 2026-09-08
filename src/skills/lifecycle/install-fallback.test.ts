@@ -19,14 +19,9 @@ vi.mock("../../plugins/install-security-scan.js", () => ({
   evaluateSkillInstallPolicy: vi.fn(async () => undefined),
 }));
 
-vi.mock("../loading/workspace-skill-loader.js", async () => {
-  const actual = await vi.importActual<typeof import("../loading/workspace-skill-loader.js")>(
-    "../loading/workspace-skill-loader.js",
-  );
+vi.mock("../loading/workspace-skill-loader.js", () => {
   return {
-    loadMergedWorkspaceSkills: skillsMocks.loadWorkspaceSkills,
     loadWorkspaceSkills: skillsMocks.loadWorkspaceSkills,
-    normalizeWorkspaceSkillRoots: actual.normalizeWorkspaceSkillRoots,
   };
 });
 

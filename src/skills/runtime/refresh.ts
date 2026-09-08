@@ -20,7 +20,11 @@ import {
   resolveAllowedSkillSymlinkTargetRealPaths,
   tryRealpath,
 } from "../loading/symlink-targets.js";
-import { createWorkshopWatcherKey, resolveWorkshopWatchRoots } from "../workshop/skills-root.js";
+import {
+  normalizeWorkspaceSkillRoots,
+  resolveWorkspaceSkillDirectories,
+} from "../loading/workspace-skill-roots.js";
+import { resolveWorkshopWatchRoots } from "../workshop/skills-root.js";
 import { areOrderedArraysEqual } from "./ordered-array-equality.js";
 import {
   bumpSkillsSnapshotVersion,
@@ -112,21 +116,13 @@ function resolveWatchTargets(
   workspaceDir: string,
   config: OpenClawConfig | undefined,
   agentId: string | undefined,
-  executionSkillsDir: string | undefined,
+  executionWorkspaceDir: string | undefined,
   watcherKey: string,
   pluginMetadataSnapshot: PluginMetadataSnapshot | undefined,
 ): WatchTarget[] {
-  const baseRoots: Array<{ path: string; source: string }> = [];
-  if (workspaceDir.trim()) {
-    baseRoots.push({ path: path.join(workspaceDir, "skills"), source: "openclaw-workspace" });
-    baseRoots.push({
-      path: path.join(workspaceDir, ".agents", "skills"),
-      source: "agents-skills-project",
-    });
-  }
-  if (executionSkillsDir) {
-    baseRoots.push({ path: executionSkillsDir, source: "openclaw-workspace" });
-  }
+  const baseRoots = [workspaceDir, ...(executionWorkspaceDir ? [executionWorkspaceDir] : [])]
+    .flatMap((workspace) => resolveWorkspaceSkillDirectories(workspace))
+    .map(({ dir, source }) => ({ path: dir, source }));
   baseRoots.push(...resolveWorkshopWatchRoots(config, agentId));
   baseRoots.push({ path: path.join(CONFIG_DIR, "skills"), source: "openclaw-managed" });
   if (isDefaultStateDir()) {
@@ -679,7 +675,7 @@ function evictIdleWorkspaceWatchStates(now: number): void {
 
 export function ensureSkillsWatcher(params: {
   workspaceDir: string;
-  executionSkillsDir?: string;
+  executionWorkspaceDir?: string;
   config?: OpenClawConfig;
   agentId?: string;
   pluginMetadataSnapshot?: PluginMetadataSnapshot;
@@ -688,7 +684,11 @@ export function ensureSkillsWatcher(params: {
   if (!workspaceDir) {
     return;
   }
-  const watcherKey = createWorkshopWatcherKey(workspaceDir, params);
+  const { executionWorkspaceDir } = normalizeWorkspaceSkillRoots({
+    agentWorkspaceDir: workspaceDir,
+    executionWorkspaceDir: params.executionWorkspaceDir,
+  });
+  const watcherKey = JSON.stringify([workspaceDir, executionWorkspaceDir, params.agentId]);
   workspaceWatchOwnerDirs.set(watcherKey, workspaceDir);
   const now = Date.now();
   const watchEnabled = params.config?.skills?.load?.watch !== false;
@@ -713,7 +713,7 @@ export function ensureSkillsWatcher(params: {
     workspaceDir,
     params.config,
     params.agentId,
-    params.executionSkillsDir,
+    executionWorkspaceDir,
     watcherKey,
     params.pluginMetadataSnapshot,
   );

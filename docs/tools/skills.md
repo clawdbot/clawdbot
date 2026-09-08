@@ -47,6 +47,18 @@ identity and revision rather than discovered by scanning every user's files.
 | 6           | Custodian skills       | shipped; configured Custodian agent only             |
 | 7 — lowest  | Extra directories      | `skills.load.extraDirs` + plugin skills              |
 
+When a session uses a different execution workspace, OpenClaw also loads that
+workspace's `skills/` and `.agents/skills/` directories. These skills follow the
+entire agent catalog in precedence and prompt order; within the execution
+workspace, `skills/` wins over `.agents/skills/`. Both directories participate in
+snapshot refresh and sandbox synchronization. Sandboxed runs read the
+materialized copies, not the original host paths.
+
+Managed worktree sessions keep their recorded canonical workspace as the skill
+source. A selected nested workspace stays nested: discovery does not walk up to
+its parent repository. Installing OpenClaw from a repository does not make that
+repository's `.agents/skills/` a global bundled skill source.
+
 Skill roots support grouped layouts. OpenClaw discovers a skill whenever
 `SKILL.md` appears anywhere under a configured root (up to 6 levels deep):
 

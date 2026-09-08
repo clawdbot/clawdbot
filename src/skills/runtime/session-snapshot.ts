@@ -5,12 +5,9 @@ import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { matchesSkillFilter } from "../discovery/filter.js";
 import { loadSkillLibrarySelection } from "../library/selection.js";
-import {
-  loadMergedWorkspaceSkills,
-  loadWorkspaceSkills,
-  normalizeWorkspaceSkillRoots,
-} from "../loading/workspace-skill-loader.js";
+import { loadWorkspaceSkills } from "../loading/workspace-skill-loader.js";
 import { buildSkillSnapshot } from "../loading/workspace-skill-prompt.js";
+import { normalizeWorkspaceSkillRoots } from "../loading/workspace-skill-roots.js";
 import { WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION } from "../types.js";
 import type { SkillEligibilityContext, SkillSnapshot } from "../types.js";
 import { getSkillsSnapshotVersion, shouldRefreshSnapshotForVersion } from "./refresh-state.js";
@@ -26,7 +23,7 @@ const SKILL_SNAPSHOT_CACHE_MAX = 10;
 type ReusableSkillSnapshotParams = {
   librarySelections?: SkillSnapshot["librarySelections"];
   workspaceDir: string;
-  executionSkillsDir?: string;
+  executionWorkspaceDir?: string;
   config: OpenClawConfig;
   agentId?: string;
   skillFilter?: string[];
@@ -56,19 +53,21 @@ export function resolveReusableWorkspaceSkillSnapshot(
 ): ReusableSkillSnapshotResult {
   const normalizedRoots = normalizeWorkspaceSkillRoots({
     agentWorkspaceDir: params.workspaceDir,
-    ...(params.executionSkillsDir ? { executionSkillsDir: params.executionSkillsDir } : {}),
+    ...(params.executionWorkspaceDir
+      ? { executionWorkspaceDir: params.executionWorkspaceDir }
+      : {}),
   });
-  const skillRoots = normalizedRoots.executionSkillsDir
+  const skillRoots = normalizedRoots.executionWorkspaceDir
     ? {
         agentWorkspaceDir: normalizedRoots.agentWorkspaceDir,
-        executionSkillsDir: normalizedRoots.executionSkillsDir,
+        executionWorkspaceDir: normalizedRoots.executionWorkspaceDir,
       }
     : undefined;
   const watcherWorkspaceDir = skillRoots?.agentWorkspaceDir ?? params.workspaceDir;
   if (params.watch !== false) {
     ensureSkillsWatcher({
       workspaceDir: watcherWorkspaceDir,
-      ...(skillRoots ? { executionSkillsDir: skillRoots.executionSkillsDir } : {}),
+      ...(skillRoots ? { executionWorkspaceDir: skillRoots.executionWorkspaceDir } : {}),
       config: params.config,
       agentId: params.agentId,
       ...(params.pluginMetadataSnapshot
@@ -104,32 +103,22 @@ export function resolveReusableWorkspaceSkillSnapshot(
     !matchesSkillFilter(params.existingSnapshot?.skillFilter, params.skillFilter) ||
     skillOverridesChanged;
   const buildSnapshot = () => {
-    let entries = skillRoots
-      ? loadMergedWorkspaceSkills({
-          ...skillRoots,
-          config: params.config,
-          agentId: params.agentId,
-          skillFilter: params.skillFilter,
-          skillOverrides: params.skillOverrides,
-          eligibility: params.eligibility,
-          pluginMetadataSnapshot: params.pluginMetadataSnapshot,
-        })
-      : undefined;
+    const entries = loadWorkspaceSkills(normalizedRoots.agentWorkspaceDir, {
+      executionWorkspaceDir: normalizedRoots.executionWorkspaceDir,
+      config: params.config,
+      agentId: params.agentId,
+      skillFilter: params.skillFilter,
+      skillOverrides: params.skillOverrides,
+      eligibility: params.eligibility,
+      pluginMetadataSnapshot: params.pluginMetadataSnapshot,
+    });
     if (librarySelections?.length) {
-      entries = [
-        ...(entries ??
-          loadWorkspaceSkills(params.workspaceDir, {
-            config: params.config,
-            agentId: params.agentId,
-            eligibility: params.eligibility,
-            pluginMetadataSnapshot: params.pluginMetadataSnapshot,
-          })),
-        ...loadSkillLibrarySelection(librarySelections),
-      ];
+      entries.push(...loadSkillLibrarySelection(librarySelections));
     }
     const snapshot = buildSkillSnapshot(params.workspaceDir, {
       config: params.config,
-      ...(entries ? { entries, preserveEntryOrder: true } : {}),
+      entries,
+      preserveEntryOrder: Boolean(skillRoots),
       agentId: params.agentId,
       skillFilter: params.skillFilter,
       skillOverrides: params.skillOverrides,

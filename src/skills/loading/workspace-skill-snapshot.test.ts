@@ -2,12 +2,14 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { readCodeModeSkill, resolveCodeModeSkills } from "../../agents/code-mode-skills.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withEnv, withPathResolutionEnv } from "../../test-utils/env.js";
 import { createFixtureSuite } from "../../test-utils/fixture-suite.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../../test-utils/temp-home.js";
 import { buildWorkspaceSkillStatus } from "../discovery/status.js";
 import { resolveEmbeddedRunSkillEntries } from "../runtime/embedded-run-entries.js";
+import { bumpSkillsSnapshotVersion } from "../runtime/refresh-state.js";
 import { resolveReusableWorkspaceSkillSnapshot } from "../runtime/session-snapshot.js";
 import { writeSkill, writeWorkspaceSkills } from "../test-support/e2e-test-helpers.js";
 import {
@@ -120,21 +122,28 @@ async function createMultiRootFixture() {
       description,
     });
   }
-  const skillFilter = ["aardvark", "middle", "shared", "zulu"];
-  const executionSkillsDir = path.join(executionWorkspaceDir, "skills");
+  for (const name of ["aardvark", "project-only", "shared"]) {
+    await writeSkill({
+      dir: path.join(executionWorkspaceDir, ".agents", "skills", name),
+      name,
+      description: `Project ${name}`,
+      body: `# Project ${name} instructions\n`,
+    });
+  }
+  const skillFilter = ["aardvark", "middle", "project-only", "shared", "zulu"];
   const snapshot = withWorkspaceHome(
     agentWorkspaceDir,
     () =>
       resolveReusableWorkspaceSkillSnapshot({
         workspaceDir: agentWorkspaceDir,
-        executionSkillsDir,
+        executionWorkspaceDir,
         config: {},
         skillFilter,
         watch: false,
         snapshotVersion: 1,
       }).snapshot,
   );
-  return { agentWorkspaceDir, executionSkillsDir, skillFilter, snapshot };
+  return { agentWorkspaceDir, executionWorkspaceDir, skillFilter, snapshot };
 }
 
 function expectSnapshotNamesAndPrompt(
@@ -254,11 +263,15 @@ describe("buildSkillSnapshot", () => {
       "middle",
       "shared",
       "aardvark",
+      "project-only",
       "zulu",
     ]);
     expect(
       [...snapshot.prompt.matchAll(/<name>([^<]+)<\/name>/g)].map((match) => match[1]),
-    ).toEqual(["middle", "shared", "aardvark", "zulu"]);
+    ).toEqual(["middle", "shared", "aardvark", "project-only", "zulu"]);
+    expect(snapshot.resolvedSkills?.find((skill) => skill.name === "aardvark")?.description).toBe(
+      "Execution aardvark",
+    );
   });
 
   it("keeps the agent-workspace skill when the execution root has the same name", async () => {
@@ -276,13 +289,13 @@ describe("buildSkillSnapshot", () => {
       name: "canonical",
       description: "Canonical",
     });
-    const build = (executionSkillsDir?: string) =>
+    const build = (executionWorkspaceDir?: string) =>
       withWorkspaceHome(
         workspaceDir,
         () =>
           resolveReusableWorkspaceSkillSnapshot({
             workspaceDir,
-            ...(executionSkillsDir ? { executionSkillsDir } : {}),
+            ...(executionWorkspaceDir ? { executionWorkspaceDir } : {}),
             config: {},
             skillFilter: ["canonical"],
             watch: false,
@@ -290,27 +303,144 @@ describe("buildSkillSnapshot", () => {
           }).snapshot,
       );
 
-    expect(JSON.stringify(build(path.join(workspaceDir, "skills")))).toBe(JSON.stringify(build()));
+    expect(JSON.stringify(build(workspaceDir))).toBe(JSON.stringify(build()));
   });
 
-  it("returns identical sets from snapshot and cold embedded fallback paths", async () => {
-    const { agentWorkspaceDir, snapshot } = await createMultiRootFixture();
-    const coldSnapshot = { ...snapshot };
-    delete coldSnapshot.resolvedSkills;
-    const fallback = withWorkspaceHome(agentWorkspaceDir, () =>
+  it.each([false, true])(
+    "keeps snapshot and cold fallback skills readable (stale=%s)",
+    async (stale) => {
+      const { agentWorkspaceDir, executionWorkspaceDir, snapshot } = await createMultiRootFixture();
+      const coldSnapshot = { ...snapshot, ...(stale ? { promptFormatVersion: 0 } : {}) };
+      delete coldSnapshot.resolvedSkills;
+      const fallback = withWorkspaceHome(agentWorkspaceDir, () =>
+        resolveEmbeddedRunSkillEntries({
+          workspaceDir: agentWorkspaceDir,
+          config: {},
+          skillsSnapshot: coldSnapshot,
+          executionWorkspaceDir,
+        }),
+      );
+
+      expect(fallback.skillEntries.map((entry) => entry.skill.name)).toEqual(
+        snapshot.skills.map((skill) => skill.name),
+      );
+      expect(fallback.skillEntries.map((entry) => entry.skill.filePath)).toEqual(
+        snapshot.resolvedSkills?.map((skill) => skill.filePath),
+      );
+      const codeModeSkills = resolveCodeModeSkills({
+        skillsPrompt: snapshot.prompt,
+        candidates: fallback.skillEntries.map((entry) => entry.skill),
+      });
+      const projectSkill = codeModeSkills.find((skill) => skill.name === "project-only");
+      expect(projectSkill).toBeDefined();
+      expect(await readCodeModeSkill(projectSkill!)).toContain(
+        "# Project project-only instructions",
+      );
+    },
+  );
+
+  it.each([false, true].flatMap((split) => [false, true].map((override) => ({ split, override }))))(
+    "honors session skill policy before agent filtering (split=$split, override=$override)",
+    async ({ split, override }) => {
+      const workspaceDir = await fixtureSuite.createCaseDir("session-policy-agent");
+      const executionWorkspaceDir = split
+        ? await fixtureSuite.createCaseDir("session-policy-execution")
+        : workspaceDir;
+      await writeSkill({
+        dir: path.join(executionWorkspaceDir, ".agents", "skills", "session-enabled"),
+        name: "session-enabled",
+        description: "Enabled by the session",
+      });
+      const snapshot = withWorkspaceHome(
+        workspaceDir,
+        () =>
+          resolveReusableWorkspaceSkillSnapshot({
+            workspaceDir,
+            executionWorkspaceDir,
+            agentId: "main",
+            config: { agents: { defaults: { skills: [] } } },
+            ...(override
+              ? { skillOverrides: { "session-enabled": true } }
+              : { skillFilter: ["session-enabled"] }),
+            watch: false,
+          }).snapshot,
+      );
+      expect(snapshot.skills.map((skill) => skill.name)).toEqual(["session-enabled"]);
+      expect(snapshot.prompt).toContain("Enabled by the session");
+    },
+  );
+
+  it.each([false, true])(
+    "confines sandbox rebuilds to materialized skills (hydrated=%s)",
+    async (hydrated) => {
+      const { executionWorkspaceDir, snapshot } = await createMultiRootFixture();
+      const workspaceDir = await fixtureSuite.createCaseDir("sandbox-materialized");
+      const skillDir = path.join(workspaceDir, "skills", "middle");
+      await writeSkill({ dir: skillDir, name: "middle", description: "Materialized instructions" });
+      const skillsSnapshot = { ...snapshot };
+      if (!hydrated) {
+        delete skillsSnapshot.resolvedSkills;
+      }
+      const runtime = withWorkspaceHome(workspaceDir, () =>
+        resolveEmbeddedRunSkillEntries({
+          workspaceDir,
+          executionWorkspaceDir,
+          config: {},
+          skillsSnapshot,
+          workspaceOnly: true,
+        }),
+      );
+      const entries = runtime.loadSkillEntries();
+      expect(entries.map((entry) => entry.skill.name)).toEqual(["middle"]);
+      expect(entries[0]?.skill.filePath).toBe(path.join(skillDir, "SKILL.md"));
+      expect(entries[0]?.skill.description).toBe("Materialized instructions");
+    },
+  );
+
+  it("invalidates execution project skills without escaping the selected workspace", async () => {
+    const agentWorkspaceDir = await fixtureSuite.createCaseDir("agent-root");
+    const repo = await fixtureSuite.createCaseDir("repository");
+    const executionWorkspaceDir = path.join(repo, "packages", "app");
+    const skillDir = path.join(executionWorkspaceDir, ".agents", "skills", "project-only");
+    await writeSkill({
+      dir: path.join(repo, ".agents", "skills", "ancestor"),
+      name: "ancestor",
+      description: "Not selected",
+    });
+    await writeSkill({ dir: skillDir, name: "project-only", description: "Original instructions" });
+    await fs.symlink(
+      path.join(repo, ".agents", "skills", "ancestor"),
+      path.join(executionWorkspaceDir, ".agents", "skills", "escape"),
+      directorySymlinkType,
+    );
+    const params = {
+      workspaceDir: agentWorkspaceDir,
+      executionWorkspaceDir,
+      config: {},
+      skillFilter: ["ancestor", "project-only"],
+      watch: false,
+    };
+    const first = withWorkspaceHome(agentWorkspaceDir, () =>
+      resolveReusableWorkspaceSkillSnapshot(params),
+    );
+    expect(first.snapshot.skills.map((skill) => skill.name)).toEqual(["project-only"]);
+    await writeSkill({ dir: skillDir, name: "project-only", description: "Updated instructions" });
+    bumpSkillsSnapshotVersion({ workspaceDir: agentWorkspaceDir, reason: "watch" });
+    const next = withWorkspaceHome(agentWorkspaceDir, () =>
+      resolveReusableWorkspaceSkillSnapshot({ ...params, existingSnapshot: first.snapshot }),
+    );
+    expect(next.shouldRefresh).toBe(true);
+    expect(next.snapshot.prompt).toContain("Updated instructions");
+    expect(next.snapshot.resolvedSkills?.[0]?.filePath).toBe(path.join(skillDir, "SKILL.md"));
+    const sandbox = withWorkspaceHome(agentWorkspaceDir, () =>
       resolveEmbeddedRunSkillEntries({
         workspaceDir: agentWorkspaceDir,
+        executionWorkspaceDir,
         config: {},
-        skillsSnapshot: coldSnapshot,
+        workspaceOnly: true,
       }),
     );
-
-    expect(fallback.skillEntries.map((entry) => entry.skill.name)).toEqual(
-      snapshot.skills.map((skill) => skill.name),
-    );
-    expect(fallback.skillEntries.map((entry) => entry.skill.filePath)).toEqual(
-      snapshot.resolvedSkills?.map((skill) => skill.filePath),
-    );
+    expect(sandbox.skillEntries).toEqual([]);
   });
 
   it("returns an empty snapshot when skills dirs are missing", async () => {

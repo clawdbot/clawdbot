@@ -2888,17 +2888,40 @@ describe("prepareCliRunContext", () => {
     );
   });
 
-  it("uses cwd for CLI system prompt workspace guidance", async () => {
+  it.each([false, true])("uses admitted CLI repository skills (managed=%s)", async (managed) => {
     const { dir } = fixture.session;
     const taskDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-task-"));
+    const canonicalDir = path.join(dir, "canonical", "packages", "app");
+    const skillDir = path.join(managed ? canonicalDir : taskDir, ".agents", "skills", "task-proof");
+    fs.mkdirSync(skillDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(skillDir, "SKILL.md"),
+      "---\nname: task-proof\ndescription: Task-local proof\n---\n# Proof instructions\n",
+    );
     try {
       const context = await fixture.prepare({
         cwd: taskDir,
+        ...(managed
+          ? {
+              sessionEntry: {
+                sessionId: fixture.session.sessionTarget.sessionId,
+                updatedAt: Date.now(),
+                worktree: {
+                  id: "task",
+                  branch: "task",
+                  repoRoot: path.join(dir, "canonical"),
+                  canonicalWorkspaceDir: canonicalDir,
+                },
+              },
+            }
+          : {}),
       });
 
       expect(context.cwd).toBe(taskDir);
       expect(context.systemPrompt).toContain(`Working directory: ${taskDir}`);
       expect(context.systemPrompt).not.toContain(`Working directory: ${dir}`);
+      expect(context.systemPrompt).toContain("<name>task-proof</name>");
+      expect(context.systemPrompt).toContain(path.join(skillDir, "SKILL.md"));
     } finally {
       fs.rmSync(taskDir, { recursive: true, force: true });
     }

@@ -1011,14 +1011,9 @@ export async function loadCompactHooksHarness(options: { durableSession?: boolea
     applySkillEnvOverridesFromSnapshot: vi.fn(() => () => {}),
   }));
 
-  vi.doMock("../../skills/loading/workspace-skill-loader.js", async () => {
-    const actual = await vi.importActual<
-      typeof import("../../skills/loading/workspace-skill-loader.js")
-    >("../../skills/loading/workspace-skill-loader.js");
+  vi.doMock("../../skills/loading/workspace-skill-loader.js", () => {
     return {
-      loadMergedWorkspaceSkills: vi.fn(() => []),
       loadWorkspaceSkills: vi.fn(() => []),
-      normalizeWorkspaceSkillRoots: actual.normalizeWorkspaceSkillRoots,
     };
   });
 
