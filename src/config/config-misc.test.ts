@@ -341,6 +341,22 @@ describe("$schema key in config (#14998)", () => {
   });
 });
 
+describe("auth.cooldownBypassProviders", () => {
+  it("accepts a provider id list", () => {
+    const result = validateConfigObjectRaw({
+      auth: { cooldownBypassProviders: ["my-gateway"] },
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it("rejects non-string entries", () => {
+    const result = validateConfigObjectRaw({
+      auth: { cooldownBypassProviders: [1] },
+    });
+    expect(result.ok).toBe(false);
+  });
+});
+
 describe("accessGroups config", () => {
   it("accepts Discord channel audience access groups", () => {
     const result = OpenClawSchema.safeParse({

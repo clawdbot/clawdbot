@@ -391,7 +391,8 @@ async function runWithModelFallbackInternal<T>(
     ) {
       const profileIds = candidateAuthProfileIds;
       const isAnyProfileAvailable = profileIds.some(
-        (id) => !authRuntime.isProfileInCooldown(authStore, id, undefined, candidate.model),
+        (id) =>
+          !authRuntime.isProfileInCooldown(authStore, id, undefined, candidate.model, params.cfg),
       );
 
       if (profileIds.length > 0 && !isAnyProfileAvailable) {

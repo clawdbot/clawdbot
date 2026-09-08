@@ -323,11 +323,14 @@ type AuthProfileCooldown = {
   hint: string;
 };
 
-function collectAuthProfileCooldowns(store: ReturnType<typeof ensureAuthProfileStore>) {
+function collectAuthProfileCooldowns(
+  store: ReturnType<typeof ensureAuthProfileStore>,
+  cfg: OpenClawConfig,
+) {
   const cooldowns: AuthProfileCooldown[] = [];
   const now = Date.now();
   for (const profileId of Object.keys(store.usageStats ?? {})) {
-    const until = resolveProfileUnusableUntilForDisplay(store, profileId);
+    const until = resolveProfileUnusableUntilForDisplay(store, profileId, cfg);
     if (!until || now >= until) {
       continue;
     }
@@ -426,7 +429,7 @@ async function collectAuthProfileHealthFindingsForTarget(params: {
 }): Promise<readonly HealthFinding[]> {
   const { store, summary } = loadAuthProfileHealth({ ...params, readOnly: true });
   const findings: HealthFinding[] = [];
-  for (const cooldown of collectAuthProfileCooldowns(store)) {
+  for (const cooldown of collectAuthProfileCooldowns(store, params.cfg)) {
     findings.push(
       authProfileCooldownToHealthFinding({
         ...cooldown,
@@ -497,7 +500,7 @@ async function noteAuthProfileHealthForTarget(params: {
   let { store, summary } = loadAuthProfileHealth(params);
   const noteTitle = (title: string) =>
     formatAuthNoteTitle(title, params.target, params.labelStores);
-  const unusable = collectAuthProfileCooldowns(store).map(
+  const unusable = collectAuthProfileCooldowns(store, params.cfg).map(
     ({ profileId, kind, remaining, hint }) =>
       `- ${profileId}: ${kind} (${remaining})${hint ? ` — ${hint}` : ""}`,
   );

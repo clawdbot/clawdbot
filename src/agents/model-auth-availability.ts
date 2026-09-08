@@ -553,7 +553,7 @@ export function createModelAuthAvailabilityResolver(
     const cooldownModel = target.modelId
       ? splitTrailingAuthProfile(target.modelId).model
       : undefined;
-    return isProfileInCooldown(store, profileId, now, cooldownModel);
+    return isProfileInCooldown(store, profileId, now, cooldownModel, params.cfg);
   };
   const hasPermanentAuthFailure = (stats: ProfileUsageStats | undefined) =>
     stats?.disabledReason === "auth_permanent" && isActiveUnusableWindow(stats.disabledUntil, now);
@@ -639,7 +639,7 @@ export function createModelAuthAvailabilityResolver(
         : undefined;
       const availability =
         credential &&
-        !isProfileInCooldown(store, binding.profileId, now, cooldownModel) &&
+        !isProfileInCooldown(store, binding.profileId, now, cooldownModel, params.cfg) &&
         profileEligibleForReadOnlyAvailability(
           binding.credential.provider,
           binding.profileId,
@@ -661,7 +661,7 @@ export function createModelAuthAvailabilityResolver(
     // billing/auth cooldown must hide them from browse availability the same way
     // it blocks their resolution — otherwise a cooled key still looks usable.
     const { stats: inlineUsageStats, unusableUntil: inlineKeyUnusableUntil } =
-      readInlineProviderApiKeyUsage(store, provider);
+      readInlineProviderApiKeyUsage(store, provider, params.cfg);
     if (inlineKeyUnusableUntil != null && inlineKeyUnusableUntil > now) {
       return {
         availability: false,

@@ -21,4 +21,10 @@ export type AuthConfig = {
   profiles?: Record<string, AuthProfileConfig>;
   /** Preferred profile order per provider id. */
   order?: Record<string, string[]>;
+  /**
+   * Provider ids whose auth-profile cooldown bookkeeping is skipped because the
+   * upstream gateway manages its own rate limiting. Added to the built-in set
+   * (openrouter, kilocode); ids are normalized case-insensitively.
+   */
+  cooldownBypassProviders?: string[];
 };

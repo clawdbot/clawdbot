@@ -270,6 +270,7 @@ export const OpenClawSchemaShape = {
         )
         .optional(),
       order: z.record(z.string(), z.array(z.string())).optional(),
+      cooldownBypassProviders: z.array(z.string()).optional(),
     })
     .optional(),
   accessGroups: AccessGroupsSchema,

@@ -96,7 +96,7 @@ export function resolveProviderAuthOverview(params: {
   const now = Date.now();
   const profiles = listProfilesForProvider(store, provider);
   const withUnusableSuffix = (base: string, profileId: string) => {
-    const unusableUntil = resolveProfileUnusableUntilForDisplay(store, profileId);
+    const unusableUntil = resolveProfileUnusableUntilForDisplay(store, profileId, cfg);
     if (!unusableUntil || now >= unusableUntil) {
       return base;
     }

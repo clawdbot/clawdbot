@@ -520,6 +520,7 @@ export const FIELD_LABELS: Record<string, string> = {
   auth: "Auth",
   "auth.profiles": "Auth Profiles",
   "auth.order": "Auth Profile Order",
+  "auth.cooldownBypassProviders": "Auth Cooldown Bypass Providers",
   acp: "ACP",
   "acp.enabled": "ACP Enabled",
   "acp.dispatch.enabled": "ACP Dispatch Enabled",

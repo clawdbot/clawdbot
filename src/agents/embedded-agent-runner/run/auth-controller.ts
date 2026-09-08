@@ -75,6 +75,7 @@ type LogLike = {
 /** Decides whether one automatic profile may bypass its current cooldown. */
 export function resolveEmbeddedAuthCooldownProbePolicy(params: {
   authStore: AuthProfileStore;
+  config?: RunEmbeddedAgentParams["config"];
   profileCandidates: Array<string | undefined>;
   lockedProfileId?: string;
   modelId: string;
@@ -87,7 +88,7 @@ export function resolveEmbeddedAuthCooldownProbePolicy(params: {
   const allAutoProfilesInCooldown =
     autoProfileCandidates.length > 0 &&
     autoProfileCandidates.every((candidate) =>
-      isProfileInCooldown(params.authStore, candidate, undefined, params.modelId),
+      isProfileInCooldown(params.authStore, candidate, undefined, params.modelId, params.config),
     );
   const unavailableReason = allAutoProfilesInCooldown
     ? (resolveProfilesUnavailableReason({
@@ -641,7 +642,7 @@ export function createEmbeddedRunAuthController(params: {
       state.profileIndex = candidateIndex;
       if (
         candidate &&
-        isProfileInCooldown(params.authStore, candidate, undefined, params.modelId)
+        isProfileInCooldown(params.authStore, candidate, undefined, params.modelId, params.config)
       ) {
         continue;
       }
@@ -670,13 +671,15 @@ export function createEmbeddedRunAuthController(params: {
         lockedProfileId: params.lockedProfileId,
         modelId,
         allowTransientCooldownProbe: params.allowTransientCooldownProbe,
+        config: params.config,
       });
       let didTransientCooldownProbe = false;
 
       while (state.profileIndex < params.profileCandidates.length) {
         const candidate = params.profileCandidates[state.profileIndex];
         const inCooldown =
-          candidate && isProfileInCooldown(params.authStore, candidate, undefined, modelId);
+          candidate &&
+          isProfileInCooldown(params.authStore, candidate, undefined, modelId, params.config);
         if (inCooldown) {
           const canProbeCandidate =
             !didTransientCooldownProbe && cooldownProbePolicy.probeProfileIds.has(candidate);
