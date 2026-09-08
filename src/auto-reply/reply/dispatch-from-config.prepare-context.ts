@@ -93,9 +93,7 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
   // Hook contexts use transport-native ids (for example Slack `U123`), while
   // binding records use the channel's canonical target (`user:U123`). Resolve
   // through the binding contract instead of reusing the hook projection.
-  const pluginBindingConversation = state.allowInboundHandlers
-    ? resolveConversationBindingContextFromMessage({ cfg, ctx })
-    : undefined;
+  const pluginBindingConversation = resolveConversationBindingContextFromMessage({ cfg, ctx });
   const pluginOwnedBindingRecord = pluginBindingConversation
     ? getSessionBindingService().resolveByConversation({
         channel: pluginBindingConversation.channel,
@@ -519,7 +517,7 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
     return attachSourceReplyDeliveryMode({
       queuedFinal,
       counts: dispatcher.getQueuedCounts(),
-      ...(state.turnLedger.hasObservedDelivery() ? { observedReplyDelivery: true } : {}),
+      ...(state.turnLedger.hasVisibleDelivery() ? { observedReplyDelivery: true } : {}),
     });
   };
 
@@ -529,9 +527,6 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
       | "plugin-bound-fallback-no-handler";
   } = {};
   const emitMessageReceivedHooks = () => {
-    if (!state.allowInboundHandlers) {
-      return;
-    }
     emitSharedMessageReceivedHooks({
       ctx,
       hookRunner,
@@ -541,7 +536,7 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
     });
   };
   state.markProcessing();
-  if (state.allowInboundHandlers && (await capturePendingConversationTurnReply({ cfg, ctx }))) {
+  if (await capturePendingConversationTurnReply({ cfg, ctx })) {
     emitMessageReceivedHooks();
     commitInboundDedupeIfClaimed();
     recordProcessed("completed", { reason: "conversation-turn-reply" });

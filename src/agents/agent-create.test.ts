@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createTestConfigSnapshot } from "../commands/test-runtime-config-helpers.js";
 import { FsSafeError } from "../infra/fs-safe.js";
 
 const mocks = vi.hoisted(() => ({
@@ -132,11 +131,7 @@ describe("createAgent", () => {
         };
         mocks.persisted = transformed.nextConfig;
         mocks.config = transformed.nextConfig;
-        return {
-          path: "/tmp/created-config.json",
-          result: transformed.result,
-          nextConfig: transformed.nextConfig,
-        };
+        return { result: transformed.result, nextConfig: transformed.nextConfig };
       },
     );
   });
@@ -332,17 +327,15 @@ describe("createAgent", () => {
         name: "Researcher",
         workspace: "/tmp/staged-work",
       },
+      expectedConfigHash: null,
       stagedConfig: {
-        writeSnapshot: { snapshot: createTestConfigSnapshot({}), writeOptions: {} },
-        config: {
-          agents: {
-            entries: {
-              main: {},
-              researcher: { workspace: "/tmp/staged-work" },
-            },
+        agents: {
+          entries: {
+            main: {},
+            researcher: { workspace: "/tmp/staged-work" },
           },
-          channels: { telegram: { enabled: true } },
         },
+        channels: { telegram: { enabled: true } },
       },
     });
 
@@ -358,20 +351,14 @@ describe("createAgent", () => {
     expect(result.config).toEqual(mocks.persisted);
   });
 
-  it("rejects guided staging whose original revision no longer owns creation", async () => {
+  it("requires a config revision for guided staging", async () => {
     await expect(
       createAgent({
         entry: { id: "researcher" },
-        stagedConfig: {
-          config: { agents: { entries: { researcher: {} } } },
-          writeSnapshot: {
-            snapshot: { ...createTestConfigSnapshot({}), hash: "stale-revision" },
-            writeOptions: {},
-          },
-        },
+        stagedConfig: { agents: { entries: { researcher: {} } } },
       }),
-    ).rejects.toThrow("config changed before first-agent creation");
-    expect(mocks.ensureAgentWorkspace).not.toHaveBeenCalled();
+    ).rejects.toThrow("staged agent creation requires an expected config hash");
+    expect(mocks.withConfigMutationExclusive).not.toHaveBeenCalled();
   });
 
   it("replaces only the load-time compatibility roster when creating a named first agent", async () => {
@@ -383,7 +370,7 @@ describe("createAgent", () => {
     expect(mocks.transformConfigFileWithRetry).toHaveBeenCalledOnce();
     expect(mocks.transformConfigFileWithRetry).toHaveBeenCalledWith(
       expect.objectContaining({
-        writeOptions: expect.objectContaining({ allowedAgentRosterRemovals: ["main"] }),
+        writeOptions: { allowedAgentRosterRemovals: ["main"] },
       }),
     );
     expect(mocks.persisted).toMatchObject({

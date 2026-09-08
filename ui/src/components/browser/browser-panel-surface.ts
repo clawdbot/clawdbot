@@ -33,7 +33,6 @@ const FORWARDED_KEYS = new Set([
 
 /** One rendered page snapshot plus the geometry needed to map pointer coords. */
 export type BrowserPanelView = {
-  kind?: "native" | "remote";
   targetId: string;
   browserTab?: BrowserTabTarget;
   dataUrl: string;
@@ -147,7 +146,7 @@ export function dispatchCompositedBrowserAnnotation(
     title,
     strokes,
     element,
-    browserTab: view.kind === "native" ? undefined : view.browserTab,
+    browserTab: view.browserTab,
   });
   const dataUrl = composeAnnotatedImage({
     image: view.image,

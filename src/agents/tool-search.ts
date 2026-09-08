@@ -401,7 +401,7 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
             ...formatToolSearchControlResult(
               { tool: { id, name, source }, result: callResult.result },
               runtime,
-              { parentToolCallId: toolCallId },
+              toolCallId,
             ),
             details: callResult,
           };

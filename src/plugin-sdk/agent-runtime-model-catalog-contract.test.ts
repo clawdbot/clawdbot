@@ -65,10 +65,7 @@ describe("agent-runtime model catalog compatibility", () => {
   });
 
   it("accepts legacy options without overriding lifecycle metadata", async () => {
-    type LegacyMetadataSnapshot = Omit<
-      PluginMetadataSnapshot,
-      "owners" | "declaredProviderOwners"
-    > & {
+    type LegacyMetadataSnapshot = Omit<PluginMetadataSnapshot, "owners"> & {
       owners: Omit<PluginMetadataSnapshot["owners"], "modelIdNormalizationPolicies">;
     };
     type AcceptedMetadataSnapshot = NonNullable<

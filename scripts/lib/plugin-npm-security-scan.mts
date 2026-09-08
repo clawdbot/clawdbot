@@ -110,18 +110,10 @@ const RELEASE_2026_9_1_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS = new Map<string,
   ["@openclaw/voice-call:dangerous-exec:src/tunnel.ts", 1],
 ]);
 
-const RELEASE_2026_9_2_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS = new Map<string, number>([
+const CURRENT_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS = new Map<string, number>([
   ...RELEASE_2026_9_1_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS,
   ["@openclaw/llama-cpp-provider:dangerous-exec:src/hardware.ts", 1],
 ]);
-
-// The bounded async Codex version probe no longer produces this syntactic finding.
-// Keep shipped inventories intact; a new direct call must be reviewed again.
-const CURRENT_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS = new Map(
-  [...RELEASE_2026_9_2_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS].filter(
-    ([key]) => key !== "@openclaw/codex:dangerous-exec:src/doctor.ts",
-  ),
-);
 
 type ReviewedReleaseLayout = {
   id: string;
@@ -204,25 +196,12 @@ const FROZEN_RELEASE_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS = new Map<string, n
   ["@openclaw/voice-call:dangerous-exec:dist/runtime-entry-<hash>.js", 1],
 ]);
 
-const FROZEN_EXTENDED_STABLE_2026_7_33_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS = new Map(
-  FROZEN_RELEASE_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS,
-);
-FROZEN_EXTENDED_STABLE_2026_7_33_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS.set(
-  "@openclaw/acpx:dangerous-exec:src/runtime-internals/mcp-proxy.test.ts",
-  3,
-);
-
 const FROZEN_EXTENDED_STABLE_2026_6_33_LAYOUT = {
   id: "extended-stable-2026.6.33",
   findings: new Map<string, number>([
     ["@openclaw/codex:dangerous-exec:src/app-server/sandbox-exec-server/http.ts", 1],
     ["@openclaw/codex:dangerous-exec:src/app-server/sandbox-exec-server/processes.ts", 1],
   ]),
-};
-
-const FROZEN_EXTENDED_STABLE_2026_7_33_LAYOUT = {
-  id: "extended-stable-2026.7.33",
-  findings: FROZEN_EXTENDED_STABLE_2026_6_33_LAYOUT.findings,
 };
 
 const FROZEN_RELEASE_SECURITY_INVENTORY_POLICIES = new Map<string, PluginSecurityInventoryPolicy>([
@@ -233,28 +212,13 @@ const FROZEN_RELEASE_SECURITY_INVENTORY_POLICIES = new Map<string, PluginSecurit
       requiredSourceFindingCounts: RELEASE_2026_9_1_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS,
     },
   ],
-  [
-    "release/2026.9.2",
-    {
-      ...CURRENT_SECURITY_INVENTORY_POLICY,
-      requiredSourceFindingCounts: RELEASE_2026_9_2_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS,
-    },
-  ],
+  ["release/2026.9.2", CURRENT_SECURITY_INVENTORY_POLICY],
   ["release/2026.9.3", CURRENT_SECURITY_INVENTORY_POLICY],
   [
     "extended-stable/2026.6.33",
     {
       layout: FROZEN_EXTENDED_STABLE_2026_6_33_LAYOUT,
       optionalPackedFindingCounts: FROZEN_RELEASE_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS,
-      requiredSourceFindingCounts: FROZEN_RELEASE_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS,
-    },
-  ],
-  [
-    "extended-stable/2026.7.33",
-    {
-      layout: FROZEN_EXTENDED_STABLE_2026_7_33_LAYOUT,
-      optionalPackedFindingCounts:
-        FROZEN_EXTENDED_STABLE_2026_7_33_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS,
       requiredSourceFindingCounts: FROZEN_RELEASE_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS,
     },
   ],

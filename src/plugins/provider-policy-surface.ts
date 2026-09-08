@@ -2,7 +2,6 @@
 import type { ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
-  ProviderFastModePolicyContext,
   ProviderModelRouteResolution,
   ProviderNormalizeModelCatalogIdContext,
   ProviderResponseModelEquivalenceContext,
@@ -66,7 +65,6 @@ export type InspectEmbeddingProviderSetup = (params: {
 
 /** Provider policy hooks supported by bundled and trusted official plugins. */
 export type ProviderPolicySurface = {
-  resolveFastModeSupport?: (ctx: ProviderFastModePolicyContext) => boolean | undefined;
   deprecatedProfileIds?: readonly string[];
   normalizeConfig?: (ctx: ProviderNormalizeConfigContext) => ModelProviderConfig | null | undefined;
   applyConfigDefaults?: (
@@ -101,7 +99,6 @@ export type BundledProviderPolicySurface = ProviderPolicySurface & {
 };
 
 const PROVIDER_POLICY_HOOK_KEYS = [
-  "resolveFastModeSupport",
   "normalizeConfig",
   "applyConfigDefaults",
   "resolveConfigApiKey",

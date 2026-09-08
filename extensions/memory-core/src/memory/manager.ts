@@ -499,9 +499,6 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
   }
 
   status(): MemoryProviderStatus {
-    if (this.closing || this.closed) {
-      throw new Error("Memory index manager is closed");
-    }
     return this.withPublishedDatabase(() => this.publishedStatus());
   }
 

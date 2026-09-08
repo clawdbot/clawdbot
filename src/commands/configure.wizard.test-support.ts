@@ -1,7 +1,6 @@
 import { vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { committedConfigFiles } from "./committed-config.test-support.js";
 
 const wizardTestMocks = vi.hoisted(() => {
   const writeConfigFile = vi.fn();
@@ -25,7 +24,6 @@ const wizardTestMocks = vi.hoisted(() => {
       }) => {
         params.writeOptions?.assertConfigPathForWrite?.();
         await writeConfigFile(params.nextConfig);
-        return committedConfigFiles.write(params.nextConfig as OpenClawConfig);
       },
     ),
     resolveGatewayPort: vi.fn(),
@@ -109,11 +107,7 @@ vi.mock("../config/config.js", () => ({
           writeOptions: params.writeOptions,
           afterWrite: { mode: "auto" },
         });
-        return {
-          ...committedConfigFiles.write(committed.config),
-          result: transformed.result,
-          attempts: attempt + 1,
-        };
+        return { nextConfig: committed.config };
       } catch (error) {
         if (
           !(error instanceof Error) ||
@@ -217,7 +211,6 @@ const { runConfigureWizard } = await import("./configure.wizard.js");
 export { runConfigureWizard, wizardTestMocks };
 
 export function setupWizardTestDefaults() {
-  committedConfigFiles.clear();
   wizardTestMocks.assertConfigPathForWrite.mockImplementation(() => {});
   wizardTestMocks.resolvePluginContributionOwners.mockReturnValue(["firecrawl"]);
   wizardTestMocks.resolveSearchProviderOptions.mockReturnValue([

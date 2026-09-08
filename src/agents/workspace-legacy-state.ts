@@ -7,13 +7,9 @@ import { formatCliCommand } from "../cli/command-format.js";
 import { resolveLegacyStateDirs, resolveStateDir } from "../config/paths.js";
 import { root } from "../infra/fs-safe.js";
 import { pathMayExistSync } from "../infra/path-existence.js";
-import { StartupMaintenanceRequiredError } from "../infra/startup-maintenance-required.js";
 import { formatDoctorStateRepairFailure } from "../infra/state-repair-message.js";
 import { resolveUserPath } from "../utils.js";
-import {
-  resolveCanonicalWorkspacePath,
-  resolveWorkspaceStateIdentity,
-} from "./workspace-state-identity.js";
+import { resolveWorkspaceStateIdentity } from "./workspace-state-identity.js";
 
 export const LEGACY_WORKSPACE_STATE_DIRNAME = ".openclaw";
 const LEGACY_WORKSPACE_STATE_FILENAME = "workspace-state.json";
@@ -76,12 +72,11 @@ export function resolveLegacyWorkspaceSourcePaths(
   // while it still exists; destructive cleanup may remove the alias first.
   const workspacePath = path.resolve(resolveUserPath(workspaceDir));
   const canonicalIdentity = resolveWorkspaceStateIdentity(workspaceDir);
-  const canonicalDirectoryPath = resolveCanonicalWorkspacePath(workspaceDir);
   const workspaceKeys = [
     createHash("sha256").update(workspacePath).digest("hex"),
     canonicalIdentity.workspaceKey,
   ];
-  const workspacePaths = [workspacePath, canonicalDirectoryPath];
+  const workspacePaths = [workspacePath, canonicalIdentity.workspacePath];
   const env = options?.env ?? process.env;
   const stateDirs = [
     resolveStateDir(env, options?.homedir),
@@ -90,9 +85,9 @@ export function resolveLegacyWorkspaceSourcePaths(
   return {
     workspacePath,
     setupStatePaths: [
-      path.join(canonicalDirectoryPath, LEGACY_WORKSPACE_STATE_CURRENT_FILENAME),
+      path.join(canonicalIdentity.workspacePath, LEGACY_WORKSPACE_STATE_CURRENT_FILENAME),
       path.join(
-        canonicalDirectoryPath,
+        canonicalIdentity.workspacePath,
         LEGACY_WORKSPACE_STATE_DIRNAME,
         LEGACY_WORKSPACE_STATE_FILENAME,
       ),
@@ -163,8 +158,7 @@ function workspaceMigrationError(
   env?: NodeJS.ProcessEnv,
   operation?: "doctor",
 ): Error {
-  return new StartupMaintenanceRequiredError(
-    "legacy-workspace",
+  return new Error(
     operation === "doctor"
       ? formatDoctorStateRepairFailure(
           `Legacy workspace setup state requires migration at ${blockedPaths.join(", ")}`,
@@ -270,7 +264,7 @@ export function prepareLegacyWorkspaceStateReset(
 /** Discard retired workspace files from a pre-removal reset plan. */
 export async function removeLegacyWorkspaceStateForReset(
   plan: LegacyWorkspaceResetPlan,
-  options?: { dryRun?: boolean; assertCurrent?: () => void },
+  options?: { dryRun?: boolean },
 ): Promise<LegacyWorkspaceResetCleanup> {
   const removedPaths: string[] = [];
   const warnings: string[] = [];
@@ -303,7 +297,6 @@ export async function removeLegacyWorkspaceStateForReset(
         }
       }
       if (!options?.dryRun) {
-        options?.assertCurrent?.();
         await sourceRoot.remove(relativePath);
       }
       removedPaths.push(sourcePath);

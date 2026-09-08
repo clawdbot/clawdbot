@@ -105,7 +105,7 @@ type OpenClawCompileCacheRespawnPlan = {
 };
 
 type OpenClawCompileCacheRespawnRuntime = RespawnChildRuntime & {
-  writeError: (message: string) => void | Promise<void>;
+  writeError: (message: string) => void;
 };
 
 function buildOpenClawCompileCacheRespawnPlan(params: {
@@ -145,7 +145,7 @@ function buildOpenClawCompileCacheRespawnPlan(params: {
 export async function respawnWithoutOpenClawCompileCacheIfNeeded(params: {
   currentFile: string;
   installRoot: string;
-  prepareWriteError?: () => Promise<(message: string) => void | Promise<void>>;
+  prepareWriteError?: () => Promise<(message: string) => void>;
 }): Promise<boolean> {
   const plan = buildOpenClawCompileCacheRespawnPlan({
     currentFile: params.currentFile,
@@ -176,9 +176,7 @@ function runOpenClawCompileCacheRespawnPlan(
     spawn,
     attachChildProcessBridge,
     exit: process.exit.bind(process) as (code?: number) => never,
-    writeError: (message: string) => {
-      process.stderr.write(message);
-    },
+    writeError: (message: string) => process.stderr.write(message),
   },
 ): ChildProcess {
   return runRespawnChildWithSignalBridge({
@@ -188,7 +186,7 @@ function runOpenClawCompileCacheRespawnPlan(
     detachForProcessTree: plan.detachForProcessTree,
     runtime,
     onError: (error) => {
-      return runtime.writeError(
+      runtime.writeError(
         `[openclaw] Failed to respawn CLI without compile cache: ${
           error instanceof Error ? (error.stack ?? error.message) : String(error)
         }\n`,

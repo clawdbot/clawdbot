@@ -23,8 +23,6 @@ agent model: openai/gpt-5.6-sol (thinking=medium, fast=on)
 
 `thinking` comes from the default agent, model params, or the global agent default; when unset it shows `medium`. `fast` comes from the default agent or the model's `fastMode` params.
 
-If a plugin reload supersedes startup plugin loading, the model line, loaded-plugin summary, and channel warnings use the replacement configuration and plugin metadata.
-
 ## File-based logger
 
 - Default rolling log files are under `/tmp/openclaw/` (one file per day), dated by the gateway host's local timezone. The default profile uses `openclaw-YYYY-MM-DD.log`; named profiles use `openclaw-<profile>-YYYY-MM-DD.log` (for example, `openclaw-dev-YYYY-MM-DD.log`). If that directory is unsafe or unwritable (wrong owner, world-writable, a symlink), OpenClaw falls back to a user-scoped `os.tmpdir()/openclaw-<uid>` path instead; on Windows it always uses that OS-tmpdir fallback.
@@ -53,35 +51,6 @@ openclaw logs --follow
 - Embedded-run `continue_normal` decisions log at `debug`; retry, profile-rotation, model-fallback, and error decisions remain warnings.
 - Trace logging also includes diagnostic timing summaries for selected hot paths, such as plugin tool factory preparation. See [/tools/plugin#slow-plugin-tool-setup](/tools/plugin#slow-plugin-tool-setup).
 
-### SQLite session writes
-
-Failed SQLite session writes include a bounded, redacted `error` summary in
-their structured file-log record, with cause and error-code details when
-available. Long summaries are truncated; the record retains its write timing
-and store fields.
-
-### Slow agent database opens
-
-A completed physical agent-database open taking at least one second emits
-`slow OpenClaw agent database open`. The record retains total elapsed time and
-the `open`, `validation`, `configuration`, `schema`, and `registration` phases.
-For a yielded integrity check, it also includes `integrityGateMs` and
-`integrityGateOutcome` (`healthy` or `failed`). The gate includes the check plus
-any driver waits, scheduling, and ownership revalidation. When admission uses a
-separate integrity Worker, its lifetime is included. This does not isolate
-native-check or CPU time.
-
-When canonical-index validation completes, `canonicalIndexMs` reports the
-subsequent synchronous inspection and any repair or rechecks, and
-`repairedIndexCount` counts indexes successfully repaired by that operation.
-A healthy initial integrity check can still require an index-definition repair;
-a failed initial check can be recovered by a successful repair. Fields are
-absent when their stage does not run, including the yielded-check fields for a
-fresh empty database. These details cover portions of `validation`, not extra
-time to add to it. The summary is emitted only at registration; earlier failures
-and live cache hits produce no summary. The details add no index names or
-database contents.
-
 ### Slow cron list pages
 
 A cron list page taking at least one second emits `cron: slow list page` through
@@ -98,35 +67,6 @@ filtering and delivery previews outside that page are not included. Existing
 trace context is retained when present. Emitter identity identifies the logging process/isolate, not the owner of work
 awaited by the callback. The diagnostic adds no job identifiers,
 job contents, or request parameters.
-
-### Slow cron list requests
-
-With `diagnostics.enabled` active, a `cron.list` handler taking at least one
-second emits `cron: slow list request` through the Gateway logger. The record
-uses the existing request trace/span and reports `elapsedMs` plus fixed
-`phaseDurationsMs` for `setup`, `listing`, `projection`, optional `previews`,
-`response`, and `handlerExit`. Unentered phases are absent.
-
-`sourcePageMs` and `sourcePageCount` aggregate source-page calls, including
-failed calls. `returnedCount` appears once a page is selected.
-`scopeAttemptCount` is zero for direct lists; scoped lists allow
-three total attempts. For scoped lists, `scopeProcessingMs` is listing time
-minus source-page time: it includes visibility filtering, snapshot processing
-and scheduling between page calls. These components are already included in
-the listing phase and must not be added to it again.
-
-The bounded branch fields are `compact`, `previewsRequested`, and `scopeApplied`.
-`previewsRequested` describes the selected response mode, not whether execution
-reached that phase. `handlerOutcome` is `returned` or `threw`; `responseOutcome`
-is `none`, `ok`, `error`, or `threw` for the handler's response callback. Its
-`response` phase measures that synchronous callback, and `handlerExit` ends at
-the handler's own cleanup boundary. Neither proves socket delivery or client
-receipt; outer RPC diagnostics retain those separate outcomes.
-
-All durations are wall time, including awaits and scheduling, not CPU time.
-Fast requests and requests with diagnostics disabled emit no summary. The
-record adds no job identifiers, content, query strings, targets or error text,
-and does not change individual slow-page warnings or response payloads.
 
 ## Console capture
 

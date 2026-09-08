@@ -1,3 +1,4 @@
+// ACP Core module implements meta behavior.
 import { asFiniteNumber, asSafeIntegerInRange } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 

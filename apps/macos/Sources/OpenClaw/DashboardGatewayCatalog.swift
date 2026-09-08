@@ -56,7 +56,6 @@ struct MacGatewayCatalogProfile: Equatable, Sendable {
     var usesBrowserIdentity = false
     var browserSessionExpiresAt: Date?
     var authKind: AuthKind?
-    var browserSessionSubject: String?
 }
 
 enum DashboardGatewayCatalog {

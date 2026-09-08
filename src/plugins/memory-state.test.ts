@@ -19,11 +19,7 @@ import {
   type MemoryPluginPublicArtifact,
 } from "./memory-state.test-fixtures.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
-import {
-  clearActivePluginRegistry,
-  getActivePluginRegistry,
-  withPluginRegistrationContext,
-} from "./runtime.js";
+import { withPluginRegistrationContext } from "./runtime.js";
 import { createPluginRecord } from "./status.test-helpers.js";
 
 function createMemoryRuntime() {
@@ -78,15 +74,6 @@ describe("memory plugin state", () => {
 
   it("returns empty defaults when no memory plugin state is registered", () => {
     expectClearedMemoryState();
-  });
-
-  it("keeps a cleared registry absent while reading memory capability state", async () => {
-    await clearActivePluginRegistry();
-
-    expect(getMemoryRuntime()).toBeUndefined();
-    expect(getMemoryCapabilityRegistration()).toBeUndefined();
-    expect(resolveMemoryFlushPlan({})).toBeNull();
-    expect(getActivePluginRegistry()).toBeNull();
   });
 
   it("attributes direct builder registrations to the synchronous plugin owner", () => {

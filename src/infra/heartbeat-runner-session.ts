@@ -128,7 +128,6 @@ export function resolveHeartbeatSession(
   return {
     ...resolved,
     entry: loadSessionEntry({
-      agentId,
       storePath: resolved.storePath,
       sessionKey: resolved.sessionKey,
       env,
@@ -232,7 +231,6 @@ export function resolveHeartbeatSessionSelection(
       isolatedBaseSessionKey === session.sessionKey
         ? session.entry
         : loadSessionEntry({
-            agentId,
             storePath: session.storePath,
             sessionKey: isolatedBaseSessionKey,
             env,
@@ -262,26 +260,33 @@ export function resolveStaleHeartbeatIsolatedSessionKey(params: {
 }
 
 export async function restoreHeartbeatUpdatedAt(params: {
-  agentId: string;
   storePath: string;
   sessionKey: string;
   updatedAt?: number;
 }) {
-  const { updatedAt, ...scope } = params;
+  const { storePath, sessionKey, updatedAt } = params;
   if (typeof updatedAt !== "number") {
     return;
   }
-  const entry = loadSessionEntry(scope);
-  if (!entry || entry.updatedAt === Math.max(entry.updatedAt ?? 0, updatedAt)) {
+  const entry = loadSessionEntry({ storePath, sessionKey });
+  if (!entry) {
+    return;
+  }
+  const nextUpdatedAt = Math.max(entry.updatedAt ?? 0, updatedAt);
+  if (entry.updatedAt === nextUpdatedAt) {
     return;
   }
   await patchSessionEntryCore(
-    scope,
+    { storePath, sessionKey },
     (nextEntry, context) => {
+      if (!context.existingEntry) {
+        return null;
+      }
       const resolvedUpdatedAt = Math.max(nextEntry.updatedAt ?? 0, updatedAt);
-      return context.existingEntry && nextEntry.updatedAt !== resolvedUpdatedAt
-        ? { ...nextEntry, updatedAt: resolvedUpdatedAt }
-        : null;
+      if (nextEntry.updatedAt === resolvedUpdatedAt) {
+        return null;
+      }
+      return { ...nextEntry, updatedAt: resolvedUpdatedAt };
     },
     { replaceEntry: true },
   );

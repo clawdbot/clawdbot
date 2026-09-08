@@ -104,7 +104,6 @@ vi.mock("../agents/runtime-plugins.js", () => ({
 
 vi.mock("../plugins/registry-refresh.js", () => ({
   refreshPluginRegistryAfterConfigMutation: mocks.refreshPluginRegistryAfterConfigMutation,
-  refreshPluginRegistryForPreparedConfig: mocks.refreshPluginRegistryAfterConfigMutation,
 }));
 
 vi.mock("../config/config.js", async (importOriginal) => {
@@ -594,7 +593,6 @@ function activateCodexSetup(params: Omit<TestSetupInferenceActivationParams, "ki
       ensureCodexRuntimePlugin: mockCodexRuntimeInstall(),
       runEmbeddedAgent: vi.fn(successfulRunner("openai", "gpt-5.6-sol")) as never,
       refreshPluginRegistryAfterConfigMutation: vi.fn(async () => {}) as never,
-      refreshPluginRegistryForPreparedConfig: vi.fn(async () => {}) as never,
       ...params.deps,
     },
   });
@@ -1563,7 +1561,6 @@ async function runCodexSetupWithFinalConfig(params: {
       readConfigFileSnapshot: readConfigFileSnapshot as never,
       transformConfigWithPendingPluginInstalls: transformConfig as never,
       refreshPluginRegistryAfterConfigMutation: refreshPluginRegistry as never,
-      refreshPluginRegistryForPreparedConfig: refreshPluginRegistry as never,
     },
   });
   return { result, persistedConfig, refreshPluginRegistry, transformConfig };
@@ -2766,7 +2763,6 @@ describe("activateSetupInference", () => {
         ensureCodexRuntimePlugin: ensureCodexRuntimePlugin as never,
         transformConfigWithPendingPluginInstalls: configHarness.transform as never,
         refreshPluginRegistryAfterConfigMutation: refreshPluginRegistry as never,
-        refreshPluginRegistryForPreparedConfig: refreshPluginRegistry as never,
         runCliAgent: runCliAgent as never,
       },
     });
@@ -4801,7 +4797,6 @@ describe("activateSetupInference", () => {
         markRetainedManagedNpmInstall: markRetainedInstall,
         transformConfigWithPendingPluginInstalls: transformConfig as never,
         refreshPluginRegistryAfterConfigMutation: refreshPluginRegistry as never,
-        refreshPluginRegistryForPreparedConfig: refreshPluginRegistry as never,
       },
     });
     expect(result).toMatchObject({ ok: true, gatewayRestartRequired: true });
@@ -4882,6 +4877,7 @@ describe("activateSetupInference", () => {
       expect.not.objectContaining({ afterWrite: expect.anything() }),
     );
     expect(refreshPluginRegistry).toHaveBeenCalledWith({
+      config: persistedConfig,
       reason: "source-changed",
       workspaceDir: "/tmp/openclaw-workspace",
       logger: expect.objectContaining({ warn: expect.any(Function) }),
@@ -5018,7 +5014,6 @@ describe("activateSetupInference", () => {
         readConfigFileSnapshot: configHarness.readSnapshot as never,
         ensureCodexRuntimePlugin: ensureCodex as never,
         refreshPluginRegistryAfterConfigMutation: refreshPluginRegistryAfterConfigMutation as never,
-        refreshPluginRegistryForPreparedConfig: refreshPluginRegistryAfterConfigMutation as never,
         runEmbeddedAgent: runEmbeddedAgent as never,
         transformConfigWithPendingPluginInstalls: configHarness.transform as never,
       },
@@ -5392,7 +5387,6 @@ describe("activateSetupInference", () => {
         runEmbeddedAgent: runEmbeddedAgent as never,
         transformConfigWithPendingPluginInstalls: transformConfig as never,
         refreshPluginRegistryAfterConfigMutation: refreshPluginRegistry as never,
-        refreshPluginRegistryForPreparedConfig: refreshPluginRegistry as never,
       },
     });
 
@@ -5428,7 +5422,6 @@ describe("activateSetupInference", () => {
         clearPluginMetadataLifecycleCaches: clearMetadata,
         invalidatePluginRuntimeDiscoveryAfterConfigMutation: clearDiscovery as never,
         refreshPluginRegistryAfterConfigMutation: refreshPluginRegistry as never,
-        refreshPluginRegistryForPreparedConfig: refreshPluginRegistry as never,
       },
     });
 
@@ -5444,6 +5437,7 @@ describe("activateSetupInference", () => {
     expect(clearMetadata).toHaveBeenCalledTimes(2);
     expect(clearDiscovery).toHaveBeenCalledTimes(2);
     expect(refreshPluginRegistry).toHaveBeenCalledWith({
+      config: {},
       reason: "source-changed",
       workspaceDir: "/tmp/openclaw-workspace",
       logger: expect.objectContaining({ warn: expect.any(Function) }),
@@ -5485,7 +5479,6 @@ describe("activateSetupInference", () => {
           clearPluginMetadataLifecycleCaches: vi.fn(),
           invalidatePluginRuntimeDiscoveryAfterConfigMutation: vi.fn(async () => {}) as never,
           refreshPluginRegistryAfterConfigMutation: refreshPluginRegistry as never,
-          refreshPluginRegistryForPreparedConfig: refreshPluginRegistry as never,
           createTempDir: async () => {
             tempDir = await suiteTempRootTracker.make("case");
             return tempDir;
@@ -5600,7 +5593,6 @@ describe("activateSetupInference", () => {
         runEmbeddedAgent: runEmbeddedAgent as never,
         transformConfigWithPendingPluginInstalls: transformConfig as never,
         refreshPluginRegistryAfterConfigMutation: refreshPluginRegistry as never,
-        refreshPluginRegistryForPreparedConfig: refreshPluginRegistry as never,
       },
     });
 
@@ -5640,7 +5632,6 @@ describe("activateSetupInference", () => {
           transformConfigWithPendingPluginInstalls: configHarness.transform as never,
           readPersistedInstalledPluginIndexInstallRecords: vi.fn(async () => ({})),
           refreshPluginRegistryAfterConfigMutation: refreshPluginRegistry as never,
-          refreshPluginRegistryForPreparedConfig: refreshPluginRegistry as never,
         },
       });
 
@@ -5775,7 +5766,6 @@ describe("activateSetupInference", () => {
       transformConfigWithPendingPluginInstalls: transformConfig as never,
       readConfigFileSnapshot: readConfigFileSnapshot as never,
       refreshPluginRegistryAfterConfigMutation: vi.fn(async () => {}) as never,
-      refreshPluginRegistryForPreparedConfig: vi.fn(async () => {}) as never,
       readPersistedInstalledPluginIndexInstallRecords: vi.fn(async () => ({})),
       markRetainedManagedNpmInstall: markRetained,
       clearLoadInstalledPluginIndexInstallRecordsCache: clearInstallRecords,
@@ -5899,7 +5889,6 @@ describe("resolvePersistentApplyInference", () => {
     const execution = {
       runner: "embedded" as const,
       runConfig: { agents: { defaults: { model: "openai/gpt-5.5" } } },
-      sourceConfig: { agents: { defaults: { model: "openai/gpt-5.5" } } },
       modelLabel: "openai/gpt-5.5",
       provider: "openai",
       model: "gpt-5.5",

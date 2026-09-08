@@ -5,10 +5,7 @@ import ai.openclaw.app.ui.design.ClawTheme
 import android.content.ClipData
 import android.content.ClipboardManager
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
@@ -25,7 +22,6 @@ import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
-import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.font.FontFamily
@@ -76,29 +72,6 @@ class ChatCodeBlockLayoutTest {
     assertCopiedSource(code)
     click("Start of code")
     visibleGlyph("FIRST_CODE")
-  }
-
-  @Test
-  fun standaloneEndAndStartRevealEndpointsInsideAShortScrollingParent() {
-    val code = (0 until 700).joinToString("\n") { "R$it" }
-    show {
-      Box(
-        Modifier
-          .height(198.dp)
-          .clipToBounds()
-          .verticalScroll(rememberScrollState()),
-      ) {
-        ChatCodeBlock(code = code, language = null)
-      }
-    }
-
-    visibleGlyph("R0")
-    click("End of code")
-    composeRule.waitForIdle()
-    visibleGlyph("R699")
-    composeRule.onNode(hasText("Start of code") and hasClickAction()).performScrollTo()
-    click("Start of code")
-    visibleGlyph("R0")
   }
 
   @Test

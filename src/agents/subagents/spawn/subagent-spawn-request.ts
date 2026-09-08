@@ -46,7 +46,6 @@ type ResolvedSubagentSpawnRequest = {
     groupId?: string;
     schedulerGroupKey?: string;
     launchReplayKey?: string;
-    soleImplicitMember: boolean;
     reservationPending: boolean;
   };
   admission: {
@@ -271,10 +270,8 @@ export function resolveSubagentSpawnRequest(
         .slice(0, 32)}`
     : crypto.randomUUID();
   let reservationPending = false;
-  let soleImplicitMember = false;
   if (params.collect && swarmGroupId && swarmSchedulerGroupKey) {
     const groupRuns = listSwarmRunsForGroup(swarmGroupId, requesterInternalKey, requesterAgentId);
-    soleImplicitMember = !explicitSwarmGroupId && !swarmLaunchReplayKey && groupRuns.length === 0;
     // Swarm reservation can reconcile existing lane state even when it rejects a duplicate.
     ctx.onSpawnEffectsStart?.();
     if (
@@ -321,7 +318,6 @@ export function resolveSubagentSpawnRequest(
         groupId: swarmGroupId,
         schedulerGroupKey: swarmSchedulerGroupKey,
         launchReplayKey: swarmLaunchReplayKey,
-        soleImplicitMember,
         reservationPending,
       },
       admission: {

@@ -400,7 +400,6 @@ describe("requester settle dispatch deadline", () => {
         } as AgentCommandOpts,
         prepare: async () => ({
           ...target,
-          sessionAgentId: "main",
           sessionId: "requester-session",
           isNewSession: false,
           sessionEntry: loadSessionEntry(target),

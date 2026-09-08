@@ -5,14 +5,13 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER } from "../../agents/main-session-recovery/main-session-recovery-admission.js";
 import { SESSION_RESTART_RECOVERY_TOMBSTONE_ERROR_CODE } from "../../config/sessions/lifecycle.js";
+import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import {
   deleteSessionEntryLifecycle,
   loadSessionEntry,
   replaceSessionEntry,
   replaceSessionEntrySync,
 } from "../../config/sessions/session-accessor.js";
-import * as sessionAccessor from "../../config/sessions/session-accessor.js";
-import * as sessionEntryAccessor from "../../config/sessions/session-accessor.sqlite-entry.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
 import {
   resetDiagnosticRunActivityForTest,
@@ -85,14 +84,6 @@ function admitTestReplyTurn(
   return admitReplyTurn({ kind: "visible", resetTriggered: false, ...overrides });
 }
 
-async function admitTestReplyOperation(params: Parameters<typeof admitTestReplyTurn>[0]) {
-  const admission = await admitTestReplyTurn(params);
-  if (admission.status !== "owned") {
-    throw new Error("Fixture requires an admitted reply operation");
-  }
-  return admission.operation;
-}
-
 function createSessionStore(entries: Record<string, object>): string {
   const root = tempDirs.make("openclaw-reply-admission-");
   // The store handle stays a sessions.json path; the sqlite-backed accessor
@@ -147,7 +138,7 @@ describe("reply turn admission", () => {
       owner: MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER,
       assertAllowed: () => {},
     });
-    const loadSpy = vi.spyOn(sessionEntryAccessor, "loadSessionEntryWithDatabase");
+    const loadSpy = vi.spyOn(sessionAccessor, "loadSessionEntry");
     const controller = new AbortController();
     const admission = admitTestReplyTurn({
       sessionKey,
@@ -1249,7 +1240,7 @@ describe("reply turn admission", () => {
     active.completeWithAfterClearBarrier(barrier);
     const visibleAdmission = await admitTestReplyTurn({
       sessionKey: "agent:main:discord:channel:42",
-      sessionId: "active-session",
+      sessionId: "visible-session",
     });
     expect(visibleAdmission.status).toBe("owned");
     if (visibleAdmission.status === "owned") {
@@ -1303,10 +1294,9 @@ describe("reply turn admission", () => {
     const sessionId = "pre-compact-session";
     const nextSessionId = "post-compact-session";
     const storePath = createSessionStoreFor(sessionKey, sessionId);
-    const active = await admitTestReplyOperation({
+    const active = createTestReplyOperation({
       sessionKey,
       sessionId,
-      storePath,
     });
     active.setPhase("preflight_compacting");
 
@@ -1340,10 +1330,9 @@ describe("reply turn admission", () => {
     const sessionId = "pre-compact-session";
     const nextSessionId = "post-compact-session";
     const storePath = createSessionStoreFor(sessionKey, sessionId);
-    const active = await admitTestReplyOperation({
+    const active = createTestReplyOperation({
       sessionKey,
       sessionId,
-      storePath,
     });
     active.setPhase("preflight_compacting");
     active.updateSessionId(nextSessionId);
@@ -1373,10 +1362,9 @@ describe("reply turn admission", () => {
     const sessionId = "pre-compact-session";
     const nextSessionId = "post-compact-session";
     const storePath = createSessionStoreFor(sessionKey, sessionId);
-    const active = await admitTestReplyOperation({
+    const active = createTestReplyOperation({
       sessionKey,
       sessionId,
-      storePath,
     });
     active.setPhase("preflight_compacting");
     active.updateSessionId(nextSessionId);
@@ -1412,10 +1400,9 @@ describe("reply turn admission", () => {
     const storePath = createSessionStore({
       [sessionKey]: { sessionId: nextSessionId, updatedAt: Date.now() },
     });
-    const freshOwner = await admitTestReplyOperation({
+    const freshOwner = createTestReplyOperation({
       sessionKey,
       sessionId: nextSessionId,
-      storePath,
     });
 
     const admitted = admitTestReplyTurn({
@@ -1431,13 +1418,7 @@ describe("reply turn admission", () => {
   });
 
   it.each([
-    [
-      "failed",
-      (operation: ReplyOperation) => {
-        operation.fail("run_failed");
-        operation.complete();
-      },
-    ],
+    ["failed", (operation: ReplyOperation) => operation.fail("run_failed")],
     [
       "user-aborted",
       (operation: ReplyOperation) => {
@@ -1450,10 +1431,9 @@ describe("reply turn admission", () => {
     const sessionId = "pre-compact-session";
     const nextSessionId = "post-compact-session";
     const storePath = createSessionStoreFor(sessionKey, sessionId);
-    const active = await admitTestReplyOperation({
+    const active = createTestReplyOperation({
       sessionKey,
       sessionId,
-      storePath,
     });
     active.setPhase("preflight_compacting");
     active.updateSessionId(nextSessionId);

@@ -160,13 +160,6 @@ function mockMediaLoad(fileName: string, contentType: string, data: string) {
   });
 }
 
-function mockPhotoMedia(count = 2) {
-  return Array.from({ length: count }, (_, index) => {
-    mockMediaLoad(`photo-${index}.jpg`, "image/jpeg", `photo-${index}`);
-    return `https://example.com/photo-${index}.jpg`;
-  });
-}
-
 function createObservedPromptContextSequence(
   record: (value: unknown) => void,
   source?: { transcriptMessageId: string },
@@ -1158,249 +1151,6 @@ describe("deliverReplies", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
-  it.each([2, 10, 11])(
-    "delivers %s photos as bounded albums with one caption and reply",
-    async (count) => {
-      const mediaUrls = mockPhotoMedia(count);
-      const messages = Array.from({ length: count }, (_, index) => ({
-        message_id: 100 + index,
-        message_thread_id: 42,
-        chat: { id: "123", type: "supergroup" },
-      }));
-      const sendMediaGroup = vi.fn().mockResolvedValue(messages.slice(0, 10));
-      const sendPhoto = vi.fn().mockResolvedValue(messages.at(-1));
-      const transcriptMirror = vi.fn();
-      const record = vi.fn();
-      const promptContextSequence = createObservedPromptContextSequence(record, {
-        transcriptMessageId: "assistant-photos",
-      });
-
-      await expect(
-        deliverWith({
-          replies: [{ text: "hi **boss**", mediaUrls, replyToId: "900" }],
-          runtime: createRuntime(),
-          bot: createBot({ sendMediaGroup, sendPhoto }),
-          thread: { id: 42, scope: "forum" },
-          replyToMode: "first",
-          replyQuoteMessageId: 900,
-          replyQuoteText: "quoted",
-          silent: true,
-          transcriptMirror,
-          promptContextSequence,
-        }),
-      ).resolves.toEqual({ delivered: true });
-      await promptContextSequence.finish();
-
-      expect(sendMediaGroup).toHaveBeenCalledOnce();
-      expect(sendMediaGroup).toHaveBeenCalledWith(
-        "123",
-        Array.from({ length: Math.min(count, 10) }, (_, index) => ({
-          type: "photo",
-          media: expect.objectContaining({
-            filename: `photo-${index}.jpg`,
-            buffer: Buffer.from(`photo-${index}`),
-          }),
-          ...(index === 0 ? { caption: "hi <b>boss</b>", parse_mode: "HTML" } : {}),
-        })),
-        {
-          message_thread_id: 42,
-          disable_notification: true,
-          reply_parameters: { message_id: 900, quote: "quoted", allow_sending_without_reply: true },
-        },
-      );
-      expect(sendPhoto).toHaveBeenCalledTimes(count === 11 ? 1 : 0);
-      if (count === 11) {
-        expect(sendPhoto).toHaveBeenCalledWith(
-          "123",
-          expect.objectContaining({ filename: "photo-10.jpg" }),
-          {
-            caption: undefined,
-            message_thread_id: 42,
-            disable_notification: true,
-          },
-        );
-      }
-      expect(recordSentMessage.mock.calls.map((call) => call[1])).toEqual(
-        messages.map((message) => message.message_id),
-      );
-      expect(record.mock.calls.map(([value]) => value)).toEqual(
-        messages.map((message, index) =>
-          expect.objectContaining({
-            messageId: message.message_id,
-            message,
-            ...(index === 0 ? { text: "hi **boss**" } : {}),
-            projection: {
-              transcriptMessageId: "assistant-photos",
-              partIndex: index,
-              finalPart: index === count - 1,
-            },
-          }),
-        ),
-      );
-      expect(transcriptMirror).toHaveBeenCalledWith({ text: "hi **boss**", mediaUrls });
-    },
-  );
-
-  it("keeps controls on the first photo instead of dropping them into an album", async () => {
-    const mediaUrls = mockPhotoMedia();
-    const buttons = [[{ text: "Retry", callback_data: "retry" }]];
-    const sendMediaGroup = vi.fn();
-    const sendPhoto = vi
-      .fn()
-      .mockResolvedValueOnce({ message_id: 101, chat: { id: "123" } })
-      .mockResolvedValueOnce({ message_id: 102, chat: { id: "123" } });
-
-    await deliverWith({
-      replies: [{ text: "Choose", mediaUrls, channelData: { telegram: { buttons } } }],
-      runtime: createRuntime(),
-      bot: createBot({ sendPhoto, sendMediaGroup }),
-    });
-
-    expect(sendMediaGroup).not.toHaveBeenCalled();
-    expect(sendPhoto).toHaveBeenCalledTimes(2);
-    expectRecordFields(mockCallArg(sendPhoto, 0, 2), {
-      caption: "Choose",
-      reply_markup: { inline_keyboard: buttons },
-    });
-    expect(mockCallArg(sendPhoto, 1, 2)).not.toHaveProperty("reply_markup");
-  });
-
-  it.each([false, true])(
-    "sends oversized album text after every photo when rejected=%s",
-    async (rejected) => {
-      const mediaUrls = mockPhotoMedia();
-      const text = "x".repeat(1025);
-      const sendMediaGroup = vi.fn().mockResolvedValue([
-        { message_id: 101, chat: { id: "123" } },
-        { message_id: 102, chat: { id: "123" } },
-      ]);
-      if (rejected) {
-        sendMediaGroup.mockRejectedValue(createChunkRejection("PHOTO_INVALID_DIMENSIONS"));
-      }
-      const sendPhoto = vi
-        .fn()
-        .mockResolvedValueOnce({ message_id: 101, chat: { id: "123" } })
-        .mockResolvedValueOnce({ message_id: 102, chat: { id: "123" } });
-      const sendMessage = vi.fn(async () => {
-        expect(recordSentMessage.mock.calls.map((call) => call[1])).toEqual([101, 102]);
-        return { message_id: 103, chat: { id: "123" } };
-      });
-
-      await deliverWith({
-        replies: [{ text, mediaUrls, replyToId: "900" }],
-        runtime: createRuntime(),
-        bot: createBot({ sendMediaGroup, sendPhoto, sendMessage }),
-        replyToMode: "first",
-      });
-
-      expect(sendMediaGroup).toHaveBeenCalledWith(
-        "123",
-        [
-          { type: "photo", media: expect.objectContaining({ filename: "photo-0.jpg" }) },
-          { type: "photo", media: expect.objectContaining({ filename: "photo-1.jpg" }) },
-        ],
-        { reply_to_message_id: 900, allow_sending_without_reply: true },
-      );
-      expect(sendPhoto).toHaveBeenCalledTimes(rejected ? 2 : 0);
-      expect(sendMessage).toHaveBeenCalledOnce();
-      expect(firstSendText(sendMessage)).toBe(text);
-      expect(firstMockCallArg(sendMessage, 2)).not.toHaveProperty("reply_to_message_id");
-      expect(recordSentMessage.mock.calls.map((call) => call[1])).toEqual([101, 102, 103]);
-    },
-  );
-
-  it("keeps every accepted album id when the first bookkeeping observer fails", async () => {
-    const mediaUrls = mockPhotoMedia();
-    const failure = new Error("sent-message cache unavailable");
-    const sendMediaGroup = vi.fn().mockResolvedValue([
-      { message_id: 101, chat: { id: "123" } },
-      { message_id: 102, chat: { id: "123" } },
-    ]);
-    const sendPhoto = vi.fn();
-    recordSentMessage.mockImplementationOnce(() => {
-      throw failure;
-    });
-
-    await expect(
-      deliverWith({
-        replies: [{ mediaUrls }],
-        runtime: createRuntime(),
-        bot: createBot({ sendMediaGroup, sendPhoto }),
-      }),
-    ).rejects.toMatchObject({
-      deliveryResult: {
-        messageIds: ["101", "102"],
-        visibleReplySent: true,
-        receipt: {
-          platformMessageIds: ["101", "102"],
-          parts: [
-            { platformMessageId: "101", kind: "media", index: 0 },
-            { platformMessageId: "102", kind: "media", index: 1 },
-          ],
-        },
-      },
-    });
-    expect(sendMediaGroup).toHaveBeenCalledOnce();
-    expect(sendPhoto).not.toHaveBeenCalled();
-    expect(recordSentMessage).toHaveBeenCalledOnce();
-  });
-
-  it("uses single-photo document recovery after a definite album photo-limit rejection", async () => {
-    const runtime = createRuntime();
-    const mediaUrls = mockPhotoMedia();
-    const failure = createChunkRejection("PHOTO_INVALID_DIMENSIONS");
-    const sendMediaGroup = vi.fn().mockRejectedValue(failure);
-    const sendPhoto = vi
-      .fn()
-      .mockRejectedValueOnce(failure)
-      .mockResolvedValueOnce({ message_id: 102, chat: { id: "123" } });
-    const sendDocument = vi.fn().mockResolvedValue({ message_id: 101, chat: { id: "123" } });
-
-    await expect(
-      deliverWith({
-        replies: [{ text: "Caption", mediaUrls }],
-        runtime,
-        bot: createBot({ sendMediaGroup, sendPhoto, sendDocument }),
-      }),
-    ).resolves.toEqual({ delivered: true });
-
-    expect(sendMediaGroup).toHaveBeenCalledOnce();
-    expect(sendPhoto).toHaveBeenCalledTimes(2);
-    expect(sendDocument).toHaveBeenCalledWith(
-      "123",
-      expect.objectContaining({
-        filename: "photo-0.jpg",
-        buffer: Buffer.from("photo-0"),
-      }),
-      { caption: "Caption", parse_mode: "HTML" },
-    );
-    expect(mockCallArg(sendPhoto, 1, 1)).toMatchObject({ filename: "photo-1.jpg" });
-    expect(recordSentMessage.mock.calls.map((call) => call[1])).toEqual([101, 102]);
-    expect(runtime.error).not.toHaveBeenCalled();
-  });
-
-  it("does not replay an album after an ambiguous upload failure", async () => {
-    const runtime = createRuntime();
-    const mediaUrls = mockPhotoMedia();
-    const failure = createPlainHttpError("sendMediaGroup");
-    const sendMediaGroup = vi.fn().mockRejectedValue(failure);
-    const sendPhoto = vi.fn();
-    const sendDocument = vi.fn();
-
-    await expect(
-      deliverWith({
-        replies: [{ mediaUrls }],
-        runtime,
-        bot: createBot({ sendMediaGroup, sendPhoto, sendDocument }),
-      }),
-    ).rejects.toBe(failure);
-    expect(sendMediaGroup).toHaveBeenCalledOnce();
-    expect(sendPhoto).not.toHaveBeenCalled();
-    expect(sendDocument).not.toHaveBeenCalled();
-    expect(recordSentMessage).not.toHaveBeenCalled();
-    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("sendMediaGroup failed"));
-  });
-
   it("stops a media follow-up when the provider returns the wrong topic", async () => {
     const runtime = createRuntime();
     const sendPhoto = vi.fn().mockResolvedValue({
@@ -1439,20 +1189,20 @@ describe("deliverReplies", () => {
     expect(recordSentMessage).not.toHaveBeenCalled();
   });
 
-  it("keeps every album id when a later item lands in the wrong topic", async () => {
+  it("keeps earlier media ids when a later item lands in the wrong topic", async () => {
     const runtime = createRuntime();
-    const sendMediaGroup = vi.fn().mockResolvedValueOnce([
-      {
+    const sendPhoto = vi
+      .fn()
+      .mockResolvedValueOnce({
         message_id: 61,
         message_thread_id: 42,
         chat: { id: "123", type: "supergroup" },
-      },
-      {
+      })
+      .mockResolvedValueOnce({
         message_id: 62,
         message_thread_id: 43,
         chat: { id: "123", type: "supergroup" },
-      },
-    ]);
+      });
     const observer = vi.fn();
     const promptContextSequence = createObservedPromptContextSequence(observer);
     mockMediaLoad("one.jpg", "image/jpeg", "one");
@@ -1463,7 +1213,7 @@ describe("deliverReplies", () => {
       await deliverWith({
         replies: [{ mediaUrls: ["https://example.com/one.jpg", "https://example.com/two.jpg"] }],
         runtime,
-        bot: createBot({ sendMediaGroup }),
+        bot: createBot({ sendPhoto }),
         thread: { id: 42, scope: "forum" },
         promptContextSequence,
       });
@@ -1476,13 +1226,9 @@ describe("deliverReplies", () => {
     if (!isChannelPartialDeliveryError(observed)) {
       throw observed;
     }
-    expect(sendMediaGroup).toHaveBeenCalledOnce();
+    expect(sendPhoto).toHaveBeenCalledTimes(2);
     expect(observed.deliveryResult.messageIds).toEqual(["61", "62"]);
-    expect(observed.deliveryResult.receipt?.threadId).toBeUndefined();
-    expect(observed.deliveryResult.receipt?.parts).toMatchObject([
-      { platformMessageId: "61", kind: "media", index: 0, threadId: "42" },
-      { platformMessageId: "62", kind: "media", index: 1, threadId: "43" },
-    ]);
+    expect(observed.deliveryResult.receipt?.threadId).toBe("43");
     expect(observer).toHaveBeenCalledOnce();
     expect(recordSentMessage).toHaveBeenCalledOnce();
   });
@@ -1516,11 +1262,7 @@ describe("deliverReplies", () => {
       .mockResolvedValueOnce({ message_id: 71, chat: { id: "123" } })
       .mockRejectedValueOnce(rejection);
     mockMediaLoad(testCase.fileName, testCase.contentType, "first");
-    mockMediaLoad(
-      testCase.kind === "photo" ? "report.pdf" : testCase.fileName,
-      testCase.kind === "photo" ? "application/pdf" : testCase.contentType,
-      "second",
-    );
+    mockMediaLoad(testCase.fileName, testCase.contentType, "second");
 
     let observed: unknown;
     try {
@@ -1532,10 +1274,7 @@ describe("deliverReplies", () => {
           },
         ],
         runtime: createRuntime(),
-        bot: createBot({
-          [testCase.method]: sendMedia,
-          ...(testCase.kind === "photo" ? { sendDocument: sendMedia } : {}),
-        }),
+        bot: createBot({ [testCase.method]: sendMedia }),
       });
     } catch (error) {
       observed = error;
@@ -1643,11 +1382,13 @@ describe("deliverReplies", () => {
   );
 
   it("preserves media and accepted caption-follow-up ids when later media fails", async () => {
-    const sendPhoto = vi.fn().mockResolvedValueOnce({ message_id: 75, chat: { id: "123" } });
-    const sendDocument = vi.fn().mockRejectedValueOnce(new Error("later document failed"));
+    const sendPhoto = vi
+      .fn()
+      .mockResolvedValueOnce({ message_id: 75, chat: { id: "123" } })
+      .mockRejectedValueOnce(new Error("later photo failed"));
     const sendMessage = vi.fn().mockResolvedValueOnce({ message_id: 76, chat: { id: "123" } });
     mockMediaLoad("photo.jpg", "image/jpeg", "first");
-    mockMediaLoad("report.pdf", "application/pdf", "second");
+    mockMediaLoad("photo.jpg", "image/jpeg", "second");
 
     let observed: unknown;
     try {
@@ -1659,7 +1400,7 @@ describe("deliverReplies", () => {
           },
         ],
         runtime: createRuntime(),
-        bot: createBot({ sendPhoto, sendDocument, sendMessage }),
+        bot: createBot({ sendPhoto, sendMessage }),
       });
     } catch (error) {
       observed = error;
@@ -3472,20 +3213,19 @@ describe("deliverReplies", () => {
     }
   });
 
-  it("replyToMode 'first' only applies reply-to to the first mixed-media item", async () => {
+  it("replyToMode 'first' only applies reply-to to first media item", async () => {
     const runtime = createRuntime();
     const sendPhoto = vi.fn().mockResolvedValue({
       message_id: 30,
       chat: { id: "123" },
     });
-    const sendDocument = vi.fn().mockResolvedValue({ message_id: 31, chat: { id: "123" } });
-    const bot = createBot({ sendPhoto, sendDocument });
+    const bot = createBot({ sendPhoto });
 
     mockMediaLoad("a.jpg", "image/jpeg", "img1");
-    mockMediaLoad("b.pdf", "application/pdf", "document");
+    mockMediaLoad("b.jpg", "image/jpeg", "img2");
 
     await deliverReplies({
-      replies: [{ mediaUrls: ["https://a.jpg", "https://b.pdf"], replyToId: "900" }],
+      replies: [{ mediaUrls: ["https://a.jpg", "https://b.jpg"], replyToId: "900" }],
       chatId: "123",
       token: "tok",
       runtime,
@@ -3494,15 +3234,14 @@ describe("deliverReplies", () => {
       textLimit: 4000,
     });
 
-    expect(sendPhoto).toHaveBeenCalledOnce();
-    expect(sendDocument).toHaveBeenCalledOnce();
+    expect(sendPhoto).toHaveBeenCalledTimes(2);
     // First media should have reply_to_message_id
     expectRecordFields(mockCallArg(sendPhoto, 0, 2), {
       reply_to_message_id: 900,
       allow_sending_without_reply: true,
     });
     // Second media should NOT have reply_to_message_id
-    expect(mockCallArg(sendDocument, 0, 2)).not.toHaveProperty("reply_to_message_id");
+    expect(mockCallArg(sendPhoto, 1, 2)).not.toHaveProperty("reply_to_message_id");
   });
 
   it("pins the first delivered text message when telegram pin is requested", async () => {

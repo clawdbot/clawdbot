@@ -1,3 +1,4 @@
+// Terminal Core module implements prompt style behavior.
 import { isRich, theme } from "./theme.js";
 
 // Shared styling helpers for interactive prompt copy.

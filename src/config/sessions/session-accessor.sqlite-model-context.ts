@@ -25,10 +25,6 @@ import {
 } from "./session-accessor.sqlite-scope.js";
 import { readActiveTranscriptEntryAnchorInTransaction } from "./session-accessor.sqlite-transcript-anchor.js";
 import {
-  readTranscriptContextVersionInTransaction,
-  type SessionTranscriptContextVersion,
-} from "./session-accessor.sqlite-transcript-state.js";
-import {
   projectModelContextEventSql,
   projectModelContextNavigationSql,
 } from "./session-model-context-projection.js";
@@ -43,10 +39,11 @@ import {
   selectSessionTranscriptTreePathNodes,
 } from "./transcript-tree.js";
 
-export type { SessionTranscriptContextVersion } from "./session-accessor.sqlite-transcript-state.js";
-
 type ContextEntry = SessionTreeEntry & { seq: number };
-
+export type SessionTranscriptContextVersion = {
+  generation: string | null;
+  rawSeq: number | null;
+};
 type ModelContextRequest = { entry: ContextEntry; omitCheckpoint: boolean };
 type TranscriptContextSnapshot = {
   header: TranscriptEvent;
@@ -59,6 +56,24 @@ type TranscriptContextSnapshot = {
 };
 
 const MODEL_CONTEXT_PAYLOAD_BATCH_SIZE = 400;
+
+function readContextVersion(database: Pick<OpenClawAgentDatabase, "db">, sessionId: string) {
+  const db = getSessionKysely(database.db);
+  return executeSqliteQueryTakeFirstSync(
+    database.db,
+    db
+      .selectFrom("transcript_events")
+      .select((eb) => [
+        eb.fn.max<number | null>("seq").as("rawSeq"),
+        eb
+          .selectFrom("transcript_rewrite_watermarks")
+          .select("generation")
+          .where("session_id", "=", sessionId)
+          .as("generation"),
+      ])
+      .where("session_id", "=", sessionId),
+  )!;
+}
 
 function assertContextAnchor(
   database: Pick<OpenClawAgentDatabase, "db" | "path">,
@@ -113,7 +128,7 @@ export function validateSessionTranscriptContextVersion(
 ): void {
   const resolved = resolveSqliteTranscriptReadScope(scope);
   const result = withOpenClawAgentDatabaseReadOnly(
-    (database) => readTranscriptContextVersionInTransaction(database, resolved.sessionId),
+    (database) => readContextVersion(database, resolved.sessionId),
     toDatabaseOptions(resolved),
     { throwOnMissingTable: true },
   );
@@ -214,7 +229,7 @@ function withTranscriptContextSnapshot<T>(
         () => {
           const db = getSessionKysely(database.db);
           const fence = resolveSqliteSessionTranscriptReadFence({ database, ...resolved });
-          const version = readTranscriptContextVersionInTransaction(database, resolved.sessionId);
+          const version = readContextVersion(database, resolved.sessionId);
           if (through) {
             assertContextAnchor(database, resolved, through);
           }

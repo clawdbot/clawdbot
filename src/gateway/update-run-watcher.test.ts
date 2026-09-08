@@ -15,7 +15,6 @@ vi.mock("../state/openclaw-state-db.js", () => ({
 }));
 vi.mock("./update-run-notice.runtime.js", () => ({ notifyUpdateRunPhase: ledger.notice }));
 vi.mock("../infra/update-run-ledger.js", () => ({
-  reconcileAbandonedUpdateRuns: () => [],
   findActiveUpdateRun: () => {
     ledger.reads();
     return ledger.run?.status === "running" ? ledger.run : undefined;

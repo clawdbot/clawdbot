@@ -1,3 +1,4 @@
+// Memory Host SDK module implements embedding model limits behavior.
 import type { EmbeddingProvider } from "./embeddings.types.js";
 
 // Provider input limits are byte-based approximations for pre-embedding chunk splitting.

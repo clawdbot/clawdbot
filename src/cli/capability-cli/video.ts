@@ -10,6 +10,7 @@ import {
   assertOkOrThrowHttpError,
   assertProviderBinaryResponseContent,
 } from "../../agents/provider-http-errors.js";
+import { getRuntimeConfig } from "../../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { readResponseWithLimit } from "../../infra/http-body.js";
@@ -36,7 +37,6 @@ import {
   parseOptionalFiniteNumber,
   parseOptionalTimeoutMs,
   providerHasGenericConfig,
-  registerLocalProvidersCommand,
   requireProviderModelOverride,
   resolveCapabilityAgentOption,
   resolveCapabilityProviderAgentId,
@@ -325,38 +325,48 @@ export function registerVideoCapabilityCommands(capability: Command): void {
       });
     });
 
-  registerLocalProvidersCommand(
-    video,
-    "List video generation and description providers",
-    (cfg, agentId) => {
-      const selectedGenerationProvider = resolveSelectedProviderFromModelRef(
-        resolveAgentModelPrimaryValue(cfg.agents?.defaults?.mediaModels?.video),
-      );
-      return {
-        generation: listRuntimeVideoGenerationProviders({ config: cfg }).map((provider) => ({
-          available: true,
-          configured:
-            selectedGenerationProvider === provider.id ||
-            providerHasGenericConfig({ cfg, providerId: provider.id, agentId }),
-          selected: selectedGenerationProvider === provider.id,
-          id: provider.id,
-          label: provider.label,
-          defaultModel: provider.defaultModel,
-          models: provider.models ?? [],
-          capabilities: provider.capabilities,
-        })),
-        description: [...buildMediaUnderstandingRegistry(undefined, cfg).values()]
-          .filter((provider) => provider.capabilities?.includes("video"))
-          .map((provider) => ({
+  video
+    .command("providers")
+    .description("List video generation and description providers")
+    .option("--agent <id>", "Agent whose provider state should be inspected")
+    .option("--json", "Output JSON", false)
+    .action(async (opts, command) => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        const cfg = getRuntimeConfig();
+        const agentId = resolveCapabilityProviderAgentId(
+          cfg,
+          resolveCapabilityAgentOption(command, opts.agent),
+        );
+        const selectedGenerationProvider = resolveSelectedProviderFromModelRef(
+          resolveAgentModelPrimaryValue(cfg.agents?.defaults?.mediaModels?.video),
+        );
+        const result = {
+          generation: listRuntimeVideoGenerationProviders({ config: cfg }).map((provider) => ({
             available: true,
-            configured: providerHasGenericConfig({ cfg, providerId: provider.id, agentId }),
-            selected: false,
+            configured:
+              selectedGenerationProvider === provider.id ||
+              providerHasGenericConfig({ cfg, providerId: provider.id, agentId }),
+            selected: selectedGenerationProvider === provider.id,
             id: provider.id,
+            label: provider.label,
+            defaultModel: provider.defaultModel,
+            models: provider.models ?? [],
             capabilities: provider.capabilities,
-            defaultModels: provider.defaultModels,
           })),
-      };
-    },
-    (value) => JSON.stringify(value, null, 2),
-  );
+          description: [...buildMediaUnderstandingRegistry(undefined, cfg).values()]
+            .filter((provider) => provider.capabilities?.includes("video"))
+            .map((provider) => ({
+              available: true,
+              configured: providerHasGenericConfig({ cfg, providerId: provider.id, agentId }),
+              selected: false,
+              id: provider.id,
+              capabilities: provider.capabilities,
+              defaultModels: provider.defaultModels,
+            })),
+        };
+        emitJsonOrText(defaultRuntime, Boolean(opts.json), result, (value) =>
+          JSON.stringify(value, null, 2),
+        );
+      });
+    });
 }

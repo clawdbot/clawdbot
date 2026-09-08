@@ -1,3 +1,4 @@
+// Memory Host SDK module implements response snippet behavior.
 import { consumeResponseBytes, decodeTextPrefix } from "@openclaw/normalization-core";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 

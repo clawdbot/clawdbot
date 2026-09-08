@@ -14,7 +14,6 @@ import { resolveEffectiveResponseUsage } from "../auto-reply/thinking.js";
 import {
   resolveFreshSessionTotalTokens,
   resolveProjectedSessionContextTokens,
-  resolveProjectedSessionContextBudgetStatus,
   SESSION_TOTAL_TOKENS_VERSION,
   type InternalSessionEntry,
   type SessionEntry,
@@ -45,7 +44,6 @@ import {
 import { isSessionPermissionChangePending } from "./session-permission-change.js";
 import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
 import { buildSessionSwarmSummary } from "./session-swarm-summary.js";
-import { readSessionTerminalModelFromTranscript } from "./session-transcript-readers.js";
 import { readSessionTitleFieldsFromTranscript as readScopedSessionTitleFieldsFromTranscript } from "./session-transcript-title-reader.js";
 import type { SessionListRowContext } from "./session-utils-contracts.js";
 import {
@@ -194,10 +192,7 @@ export function buildGatewaySessionRow(params: {
         params.storeChildSessionsByKey.get(key),
       )
     : resolveChildSessionKeys(key, store, now, rowContext?.subagentRuns);
-  const pinnedAt =
-    entry?.pinnedAt !== undefined && isPinnableSessionEntry(key, entry)
-      ? entry.pinnedAt
-      : undefined;
+  const pinnedAt = isPinnableSessionEntry(key, entry) ? entry?.pinnedAt : undefined;
   const compactionCheckpoints = resolveProjectableCompactionCheckpoints(entry);
   const compactionCheckpointCount = Array.isArray(entry?.compactionCheckpoints)
     ? compactionCheckpoints.length
@@ -214,17 +209,10 @@ export function buildGatewaySessionRow(params: {
     rowContext: params.rowContext,
   });
   // Display aliases do not change the selected route's catalog or runtime policy.
-  const completedModel =
-    entry?.status === "done" && entry.lastRunId && entry.fallbackNotice
-      ? readSessionTerminalModelFromTranscript(
-          { agentId: sessionAgentId, sessionKey: key, sessionId: entry.sessionId, storePath },
-          entry.lastRunId,
-        )
-      : undefined;
   const runtimeModels = resolveSelectedAndActiveModel({
     selectedProvider: rowModelProvider,
     selectedModel: rowModel,
-    sessionEntry: completedModel ?? entry,
+    sessionEntry: entry,
   });
   const activeFallback = resolveActiveFallbackState({
     selectedModelRef: runtimeModels.selected.label,
@@ -503,12 +491,7 @@ export function buildGatewaySessionRow(params: {
     modelSelectionLocked: entry?.modelSelectionLocked,
     agentRuntime: projectWorkerPlacementAgentRuntime(thinkingProjection.agentRuntime),
     contextTokens,
-    contextBudgetStatus: resolveProjectedSessionContextBudgetStatus({
-      entry,
-      provider: rowModelProvider,
-      model: rowModel,
-      contextTokens,
-    }),
+    contextBudgetStatus: entry?.contextBudgetStatus,
     deliveryContext: deliveryFields.deliveryContext,
     lastChannel: deliveryFields.lastChannel,
     lastTo: deliveryFields.lastTo,

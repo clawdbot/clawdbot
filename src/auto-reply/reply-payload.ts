@@ -214,8 +214,6 @@ export type ReplyPayloadMetadata = {
   commandReply?: true;
   /** Host-owned acknowledgement after this final payload is confirmed delivered. */
   onFinalDeliverySuccess?: () => void;
-  /** Host-projected monitoring final; notification policy already normalized its text. */
-  heartbeatReply?: true;
   /** Exact key for replacing a runtime-owned assistant row after media materialization. */
   assistantTranscriptIdempotencyKey?: string;
   /** Original session-writer claim that must still hold at final delivery. */

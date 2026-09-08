@@ -152,7 +152,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let webChatAutoLogger = Logger(subsystem: "ai.openclaw", category: "Chat")
     private static func cleanUpProcesses() async {
         let execHostCleanup = ExecApprovalsPromptServer.shared.stop()
-        let macControlCleanup = MacControlServer.shared.stop()
         // Start tunnel retirement before helper drains can consume the quit deadline.
         async let tunnelCleanup: Void = RemoteTunnelManager.shared.shutdown()
         async let gatewayCleanup: Void = GatewayConnection.shared.shutdown()
@@ -165,7 +164,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         await MacNodeModeCoordinator.shared.stopAndWait()
         _ = await (tunnelCleanup, gatewayCleanup, profileCleanup)
         await execHostCleanup?.value
-        await macControlCleanup?.value
     }
 
     var openDashboardAction: @MainActor () -> Void = { AppNavigationActions.openDashboard() }
@@ -356,7 +354,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NodePairingApprovalPrompter.shared.start()
             DevicePairingApprovalPrompter.shared.start()
             ExecApprovalsPromptServer.shared.start()
-            MacControlServer.shared.start()
             ExecApprovalsGatewayPrompter.shared.start()
             if let state {
                 CookieSyncManager.shared.start(state: state)
@@ -404,7 +401,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NodePairingApprovalPrompter.shared.stop()
         DevicePairingApprovalPrompter.shared.stop()
         ExecApprovalsPromptServer.shared.stop()
-        MacControlServer.shared.stop()
         ExecApprovalsGatewayPrompter.shared.stop()
         MacNodeModeCoordinator.shared.stop()
         CookieSyncManager.shared.stop()

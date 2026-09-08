@@ -2,10 +2,14 @@
 import {
   closeTaskRegistryDatabase,
   deleteTaskAndDeliveryStateFromSqlite,
+  deleteTaskDeliveryStateFromSqlite,
+  deleteTaskRegistryRecordFromSqlite,
   loadTaskRegistryStateFromSqlite,
   listTaskRegistryRecordsByOwnerKeyFromSqlite,
+  saveTaskRegistryStateToSqlite,
   upsertTaskWithDeliveryStateToSqlite,
   upsertTaskDeliveryStateToSqlite,
+  upsertTaskRegistryRecordToSqlite,
 } from "./task-registry.store.sqlite.js";
 import type { TaskRegistryStoreSnapshot } from "./task-registry.store.types.js";
 import type { TaskDeliveryState, TaskRecord } from "./task-registry.types.js";
@@ -14,13 +18,17 @@ export type { TaskRegistryStoreSnapshot } from "./task-registry.store.types.js";
 
 export type TaskRegistryStore = {
   loadSnapshot: () => TaskRegistryStoreSnapshot;
+  saveSnapshot: (snapshot: TaskRegistryStoreSnapshot) => void;
   listTasksForOwnerKey?: (ownerKey: string) => TaskRecord[];
-  upsertTaskWithDeliveryState: (params: {
+  upsertTaskWithDeliveryState?: (params: {
     task: TaskRecord;
     deliveryState?: TaskDeliveryState;
   }) => void;
-  deleteTaskWithDeliveryState: (taskId: string) => void;
-  upsertDeliveryState: (state: TaskDeliveryState) => void;
+  upsertTask?: (task: TaskRecord) => void;
+  deleteTaskWithDeliveryState?: (taskId: string) => void;
+  deleteTask?: (taskId: string) => void;
+  upsertDeliveryState?: (state: TaskDeliveryState) => void;
+  deleteDeliveryState?: (taskId: string) => void;
   close?: () => void;
 };
 
@@ -41,16 +49,20 @@ export type TaskRegistryObserverEvent =
     };
 
 type TaskRegistryObservers = {
-  // Observers are incremental/best-effort only. Persistence belongs to TaskRegistryStore.
+  // Observers are incremental/best-effort only. Snapshot persistence belongs to TaskRegistryStore.
   onEvent?: (event: TaskRegistryObserverEvent) => void;
 };
 
 const defaultTaskRegistryStore: TaskRegistryStore = {
   loadSnapshot: loadTaskRegistryStateFromSqlite,
+  saveSnapshot: saveTaskRegistryStateToSqlite,
   listTasksForOwnerKey: listTaskRegistryRecordsByOwnerKeyFromSqlite,
   upsertTaskWithDeliveryState: upsertTaskWithDeliveryStateToSqlite,
+  upsertTask: upsertTaskRegistryRecordToSqlite,
   deleteTaskWithDeliveryState: deleteTaskAndDeliveryStateFromSqlite,
+  deleteTask: deleteTaskRegistryRecordFromSqlite,
   upsertDeliveryState: upsertTaskDeliveryStateToSqlite,
+  deleteDeliveryState: deleteTaskDeliveryStateFromSqlite,
   close: closeTaskRegistryDatabase,
 };
 

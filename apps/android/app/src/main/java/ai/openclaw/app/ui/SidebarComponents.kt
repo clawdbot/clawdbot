@@ -2,7 +2,6 @@ package ai.openclaw.app.ui
 
 import ai.openclaw.app.R
 import ai.openclaw.app.chat.ChatSessionEntry
-import ai.openclaw.app.chat.isSessionRunActive
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.ui.design.ClawTheme
 import ai.openclaw.app.ui.design.sessionColor
@@ -364,12 +363,10 @@ internal enum class SidebarSessionActivity {
 internal fun sidebarSessionActivity(
   status: String?,
   lastRunError: String?,
-  hasActiveRun: Boolean?,
+  hasActiveRun: Boolean,
   unread: Boolean,
-  continuing: Boolean = false,
 ): SidebarSessionActivity? {
   val normalizedStatus = status?.trim()?.lowercase()
-  val active = isSessionRunActive(hasActiveRun, normalizedStatus)
   return when {
     !lastRunError.isNullOrBlank() ||
       normalizedStatus == "failed" ||
@@ -377,9 +374,9 @@ internal fun sidebarSessionActivity(
       normalizedStatus == "killed" ||
       normalizedStatus == "error" -> SidebarSessionActivity.Failed
 
-    normalizedStatus == "queued" && active -> SidebarSessionActivity.Queued
+    normalizedStatus == "queued" -> SidebarSessionActivity.Queued
 
-    continuing || active -> SidebarSessionActivity.Running
+    hasActiveRun || normalizedStatus == "active" || normalizedStatus == "running" -> SidebarSessionActivity.Running
 
     unread -> SidebarSessionActivity.Unread
 
@@ -446,7 +443,7 @@ internal fun SidebarSessionRow(
     sidebarSessionActivity(
       status = session.status,
       lastRunError = session.lastRunError,
-      hasActiveRun = session.hasActiveRun,
+      hasActiveRun = session.hasActiveRun == true,
       unread = session.unread == true,
     )
   val sessionStateDescription =
@@ -657,7 +654,7 @@ internal fun sidebarSessionSubtitle(
 ): String =
   sessionListSubtitle(
     session = session,
-    fallback = sessionSourceLabel(session.key),
+    fallback =
+      if (session.hasActiveRun == true) checkNotNull(activeRunLabel) else sessionSourceLabel(session.key),
     nowMs = nowMs,
-    activeRunLabel = activeRunLabel,
   )

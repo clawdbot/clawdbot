@@ -29,7 +29,7 @@ interface BrowserPanelStreamHost extends StreamState {
   readonly mode: "interact" | "annotate" | "inspect";
   readonly operations: Pick<
     BrowserPanelOperationOwnership,
-    "epoch" | "route" | "isLive" | "hasPendingCapture" | "capturedTabs" | "markNavigationReconciled"
+    "epoch" | "route" | "isLive" | "capturedTabs" | "markNavigationReconciled"
   >;
   readonly urlDraftEditing: boolean;
   readonly observedViewportSize: { width: number; height: number } | null;
@@ -39,8 +39,6 @@ interface BrowserPanelStreamHost extends StreamState {
   refreshView(targetId: string): Promise<void>;
   refreshAll(): Promise<void>;
 }
-
-type Recovery = Pick<Attempt, "targetId" | "epoch" | "client">;
 
 type Attempt = {
   targetId: string;
@@ -67,8 +65,6 @@ export class BrowserPanelStream {
   private objectUrl?: string;
   private decodingUrl?: string;
   private resizeTimer?: ReturnType<typeof setTimeout>;
-  private recoveryTimer?: ReturnType<typeof setTimeout>;
-  private recovery?: Recovery;
   private viewportSyncPending = false;
   private readonly retiringUrls = new Set<string>();
 
@@ -108,10 +104,12 @@ export class BrowserPanelStream {
       this.close();
       this.scope = { client: this.host.host.client, route };
       this.unsupported = false;
+      this.lastFailures.clear();
     }
     if (this.attempt && this.current(this.attempt) && this.attempt.targetId === targetId) {
       return this.attempt.live || (await this.attempt.firstFrame);
     }
+    this.close(false);
     // Only failed attempts back off; navigation and resize close streams on purpose and restart at once.
     if (
       this.unsupported ||
@@ -119,7 +117,6 @@ export class BrowserPanelStream {
     ) {
       return false;
     }
-    this.close(false);
     const dimensions = this.dimensions();
     let settle!: Attempt["settle"];
     const firstFrame = new Promise<boolean>((resolve) => {
@@ -179,10 +176,9 @@ export class BrowserPanelStream {
             return;
           }
           if (code !== 4003 && code !== 4004) {
-            this.recover(attempt);
-            return;
+            this.lastFailures.set(attempt.targetId, Date.now());
           }
-          this.close();
+          this.close(code === 4003 || code === 4004);
           if (code === 4003) {
             this.host.setState(
               "tabs",
@@ -201,59 +197,11 @@ export class BrowserPanelStream {
     } catch (error) {
       if (this.current(attempt)) {
         this.unsupported = isBrowserScreencastUnsupportedError(error);
-        if (this.unsupported) {
-          this.close(false);
-        } else {
-          this.recover(attempt);
+        if (!this.unsupported) {
+          this.lastFailures.set(attempt.targetId, Date.now());
         }
+        this.close(false);
       }
-    }
-  }
-
-  private recover(attempt: Attempt): void {
-    this.lastFailures.set(attempt.targetId, Date.now());
-    this.close(false);
-    this.recovery = { targetId: attempt.targetId, epoch: attempt.epoch, client: attempt.client };
-    // A received frame invalidates older screenshots even if decoding has not finished.
-    this.scheduleRecovery(attempt.live ? 0 : RETRY_DELAY_MS);
-  }
-
-  private scheduleRecovery(delay: number): void {
-    const recovery = this.recovery;
-    if (!recovery) {
-      return;
-    }
-    clearTimeout(this.recoveryTimer);
-    this.recoveryTimer = setTimeout(() => {
-      this.recoveryTimer = undefined;
-      if (
-        this.host.activeTargetId !== recovery.targetId ||
-        !this.host.operations.isLive(recovery.epoch, recovery.client)
-      ) {
-        this.recovery = undefined;
-        return;
-      }
-      // Capture modes pin their image; flushPendingFrame resumes recovery on exit.
-      if (this.host.mode !== "interact") {
-        return;
-      }
-      // A stalled screenshot must not hold the reconnect deadline.
-      this.scheduleRecovery(RETRY_DELAY_MS);
-      void this.resume(recovery);
-    }, delay);
-  }
-
-  private async resume(recovery: Recovery): Promise<void> {
-    if (await this.ensure(recovery.targetId, recovery.client, recovery.epoch)) {
-      return;
-    }
-    // A failed reconnect must not discard a fallback screenshot that is still in flight.
-    if (
-      this.host.activeTargetId === recovery.targetId &&
-      this.host.operations.isLive(recovery.epoch, recovery.client) &&
-      !this.host.operations.hasPendingCapture
-    ) {
-      void this.host.refreshView(recovery.targetId);
     }
   }
 
@@ -276,12 +224,10 @@ export class BrowserPanelStream {
   }
 
   flushPendingFrame(): void {
-    this.scheduleRecovery(0);
     const attempt = this.attempt;
     if (attempt && this.current(attempt) && !attempt.decoding) {
       void this.decodeFrames(attempt);
     }
-    this.restartAfterResize();
   }
 
   private async decodeFrames(attempt: Attempt): Promise<void> {
@@ -363,7 +309,7 @@ export class BrowserPanelStream {
       }
     } catch {
       if (this.current(attempt)) {
-        this.recover(attempt);
+        this.close(false);
       }
     } finally {
       attempt.decoding = false;
@@ -373,26 +319,22 @@ export class BrowserPanelStream {
   resize(): void {
     // The debounced viewport sync just ran; later mismatched frames may schedule again.
     this.viewportSyncPending = false;
-    this.restartAfterResize();
-  }
-
-  private resized(attempt: Attempt): boolean {
-    return Math.abs(this.dimensions().width - attempt.width) / attempt.width > 0.3;
-  }
-
-  private restartAfterResize(): void {
     const attempt = this.attempt;
-    if (!attempt || !this.current(attempt) || !this.resized(attempt)) {
+    if (
+      !attempt ||
+      !this.current(attempt) ||
+      Math.abs(this.dimensions().width - attempt.width) / attempt.width <= 0.3
+    ) {
       return;
     }
     // Coalesce a burst of layout changes into one restart.
     this.resizeTimer ??= setTimeout(() => {
       this.resizeTimer = undefined;
-      if (this.attempt !== attempt || !this.current(attempt) || !this.resized(attempt)) {
-        return;
-      }
-      // Capture modes pin their image; flushPendingFrame restarts the stream on exit.
-      if (this.host.mode !== "interact") {
+      if (
+        this.attempt !== attempt ||
+        !this.current(attempt) ||
+        Math.abs(this.dimensions().width - attempt.width) / attempt.width <= 0.3
+      ) {
         return;
       }
       this.close(false);
@@ -418,13 +360,6 @@ export class BrowserPanelStream {
   }
 
   close(releaseView = true): void {
-    if (releaseView) {
-      // Intentional teardown starts a new owner; it must not inherit an orphaned backoff.
-      this.lastFailures.clear();
-    }
-    clearTimeout(this.recoveryTimer);
-    this.recoveryTimer = undefined;
-    this.recovery = undefined;
     clearTimeout(this.resizeTimer);
     this.resizeTimer = undefined;
     // Invalidation cancels the pending sync timer; the next stream must be able to schedule one.

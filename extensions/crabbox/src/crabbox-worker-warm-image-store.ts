@@ -1,11 +1,6 @@
 import { createHash } from "node:crypto";
-import type { WorkerProvider } from "openclaw/plugin-sdk/plugin-entry";
 import { createPluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-store-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-
-type WorkerNodeRuntimeIdentity = NonNullable<
-  NonNullable<Parameters<WorkerProvider["provision"]>[2]>["nodeRuntimeIdentity"]
->;
 
 export type WarmImageRecord = {
   checkpointId: string;
@@ -14,8 +9,6 @@ export type WarmImageRecord = {
   createdAtMs: number;
   lastUsedAtMs: number;
   baseCommit?: string;
-  /** Runtime content attested by successful preparation before this capture. */
-  runtimeIdentity?: WorkerNodeRuntimeIdentity;
 };
 
 export type WarmAllocationRecord = {
@@ -23,8 +16,6 @@ export type WarmAllocationRecord = {
   machineClass: string;
   phase: "pending" | "prepared" | "enrolled";
   baseCommit?: string;
-  /** Frozen target; preparation/enrollment must verify it before capture can publish it. */
-  runtimeIdentity?: WorkerNodeRuntimeIdentity;
 };
 
 export type WarmProfileRecord = {
@@ -162,7 +153,6 @@ export function listCrabboxWarmImages(env?: NodeJS.ProcessEnv) {
       createdAtMs: value.image?.createdAtMs,
       lastUsedAtMs: value.image?.lastUsedAtMs,
       baseCommit: value.image?.baseCommit,
-      runtimeIdentity: value.image?.runtimeIdentity,
       allocations: value.allocations,
       capture: crabboxWarmImageCaptureStatus(key, value),
       retirement:

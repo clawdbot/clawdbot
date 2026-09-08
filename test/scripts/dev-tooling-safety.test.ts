@@ -1136,21 +1136,24 @@ describe("script-specific dev tooling hardening", () => {
   });
 
   it("bounds Claude usage response body reads by content-length", async () => {
-    const maxBytes = 256 * 1024;
+    const maxBytes = claudeUsageTesting.FETCH_RESPONSE_MAX_BYTES;
     const response = new Response("{}", {
       headers: { "content-length": String(maxBytes + 1) },
     });
+    const controller = new AbortController();
 
     await expect(
-      claudeUsageTesting.fetchAnthropicOAuthUsage("test-token", {
-        fetchImpl: async () => response,
-        timeoutMs: 1_000,
-      }),
-    ).rejects.toThrow(`Anthropic OAuth usage request response body exceeded ${maxBytes} bytes`);
+      claudeUsageTesting.readBoundedResponseText(
+        response,
+        "Claude usage test",
+        controller.signal,
+        maxBytes,
+      ),
+    ).rejects.toThrow(`Claude usage test response body exceeded ${maxBytes} bytes`);
   });
 
   it("bounds Claude usage response body reads by streamed bytes", async () => {
-    const maxBytes = 256 * 1024;
+    const maxBytes = claudeUsageTesting.FETCH_RESPONSE_MAX_BYTES;
     const response = new Response(
       new ReadableStream({
         start(controller) {
@@ -1159,13 +1162,16 @@ describe("script-specific dev tooling hardening", () => {
         },
       }),
     );
+    const controller = new AbortController();
 
     await expect(
-      claudeUsageTesting.fetchAnthropicOAuthUsage("test-token", {
-        fetchImpl: async () => response,
-        timeoutMs: 1_000,
-      }),
-    ).rejects.toThrow(`Anthropic OAuth usage request response body exceeded ${maxBytes} bytes`);
+      claudeUsageTesting.readBoundedResponseText(
+        response,
+        "Claude usage test",
+        controller.signal,
+        maxBytes,
+      ),
+    ).rejects.toThrow(`Claude usage test response body exceeded ${maxBytes} bytes`);
   });
 
   it.each([

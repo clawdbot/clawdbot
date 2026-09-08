@@ -1,6 +1,6 @@
 // Memory Core plugin module implements the synchronous sqlite-vec KNN query body.
 import type { DatabaseSync } from "node:sqlite";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/memory-core-host-engine-knn";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import type { MemorySource } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { vectorToBlob } from "./vector-blob.js";
 
@@ -77,7 +77,7 @@ function buildModelFilter(column: string, models: string[]): string {
     : `${column} IN (${models.map(() => "?").join(", ")})`;
 }
 
-export function validateVectorKnnRequest(request: VectorKnnRequest): void {
+function validateRequest(request: VectorKnnRequest): void {
   if (!SQL_IDENTIFIER_RE.test(request.vectorTable)) {
     throw new Error("invalid memory vector table identifier");
   }
@@ -113,7 +113,7 @@ export function runVectorKnnQuery(
   db: Pick<DatabaseSync, "prepare">,
   request: VectorKnnRequest,
 ): VectorKnnResponse {
-  validateVectorKnnRequest(request);
+  validateRequest(request);
   const vectorModelFilter = buildModelFilter("c.model", request.providerModels);
   const qBlob = vectorToBlob(request.queryVec);
   const runVectorQuery = (candidateLimit: number) => {

@@ -19,7 +19,7 @@ import { runSessionStartupMigration } from "../config/sessions/startup-migration
 import { resetAgentRunRegistryForTest } from "../infra/agent-run-registry.js";
 import {
   beginAgentDeletionJournal,
-  completeAgentDeletionJournalInDatabase,
+  completeAgentDeletionJournal,
   readAgentDeletionJournal,
 } from "../state/agent-deletion-journal.js";
 import { readAgentProvenance } from "../state/agent-provenance.js";
@@ -29,10 +29,7 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../state/openclaw-agent-db.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
-import {
-  closeOpenClawStateDatabaseForTest,
-  runOpenClawStateWriteTransaction,
-} from "../state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { ensureOnboardingAgent } from "./onboard-agent.js";
 
@@ -291,9 +288,7 @@ describe("onboarding authored config persistence", () => {
             sessionsDir: path.join(stateDir, "agents", "robby", "sessions"),
             workspaceDir: path.join(stateDir, "workspace"),
           });
-          runOpenClawStateWriteTransaction((sharedStateDatabase) =>
-            completeAgentDeletionJournalInDatabase(sharedStateDatabase, "robby", "previous-robby"),
-          );
+          completeAgentDeletionJournal("robby", "previous-robby");
           migrationWindow.afterPublication = () => {
             beforePersistentApply();
             admission.close();

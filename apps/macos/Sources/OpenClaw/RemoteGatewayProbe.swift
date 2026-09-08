@@ -42,9 +42,9 @@ enum RemoteGatewayAuthIssue: Equatable {
 
     var showsTokenField: Bool {
         switch self {
-        case .tokenRequired, .tokenMismatch, .passwordRequired:
+        case .tokenRequired, .tokenMismatch:
             true
-        case .gatewayTokenNotConfigured, .setupCodeExpired, .pairingRequired:
+        case .gatewayTokenNotConfigured, .setupCodeExpired, .passwordRequired, .pairingRequired:
             false
         }
     }
@@ -60,7 +60,7 @@ enum RemoteGatewayAuthIssue: Equatable {
         case .setupCodeExpired:
             "This setup code is no longer valid"
         case .passwordRequired:
-            "Check this gateway's password"
+            "This gateway is using unsupported auth"
         case .pairingRequired:
             "This device needs pairing approval"
         }
@@ -82,9 +82,8 @@ enum RemoteGatewayAuthIssue: Equatable {
         case .setupCodeExpired:
             "Scan or paste a fresh setup code from an already-paired OpenClaw client, then try again."
         case .passwordRequired:
-            "Paste the gateway host's configured password into the Gateway token field, then try again. "
-                + "The gateway accepts its secret in either field. If no password is configured, "
-                + "set `gateway.auth.password` or `OPENCLAW_GATEWAY_PASSWORD` on the gateway host."
+            "This onboarding flow does not support password auth yet. "
+                + "Reconfigure the gateway to use token auth, then retry."
         case .pairingRequired:
             "Approve this device from an already-paired OpenClaw client. "
                 + "In your OpenClaw chat, run `/pair approve`, then click **Check connection** again."
@@ -117,8 +116,7 @@ enum RemoteGatewayAuthIssue: Equatable {
         case .setupCodeExpired:
             "Setup code expired or already used. Scan a fresh setup code, then try again."
         case .passwordRequired:
-            "Enter the gateway password in the Gateway token field. "
-                + "If needed, configure gateway.auth.password or OPENCLAW_GATEWAY_PASSWORD on the gateway host."
+            "This gateway uses password auth. Remote onboarding on macOS cannot collect gateway passwords yet."
         case .pairingRequired:
             "Pairing required. In an already-paired OpenClaw client, "
                 + "run /pair approve, then check the connection again."

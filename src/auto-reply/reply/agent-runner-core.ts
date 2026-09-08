@@ -36,7 +36,7 @@ import type { BlockReplyPipeline } from "./block-reply-pipeline.js";
 import { resolveEffectiveReplyRoute } from "./effective-reply-route.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import { normalizeReplyPayload } from "./normalize-reply.js";
-import { sanitizePendingFinalDeliveryText } from "./pending-final-delivery-state.js";
+import { sanitizePendingFinalDeliveryText } from "./pending-final-delivery.js";
 import { type FollowupRun, type QueueSettings, scheduleFollowupDrain } from "./queue.js";
 import { normalizeReplyPayloadDirectives } from "./reply-delivery.js";
 import { isReplyOperationSuperseded } from "./reply-operation-abort.js";
@@ -435,8 +435,8 @@ export async function cleanupReplyAgentRun(context: {
   // markDispatchIdle(), but if the dispatcher exits early, errors,
   // or the reply path doesn't go through it cleanly, the second
   // signal never fires and the typing keepalive loop runs forever.
-  // Repeated completion signals are harmless: cleanup() is guarded by
-  // the typing controller's sealed flag.
+  // Calling this twice is harmless — cleanup() is guarded by the
+  // `active` flag.  Same pattern as the followup runner fix (#26881).
   typing.markDispatchIdle();
 }
 

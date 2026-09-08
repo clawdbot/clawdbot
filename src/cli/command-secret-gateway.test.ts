@@ -688,21 +688,17 @@ describe("resolveCommandSecretRefsViaGateway", () => {
     const envKey = "TALK_API_KEY_FAILFAST";
     await withEnvValue(envKey, undefined, async () => {
       callGateway.mockRejectedValueOnce(new Error("gateway closed"));
-      const resolution = resolveCommandSecretRefsViaGateway({
-        config: buildTalkTestProviderConfig({
-          source: "env",
-          provider: "default",
-          id: envKey,
+      await expect(
+        resolveCommandSecretRefsViaGateway({
+          config: buildTalkTestProviderConfig({
+            source: "env",
+            provider: "default",
+            id: envKey,
+          }),
+          commandName: "memory status",
+          targetIds: new Set(["talk.providers.*.apiKey"]),
         }),
-        commandName: "memory status",
-        targetIds: new Set(["talk.providers.*.apiKey"]),
-      });
-      await expect(resolution).rejects.toThrow(
-        /failed to resolve secrets from the active gateway snapshot/i,
-      );
-      await expect(resolution).rejects.toThrow(/local resolution also failed/i);
-      await expect(resolution).rejects.toThrow(/check the configured secret sources/i);
-      await expect(resolution).rejects.not.toThrow(envKey);
+      ).rejects.toThrow(/failed to resolve secrets from the active gateway snapshot/i);
     });
   });
 

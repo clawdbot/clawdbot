@@ -27,7 +27,6 @@ import { acquireGatewayLock } from "../../infra/gateway-lock.js";
 import { consumeGatewaySuspendHandoff } from "../../infra/gateway-suspend-coordinator.js";
 import type { GatewayRestartIntent } from "../../infra/restart-intent.js";
 import type { GatewayRestartEmitter } from "../../infra/restart.js";
-import { findStartupMaintenanceRequiredError } from "../../infra/startup-maintenance-required.js";
 import { flushLogger } from "../../logging/logger.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runOutsideGatewayRootWorkAdmission } from "../../process/gateway-work-admission.js";
@@ -35,6 +34,10 @@ import type { RuntimeEnv } from "../../runtime.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import {
+  findOpenClawAgentDatabaseMediaMigrationRequiredError,
+  GATEWAY_AGENT_MEDIA_MIGRATION_REQUIRED_REASON,
+} from "../../state/openclaw-agent-db-migration-required.js";
 import { createGatewayHostLifecycle } from "./host-lifecycle.js";
 import {
   armShutdownHardExitWatchdog,
@@ -1309,14 +1312,16 @@ export async function runGatewayLoop(params: {
         await iterationHost.retire();
         const failedServer = server;
         server = null;
-        const maintenanceRequired = findStartupMaintenanceRequiredError(err);
+        const mediaMigrationRequired = findOpenClawAgentDatabaseMediaMigrationRequiredError(err);
         params.completeBoot?.({
           outcome: "startup_failed",
           reason: truncateUtf16Safe(
             formatErrorMessage(err),
             GATEWAY_BOOT_REASON_MAX_UTF16_CODE_UNITS,
           ),
-          ...(maintenanceRequired ? { startupReason: maintenanceRequired.code } : {}),
+          ...(mediaMigrationRequired
+            ? { startupReason: GATEWAY_AGENT_MEDIA_MIGRATION_REQUIRED_REASON }
+            : {}),
         });
         try {
           await failedServer?.close({ reason: "gateway startup failed" });
@@ -1325,11 +1330,7 @@ export async function runGatewayLoop(params: {
         }
         // Keep TCC recovery after clean restart failures (#35862), but never reuse a
         // generation whose startup cleanup failed. The outer CLI exits nonzero.
-        if (
-          maintenanceRequired ||
-          !isRestartIteration ||
-          err instanceof GatewayStartupCleanupError
-        ) {
+        if (!isRestartIteration || err instanceof GatewayStartupCleanupError) {
           throw err;
         }
         startupFailedWithoutServerHandle = true;

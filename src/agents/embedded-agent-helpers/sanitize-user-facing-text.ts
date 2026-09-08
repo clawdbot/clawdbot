@@ -223,23 +223,15 @@ export function createVerifiedConversationContextStreamFilter(
 }
 
 // Share descriptors only; createTextProjection owns each stream's mutable state.
-const userFacingFilters: Partial<
-  Record<`${"normal" | "error"}${"" | "-stream"}`, readonly TextFilter[]>
-> = {};
+const userFacingFilters: Partial<Record<"normal" | "error", readonly TextFilter[]>> = {};
 
-export function userFacingTextFilters(
-  errorContext = false,
-  streaming = false,
-): readonly TextFilter[] {
-  const key = `${errorContext ? "error" : "normal"}${streaming ? "-stream" : ""}` as const;
-  return (userFacingFilters[key] ??= [
+export function userFacingTextFilters(errorContext = false): readonly TextFilter[] {
+  return (userFacingFilters[errorContext ? "error" : "normal"] ??= [
     { transform: stripFinalTags, activationTokens: ["<"] },
     {
-      transform: streaming
-        ? (text) => stripInternalRuntimeContext(text, { streaming: true })
-        : stripInternalRuntimeContext,
+      transform: stripInternalRuntimeContext,
       activationTokens: [
-        streaming ? "<" : INTERNAL_RUNTIME_CONTEXT_BEGIN,
+        INTERNAL_RUNTIME_CONTEXT_BEGIN,
         INTERNAL_RUNTIME_CONTEXT_END,
         OPENCLAW_RUNTIME_CONTEXT_NOTICE,
       ],
@@ -279,8 +271,5 @@ export function sanitizeUserFacingText(
           opts?.streaming,
         )
       : raw;
-  return applyTextFilters(
-    withoutConversationContext,
-    userFacingTextFilters(opts?.errorContext, opts?.streaming),
-  );
+  return applyTextFilters(withoutConversationContext, userFacingTextFilters(opts?.errorContext));
 }

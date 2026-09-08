@@ -10,7 +10,7 @@ import {
 } from "../channels/plugins/index.js";
 import { resolveInstallableChannelPlugin } from "../commands/channel-setup/channel-plugin-resolution.js";
 import { assertAccountSelectorForMutation } from "../commands/channels/account-selector.js";
-import { requireValidConfigForWrite } from "../commands/config-validation.js";
+import { requireValidConfigFileSnapshot } from "../commands/config-validation.js";
 import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { callGateway } from "../gateway/call.js";
@@ -105,15 +105,12 @@ async function resolveChannelPluginForMode(
   plugin: ChannelPlugin;
 } | null> {
   assertAccountSelectorForMutation(opts.account);
-  const writeSnapshot = await requireValidConfigForWrite(runtime);
-  if (!writeSnapshot) {
+  const snapshot = await requireValidConfigFileSnapshot(runtime);
+  if (!snapshot) {
     return null;
   }
   // Runtime defaults are not authored plugin enablement intent.
-  const autoEnabled = applyPluginAutoEnable({
-    config: writeSnapshot.snapshot.sourceConfig,
-    env: process.env,
-  });
+  const autoEnabled = applyPluginAutoEnable({ config: snapshot.sourceConfig, env: process.env });
   const cfg = autoEnabled.config;
   const explicitChannel = opts.channel?.trim();
   const channelInput = explicitChannel || resolveConfiguredAuthChannelInput(mode);
@@ -146,9 +143,8 @@ async function resolveChannelPluginForMode(
   }
   if (autoEnabled.changes.length > 0 || resolved.configChanged) {
     await commitConfigWithPendingPluginInstalls({
-      sourceConfig: resolved.cfg,
-      baseHash: writeSnapshot.snapshot.hash,
-      writeOptions: writeSnapshot.writeOptions,
+      nextConfig: resolved.cfg,
+      baseHash: snapshot.hash,
     });
   }
   return {

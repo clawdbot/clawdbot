@@ -39,23 +39,32 @@ export function resolvePluginRuntimeLoadContext(
     env,
     workspaceDir: options?.workspaceDir,
   }).workspaceDir;
-  const metadataSnapshot =
+  const resolveMetadataSnapshot = (params: {
+    config: OpenClawConfig;
+    index?: PluginMetadataSnapshot["index"];
+  }): PluginMetadataSnapshot => {
+    if (options?.workspaceDir === undefined) {
+      return projectPluginMetadataSnapshot(
+        resolveConfigWidePluginMetadataSnapshot({ config: params.config, env }),
+        options?.onlyPluginIds,
+      );
+    }
+    const snapshot = resolvePluginMetadataSnapshot({
+      config: params.config,
+      env,
+      workspaceDir: rawWorkspaceDir,
+      allowWorkspaceScopedCurrent: true,
+      ...(params.index ? { index: params.index } : {}),
+      ...(options?.onlyPluginIds !== undefined ? { pluginIds: options.onlyPluginIds } : {}),
+    });
+    return snapshot;
+  };
+  const initialMetadataSnapshot =
     options?.metadataSnapshot ??
-    (options?.manifestRegistry !== undefined
-      ? undefined
-      : options?.workspaceDir === undefined
-        ? projectPluginMetadataSnapshot(
-            resolveConfigWidePluginMetadataSnapshot({ config: rawConfig, env }),
-            options?.onlyPluginIds,
-          )
-        : resolvePluginMetadataSnapshot({
-            config: rawConfig,
-            env,
-            workspaceDir: rawWorkspaceDir,
-            allowWorkspaceScopedCurrent: true,
-            ...(options?.onlyPluginIds !== undefined ? { pluginIds: options.onlyPluginIds } : {}),
-          }));
-  const manifestRegistry = options?.manifestRegistry ?? metadataSnapshot?.manifestRegistry;
+    (options?.manifestRegistry === undefined
+      ? resolveMetadataSnapshot({ config: rawConfig })
+      : undefined);
+  const manifestRegistry = options?.manifestRegistry ?? initialMetadataSnapshot?.manifestRegistry;
   const activationSourceConfig = resolvePluginActivationSourceConfig({
     config: rawConfig,
     activationSourceConfig: options?.activationSourceConfig,
@@ -64,7 +73,7 @@ export function resolvePluginRuntimeLoadContext(
     config: rawConfig,
     env,
     manifestRegistry,
-    discovery: metadataSnapshot?.discovery,
+    discovery: initialMetadataSnapshot?.discovery,
   });
   const config = autoEnabled.config;
   const workspaceDir = resolvePluginControlPlaneWorkspace({
@@ -72,6 +81,8 @@ export function resolvePluginRuntimeLoadContext(
     env,
     workspaceDir: options?.workspaceDir,
   }).workspaceDir;
+  const metadataSnapshot = initialMetadataSnapshot;
+  const finalManifestRegistry = options?.manifestRegistry ?? metadataSnapshot?.manifestRegistry;
   const installRecords = metadataSnapshot
     ? extractPluginInstallRecordsFromInstalledPluginIndex(metadataSnapshot.index)
     : undefined;
@@ -83,7 +94,7 @@ export function resolvePluginRuntimeLoadContext(
     workspaceDir,
     env,
     logger: options?.logger ?? createPluginRuntimeLoaderLogger(),
-    ...(manifestRegistry ? { manifestRegistry } : {}),
+    ...(finalManifestRegistry ? { manifestRegistry: finalManifestRegistry } : {}),
     ...(metadataSnapshot ? { metadataSnapshot } : {}),
     installRecords,
     preferBuiltPluginArtifacts: options?.preferBuiltPluginArtifacts,

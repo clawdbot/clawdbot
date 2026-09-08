@@ -31,7 +31,6 @@ import type {
 } from "../tasks/task-system-audit.types.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { createInMemoryTaskFlowRegistryStore } from "../test-utils/task-registry-store.js";
 import {
   tasksAuditCommand,
   tasksCancelCommand,
@@ -242,8 +241,8 @@ describe("tasks commands", () => {
       });
       configureTaskFlowRegistryRuntime({
         store: {
-          ...createInMemoryTaskFlowRegistryStore(),
           loadSnapshot,
+          saveSnapshot: () => {},
         },
       });
 
@@ -960,11 +959,13 @@ describe("tasks commands", () => {
         const loadSnapshot = vi.fn(() => {
           throw new Error("SQLITE_CORRUPT: task-flow maintenance restore failed");
         });
+        const saveSnapshot = vi.fn();
         const upsertFlow = vi.fn();
         const deleteFlow = vi.fn();
         configureTaskFlowRegistryRuntime({
           store: {
             loadSnapshot,
+            saveSnapshot,
             upsertFlow,
             deleteFlow,
           },
@@ -976,6 +977,7 @@ describe("tasks commands", () => {
         );
 
         expect(loadSnapshot).toHaveBeenCalledTimes(1);
+        expect(saveSnapshot).not.toHaveBeenCalled();
         expect(upsertFlow).not.toHaveBeenCalled();
         expect(deleteFlow).not.toHaveBeenCalled();
         expect(runtime.log).not.toHaveBeenCalled();

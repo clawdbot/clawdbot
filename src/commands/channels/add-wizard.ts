@@ -9,7 +9,7 @@ import {
 import { getLoadedChannelPlugin } from "../../channels/plugins/index.js";
 import type { ChannelSetupPlugin } from "../../channels/plugins/setup-wizard-types.js";
 import { formatUnknownChannelMessage } from "../../cli/error-format.js";
-import { readConfigFileSnapshotForWrite, type OpenClawConfig } from "../../config/config.js";
+import { readConfigFileSnapshot, type OpenClawConfig } from "../../config/config.js";
 import { commitConfigWithPendingPluginInstalls } from "../../plugins/install-record-commit.js";
 import { refreshPluginRegistryAfterConfigMutation } from "../../plugins/registry-refresh.js";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
@@ -66,8 +66,9 @@ export async function resolveInitialWizardChannelTarget(
 }
 
 type ChannelsAddWizardFlowParams = {
-  writeSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshotForWrite>>;
+  cfg: OpenClawConfig;
   workspaceDir?: string;
+  baseHash?: string;
   runtime: RuntimeEnv;
   prompter: WizardPrompter;
   initialChannel?: ChannelChoice;
@@ -84,13 +85,12 @@ type ChannelsAddWizardFlowParams = {
 
 /** Run the interactive channel-setup flow and persist the resulting config. */
 export async function runChannelsAddWizardFlow(params: ChannelsAddWizardFlowParams): Promise<void> {
-  const { writeSnapshot, runtime, prompter } = params;
-  const { sourceConfig: cfg, hash: baseHash } = writeSnapshot.snapshot;
+  const { cfg, baseHash, runtime, prompter } = params;
   const [{ buildAgentSummaries }, onboardChannels] = await Promise.all([
     import("../agents.config.js"),
     import("../onboard-channels.js"),
   ]);
-  const channelSetup = onboardChannels.createChannelSetupHooks({
+  const channelSetup = onboardChannels.createChannelSetupTransaction({
     runtime,
     ...(params.beforePersistentEffect
       ? { beforePersistentEffect: params.beforePersistentEffect }
@@ -126,21 +126,21 @@ export async function runChannelsAddWizardFlow(params: ChannelsAddWizardFlowPara
     },
   });
   const commitWizardConfig = async (config: OpenClawConfig) => {
-    await params.beforePersistentEffect?.();
-    const committed = await commitConfigWithPendingPluginInstalls({
-      sourceConfig: config,
-      writeOptions: writeSnapshot.writeOptions,
-      ...(baseHash !== undefined ? { baseHash } : {}),
-    });
-    if (committed.movedInstallRecords) {
-      await refreshPluginRegistryAfterConfigMutation({
-        reason: "source-changed",
-        installRecords: committed.installRecords,
-        logger: { warn: (message) => runtime.log(message) },
+    return await channelSetup.commit(config, async (configToCommit) => {
+      const committed = await commitConfigWithPendingPluginInstalls({
+        nextConfig: configToCommit,
+        ...(baseHash !== undefined ? { baseHash } : {}),
       });
-    }
-    await channelSetup.runPostWriteHooks(committed.path);
-    return committed.nextConfig;
+      if (committed.movedInstallRecords) {
+        await refreshPluginRegistryAfterConfigMutation({
+          config: committed.config,
+          reason: "source-changed",
+          installRecords: committed.installRecords,
+          logger: { warn: (message) => runtime.log(message) },
+        });
+      }
+      return committed.config;
+    });
   };
   if (selection.length === 0) {
     if (nextConfig !== cfg) {
@@ -280,20 +280,20 @@ export async function runChannelsSetupWizard(
   runtime: RuntimeEnv,
   prompter: WizardPrompter,
 ): Promise<void> {
-  const writeSnapshot = await readConfigFileSnapshotForWrite();
-  const { snapshot } = writeSnapshot;
+  const snapshot = await readConfigFileSnapshot();
   if (snapshot.exists && !snapshot.valid) {
     throw new Error(
       "OpenClaw config is invalid; run `openclaw doctor --fix`, then retry channel setup.",
     );
   }
-  const cfg = snapshot.sourceConfig;
+  const cfg = (snapshot.sourceConfig ?? snapshot.config) as OpenClawConfig;
   const target = await resolveInitialWizardChannelTarget(opts.channel, cfg);
   if (target.kind === "unresolved") {
     throw new Error(target.message);
   }
   await runChannelsAddWizardFlow({
-    writeSnapshot,
+    cfg,
+    ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
     runtime,
     prompter,
     ...(target.kind === "resolved" ? { initialChannel: target.channel } : {}),

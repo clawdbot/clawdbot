@@ -963,7 +963,7 @@ describe("memory cli", () => {
     expect(probeEmbeddingAvailability).not.toHaveBeenCalled();
     expectLogged(log, "Provider: auto");
     expectLogged(log, "Vector store: unknown");
-    expectNotLogged(log, "llama.cpp server:");
+    expectNotLogged(log, "llama.cpp:");
     expect(close).toHaveBeenCalled();
   });
 
@@ -1200,14 +1200,12 @@ describe("memory cli", () => {
     expect(close).toHaveBeenCalled();
   });
 
-  it.each(["--deep", "--index"])("prints local runtime details with %s", async (flag) => {
+  it("prints embeddings status when deep", async () => {
     const close = vi.fn(async () => {});
-    const sync = vi.fn(async () => {});
     const probeVectorStoreAvailability = vi.fn(async () => true);
     const probeVectorAvailability = vi.fn(async () => true);
     const probeEmbeddingAvailability = vi.fn(async () => ({ ok: true }));
     mockManager({
-      sync,
       probeVectorStoreAvailability,
       probeVectorAvailability,
       probeEmbeddingAvailability,
@@ -1239,9 +1237,7 @@ describe("memory cli", () => {
     });
 
     const log = spyRuntimeLogs(defaultRuntime);
-    await runMemoryCli(["status", flag]);
-
-    expect(sync).toHaveBeenCalledTimes(flag === "--index" ? 1 : 0);
+    await runMemoryCli(["status", "--deep"]);
 
     expect(probeVectorStoreAvailability).toHaveBeenCalled();
     expect(probeVectorAvailability).toHaveBeenCalled();

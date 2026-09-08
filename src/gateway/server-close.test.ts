@@ -106,7 +106,7 @@ vi.mock("../agents/agent-bundle-lsp-runtime.js", async () => ({
   disposeAllBundleLspRuntimes: mocks.disposeAllBundleLspRuntimes,
 }));
 
-vi.mock("./embeddings-provider-lifetime.js", () => ({
+vi.mock("./embeddings-http.js", () => ({
   drainRetainedOpenAiEmbeddingProviders: mocks.drainRetainedEmbeddingProviders,
 }));
 

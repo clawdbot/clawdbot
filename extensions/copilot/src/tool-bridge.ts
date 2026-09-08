@@ -18,6 +18,7 @@ import {
   getPluginToolSideEffectOwnerKey,
   isSubagentSessionKey,
   isToolResultError,
+  resolveAttemptSpawnWorkspaceDir,
   resolveEmbeddedAttemptToolConstructionPlan,
   resolveModelAuthMode,
   sanitizeToolResult,
@@ -103,10 +104,15 @@ interface CopilotToolBridgeInput {
    */
   sandbox?: SandboxContext | null;
   /**
-   * Spawn workspace prepared by the attempt from the original workspace.
-   * Undefined keeps normal workspace wiring for absent or rw sandboxes.
+   * Pre-computed `spawnWorkspaceDir` for subagent inheritance. The caller
+   * derives this from the *original* workspace via
+   * `resolveAttemptSpawnWorkspaceDir({ sandbox, resolvedWorkspace })`.
+   * When omitted, the bridge falls back to computing it from the
+   * (possibly sandbox-effective) `workspaceDir` it sees; production
+   * callers should pass it explicitly so `ro`/`none` sandboxes are
+   * handled correctly.
    */
-  spawnWorkspaceDir: string | undefined;
+  spawnWorkspaceDir?: string;
   abortSignal?: AbortSignal;
   /**
    * Full PI-parity attempt parameters. When set, the bridge forwards
@@ -371,8 +377,21 @@ function buildOpenClawCodingToolsOptions(
   const workspaceDir = input.workspaceDir ?? a.workspaceDir;
   const cwd = input.cwd ?? a.cwd;
   const agentDir = input.agentDir ?? a.agentDir;
-  // Sandbox and spawn workspace are prepared by the attempt owner.
+  // Sandbox forwarded from the caller (attempt.ts derives it via
+  // `resolveSandboxContext`). Wrapped tools that opt into sandbox-aware
+  // behavior now see the same policy PI provides. Spawn workspace falls
+  // through to the caller-provided value when supplied; otherwise we
+  // derive it locally from the (possibly sandbox-effective) workspaceDir
+  // — sufficient for legacy/test fixtures that didn't pre-compute it.
   const sandbox = input.sandbox ?? undefined;
+  const spawnWorkspaceDir =
+    input.spawnWorkspaceDir ??
+    (workspaceDir
+      ? resolveAttemptSpawnWorkspaceDir({
+          sandbox,
+          resolvedWorkspace: workspaceDir,
+        })
+      : undefined);
 
   const model = a.model;
   const modelHasVision = Array.isArray(model?.input) && model.input.includes("image");
@@ -415,7 +434,7 @@ function buildOpenClawCodingToolsOptions(
     workspaceDir,
     cwd,
     sandbox,
-    spawnWorkspaceDir: input.spawnWorkspaceDir,
+    spawnWorkspaceDir,
     config: toolSurfaceRuntime?.config ?? a.config,
     abortSignal: input.abortSignal,
     modelProvider: input.modelProvider,

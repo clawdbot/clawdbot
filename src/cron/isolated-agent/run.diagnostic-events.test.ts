@@ -139,20 +139,17 @@ describe("runCronIsolatedAgentTurn diagnostic events", () => {
     );
     runWithModelFallbackMock.mockResolvedValue({
       result: {
-        result: {
-          payloads: [{ text: "test output" }],
-          meta: {
-            agentMeta: {
-              sessionId: "persisted-run-session",
-              sessionFile: "/tmp/persisted-run-session.jsonl",
-              usage: { input: 10, output: 20 },
-            },
+        payloads: [{ text: "test output" }],
+        meta: {
+          agentMeta: {
+            sessionId: "persisted-run-session",
+            sessionFile: "/tmp/persisted-run-session.jsonl",
+            usage: { input: 10, output: 20 },
           },
         },
       },
       provider: "openai",
       model: "gpt-5.4",
-      attempts: [],
     });
 
     const events: EventRecord[] = [];
@@ -216,30 +213,27 @@ describe("runCronIsolatedAgentTurn diagnostic events", () => {
 
     runWithModelFallbackMock.mockResolvedValue({
       result: {
-        result: {
-          payloads: [{ text: "test output" }],
-          meta: {
-            agentMeta: {
-              sessionId: "cron-usage-session",
-              sessionFile: "/tmp/cron-usage-session.jsonl",
-              provider: "test-provider",
-              model: "test-model",
-              usage: { input: 50, output: 100, cacheRead: 7, cacheWrite: 3, total: 55 },
-              diagnosticUsage: {
-                input: 150,
-                output: 200,
-                cacheRead: 17,
-                cacheWrite: 13,
-                total: 380,
-              },
-              lastCallUsage: { input: 40, output: 5, cacheRead: 6, cacheWrite: 4 },
+        payloads: [{ text: "test output" }],
+        meta: {
+          agentMeta: {
+            sessionId: "cron-usage-session",
+            sessionFile: "/tmp/cron-usage-session.jsonl",
+            provider: "test-provider",
+            model: "test-model",
+            usage: { input: 50, output: 100, cacheRead: 7, cacheWrite: 3, total: 55 },
+            diagnosticUsage: {
+              input: 150,
+              output: 200,
+              cacheRead: 17,
+              cacheWrite: 13,
+              total: 380,
             },
+            lastCallUsage: { input: 40, output: 5, cacheRead: 6, cacheWrite: 4 },
           },
         },
       },
       provider: "fallback-provider",
       model: "fallback-model",
-      attempts: [],
     });
 
     let result: Awaited<ReturnType<typeof runCronIsolatedAgentTurn>> | undefined;
@@ -318,19 +312,16 @@ describe("runCronIsolatedAgentTurn diagnostic events", () => {
       abortController.abort("cron: job execution timed out");
       return {
         result: {
-          result: {
-            payloads: [{ text: "late output" }],
-            meta: {
-              agentMeta: {
-                sessionId: "late-session",
-                usage: { input: 50, output: 10, total: 60 },
-              },
+          payloads: [{ text: "late output" }],
+          meta: {
+            agentMeta: {
+              sessionId: "late-session",
+              usage: { input: 50, output: 10, total: 60 },
             },
           },
         },
         provider: "openai",
         model: "gpt-5.4",
-        attempts: [],
       };
     });
 
@@ -380,18 +371,15 @@ describe("runCronIsolatedAgentTurn diagnostic events", () => {
 
     runWithModelFallbackMock.mockResolvedValue({
       result: {
-        result: {
-          payloads: [{ text: "test output" }],
-          meta: {
-            agentMeta: {
-              usage,
-            },
+        payloads: [{ text: "test output" }],
+        meta: {
+          agentMeta: {
+            usage,
           },
         },
       },
       provider: "openai",
       model: "gpt-5.4",
-      attempts: [],
     });
 
     try {

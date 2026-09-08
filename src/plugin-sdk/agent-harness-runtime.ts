@@ -127,7 +127,6 @@ export const agentHarnessAttemptTerminal = {
   setFailure: setAgentRunAttemptTerminalFailure,
 };
 export { projectAgentHarnessTranscriptMessageForDisplay } from "../agents/harness/transcript-visibility.js";
-export { isOpenClawRuntimeContextCustomMessage } from "../agents/internal-runtime-context.js";
 export { restorePreparedUserTurnOperationalMetaForRuntime } from "../sessions/user-turn-transcript.metadata.js";
 export { fingerprintResolvedAuthProfileCredential } from "../agents/execution-auth-binding.js";
 export type {
@@ -399,11 +398,21 @@ export async function loadCodexBundleMcpThreadConfig(
   return load(params);
 }
 
-/** Lazily load the strict MCP proxy client with core-owned framing, startup, and shutdown. */
+/** Load shared MCP request and subprocess ownership only when opening a connection. */
 export const mcpStdioRuntime = Object.freeze({
   async load() {
-    const { createMcpStdioClient } = await import("../agents/mcp-stdio-client.js");
-    return { createMcpStdioClient };
+    const [{ createMcpStdioClient }, { OpenClawStdioClientTransport }, lifecycle] =
+      await Promise.all([
+        import("../agents/mcp-stdio-client.js"),
+        import("../agents/mcp-stdio-transport.js"),
+        import("../agents/mcp-client-lifecycle.js"),
+      ]);
+    return {
+      createMcpStdioClient,
+      OpenClawStdioClientTransport,
+      connectMcpClient: lifecycle.connectMcpClient,
+      disposeMcpClient: lifecycle.disposeMcpClient,
+    };
   },
 });
 

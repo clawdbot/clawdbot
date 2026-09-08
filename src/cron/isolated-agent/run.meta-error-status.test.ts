@@ -35,11 +35,9 @@ function mockAgentRun({
 } = {}) {
   runWithModelFallbackMock.mockResolvedValueOnce({
     result: {
-      result: {
-        payloads: [],
-        ...result,
-        meta: { agentMeta: { usage }, ...meta },
-      },
+      payloads: [],
+      ...result,
+      meta: { agentMeta: { usage }, ...meta },
     },
     provider,
     model,

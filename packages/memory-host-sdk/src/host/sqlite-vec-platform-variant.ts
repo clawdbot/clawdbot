@@ -1,3 +1,4 @@
+// Memory Host SDK module implements sqlite vec platform variant behavior.
 import { createRequire } from "node:module";
 
 // Resolves optional sqlite-vec native extension packages for the current platform.

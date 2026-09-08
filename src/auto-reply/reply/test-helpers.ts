@@ -47,7 +47,6 @@ export function createMockReplyOperation(
     startedAtMs: Date.now(),
     lastActivityAtMs: Date.now(),
     hasOwnedSessionId: vi.fn((candidate: string) => candidate === sessionId),
-    captureOwnedSessionIds: vi.fn(() => new Set([sessionId])),
     recordActivity: vi.fn(),
     setPhase: vi.fn(),
     markWaitingForDeferredMaintenance: vi.fn(),

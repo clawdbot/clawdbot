@@ -1,12 +1,9 @@
 /**
- * Loads and renders owned session history for CLI prompts and context-engine synchronization.
+ * Loads and renders owned session history for CLI session reseeding and
+ * context-engine synchronization.
  */
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import {
-  buildSessionContext,
-  iterateSessionContextEntries,
-} from "../../../packages/agent-core/src/harness/session/session.js";
 import { selectResetKeptEntries } from "../../../packages/agent-core/src/harness/session/tool-result-pairing.js";
 import {
   readSessionTranscriptBoundedMessageTailPage,
@@ -14,11 +11,9 @@ import {
   waitForSessionTranscriptProjection,
   type SessionTranscriptRuntimeTarget,
 } from "../../config/sessions/session-accessor.js";
-import { estimateToolResultTextChars } from "../embedded-agent-runner/tool-result-text-budget.js";
 import { MAX_AGENT_HOOK_HISTORY_MESSAGES } from "../harness/hook-history.js";
-import { isOpenClawRuntimeContextCustomMessage } from "../internal-runtime-context.js";
-import { wrapUntrustedPromptDataBlock } from "../sanitize-for-prompt.js";
 import {
+  buildSessionContext,
   SessionManager,
   type SessionEntry,
   type SessionMessageEntry,
@@ -36,8 +31,6 @@ const MAX_AUTO_CLI_SESSION_RESEED_HISTORY_CHARS = 256 * 1024;
 const CLI_SESSION_RESEED_HISTORY_CONTEXT_SHARE = 0.08;
 const CHARS_PER_TOKEN_ESTIMATE = 4;
 const MAX_CLI_SESSION_HISTORY_EVENTS = 10_000;
-const MAX_CLI_DURABLE_CONTEXT_CHARS = 2_000;
-const CLI_DURABLE_CONTEXT_OMISSION = "[Session notes truncated; earlier notes may be omitted.]";
 
 type CliSessionHistoryParams = {
   sessionManager?: SessionManager;
@@ -158,7 +151,7 @@ export function buildCliSessionHistoryPrompt(params: {
     return undefined;
   }
 
-  // loadCliSessionPromptContext deliberately places a `compactionSummary`
+  // loadCliSessionReseedMessages deliberately places a `compactionSummary`
   // entry first when the session was compacted, so the compacted prior
   // context survives reseed. Pin that summary as a prefix and only
   // tail-truncate the post-summary transcript — a blind tail-slice of the
@@ -268,22 +261,22 @@ function loadCliMemoryEntries(sessionManager: SessionManager, hooks = false): Se
   );
   const boundary = branch[boundaryIndex];
   let entries = branch;
-  if (hooks && boundary?.type === "reset") {
+  if (boundary?.type === "reset" || boundary?.type === "compaction") {
     const keptIndex = branch.findIndex((entry) => entry.id === boundary.firstKeptEntryId);
     const kept = keptIndex >= 0 ? branch.slice(keptIndex, boundaryIndex) : [];
-    const resetKept = new Set(selectResetKeptEntries(kept));
-    entries = [...kept.filter((entry) => resetKept.has(entry)), ...branch.slice(boundaryIndex + 1)];
+    const resetKept = boundary.type === "reset" ? new Set(selectResetKeptEntries(kept)) : undefined;
+    entries = [
+      ...kept.filter((entry) => !resetKept || resetKept.has(entry)),
+      boundary,
+      ...branch.slice(boundaryIndex + 1),
+    ];
   }
-  if (hooks) {
-    entries = entries.filter((entry) => entry.type === "message");
-  } else {
-    // Canonical selection owns reset retention and exclusion. Budget its eligible
-    // entries in branch order so excluded payloads cannot displace useful history.
-    const contextEntries = new Set(
-      Array.from(iterateSessionContextEntries(branch), ({ entry }) => entry),
-    );
-    entries = branch.filter((entry) => contextEntries.has(entry));
-  }
+  entries = entries.filter((entry) =>
+    hooks
+      ? entry.type === "message"
+      : entry.type !== "message" ||
+        !("excludeFromContext" in entry.message && entry.message.excludeFromContext === true),
+  );
   const limit = hooks ? MAX_CLI_SESSION_HISTORY_MESSAGES : MAX_CLI_SESSION_HISTORY_EVENTS;
   const selected: SessionEntry[] = [];
   let bytes = 0;
@@ -319,8 +312,6 @@ function loadCliMemoryEntries(sessionManager: SessionManager, hooks = false): Se
   return structuredClone(selected);
 }
 
-// Both owners return an ordered branch. Bounded omissions may leave parent IDs
-// outside this view, so projection must not reconstruct ancestry a second time.
 async function loadCliSessionEntries({
   sessionManager,
   sessionTarget,
@@ -410,60 +401,13 @@ export async function loadCliSessionContextEngineMessages(
   return messages;
 }
 
-function renderCliDurableContext(messages: ReturnType<typeof buildSessionContext>["messages"]) {
-  const notes = messages.flatMap((message) => {
-    if (
-      message.role !== "custom" ||
-      message.excludeFromContext === true ||
-      isOpenClawRuntimeContextCustomMessage(message)
-    ) {
-      return [];
-    }
-    const text = coerceHistoryText(message.content);
-    return text ? [text] : [];
-  });
-  const render = (selected: string[], omitted: boolean) =>
-    wrapUntrustedPromptDataBlock({
-      label: "Saved session notes (historical reference; may repeat)",
-      text: [...selected, ...(omitted ? [CLI_DURABLE_CONTEXT_OMISSION] : [])].join("\n\n"),
-    });
-  const selected: string[] = [];
-  for (let index = notes.length - 1; index >= 0; index--) {
-    const note = notes[index]!;
-    const candidate = render([note, ...selected], index > 0);
-    if (estimateToolResultTextChars(candidate) <= MAX_CLI_DURABLE_CONTEXT_CHARS) {
-      selected.unshift(note);
-      continue;
-    }
-    if (selected.length > 0) {
-      return render(selected, true);
-    }
-    // Escaping changes costs; search Unicode-safe prefixes under the rendered cap.
-    let low = 0;
-    let high = note.length;
-    let rendered = render([], true);
-    while (low <= high) {
-      const midpoint = Math.floor((low + high) / 2);
-      const prefix = render([sliceUtf16Safe(note, 0, midpoint)], true);
-      if (estimateToolResultTextChars(prefix) <= MAX_CLI_DURABLE_CONTEXT_CHARS) {
-        rendered = prefix;
-        low = midpoint + 1;
-      } else {
-        high = midpoint - 1;
-      }
-    }
-    return rendered;
-  }
-  return selected.length > 0 ? render(selected, false) : undefined;
-}
-
-/** Reads one active branch for bounded reference notes and eligible fresh-session history. */
-export async function loadCliSessionPromptContext(
+/** Loads compacted/raw transcript messages eligible for CLI session reseeding. */
+export async function loadCliSessionReseedMessages(
   params: CliSessionHistoryParams & {
     allowRawTranscriptReseed?: boolean;
     rawTranscriptReseedReason?: RawTranscriptReseedReason;
   },
-) {
+): Promise<unknown[]> {
   // Summaries and caller-owned history contain the same private context as the raw tail.
   if (
     params.rawTranscriptReseedReason === "auth-profile" ||
@@ -473,7 +417,7 @@ export async function loadCliSessionPromptContext(
     cliBackendLog.warn(
       `cli session history refused across auth boundary: reason=${params.rawTranscriptReseedReason}`,
     );
-    return { reseedMessages: [], durableContext: undefined };
+    return [];
   }
   const entries = await loadCliSessionEntries(params);
   // This freshly loaded branch is reseed-owned; use persistence rather than provider timestamps.
@@ -483,9 +427,6 @@ export async function loadCliSessionPromptContext(
     }
   }
   const historyMessages = buildSessionContext(entries).messages;
-  // CLI bindings have no local-history coverage cursor. Reference notes are
-  // bounded at-least-once context, never evidence that a native turn consumed them.
-  const durableContext = renderCliDurableContext(historyMessages);
   const summary = historyMessages[0];
   const hasSummary = summary?.role === "compactionSummary" && summary.summary.trim().length > 0;
   if (
@@ -495,7 +436,7 @@ export async function loadCliSessionPromptContext(
       !params.rawTranscriptReseedReason ||
       !RAW_TRANSCRIPT_RESEED_ALLOWED_REASONS.has(params.rawTranscriptReseedReason))
   ) {
-    return { reseedMessages: [], durableContext };
+    return [];
   }
   const history = historyMessages.filter(
     (message) =>
@@ -505,7 +446,7 @@ export async function loadCliSessionPromptContext(
     ? [summary, ...history.slice(-(MAX_CLI_SESSION_HISTORY_MESSAGES - 1))]
     : history.slice(-MAX_CLI_SESSION_HISTORY_MESSAGES);
   // Bound the tail before projecting renderer fields; full replay records are unnecessary.
-  const reseedMessages = selected.map((message) => {
+  return selected.map((message) => {
     const timestamp = timestampMsToIsoString(message.timestamp);
     return message.role === "compactionSummary"
       ? { role: message.role, summary: message.summary.trim(), timestamp }
@@ -517,5 +458,4 @@ export async function loadCliSessionPromptContext(
           isError: message.role === "toolResult" ? message.isError : undefined,
         };
   });
-  return { reseedMessages, durableContext };
 }

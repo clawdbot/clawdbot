@@ -119,110 +119,7 @@ async function capturePeopleCard(page: Page, filename: string) {
 }
 
 suite.define(() => {
-  it("labels shared owner presence separately from a personal sign-in", async () => {
-    await suite.withPage(
-      { viewport: { width: 1280, height: 900 }, colorScheme: "light", locale: "en-US" },
-      async ({ page }) => {
-        const gateway = await installMockGateway(page, {
-          sessionKey: selected,
-          methodResponses: {
-            "sessions.list": chatSessionListResponse([
-              { key: selected, kind: "direct", label: "Synthetic audit session", updatedAt: 1 },
-            ]),
-          },
-        });
-        await page.goto(controlUiSessionUrl(suite.server.baseUrl, selected));
-        await gateway.waitForRequest("connect");
-        await gateway.emitGatewayEvent("presence", {
-          presence: [
-            {
-              user: { id: "gateway-owner", identity: { type: "profile", id: "gateway-owner" } },
-              platform: "macOS 27.0.0",
-              deviceFamily: "Mac",
-              clientId: "openclaw-macos",
-              mode: "ui",
-              onlineSince: Date.now() - 720_000,
-              watchedSessions: [selected],
-            },
-            { user: { id: "example-person", name: "Example person" } },
-          ],
-        });
-        const owner = page.locator('[data-online-user-id="gateway-owner"]');
-        await owner.hover();
-        const card = page.locator(".person-activity-hovercard");
-        await card.waitFor({ state: "visible" });
-        await capturePeopleCard(page, "shared-owner.png");
-        expect(await owner.textContent()).toContain("Shared owner");
-        expect(await card.getAttribute("aria-label")).toBe("Activity for Shared owner");
-        expect(await card.locator("h2").textContent()).toBe("Shared owner");
-        expect(await card.textContent()).toContain(
-          "Connected with the Gateway token or over a tunnel, not a personal sign-in.",
-        );
-        expect(await card.textContent()).toContain("Mac · macOS 27.0.0 · App");
-        expect(await card.textContent()).toContain("Not observed yet");
-        expect(await card.getByRole("link", { name: "View activity" }).getAttribute("href")).toBe(
-          "/activity/gateway-owner",
-        );
-        expect(
-          await page.locator('[data-online-user-id="example-person"]').textContent(),
-        ).toContain("Example person");
-        expect(
-          await page
-            .locator('.chat-pane__presence [data-viewer-id="gateway-owner"]')
-            .getAttribute("aria-label"),
-        ).toBe("Shared owner");
-      },
-    );
-  });
-
-  it.each(["click", "Enter", "tap"] as const)(
-    "opens a person's Activity page directly on %s",
-    async (action) => {
-      const touch = action === "tap";
-      await suite.withPage(
-        {
-          hasTouch: touch,
-          isMobile: touch,
-          viewport: touch ? { width: 390, height: 650 } : { width: 1280, height: 900 },
-        },
-        async ({ page }) => {
-          const gateway = await installMockGateway(page, scenario());
-          await page.goto(controlUiSessionUrl(suite.server.baseUrl, selected));
-          if (touch) {
-            await page
-              .locator(".topbar-nav-toggle:visible, .chat-pane__nav-toggle:visible")
-              .first()
-              .click();
-          }
-          const person = page.locator('[data-online-user-id="alice"]');
-          if (action === "Enter") {
-            await person.focus();
-            await page
-              .getByRole("dialog", { name: "Activity for Alice" })
-              .waitFor({ state: "visible" });
-            await person.press("Enter");
-          } else if (touch) {
-            await person.tap();
-          } else {
-            await person.click();
-          }
-          await expect.poll(() => new URL(page.url()).pathname).toBe("/activity/alice");
-          await expect
-            .poll(() => page.getByRole("dialog", { name: "Activity for Alice" }).count())
-            .toBe(0);
-          await expect
-            .poll(
-              async () =>
-                (await gateway.getRequests("sessions.list", { involvingProfileId: "alice" }))
-                  .length,
-            )
-            .toBeGreaterThan(0);
-        },
-      );
-    },
-  );
-
-  it("opens person details on hover, preserves focus on updates, and follows the card activity link", async () => {
+  it("opens one person row, preserves focus on updates, and keeps activity navigation in the card", async () => {
     await suite.withPage(
       {
         hasTouch: false,
@@ -240,7 +137,7 @@ suite.define(() => {
         const row = page
           .locator(".sidebar-online__row")
           .filter({ has: page.locator('[data-online-user-id="alice"]') });
-        const person = row.getByRole("link", { name: "Activity for Alice" });
+        const person = row.getByRole("button", { name: "Details for Alice" });
         const card = page.getByRole("dialog", { name: "Activity for Alice" });
         await person.waitFor({ state: "visible" });
         expect(await card.count()).toBe(0);
@@ -387,12 +284,13 @@ suite.define(() => {
         await page.keyboard.press("Escape");
         await expect.poll(() => card.count()).toBe(0);
         expect(await person.evaluate((element) => document.activeElement === element)).toBe(true);
-        await page.mouse.click(1100, 200);
-        await person.hover();
+        await person.click();
         await card.waitFor({ state: "visible" });
+        await page.mouse.move(1100, 200);
+        expect(await card.count()).toBe(1);
         await page.mouse.click(1100, 200);
         await expect.poll(() => card.count()).toBe(0);
-        await person.hover();
+        await person.click();
         await card.waitFor({ state: "visible" });
         await card.getByRole("link", { name: "View activity", exact: true }).click();
         await expect.poll(() => new URL(page.url()).pathname).toBe("/activity/alice");
@@ -401,7 +299,7 @@ suite.define(() => {
     );
   });
 
-  it("opens focused details inside a narrow touch viewport and follows the session's saved face", async () => {
+  it("opens touch details inside a narrow viewport and follows the session's saved face", async () => {
     await suite.withPage(
       {
         hasTouch: true,
@@ -419,8 +317,8 @@ suite.define(() => {
           .locator(".topbar-nav-toggle:visible, .chat-pane__nav-toggle:visible")
           .first()
           .click();
-        const person = page.getByRole("link", { name: "Activity for Alice" });
-        await person.focus();
+        const person = page.getByRole("button", { name: "Details for Alice" });
+        await person.tap();
         const card = page.getByRole("dialog", { name: "Activity for Alice" });
         await card.waitFor({ state: "visible" });
         await page.keyboard.press("Tab");
@@ -428,8 +326,7 @@ suite.define(() => {
         await expect.poll(() => card.count()).toBe(0);
         expect(await person.isVisible()).toBe(true);
         expect(await person.evaluate((element) => document.activeElement === element)).toBe(true);
-        await page.keyboard.press("Shift+Tab");
-        await person.focus();
+        await person.tap();
         await card.waitFor({ state: "visible" });
         expect(await card.evaluate((element) => getComputedStyle(element).pointerEvents)).toBe(
           "auto",
@@ -496,8 +393,8 @@ suite.define(() => {
           methodResponses: { "sessions.list": sessions },
         });
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, selected));
-        const profileButton = page.getByRole("link", {
-          name: "Activity for Profile person",
+        const profileButton = page.getByRole("button", {
+          name: "Details for Profile person",
           exact: true,
         });
         await profileButton.waitFor({ state: "visible" });
@@ -555,7 +452,7 @@ suite.define(() => {
           ],
         });
         await expect.poll(() => rawCard.count()).toBe(0);
-        await profileButton.hover();
+        await profileButton.click();
         const profileCard = page.getByRole("dialog", {
           name: "Activity for Profile person",
           exact: true,
@@ -605,10 +502,7 @@ suite.define(() => {
           });
           await page.goto(controlUiSessionUrl(suite.server.baseUrl, selected));
           await page
-            .getByRole(qualified ? "button" : "link", {
-              name: `${qualified ? "Details" : "Activity"} for ${peer.name}`,
-              exact: true,
-            })
+            .getByRole("button", { name: `Details for ${peer.name}`, exact: true })
             .waitFor({ state: "visible" });
           expect(await page.locator(".sidebar-online__person").count()).toBe(1);
           await expect

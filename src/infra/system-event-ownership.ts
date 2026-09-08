@@ -2,13 +2,21 @@ import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
+type SystemEventOwnershipState = {
+  eventOwners: WeakMap<object, string>;
+  optionOwners: WeakMap<object, string>;
+};
+
 const SYSTEM_EVENT_OWNERSHIP_KEY = Symbol.for("openclaw.systemEvents.ownership");
 
 // The queue is process-global, so duplicated runtime chunks must share its
 // object-identity metadata or another agent can consume an owner-marked event.
-const owners = resolveGlobalSingleton(
+const { eventOwners, optionOwners } = resolveGlobalSingleton<SystemEventOwnershipState>(
   SYSTEM_EVENT_OWNERSHIP_KEY,
-  () => new WeakMap<object, string>(),
+  () => ({
+    eventOwners: new WeakMap<object, string>(),
+    optionOwners: new WeakMap<object, string>(),
+  }),
 );
 
 function normalizeOwnerAgentId(agentId: string | null | undefined): string | null {
@@ -16,26 +24,30 @@ function normalizeOwnerAgentId(agentId: string | null | undefined): string | nul
 }
 
 export function withSystemEventOwner<T extends object>(options: T, agentId: string): T {
-  recordSystemEventOwner(options, agentId);
+  optionOwners.set(options, normalizeAgentId(agentId));
   return options;
+}
+
+export function resolveSystemEventOptionsOwnerAgentId(options: object): string | null {
+  return optionOwners.get(options) ?? null;
 }
 
 export function recordSystemEventOwner(event: object, agentId: string | null): void {
   const normalized = normalizeOwnerAgentId(agentId);
   if (normalized) {
-    owners.set(event, normalized);
+    eventOwners.set(event, normalized);
   }
 }
 
 export function cloneSystemEventOwner(source: object, clone: object): void {
-  const ownership = owners.get(source);
-  if (ownership) {
-    owners.set(clone, ownership);
+  const ownerAgentId = eventOwners.get(source);
+  if (ownerAgentId) {
+    eventOwners.set(clone, ownerAgentId);
   }
 }
 
 export function resolveSystemEventOwnerAgentId(event: object): string | null {
-  return owners.get(event) ?? null;
+  return eventOwners.get(event) ?? null;
 }
 
 export function selectAgentSystemEvents<T extends object>(

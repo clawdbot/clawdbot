@@ -3,8 +3,6 @@
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { isMainThread, threadId } from "node:worker_threads";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { formatErrorMessageWithCode } from "../../infra/errors.js";
 import { getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { getChildLogger } from "../../logging/logger.js";
 import {
@@ -95,7 +93,6 @@ export type SessionSqliteTargetResolutionCache = Map<
 >;
 
 const SQLITE_SESSION_SLOW_WRITE_MS = 1_000;
-const SQLITE_SESSION_WRITE_ERROR_MAX_CHARS = 2_048;
 const SQLITE_TRANSCRIPT_READ_QUERY_CHUNK_SIZE = 400;
 
 export function getSessionKysely(database: import("node:sqlite").DatabaseSync) {
@@ -149,10 +146,7 @@ export async function runExclusiveSqliteSessionWrite<T>(
     getChildLogger({ subsystem: "session-sqlite" }).warn("SQLite session write failed", {
       agentId: scope.agentId,
       ...timingFields(performance.now()),
-      error: truncateUtf16Safe(
-        formatErrorMessageWithCode(error),
-        SQLITE_SESSION_WRITE_ERROR_MAX_CHARS,
-      ),
+      error,
       storePath,
     });
     throw error;

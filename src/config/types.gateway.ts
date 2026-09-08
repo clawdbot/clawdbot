@@ -225,14 +225,11 @@ export type GatewayTrustedProxyConfig = {
 };
 
 export type GatewayAuthConfig = {
-  /**
-   * Authentication mode for Gateway connections. Token/password mode selects the
-   * configured secret; clients may send it in either auth.token or auth.password.
-   */
+  /** Authentication mode for Gateway connections. Defaults to token when unset. */
   mode?: GatewayAuthMode;
-  /** Shared secret selected by token mode (plaintext or SecretRef). */
+  /** Shared token for token mode (plaintext or SecretRef). */
   token?: SecretInput;
-  /** Shared secret selected by password mode (plaintext or SecretRef; consider env instead). */
+  /** Shared password for password mode (consider env instead). */
   password?: SecretInput;
   /** Allow Tailscale identity headers when serve mode is enabled. */
   allowTailscale?: boolean;

@@ -13,9 +13,8 @@ import { danger, warn } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { asFiniteNumber } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import type * as ws from "ws";
+import * as ws from "ws";
 import * as discordGateway from "../internal/gateway.js";
-import { WebSocket } from "../internal/ws-runtime.js";
 import { createDiscordDnsLookup } from "../network-config.js";
 import { validateDiscordProxyUrl } from "../proxy-fetch.js";
 import { resolveDiscordVoiceEnabled } from "../voice/config.js";
@@ -262,7 +261,7 @@ function createGatewayPlugin(params: {
       // Avoid Node's undici-backed global WebSocket here. We have seen late
       // close-path crashes during Discord gateway teardown; the ws transport is
       // already our proxy path and behaves predictably for lifecycle cleanup.
-      const WebSocketCtor = params.testing?.webSocketCtor ?? WebSocket;
+      const WebSocketCtor = params.testing?.webSocketCtor ?? ws.default;
       const socket = new WebSocketCtor(url, {
         ...discordGateway.DISCORD_GATEWAY_WS_CLIENT_OPTIONS,
         ...(params.wsAgent ? { agent: params.wsAgent } : {}),

@@ -197,7 +197,7 @@ type StatusModelRouteIssue =
     };
 
 function parseOptionalPositiveFiniteOption(raw: unknown, label: string, fallback: number): number {
-  if (raw === undefined || raw === null) {
+  if (raw === undefined || raw === null || raw === "") {
     return fallback;
   }
   const parsed = parseStrictFiniteNumber(raw);
@@ -208,7 +208,7 @@ function parseOptionalPositiveFiniteOption(raw: unknown, label: string, fallback
 }
 
 function parseOptionalPositiveIntegerOption(raw: unknown, label: string, fallback: number): number {
-  if (raw === undefined || raw === null) {
+  if (raw === undefined || raw === null || raw === "") {
     return fallback;
   }
   const parsed = parseStrictPositiveInteger(raw);

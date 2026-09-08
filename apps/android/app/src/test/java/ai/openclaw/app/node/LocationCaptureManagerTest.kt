@@ -12,7 +12,6 @@ import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.runBlocking
-import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
@@ -55,12 +54,13 @@ class LocationCaptureManagerTest : NodeHandlerRobolectricTest() {
     val executor = Executors.newSingleThreadExecutor()
     try {
       val result =
-        executor.submit<Location> {
+        executor.submit<LocationCaptureManager.Payload> {
           runBlocking {
             LocationCaptureManager(app).getLocation(
               desiredProviders = listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER),
               maxAgeMs = 1_000L,
               timeoutMs = 1_000L,
+              isPrecise = true,
             )
           }
         }
@@ -69,7 +69,7 @@ class LocationCaptureManagerTest : NodeHandlerRobolectricTest() {
         shadowOf(Looper.getMainLooper()).idle()
       }
 
-      assertEquals(2.0, result.get(1, TimeUnit.SECONDS).latitude, 0.0)
+      assertTrue(result.get(1, TimeUnit.SECONDS).payloadJson.contains("\"lat\":2.0"))
     } finally {
       executor.shutdownNow()
     }
@@ -95,6 +95,7 @@ class LocationCaptureManagerTest : NodeHandlerRobolectricTest() {
             desiredProviders = listOf(LocationManager.GPS_PROVIDER),
             maxAgeMs = 500,
             timeoutMs = 5_000,
+            isPrecise = true,
           )
         }
 
@@ -113,8 +114,8 @@ class LocationCaptureManagerTest : NodeHandlerRobolectricTest() {
       shadowManager.simulateLocation(LocationManager.GPS_PROVIDER, location(3.0, ageMs = 0))
       idleUntil("fresh location after future callbacks") { result.isCompleted }
 
-      val location = runBlocking { result.await() }
-      assertEquals(3.0, location.latitude, 0.0)
+      val payload = runBlocking { result.await() }.payloadJson
+      assertTrue("expected the fresh fix, got $payload", payload.contains("\"lat\":3.0"))
       assertTrue(shadowManager.getLocationRequests(LocationManager.GPS_PROVIDER).isEmpty())
     } finally {
       captureScope.cancel()
@@ -138,6 +139,7 @@ class LocationCaptureManagerTest : NodeHandlerRobolectricTest() {
             desiredProviders = listOf(LocationManager.GPS_PROVIDER),
             maxAgeMs = 500,
             timeoutMs = 5_000,
+            isPrecise = true,
           )
         }
 
@@ -157,8 +159,8 @@ class LocationCaptureManagerTest : NodeHandlerRobolectricTest() {
       shadowManager.simulateLocation(LocationManager.GPS_PROVIDER, location(3.0, ageMs = 0))
       idleUntil("fresh location callback") { result.isCompleted }
 
-      val location = runBlocking { result.await() }
-      assertEquals(3.0, location.latitude, 0.0)
+      val payload = runBlocking { result.await() }.payloadJson
+      assertTrue("expected the fresh fix, got $payload", payload.contains("\"lat\":3.0"))
       assertTrue(shadowManager.getLocationRequests(LocationManager.GPS_PROVIDER).isEmpty())
     } finally {
       captureScope.cancel()
@@ -182,6 +184,7 @@ class LocationCaptureManagerTest : NodeHandlerRobolectricTest() {
             desiredProviders = listOf(LocationManager.GPS_PROVIDER),
             maxAgeMs = 500,
             timeoutMs = 250,
+            isPrecise = true,
           )
         }
 
@@ -218,6 +221,7 @@ class LocationCaptureManagerTest : NodeHandlerRobolectricTest() {
             desiredProviders = listOf(LocationManager.GPS_PROVIDER),
             maxAgeMs = 500,
             timeoutMs = 5_000,
+            isPrecise = true,
           )
         }
 

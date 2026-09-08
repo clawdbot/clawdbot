@@ -677,8 +677,10 @@ describe("Claude migration provider", () => {
     expect(generatedSkill.split("\n").find((line) => line.startsWith("description: "))).toBe(
       `description: ${JSON.stringify(commandDescriptionPrefix)}`,
     );
-    await fs.access(path.join(workspaceDir, "skills", "review", "SKILL.md"));
-    await fs.access(path.join(reportDir, "summary.md"));
+    await expect(
+      fs.access(path.join(workspaceDir, "skills", "review", "SKILL.md")),
+    ).resolves.toBeUndefined();
+    await expect(fs.access(path.join(reportDir, "summary.md"))).resolves.toBeUndefined();
   });
 
   it("backs up the whole generated skill directory before overwriting it", async () => {

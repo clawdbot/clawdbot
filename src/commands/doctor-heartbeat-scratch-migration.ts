@@ -17,7 +17,7 @@ import {
 import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
 import type { CronJob } from "../cron/types.js";
 import type { HealthFinding } from "../flows/health-checks.js";
-import { formatErrorMessage as errorMessage, hasErrnoCode } from "../infra/errors.js";
+import { formatErrorMessage as errorMessage } from "../infra/errors.js";
 import { resolveHeartbeatAgents, resolveHeartbeatIntervalMs } from "../infra/heartbeat-config.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { readRegularFile } from "../infra/regular-file.js";
@@ -159,11 +159,8 @@ async function findStaleHeartbeatClaim(heartbeatPath: string): Promise<string | 
   let entries: string[];
   try {
     entries = await fs.readdir(dir);
-  } catch (error) {
-    if (hasErrnoCode(error, "ENOENT")) {
-      return undefined;
-    }
-    throw error;
+  } catch {
+    return undefined;
   }
   const claims = entries.filter((entry) => claimPattern.test(entry));
   if (claims.length > 1) {
@@ -224,23 +221,14 @@ async function restoreClaimNoClobber(claimPath: string, destinationPath: string)
 
 /**
  * Move the source aside and prove the claimed bytes still match what was read.
- * Claim before copying so a concurrent edit cannot leave stale scratch
- * committed while the replacement source is restored.
+ * The claim happens before any scratch write so a concurrent edit can never
+ * leave stale content committed while the replacement file is restored.
  */
 async function claimHeartbeatSource(source: HeartbeatSource): Promise<HeartbeatSourceClaim> {
-  const workspaceRealPath = path.dirname(source.entryKey);
-  const assertWorkspaceUnchanged = async () => {
-    if ((await fs.realpath(path.dirname(source.path))) !== workspaceRealPath) {
-      throw new Error("HEARTBEAT.md workspace changed after the source was read");
-    }
-  };
-  await assertWorkspaceUnchanged();
-  // Mutate the captured entry, so an alias retarget cannot redirect a claim or
-  // its restoration into another workspace while filesystem calls are pending.
-  const claimPath = `${source.entryKey}${HEARTBEAT_CLAIM_INFIX}${process.pid}-${source.sha256.slice(0, 12)}`;
-  await fs.rename(source.entryKey, claimPath);
+  const claimPath = `${source.path}${HEARTBEAT_CLAIM_INFIX}${process.pid}-${source.sha256.slice(0, 12)}`;
+  await fs.rename(source.path, claimPath);
   const restore = async (cause: unknown) => {
-    await restoreClaimNoClobber(claimPath, source.entryKey).catch((restoreError: unknown) => {
+    await restoreClaimNoClobber(claimPath, source.path).catch((restoreError: unknown) => {
       throw restoreError instanceof Error && restoreError.message.includes("preserved at")
         ? restoreError
         : new Error(`HEARTBEAT.md migration claim could not be restored from ${claimPath}`, {
@@ -249,7 +237,7 @@ async function claimHeartbeatSource(source: HeartbeatSource): Promise<HeartbeatS
     });
   };
   try {
-    await assertWorkspaceUnchanged();
+    const workspaceRealPath = await fs.realpath(path.dirname(source.path));
     const claimRealPath = await fs.realpath(claimPath);
     if (claimRealPath !== workspaceRealPath && !isPathInside(workspaceRealPath, claimRealPath)) {
       throw new Error("claimed HEARTBEAT.md target escapes the agent workspace");
@@ -279,7 +267,7 @@ async function claimHeartbeatSource(source: HeartbeatSource): Promise<HeartbeatS
     throw error;
   };
   const readFinalContent = async (filePath: string) => {
-    await assertWorkspaceUnchanged();
+    const workspaceRealPath = await fs.realpath(path.dirname(source.path));
     const fileRealPath = await fs.realpath(filePath);
     if (fileRealPath !== workspaceRealPath && !isPathInside(workspaceRealPath, fileRealPath)) {
       throw new Error("HEARTBEAT.md target escapes the agent workspace");
@@ -306,7 +294,7 @@ async function claimHeartbeatSource(source: HeartbeatSource): Promise<HeartbeatS
     // changed claim so the import rolls back instead of shadowing it.
     let recreated: boolean;
     try {
-      await fs.lstat(source.entryKey);
+      await fs.lstat(source.path);
       recreated = true;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
@@ -321,7 +309,7 @@ async function claimHeartbeatSource(source: HeartbeatSource): Promise<HeartbeatS
   const verifyRestoredUnchanged = async () => {
     let finalContent: string;
     try {
-      finalContent = await readFinalContent(source.entryKey);
+      finalContent = await readFinalContent(source.path);
     } catch (error) {
       throw changedError("restored HEARTBEAT.md could not be re-verified", error);
     }
@@ -338,6 +326,10 @@ async function claimHeartbeatSource(source: HeartbeatSource): Promise<HeartbeatS
     },
     release: async ({ archivePath }) => {
       await verifyUnchanged();
+      // Retire the claim by moving the inode into the archive instead of
+      // unlinking it: a writer holding an open descriptor that lands a write
+      // after the hash check above still writes into the preserved archive
+      // file, never into a deleted inode.
       const claimStat = await fs.lstat(claimPath);
       if (claimStat.isSymbolicLink()) {
         // The removable entry is the symlink itself; its target file stays in
@@ -345,22 +337,17 @@ async function claimHeartbeatSource(source: HeartbeatSource): Promise<HeartbeatS
         await fs.unlink(claimPath);
         return;
       }
-      // Equal bytes can come from distinct inodes still held by editors. Keep
-      // each original in a private backup, beside the source if state is on
-      // another filesystem. Neither location matches interrupted-claim names.
-      for (const archiveBase of [archivePath, `${source.entryKey}.doctor-archived`]) {
-        const archiveDir = await fs.mkdtemp(`${archiveBase}.`);
-        try {
-          await fs.rename(claimPath, path.join(archiveDir, LEGACY_HEARTBEAT_FILENAME));
-          return;
-        } catch (error) {
-          // A completed rename with a lost acknowledgement leaves a nonempty
-          // backup, which rmdir preserves alongside the immutable state snapshot.
-          await fs.rmdir(archiveDir).catch(() => undefined);
-          if (!hasErrnoCode(error, "EXDEV") || archiveBase !== archivePath) {
-            throw error;
-          }
+      try {
+        await fs.rename(claimPath, archivePath);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EXDEV") {
+          throw error;
         }
+        // Cross-device archive: the pre-written archive copy already holds the
+        // verified bytes. Accepted tradeoff: the unlink below reopens the
+        // microsecond open-descriptor window only when workspace and state dir
+        // sit on different filesystems.
+        await fs.unlink(claimPath);
       }
     },
   };

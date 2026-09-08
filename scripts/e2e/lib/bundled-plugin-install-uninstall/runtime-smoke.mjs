@@ -326,22 +326,6 @@ export function activateSmokePlugin(config, pluginId, channels = []) {
   };
 }
 
-export function withSmokeTtsConfig(config, tts) {
-  if (process.env.OPENCLAW_FROZEN_PLUGIN_PRERELEASE_FIXTURE_DIALECT === "legacy") {
-    return {
-      ...config,
-      messages: { ...config.messages, tts: { ...config.messages?.tts, ...tts } },
-    };
-  }
-  return { ...config, tts: { ...config.tts, ...tts } };
-}
-
-export function readSmokeTtsConfig(config) {
-  return process.env.OPENCLAW_FROZEN_PLUGIN_PRERELEASE_FIXTURE_DIALECT === "legacy"
-    ? config.messages?.tts
-    : config.tts;
-}
-
 function channelActivationEnvName(channel) {
   return `${channel
     .replace(/[^a-z0-9]+/giu, "_")
@@ -460,10 +444,10 @@ export function runCommand(command, args, options = {}) {
     let stderr = { text: "", truncatedChars: 0 };
     let timedOut = false;
     let settled = false;
-    child.stdout?.setEncoding("utf8").on("data", (chunk) => {
+    child.stdout?.on("data", (chunk) => {
       stdout = appendBoundedTail(stdout, chunk, OUTPUT_CAPTURE_CHARS);
     });
-    child.stderr?.setEncoding("utf8").on("data", (chunk) => {
+    child.stderr?.on("data", (chunk) => {
       stderr = appendBoundedTail(stderr, chunk, OUTPUT_CAPTURE_CHARS);
     });
     const clearCommandTimer = timeoutMs
@@ -1064,23 +1048,23 @@ async function smokePlugin(pluginId, pluginDir, requiresConfig, pluginIndex, plu
   const manifest = loadManifest(pluginDir, pluginRoot);
   const plan = buildPluginPlan(manifest);
   const port = resolveRuntimeSmokePort(pluginIndex);
-  let config = ensureGatewayConfig(
+  const config = ensureGatewayConfig(
     activateSmokePlugin(readConfig(), pluginId, plan.channels),
     port,
   );
   const env = withManifestChannelActivationEnv(process.env, plan.channels);
   if (plan.speechProviders[0]) {
     const provider = plan.speechProviders[0];
-    const existingTts = readSmokeTtsConfig(config);
-    config = withSmokeTtsConfig(config, {
+    config.tts = {
+      ...config.tts,
       provider,
       providers: {
-        ...existingTts?.providers,
+        ...config.tts?.providers,
         [provider]: {
-          ...existingTts?.providers?.[provider],
+          ...config.tts?.providers?.[provider],
         },
       },
-    });
+    };
   }
   writeConfig(config);
 
@@ -1410,16 +1394,14 @@ async function smokeTtsGlobalDisable(pluginId, pluginDir, provider, pluginIndex,
   const env = createIsolatedStateEnv(`tts-disabled-${pluginId}`);
   writeConfig(
     ensureGatewayConfig(
-      withSmokeTtsConfig(
-        {
-          plugins: {
-            enabled: false,
-          },
+      {
+        plugins: {
+          enabled: false,
         },
-        {
+        tts: {
           provider: selectedProvider,
         },
-      ),
+      },
       port,
     ),
     env,
@@ -1462,17 +1444,15 @@ async function smokeOpenAiTts(pluginIndex) {
   const env = createIsolatedStateEnv("tts-openai-live");
   writeConfig(
     ensureGatewayConfig(
-      withSmokeTtsConfig(
-        {
-          plugins: {
-            enabled: true,
-            allow: ["openai"],
-            entries: {
-              openai: { enabled: true },
-            },
+      {
+        plugins: {
+          enabled: true,
+          allow: ["openai"],
+          entries: {
+            openai: { enabled: true },
           },
         },
-        {
+        tts: {
           provider: "openai",
           providers: {
             openai: {
@@ -1480,7 +1460,7 @@ async function smokeOpenAiTts(pluginIndex) {
             },
           },
         },
-      ),
+      },
       port,
     ),
     env,

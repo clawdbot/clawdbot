@@ -39,17 +39,10 @@ describe("BrowserPanelController superseded tab snapshots", () => {
       });
       const controller = createBrowserPanelTestController(client, "active-tab", activeUrl);
       controller.tabs = [
-        {
-          kind: "remote" as const,
-          id: "active-tab",
-          targetId: "raw-active",
-          title: "Active",
-          url: activeUrl,
-        },
+        { id: "active-tab", targetId: "raw-active", title: "Active", url: activeUrl },
         ...(hasFallback
           ? [
               {
-                kind: "remote" as const,
                 id: "fallback-tab",
                 targetId: "raw-fallback",
                 title: "Fallback",
@@ -133,14 +126,12 @@ describe("BrowserPanelController superseded tab snapshots", () => {
       const previousView = controller.view;
       controller.tabs = [
         {
-          kind: "remote" as const,
           id: "active-tab",
           targetId: "raw-active",
           title: "Active",
           url: activeUrl,
         },
         {
-          kind: "remote" as const,
           id: "background-tab",
           targetId: "raw-background",
           title: "Background",

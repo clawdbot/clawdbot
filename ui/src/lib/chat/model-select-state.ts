@@ -72,7 +72,9 @@ type ChatFastModeSelectStateInput = {
   stream: string | null;
 };
 
-// Preserve existing controls only when the selected request's applicability is unknown.
+// Providers with a runtime fast-mode mapping: Anthropic sets speed (or legacy
+// service_tier), OpenAI sets service_tier priority, MiniMax/xAI select fast variants.
+// Providers without a wire mapping must not offer the toggle.
 const FAST_MODE_PROVIDER_IDS = new Set(["anthropic", "minimax", "minimax-portal", "openai", "xai"]);
 
 export function isChatFastModeProviderSupported(provider: string | null | undefined): boolean {
@@ -373,29 +375,8 @@ export function resolveChatFastModeSelectState(
         ? "auto"
         : "off"
     : configuredOverride;
-  const selectedValue = normalizeChatModelAvailabilityKey(
-    normalizeChatModelOverrideValue(
-      input.currentModelOverride ||
-        buildQualifiedChatModelValue(
-          activeRow?.model ?? input.sessionsResult?.defaults?.model ?? "",
-          effectiveProvider,
-        ),
-      input.catalog,
-    ),
-  );
-  const applicability = new Set(
-    input.catalog
-      .filter(
-        (entry) =>
-          normalizeChatModelAvailabilityKey(
-            buildQualifiedChatModelValue(entry.id, entry.provider),
-          ) === selectedValue,
-      )
-      .map((entry) => entry.supportsFastMode),
-  );
-  const selectedSupport = applicability.size === 1 ? [...applicability][0] : undefined;
-  const requestSupported = selectedSupport ?? isChatFastModeProviderSupported(effectiveProvider);
-  const supported = requestSupported || Boolean(configuredOverride);
+  const providerSupported = isChatFastModeProviderSupported(effectiveProvider);
+  const supported = providerSupported || Boolean(configuredOverride);
   // The picker exposes speed as a two-state toggle: fast on, or back to the
   // provider baseline (explicit off for OpenAI's priority tier, inherited
   // default elsewhere). Auto and explicit standard overrides remain reachable
@@ -417,7 +398,7 @@ export function resolveChatFastModeSelectState(
   // inherited baseline is unknowable while an override exists, and clearing
   // could land on a fast default, turning the click into a visible no-op.
   // /fast default remains the way back to the inherited setting.
-  const nextValue: ChatFastModeSelectValue = !requestSupported ? "" : active ? "off" : "on";
+  const nextValue: ChatFastModeSelectValue = !providerSupported ? "" : active ? "off" : "on";
   return {
     active,
     currentOverride,

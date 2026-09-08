@@ -7,7 +7,6 @@ import {
 } from "../../packages/gateway-protocol/src/index.js";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
 import { isSessionMember, type SessionEntry } from "../config/sessions.js";
-import { sessionCreatorProfileId } from "../config/sessions/session-entry-provenance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import {
@@ -48,23 +47,6 @@ export function resolveSessionVisibility(
   return entry.visibility ?? "shared";
 }
 
-/** Compare access facts only after the mutation owner has preserved the canonical target. */
-export function hasSessionReadAccessChanged(
-  previous: SessionEntry | undefined,
-  current: SessionEntry,
-): boolean {
-  return (
-    !previous?.sessionId?.trim() ||
-    !previous.lifecycleRevision?.trim() ||
-    previous.sessionId !== current.sessionId ||
-    previous.lifecycleRevision !== current.lifecycleRevision ||
-    sessionCreatorProfileId(previous.createdActor) !==
-      sessionCreatorProfileId(current.createdActor) ||
-    resolveSessionVisibility(previous) !== resolveSessionVisibility(current) ||
-    (previous.incognito === true) !== (current.incognito === true)
-  );
-}
-
 export function isGatewayAdmin(client: Pick<GatewayClient, "connect"> | null): boolean {
   // Internal/plugin-runtime runs reach authorization with a client that has no
   // connect handshake; treat a connect-less client as a non-admin, never a crash.
@@ -92,7 +74,6 @@ export function resolveSessionSharingTarget(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
   agentId?: string;
-  exactRead?: boolean;
   storeCache?: GatewaySessionStoreCache;
   targetDiscoveryCache?: GatewaySessionStoreDiscoveryCache;
 }): SessionSharingTarget | null {
@@ -105,7 +86,7 @@ export function resolveSessionSharingTarget(params: {
     projection: "list",
     // Batch callers reuse one store snapshot; single-target checks must not
     // materialize unrelated sessions for every task or authorization recheck.
-    exactRead: params.exactRead ?? !params.storeCache,
+    exactRead: !params.storeCache,
     ...(params.storeCache ? { storeCache: params.storeCache } : {}),
     ...(params.targetDiscoveryCache ? { targetDiscoveryCache: params.targetDiscoveryCache } : {}),
   });

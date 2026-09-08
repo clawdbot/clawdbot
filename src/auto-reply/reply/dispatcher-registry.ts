@@ -5,26 +5,38 @@
 import { resolveGlobalSet } from "../../shared/global-singleton.js";
 
 type TrackedDispatcher = {
+  readonly id: string;
   readonly pending: () => number;
+  readonly waitForIdle: () => Promise<void>;
 };
 
 const activeDispatchers = resolveGlobalSet<TrackedDispatcher>(
   Symbol.for("openclaw.activeReplyDispatchers"),
   "close-only",
 );
+let nextId = 0;
 
 /**
  * Register a reply dispatcher for global tracking.
  * Returns an unregister function to call when the dispatcher is no longer needed.
  */
-export function registerDispatcher(pending: () => number): () => void {
-  // Separate registrations must remain distinct even when they share a callback.
-  const tracked: TrackedDispatcher = { pending };
+export function registerDispatcher(dispatcher: {
+  readonly pending: () => number;
+  readonly waitForIdle: () => Promise<void>;
+}): { id: string; unregister: () => void } {
+  const id = `dispatcher-${++nextId}`;
+  const tracked: TrackedDispatcher = {
+    id,
+    pending: dispatcher.pending,
+    waitForIdle: dispatcher.waitForIdle,
+  };
   activeDispatchers.add(tracked);
 
-  return () => {
+  const unregister = () => {
     activeDispatchers.delete(tracked);
   };
+
+  return { id, unregister };
 }
 
 /**

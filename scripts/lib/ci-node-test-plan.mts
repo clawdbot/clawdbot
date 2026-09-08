@@ -2344,8 +2344,7 @@ export function createNodeTestShardBundles(
     }
 
     const { name: runnerClass } = resolveCiNodeTestRunnerClass(group.runner);
-    const buildModeSuffix = group.pretestBuildMode ? `-${group.pretestBuildMode}` : "";
-    const bundleName = `${bundleNameForConfigs(group.configs)}-${runnerClass}${buildModeSuffix}`;
+    const bundleName = `${bundleNameForConfigs(group.configs)}-${runnerClass}`;
     for (const [index, bin] of bins.entries()) {
       const shardName = `bundle-${bundleName}-${index + 1}`;
       bundled.push({

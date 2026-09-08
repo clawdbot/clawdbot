@@ -8,7 +8,6 @@ import {
   fingerprintOpaqueRuntimeOwner,
   fingerprintResolvedProviderAuth,
 } from "../agents/execution-auth-binding.js";
-import { committedConfigFiles as hostedConfigFiles } from "../commands/committed-config.test-support.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import type { runSetupMemoryImportStep } from "../wizard/setup.memory-import.js";
 import { runSystemAgentTurnWithDeps as runSystemAgentTurnWithDepsImpl } from "./agent-turn.test-support.js";
@@ -48,6 +47,7 @@ const mocks = vi.hoisted(() => ({
   runSearchSetupFlow: vi.fn(),
   runSetupMemoryImportStep: vi.fn(),
   writeWizardConfigFile: vi.fn(),
+  runCollectedChannelOnboardingPostWriteHooks: vi.fn(async () => {}),
   sharedVerifiedInference: undefined as SystemAgentVerifiedInferenceBinding | undefined,
 }));
 
@@ -67,6 +67,7 @@ vi.mock("../wizard/setup.shared.js", async (importOriginal) => ({
 vi.mock("../commands/onboard-channels.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../commands/onboard-channels.js")>()),
   setupChannels: mocks.setupChannels,
+  runCollectedChannelOnboardingPostWriteHooks: mocks.runCollectedChannelOnboardingPostWriteHooks,
 }));
 
 vi.mock("../commands/onboard-skills.js", async (importOriginal) => ({
@@ -382,15 +383,14 @@ export class SystemAgentChatEngine extends RuntimeSystemAgentChatEngine {
   }
 }
 
-export async function advanceGatewayWizardToSecretStorage(engine: SystemAgentChatEngine) {
+export async function advanceGatewayWizardToToken(engine: SystemAgentChatEngine) {
   const portStep = await engine.handle("configure gateway");
   expect((await engine.handle("19001")).text).toContain("Gateway bind address");
-  // The wizard no longer asks token vs password; bind goes straight to Tailscale exposure,
-  // then to how the generated secret is stored.
-  expect((await engine.handle("2")).text).toContain("Tailscale exposure");
-  const storageStep = await engine.handle("1");
-  expect(storageStep.text).toContain("store the Gateway");
-  return { portStep, storageStep };
+  expect((await engine.handle("2")).text).toContain("Gateway access protection");
+  expect((await engine.handle("1")).text).toContain("Tailscale exposure");
+  expect((await engine.handle("1")).text).toContain("provide the gateway token");
+  const tokenStep = await engine.handle("1");
+  return { portStep, tokenStep };
 }
 
 beforeAll(async () => {
@@ -409,7 +409,6 @@ beforeAll(async () => {
 });
 
 afterEach(() => {
-  hostedConfigFiles.clear();
   vi.unstubAllEnvs();
   vi.clearAllMocks();
   mocks.readConfigFileSnapshot.mockResolvedValue(
@@ -421,6 +420,7 @@ afterEach(() => {
   mocks.runSearchSetupFlow.mockReset();
   mocks.runSetupMemoryImportStep.mockReset();
   mocks.writeWizardConfigFile.mockReset();
+  mocks.runCollectedChannelOnboardingPostWriteHooks.mockReset();
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }

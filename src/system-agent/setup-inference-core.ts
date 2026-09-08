@@ -1,4 +1,3 @@
-import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import type {
   SetupInferenceActivationRejection,
   SetupInferenceFailureStatus,
@@ -273,7 +272,6 @@ export type ActivateSetupInferenceDeps = {
   ensureCodexRuntimePlugin?: typeof import("../commands/codex-runtime-plugin-install.js").ensureCodexRuntimePluginForModelSelection;
   transformConfigWithPendingPluginInstalls?: typeof import("../plugins/install-record-commit.js").transformConfigWithPendingPluginInstalls;
   refreshPluginRegistryAfterConfigMutation?: typeof import("../plugins/registry-refresh.js").refreshPluginRegistryAfterConfigMutation;
-  refreshPluginRegistryForPreparedConfig?: typeof import("../plugins/registry-refresh.js").refreshPluginRegistryForPreparedConfig;
   resolvePluginProviders?: typeof resolvePluginProvidersCore;
   resolveManifestProviderAuthChoice?: typeof resolveManifestProviderAuthChoice;
   enablePluginInConfig?: typeof enablePluginInConfig;
@@ -341,7 +339,7 @@ export function invalidSetupConfigError(snapshot: {
 }
 
 export async function redactSetupInferenceError(
-  message: unknown,
+  message: string,
   ...apiKeys: Array<string | undefined>
 ): Promise<string> {
   const secrets = new Set(
@@ -349,7 +347,7 @@ export async function redactSetupInferenceError(
       .flatMap((apiKey) => [apiKey, apiKey?.trim()])
       .filter((value): value is string => Boolean(value)),
   );
-  let redacted = coerceErrorMessage(message);
+  let redacted = message;
   for (const secret of Array.from(secrets).toSorted((a, b) => b.length - a.length)) {
     redacted = redacted.split(secret).join("[redacted]");
   }

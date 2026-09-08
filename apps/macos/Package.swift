@@ -89,7 +89,6 @@ let package = Package(
         .executableTarget(
             name: "OpenClawMacCLI",
             dependencies: [
-                "OpenClawIPC",
                 "OpenClawDiscovery",
                 .product(name: "OpenClawKit", package: "OpenClawKit"),
                 .product(name: "OpenClawProtocol", package: "OpenClawKit"),

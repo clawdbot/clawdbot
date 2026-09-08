@@ -31,7 +31,7 @@ import {
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { CLI_NAME } from "../cli-name.js";
+import { resolveCliName } from "../cli-name.js";
 import { createUpdateProgress } from "./progress.js";
 import {
   DEFAULT_PACKAGE_NAME,
@@ -48,6 +48,8 @@ import {
   type UpdateConfigSnapshot,
 } from "./update-command-config-snapshot.js";
 import { resolveUpdateTargetEnv } from "./update-command-service-env.js";
+
+const CLI_NAME = resolveCliName();
 
 export async function readPackageUpdateIdentity(root: string) {
   const [version, buildId] = await Promise.all([

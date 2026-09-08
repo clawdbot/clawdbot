@@ -1,3 +1,4 @@
+// Network Policy module implements ip behavior.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,

@@ -121,7 +121,6 @@ internal fun ChatMathBlock(
       ChatMathFallback(latex)
     } else {
       val scrollState = rememberScrollState()
-      val anchor = rememberChatReaderAnchor(request)
       Box(
         modifier =
           Modifier
@@ -134,8 +133,7 @@ internal fun ChatMathBlock(
           modifier =
             Modifier
               .width(with(density) { rendered.width.toDp() })
-              .height(with(density) { rendered.height.toDp() })
-              .then(anchor?.modifier ?: Modifier),
+              .height(with(density) { rendered.height.toDp() }),
         )
       }
     }

@@ -703,6 +703,13 @@ describe("createGatewayKernel", () => {
           return attributes?.traceName ?? event.name;
         });
       expect(measureNames).toEqual([
+        "state.ownership",
+        "state.runtime-imports",
+        "state.schema-preflight",
+        "runtime.network-imports",
+        "runtime.network-bootstrap",
+        "config.runtime-imports",
+        "config.snapshot",
         "config.snapshot.read",
         "config.snapshot.read.file",
         "config.snapshot.read.hash",
@@ -714,13 +721,6 @@ describe("createGatewayKernel", () => {
         "plugins.metadata.freeze",
         "config.snapshot.read.materialize",
         "config.snapshot.read.observe",
-        "state.ownership",
-        "state.runtime-imports",
-        "state.schema-preflight",
-        "runtime.network-imports",
-        "runtime.network-bootstrap",
-        "config.runtime-imports",
-        "config.snapshot",
         "config.auth",
         "config.auth.snapshot-validate",
         "config.auth.runtime-overrides",

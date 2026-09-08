@@ -129,5 +129,3 @@ export type SidebarContent =
   | FileSidebarContent
   | SessionDiffSidebarContent
   | { kind: "task"; taskId: string };
-
-export type SidebarSelection = SidebarContent | { kind: "loading" };

@@ -10,6 +10,7 @@ import type { MemoryDB } from "./lancedb-store.js";
 import { dropMediaNoteLines } from "./memory-capture-sanitization.js";
 import {
   cleanMemorySearchResults,
+  extractLatestUserText,
   formatRelevantMemoriesContext,
   normalizeRecallQuery,
 } from "./memory-policy.js";
@@ -76,8 +77,10 @@ export function createAutoRecallHook(params: {
     }
 
     try {
-      // Prompt hooks receive prior history separately from the current request.
-      const recallQuery = normalizeRecallQuery(dropMediaNoteLines(event.prompt), recallMaxChars);
+      const recallQuery = normalizeRecallQuery(
+        dropMediaNoteLines(extractLatestUserText(event.messages) ?? event.prompt),
+        recallMaxChars,
+      );
       if (!recallQuery) {
         return undefined;
       }

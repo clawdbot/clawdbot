@@ -95,12 +95,7 @@ import { stripToolResultDetails } from "./session-transcript-repair.js";
 import { getModelRegistryRuntime } from "./sessions/model-registry-runtime.js";
 import { resolveAgentTimeoutMs } from "./timeout.js";
 import { sanitizeImageBlocks } from "./tool-images.js";
-import {
-  hasBillableUsage,
-  normalizeUsage,
-  toDiagnosticUsage,
-  type NormalizedUsage,
-} from "./usage.js";
+import { hasBillableUsage } from "./usage.js";
 
 function collectTextContent(content: Array<{ type?: string; text?: string }>): string {
   return content
@@ -848,36 +843,6 @@ export async function runBtwSideQuestion(
       }
       return runtimeSelection;
     };
-    const recordBtwUsage = (runtimeModel: Model, usage?: NormalizedUsage) => {
-      if (!hasBillableUsage(usage)) {
-        return;
-      }
-      const usageState = buildReplyUsageState({
-        config: params.cfg,
-        agentDir: params.agentDir,
-        agentId: sessionAgentId,
-        sessionId,
-        provider: runtimeModel.provider,
-        model: runtimeModel.id,
-        chatType: params.chatType,
-        usage,
-      });
-      // Delivery hooks use the reply correlation ID, not the side run's authority ID.
-      recordReplyUsageState(params.opts?.runId, usageState);
-      if (isDiagnosticsEnabled(params.cfg)) {
-        emitTrustedDiagnosticEvent({
-          type: "model.usage",
-          sessionKey: params.sessionKey,
-          sessionId,
-          channel: params.messageChannel,
-          agentId: sessionAgentId,
-          provider: runtimeModel.provider,
-          model: runtimeModel.id,
-          usage: toDiagnosticUsage(usage),
-          costUsd: usageState.turnUsd,
-        });
-      }
-    };
     type BtwHarnessSideQuestionDispatch =
       | { kind: "handled"; payload: ReplyPayload }
       | {
@@ -1108,7 +1073,42 @@ export async function runBtwSideQuestion(
         } finally {
           host.close();
         }
-        recordBtwUsage(runtimeModel, result.usage);
+        if (hasBillableUsage(result.usage)) {
+          const usageState = buildReplyUsageState({
+            config: params.cfg,
+            agentDir: params.agentDir,
+            agentId: sessionAgentId,
+            sessionId,
+            provider: runtimeModel.provider,
+            model: runtimeModel.id,
+            chatType: params.chatType,
+            usage: result.usage,
+          });
+          // Delivery hooks use the reply correlation ID, not the side run's authority ID.
+          recordReplyUsageState(params.opts?.runId, usageState);
+          if (isDiagnosticsEnabled(params.cfg)) {
+            const { input = 0, output = 0, cacheRead = 0, cacheWrite = 0 } = result.usage;
+            const promptTokens = input + cacheRead + cacheWrite;
+            emitTrustedDiagnosticEvent({
+              type: "model.usage",
+              sessionKey: params.sessionKey,
+              sessionId,
+              channel: params.messageChannel,
+              agentId: sessionAgentId,
+              provider: runtimeModel.provider,
+              model: runtimeModel.id,
+              usage: {
+                input,
+                output,
+                cacheRead,
+                cacheWrite,
+                promptTokens,
+                total: result.usage.total ?? promptTokens + output,
+              },
+              costUsd: usageState.turnUsd,
+            });
+          }
+        }
         return { kind: "handled", payload: { text: result.text } };
       } finally {
         preparedRunAdmission.close();
@@ -1450,8 +1450,6 @@ export async function runBtwSideQuestion(
     if (!answer) {
       throw new Error("No BTW response generated.");
     }
-
-    recordBtwUsage(runtimeModel, normalizeUsage(finalMessage?.usage));
 
     if (emittedBlocks > 0) {
       return undefined;

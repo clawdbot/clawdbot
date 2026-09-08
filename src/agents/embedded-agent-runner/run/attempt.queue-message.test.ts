@@ -36,14 +36,6 @@ function registerDisplayRetirement(message: object) {
 type SteeringMessage = Parameters<typeof setSteeringMessageIdentity>[0];
 type CancelableAgent = NonNullable<EmbeddedAgentActiveSessionSteerTarget["agent"]>;
 
-function queuedTextMessage(text: string, timestamp: number) {
-  return {
-    role: "user",
-    content: [{ type: "text", text }],
-    timestamp,
-  } satisfies SteeringMessage;
-}
-
 function createCancelableAgent(messages: object[]): CancelableAgent {
   return {
     cancelSteeringMessage: (predicate: (message: SteeringMessage) => boolean) => {
@@ -232,7 +224,11 @@ describe("embedded OpenClaw queued steering cancellation", () => {
   });
 
   it("rejects only the exact drained steer when its transcript append fails", async () => {
-    const failedMessage = queuedTextMessage("same text", 1);
+    const failedMessage = {
+      role: "user" as const,
+      content: [{ type: "text" as const, text: "same text" }],
+      timestamp: 1,
+    };
     const survivingMessage = { ...failedMessage, timestamp: 2 };
     setSteeringMessageIdentity(failedMessage, "failed-turn");
     setSteeringMessageIdentity(survivingMessage, "surviving-turn");
@@ -288,7 +284,11 @@ describe("embedded OpenClaw queued steering cancellation", () => {
       content: [{ type: "text", text: "keep this rich payload" }, unrelatedImage],
       timestamp: 1,
     };
-    const targetMessage = queuedTextMessage("timed-out completion announce", 2);
+    const targetMessage = {
+      role: "user",
+      content: [{ type: "text", text: "timed-out completion announce" }],
+      timestamp: 2,
+    };
     const trailingMessage = {
       role: "custom",
       customType: "notice",
@@ -325,8 +325,16 @@ describe("embedded OpenClaw queued steering cancellation", () => {
   it("returns an unconsumed terminal steer for normal-turn promotion", async () => {
     vi.useFakeTimers();
     let emit!: (event: unknown) => void;
-    const targetMessage = queuedTextMessage("completion after parent stopped", 2);
-    const keepMessage = queuedTextMessage("keep unrelated queue entry", 3);
+    const targetMessage = {
+      role: "user",
+      content: [{ type: "text", text: "completion after parent stopped" }],
+      timestamp: 2,
+    };
+    const keepMessage = {
+      role: "user",
+      content: [{ type: "text", text: "keep unrelated queue entry" }],
+      timestamp: 3,
+    };
     const queueMessages = [targetMessage, keepMessage];
     const retireDisplay = registerDisplayRetirement(targetMessage);
     let unsubscribed = false;
@@ -425,7 +433,11 @@ describe("embedded OpenClaw queued steering cancellation", () => {
     const steerReturned = new Promise<void>((resolve) => {
       reportSteerReturned = resolve;
     });
-    const targetMessage = queuedTextMessage("queued before settlement", 1);
+    const targetMessage = {
+      role: "user" as const,
+      content: [{ type: "text" as const, text: "queued before settlement" }],
+      timestamp: 1,
+    };
     const queueMessages = [targetMessage];
     const retireDisplay = registerDisplayRetirement(targetMessage);
     const onQueueAccepted = vi.fn();
@@ -468,7 +480,11 @@ describe("embedded OpenClaw queued steering cancellation", () => {
 
   it("removes the runtime steer even when display retirement fails", async () => {
     let emit!: (event: unknown) => void;
-    const targetMessage = queuedTextMessage("runtime ownership wins", 1);
+    const targetMessage = {
+      role: "user" as const,
+      content: [{ type: "text" as const, text: "runtime ownership wins" }],
+      timestamp: 1,
+    };
     const queueMessages = [targetMessage];
     registerQueuedUserMessageRetirement(targetMessage, () => {
       throw new Error("display cleanup failed");
@@ -537,7 +553,11 @@ describe("embedded OpenClaw queued steering cancellation", () => {
 
   it("matches identical steering text by stable queue identity", async () => {
     let emit!: (event: unknown) => void;
-    const first = queuedTextMessage("same text", 1);
+    const first = {
+      role: "user" as const,
+      content: [{ type: "text" as const, text: "same text" }],
+      timestamp: 1,
+    };
     const second = { ...first, content: [...first.content], timestamp: 2 };
     setSteeringMessageIdentity(first, "steer-a");
     setSteeringMessageIdentity(second, "steer-b");
@@ -566,7 +586,11 @@ describe("embedded OpenClaw queued steering cancellation", () => {
   });
 
   it("cancels the exact accepted steer when its source aborts", async () => {
-    const first = queuedTextMessage("same text", 1);
+    const first = {
+      role: "user" as const,
+      content: [{ type: "text" as const, text: "same text" }],
+      timestamp: 1,
+    };
     const second = { ...first, content: [...first.content], timestamp: 2 };
     setSteeringMessageIdentity(first, "steer-a");
     setSteeringMessageIdentity(second, "steer-b");
@@ -592,7 +616,11 @@ describe("embedded OpenClaw queued steering cancellation", () => {
 
   it("cancels the exact expanded steer without leaving a duplicate UI entry", async () => {
     const expandedText = "expanded steering text";
-    const first = queuedTextMessage(expandedText, 1);
+    const first = {
+      role: "user" as const,
+      content: [{ type: "text" as const, text: expandedText }],
+      timestamp: 1,
+    };
     const second = { ...first, content: [...first.content], timestamp: 2 };
     setSteeringMessageIdentity(first, "keep-first");
     setSteeringMessageIdentity(second, "cancel-second");
@@ -716,7 +744,11 @@ describe("embedded OpenClaw queued steering cancellation", () => {
     vi.useFakeTimers();
     try {
       let emit!: (event: unknown) => void;
-      const targetMessage = queuedTextMessage("completion survives compaction", 2);
+      const targetMessage = {
+        role: "user",
+        content: [{ type: "text", text: "completion survives compaction" }],
+        timestamp: 2,
+      };
       const queueMessages = [targetMessage];
       const activeSession: EmbeddedAgentActiveSessionSteerTarget = {
         agent: createCancelableAgent(queueMessages),

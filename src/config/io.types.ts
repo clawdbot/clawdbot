@@ -1,7 +1,6 @@
 import type fs from "node:fs";
 import type JSON5 from "json5";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
-import type { ConfigMutationBase } from "./mutation-types.js";
 import type {
   ConfigWriteAfterWrite,
   RuntimeConfigSnapshotRefreshOptions,
@@ -15,8 +14,6 @@ export type ConfigWriteResult = {
   persistedHash: string;
   persistedConfig: OpenClawConfig;
 };
-
-export type ConfigWriteInputBasis = { kind: ConfigMutationBase; config: unknown };
 
 export const configWritePostCommitRollback = Symbol("configWritePostCommitRollback");
 
@@ -32,8 +29,6 @@ export type ConfigWriteAuditOrigin =
   | "cli";
 
 export type ConfigWriteOptions = {
-  /** Candidate's source/runtime basis within its write snapshot; omitted inputs use active globals. */
-  inputBase?: ConfigMutationBase;
   /** Semantic writer label recorded in the config audit journal. */
   auditOrigin?: ConfigWriteAuditOrigin;
   /** Read-time env snapshot used to validate `${VAR}` restoration decisions. */
@@ -153,10 +148,6 @@ export type ReadConfigFileSnapshotInternalResult = {
 export type ReadConfigFileSnapshotWithPluginMetadataResult = {
   snapshot: ConfigFileSnapshot;
   pluginMetadataSnapshot?: PluginMetadataSnapshot;
-};
-
-export type PreparedConfigRecovery = ReadConfigFileSnapshotWithPluginMetadataResult & {
-  apply: (beforeCommit?: () => void) => Promise<void>;
 };
 
 export type BestEffortConfigSnapshot = {

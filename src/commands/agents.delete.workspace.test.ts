@@ -42,10 +42,6 @@ const wizardMocks = vi.hoisted(() => ({
 vi.mock("../config/config.js", async () => ({
   ...(await vi.importActual<typeof import("../config/config.js")>("../config/config.js")),
   readConfigFileSnapshot: configMocks.readConfigFileSnapshot,
-  readConfigFileSnapshotForWrite: async () => ({
-    snapshot: await configMocks.readConfigFileSnapshot(),
-    writeOptions: {},
-  }),
   replaceConfigFile: configMocks.replaceConfigFile,
 }));
 

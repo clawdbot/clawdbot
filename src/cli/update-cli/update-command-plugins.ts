@@ -5,7 +5,6 @@ import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { VERSION_BOUND_RUNTIME_PLUGIN_IDS } from "../../commands/doctor/shared/configured-runtime-plugin-installs.js";
 import { runPostCorePluginConvergence } from "../../commands/doctor/shared/post-core-plugin-convergence.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
-import type { ConfigWriteOptions } from "../../config/io.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { resolveRegistryUpdateChannel, type UpdateChannel } from "../../infra/update-channels.js";
@@ -103,7 +102,6 @@ export async function updatePluginsAfterCoreUpdate(params: {
   root: string;
   channel: UpdateChannel;
   configSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>;
-  configWriteOptions: ConfigWriteOptions;
   configChanged?: boolean;
   restoredAuthoredChannels?: unknown;
   timeoutMs: number;
@@ -325,14 +323,10 @@ export async function updatePluginsAfterCoreUpdate(params: {
       nextInstallRecords,
       nextConfig,
       baseHash: params.configSnapshot.hash,
-      writeOptions: {
-        ...params.configWriteOptions,
-        inputBase: "source",
-        skipPluginValidation: true,
-      },
+      writeOptions: { skipPluginValidation: true },
     });
     await refreshPluginRegistryAfterConfigMutation({
-      configPath: params.configSnapshot.path,
+      config: nextConfig,
       reason: "source-changed",
       workspaceDir: params.root,
       installRecords: nextInstallRecords,

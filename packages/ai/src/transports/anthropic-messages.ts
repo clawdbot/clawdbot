@@ -301,8 +301,22 @@ export async function convertAnthropicMessages(
       continue;
     }
     if (msg.role === "toolResult") {
-      const toolResults: ToolResultBlockParam[] = [];
-      let j = i;
+      const toolResult = msg;
+      const toolResults: ToolResultBlockParam[] = [
+        {
+          type: "tool_result",
+          tool_use_id: toolResult.toolCallId,
+          content: await convertContentBlocks(
+            toolResult.content,
+            model,
+            imageBudget,
+            options.profile,
+            toolResult.isError,
+          ),
+          is_error: toolResult.isError,
+        },
+      ];
+      let j = i + 1;
       while (j < transformedMessages.length) {
         const nextMsg = transformedMessages.at(j);
         if (nextMsg?.role !== "toolResult") {

@@ -8,10 +8,8 @@ import {
 } from "openclaw/plugin-sdk/channel-outbound";
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { MarkdownTableMode, MSTeamsConfig, ReplyPayload } from "../runtime-api.js";
-import { formatMSTeamsMarkdown } from "./format.js";
+import type { MSTeamsConfig, ReplyPayload } from "../runtime-api.js";
 import { extractMessageId } from "./media-helpers.js";
-import { buildMSTeamsMessageActivity } from "./message-activity.js";
 import type { MSTeamsMonitorLogger } from "./monitor-types.js";
 import type { MSTeamsTurnContext } from "./sdk-types.js";
 
@@ -74,7 +72,6 @@ export function createTeamsReplyStreamController(params: {
   feedbackLoopEnabled: boolean;
   log?: MSTeamsMonitorLogger;
   msteamsConfig?: MSTeamsConfig;
-  tableMode?: MarkdownTableMode;
   /**
    * Seed for the random label rotation so the same conversation gets the same
    * "Thinking..." flavor across reconnects. Typically `${accountId}:${convId}`.
@@ -110,14 +107,13 @@ export function createTeamsReplyStreamController(params: {
   // pipeline normalizes trailing whitespace between cumulative snapshots.
   let emittedText = "";
   let acknowledgedText = "";
-  let acknowledgedLogicalText = "";
   let acknowledgedStreamId: string | undefined;
   let replacementFinalPending = false;
   let replacementEmitFailed = false;
   let replacementSettlementPending = false;
-  let replacementTextAwaitingAcknowledgement: { text: string; logicalText: string } | undefined;
+  let replacementTextAwaitingAcknowledgement: string | undefined;
   let deferredReplacementEntries: DeferredReplacementEntry[] = [];
-  let queuedFinalActivity: ReturnType<typeof finalStreamActivity> | undefined;
+  let finalMetadataQueued = false;
   let failedSegmentFallbackPrepared = false;
   const streamEvents = (stream as { events?: TeamsStreamChunkEvents } | undefined)?.events;
   let streamChunkSubscription: number | undefined;
@@ -131,7 +127,7 @@ export function createTeamsReplyStreamController(params: {
       const replacementAcknowledgement =
         typeof activity.text === "string" &&
         replacementAcknowledgementPending &&
-        activity.text === replacementTextAwaitingAcknowledgement?.text;
+        activity.text === replacementTextAwaitingAcknowledgement;
       if (
         activity.type !== "typing" ||
         activity.channelData?.streamType !== "streaming" ||
@@ -141,16 +137,13 @@ export function createTeamsReplyStreamController(params: {
         (replacementAcknowledgementPending
           ? !replacementAcknowledgement
           : !activity.text.startsWith(acknowledgedText)) ||
-        (!replacementAcknowledgement && !emittedText.startsWith(activity.text))
+        !emittedText.startsWith(activity.text)
       ) {
         return;
       }
       acknowledgedStreamId = activity.id;
       acknowledgedText = activity.text;
-      acknowledgedLogicalText = replacementAcknowledgement
-        ? replacementTextAwaitingAcknowledgement!.logicalText
-        : activity.text;
-      if (replacementAcknowledgement) {
+      if (activity.text === replacementTextAwaitingAcknowledgement) {
         replacementTextAwaitingAcknowledgement = undefined;
       }
     });
@@ -179,13 +172,13 @@ export function createTeamsReplyStreamController(params: {
 
   const fallbackPayloadAfterAcknowledgedText = (payload: ReplyPayload): Maybe<ReplyPayload> => {
     if (
-      !acknowledgedLogicalText ||
+      !acknowledgedText ||
       typeof payload.text !== "string" ||
-      !payload.text.startsWith(acknowledgedLogicalText)
+      !payload.text.startsWith(acknowledgedText)
     ) {
       return payload;
     }
-    const remainingText = payload.text.slice(acknowledgedLogicalText.length);
+    const remainingText = payload.text.slice(acknowledgedText.length);
     const hasMedia = Boolean(payload.mediaUrl || payload.mediaUrls?.length);
     if (!remainingText && !hasMedia) {
       return undefined;
@@ -199,9 +192,17 @@ export function createTeamsReplyStreamController(params: {
   };
 
   const finalStreamActivity = (text?: string) => ({
-    ...buildMSTeamsMessageActivity(
-      text === undefined ? undefined : formatMSTeamsMarkdown(text, params.tableMode ?? "code"),
-    ),
+    type: "message" as const,
+    ...(text ? { text } : {}),
+    entities: [
+      {
+        type: "https://schema.org/Message",
+        "@type": "Message",
+        "@context": "https://schema.org",
+        "@id": "",
+        additionalType: ["AIGeneratedContent"],
+      },
+    ],
     channelData: params.feedbackLoopEnabled ? { feedbackLoopEnabled: true } : {},
   });
 
@@ -263,8 +264,9 @@ export function createTeamsReplyStreamController(params: {
     },
 
     onPartialReply(payload: { text?: string }): void {
-      // Partial-token streaming only fires in "partial" mode. Progress-mode
-      // final payloads arrive at preparePayload instead.
+      // Partial-token streaming only fires in "partial" mode. In "progress"
+      // mode, openclaw's pipeline doesn't deliver tokens — the model output
+      // arrives as a single payload at preparePayload time.
       if (!stream || !payload.text || wasCanceled() || streamMode !== "partial") {
         return;
       }
@@ -275,8 +277,7 @@ export function createTeamsReplyStreamController(params: {
         pendingFinalPayload = { text: payload.text };
         return;
       }
-      // Closing the first segment does not grant another native delivery claim.
-      if (streamFinalizationPending || nativeDeliveryClaimed) {
+      if (streamFinalizationPending) {
         return;
       }
       // Convert cumulative-text from the pipeline into deltas for the SDK's
@@ -403,13 +404,9 @@ export function createTeamsReplyStreamController(params: {
         deferredReplacementEntries.push({ kind: "replacement", payload });
         pendingFinalPayload = fallbackPayloadForSuppressedFinal(payload);
         try {
-          const activity = finalStreamActivity(payload.text);
-          replacementTextAwaitingAcknowledgement = {
-            text: activity.text!,
-            logicalText: payload.text,
-          };
-          stream.emit(activity);
-          queuedFinalActivity = activity;
+          replacementTextAwaitingAcknowledgement = payload.text;
+          stream.emit(finalStreamActivity(payload.text));
+          finalMetadataQueued = true;
           emittedText = payload.text;
           tokensEmitted = false;
           // Replacement delivery owns all later payloads until close() proves
@@ -434,6 +431,18 @@ export function createTeamsReplyStreamController(params: {
           return undefined;
         }
       }
+      // Partial mode with tokens already streamed: stream carries the text;
+      // strip text from the payload (keep media if any) so block delivery
+      // doesn't duplicate. Exception: if a non-cancel stream failure was
+      // latched mid-flight, deliver only a provider-acknowledged remainder;
+      // preserve the full reply when delivery was not acknowledged.
+      if (tokensEmitted && !streamFailed) {
+        const hasMedia = Boolean(payload.mediaUrl || payload.mediaUrls?.length);
+        pendingFinalPayload = fallbackPayloadForSuppressedFinal(payload);
+        streamFinalizationPending = true;
+        tokensEmitted = false;
+        return hasMedia ? { ...payload, text: undefined } : undefined;
+      }
       if (streamFailed) {
         // Trim the provider-acknowledged prefix only from the failed segment.
         // Retain its ID/text for final settlement while later tool rounds fall through whole.
@@ -444,14 +453,19 @@ export function createTeamsReplyStreamController(params: {
         pendingFinalPayload = undefined;
         return fallback;
       }
-      // A native stream owns one final segment. Later progress payloads use
-      // block delivery, just like later partial-mode segments after tools.
-      if (streamMode === "progress" && payload.text && !nativeDispatchStarted) {
+      // Progress mode (or partial mode that received no tokens — e.g. a
+      // tool-only response): emit the final text into the stream so the
+      // preview card transitions in place to the final reply. The SDK's
+      // HttpStream accumulates the text and the next `finalize()` close()
+      // flushes it as the closing activity.
+      if (streamMode === "progress" && payload.text) {
         try {
           stream.emit(payload.text);
-          emittedText = payload.text;
           nativeDispatchStarted = true;
-          tokensEmitted = true;
+          pendingFinalPayload = fallbackPayloadForSuppressedFinal(payload);
+          streamFinalizationPending = true;
+          const hasMedia = Boolean(payload.mediaUrl || payload.mediaUrls?.length);
+          return hasMedia ? { ...payload, text: undefined } : undefined;
         } catch (err) {
           if (isStreamCancelledError(err)) {
             canceledLocally = true;
@@ -461,13 +475,6 @@ export function createTeamsReplyStreamController(params: {
           // safety net so the user still sees the final reply.
           params.log?.debug?.(`progress-mode finalize failed: ${coerceErrorMessage(err)}`);
         }
-      }
-      if (tokensEmitted) {
-        const hasMedia = Boolean(payload.mediaUrl || payload.mediaUrls?.length);
-        pendingFinalPayload = fallbackPayloadForSuppressedFinal(payload);
-        streamFinalizationPending = true;
-        tokensEmitted = false;
-        return hasMedia ? { ...payload, text: undefined } : undefined;
       }
       return payload;
     },
@@ -507,36 +514,21 @@ export function createTeamsReplyStreamController(params: {
             kind: "replacement",
             payload: pendingFinalPayload,
           });
-          const activity = finalStreamActivity(pendingFinalPayload.text);
-          replacementTextAwaitingAcknowledgement = {
-            text: activity.text!,
-            logicalText: pendingFinalPayload.text,
-          };
+          replacementTextAwaitingAcknowledgement = pendingFinalPayload.text;
           logicalContent = deferredReplacementLogicalContent();
-          stream.emit(activity);
-          queuedFinalActivity = activity;
+          stream.emit(finalStreamActivity(pendingFinalPayload.text));
+          finalMetadataQueued = true;
           emittedText = pendingFinalPayload.text;
         }
         logicalContent ??= replacementSettlementPending
           ? deferredReplacementLogicalContent()
           : undefined;
-        const logicalText = pendingFinalPayload?.text ?? (emittedText || undefined);
-        const finalActivity = queuedFinalActivity ?? finalStreamActivity(logicalText);
-        const content = finalActivity.text;
-        logicalContent ??= content !== logicalText ? logicalText : undefined;
+        const content = pendingFinalPayload?.text ?? (emittedText || undefined);
         // The replacement path already queued text and final metadata as one
         // activity. Other paths add metadata here so the SDK can merge it into
         // the closing activity without duplicating the replacement chunk.
-        if (!queuedFinalActivity) {
-          if (content !== undefined && content !== emittedText) {
-            // The SDK appends text. Replace its buffer once the complete Markdown
-            // is known; retain logical text separately for acknowledged fallback.
-            stream.clearText();
-            replacementTextAwaitingAcknowledgement = { text: content, logicalText: logicalText! };
-            stream.emit(finalActivity);
-          } else {
-            stream.emit({ ...finalActivity, text: undefined });
-          }
+        if (!finalMetadataQueued) {
+          stream.emit(finalStreamActivity());
         }
         const result = await stream.close();
         streamFinalizationPending = false;
@@ -619,9 +611,7 @@ export function createTeamsReplyStreamController(params: {
           ...(postNativePayloads.length > 0 ? { postNativePayloads } : {}),
         };
       } finally {
-        // This segment's acknowledged-prefix fallback has been consumed.
-        failedSegmentFallbackPrepared = true;
-        queuedFinalActivity = undefined;
+        finalMetadataQueued = false;
         replacementEmitFailed = false;
         replacementFinalPending = false;
         replacementSettlementPending = false;

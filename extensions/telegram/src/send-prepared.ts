@@ -1,4 +1,3 @@
-import type { InputFile } from "grammy";
 import type { InlineKeyboardMarkup, Message } from "grammy/types";
 import { createChannelApiRetryRunner } from "openclaw/plugin-sdk/retry-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
@@ -108,29 +107,19 @@ export function createTelegramPreparedSender(config: {
     parts.push(accepted);
     return accepted;
   };
-  const acceptMany = async (
-    delivered: readonly TelegramPreparedSendPart[],
-    observe: ObservePart,
-    details?: () => PartialDeliveryResult,
-    start = 0,
-  ) => {
-    // One album request accepts every returned message at once. Record all IDs
-    // before any receipt/cache observer can fail, preventing a replay of its tail.
-    const accepted = delivered.map(recordAcceptance);
-    try {
-      for (const part of accepted) {
-        await observe(part);
-      }
-    } catch (error) {
-      fail(error, start, details?.());
-    }
-  };
-  const accept = (
+  const accept = async (
     part: TelegramPreparedSendPart,
     observe: ObservePart,
     details?: () => PartialDeliveryResult,
     start = 0,
-  ) => acceptMany([part], observe, details, start);
+  ) => {
+    const accepted = recordAcceptance(part);
+    try {
+      await observe(accepted);
+    } catch (error) {
+      fail(error, start, details?.());
+    }
+  };
   const request = <T>(
     label: string,
     requestParams: Record<string, unknown>,
@@ -339,55 +328,7 @@ export function createTelegramPreparedSender(config: {
       sender: delivery.sender,
     };
   };
-  const sendPhotoAlbum = async (params: {
-    files: readonly InputFile[];
-    requestParams: Record<string, unknown>;
-    plainCaption?: string;
-  }) => {
-    await config.beforeMedia?.();
-    const delivery = await sendTelegramCaptionedMediaWithFallback({
-      operation: "sendMediaGroup",
-      requestParams: params.requestParams,
-      plainCaption: params.plainCaption,
-      shouldLog: (error) => !isTelegramPhotoLimitError(error),
-      send: (requestParams, shouldLog) =>
-        request(
-          "sendMediaGroup",
-          requestParams,
-          (effective) => {
-            const { caption, parse_mode, ...groupParams } = effective;
-            return config.api.sendMediaGroup(
-              config.chatId,
-              params.files.map((media, index) => ({
-                type: "photo" as const,
-                media,
-                ...(index === 0 && typeof caption === "string" ? { caption } : {}),
-                ...(index === 0 && parse_mode === "HTML" ? { parse_mode: "HTML" as const } : {}),
-              })),
-              groupParams,
-            );
-          },
-          { shouldLog },
-        ),
-    });
-    const prepared = delivery.result.result.map((result, index): TelegramPreparedSendPart => ({
-      result,
-      acceptedParams: delivery.result.acceptedParams,
-      plainText: index === 0 ? (delivery.deliveredCaption ?? "") : "",
-    }));
-    const [first, ...remaining] = prepared;
-    if (!first) {
-      throw new Error("Telegram sendMediaGroup returned no messages");
-    }
-    return {
-      parts: [first, ...remaining] satisfies [
-        TelegramPreparedSendPart,
-        ...TelegramPreparedSendPart[],
-      ],
-      ...(delivery.captionRemoved ? { captionRemoved: true as const } : {}),
-    };
-  };
-  return { parts, accept, acceptMany, fail, sendText, sendMedia, sendPhotoAlbum };
+  return { parts, accept, fail, sendText, sendMedia };
 }
 
 export type TelegramPreparedSender = ReturnType<typeof createTelegramPreparedSender>;

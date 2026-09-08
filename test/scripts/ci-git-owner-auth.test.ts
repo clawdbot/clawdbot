@@ -89,12 +89,12 @@ it.skipIf(process.platform === "win32").each([
 );
 
 it.skipIf(process.platform === "win32").each([
-  { mode: "kova", failures: 0, succeeds: true, backoffs: [] },
-  { mode: "kova-retry", failures: 2, succeeds: true, backoffs: [5, 5] },
-  { mode: "kova-exhausted", failures: 3, succeeds: false, backoffs: [5, 5] },
+  { mode: "kova", failures: 0, succeeds: true },
+  { mode: "kova-retry", failures: 2, succeeds: true },
+  { mode: "kova-exhausted", failures: 3, succeeds: false },
 ])(
   "Kova authenticates source fetch and checkout with bounded retries ($mode)",
-  async ({ mode, failures, succeeds, backoffs }) => {
+  async ({ mode, failures, succeeds }) => {
     const report = await runAuthFixture(
       mode,
       workflowScript("openclaw-performance.yml", "kova", "Install OCM and Kova"),
@@ -104,7 +104,6 @@ it.skipIf(process.platform === "win32").each([
       checkoutComplete: succeeds,
       sessions: failures + (succeeds ? 2 : 0),
       transientFailures: failures,
-      backoffs,
       filteredFetch: succeeds,
       shallowCheckout: succeeds,
       credentialPersisted: false,

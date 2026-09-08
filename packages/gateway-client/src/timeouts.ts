@@ -1,3 +1,4 @@
+// Gateway Client module implements timeouts behavior.
 function parsePositiveTimeoutSetting(value: string): number | undefined {
   const trimmed = value.trim();
   if (!/^\+?\d+$/u.test(trimmed)) {

@@ -524,7 +524,6 @@ export class ChatPane extends ChatPaneLayoutRender {
       pullRequests: this.sessionPullRequests.filter(
         (pullRequest) => !this.dismissedSessionPullRequestIds.has(chatPullRequestId(pullRequest)),
       ),
-      githubRepo: this.githubRepo,
       pullRequestsBranch: createPullRequestBranch(
         this.sessionPullRequests,
         this.sessionPullRequestsBranch,

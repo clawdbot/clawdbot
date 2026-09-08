@@ -12,8 +12,7 @@ fi
 export CI=true
 export OPENCLAW_NO_ONBOARD=1
 export OPENCLAW_NO_PROMPT=1
-# The target manager must start channels; suppression belongs only to the old process.
-unset OPENCLAW_SKIP_PROVIDERS OPENCLAW_SKIP_CHANNELS
+export OPENCLAW_SKIP_PROVIDERS=1
 export OPENCLAW_DISABLE_BONJOUR=1
 export npm_config_audit=false
 export npm_config_fund=false
@@ -388,7 +387,6 @@ cp "$SYSTEMCTL_SHIM_LOG" "$SYSTEMCTL_SHIM_SETUP_LOG"
 : >"$SYSTEMCTL_SHIM_LOG"
 
 env \
-  OPENCLAW_SKIP_PROVIDERS=1 \
   OPENCLAW_SYSTEMD_UNIT=openclaw-gateway.service \
   openclaw gateway --port "$PORT" --bind loopback --allow-unconfigured \
   >"$GATEWAY_LOG" 2>&1 &
@@ -681,7 +679,9 @@ source_gateway_pid="$gateway_pid"
   fi
   echo "source Gateway exited through supervised update handoff"
   echo "starting installed service without provider suppression"
-  systemctl --user start openclaw-gateway.service
+  env \
+    -u OPENCLAW_SKIP_PROVIDERS \
+    systemctl --user start openclaw-gateway.service
   service_pid="$(cat "$SYSTEMCTL_SHIM_PID_FILE" 2>/dev/null || true)"
   [[ "$service_pid" =~ ^[0-9]+$ ]] || exit 1
   echo "service Gateway started pid=$service_pid"

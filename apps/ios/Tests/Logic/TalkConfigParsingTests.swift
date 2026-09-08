@@ -1,11 +1,11 @@
 import Foundation
+import OpenClawKit
 import Testing
-@testable import OpenClawKit
 
 private let iOSSilenceTimeoutMs = 900
 
-struct TalkConfigParsingTests {
-    @Test func `rejects normalized talk provider payload without resolved`() {
+@Suite struct TalkConfigParsingTests {
+    @Test func rejectsNormalizedTalkProviderPayloadWithoutResolved() {
         let talk: [String: Any] = [
             "provider": "elevenlabs",
             "providers": [
@@ -23,7 +23,7 @@ struct TalkConfigParsingTests {
         #expect(selection == nil)
     }
 
-    @Test func `ignores legacy talk fields when normalized payload missing`() {
+    @Test func ignoresLegacyTalkFieldsWhenNormalizedPayloadMissing() {
         let talk: [String: Any] = [
             "voiceId": "voice-legacy",
             "apiKey": "legacy-key", // pragma: allowlist secret
@@ -36,7 +36,7 @@ struct TalkConfigParsingTests {
         #expect(selection == nil)
     }
 
-    @Test func `reads configured silence timeout ms`() {
+    @Test func readsConfiguredSilenceTimeoutMs() {
         let talk: [String: Any] = [
             "silenceTimeoutMs": 1500,
         ]
@@ -47,7 +47,7 @@ struct TalkConfigParsingTests {
                 fallback: iOSSilenceTimeoutMs) == 1500)
     }
 
-    @Test func `reads configured speech locale`() {
+    @Test func readsConfiguredSpeechLocale() {
         let talk: [String: Any] = [
             "speechLocale": " ru-RU ",
         ]
@@ -57,11 +57,11 @@ struct TalkConfigParsingTests {
                 TalkConfigParsing.bridgeFoundationDictionary(talk)) == "ru-RU")
     }
 
-    @Test func `defaults silence timeout ms when missing`() {
+    @Test func defaultsSilenceTimeoutMsWhenMissing() {
         #expect(TalkConfigParsing.resolvedSilenceTimeoutMs(nil, fallback: iOSSilenceTimeoutMs) == iOSSilenceTimeoutMs)
     }
 
-    @Test func `defaults silence timeout ms when invalid`() {
+    @Test func defaultsSilenceTimeoutMsWhenInvalid() {
         let talk: [String: Any] = [
             "silenceTimeoutMs": 0,
         ]
@@ -72,7 +72,7 @@ struct TalkConfigParsingTests {
                 fallback: iOSSilenceTimeoutMs) == iOSSilenceTimeoutMs)
     }
 
-    @Test func `defaults silence timeout ms when bool`() {
+    @Test func defaultsSilenceTimeoutMsWhenBool() {
         let talk: [String: Any] = [
             "silenceTimeoutMs": true,
         ]

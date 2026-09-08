@@ -95,7 +95,6 @@ describe("routeReply custody projections", () => {
           ok: false,
           delivered: Boolean(messageId),
           error: "Failed to route reply to slack: transport failed",
-          cause: expect.objectContaining({ cause, queueCustody, sentBeforeError }),
           messageId,
           queueCustody,
           ...(!messageId && sentBeforeError ? { ambiguous: true } : {}),

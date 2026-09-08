@@ -627,6 +627,7 @@ describe("comfy image-generation provider", () => {
       filename: "cloud.png",
       outputKind: "images",
       promptId: "strict-cloud-job-1",
+      redirectLocation: "https://cdn.example.com/cloud.png",
     });
 
     const provider = buildComfyImageGenerationProvider();
@@ -658,6 +659,7 @@ describe("comfy image-generation provider", () => {
       filename: "cloud.png",
       outputKind: "images",
       promptId: "private-cloud-job-1",
+      redirectLocation: "https://cdn.example.com/cloud.png",
     });
 
     const provider = buildComfyImageGenerationProvider();
@@ -1185,6 +1187,7 @@ describe("comfy image-generation provider", () => {
       filename: "cloud.png",
       outputKind: "images",
       promptId: "cloud-job-1",
+      redirectLocation: "https://cdn.example.com/cloud.png",
     });
 
     const provider = buildComfyImageGenerationProvider();
@@ -1244,6 +1247,7 @@ describe("comfy image-generation provider", () => {
       filename: "cloud.png",
       outputKind: "images",
       promptId: "cloud-secret-ref-1",
+      redirectLocation: "https://cdn.example.com/cloud.png",
     });
 
     const provider = buildComfyImageGenerationProvider();
@@ -1280,6 +1284,7 @@ describe("comfy image-generation provider", () => {
       filename: "cloud.png",
       outputKind: "images",
       promptId: "cloud-profile-1",
+      redirectLocation: "https://cdn.example.com/cloud.png",
     });
 
     const provider = buildComfyImageGenerationProvider();

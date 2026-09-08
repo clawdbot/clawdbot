@@ -27,10 +27,6 @@ import {
   type PluginCompatibilityNotice,
 } from "../../plugins/status.js";
 import { dedupeByKey } from "../../shared/dedupe-by-key.js";
-import {
-  hasMissingSkillRequirements,
-  type SkillStatusReport,
-} from "../../skills/discovery/status.js";
 import { formatDeliveryQueueHealthLine } from "../health-format.js";
 import type {
   resolveStatusGatewayHealthSafe,
@@ -61,6 +57,11 @@ type TailscaleStatusLike = {
   dnsName: string | null;
   ips: string[];
   error: string | null;
+};
+
+type SkillStatusLike = {
+  workspaceDir: string;
+  skills: Array<{ eligible: boolean; missing: Record<string, unknown[]> }>;
 };
 
 type ChannelIssueLike = {
@@ -160,7 +161,7 @@ export async function appendStatusAllDiagnosis(params: {
   tailscaleMode: string;
   tailscale: TailscaleStatusLike;
   tailscaleHttpsUrl: string | null;
-  skillStatus: SkillStatusReport | null;
+  skillStatus: SkillStatusLike | null;
   pluginCompatibility: PluginCompatibilityNotice[];
   channelsStatus: unknown;
   channelIssues: ChannelIssueLike[];
@@ -315,7 +316,9 @@ export async function appendStatusAllDiagnosis(params: {
 
   if (params.skillStatus) {
     const eligible = params.skillStatus.skills.filter((s) => s.eligible).length;
-    const missing = params.skillStatus.skills.filter(hasMissingSkillRequirements).length;
+    const missing = params.skillStatus.skills.filter(
+      (s) => s.eligible && Object.values(s.missing).some((arr) => arr.length),
+    ).length;
     emitCheck(
       `Skills: ${eligible} eligible · ${missing} missing · ${params.skillStatus.workspaceDir}`,
       missing === 0 ? "ok" : "warn",

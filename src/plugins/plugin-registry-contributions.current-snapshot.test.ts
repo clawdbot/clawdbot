@@ -15,7 +15,6 @@ import {
   resolveManifestContractPluginIds,
 } from "./plugin-registry-contributions.js";
 import { loadPluginRegistrySnapshotWithMetadata } from "./plugin-registry-snapshot.js";
-import { buildDeclaredProviderOwnerIndex } from "./provider-owner-index.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -81,7 +80,6 @@ function createSnapshot(params: {
     diagnostics: [],
     byPluginId: new Map(plugins.map((plugin) => [plugin.id, plugin])),
     normalizePluginId: (pluginId: string) => pluginId,
-    declaredProviderOwners: buildDeclaredProviderOwnerIndex(plugins),
     owners: {
       channels: new Map(),
       channelConfigs: new Map(),

@@ -126,7 +126,10 @@ export async function submitEmbeddedAttemptPrompt(input: {
           input.toolResultAggregateMaxChars,
           input.toolResultPromptProjectionState,
         );
-        const providerMessages = providerPromptHistoryTruncation.messages;
+        const providerMessages =
+          providerPromptHistoryTruncation.messages !== messages
+            ? providerPromptHistoryTruncation.messages
+            : messages;
         if (providerPromptHistoryTruncation.aggregateTruncatedCount > 0) {
           recordAggregateTruncation(attempt);
         }
@@ -254,7 +257,7 @@ function hasNonEmptyContent(content: unknown): boolean {
 }
 
 /** Classifies prompt failures and performs yield or mid-turn recovery. */
-type PromptErrorAttempt = Pick<EmbeddedRunAttemptParams, "runId" | "sessionId" | "abortSignal">;
+type PromptErrorAttempt = Pick<EmbeddedRunAttemptParams, "runId" | "sessionId">;
 type WithOwnedTranscriptWrite = <T>(operation: () => Promise<T> | T) => Promise<T>;
 
 type EmbeddedAttemptPromptErrorOutcome = {
@@ -287,17 +290,9 @@ export async function handleEmbeddedAttemptPromptError(input: {
       sessionId: input.attempt.sessionId,
     });
     await input.withOwnedTranscriptWrite(async () => {
-      const transcriptRewritten = stripSessionsYieldArtifacts(input.activeSession);
+      stripSessionsYieldArtifacts(input.activeSession);
       if (input.yieldMessage) {
         await persistSessionsYieldContextMessage(input.activeSession, input.yieldMessage);
-      }
-      const target = transcriptRewritten && input.activeSession.sessionManager.getSessionTarget();
-      if (target) {
-        // Yield cleanup owns this rewrite; settle its projection before handing off the lane.
-        // The caller signal stays live during a deliberate sessions_yield provider abort.
-        const { waitForSessionTranscriptProjection } =
-          await import("../../../config/sessions/session-transcript-reconcile.js");
-        await waitForSessionTranscriptProjection(target, input.attempt.abortSignal);
       }
     });
     return {};

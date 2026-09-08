@@ -661,14 +661,6 @@ function writeImageGeneration(res) {
 }
 
 function resolveResponseText(bodyText) {
-  const servingChecks = Array.from(
-    bodyText.matchAll(
-      /This is an OpenClaw update serving check\. Do not use tools\. Reply with exactly: (update-verified-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b/gu,
-    ),
-  );
-  if (servingChecks.length > 0) {
-    return servingChecks.at(-1)[1];
-  }
   const matches = Array.from(bodyText.matchAll(/\bOPENCLAW_E2E_[A-Z0-9]+(?:_[A-Z0-9]+)*\b/gu));
   return matches.at(-1)?.[0] ?? successMarker;
 }
@@ -731,10 +723,6 @@ function mcpCodeModeApiFileEvents(body, bodyText) {
     if (!hasDeclaredTool(bodyText, "exec")) {
       return null;
     }
-    const catalogExpression =
-      process.env.OPENCLAW_FROZEN_TARGET_MCP_CODE_MODE_CATALOG_MODE === "legacy"
-        ? "ALL_TOOLS.some((tool) => tool.source === 'mcp')"
-        : "catalog.all().some((tool) => tool.source === 'mcp')";
     return toolCallEvents("exec", {
       language: "javascript",
       code: [
@@ -748,7 +736,7 @@ function mcpCodeModeApiFileEvents(body, bodyText) {
         "  rootHasFixture: root.content.includes('fixture'),",
         "  headerHasLookup: api.content.includes('function lookupNote'),",
         "  resultText: result.content?.[0]?.text,",
-        `  allHasMcp: ${catalogExpression},`,
+        "  allHasMcp: catalog.all().some((tool) => tool.source === 'mcp'),",
         "};",
       ].join("\n"),
     });

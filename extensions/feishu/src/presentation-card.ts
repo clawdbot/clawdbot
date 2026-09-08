@@ -139,29 +139,38 @@ export function assertFeishuCardWithinEnvelope(
 const FEISHU_CARD_TABLE_LIMIT = 5;
 
 function countMarkdownTables(text: string): number {
-  // GFM table headers require a literal pipe.
-  return text.includes("|") ? markdownToIRWithMeta(text, { tableMode: "block" }).tables.length : 0;
+  return text ? markdownToIRWithMeta(text, { tableMode: "block" }).tables.length : 0;
 }
 
 export function withinCardTableLimit(text: string): boolean {
   return countMarkdownTables(text) <= FEISHU_CARD_TABLE_LIMIT;
 }
 
+function collectFeishuCardMarkdownTexts(value: unknown, output: string[]): void {
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      collectFeishuCardMarkdownTexts(item, output);
+    }
+    return;
+  }
+  if (!isRecord(value)) {
+    return;
+  }
+  if (value.tag === "markdown" && typeof value.content === "string") {
+    output.push(value.content);
+  }
+  for (const child of Object.values(value)) {
+    collectFeishuCardMarkdownTexts(child, output);
+  }
+}
+
 export function feishuCardWithinTableLimit(card: Record<string, unknown>): boolean {
-  let remaining = FEISHU_CARD_TABLE_LIMIT;
-  const visit = (value: unknown): boolean => {
-    if (Array.isArray(value)) {
-      return value.every(visit);
-    }
-    if (!isRecord(value)) {
-      return true;
-    }
-    if (value.tag === "markdown" && typeof value.content === "string") {
-      remaining -= countMarkdownTables(value.content);
-    }
-    return remaining >= 0 && Object.values(value).every(visit);
-  };
-  return visit(card);
+  const markdownTexts: string[] = [];
+  collectFeishuCardMarkdownTexts(card, markdownTexts);
+  return (
+    markdownTexts.reduce((total, text) => total + countMarkdownTables(text), 0) <=
+    FEISHU_CARD_TABLE_LIMIT
+  );
 }
 
 function resolveFeishuButtonUrl(button: MessagePresentationButton): string | undefined {

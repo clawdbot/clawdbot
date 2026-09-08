@@ -60,7 +60,7 @@ openclaw security audit --json
 - **Tool blast radius** - elevated tools + open rooms: could prompt injection become shell/file/network actions?
 - **Exec filesystem drift** - mutating filesystem tools denied while `exec`/`process` stay available without sandbox constraints.
 - **Exec approval drift** - `security="full"`, `autoAllowSkills`, interpreter allowlists without `strictInlineEval`. `security="full"` alone is a broad posture warning, not proof of a bug - it is the chosen default for trusted-operator setups; tighten it only when your threat model needs approval or allowlist guardrails.
-- **Network exposure** - Gateway bind/auth, Tailscale Serve/Funnel, weak/short auth tokens and passwords.
+- **Network exposure** - Gateway bind/auth, Tailscale Serve/Funnel, weak/short auth tokens.
 - **Browser control exposure** - remote nodes, relay ports, remote CDP endpoints.
 - **Local disk hygiene** - permissions, symlinks, config includes, synced-folder paths.
 - **Plugins** - loading without an explicit allowlist.
@@ -654,9 +654,7 @@ Auth modes:
 - `"password"`: prefer setting via `OPENCLAW_GATEWAY_PASSWORD`.
 - `"trusted-proxy"`: trust an identity-aware reverse proxy to authenticate users and pass identity via headers. See [Trusted Proxy Auth](/gateway/trusted-proxy-auth).
 
-Gateway startup rejects blank tokens and passwords, the literal strings `undefined` and `null`, and published example placeholders. Generate a real secret (for example, `openssl rand -hex 32`) and update the selected credential or its external source. `openclaw security audit` flags blank/nullish values as critical and warns when the selected token or password has fewer than 24 characters.
-
-Rotation checklist (token/password): generate/set a new secret (`gateway.auth.token` or `gateway.auth.password`); update remote clients (`gateway.remote.token`/`.password`); verify the old credentials no longer work. Configured token/password rotation hot-applies only when the effective auth mode stays the same; set `gateway.auth.mode` explicitly for SecretRef credentials. Auth-mode changes require a Gateway restart. Changes to process environment credentials such as `OPENCLAW_GATEWAY_PASSWORD` also require restarting the Gateway (or its supervising macOS app) with the updated environment. See [Config hot reload](/gateway/configuration#config-hot-reload).
+Rotation checklist (token/password): generate/set a new secret (`gateway.auth.token` or `OPENCLAW_GATEWAY_PASSWORD`); restart the Gateway (or the macOS app if it supervises the Gateway); update remote clients (`gateway.remote.token`/`.password`); verify the old credentials no longer work.
 
 ### Tailscale Serve identity headers
 
@@ -882,7 +880,7 @@ For phone-number-based channels, consider running the assistant on a separate nu
 
 ### Rotate (assume compromise if secrets leaked)
 
-1. Rotate Gateway auth (`gateway.auth.token` / `gateway.auth.password`). Rotation hot-applies only when the effective auth mode stays the same; set `gateway.auth.mode` explicitly for SecretRefs. Restart for an auth-mode change or updated process environment credentials such as `OPENCLAW_GATEWAY_PASSWORD`.
+1. Rotate Gateway auth (`gateway.auth.token` / `OPENCLAW_GATEWAY_PASSWORD`) and restart.
 2. Rotate remote client secrets (`gateway.remote.token` / `.password`) on any machine that can call the Gateway.
 3. Rotate provider/API credentials (WhatsApp creds, Slack/Discord tokens, model/API keys in SQLite auth stores, and encrypted secrets payload values when used).
 

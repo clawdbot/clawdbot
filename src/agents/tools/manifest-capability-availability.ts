@@ -6,7 +6,6 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizePluginsConfig } from "../../plugins/config-state.js";
 import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
-import { createInstalledPluginEnabledPredicate } from "../../plugins/installed-plugin-index.js";
 import { isManifestPluginAvailableForControlPlane } from "../../plugins/manifest-contract-eligibility.js";
 import type { PluginManifestRecord } from "../../plugins/manifest-registry.js";
 import {
@@ -83,10 +82,6 @@ function hasAvailableCapabilityPlugin(
     return false;
   }
   const normalizedConfig = normalizePluginsConfig(params.config?.plugins);
-  const isInstalledPluginEnabled = createInstalledPluginEnabledPredicate(
-    params.snapshot.index.plugins,
-    params.config,
-  );
   return params.snapshot.plugins.some(
     (plugin) =>
       isManifestPluginAvailableForControlPlane({
@@ -94,7 +89,6 @@ function hasAvailableCapabilityPlugin(
         plugin,
         config: params.config,
         normalizedConfig,
-        isInstalledPluginEnabled,
       }) && accepts(plugin),
   );
 }

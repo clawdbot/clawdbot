@@ -62,7 +62,7 @@ export function buildNativeHookRelayCommandWithStateDatabase(params: {
   nodeExecutable?: string;
 }): string {
   const timeoutMs = normalizePositiveInteger(params.timeoutMs, DEFAULT_RELAY_TIMEOUT_MS);
-  const executable = params.executable ?? resolveNativeHookRelayExecutable();
+  const executable = params.executable ?? resolveOpenClawCliExecutable();
   const argv =
     executable === "openclaw"
       ? ["openclaw"]
@@ -92,7 +92,7 @@ export function buildNativeHookRelayCommandWithStateDatabase(params: {
   return process.platform === "win32" ? command : `exec ${command}`;
 }
 
-function resolveNativeHookRelayExecutable(): string {
+function resolveOpenClawCliExecutable(): string {
   const envPath = process.env.OPENCLAW_CLI_PATH?.trim();
   if (envPath && existsSync(envPath)) {
     return envPath;
@@ -104,7 +104,6 @@ function resolveNativeHookRelayExecutable(): string {
   });
   if (packageRoot) {
     for (const candidate of [
-      path.join(packageRoot, "dist", "native-hook-relay", "entry.js"),
       path.join(packageRoot, "openclaw.mjs"),
       path.join(packageRoot, "dist", "entry.js"),
       path.join(packageRoot, "scripts", "run-node.mjs"),

@@ -3,7 +3,6 @@
  * allowlists, and display paths. Manifest policies are optional so tests can
  * isolate built-in normalization behavior.
  */
-import type { ProviderModelRef as ModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import {
   findNormalizedProviderKey as findNormalizedProviderKeyCore,
   normalizeProviderId as normalizeProviderIdCore,
@@ -24,7 +23,10 @@ import { modelKey } from "../shared/model-key.js";
 import { normalizeProviderModelIdWithRuntime } from "./provider-model-normalization.runtime.js";
 export { modelKey } from "../shared/model-key.js";
 
-export type { ProviderModelRef as ModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
+export type ModelRef = {
+  provider: string;
+  model: string;
+};
 
 export type ModelManifestNormalizationContext = {
   manifestPlugins?: ManifestModelIdNormalizationSource;
@@ -131,6 +133,7 @@ function normalizeProviderModelId(
   return (
     normalizeProviderModelIdWithRuntime({
       provider,
+      ...(options?.manifestPlugins ? { plugins: options.manifestPlugins } : {}),
       context: {
         provider,
         modelId: staticModelId,

@@ -58,9 +58,7 @@ const HEIC_MODEL_RUN_MIMES = new Set([
   "image/heif-sequence",
 ]);
 
-async function loadModelCatalogForInspection(cfg: OpenClawConfig, rawAgentId?: string) {
-  const agentId =
-    rawAgentId === undefined ? undefined : resolveCapabilityProviderAgentId(cfg, rawAgentId);
+async function loadModelCatalogForInspection(cfg: OpenClawConfig, agentId?: string) {
   const prepared = await loadPreparedModelCatalog({ config: cfg, agentId, readOnly: true });
   const metadataSnapshot = loadManifestMetadataSnapshot({ config: cfg, env: process.env });
   const manifest = planEffectiveModelCatalogRows({
@@ -82,15 +80,13 @@ async function loadModelCatalogForInspection(cfg: OpenClawConfig, rawAgentId?: s
 async function canonicalizeModelRunRef(params: {
   raw: string | undefined;
   cfg: OpenClawConfig;
-  agentId: string;
   preserveAuthProfile: boolean;
 }): Promise<string | undefined> {
   return await canonicalizeCaseOnlyCatalogModelRef({
     cfg: params.cfg,
     raw: params.raw,
     defaultProvider: DEFAULT_PROVIDER,
-    loadCatalog: () =>
-      loadPreparedModelCatalog({ config: params.cfg, agentId: params.agentId, readOnly: true }),
+    loadCatalog: () => loadPreparedModelCatalog({ config: params.cfg, readOnly: true }),
     preserveAuthProfile: params.preserveAuthProfile,
   });
 }
@@ -190,7 +186,6 @@ async function runModelRun(params: {
   const modelRef = await canonicalizeModelRunRef({
     raw: params.model,
     cfg,
-    agentId,
     preserveAuthProfile: params.transport === "local",
   });
   const hasExplicitProviderModelOverride = Boolean(explicitModelOverride);
@@ -497,12 +492,9 @@ export function registerModelCapabilityCommands(capability: Command): void {
     .command("list")
     .description("List known models")
     .option("--json", "Output JSON", false)
-    .action(async (opts, command) => {
+    .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
-        const result = await loadModelCatalogForInspection(
-          getRuntimeConfig(),
-          resolveCapabilityAgentOption(command, opts.agent),
-        );
+        const result = await loadModelCatalogForInspection(getRuntimeConfig());
         emitJsonOrText(defaultRuntime, Boolean(opts.json), result, providerSummaryText);
       });
     });
@@ -512,13 +504,10 @@ export function registerModelCapabilityCommands(capability: Command): void {
     .description("Inspect one model catalog entry")
     .requiredOption("--model <provider/model>", "Model id")
     .option("--json", "Output JSON", false)
-    .action(async (opts, command) => {
+    .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
         const target = normalizeStringifiedOptionalString(opts.model) ?? "";
-        const catalog = await loadModelCatalogForInspection(
-          getRuntimeConfig(),
-          resolveCapabilityAgentOption(command, opts.agent),
-        );
+        const catalog = await loadModelCatalogForInspection(getRuntimeConfig());
         const entry =
           catalog.find((candidate) => `${candidate.provider}/${candidate.id}` === target) ??
           catalog.find((candidate) => candidate.id === target);

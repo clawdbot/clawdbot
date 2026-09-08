@@ -42,12 +42,11 @@ import type { PluginManifestRecord } from "./manifest-registry.js";
 import { resolveExternalPluginRuntimeDependencyRepairHint } from "./official-external-plugin-repair-hints.js";
 import { withProfile } from "./plugin-load-profile.js";
 import { preparePluginModule } from "./plugin-module-loader-cache.js";
-import { resolvePluginRuntimeArtifact } from "./plugin-runtime-artifact-resolution.js";
 import {
-  bindPluginRuntimeArtifactSelection,
-  resolvePluginRuntimeExecutionArtifact,
-  prefersBuiltPluginArtifacts,
-} from "./plugin-runtime-artifact-selection.js";
+  resolveCanonicalDistRuntimeSource,
+  resolvePluginRuntimeArtifact,
+} from "./plugin-runtime-artifact-resolution.js";
+import { prefersBuiltPluginArtifacts } from "./plugin-runtime-artifact-selection.js";
 import type { createPluginRegistry, PluginRecord } from "./registry.js";
 import {
   clearActiveDegradedPlugin,
@@ -164,25 +163,28 @@ export function loadRuntimePluginCandidate(params: {
     context.artifactPreference,
     candidate.origin,
   );
-  const artifactParams = {
+  const runtimeCandidateEntry = resolvePluginRuntimeArtifact({
     pluginId,
+    entryKind: "runtime",
+    source: candidate.source,
     rootDir: pluginRoot,
     origin: candidate.origin,
     preferBuiltPluginArtifacts,
     sourcePreferred: manifestRecord.sourcePreferred,
     packageManifest: candidate.packageManifest,
     registry,
-  };
-  const runtimeCandidateEntry = resolvePluginRuntimeArtifact({
-    ...artifactParams,
-    entryKind: "runtime",
-    source: candidate.source,
   });
   const runtimeSetupEntry = manifestRecord.setupSource
     ? resolvePluginRuntimeArtifact({
-        ...artifactParams,
+        pluginId,
         entryKind: "setup",
         source: manifestRecord.setupSource,
+        rootDir: pluginRoot,
+        origin: candidate.origin,
+        preferBuiltPluginArtifacts,
+        sourcePreferred: manifestRecord.sourcePreferred,
+        packageManifest: candidate.packageManifest,
+        registry,
       })
     : undefined;
   const scopedSetupOnlyChannelPluginRequested =
@@ -306,9 +308,15 @@ export function loadRuntimePluginCandidate(params: {
         throw new Error("entry must resolve inside the selected plugin root");
       }
       const artifact = resolvePluginRuntimeArtifact({
-        ...artifactParams,
+        pluginId,
         entryKind: "capability-catalog",
         source: manifestRecord.capabilityCatalogSource,
+        rootDir: pluginRoot,
+        origin: candidate.origin,
+        preferBuiltPluginArtifacts,
+        sourcePreferred: manifestRecord.sourcePreferred,
+        packageManifest: candidate.packageManifest,
+        registry,
       });
       const { source, modulePath } = preparePluginModule({
         modulePath: artifact.source,
@@ -373,20 +381,12 @@ export function loadRuntimePluginCandidate(params: {
     // Shipped register()-only plugins and families omitted by a catalog keep runtime discovery.
   }
 
-  const loadEntry = resolvePluginRuntimeExecutionArtifact(
+  const loadEntry =
     registrationPlan.loadSetupEntry && runtimeSetupEntry
       ? runtimeSetupEntry
-      : runtimeCandidateEntry,
-  );
-  // Setup runtime can register a channel without importing the main entry.
-  // Retain the setup source that actually ran, rather than unused declarations.
-  const artifactSelection = bindPluginRuntimeArtifactSelection(record, {
-    ...artifactParams,
-    runtimeEntry: resolvePluginRuntimeExecutionArtifact(runtimeCandidateEntry),
-    setupEntry: registrationPlan.loadSetupEntry ? loadEntry : undefined,
-  });
-  const moduleLoadSource = loadEntry.source;
-  const moduleRoot = loadEntry.rootDir;
+      : runtimeCandidateEntry;
+  const moduleLoadSource = resolveCanonicalDistRuntimeSource(loadEntry.source);
+  const moduleRoot = resolveCanonicalDistRuntimeSource(loadEntry.rootDir);
   const rejectHardlinks = shouldRejectHardlinkedPluginFiles({
     origin: candidate.origin,
     rootDir: candidate.rootDir,
@@ -567,8 +567,6 @@ export function loadRuntimePluginCandidate(params: {
     // Non-activating snapshots are private until cached activation; rollback restores both.
     if (registrationPlan.runRuntimeCapabilityPolicy) {
       registerPluginDashboardCapabilities({ record, registry });
-      // Publish completion only after the capability-enabled register pass succeeds.
-      artifactSelection.runtimeRegistrationComplete = true;
     }
     registry.plugins.push(record);
     state.seenIds.set(pluginId, candidate.origin);

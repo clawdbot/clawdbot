@@ -31,10 +31,9 @@ type CopilotToolBridgeInput = Parameters<typeof createCopilotToolBridgeImpl>[0];
 type CopilotToolBridgeAttemptParams = NonNullable<CopilotToolBridgeInput["attemptParams"]>;
 type CopilotToolBridgeTestInput = Omit<
   CopilotToolBridgeInput,
-  "agentId" | "attemptParams" | "modelId" | "modelProvider" | "sessionId" | "spawnWorkspaceDir"
+  "agentId" | "attemptParams" | "modelId" | "modelProvider" | "sessionId"
 > &
   Partial<Pick<CopilotToolBridgeInput, "agentId" | "modelId" | "modelProvider" | "sessionId">> & {
-    spawnWorkspaceDir?: CopilotToolBridgeInput["spawnWorkspaceDir"];
     attemptParams?: Omit<CopilotToolBridgeAttemptParams, "hostCapabilities"> &
       Partial<Pick<CopilotToolBridgeAttemptParams, "hostCapabilities">>;
   };
@@ -50,7 +49,6 @@ function createCopilotToolBridge(input: CopilotToolBridgeTestInput) {
     modelId: "gpt-4o",
     modelProvider: "github-copilot",
     sessionId: "session-1",
-    spawnWorkspaceDir: undefined,
     ...baseInput,
     attemptParams: {
       ...attemptParams,
@@ -156,7 +154,6 @@ describe("createCopilotToolBridge", () => {
         modelId: "gpt-test",
         modelProvider: "github-copilot",
         sessionId: "session-1",
-        spawnWorkspaceDir: undefined,
       }),
     ).rejects.toThrow("Copilot attempt tools require host-bound capabilities");
     expect(createOpenClawCodingTools).not.toHaveBeenCalled();
@@ -1329,7 +1326,7 @@ describe("createCopilotToolBridge", () => {
       } as unknown as SandboxContext;
     }
 
-    it("forwards an absent sandbox and prepared spawn workspace", async () => {
+    it("defaults sandbox to undefined and derives spawnWorkspaceDir from workspaceDir when no sandbox is passed (back-compat)", async () => {
       const createOpenClawCodingTools = vi.fn(async () => [makeTool()]);
       await createCopilotToolBridge({
         createOpenClawCodingTools,
@@ -1343,6 +1340,8 @@ describe("createCopilotToolBridge", () => {
       };
       expect(opts.sandbox).toBeUndefined();
       expect(opts.workspaceDir).toBe("/workspace");
+      // resolveAttemptSpawnWorkspaceDir returns undefined for the
+      // no-sandbox path; the back-compat fallback emits that.
       expect(opts.spawnWorkspaceDir).toBeUndefined();
     });
 
@@ -1364,6 +1363,26 @@ describe("createCopilotToolBridge", () => {
       expect(opts.sandbox).toBe(sandbox);
       expect(opts.workspaceDir).toBe("/sandbox/copy");
       expect(opts.spawnWorkspaceDir).toBe("/original-workspace");
+    });
+
+    it("derives spawnWorkspaceDir from sandbox when caller omits it (fallback path)", async () => {
+      const sandbox = makeSandboxStub({ workspaceAccess: "ro" });
+      const createOpenClawCodingTools = vi.fn(async () => [makeTool()]);
+      await createCopilotToolBridge({
+        createOpenClawCodingTools,
+        sandbox,
+        sessionKey: "session-1",
+        workspaceDir: "/sandbox/copy",
+      });
+      const opts = (createOpenClawCodingTools.mock.calls[0] as unknown[] | undefined)?.[0] as {
+        spawnWorkspaceDir?: unknown;
+      };
+      // Fallback derives spawnWorkspaceDir from (effective) workspaceDir
+      // since the caller didn't pre-compute one. For a ro/none sandbox
+      // this yields the effective dir (= sandbox copy). Production
+      // callers (attempt.ts) always pre-compute spawnWorkspaceDir from
+      // the original workspace; the fallback is for test fixtures.
+      expect(opts.spawnWorkspaceDir).toBe("/sandbox/copy");
     });
   });
 

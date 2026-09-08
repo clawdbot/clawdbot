@@ -20,7 +20,6 @@ import {
   readTerminalSourceReplyDeliveryMirror,
 } from "../embedded-agent-runner/message-visibility.js";
 import { buildMainSessionRecoveryClearPatch } from "./main-session-recovery-clear.js";
-import type { MainSessionRecoveryStoreTarget } from "./main-session-recovery-store.js";
 import { isRestartAbortTailArtifact } from "./main-session-restart-recovery-resume-policy.js";
 import {
   mainSessionRecoveryLog,
@@ -44,15 +43,15 @@ export function hasCompletionReportUserTail(messages: readonly unknown[]): boole
   );
 }
 
-export async function reconcileInterruptedCompletionReport(
-  params: MainSessionRecoveryStoreTarget & {
-    entry: SessionEntry;
-    source: "announce_runs" | "transcript";
-  },
-): Promise<{ outcome: "reconciled" } | { outcome: "changed"; entry: SessionEntry | null }> {
+export async function reconcileInterruptedCompletionReport(params: {
+  entry: SessionEntry;
+  source: "announce_runs" | "transcript";
+  storePath: string;
+  sessionKey: string;
+}): Promise<{ outcome: "reconciled" } | { outcome: "changed"; entry: SessionEntry | null }> {
   let didReconcile = false;
   const current = await updateSessionEntry(
-    params,
+    { sessionKey: params.sessionKey, storePath: params.storePath },
     (entry) => {
       const hasRecoveryRuns = Boolean(entry.restartRecoveryRuns?.length);
       const stillMatchesSource =
@@ -476,7 +475,6 @@ export async function markSessionCompletedAfterRecoveryCheckpoint(params: {
     return { outcome: completed ? "completed" : "changed" };
   }
   const marked = await applySessionEntryReplacements({
-    agentId: params.agentId,
     sessionKeys: [params.sessionKey],
     storePath: params.storePath,
     update: (entries) => {

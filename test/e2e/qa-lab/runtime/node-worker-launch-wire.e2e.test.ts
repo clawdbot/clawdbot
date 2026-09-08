@@ -482,7 +482,6 @@ describe("node worker launch wire", () => {
                 return loadRunId;
               }),
             );
-            const waveGateway = gateway;
             const waits = Promise.all(
               loadRunIds.map(async (loadRunId) => {
                 const completedLoad = await operator!.request<{ status?: string }>(
@@ -490,19 +489,10 @@ describe("node worker launch wire", () => {
                   { runId: loadRunId, timeoutMs: PROOF_TIMEOUT_MS },
                   { timeoutMs: PROOF_TIMEOUT_MS + 5_000 },
                 );
-                expect(
-                  completedLoad,
-                  `load run ${loadRunId} failed\n${waveGateway.logs().slice(-12_000)}`,
-                ).toMatchObject({ status: "ok" });
+                expect(completedLoad.status).toBe("ok");
               }),
             );
-            // Failed turns may never upload; observe their failure while waiting for finalization.
-            await Promise.race([
-              waveFinalizationStarted,
-              waits.then(() => {
-                throw new Error("load wave completed without workspace finalization");
-              }),
-            ]);
+            await waveFinalizationStarted;
             const freshConnectionStartedAt = performance.now();
             const freshClient = await connectWireClient({
               gateway,

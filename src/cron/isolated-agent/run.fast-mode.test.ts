@@ -30,10 +30,8 @@ function mockSuccessfulModelFallback() {
     await runInitialModelFallbackAttempt(params);
     return {
       result: {
-        result: {
-          payloads: [{ text: "ok" }],
-          meta: { agentMeta: {} },
-        },
+        payloads: [{ text: "ok" }],
+        meta: { agentMeta: {} },
       },
       provider: params.provider,
       model: params.model,

@@ -5,7 +5,6 @@ import {
   type AssistantTranscriptRoleHeaderSpan,
 } from "./assistant-transcript-headers.js";
 import { tokenizeHtmlTags } from "./html-tags.js";
-import { appendHtmlTags, copyHtmlTags, RAW_HTML_TOKEN_TYPE } from "./ir-metadata.js";
 
 export const ASSISTANT_TRANSCRIPT_ROLE_NODE_TYPE = "assistant_transcript_role_text";
 
@@ -78,8 +77,7 @@ function visibleTokenProjection(
   if (token.type === "text" || token.type === "html_inline") {
     return { text: token.content, excludedRanges: [] };
   }
-  // Raw lexemes own their contents but still contribute length to later text offsets.
-  if (token.type === "code_inline" || token.type === RAW_HTML_TOKEN_TYPE) {
+  if (token.type === "code_inline") {
     return { text: token.content, excludedRanges: [{ start: 0, end: token.content.length }] };
   }
   if (token.type === "image") {
@@ -114,8 +112,7 @@ function visibleTokensProjection(
 function cloneToken(
   TokenType: StateCore["Token"],
   source: Token,
-  start: number,
-  end: number,
+  content: string,
   type: string = source.type,
 ): Token {
   const token = new TokenType(
@@ -125,19 +122,18 @@ function cloneToken(
   );
   Object.assign(token, source);
   token.type = type;
-  token.content = source.content.slice(start, end);
+  token.content = content;
   token.children = null;
-  return copyHtmlTags(source, token, start, end);
+  return token;
 }
 
 function annotatedToken(
   TokenType: StateCore["Token"],
   source: Token,
-  start: number,
-  end: number,
+  content: string,
   span: AssistantTranscriptRoleHeaderSpan,
 ): Token {
-  const token = cloneToken(TokenType, source, start, end, ASSISTANT_TRANSCRIPT_ROLE_NODE_TYPE);
+  const token = cloneToken(TokenType, source, content, ASSISTANT_TRANSCRIPT_ROLE_NODE_TYPE);
   token.meta = {
     ...(source.meta && typeof source.meta === "object" ? source.meta : {}),
     assistantTranscriptRoleHeader: {
@@ -175,15 +171,24 @@ function splitVisibleToken(params: {
     const overlapStart = Math.max(span.start, visibleStart) - visibleStart;
     const overlapEnd = Math.min(span.end, visibleEnd) - visibleStart;
     if (overlapStart > localCursor) {
-      result.push(cloneToken(params.TokenType, token, localCursor, overlapStart));
+      result.push(
+        cloneToken(params.TokenType, token, token.content.slice(localCursor, overlapStart)),
+      );
     }
     if (overlapEnd > overlapStart) {
-      result.push(annotatedToken(params.TokenType, token, overlapStart, overlapEnd, span));
+      result.push(
+        annotatedToken(
+          params.TokenType,
+          token,
+          token.content.slice(overlapStart, overlapEnd),
+          span,
+        ),
+      );
     }
     localCursor = overlapEnd;
   }
   if (localCursor < token.content.length) {
-    result.push(cloneToken(params.TokenType, token, localCursor, token.content.length));
+    result.push(cloneToken(params.TokenType, token, token.content.slice(localCursor)));
   }
   return result;
 }
@@ -296,7 +301,6 @@ function removeLinksContainingAssistantTranscriptRoles(tokens: Token[]): Token[]
       previous?.type === ASSISTANT_TRANSCRIPT_ROLE_NODE_TYPE &&
       token.type === ASSISTANT_TRANSCRIPT_ROLE_NODE_TYPE
     ) {
-      appendHtmlTags(previous, token, previous.content.length);
       previous.content += token.content;
       continue;
     }

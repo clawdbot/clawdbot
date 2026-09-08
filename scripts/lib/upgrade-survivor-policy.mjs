@@ -1,7 +1,5 @@
 const UPGRADE_SURVIVOR_SCENARIOS = Object.freeze([
   "base",
-  "abandoned-update",
-  "legacy-operator-state",
   "mobile-pairing-reconnect",
   "acpx-openclaw-tools-bridge",
   "feishu-channel",
@@ -21,12 +19,9 @@ const UPGRADE_SURVIVOR_SCENARIOS = Object.freeze([
   "watchos-direct-node",
 ]);
 
-// Oldest release line supported by the operator-state upgrade regression gate.
-export const OLDEST_SUPPORTED_UPGRADE_SURVIVOR_BASELINE = "2026.6.34";
-
 // These black-box scenarios are implemented entirely by the current trusted
 // release harness and treat the selected tree only as the package under test.
-const TRUSTED_HARNESS_OWNED_SCENARIOS = new Set(["mobile-pairing-reconnect", "abandoned-update"]);
+const TRUSTED_HARNESS_OWNED_SCENARIOS = new Set(["mobile-pairing-reconnect"]);
 
 export function isTrustedHarnessOwnedUpgradeSurvivorScenario(scenario) {
   return TRUSTED_HARNESS_OWNED_SCENARIOS.has(scenario);
@@ -38,7 +33,6 @@ export function isTrustedHarnessOwnedUpgradeSurvivorScenario(scenario) {
 // qualification until their runtime cost justifies aggregate release coverage.
 const aggregateScenarios = UPGRADE_SURVIVOR_SCENARIOS.filter(
   (scenario) =>
-    scenario !== "abandoned-update" &&
     scenario !== "mobile-pairing-reconnect" &&
     scenario !== "watchos-direct-node" &&
     scenario !== "prerelease-plugin-registry" &&
@@ -176,19 +170,8 @@ function supportsUpgradeSurvivorMobilePairingReconnect(baselineSpec) {
   return comparePublishedReleaseVersion(version, { year: 2026, month: 7, patch: 1 }) >= 0;
 }
 
-function supportsUpgradeSurvivorLegacyOperatorState(baselineSpec) {
-  const version = parsePublishedReleaseVersion(baselineSpec);
-  const floor = parsePublishedReleaseVersion(
-    `openclaw@${OLDEST_SUPPORTED_UPGRADE_SURVIVOR_BASELINE}`,
-  );
-  return !version || comparePublishedReleaseVersion(version, floor) >= 0;
-}
-
 export function supportsUpgradeSurvivorScenarioAtBaseline(scenario, baselineSpec) {
   return (
-    (scenario !== "abandoned-update" || baselineSpec === "openclaw@2026.9.2") &&
-    (scenario !== "legacy-operator-state" ||
-      supportsUpgradeSurvivorLegacyOperatorState(baselineSpec)) &&
     (scenario !== "plugin-deps-cleanup" ||
       supportsUpgradeSurvivorPluginDependencyCleanup(baselineSpec)) &&
     (scenario !== "acpx-openclaw-tools-bridge" ||

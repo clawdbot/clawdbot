@@ -3,6 +3,7 @@ import {
   closeTaskFlowRegistryDatabase,
   deleteTaskFlowRegistryRecordFromSqlite,
   loadTaskFlowRegistryStateFromSqlite,
+  saveTaskFlowRegistryStateToSqlite,
   upsertTaskFlowRegistryRecordToSqlite,
 } from "./task-flow-registry.store.sqlite.js";
 import type { TaskFlowRegistryStoreSnapshot } from "./task-flow-registry.store.types.js";
@@ -10,8 +11,9 @@ import type { TaskFlowRecord } from "./task-flow-registry.types.js";
 
 type TaskFlowRegistryStore = {
   loadSnapshot: () => TaskFlowRegistryStoreSnapshot;
-  upsertFlow: (flow: TaskFlowRecord) => void;
-  deleteFlow: (flowId: string) => void;
+  saveSnapshot: (snapshot: TaskFlowRegistryStoreSnapshot) => void;
+  upsertFlow?: (flow: TaskFlowRecord) => void;
+  deleteFlow?: (flowId: string) => void;
   close?: () => void;
 };
 
@@ -32,12 +34,13 @@ export type TaskFlowRegistryObserverEvent =
     };
 
 type TaskFlowRegistryObservers = {
-  // Observers are incremental/best-effort only. Persistence belongs to TaskFlowRegistryStore.
+  // Observers are incremental/best-effort only. Snapshot persistence belongs to TaskFlowRegistryStore.
   onEvent?: (event: TaskFlowRegistryObserverEvent) => void;
 };
 
 const defaultFlowRegistryStore: TaskFlowRegistryStore = {
   loadSnapshot: loadTaskFlowRegistryStateFromSqlite,
+  saveSnapshot: saveTaskFlowRegistryStateToSqlite,
   upsertFlow: upsertTaskFlowRegistryRecordToSqlite,
   deleteFlow: deleteTaskFlowRegistryRecordFromSqlite,
   close: closeTaskFlowRegistryDatabase,

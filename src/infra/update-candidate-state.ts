@@ -7,20 +7,20 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runCommandBuffered } from "../process/exec.js";
 import type { OpenClawSchemaVersions } from "../state/openclaw-schema-versions.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
-import { readStateSchemaContentVersion } from "../state/openclaw-state-db-schema-version.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import { resolveOpenClawRegisteredAgentDatabasePath } from "../state/openclaw-state-db.paths.js";
+import { readStateSchemaContentVersion } from "../state/openclaw-state-schema-publication.js";
+import { sha256Hex } from "./crypto-digest.js";
 import { resolveUserPath } from "./home-dir.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
-import { hasNodeErrorCode } from "./path-guards.js";
+import { hasNodeErrorCode, isPathInside } from "./path-guards.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { prepareSqliteReadOnlyLocationSyncInProcess } from "./sqlite-readonly-location.js";
 import { readSqliteUserVersion } from "./sqlite-user-version.js";
-import { resolveUpdateCandidateStatePath } from "./update-candidate-paths.js";
 
-const UpdateStateSchemaVersionsSchema = z.array(
+export const UpdateStateSchemaVersionsSchema = z.array(
   z.object({
     path: z.string(),
     userVersion: z.number().nullable(),
@@ -28,10 +28,6 @@ const UpdateStateSchemaVersionsSchema = z.array(
   }),
 );
 export type UpdateStateSchemaVersion = z.infer<typeof UpdateStateSchemaVersionsSchema>[number];
-export const UpdateCandidateStateSnapshotSchema = z.object({
-  versions: UpdateStateSchemaVersionsSchema,
-  pluginPaths: z.record(z.string(), z.string()),
-});
 type StateInput = { stateDir: string; config: OpenClawConfig; env?: NodeJS.ProcessEnv };
 type CandidateStateDatabase = Pick<
   DB,
@@ -238,10 +234,25 @@ export async function readUpdateStateSchemaVersions({
   return UpdateStateSchemaVersionsSchema.parse(JSON.parse(result.stdout.toString("utf8")));
 }
 
+/** Shared with config projection so custom agent directories use their copied database. */
+export function resolveUpdateCandidateStatePath(
+  sourceRoot: string,
+  targetRoot: string,
+  source: string,
+): string {
+  // Registered link/../ locators can identify a different inode from their
+  // normalized spelling; flattening them would overwrite another copied database.
+  const relative =
+    path.normalize(source) === source && isPathInside(sourceRoot, source)
+      ? path.relative(sourceRoot, source)
+      : path.join("candidate-external", sha256Hex(source));
+  return path.join(targetRoot, relative);
+}
+
 /** Keep snapshot dependencies out of schema inspection; rebind registry paths to private copies. */
 export async function snapshotUpdateCandidateState(
-  input: StateInput & { targetStateDir: string; candidateRoot: string },
-): Promise<z.infer<typeof UpdateCandidateStateSnapshotSchema>> {
+  input: StateInput & { targetStateDir: string },
+): Promise<UpdateStateSchemaVersion[]> {
   const { createVerifiedSqliteSnapshot } = await import("./sqlite-snapshot.js");
   const sourceRoot = path.resolve(input.stateDir);
   const shared = path.join(sourceRoot, "state", "openclaw.sqlite");
@@ -318,7 +329,5 @@ export async function snapshotUpdateCandidateState(
       ...(contentVersion === undefined ? {} : { contentVersion }),
     });
   }
-  const { projectUpdateCandidatePlugins } = await import("./update-candidate-plugins.js");
-  const pluginPaths = await projectUpdateCandidatePlugins(input);
-  return { versions, pluginPaths };
+  return versions;
 }

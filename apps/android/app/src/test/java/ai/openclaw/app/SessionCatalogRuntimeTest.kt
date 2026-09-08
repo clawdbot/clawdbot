@@ -149,7 +149,6 @@ class SessionCatalogRuntimeTest {
       val refreshStarted = CompletableDeferred<Unit>()
       val releaseRefresh = CompletableDeferred<Unit>()
       val loadMoreStarted = CompletableDeferred<Unit>()
-      var failExpandedRefresh = false
       try {
         ReflectionHelpers.setField(runtime, "connectedEndpoint", GatewayEndpoint.manual("127.0.0.1", 18789))
         ReflectionHelpers.setField(runtime, "operatorConnected", true)
@@ -182,7 +181,6 @@ class SessionCatalogRuntimeTest {
           val request = Json.parseToJsonElement(requireNotNull(params)).jsonObject
           if ("cursors" in request) {
             loadMoreStarted.complete(Unit)
-            if (failExpandedRefresh) error("Synthetic catalog page failure")
             """{"catalogs":[{"id":"codex","label":"Codex","hosts":[{"hostId":"desktop","label":"Desktop","kind":"node","connected":true,"sessions":[{"threadId":"page-2","status":"idle","canContinue":true}]}]}]}"""
           } else {
             refreshStarted.complete(Unit)
@@ -228,15 +226,6 @@ class SessionCatalogRuntimeTest {
             .map(SessionCatalogEntry::threadId),
         )
         assertEquals(1, state.loadedPageDepthsByHost[sessionCatalogHostKey("codex", "desktop")])
-
-        failExpandedRefresh = true
-        withTimeout(2_000) { invokeRefreshSessionCatalogFromGateway(runtime, "main") }
-
-        val failedRefresh = runtime.sessionCatalogState.value
-        assertFalse(failedRefresh.loading)
-        assertEquals(state.catalogs, failedRefresh.catalogs)
-        assertEquals(state.loadedPageDepthsByHost, failedRefresh.loadedPageDepthsByHost)
-        assertTrue("A failed expanded-page refresh must remain visible", !failedRefresh.errorText.isNullOrBlank())
       } finally {
         releaseRefresh.complete(Unit)
         closeNodeRuntimeTestFixture(runtime)

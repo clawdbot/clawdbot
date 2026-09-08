@@ -244,7 +244,6 @@ export function renderGroupedMessage(
     embedSandboxMode?: EmbedSandboxMode;
     allowExternalEmbedUrls?: boolean;
     fetchLinkFavicon?: LinkFaviconFetcher;
-    githubRepo?: MarkdownRenderOptions["githubRepo"];
     onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;
     entryId?: string;
     /** Freshly submitted user turn: play the one-shot composer entry animation. */
@@ -311,7 +310,6 @@ export function renderGroupedMessage(
     codeBlockChrome: role === "user" ? "none" : "copy",
     codeBlockInteraction: role === "assistant" ? "interactive" : "static",
     fileLinks: true,
-    githubRepo: role === "assistant" ? (opts.githubRepo ?? null) : null,
     interactiveImages: opts.onOpenImage !== undefined,
     sessionLinks: true,
     tableInteractions: "enabled",

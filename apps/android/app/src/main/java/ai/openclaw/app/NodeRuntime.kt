@@ -1059,7 +1059,6 @@ class NodeRuntime private constructor(
     val token: String?,
     val bootstrapToken: String?,
     val password: String?,
-    val bootstrapHandoff: ai.openclaw.app.gateway.GatewayBootstrapHandoff? = null,
   )
 
   /**
@@ -1123,15 +1122,11 @@ class NodeRuntime private constructor(
   // Identity owns an established connection until disconnect/replacement, independently
   // of the UI request or lifecycle sequence that originally admitted it.
   private class GatewayConnectionContext(
-    private val initialAuth: GatewayConnectAuth,
+    val auth: GatewayConnectAuth,
     // A started session owns retries and auth pauses before readiness is published.
     // Only bootstrap without operator auth may admit this role after the node connects.
     var operatorConnectAdmitted: Boolean = false,
-  ) {
-    val bootstrapHandoff = initialAuth.bootstrapHandoff
-    val auth: GatewayConnectAuth
-      get() = if (bootstrapHandoff?.completed == true) initialAuth.copy(bootstrapToken = null) else initialAuth
-  }
+  )
 
   private var activeGatewayConnection: GatewayConnectionContext? = null
 
@@ -4561,11 +4556,8 @@ class NodeRuntime private constructor(
 
   // Queued callers can exit before cleanup, so generation changes must request reconciliation.
   private fun advanceGatewayLifecycleIntent(): Long =
-    synchronized(gatewayLifecycleIntentLock) {
-      activeGatewayConnection?.bootstrapHandoff?.invalidate()
-      gatewayLifecycleIntentSeq.incrementAndGet().also {
-        requestBackgroundGatewayReconciliation()
-      }
+    gatewayLifecycleIntentSeq.incrementAndGet().also {
+      requestBackgroundGatewayReconciliation()
     }
 
   private fun gatewayLifecycleIntent(
@@ -4606,7 +4598,6 @@ class NodeRuntime private constructor(
   ): Boolean =
     runGatewayConnectOperation {
       beforeConnect()
-      activeGatewayConnection?.bootstrapHandoff?.invalidate()
       val connection = GatewayConnectionContext(auth)
       activeGatewayConnection = connection
       val tls = connectionManager.resolveTlsParams(endpoint)
@@ -4652,7 +4643,6 @@ class NodeRuntime private constructor(
         auth.password,
         nodeConnectOptions,
         tls,
-        bootstrapHandoff = connection.bootstrapHandoff,
       )
     }
 
@@ -4830,21 +4820,15 @@ class NodeRuntime private constructor(
   internal fun resolveGatewayConnectAuth(
     endpoint: GatewayEndpoint,
     explicitAuth: GatewayConnectAuth? = null,
-  ): GatewayConnectAuth {
-    val auth =
-      explicitAuth
-        ?: prefs.loadGatewayCredentials(endpoint.stableId).let { credentials ->
-          GatewayConnectAuth(
-            token = credentials.token,
-            bootstrapToken = credentials.bootstrapToken,
-            password = credentials.password,
-          )
-        }
-    val bootstrap = auth.bootstrapToken?.trim()?.takeIf { it.isNotEmpty() } ?: return auth
-    return auth.copy(
-      bootstrapHandoff = prefs.prepareGatewayBootstrapHandoff(endpoint.stableId, bootstrap, allowStoredTokenRecovery = explicitAuth == null),
-    )
-  }
+  ): GatewayConnectAuth =
+    explicitAuth
+      ?: prefs.loadGatewayCredentials(endpoint.stableId).let { credentials ->
+        GatewayConnectAuth(
+          token = credentials.token,
+          bootstrapToken = credentials.bootstrapToken,
+          password = credentials.password,
+        )
+      }
 
   fun acceptGatewayTrustPrompt(manualFingerprint: String? = null) {
     val prompt = _pendingGatewayTrust.value ?: return
@@ -5155,7 +5139,6 @@ class NodeRuntime private constructor(
     connectedEndpoint = null
     connectingEndpointStableId = null
     _gatewayControlPage.value = null
-    activeGatewayConnection?.bootstrapHandoff?.invalidate()
     activeGatewayConnection = null
     updateStatus {
       operatorConnected = false
@@ -5945,20 +5928,26 @@ class NodeRuntime private constructor(
           loadedPageDepthsByHost = previousPageDepths,
           isCurrent = { sessionCatalogRefreshSeq.get() == requestSeq },
         ) { catalogId, hostId, cursor ->
-          val pageResponse =
-            requestGatewayData(
-              gatewayScope,
-              "sessions.catalog.list",
-              sessionCatalogPageParams(
-                normalizedAgentId,
-                catalogId,
-                mapOf(hostId to cursor),
-              ),
-            )
-          parseSessionCatalogs(pageResponse, normalizedAgentId, json)
-            .firstOrNull { it.id == catalogId }
-            ?.hosts
-            ?.firstOrNull { it.hostId == hostId }
+          try {
+            val pageResponse =
+              requestGatewayData(
+                gatewayScope,
+                "sessions.catalog.list",
+                sessionCatalogPageParams(
+                  normalizedAgentId,
+                  catalogId,
+                  mapOf(hostId to cursor),
+                ),
+              )
+            parseSessionCatalogs(pageResponse, normalizedAgentId, json)
+              .firstOrNull { it.id == catalogId }
+              ?.hosts
+              ?.firstOrNull { it.hostId == hostId }
+          } catch (err: CancellationException) {
+            throw err
+          } catch (_: Throwable) {
+            null
+          }
         }
       publishGatewayData(gatewayScope) {
         if (sessionCatalogRefreshSeq.get() == requestSeq) {

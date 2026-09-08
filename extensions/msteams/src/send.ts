@@ -22,7 +22,6 @@ import {
   uploadAndShareSharePoint,
 } from "./graph-upload.js";
 import { extractFilename, extractMessageId } from "./media-helpers.js";
-import { buildMSTeamsMessageActivity } from "./message-activity.js";
 import { buildConversationReference, sendMSTeamsMessages } from "./messenger.js";
 import { setPendingUploadActivityIdFs } from "./pending-uploads-fs.js";
 import { setPendingUploadActivityId } from "./pending-uploads.js";
@@ -323,7 +322,8 @@ export async function sendMessageMSTeams(
 
       const fileCardAttachment = buildTeamsFileInfoCard(driveItem);
       const activity = {
-        ...buildMSTeamsMessageActivity(messageText || undefined),
+        type: "message",
+        text: messageText || undefined,
         attachments: [fileCardAttachment],
       };
       const messageId = await sendProactiveActivityRaw({
@@ -561,13 +561,9 @@ export async function editMessageMSTeams(
   return updateMSTeamsMessageActivity({
     ...params,
     activity: {
-      ...buildMSTeamsMessageActivity(
-        formatMSTeamsMarkdown(
-          params.text,
-          resolveMarkdownTableMode({ cfg: params.cfg, channel: "msteams" }),
-        ),
-      ),
+      type: "message",
       id: params.activityId,
+      text: params.text,
     },
   });
 }

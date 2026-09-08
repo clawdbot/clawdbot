@@ -281,11 +281,6 @@ on:
         required: false
         default: ""
         type: string
-      published_upgrade_survivor_baseline_scope:
-        description: Internal baseline selector provenance from Package Acceptance
-        required: false
-        default: all-scenarios
-        type: string
       published_upgrade_survivor_scenarios:
         description: Optional scenario list for published-upgrade-survivor/update-migration lane expansion
         required: false
@@ -1327,7 +1322,6 @@ jobs:
       OPENCLAW_DOCKER_E2E_PACKAGE_ARTIFACT_NAME: ${{ needs.prepare_docker_e2e_image.outputs.package_artifact_name || 'docker-e2e-package' }}
       OPENCLAW_DOCKER_E2E_REPO_ROOT: ${{ github.workspace }}
       OPENCLAW_DOCKER_E2E_SELECTED_SHA: ${{ needs.validate_selected_ref.outputs.selected_sha }}
-      OPENCLAW_SELECTED_SHA: ${{ needs.validate_selected_ref.outputs.selected_sha }}
       OPENCLAW_DOCKER_ALL_RELEASE_PROFILE: ${{ inputs.release_test_profile }}
       OPENCLAW_CODEX_NPM_PLUGIN_SPEC: ${{ inputs.codex_plugin_spec }}
       OPENCLAW_CURRENT_PACKAGE_TGZ: .artifacts/docker-e2e-package/openclaw-current.tgz
@@ -1338,7 +1332,6 @@ jobs:
       OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS: ${{ inputs.published_upgrade_survivor_scenarios }}
       OPENCLAW_DOCKER_E2E_REQUIRE_LOCAL_IMAGE: ${{ inputs.shared_image_policy == 'no-push-artifact' && '1' || '0' }}
       OPENCLAW_SKIP_DOCKER_BUILD: "1"
-      OPENCLAW_TOOLING_SHA: ${{ needs.validate_selected_ref.outputs.workflow_sha }}
       INCLUDE_OPENWEBUI: ${{ inputs.include_openwebui }}
       DOCKER_E2E_CHUNK: ${{ matrix.chunk_id }}
     steps:
@@ -1641,8 +1634,6 @@ jobs:
         env:
           LANES: ${{ inputs.docker_lanes }}
           GROUP_SIZE: ${{ inputs.targeted_docker_lane_group_size }}
-          OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: ${{ inputs.published_upgrade_survivor_baseline }}
-          OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SCOPE: ${{ inputs.published_upgrade_survivor_baseline_scope || 'all-scenarios' }}
           OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS: ${{ inputs.published_upgrade_survivor_baselines }}
           OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS: ${{ inputs.published_upgrade_survivor_scenarios }}
         run: |
@@ -1717,7 +1708,6 @@ jobs:
       OPENCLAW_DOCKER_E2E_PACKAGE_ARTIFACT_NAME: ${{ needs.prepare_docker_e2e_image.outputs.package_artifact_name || 'docker-e2e-package' }}
       OPENCLAW_DOCKER_E2E_REPO_ROOT: ${{ github.workspace }}
       OPENCLAW_DOCKER_E2E_SELECTED_SHA: ${{ needs.validate_selected_ref.outputs.selected_sha }}
-      OPENCLAW_SELECTED_SHA: ${{ needs.validate_selected_ref.outputs.selected_sha }}
       OPENCLAW_CODEX_NPM_PLUGIN_SPEC: ${{ inputs.codex_plugin_spec }}
       OPENCLAW_CURRENT_PACKAGE_TGZ: .artifacts/docker-e2e-package/openclaw-current.tgz
       OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_CANDIDATE_VERSION: ${{ needs.prepare_docker_e2e_image.outputs.package_version }}
@@ -1727,7 +1717,6 @@ jobs:
       OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS: ${{ matrix.group.published_upgrade_survivor_scenarios || inputs.published_upgrade_survivor_scenarios }}
       OPENCLAW_DOCKER_E2E_REQUIRE_LOCAL_IMAGE: ${{ inputs.shared_image_policy == 'no-push-artifact' && '1' || '0' }}
       OPENCLAW_SKIP_DOCKER_BUILD: "1"
-      OPENCLAW_TOOLING_SHA: ${{ needs.validate_selected_ref.outputs.workflow_sha }}
       INCLUDE_OPENWEBUI: ${{ inputs.include_openwebui }}
       DOCKER_E2E_LANES: ${{ matrix.group.docker_lanes }}
     steps:
@@ -4275,20 +4264,15 @@ jobs:
       OPENCLAW_LIVE_VYDRA_VIDEO: "1"
       OPENCLAW_VITEST_MAX_WORKERS: "2"
     steps:
-      - name: Select native live suite
-        id: selection
-        if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || (inputs.live_suite_filter == 'native-live-src-gateway-profiles-anthropic' && startsWith(matrix.suite_id, 'native-live-src-gateway-profiles-anthropic-')) || (inputs.live_suite_filter == 'native-live-src-gateway-profiles-opencode-go' && startsWith(matrix.suite_id, 'native-live-src-gateway-profiles-opencode-go-')))
-        run: echo "run=true" >> "$GITHUB_OUTPUT"
-
       - name: Checkout selected ref
-        if: steps.selection.outputs.run == 'true'
+        if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || (inputs.live_suite_filter == 'native-live-src-gateway-profiles-anthropic' && startsWith(matrix.suite_id, 'native-live-src-gateway-profiles-anthropic-')) || (inputs.live_suite_filter == 'native-live-src-gateway-profiles-opencode-go' && startsWith(matrix.suite_id, 'native-live-src-gateway-profiles-opencode-go-')))
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
 
       - name: Checkout trusted live shard harness
-        if: steps.selection.outputs.run == 'true'
+        if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || (inputs.live_suite_filter == 'native-live-src-gateway-profiles-anthropic' && startsWith(matrix.suite_id, 'native-live-src-gateway-profiles-anthropic-')) || (inputs.live_suite_filter == 'native-live-src-gateway-profiles-opencode-go' && startsWith(matrix.suite_id, 'native-live-src-gateway-profiles-opencode-go-')))
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -4298,29 +4282,19 @@ jobs:
           path: .release-harness
 
       - name: Setup Node environment
-        if: steps.selection.outputs.run == 'true'
+        if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || (inputs.live_suite_filter == 'native-live-src-gateway-profiles-anthropic' && startsWith(matrix.suite_id, 'native-live-src-gateway-profiles-anthropic-')) || (inputs.live_suite_filter == 'native-live-src-gateway-profiles-opencode-go' && startsWith(matrix.suite_id, 'native-live-src-gateway-profiles-opencode-go-')))
         uses: ./.github/actions/setup-node-env
         with:
           cache-mode: restore
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
 
-      - name: Setup trusted release harness
-        if: steps.selection.outputs.run == 'true'
-        uses: ./.release-harness/.github/actions/setup-release-harness
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-
-      - name: Install Chromium for native live browser tests
-        if: steps.selection.outputs.run == 'true' && matrix.suite_id == 'native-live-test'
-        run: pnpm --dir ui exec playwright install --with-deps chromium
-
       - name: Hydrate live auth/profile inputs
-        if: steps.selection.outputs.run == 'true'
+        if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || (inputs.live_suite_filter == 'native-live-src-gateway-profiles-anthropic' && startsWith(matrix.suite_id, 'native-live-src-gateway-profiles-anthropic-')) || (inputs.live_suite_filter == 'native-live-src-gateway-profiles-opencode-go' && startsWith(matrix.suite_id, 'native-live-src-gateway-profiles-opencode-go-')))
         run: bash scripts/ci-hydrate-live-auth.sh
 
       - name: Configure suite-specific env
-        if: steps.selection.outputs.run == 'true'
+        if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || (inputs.live_suite_filter == 'native-live-src-gateway-profiles-anthropic' && startsWith(matrix.suite_id, 'native-live-src-gateway-profiles-anthropic-')) || (inputs.live_suite_filter == 'native-live-src-gateway-profiles-opencode-go' && startsWith(matrix.suite_id, 'native-live-src-gateway-profiles-opencode-go-')))
         shell: bash
         run: |
           set -euo pipefail
@@ -4370,7 +4344,7 @@ jobs:
           esac
 
       - name: Run ${{ matrix.label }}
-        if: steps.selection.outputs.run == 'true'
+        if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || (inputs.live_suite_filter == 'native-live-src-gateway-profiles-anthropic' && startsWith(matrix.suite_id, 'native-live-src-gateway-profiles-anthropic-')) || (inputs.live_suite_filter == 'native-live-src-gateway-profiles-opencode-go' && startsWith(matrix.suite_id, 'native-live-src-gateway-profiles-opencode-go-')))
         env:
           OPENCLAW_LIVE_COMMAND: ${{ matrix.command }}
           OPENCLAW_LIVE_SUITE_ADVISORY: ${{ matrix.advisory }}

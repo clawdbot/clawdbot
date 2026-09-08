@@ -21,7 +21,6 @@ import { normalizeAgentLabel } from "../lib/agents/display.ts";
 import type { BoardFace } from "../lib/board/settings.ts";
 import { invalidateChatMetadataStore } from "../lib/chat/chat-metadata-store.ts";
 import { createIdleImport } from "../lib/idle-import.ts";
-import { invalidateModelAuthStatusRequests } from "../lib/model-auth-request-state.ts";
 import { invalidateModelCatalogCache } from "../lib/model-catalog-store.ts";
 import { resolveSessionDisplayName } from "../lib/session-display.ts";
 import {
@@ -498,7 +497,6 @@ class OpenClawShell
       const client = this.context?.gateway?.snapshot.client;
       if (client) {
         invalidateModelCatalogCache(client);
-        invalidateModelAuthStatusRequests(client);
         invalidateChatMetadataStore(client);
       }
     }
@@ -687,7 +685,6 @@ class OpenClawShell
       // cannot keep metadata alive across logical Gateway connections.
       if (snapshot.client) {
         invalidateModelCatalogCache(snapshot.client);
-        invalidateModelAuthStatusRequests(snapshot.client);
         invalidateChatMetadataStore(snapshot.client);
       }
     }

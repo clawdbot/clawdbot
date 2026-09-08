@@ -1,9 +1,17 @@
-import { webKitHostWindow } from "./native-webkit-bridge.ts";
+type NativeWindowDragMessage = { type: "window-drag" };
 
-function getNativeWindowDragPoster() {
+type WebKitMessageHandler = {
+  postMessage(message: NativeWindowDragMessage): void;
+};
+
+function getNativeWindowDragPoster(): WebKitMessageHandler["postMessage"] | undefined {
   // Native macOS hosts install this handler before navigation; its absence
   // (plain browsers, other hosts) keeps default mouse behavior.
-  const handler = webKitHostWindow()?.webkit?.messageHandlers?.openclawWindowDrag;
+  const handler = (
+    window as unknown as {
+      webkit?: { messageHandlers?: { openclawWindowDrag?: WebKitMessageHandler } };
+    }
+  ).webkit?.messageHandlers?.openclawWindowDrag;
   return handler?.postMessage.bind(handler);
 }
 

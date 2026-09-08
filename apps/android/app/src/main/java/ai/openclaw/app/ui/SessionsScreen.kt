@@ -2,7 +2,6 @@ package ai.openclaw.app.ui
 
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.chat.ChatSessionEntry
-import ai.openclaw.app.chat.isSessionRunActive
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.ui.design.ClawEmptyState
 import ai.openclaw.app.ui.design.ClawLoadingState
@@ -64,7 +63,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -104,7 +102,7 @@ internal fun SessionsScreen(
   var filter by rememberSaveable { mutableStateOf(SessionFilter.Recent) }
   var compactLayout by rememberSaveable { mutableStateOf(false) }
   var recentFirst by rememberSaveable { mutableStateOf(true) }
-  var sessionStatusNowMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
+  var sessionStatusNowMs by remember { mutableStateOf(System.currentTimeMillis()) }
   var collapsedSessionKeys by
     rememberSaveable(activeGatewayStableId, stateSaver = CollapsedSessionKeysSaver) {
       mutableStateOf<Set<String>>(emptySet())
@@ -1062,7 +1060,6 @@ internal fun sessionListSubtitle(
   session: ChatSessionEntry,
   fallback: String,
   nowMs: Long = System.currentTimeMillis(),
-  activeRunLabel: String? = null,
 ): String {
   val agentStatus =
     session.agentStatus?.takeIf { status ->
@@ -1076,7 +1073,7 @@ internal fun sessionListSubtitle(
       ?.trim()
       ?.takeIf { it.isNotEmpty() && (runStatus == "failed" || runStatus == "timeout") && (session.lastReadAt ?: 0L) < failureAt }
   val digest = session.observerDigest
-  val running = isSessionRunActive(session.hasActiveRun, runStatus)
+  val running = session.hasActiveRun == true || runStatus == "running"
   val digestMatchesActiveRun =
     digest
       ?.runId
@@ -1088,9 +1085,8 @@ internal fun sessionListSubtitle(
       (digest.health == "done" || digest.health == "failed") &&
       (session.lastReadAt ?: 0L) < digest.updatedAt
   val observer = digest?.headline?.takeIf { (running && digestMatchesActiveRun) || (!running && finalDigestUnread) }
-  // Stored queued status can outlive its reservation; this copy describes current waiting.
-  val queued = nativeString("Waiting for a concurrency slot").takeIf { running && runStatus == "queued" }
-  return declaredAttention ?: failedAttention ?: agentStatus?.note ?: queued ?: observer ?: activeRunLabel?.takeIf { running } ?: fallback
+  val queued = nativeString("Waiting for a concurrency slot").takeIf { runStatus == "queued" }
+  return declaredAttention ?: failedAttention ?: agentStatus?.note ?: queued ?: observer ?: fallback
 }
 
 internal data class SessionSection(
@@ -1259,7 +1255,7 @@ internal fun buildSessionTreeSections(
     val attention = session.agentStatus?.let { it.expiresAt > nowMs && it.attention != null } == true
     return SessionDescendantState(
       containsCurrent = session.key == currentSessionKey,
-      hasRunning = isSessionRunActive(session.hasActiveRun, status),
+      hasRunning = session.hasActiveRun == true || status == "running",
       hasUnread = session.unread == true,
       hasFailure = status == "failed" || status == "timeout" || status == "timed_out",
       hasAttention = attention,

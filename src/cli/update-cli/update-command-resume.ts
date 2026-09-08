@@ -15,9 +15,10 @@ import { defaultRuntime } from "../../runtime.js";
 import { VERSION } from "../../version.js";
 import { readPackageVersion, type UpdateCommandOptions } from "./shared.js";
 import {
-  preparePostCorePluginConfig,
+  persistRequestedUpdateChannel,
   persistValidatedDowngradeConfig,
   readPostCorePreUpdateSourceConfig,
+  restoreDroppedPreUpdateChannels,
 } from "./update-command-config.js";
 import { updatePluginsAfterCoreUpdate } from "./update-command-plugins.js";
 import {
@@ -76,7 +77,7 @@ async function resumePostCoreUpdateInternal(params: ResumePostCoreUpdateParams):
   process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION =
     (await readPackageVersion(params.root)) ?? VERSION;
 
-  const configSnapshot = await readConfigFileSnapshot({
+  let configSnapshot = await readConfigFileSnapshot({
     skipPluginValidation: true,
     suppressFutureVersionWarning: true,
   });
@@ -92,11 +93,15 @@ async function resumePostCoreUpdateInternal(params: ResumePostCoreUpdateParams):
   const pluginUpdate = await withPluginLifecycleLease({}, async () => {
     // The core migration owner committed before activation. This fresh process
     // reads that generation and only owns plugin convergence.
-    const preparedConfig = await preparePostCorePluginConfig({
-      requestedChannel,
-      preUpdateConfig: preUpdateSourceConfig,
+    configSnapshot = await readConfigFileSnapshot({
+      skipPluginValidation: true,
       suppressFutureVersionWarning: true,
     });
+    configSnapshot = await persistRequestedUpdateChannel({
+      configSnapshot,
+      requestedChannel,
+    });
+    const restoredConfig = restoreDroppedPreUpdateChannels(configSnapshot, preUpdateSourceConfig);
     // The updated doctor may have repaired or removed plugin installs before this process resumed.
     const currentPluginInstallRecords = await loadInstalledPluginIndexInstallRecords();
     const persistedPluginIndex = await readPersistedInstalledPluginIndex();
@@ -116,7 +121,9 @@ async function resumePostCoreUpdateInternal(params: ResumePostCoreUpdateParams):
     return await updatePluginsAfterCoreUpdate({
       root: params.root,
       channel,
-      ...preparedConfig,
+      configSnapshot: restoredConfig.snapshot,
+      configChanged: restoredConfig.changed,
+      restoredAuthoredChannels: restoredConfig.authoredChannels,
       json: params.opts.json,
       acceptCapabilities: params.opts.acceptCapabilities,
       timeoutMs: params.timeoutMs,

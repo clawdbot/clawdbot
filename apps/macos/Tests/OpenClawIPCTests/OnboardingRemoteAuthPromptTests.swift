@@ -98,11 +98,6 @@ struct OnboardingRemoteAuthPromptTests {
             showAdvancedConnection: false,
             remoteToken: "",
             remoteTokenUnsupported: false,
-            authIssue: .passwordRequired))
-        #expect(OnboardingView.shouldShowRemoteTokenField(
-            showAdvancedConnection: false,
-            remoteToken: "",
-            remoteTokenUnsupported: false,
             authIssue: .gatewayTokenNotConfigured) == false)
         #expect(OnboardingView.shouldShowRemoteTokenField(
             showAdvancedConnection: false,

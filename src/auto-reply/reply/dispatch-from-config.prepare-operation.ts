@@ -189,7 +189,7 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
       result: attachSourceReplyDeliveryMode({
         queuedFinal: false,
         counts: dispatcher.getQueuedCounts(),
-        ...(turnLedger.hasObservedDelivery() ? { observedReplyDelivery: true } : {}),
+        ...(turnLedger.hasVisibleDelivery() ? { observedReplyDelivery: true } : {}),
       }),
     };
   };

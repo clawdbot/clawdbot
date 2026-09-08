@@ -2,7 +2,6 @@
 import path from "node:path";
 import { chromium, type Browser, type BrowserContext } from "playwright";
 import { beforeEach, afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import type { NativeBrowserMessage, NativeBrowserReply } from "../app/native-browser-bridge.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   canRunPlaywrightChromium,
@@ -64,7 +63,7 @@ describeControlUiE2e("native link routing", () => {
 
   afterEach(closeContexts);
 
-  it("opens native Browser panel tabs and keeps external link actions", async () => {
+  it("shows native actions and posts inline or external targets", async () => {
     const context = await newBrowserContext();
     await context.grantPermissions(["clipboard-read", "clipboard-write"], {
       origin: new URL(server.baseUrl).origin,
@@ -74,30 +73,18 @@ describeControlUiE2e("native link routing", () => {
     );
     await context.addInitScript(() => {
       const messages: unknown[] = [];
-      const browserMessages: NativeBrowserMessage[] = [];
       const host = window as Window & {
         openclawNativeLinkMessages?: unknown[];
-        openclawNativeBrowserMessages?: NativeBrowserMessage[];
         webkit?: {
           messageHandlers?: {
             openclawLink?: { postMessage: (message: unknown) => void };
-            openclawBrowser?: {
-              postMessage: (message: NativeBrowserMessage) => Promise<NativeBrowserReply>;
-            };
           };
         };
       };
       host.openclawNativeLinkMessages = messages;
-      host.openclawNativeBrowserMessages = browserMessages;
       host.webkit = {
         messageHandlers: {
           openclawLink: { postMessage: (message: unknown) => messages.push(message) },
-          openclawBrowser: {
-            postMessage: async (message) => {
-              browserMessages.push(message);
-              return message.type === "open" ? { ok: true, tabId: message.tabId } : { ok: true };
-            },
-          },
         },
       };
     });
@@ -127,26 +114,11 @@ describeControlUiE2e("native link routing", () => {
       .poll(() =>
         page.evaluate(
           () =>
-            (window as Window & { openclawNativeBrowserMessages?: NativeBrowserMessage[] })
-              .openclawNativeBrowserMessages,
-        ),
-      )
-      .toContainEqual(
-        expect.objectContaining({
-          type: "open",
-          url: "https://example.com/report",
-          tabId: expect.stringMatching(/^mac-/),
-        }),
-      );
-    await expect
-      .poll(() =>
-        page.evaluate(
-          () =>
             (window as Window & { openclawNativeLinkMessages?: unknown[] })
               .openclawNativeLinkMessages,
         ),
       )
-      .toEqual([]);
+      .toEqual([{ type: "open-link", url: "https://example.com/report", target: "inline" }]);
 
     await page.evaluate(() => {
       const anchor = document.createElement("a");
@@ -209,7 +181,7 @@ describeControlUiE2e("native link routing", () => {
     await expect.poll(() => replyMenu.count()).toBe(0);
     await expect
       .poll(() => page.locator("openclaw-native-link-menu .session-menu__text").allTextContents())
-      .toEqual(["Open in Browser Panel", "Open in Default Browser", "Copy Link"]);
+      .toEqual(["Open in Sidebar", "Open in Default Browser", "Copy Link"]);
     await page.screenshot({
       path: path.join(artifactDir, "01-native-link-menu-page.jpg"),
       type: "jpeg",
@@ -225,6 +197,7 @@ describeControlUiE2e("native link routing", () => {
         ),
       )
       .toEqual([
+        { type: "open-link", url: "https://example.com/report", target: "inline" },
         { type: "open-link", url: "mailto:hello@example.com", target: "external" },
         { type: "open-link", url: "https://example.com/report", target: "external" },
       ]);
@@ -267,7 +240,7 @@ describeControlUiE2e("native link routing", () => {
           (window as Window & { openclawNativeLinkMessages?: unknown[] })
             .openclawNativeLinkMessages,
       ),
-    ).toHaveLength(2);
+    ).toHaveLength(3);
 
     await page.evaluate(async () => {
       await customElements.whenDefined("openclaw-modal-dialog");
@@ -296,31 +269,22 @@ describeControlUiE2e("native link routing", () => {
       )
       .toBe(true);
     await modalLink.click({ button: "right" });
-    const modalBrowserItem = menuHost.getByRole("menuitem", { name: "Open in Browser Panel" });
-    await expect.poll(() => modalBrowserItem.isVisible()).toBe(true);
-    await modalBrowserItem.click();
+    const modalSidebarItem = menuHost.getByRole("menuitem", { name: "Open in Sidebar" });
+    await expect.poll(() => modalSidebarItem.isVisible()).toBe(true);
+    await modalSidebarItem.click();
     await expect
       .poll(() =>
         page.evaluate(
           () =>
-            (window as Window & { openclawNativeBrowserMessages?: NativeBrowserMessage[] })
-              .openclawNativeBrowserMessages,
+            (window as Window & { openclawNativeLinkMessages?: unknown[] })
+              .openclawNativeLinkMessages,
         ),
       )
-      .toContainEqual(
-        expect.objectContaining({
-          type: "open",
-          url: "https://example.com/modal-report",
-          tabId: expect.stringMatching(/^mac-/),
-        }),
-      );
-    expect(
-      await page.evaluate(
-        () =>
-          (window as Window & { openclawNativeLinkMessages?: unknown[] })
-            .openclawNativeLinkMessages,
-      ),
-    ).toHaveLength(2);
+      .toContainEqual({
+        type: "open-link",
+        url: "https://example.com/modal-report",
+        target: "inline",
+      });
     await page.evaluate(() => {
       document.querySelector("#native-link-routing-modal")?.remove();
     });

@@ -22,7 +22,6 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { runInNewContext } from "node:vm";
 import { expectDefined } from "@openclaw/normalization-core";
-import { minimatch } from "minimatch";
 import ts from "typescript";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
@@ -3890,68 +3889,10 @@ NODE
         OPENCLAW_DOCKER_ALL_LANES: "${{ needs.preflight.outputs.docker_seed_lanes }}",
         OPENCLAW_DOCKER_ALL_LIVE_MODE: "skip",
         OPENCLAW_DOCKER_E2E_ALLOW_UNRELEASED_CHANGELOG: "1",
-        OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: "openclaw@latest",
-        OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS: "legacy-operator-state",
-        OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE: "auto-auth",
         OPENCLAW_DOCKER_ALL_TAIL_PARALLELISM: parallelism,
       },
     });
     expect(parallelism).toContain("&& 3 || 1");
-  });
-
-  it.each([
-    { repository: "openclaw/openclaw", ref: "refs/heads/main", expected: true },
-    { repository: "openclaw/openclaw", ref: "refs/heads/feature", expected: false },
-    { repository: "fork/openclaw", ref: "refs/heads/main", expected: false },
-  ])(
-    "gates only canonical main pushes admitted by CI ($repository $ref)",
-    ({ repository, ref, expected }) => {
-      const push = readCiWorkflow().on.push;
-      expect(push.branches).toEqual(["main"]);
-      expect(push).not.toHaveProperty("paths");
-      expect(push["paths-ignore"]).toEqual(["**/*.md", "docs/**"]);
-      const result = runCiManifestFixture({
-        bundledPlanner: true,
-        eventName: "push",
-        repository,
-        changedPaths: ["assets/logo.svg"],
-        scopeEnv: { GITHUB_REF: ref },
-      });
-      expect(result.status, result.output).toBe(0);
-      expect(result.outputs.run_docker_seed_e2e).toBe(String(expected));
-      expect(result.outputs.docker_seed_lanes).toBe(expected ? "published-upgrade-survivor" : "");
-    },
-  );
-
-  it.each([
-    { paths: ["README.md"], admitted: false },
-    { paths: [".agents/skills/example/SKILL.md"], admitted: false },
-    { paths: ["docs/ci.md", "docs/images/diagram.svg"], admitted: false },
-    { paths: ["docs/reference/schema.json"], admitted: false },
-    { paths: ["src/ordinary.ts"], admitted: true },
-    { paths: ["assets/logo.svg"], admitted: true },
-    { paths: ["README.md", "src/ordinary.ts"], admitted: true },
-    { paths: ["docs/ci.md", "assets/logo.svg"], admitted: true },
-  ])("admits main push paths $paths to CI: $admitted", ({ paths, admitted }) => {
-    const ignored: string[] = readCiWorkflow().on.push["paths-ignore"] ?? [];
-    // GitHub skips paths-ignore only when every changed path matches a pattern.
-    const runsCi = paths.some(
-      (changedPath) => !ignored.some((pattern) => minimatch(changedPath, pattern, { dot: true })),
-    );
-    expect(runsCi).toBe(admitted);
-    if (!runsCi) {
-      return;
-    }
-    const result = runCiManifestFixture({
-      bundledPlanner: true,
-      eventName: "push",
-      repository: "openclaw/openclaw",
-      changedPaths: paths,
-      scopeEnv: { GITHUB_REF: "refs/heads/main" },
-    });
-    expect(result.status, result.output).toBe(0);
-    expect(result.outputs.run_docker_seed_e2e).toBe("true");
-    expect(result.outputs.docker_seed_lanes).toBe("published-upgrade-survivor");
   });
 
   it("splits Windows tests two ways on every runner backend", () => {
@@ -4385,7 +4326,7 @@ NODE
       "CodeQL macOS Xcode selection",
     );
 
-    expect(codeqlJob["runs-on"]).toBe("macos-26");
+    expect(codeqlJob["runs-on"]).toBe("blacksmith-12vcpu-macos-26");
     expect(codeqlSelect.run).toContain("/Applications/Xcode_26.6.app/Contents/Developer");
     expect(codeqlSelect.run).toContain('if [[ "$xcode_version" != 26.6* ]]; then');
 
@@ -5136,7 +5077,6 @@ setImmediate(() => {
   fs.appendFileSync(process.env.CONTRACT_COMMAND_LOG, JSON.stringify({ ...record, phase: "end" }) + "\n");
   process.exitCode = files[0] === "first.test.ts" ? Number(process.env.CONTRACT_FIRST_EXIT) : 0;
 });
-
 `,
       );
       chmodSync(pnpm, 0o755);
@@ -7075,8 +7015,8 @@ server.listen(0, "127.0.0.1", () => {
     );
   });
 
-  it("persists Node 26 minimum declarations through trusted bounded artifacts", () => {
-    const workflow = parse(readFileSync(".github/workflows/node-runtime-compat.yml", "utf8"));
+  it("persists Node 22 declarations through trusted bounded artifacts", () => {
+    const workflow = parse(readFileSync(".github/workflows/node22-compat.yml", "utf8"));
     const steps = workflow.jobs.compat.steps as WorkflowStep[];
     const setupStep = steps.find((step) => step.name === "Setup Node environment");
     const resolveStep = steps.find(
@@ -7137,7 +7077,6 @@ server.listen(0, "127.0.0.1", () => {
         name: "fixture",
         openclaw: { schemaVersions: { agent: 17, state: 6 } },
         scripts: {
-          "pnpm:devPreinstall": "node scripts/check-install-dependency-ownership.mjs",
           postinstall: "node scripts/postinstall-bundled-plugins.mjs",
           preinstall: "node scripts/preinstall-package-manager-warning.mjs",
           prepare: "node scripts/prepare-git-hooks.mjs",
@@ -7172,7 +7111,6 @@ server.listen(0, "127.0.0.1", () => {
       for (const relativePath of [
         "node-version.mjs",
         ".github/actions/setup-node-env/install-dependencies.sh",
-        "scripts/check-install-dependency-ownership.mjs",
         "scripts/prepare-git-hooks.mjs",
         "scripts/lib/package-lifecycle-marker.mjs",
       ]) {
@@ -7191,7 +7129,6 @@ server.listen(0, "127.0.0.1", () => {
         scripts: {
           test: "vitest run --reporter=dot",
           prepare: "node scripts/prepare-git-hooks.mjs",
-          "pnpm:devPreinstall": "node scripts/check-install-dependency-ownership.mjs",
           postinstall: "node scripts/postinstall-bundled-plugins.mjs",
           preinstall: "node scripts/preinstall-package-manager-warning.mjs",
         },
@@ -7205,7 +7142,6 @@ server.listen(0, "127.0.0.1", () => {
         name: "fixture",
         openclaw: { schemaVersions: { agent: 17, state: 7 } },
         scripts: {
-          "pnpm:devPreinstall": "node scripts/check-install-dependency-ownership.mjs",
           postinstall: "node scripts/postinstall-bundled-plugins.mjs",
           preinstall: "node scripts/preinstall-package-manager-warning.mjs",
           prepare: "node scripts/prepare-git-hooks.mjs",
@@ -7218,7 +7154,6 @@ server.listen(0, "127.0.0.1", () => {
       writeManifest({
         name: "fixture",
         scripts: {
-          "pnpm:devPreinstall": "node scripts/check-install-dependency-ownership.mjs",
           postinstall: "node scripts/postinstall-bundled-plugins.mjs",
           preinstall: "node scripts/preinstall-package-manager-warning.mjs",
           prepare: "node scripts/prepare-git-hooks.mjs",
@@ -7239,7 +7174,6 @@ server.listen(0, "127.0.0.1", () => {
       writeManifest({
         name: "fixture",
         scripts: {
-          "pnpm:devPreinstall": "node scripts/check-install-dependency-ownership.mjs",
           postinstall: "node scripts/postinstall-bundled-plugins.mjs",
           preinstall: "node scripts/preinstall-package-manager-warning.mjs",
           prepare: "node scripts/prepare-git-hooks.mjs",
@@ -7263,7 +7197,6 @@ server.listen(0, "127.0.0.1", () => {
       writeManifest({
         name: "fixture",
         scripts: {
-          "pnpm:devPreinstall": "node scripts/check-install-dependency-ownership.mjs",
           postinstall: "node scripts/postinstall-bundled-plugins.mjs",
           preinstall: "node scripts/preinstall-package-manager-warning.mjs",
           prepare: "node scripts/prepare-git-hooks.mjs",
@@ -10560,11 +10493,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
   );
 
   it("runs temp path guardrails in the hosted guard shard", () => {
-    const requiredScripts = [
-      "check:doctor-deprecation-registry",
-      "check:browser-inspect-script:swift",
-      "check:coercion-helpers",
-    ];
+    const requiredScripts = ["check:doctor-deprecation-registry", "check:coercion-helpers"];
     const current = runCheckShardFixture({
       frozenTarget: false,
       scripts: [...requiredScripts, "check:temp-path-guardrails"],
@@ -14685,59 +14614,6 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     ).toEqual(row.groups);
   });
 
-  it("provisions ripgrep for real filesystem contract selections", () => {
-    const contract = "src/agents/filesystem-tools-output-contract.test.ts";
-    const nativeTools = "src/agents/sessions/tools/index.test.ts";
-    const unrelated = "src/agents/run-wait.test.ts";
-    const selections = [
-      { targets: [contract] },
-      { includePatterns: [contract] },
-      { includePatterns: ["src/agents/filesystem-*.test.ts"] },
-      { targets: [nativeTools] },
-      { includePatterns: [unrelated] },
-      { shardName: "agentic-agents-core-runtime" },
-      { shardName: "agentic-agents-support" },
-      { shardName: "agentic-agents-core-runtime", includePatterns: [unrelated] },
-      { groups: [{ shard_name: "agentic-agents-core-runtime", includePatterns: [contract] }] },
-      { groups: [{ shard_name: "agentic-agents-support", includePatterns: [nativeTools] }] },
-      { groups: [{ shard_name: "agentic-agents-core-runtime", includePatterns: [unrelated] }] },
-      { groups: [{ shard_name: "agentic-agents-core-runtime" }] },
-    ];
-    const result = runCiManifestFixture({
-      bundledPlanner: true,
-      nodeTestShards: selections.map((selection, index) =>
-        Object.assign(
-          {
-            checkName: `grep-${index}`,
-            configs: ["test/vitest/vitest.agents-core.config.ts"],
-            requiresDist: false,
-            runner: "ubuntu-24.04",
-            shardName: "compact-small-1",
-          },
-          selection,
-        ),
-      ),
-    });
-    expect(result.status, result.output).toBe(0);
-    const matrix = JSON.parse(
-      expectDefined(result.outputs.checks_node_core_nondist_matrix, "non-dist Node matrix"),
-    ) as { include: { requires_ripgrep?: boolean }[] };
-    expect(matrix.include.map((row) => Boolean(row.requires_ripgrep))).toEqual([
-      true,
-      true,
-      true,
-      true,
-      false,
-      true,
-      true,
-      false,
-      true,
-      true,
-      false,
-      true,
-    ]);
-  });
-
   it("fails and retries quiet Node test shard stalls quickly", () => {
     const workflow = readCiWorkflow();
     const preflightJob = workflow.jobs.preflight;
@@ -15269,7 +15145,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     }
   });
 
-  it("runs Node 24 minimum compatibility only from manual CI dispatches", () => {
+  it("runs Node 22 compatibility only from manual CI dispatches", () => {
     const workflow = readCiWorkflow();
     const compatibilityJob = workflow.jobs["checks-node-compat"];
     const fullReleaseWorkflow = readWorkflow(".github/workflows/full-release-validation.yml");
@@ -15277,20 +15153,13 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       (step: WorkflowStep) => step.name === "Dispatch CI",
     );
 
-    expect(compatibilityJob.name).toBe("checks-node-compat-node24");
+    expect(compatibilityJob.name).toBe("checks-node-compat-node22");
     expect(compatibilityJob.if).toBe(
       "needs.preflight.outputs.run_build_artifacts == 'true' && github.event_name == 'workflow_dispatch'",
     );
     expect(fullReleaseDispatch.env.CHILD_WORKFLOW_KIND).toBe("ci");
     expect(fullReleaseDispatch.run).toContain('dispatch_child ci.yml "$dispatch_run_name"');
     expect(fullReleaseDispatch.run).toContain('-f target_ref="$TARGET_SHA"');
-    expect(compatibilityJob.steps.at(-1)?.run).toContain(
-      "src/config/sessions/session-accessor.test.ts",
-    );
-    expect(compatibilityJob.steps.at(-1)?.run).toContain(
-      "src/config/sessions/store-writer.test.ts",
-    );
-    expect(compatibilityJob.steps.at(-1)?.run).toContain("src/config/sessions/sessions.test.ts");
   });
 
   it.skipIf(process.platform === "win32")("ci-gate rejects an unexpected selected skip", () => {
@@ -15483,8 +15352,6 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       );
       const protocolOutput = "${{ needs.validate_selected_ref.outputs.protocol_base_revision }}";
       const trustedInput = "${{ inputs.trusted_ref || inputs.ref }}";
-
-      expect(qaWorkflow.env.OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB).toBe("8192");
 
       expect(qaWorkflow.on.workflow_call.inputs.trusted_ref).toEqual({
         description: "Optional trusted branch, tag, or SHA identity for an immutable ref",
@@ -17057,9 +16924,9 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     const compatibilityScenarioBlock = smokeRunStep.run.match(
       /const compatibilityScenarioIds = new Set\(\[([\s\S]*?)\]\);/u,
     )?.[1];
-    expect(compatibilityScenarioBlock?.match(/^\s+"[^"]+",$/gmu)).toHaveLength(10);
+    expect(compatibilityScenarioBlock?.match(/^\s+"[^"]+",$/gmu)).toHaveLength(11);
     expect(compatibilityScenarioBlock).not.toContain('"dreaming-shadow-trial-report"');
-    expect(compatibilityScenarioBlock).not.toContain('"control-ui-chat-flow-playwright"');
+    expect(compatibilityScenarioBlock).toContain('"control-ui-chat-flow-playwright"');
     expect(compatibilityScenarioBlock).toContain('"gateway-smoke"');
     expect(compatibilityScenarioBlock).toContain('"matrix-restart-resume"');
     expect(smokeRunStep.run).toContain(
@@ -18970,19 +18837,5 @@ it("pins every Performance Git owner before checkout and preserves Git deadlines
     group:
       "${{ github.event_name == 'workflow_dispatch' && format('{0}-{1}', github.workflow, github.run_id) || format('{0}-{1}', github.workflow, github.ref) }}",
     "cancel-in-progress": false,
-  });
-});
-
-describe("frozen CI compatibility contracts", () => {
-  it("skips current-only launcher and QA contracts for frozen targets", () => {
-    const source = readFileSync(".github/workflows/ci.yml", "utf8");
-    expect(source).toContain(
-      `if: \${{ needs.preflight.outputs.frozen_target != 'true' }}\n        run: |\n          bun openclaw.mjs --help`,
-    );
-    expect(source).toContain(
-      "[skip] ${partId} is not declared by this checkout's legacy smoke plan",
-    );
-    expect(source).not.toContain('"control-ui-chat-flow-playwright",');
-    expect(source).toContain("if (!source.includes(marker)) process.exit(0);");
   });
 });

@@ -1,12 +1,9 @@
-import { performance } from "node:perf_hooks";
 import type { DatabaseSync } from "node:sqlite";
 import {
   assertSqliteIntegrity,
   assertSqliteTableIntegrity,
   isTerminalSqliteIntegrityError,
   runSqliteIntegrityOperationSync,
-  sqliteIntegrityCheckSteps,
-  type SqliteIntegrityDiagnostics,
   type SqliteIntegrityOperation,
 } from "./sqlite-integrity.js";
 import {
@@ -54,14 +51,11 @@ export function* verifyAndRepairCanonicalSqliteIndexSteps(
   db: DatabaseSync,
   databaseLabel: string,
   schemaSql: string,
-  options: Omit<RepairCanonicalSqliteIndexesOptions, "verifyPhysicalIntegrity"> & {
-    diagnostics?: SqliteIntegrityDiagnostics;
-  } = {},
+  options: Omit<RepairCanonicalSqliteIndexesOptions, "verifyPhysicalIntegrity"> = {},
 ): SqliteIntegrityOperation<string[]> {
-  const { diagnostics, ...repairOptions } = options;
   let integrityFailure: Error | undefined;
   try {
-    yield* sqliteIntegrityCheckSteps(db, databaseLabel, diagnostics);
+    yield { database: db, databaseLabel };
   } catch (error) {
     if (!(error instanceof Error) || !isTerminalSqliteIntegrityError(error)) {
       throw error;
@@ -69,19 +63,14 @@ export function* verifyAndRepairCanonicalSqliteIndexSteps(
     integrityFailure = error;
   }
 
-  const indexesStartedAt = performance.now();
   const repairedIndexes = repairCanonicalSqliteIndexes(db, databaseLabel, schemaSql, {
-    ...repairOptions,
+    ...options,
     verifyPhysicalIntegrity: integrityFailure !== undefined,
   });
   // A non-empty repair result already passed table and whole-file integrity
   // checks inside the repair savepoint, so it supersedes the initial failure.
   if (integrityFailure && repairedIndexes.length === 0) {
     throw integrityFailure;
-  }
-  if (diagnostics) {
-    diagnostics.canonicalIndexMs = Math.floor(performance.now() - indexesStartedAt);
-    diagnostics.repairedIndexCount = repairedIndexes.length;
   }
   return repairedIndexes;
 }

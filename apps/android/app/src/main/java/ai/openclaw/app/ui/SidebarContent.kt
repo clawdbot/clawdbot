@@ -1331,20 +1331,10 @@ private fun SidebarCatalogSessionRow(
   val draggableSession = liveSession?.takeIf { canMutateSessions }
   val activity =
     sidebarSessionActivity(
-      // Adopted rows use Gateway state; unadopted catalogs also call their running state "active".
-      status =
-        if (liveSession != null) {
-          liveSession.status
-        } else {
-          session.status
-            .trim()
-            .lowercase()
-            .let { if (it == "active") "running" else it }
-        },
+      status = liveSession?.status ?: session.status,
       lastRunError = liveSession?.lastRunError,
-      hasActiveRun = liveSession?.hasActiveRun,
+      hasActiveRun = continuing || liveSession?.hasActiveRun == true,
       unread = liveSession?.unread == true,
-      continuing = continuing,
     )
   SidebarRowSurface(
     selected = selected,

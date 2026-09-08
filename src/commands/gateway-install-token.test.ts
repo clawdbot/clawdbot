@@ -190,7 +190,7 @@ describe("resolveGatewayInstallToken", () => {
     expect(result.warnings.join("\n")).toContain("saving to config");
     expect(replaceConfigFileMock).toHaveBeenCalledOnce();
     expect(firstReplaceConfigRequest()).toStrictEqual({
-      sourceConfig: {
+      nextConfig: {
         gateway: {
           auth: {
             mode: "token",

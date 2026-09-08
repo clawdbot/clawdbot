@@ -168,8 +168,6 @@ export type CliBackendToolAvailability = {
 
 /** Native action a plugin-owned runtime asks the admitted host run to authorize. */
 export type CliBackendToolPermissionRequest = {
-  /** Actual working directory reported by the native permission hook. */
-  cwd?: string;
   toolName: string;
   toolInput: Record<string, unknown>;
   toolCallId?: string;

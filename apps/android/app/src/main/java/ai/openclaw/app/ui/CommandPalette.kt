@@ -74,6 +74,7 @@ internal fun CommandPalette(
   val sessions by viewModel.chatSessions.collectAsState()
   val models by viewModel.providerModelCatalog.collectAsState()
   val providers by viewModel.modelAuthProviders.collectAsState()
+  val pendingRunCount by viewModel.pendingRunCount.collectAsState()
   val desktopObserveAvailable by viewModel.desktopObserveAvailable.collectAsState()
   var query by rememberSaveable { mutableStateOf("") }
   val searchFocusRequester = remember { FocusRequester() }
@@ -166,7 +167,7 @@ internal fun CommandPalette(
                     key = session.key,
                     ownerAgentId = session.ownerAgentId,
                     title = sessionPresentationTitle(session) { nativeString("Main thread") },
-                    subtitle = sessionListSubtitle(session, fallback = nativeString("OpenClaw thread"), activeRunLabel = nativeString("Assistant working")),
+                    subtitle = if (pendingRunCount > 0) nativeString("Assistant working") else nativeString("OpenClaw thread"),
                     metadata = session.updatedAtMs?.let(::relativeSessionTime) ?: nativeString("now"),
                   )
                 },

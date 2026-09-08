@@ -3,16 +3,14 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   applyLocalOxlintPolicy,
   applyLocalTsgoPolicy,
-  ensureRepoNodeModulesLink,
+  ensureRepoToolNodeModulesLink,
   resolveLocalCheckEnv,
   resolveRepoToolBinPath,
 } from "../../scripts/lib/local-check-runtime.mts";
-import { resolveTsxImport } from "../../scripts/lib/tsx-cli-shim.mjs";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
@@ -69,10 +67,11 @@ describe("local-check-runtime", () => {
     { platform: "linux" as const, linkType: "dir" },
     { platform: "win32" as const, linkType: "junction" },
   ])(
-    "links relocated $platform declaration output to its explicit package dependencies",
+    "links dependency-less $platform worktrees to the selected checkout's modules",
     ({ platform, linkType }) => {
       const primaryRoot = createTempDir("openclaw-primary-toolchain-");
-      const cwd = path.join(primaryRoot, ".artifacts", "declarations");
+      const cwd = path.join(primaryRoot, ".codex", "worktrees", "task", "openclaw");
+      const commonDir = path.join(primaryRoot, ".git");
       const primaryTsgo = path.join(primaryRoot, "node_modules", ".bin", "tsgo");
       const primaryNodeModules = path.join(primaryRoot, "node_modules");
       const localNodeModules = path.join(cwd, "node_modules");
@@ -81,6 +80,7 @@ describe("local-check-runtime", () => {
       const linkTypes: Array<Parameters<typeof fs.symlinkSync>[2]> = [];
       const linkOptions = {
         cwd,
+        resolveCommonDir: () => commonDir,
         platform,
         symlink: (...args: Parameters<typeof fs.symlinkSync>) => {
           linkTypes.push(args[2]);
@@ -88,24 +88,28 @@ describe("local-check-runtime", () => {
         },
       };
 
-      expect(ensureRepoNodeModulesLink(primaryNodeModules, linkOptions)).toBe(localNodeModules);
+      expect(ensureRepoToolNodeModulesLink(primaryTsgo, linkOptions)).toBe(localNodeModules);
       expect(fs.realpathSync(localNodeModules)).toBe(fs.realpathSync(primaryNodeModules));
 
       // The stable link is idempotent for concurrent and later local runners.
-      expect(ensureRepoNodeModulesLink(primaryNodeModules, linkOptions)).toBe(localNodeModules);
+      expect(ensureRepoToolNodeModulesLink(primaryTsgo, linkOptions)).toBe(localNodeModules);
       expect(linkTypes).toEqual([linkType]);
     },
   );
 
   it("leaves existing worktree node_modules directories locally owned", () => {
     const primaryRoot = createTempDir("openclaw-primary-toolchain-");
+    const commonDir = path.join(primaryRoot, ".git");
     const primaryTsgo = path.join(primaryRoot, "node_modules", ".bin", "tsgo");
     const cwd = path.join(primaryRoot, "worktree");
     const localNodeModules = path.join(cwd, "node_modules");
     fs.mkdirSync(path.dirname(primaryTsgo), { recursive: true });
     fs.mkdirSync(localNodeModules, { recursive: true });
 
-    ensureRepoNodeModulesLink(path.join(primaryRoot, "node_modules"), { cwd });
+    ensureRepoToolNodeModulesLink(primaryTsgo, {
+      cwd,
+      resolveCommonDir: () => commonDir,
+    });
 
     expect(fs.lstatSync(localNodeModules).isDirectory()).toBe(true);
     expect(fs.lstatSync(localNodeModules).isSymbolicLink()).toBe(false);
@@ -519,99 +523,4 @@ fs.appendFileSync(process.env.CAPTURE_PATH, JSON.stringify({ step, goEnv, args: 
       expect(args).not.toContain("stylish");
     },
   );
-});
-
-describe("TypeScript bootstrap dependency ownership", () => {
-  afterEach(() => vi.unstubAllEnvs());
-
-  function fixture() {
-    vi.stubEnv("PNPM_CONFIG_MODULES_DIR", undefined);
-    vi.stubEnv("pnpm_config_modules_dir", undefined);
-    vi.stubEnv("npm_config_modules_dir", undefined);
-    const root = fs.realpathSync(createTempDir("openclaw-toolchain-ownership-"));
-    const primary = path.join(root, "primary");
-    const checkout = path.join(root, "checkout");
-    fs.mkdirSync(checkout);
-    expect(spawnSync("git", ["init", "--quiet", primary]).status).toBe(0);
-    const gitdir = path.join(primary, ".git", "worktrees", "task");
-    fs.mkdirSync(gitdir, { recursive: true });
-    fs.writeFileSync(path.join(gitdir, "commondir"), "../..\n");
-    fs.writeFileSync(path.join(gitdir, "HEAD"), "ref: refs/heads/main\n");
-    fs.writeFileSync(path.join(gitdir, "gitdir"), `${checkout}/.git\n`);
-    fs.writeFileSync(path.join(checkout, ".git"), `gitdir: ${gitdir}\n`);
-    const modules = path.join(primary, "node_modules");
-    const tsx = path.join(modules, "tsx");
-    fs.mkdirSync(tsx, { recursive: true });
-    fs.writeFileSync(
-      path.join(tsx, "package.json"),
-      JSON.stringify({ name: "tsx", type: "module", exports: { "./esm": "./esm.mjs" } }),
-    );
-    fs.writeFileSync(path.join(tsx, "esm.mjs"), "export {};\n");
-    return { checkout, modules, entry: pathToFileURL(path.join(tsx, "esm.mjs")).href };
-  }
-
-  it.each([false, true])(
-    "refuses a missing worktree install with an empty override=%s",
-    (emptyOverride) => {
-      const { checkout, modules } = fixture();
-      if (emptyOverride) {
-        vi.stubEnv("PNPM_CONFIG_MODULES_DIR", "");
-        vi.stubEnv("pnpm_config_modules_dir", modules);
-      }
-      const before = fs.statSync(modules);
-      expect(() => resolveTsxImport(checkout)).toThrow("pnpm install --frozen-lockfile");
-      expect(fs.existsSync(path.join(checkout, "node_modules"))).toBe(false);
-      expect(fs.statSync(modules).ino).toBe(before.ino);
-      expect(fs.statSync(modules).mtimeMs).toBe(before.mtimeMs);
-    },
-  );
-
-  it("keeps an existing explicit borrow readable without replacing its link", () => {
-    const { checkout, modules, entry } = fixture();
-    const link = path.join(checkout, "node_modules");
-    fs.symlinkSync(modules, link, process.platform === "win32" ? "junction" : "dir");
-    const before = fs.lstatSync(link);
-    const target = fs.readlinkSync(link);
-    expect(resolveTsxImport(checkout)).toBe(entry);
-    expect(fs.lstatSync(link).ino).toBe(before.ino);
-    expect(fs.readlinkSync(link)).toBe(target);
-  });
-
-  it("uses owned checkout dependencies when the configured directory contains only metadata", () => {
-    const { checkout, modules } = fixture();
-    const localModules = path.join(checkout, "node_modules");
-    fs.cpSync(modules, localModules, { recursive: true });
-    const metadata = path.join(path.dirname(checkout), "metadata");
-    fs.mkdirSync(metadata);
-    fs.writeFileSync(path.join(metadata, ".modules.yaml"), "virtualStoreDir: .pnpm\n");
-    vi.stubEnv("PNPM_CONFIG_MODULES_DIR", metadata);
-    const before = fs.lstatSync(localModules);
-    expect(resolveTsxImport(checkout)).toBe(
-      pathToFileURL(path.join(localModules, "tsx", "esm.mjs")).href,
-    );
-    expect(fs.lstatSync(localModules).ino).toBe(before.ino);
-    expect(fs.lstatSync(localModules).isSymbolicLink()).toBe(false);
-  });
-
-  it.each(["PNPM_CONFIG_MODULES_DIR", "pnpm_config_modules_dir", "npm_config_modules_dir"])(
-    "preserves the explicitly configured hydrated toolchain through %s",
-    (key) => {
-      const { checkout, modules, entry } = fixture();
-      vi.stubEnv(key, modules);
-      expect(resolveTsxImport(checkout)).toBe(entry);
-      expect(fs.realpathSync(path.join(checkout, "node_modules"))).toBe(modules);
-    },
-  );
-
-  it("preserves leading whitespace in an explicitly configured module directory", () => {
-    const { checkout, modules } = fixture();
-    const configured = " modules";
-    const target = path.join(checkout, configured);
-    fs.renameSync(modules, target);
-    vi.stubEnv("PNPM_CONFIG_MODULES_DIR", configured);
-    expect(resolveTsxImport(checkout)).toBe(
-      pathToFileURL(path.join(target, "tsx", "esm.mjs")).href,
-    );
-    expect(fs.realpathSync(path.join(checkout, "node_modules"))).toBe(target);
-  });
 });

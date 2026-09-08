@@ -18,7 +18,7 @@ import {
   readSessionIdentitySnapshot,
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
-import { prepareSessionIdentityPublication } from "./session-accessor.sqlite-identity.js";
+import { emitCommittedSessionIdentityDiff } from "./session-accessor.sqlite-identity.js";
 import { loadTranscriptEventsFromDatabase } from "./session-accessor.sqlite-read.js";
 import {
   getSessionKysely,
@@ -242,8 +242,11 @@ async function mutateSqliteSessionAtMessage(
       : undefined);
   return await runExclusiveSqliteSessionWrite(resolved, async () => {
     let previousIdentity = new Map<string, SessionEntry>();
-    const { databasePath, result, publish } = runOpenClawAgentWriteTransaction((database) => {
+    let currentIdentity = new Map<string, SessionEntry>();
+    let databasePath: string | undefined;
+    const result = runOpenClawAgentWriteTransaction((database) => {
       params.commitGuard?.();
+      databasePath = database.path;
       const identityKeys = uniqueStrings([
         ...collectSessionEntryLookupKeys(database, sourceKey),
         ...collectSessionEntryLookupKeys(database, targetKey),
@@ -259,19 +262,10 @@ async function mutateSqliteSessionAtMessage(
         sourceKey,
         targetKey,
       });
-      const currentIdentity = readSessionIdentitySnapshot(database, identityKeys);
-      return {
-        databasePath: database.path,
-        result: mutationResult,
-        publish: prepareSessionIdentityPublication(
-          database,
-          resolved.agentId,
-          previousIdentity,
-          currentIdentity,
-        ),
-      };
+      currentIdentity = readSessionIdentitySnapshot(database, identityKeys);
+      return mutationResult;
     }, toDatabaseOptions(resolved));
-    if (result.status === "created") {
+    if (result.status === "created" && databasePath) {
       invalidateSessionBranchCache(databasePath, [
         ...[...previousIdentity.values()].flatMap((entry) =>
           entry.sessionId ? [entry.sessionId] : [],
@@ -279,7 +273,7 @@ async function mutateSqliteSessionAtMessage(
         ...(result.entry.sessionId ? [result.entry.sessionId] : []),
       ]);
     }
-    publish();
+    emitCommittedSessionIdentityDiff(resolved.agentId, previousIdentity, currentIdentity);
     return result;
   });
 }

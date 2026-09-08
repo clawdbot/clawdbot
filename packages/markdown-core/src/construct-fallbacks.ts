@@ -1,5 +1,4 @@
 import type { FormatCapabilityProfile, FormatConstruct } from "./format-capabilities.js";
-import { copyHtmlTags } from "./ir-metadata.js";
 import {
   createStyleSpan,
   mergeAnnotationSpans,
@@ -113,12 +112,12 @@ function applyTextEdits(ir: MarkdownIR, edits: TextEdit[]): MarkdownIR {
       return !previous || edit.start !== previous.start || edit.end !== previous.end;
     });
   // Edited output drops list metadata, so do not rebuild it for every slice.
-  const content: MarkdownIR = copyHtmlTags(ir, {
+  const content: MarkdownIR = {
     text: ir.text,
     styles: ir.styles,
     links: ir.links,
     annotations: ir.annotations,
-  });
+  };
   const result: MarkdownIR = { text: "", styles: [], links: [] };
   let cursor = 0;
   for (const edit of ordered) {
@@ -141,14 +140,11 @@ export function applyConstructFallbacks(
 ): MarkdownIR {
   // Tables stay in convertMarkdownTables; images and mentions are already plain
   // text in this flat IR, so those constructs have no shared fallback work here.
-  const styled: MarkdownIR = copyHtmlTags(ir, {
+  const styled: MarkdownIR = {
     ...ir,
     styles: projectStyles(ir.styles, profile),
-  });
+  };
   const listProjected = applyTextEdits(styled, collectListFallbacks(styled, profile));
   const linkProjection = collectLinkFallbacks(listProjected, profile);
-  return applyTextEdits(
-    copyHtmlTags(listProjected, { ...listProjected, links: linkProjection.links }),
-    linkProjection.edits,
-  );
+  return applyTextEdits({ ...listProjected, links: linkProjection.links }, linkProjection.edits);
 }

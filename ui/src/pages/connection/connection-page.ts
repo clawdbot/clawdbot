@@ -1,5 +1,5 @@
-// Settings page owning this browser's Gateway connection draft (URL, credential,
-// default session) and the live handshake summary.
+// Settings page owning the dashboard's gateway connection draft (URL, token,
+// password, default session key) plus the latest handshake snapshot.
 import "../../styles/connection.css";
 import { consume } from "@lit/context";
 import { html } from "lit";
@@ -22,6 +22,7 @@ import {
 } from "../../lit/gateway-page-controller.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { PollController } from "../../lit/poll-controller.ts";
+import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { isUnknownSystemInfoMethodError, supportsSystemInfo } from "./system-info.ts";
 import { renderConnection } from "./view.ts";
 
@@ -34,7 +35,8 @@ export class ConnectionPage extends OpenClawLightDomElement {
 
   @state() private settings: UiSettings = loadSettings();
   @state() private password = "";
-  @state() private gatewaySecretVisible = false;
+  @state() private gatewayTokenVisible = false;
+  @state() private gatewayPasswordVisible = false;
   @state() private systemInfo: SystemInfoResult | null = null;
   @state() private systemInfoUnavailable = false;
 
@@ -59,15 +61,21 @@ export class ConnectionPage extends OpenClawLightDomElement {
     },
     onSnapshot: (change) => this.handleGatewaySnapshot(change),
   });
+  private readonly subscriptions = new SubscriptionsController(this).watch(
+    () => this.context?.channels,
+    (channels, notify) => channels.subscribe(notify),
+  );
 
   override disconnectedCallback() {
     this.systemInfoPolling.stop();
+    this.subscriptions.clear();
     this.resetSensitiveUi();
     super.disconnectedCallback();
   }
 
   private resetSensitiveUi() {
-    this.gatewaySecretVisible = false;
+    this.gatewayTokenVisible = false;
+    this.gatewayPasswordVisible = false;
   }
 
   private handleGatewaySnapshot({
@@ -198,28 +206,19 @@ export class ConnectionPage extends OpenClawLightDomElement {
 
   override render() {
     const gateway = this.context.gateway.snapshot;
-    const live = this.context.gateway.connection;
-    const dirty =
-      this.sessionKeyDirty ||
-      this.settings.gatewayUrl !== live.gatewayUrl ||
-      this.settings.token !== live.token ||
-      this.password !== live.password;
     const body = renderConnection({
       connected: gateway.phase === "connected",
       hello: gateway.hello,
       settings: this.settings,
-      liveGatewayUrl: live.gatewayUrl,
-      secret: this.settings.token || this.password,
+      password: this.password,
       lastError: gateway.lastError,
+      lastChannelsRefresh: this.context.channels.state.channelsLastSuccess,
       systemInfo: this.systemInfo,
       systemInfoUnavailable: this.systemInfoUnavailable,
-      dirty,
-      showGatewaySecret: this.gatewaySecretVisible,
+      showGatewayToken: this.gatewayTokenVisible,
+      showGatewayPassword: this.gatewayPasswordVisible,
       onConnectionChange: (patch) => this.updateConnection(patch),
-      onSecretChange: (token) => {
-        this.password = "";
-        this.updateConnection({ token });
-      },
+      onPasswordChange: (next) => (this.password = next),
       onSessionKeyChange: (sessionKey) => {
         this.sessionKeyDirty = true;
         this.settings = {
@@ -228,10 +227,14 @@ export class ConnectionPage extends OpenClawLightDomElement {
           lastActiveSessionKey: sessionKey,
         };
       },
-      onToggleGatewaySecretVisibility: () => {
-        this.gatewaySecretVisible = !this.gatewaySecretVisible;
+      onToggleGatewayTokenVisibility: () => {
+        this.gatewayTokenVisible = !this.gatewayTokenVisible;
+      },
+      onToggleGatewayPasswordVisibility: () => {
+        this.gatewayPasswordVisible = !this.gatewayPasswordVisible;
       },
       onConnect: () => this.connect(),
+      onRefresh: () => void this.context.channels.refresh(false),
     });
     return html`
       <section class="content-header">

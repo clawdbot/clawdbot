@@ -317,7 +317,6 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
   handoffFromGateway?: (state: GatewayServiceState) => Promise<boolean>;
   expectedService?: Pick<PreManagedServiceStop, "serviceEnv" | "serviceUpdateVerdict">;
   activatedInstall?: { packageUpdateNodeRunner?: string; invocationCwd?: string };
-  onStopped?: (state: PreManagedServiceStop) => void;
   timeoutMs?: number;
 }): Promise<PreManagedServiceStop> {
   const uninspected = { stopped: false, inspected: false, runtimeInspected: false, running: false };
@@ -458,7 +457,7 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
     params.shouldRestart &&
     serviceState.loadState.status === "loaded" &&
     (process.platform === "darwin"
-      ? (await service.isEnabled?.({ env: serviceState.env, timeoutMs: params.timeoutMs })) === true
+      ? (await service.isEnabled?.({ env: serviceState.env })) === true
       : process.env.OPENCLAW_UPDATE_RUN_HANDOFF === "1");
   if (!params.shouldRestart || (!serviceState.running && !supervisorMayRespawn)) {
     if (!params.shouldRestart && !params.jsonMode && serviceState.running) {
@@ -537,8 +536,6 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
       await service.stop({
         env: currentState.env,
         stdout: params.jsonMode ? JSON_MODE_SERVICE_STDOUT : process.stdout,
-        // Native stop may unload the service before a later port check fails.
-        onMutation: () => params.onStopped?.({ ...inspected, stopped: true, stoppedAtMs }),
       });
     }
     if (windowsTaskAutoStartRecovery) {

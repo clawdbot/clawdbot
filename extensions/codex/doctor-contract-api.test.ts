@@ -527,7 +527,7 @@ describe("codex doctor contract", () => {
         storePath: fixture.storePath,
       }),
     ).toMatchObject({ agentHarnessId: "codex" });
-    await fs.access(`${fixture.sidecarPath}.migrated`);
+    await expect(fs.access(`${fixture.sidecarPath}.migrated`)).resolves.toBeUndefined();
 
     await removeCodexDoctorFixture(fixture.stateDir);
   });
@@ -571,7 +571,7 @@ describe("codex doctor contract", () => {
         }),
       ),
     ).resolves.toMatchObject({ sessionId: "explicit-ops-owner" });
-    await fs.access(`${fixture.sidecarPath}.migrated`);
+    await expect(fs.access(`${fixture.sidecarPath}.migrated`)).resolves.toBeUndefined();
 
     await removeCodexDoctorFixture(fixture.stateDir);
   });

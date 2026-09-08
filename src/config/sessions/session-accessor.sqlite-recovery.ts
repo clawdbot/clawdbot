@@ -6,7 +6,7 @@ import {
   resolveLifecyclePrimaryEntry,
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
-import { prepareSessionIdentityPublication } from "./session-accessor.sqlite-identity.js";
+import { emitCommittedSessionIdentityDiff } from "./session-accessor.sqlite-identity.js";
 import { loadTranscriptEventsFromDatabase } from "./session-accessor.sqlite-read.js";
 import {
   cloneSessionEntry,
@@ -69,13 +69,15 @@ export async function recoverSessionEntryFromRestartTombstone(params: {
     ...params.successorTarget,
     storeKeys: [...params.successorTarget.storeKeys],
   });
+  let previousIdentity = new Map<string, SessionEntry>();
+  let currentIdentity = new Map<string, SessionEntry>();
   let result: RestartTombstoneRecoveryResult = {
     status: "conflict",
     reason: "source-changed",
   };
 
-  const publish = await runExclusiveSqliteSessionWrite(resolved, async () => {
-    return runOpenClawAgentWriteTransaction((database) => {
+  await runExclusiveSqliteSessionWrite(resolved, async () => {
+    runOpenClawAgentWriteTransaction((database) => {
       const source = resolveLifecyclePrimaryEntry(database, sourceTarget)?.entry as
         | InternalSessionEntry
         | undefined;
@@ -83,7 +85,7 @@ export async function recoverSessionEntryFromRestartTombstone(params: {
       const tombstone = recovery?.tombstone;
       if (!source?.sessionId || !recovery || !tombstone) {
         result = { status: "conflict", reason: "not-tombstoned" };
-        return undefined;
+        return;
       }
 
       const recoveredSessionKey = tombstone.recoveredSessionKey;
@@ -91,7 +93,7 @@ export async function recoverSessionEntryFromRestartTombstone(params: {
       if (recoveredSessionKey || recoveredSessionId) {
         if (!recoveredSessionKey || !recoveredSessionId) {
           result = { status: "conflict", reason: "successor-missing" };
-          return undefined;
+          return;
         }
         const linked = resolveLifecyclePrimaryEntry(
           database,
@@ -102,7 +104,7 @@ export async function recoverSessionEntryFromRestartTombstone(params: {
         )?.entry;
         if (!linked || linked.sessionId !== recoveredSessionId) {
           result = { status: "conflict", reason: "successor-missing" };
-          return undefined;
+          return;
         }
         result = {
           status: "existing",
@@ -110,7 +112,7 @@ export async function recoverSessionEntryFromRestartTombstone(params: {
           successorEntry: cloneSessionEntry(linked),
           successorKey: recoveredSessionKey,
         };
-        return undefined;
+        return;
       }
 
       if (
@@ -121,18 +123,18 @@ export async function recoverSessionEntryFromRestartTombstone(params: {
         source.pluginOwnerId !== params.expected.pluginOwnerId
       ) {
         result = { status: "conflict", reason: "source-changed" };
-        return undefined;
+        return;
       }
       if (resolveLifecyclePrimaryEntry(database, successorTarget)?.entry) {
         result = { status: "conflict", reason: "target-exists" };
-        return undefined;
+        return;
       }
 
       const sourceEvents = loadTranscriptEventsFromDatabase(database, source.sessionId);
       const header = findSessionTranscriptHeader(sourceEvents);
       if (!header) {
         result = { status: "conflict", reason: "transcript-missing" };
-        return undefined;
+        return;
       }
 
       const successorSessionId = params.successorEntry.sessionId;
@@ -189,27 +191,21 @@ export async function recoverSessionEntryFromRestartTombstone(params: {
       params.commitGuard?.();
 
       const identityKeys = [sourceTarget.canonicalKey, successorTarget.canonicalKey];
-      const previousIdentity = readSessionIdentitySnapshot(database, identityKeys);
+      previousIdentity = readSessionIdentitySnapshot(database, identityKeys);
       writeSessionEntry(database, successorTarget.canonicalKey, params.successorEntry);
       writeSessionEntry(database, sourceTarget.canonicalKey, nextSource, {
         previousEntry: source,
       });
-      const currentIdentity = readSessionIdentitySnapshot(database, identityKeys);
+      currentIdentity = readSessionIdentitySnapshot(database, identityKeys);
       result = {
         status: "created",
         sourceEntry: cloneSessionEntry(nextSource),
         successorEntry: cloneSessionEntry(params.successorEntry),
         successorKey: successorTarget.canonicalKey,
       };
-      return prepareSessionIdentityPublication(
-        database,
-        resolved.agentId,
-        previousIdentity,
-        currentIdentity,
-      );
     }, toDatabaseOptions(resolved));
   });
 
-  publish?.();
+  emitCommittedSessionIdentityDiff(resolved.agentId, previousIdentity, currentIdentity);
   return result;
 }

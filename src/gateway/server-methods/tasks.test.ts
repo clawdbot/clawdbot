@@ -26,6 +26,7 @@ import {
   recordTaskProgressByRunId,
 } from "../../tasks/runtime-internal.js";
 import { reloadTaskRegistryFromStore } from "../../tasks/task-registry.js";
+import { saveTaskRegistryStateToSqlite } from "../../tasks/task-registry.store.sqlite.js";
 import type { TaskRecord } from "../../tasks/task-registry.types.js";
 import {
   resetTaskRegistryControlRuntimeForTests,
@@ -33,7 +34,6 @@ import {
   setTaskRegistryControlRuntimeForTests,
 } from "../../tasks/task-runtime.test-helpers.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
-import { seedTaskRegistryRowsForTests } from "../../test-utils/task-registry-sqlite.js";
 import {
   createContext,
   createSnapshotTask,
@@ -228,7 +228,13 @@ describe("tasks gateway handlers", () => {
       lastEventAt: base - 2_000,
       endedAt: base - 3_000,
     });
-    seedTaskRegistryRowsForTests([justFinished, finishedEarlier]);
+    saveTaskRegistryStateToSqlite({
+      tasks: new Map([
+        [justFinished.taskId, justFinished],
+        [finishedEarlier.taskId, finishedEarlier],
+      ]),
+      deliveryStates: new Map(),
+    });
     reloadTaskRegistryFromStore();
 
     const { payload } = await runTaskHandler("tasks.list", {});
@@ -261,7 +267,13 @@ describe("tasks gateway handlers", () => {
       lastEventAt: base - 4_000,
       endedAt: base - 500,
     });
-    seedTaskRegistryRowsForTests([laterActivity, laterCompletion]);
+    saveTaskRegistryStateToSqlite({
+      tasks: new Map([
+        [laterActivity.taskId, laterActivity],
+        [laterCompletion.taskId, laterCompletion],
+      ]),
+      deliveryStates: new Map(),
+    });
     reloadTaskRegistryFromStore();
 
     const { payload } = await runTaskHandler("tasks.list", {});
@@ -391,7 +403,13 @@ describe("tasks gateway handlers", () => {
       runId: "run-a",
       lastEventAt: sharedActivityAt,
     });
-    seedTaskRegistryRowsForTests([laterId, earlierId]);
+    saveTaskRegistryStateToSqlite({
+      tasks: new Map([
+        [laterId.taskId, laterId],
+        [earlierId.taskId, earlierId],
+      ]),
+      deliveryStates: new Map(),
+    });
     reloadTaskRegistryFromStore();
 
     const { payload } = await runTaskHandler("tasks.list", {});
@@ -926,7 +944,13 @@ describe("tasks gateway handlers", () => {
       startedAt: 1_011,
       lastEventAt: 1_011,
     });
-    seedTaskRegistryRowsForTests([task, siblingTask]);
+    saveTaskRegistryStateToSqlite({
+      tasks: new Map([
+        [task.taskId, task],
+        [siblingTask.taskId, siblingTask],
+      ]),
+      deliveryStates: new Map(),
+    });
     reloadTaskRegistryFromStore();
     cancelSessionMock.mockResolvedValue(undefined);
 

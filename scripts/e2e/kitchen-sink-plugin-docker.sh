@@ -3,12 +3,6 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
-source "$ROOT_DIR/scripts/lib/frozen-target-compat.sh"
-
-TARGET_ROOT_DIR="$(cd "${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$ROOT_DIR}" && pwd)"
-KITCHEN_SINK_ASSERTIONS="$(openclaw_resolve_frozen_target_file "$TARGET_ROOT_DIR" \
-  scripts/e2e/lib/kitchen-sink-plugin/assertions.mjs \
-  "$ROOT_DIR/scripts/e2e/lib/kitchen-sink-plugin/assertions.mjs")"
 IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-kitchen-sink-plugin-e2e" OPENCLAW_KITCHEN_SINK_PLUGIN_E2E_IMAGE)"
 OPENCLAW_DOCKER_E2E_LOG_PRINT_BYTES="$(
   docker_e2e_read_positive_int_env OPENCLAW_DOCKER_E2E_LOG_PRINT_BYTES 65536
@@ -63,11 +57,6 @@ DOCKER_ENV_ARGS=(
   -e "KITCHEN_SINK_SCENARIOS=$KITCHEN_SINK_SCENARIOS"
   -e "KITCHEN_SINK_CLI_TIMEOUT=$KITCHEN_SINK_CLI_TIMEOUT"
 )
-capability_status=0
-openclaw_resolve_frozen_plugin_harness_capabilities \
-  "${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$ROOT_DIR}" || capability_status=$?
-[ "$capability_status" -eq 0 ] || exit "$capability_status"
-openclaw_append_frozen_plugin_harness_docker_env
 if [[ "${OPENCLAW_KITCHEN_SINK_LIVE_CLAWHUB:-0}" = "1" ]]; then
   for env_name in \
     OPENCLAW_KITCHEN_SINK_LIVE_CLAWHUB \
@@ -85,7 +74,7 @@ fi
 echo "Running kitchen-sink plugin Docker E2E..."
 docker_e2e_docker_cmd rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
 docker_e2e_harness_mount_args
-DOCKER_COMMAND_TIMEOUT="$DOCKER_RUN_TIMEOUT" docker_e2e_docker_run_cmd run --name "$CONTAINER_NAME" "${DOCKER_E2E_HARNESS_ARGS[@]}" "${DOCKER_ENV_ARGS[@]}" -v "$KITCHEN_SINK_ASSERTIONS:/app/scripts/e2e/lib/kitchen-sink-plugin/assertions.mjs:ro" -i "$IMAGE_NAME" bash scripts/e2e/lib/kitchen-sink-plugin/sweep.sh \
+DOCKER_COMMAND_TIMEOUT="$DOCKER_RUN_TIMEOUT" docker_e2e_docker_run_cmd run --name "$CONTAINER_NAME" "${DOCKER_E2E_HARNESS_ARGS[@]}" "${DOCKER_ENV_ARGS[@]}" -i "$IMAGE_NAME" bash scripts/e2e/lib/kitchen-sink-plugin/sweep.sh \
   >"$RUN_LOG" 2>&1 &
 docker_pid="$!"
 

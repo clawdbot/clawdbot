@@ -1,8 +1,6 @@
 // Implements agent deletion with gateway delegation and local cleanup fallback.
 import type { AgentsDeleteResult } from "../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import {
-  AgentSharedStoreOwnerError,
-  assertAgentSessionStoreDeletionSafe,
   isPathOwnedBySurvivingAgent,
   prepareAgentDeleteDatabases,
   readAgentDeleteDatabaseRegistry,
@@ -16,7 +14,7 @@ import {
 } from "../agents/agent-delete-safety.js";
 import { normalizeAgentDirRegistryPath } from "../agents/agent-dir-registry.js";
 import {
-  withAgentDeletion,
+  beginAgentDeletion,
   claimCompletedAgentDeletion,
 } from "../agents/agent-lifecycle-registry.js";
 import {
@@ -64,7 +62,7 @@ import { createClackPrompter } from "../wizard/clack-prompter.js";
 import { createQuietRuntime } from "./agents.command-shared.js";
 import { findAgentEntryIndex, listAgentEntries, pruneAgentConfig } from "./agents.config.js";
 import { moveToTrashResult } from "./cleanup-utils.js";
-import { requireValidConfigForWrite } from "./config-validation.js";
+import { requireValidConfigFileSnapshot } from "./config-validation.js";
 
 type AgentsDeleteOptions = {
   id: string;
@@ -98,7 +96,7 @@ function logClearedOwnerRefs(runtime: RuntimeEnv, clearedOwnerRefs: readonly str
 function logSessionPurgeWarning(runtime: RuntimeEnv, agentId: string, purgeFailed: boolean): void {
   if (purgeFailed) {
     runtime.error(
-      `Warning: session-store purge failed for deleted agent "${agentId}"; source data was retained. Retry deletion after resolving the storage error.`,
+      `Warning: session-store purge failed for deleted agent "${agentId}"; stale shared-store rows may remain.`,
     );
   }
 }
@@ -135,11 +133,12 @@ export async function agentsDeleteCommand(
   opts: AgentsDeleteOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ) {
-  const writeSnapshot = await requireValidConfigForWrite(runtime);
-  if (!writeSnapshot) {
+  const configSnapshot = await requireValidConfigFileSnapshot(runtime);
+  if (!configSnapshot) {
     return;
   }
-  const cfg = writeSnapshot.snapshot.sourceConfig;
+  const cfg = configSnapshot.sourceConfig ?? configSnapshot.config;
+  const baseHash = configSnapshot.hash;
 
   const input = opts.id?.trim();
   if (!input) {
@@ -179,15 +178,6 @@ export async function agentsDeleteCommand(
   if (!safetyAgentDir) {
     throw new Error(`Agent "${agentId}" deletion has no state directory.`);
   }
-  try {
-    assertAgentSessionStoreDeletionSafe(cfg, agentId);
-  } catch (error) {
-    if (!(error instanceof AgentSharedStoreOwnerError)) {
-      throw error;
-    }
-    failAgentsDelete(opts, runtime, error.message);
-    return;
-  }
   const sharedAuthOwnership = resolveSharedAuthStoreOwnership();
   if (
     isSharedAuthStoreOwner({
@@ -220,6 +210,9 @@ export async function agentsDeleteCommand(
   if (configured) {
     existingJournal = readAgentDeletionJournal(agentId);
     if (existingJournal?.cleanupCompleted) {
+      if (!claimCompletedAgentDeletion(agentId, existingJournal.operationId)) {
+        throw new Error(`Agent "${agentId}" deletion tombstone changed before fresh deletion.`);
+      }
       existingJournal = undefined;
     }
   }
@@ -288,173 +281,147 @@ export async function agentsDeleteCommand(
     return;
   }
 
-  return await withAgentDeletion(agentId, async (begin) => {
-    existingJournal = readAgentDeletionJournal(agentId);
-    if (configured && existingJournal?.cleanupCompleted) {
-      if (!claimCompletedAgentDeletion(agentId, existingJournal.operationId)) {
-        throw new Error(`Agent "${agentId}" deletion tombstone changed before fresh deletion.`);
-      }
-      existingJournal = undefined;
-    }
-    if (!configured && (!existingJournal || existingJournal.cleanupCompleted)) {
-      throw new Error(`Agent "${agentId}" deletion already completed.`);
-    }
-    assertAgentSessionStoreDeletionSafe(cfg, agentId);
-    const workspaceSharedWith = findOverlappingWorkspaceAgentIds(cfg, agentId, workspaceDir);
+  const workspaceSharedWith = findOverlappingWorkspaceAgentIds(cfg, agentId, workspaceDir);
 
-    const deleteFiles = existingJournal?.deleteFiles ?? true;
-    const deletion = begin(
-      existingJournal ?? { agentId, agentDir, workspaceDir, sessionsDir, deleteFiles },
-    );
-    try {
-      prepareAgentDeleteDatabases(cfg, agentId, agentDir);
-      const commitRoster = async () =>
-        await withAgentExecApprovalsRemoved(agentId, async () => {
-          deletion.assertCurrent();
-          if (configured) {
-            await replaceConfigFile({
-              ...writeSnapshot,
-              sourceConfig: result.config,
-              writeOptions: {
-                ...writeSnapshot.writeOptions,
-                allowedAgentRosterRemovals: [agentId],
-                assertConfigPathForWrite: () => {
-                  writeSnapshot.writeOptions.assertConfigPathForWrite?.();
-                  deletion.assertCurrent();
-                },
-                ...(opts.json ? { skipOutputLogs: true } : {}),
-              },
-            });
-            if (!opts.json) {
-              logConfigUpdated(runtime);
-            }
-          }
-        });
-      if (gatewayAttempt.kind === "fallback-unreachable") {
-        await withLocalAgentCronJobsRemoved(agentId, () => cfg, commitRoster);
-      } else {
-        // Credential resolution fails before transport, so a live scheduler may still own the store.
-        await commitRoster();
-      }
-      deletion.assertCurrent();
-    } catch (error) {
-      if (!existingJournal) {
-        deletion.rollback();
-      }
-      throw error;
-    }
-
-    // Purge session store entries for this agent so orphaned sessions cannot be targeted (#65524).
-    const purgeFailed = await purgeAgentSessionStoreEntries(cfg, agentId, {
-      runDatabaseCleanup: deletion.runDatabaseCleanup,
-    });
-    deletion.assertCurrent();
-    // Directory ownership is process-local; resolve survivors before the destructive recheck.
-    for (const survivingAgentId of listAgentIds(result.config)) {
-      resolveAgentDir(result.config, survivingAgentId);
-    }
-    const survivingDatabaseFilePaths = resolveSurvivingDatabaseFilePaths(
-      readAgentDeleteDatabaseRegistry(),
-      agentId,
-    );
-    const sharedWithSurvivor = (pathname: string) =>
-      isPathOwnedBySurvivingAgent(result.config, agentId, pathname, survivingDatabaseFilePaths);
-    const workspaceRetained = sharedWithSurvivor(workspaceDir);
-
-    const quietRuntime = opts.json ? createQuietRuntime(runtime) : runtime;
-    // Only trash the workspace if no other agent can depend on that path (#70890).
-    let workspaceCleanupError: Error | undefined;
-    const removed: AgentDeleteRemovedPath[] = [];
-    const failed: AgentDeleteFailedPath[] = [];
-    const removePath = async (pathname: string) => {
-      const outcome = await moveToTrashResult(pathname, quietRuntime, deletion.assertCurrent);
-      deletion.assertCurrent();
-      if ("removed" in outcome) {
-        removed.push(outcome.removed);
-      } else {
-        failed.push(outcome.failed);
-      }
-      return outcome;
-    };
-    if (deleteFiles && !purgeFailed && workspaceRetained) {
-      quietRuntime.log(
-        `Skipped workspace removal (shared with other agents${workspaceSharedWith.length ? `: ${workspaceSharedWith.join(", ")}` : ""}): ${workspaceDir}`,
-      );
-    } else if (deleteFiles && !purgeFailed) {
-      const legacyPlan = prepareLegacyWorkspaceStateReset(workspaceDir);
-      const statePlan = prepareWorkspaceStateDeletion(workspaceDir);
-      const workspaceResult = await removePath(workspaceDir);
-      if ("removed" in workspaceResult) {
-        try {
-          const legacyCleanup = await removeLegacyWorkspaceStateForReset(legacyPlan, {
-            assertCurrent: deletion.assertCurrent,
+  const deleteFiles = existingJournal?.deleteFiles ?? true;
+  const deletion = beginAgentDeletion(
+    existingJournal ?? { agentId, agentDir, workspaceDir, sessionsDir, deleteFiles },
+  );
+  try {
+    prepareAgentDeleteDatabases(cfg, agentId, agentDir);
+    const commitRoster = async () =>
+      await withAgentExecApprovalsRemoved(agentId, async () => {
+        if (configured) {
+          await replaceConfigFile({
+            nextConfig: result.config,
+            ...(baseHash !== undefined ? { baseHash } : {}),
+            writeOptions: {
+              allowedAgentRosterRemovals: [agentId],
+              ...(opts.json ? { skipOutputLogs: true } : {}),
+            },
           });
-          for (const warning of legacyCleanup.warnings) {
-            quietRuntime.log(warning);
+          if (!opts.json) {
+            logConfigUpdated(runtime);
           }
-          deletion.assertCurrent();
-          deleteWorkspaceState(statePlan);
-        } catch (error) {
-          workspaceCleanupError = error instanceof Error ? error : new Error(String(error));
         }
-      }
-    }
-    if (deleteFiles && !purgeFailed) {
-      const canonicalAgentDir = normalizeAgentDirRegistryPath(agentDir);
-      const databasePaths = deletion.entry.databasePaths.filter((pathname) => {
-        const canonicalPath = normalizeAgentDirRegistryPath(pathname);
-        return !isPathInside(canonicalAgentDir, canonicalPath) && !sharedWithSurvivor(pathname);
       });
-      for (const directory of [agentDir, sessionsDir]) {
-        if (!sharedWithSurvivor(directory)) {
-          await removePath(directory);
-        }
-      }
-      for (const databasePath of databasePaths) {
-        await removePath(databasePath);
-      }
-    }
-    if (workspaceCleanupError) {
-      throw workspaceCleanupError;
-    }
-    deletion.assertCurrent();
-    if (failed.length === 0 && !purgeFailed) {
-      if (deleteFiles) {
-        // Keep registry ownership until every cleanup target is terminal. A crash before journal
-        // completion leaves this idempotent deregistration reachable on the next delete attempt.
-        unregisterOpenClawAgentDatabases({ agentId });
-      }
-      deletion.finish();
-    }
-
-    if (opts.json) {
-      writeRuntimeJson(runtime, {
-        agentId,
-        workspace: workspaceDir,
-        workspaceRetained: workspaceRetained || undefined,
-        workspaceRetainedReason: workspaceRetained ? "shared" : undefined,
-        workspaceSharedWith: workspaceRetained ? workspaceSharedWith : undefined,
-        agentDir,
-        sessionsDir,
-        removedBindings: result.removedBindings,
-        removedAllow: result.removedAllow,
-        clearedOwnerRefs: result.clearedOwnerRefs.length > 0 ? result.clearedOwnerRefs : undefined,
-        removed,
-        failed,
-        ...(purgeFailed ? { purgeFailed: true } : {}),
-        ...(gatewayAttempt.kind === "fallback-credentials-required"
-          ? { cronCleanupSkipped: true }
-          : {}),
-      });
+    if (gatewayAttempt.kind === "fallback-unreachable") {
+      await withLocalAgentCronJobsRemoved(agentId, () => cfg, commitRoster);
     } else {
-      runtime.log(`Deleted agent: ${agentId}`);
-      logClearedOwnerRefs(runtime, result.clearedOwnerRefs);
-      logSessionPurgeWarning(runtime, agentId, purgeFailed);
+      // Credential resolution fails before transport, so a live scheduler may still own the store.
+      await commitRoster();
     }
-    if (gatewayAttempt.kind === "fallback-credentials-required") {
-      runtime.error(
-        `Warning: cron cleanup was skipped for deleted agent "${agentId}" because the Gateway could not be authenticated; scheduled jobs may remain.`,
-      );
+  } catch (error) {
+    if (!existingJournal) {
+      deletion.rollback();
     }
+    throw error;
+  }
+
+  // Purge session store entries for this agent so orphaned sessions cannot be targeted (#65524).
+  const purgeFailed = await purgeAgentSessionStoreEntries(cfg, agentId, {
+    runDatabaseCleanup: deletion.runDatabaseCleanup,
   });
+  // Directory ownership is process-local; resolve survivors before the destructive recheck.
+  for (const survivingAgentId of listAgentIds(result.config)) {
+    resolveAgentDir(result.config, survivingAgentId);
+  }
+  const survivingDatabaseFilePaths = resolveSurvivingDatabaseFilePaths(
+    readAgentDeleteDatabaseRegistry(),
+    agentId,
+  );
+  const sharedWithSurvivor = (pathname: string) =>
+    isPathOwnedBySurvivingAgent(result.config, agentId, pathname, survivingDatabaseFilePaths);
+  const workspaceRetained = sharedWithSurvivor(workspaceDir);
+
+  const quietRuntime = opts.json ? createQuietRuntime(runtime) : runtime;
+  // Only trash the workspace if no other agent can depend on that path (#70890).
+  let workspaceCleanupError: Error | undefined;
+  const removed: AgentDeleteRemovedPath[] = [];
+  const failed: AgentDeleteFailedPath[] = [];
+  const removePath = async (pathname: string) => {
+    const outcome = await moveToTrashResult(pathname, quietRuntime);
+    if ("removed" in outcome) {
+      removed.push(outcome.removed);
+    } else {
+      failed.push(outcome.failed);
+    }
+    return outcome;
+  };
+  if (deleteFiles && !purgeFailed && workspaceRetained) {
+    quietRuntime.log(
+      `Skipped workspace removal (shared with other agents${workspaceSharedWith.length ? `: ${workspaceSharedWith.join(", ")}` : ""}): ${workspaceDir}`,
+    );
+  } else if (deleteFiles && !purgeFailed) {
+    const legacyPlan = prepareLegacyWorkspaceStateReset(workspaceDir);
+    const statePlan = prepareWorkspaceStateDeletion(workspaceDir);
+    const workspaceResult = await removePath(workspaceDir);
+    if ("removed" in workspaceResult) {
+      try {
+        const legacyCleanup = await removeLegacyWorkspaceStateForReset(legacyPlan);
+        for (const warning of legacyCleanup.warnings) {
+          quietRuntime.log(warning);
+        }
+        deleteWorkspaceState(statePlan);
+      } catch (error) {
+        workspaceCleanupError = error instanceof Error ? error : new Error(String(error));
+      }
+    }
+  }
+  if (deleteFiles && !purgeFailed) {
+    const canonicalAgentDir = normalizeAgentDirRegistryPath(agentDir);
+    const databasePaths = deletion.entry.databasePaths.filter((pathname) => {
+      const canonicalPath = normalizeAgentDirRegistryPath(pathname);
+      return !isPathInside(canonicalAgentDir, canonicalPath) && !sharedWithSurvivor(pathname);
+    });
+    for (const directory of [agentDir, sessionsDir]) {
+      if (!sharedWithSurvivor(directory)) {
+        await removePath(directory);
+      }
+    }
+    for (const databasePath of databasePaths) {
+      await removePath(databasePath);
+    }
+  }
+  if (workspaceCleanupError) {
+    throw workspaceCleanupError;
+  }
+  if (failed.length === 0 && !purgeFailed) {
+    if (deleteFiles) {
+      // Keep registry ownership until every cleanup target is terminal. A crash before journal
+      // completion leaves this idempotent deregistration reachable on the next delete attempt.
+      unregisterOpenClawAgentDatabases({ agentId });
+    }
+    deletion.finish();
+  }
+
+  if (opts.json) {
+    writeRuntimeJson(runtime, {
+      agentId,
+      workspace: workspaceDir,
+      workspaceRetained: workspaceRetained || undefined,
+      workspaceRetainedReason: workspaceRetained ? "shared" : undefined,
+      workspaceSharedWith: workspaceRetained ? workspaceSharedWith : undefined,
+      agentDir,
+      sessionsDir,
+      removedBindings: result.removedBindings,
+      removedAllow: result.removedAllow,
+      clearedOwnerRefs: result.clearedOwnerRefs.length > 0 ? result.clearedOwnerRefs : undefined,
+      removed,
+      failed,
+      ...(purgeFailed ? { purgeFailed: true } : {}),
+      ...(gatewayAttempt.kind === "fallback-credentials-required"
+        ? { cronCleanupSkipped: true }
+        : {}),
+    });
+  } else {
+    runtime.log(`Deleted agent: ${agentId}`);
+    logClearedOwnerRefs(runtime, result.clearedOwnerRefs);
+    logSessionPurgeWarning(runtime, agentId, purgeFailed);
+  }
+  if (gatewayAttempt.kind === "fallback-credentials-required") {
+    runtime.error(
+      `Warning: cron cleanup was skipped for deleted agent "${agentId}" because the Gateway could not be authenticated; scheduled jobs may remain.`,
+    );
+  }
 }

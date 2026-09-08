@@ -450,16 +450,6 @@ async function ensureGooglePromptCache(
     cacheConfigDigest: params.cacheConfigDigest,
   });
   const latestEntry = readLatestGooglePromptCacheEntry(params.sessionManager, matchKey);
-  const entryMetadata = {
-    timestamp: now,
-    provider: params.provider,
-    modelId: params.model.id,
-    modelApi: params.model.api,
-    baseUrl,
-    systemPromptDigest,
-    cacheConfigDigest: params.cacheConfigDigest,
-    cacheRetention: params.cacheRetention,
-  };
 
   if (
     latestEntry?.status === "failed" &&
@@ -469,16 +459,6 @@ async function ensureGooglePromptCache(
   }
 
   const fetchImpl = (deps.buildGuardedFetch ?? buildGuardedModelFetch)(params.model);
-  const requestOptions = {
-    apiKey: params.apiKey,
-    baseUrl,
-    cacheRetention: params.cacheRetention,
-    fetchImpl,
-    headers: params.model.headers,
-    model: params.model,
-    now,
-    signal: params.signal,
-  };
   const refreshWindowMs = resolveGooglePromptCacheRefreshWindowMs(params.cacheRetention);
   const cachedContent =
     latestEntry?.status === "ready" ? readGooglePromptCacheName(latestEntry.cachedContent) : null;
@@ -490,13 +470,27 @@ async function ensureGooglePromptCache(
         return cachedContent;
       }
       const refreshed = await requestGooglePromptCache({
-        ...requestOptions,
+        apiKey: params.apiKey,
+        baseUrl,
+        cacheRetention: params.cacheRetention,
         cachedContent,
+        fetchImpl,
+        headers: params.model.headers,
+        model: params.model,
+        now,
+        signal: params.signal,
       });
       if (refreshed) {
         await appendGooglePromptCacheEntry(params.sessionManager, {
           status: "ready",
-          ...entryMetadata,
+          timestamp: now,
+          provider: params.provider,
+          modelId: params.model.id,
+          modelApi: params.model.api,
+          baseUrl,
+          systemPromptDigest,
+          cacheConfigDigest: params.cacheConfigDigest,
+          cacheRetention: params.cacheRetention,
           cachedContent,
           expireTime: refreshed.expireTime,
         });
@@ -507,8 +501,15 @@ async function ensureGooglePromptCache(
   }
 
   const created = await requestGooglePromptCache({
-    ...requestOptions,
+    apiKey: params.apiKey,
+    baseUrl,
+    cacheRetention: params.cacheRetention,
+    fetchImpl,
+    headers: params.model.headers,
+    model: params.model,
     modelId: params.model.id,
+    now,
+    signal: params.signal,
     systemPrompt: params.systemPrompt,
     tools: params.tools,
     toolConfig: params.toolConfig,
@@ -516,7 +517,14 @@ async function ensureGooglePromptCache(
   if (!created) {
     await appendGooglePromptCacheEntry(params.sessionManager, {
       status: "failed",
-      ...entryMetadata,
+      timestamp: now,
+      provider: params.provider,
+      modelId: params.model.id,
+      modelApi: params.model.api,
+      baseUrl,
+      systemPromptDigest,
+      cacheConfigDigest: params.cacheConfigDigest,
+      cacheRetention: params.cacheRetention,
       retryAfter:
         resolveExpiresAtMsFromDurationMs(GOOGLE_PROMPT_CACHE_RETRY_BACKOFF_MS, { nowMs: now }) ?? 0,
     });
@@ -525,7 +533,14 @@ async function ensureGooglePromptCache(
 
   await appendGooglePromptCacheEntry(params.sessionManager, {
     status: "ready",
-    ...entryMetadata,
+    timestamp: now,
+    provider: params.provider,
+    modelId: params.model.id,
+    modelApi: params.model.api,
+    baseUrl,
+    systemPromptDigest,
+    cacheConfigDigest: params.cacheConfigDigest,
+    cacheRetention: params.cacheRetention,
     cachedContent: created.cachedContent,
     expireTime: created.expireTime,
   });

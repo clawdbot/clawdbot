@@ -242,7 +242,7 @@ export type EmbeddedAgentSubscribeContext = {
   hookRunner?: HookRunner;
   builtinToolNames?: ReadonlySet<string>;
   trustedLocalMediaToolNames?: ReadonlySet<string>;
-  noteLastAssistant: (msg: AgentMessage, options?: { hasToolResults: boolean }) => void;
+  noteLastAssistant: (msg: AgentMessage) => void;
 
   shouldEmitToolResult: () => boolean;
   shouldEmitToolOutput: () => boolean;
@@ -302,7 +302,7 @@ export type EmbeddedAgentSubscribeContext = {
     options?: { assistantMessageIndex?: number; consumePendingToolMedia?: boolean },
   ) => void;
   flushAssistantStream: () => void;
-  releaseDeferredReplies: () => void;
+  flushDeferredBlockReplies: () => void;
   clearAssistantStream: () => void;
   clearDeferredBlockReplies: () => void;
 };

@@ -1,10 +1,15 @@
-import type {
-  getTaskFlowRegistryStore,
-  TaskFlowRegistryObserverEvent,
-} from "./task-flow-registry.store.js";
+import type { TaskFlowRegistryObserverEvent } from "./task-flow-registry.store.js";
+import type { TaskFlowRegistryStoreSnapshot } from "./task-flow-registry.store.types.js";
 import "./task-flow-registry.store.js";
+import type { TaskFlowRecord } from "./task-flow-registry.types.js";
 
-type TaskFlowRegistryStore = ReturnType<typeof getTaskFlowRegistryStore>;
+type TaskFlowRegistryStore = {
+  loadSnapshot: () => TaskFlowRegistryStoreSnapshot;
+  saveSnapshot: (snapshot: TaskFlowRegistryStoreSnapshot) => void;
+  upsertFlow?: (flow: TaskFlowRecord) => void;
+  deleteFlow?: (flowId: string) => void;
+  close?: () => void;
+};
 
 type TaskFlowRegistryStoreTestApi = {
   configureTaskFlowRegistryRuntime(params: {

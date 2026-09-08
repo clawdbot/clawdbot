@@ -3,11 +3,6 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
-import type {
-  DreamingArtifactsAuditIssue,
-  DreamingArtifactsAuditSummary,
-  RepairDreamingArtifactsResult,
-} from "openclaw/plugin-sdk/memory-core-host-status";
 import {
   clearMemoryCoreWorkspaceNamespace,
   DREAMING_SESSION_INGESTION_FILES_NAMESPACE,
@@ -15,7 +10,37 @@ import {
   readMemoryCoreWorkspaceEntries,
 } from "./dreaming-state.js";
 
-export type { DreamingArtifactsAuditSummary, RepairDreamingArtifactsResult };
+type DreamingArtifactsAuditIssue = {
+  severity: "warn" | "error";
+  code:
+    | "dreaming-session-corpus-unreadable"
+    | "dreaming-session-corpus-self-ingested"
+    | "dreaming-session-ingestion-unreadable"
+    | "dreaming-diary-unreadable";
+  message: string;
+  fixable: boolean;
+};
+
+export type DreamingArtifactsAuditSummary = {
+  dreamsPath?: string;
+  sessionCorpusDir: string;
+  sessionCorpusFileCount: number;
+  suspiciousSessionCorpusFileCount: number;
+  suspiciousSessionCorpusLineCount: number;
+  sessionIngestionPath: string;
+  sessionIngestionExists: boolean;
+  issues: DreamingArtifactsAuditIssue[];
+};
+
+export type RepairDreamingArtifactsResult = {
+  changed: boolean;
+  archiveDir?: string;
+  archivedDreamsDiary: boolean;
+  archivedSessionCorpus: boolean;
+  archivedSessionIngestion: boolean;
+  archivedPaths: string[];
+  warnings: string[];
+};
 
 const DREAMS_FILENAMES = ["DREAMS.md", "dreams.md"] as const;
 const SESSION_CORPUS_RELATIVE_DIR = path.join("memory", ".dreams", "session-corpus");

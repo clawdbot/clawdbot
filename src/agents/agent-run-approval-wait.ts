@@ -13,15 +13,10 @@ export function observeAgentRunApprovalWait(params: {
 }): AgentRunApprovalWait {
   const approvals = new Set<string>();
   let pausedAtMs = 0;
-  let completedPausedMs = 0;
   let unsubscribe = () => {};
   const state: AgentRunApprovalWait = {
     pending: false,
-    // Include an open interval so each exec/wait can take its own baseline;
-    // time spent parked before that call never becomes execution credit.
-    get pausedMs() {
-      return completedPausedMs + (state.pending ? Math.max(0, performance.now() - pausedAtMs) : 0);
-    },
+    pausedMs: 0,
     dispose: () => {
       unsubscribe();
       state.onChange = undefined;
@@ -57,7 +52,7 @@ export function observeAgentRunApprovalWait(params: {
     if (pending) {
       pausedAtMs = performance.now();
     } else {
-      completedPausedMs += Math.max(0, performance.now() - pausedAtMs);
+      state.pausedMs += Math.max(0, performance.now() - pausedAtMs);
     }
     state.pending = pending;
     state.onChange?.(pending);

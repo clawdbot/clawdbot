@@ -621,18 +621,14 @@ export function createTalkClientGatewayControlOwner(params: {
   // startup succeeds, so a failed new transport cannot evict the current one.
   owner.assertOpen();
   pendingOwners.add(owner);
-  registerTalkConnectionCleanup(params.connId, "browser-control", async () => {
-    const pendingCloses: Promise<void>[] = [];
+  registerTalkConnectionCleanup(params.connId, "browser-control", () => {
     for (const current of [...pendingOwners, ...owners.values()]) {
       if (current.connId === params.connId) {
-        pendingCloses.push(
-          current.close().catch((error: unknown) => {
-            warn(`talk disconnected Gateway control close failed: ${formatError(error)}`);
-          }),
-        );
+        void current.close().catch((error: unknown) => {
+          warn(`talk disconnected Gateway control close failed: ${formatError(error)}`);
+        });
       }
     }
-    await Promise.all(pendingCloses);
   });
   return owner;
 }

@@ -14,7 +14,7 @@ import {
   uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { LMSTUDIO_PROVIDER_ID } from "./defaults.js";
-import { prepareLmstudioModelForInference, type LmstudioPreparedModel } from "./models.fetch.js";
+import { ensureLmstudioModelLoaded } from "./models.fetch.js";
 import { resolveLmstudioInferenceBase } from "./models.js";
 import { resolveLmstudioProviderHeaders, resolveLmstudioRuntimeApiKey } from "./runtime.js";
 
@@ -23,7 +23,7 @@ const log = createSubsystemLogger("extensions/lmstudio/stream");
 type StreamOptions = Parameters<StreamFn>[2];
 type StreamModel = Parameters<StreamFn>[0];
 
-const preloadInFlight = new Map<string, Promise<LmstudioPreparedModel | undefined>>();
+const preloadInFlight = new Map<string, Promise<string | undefined>>();
 
 /**
  * Cooldown state for the LM Studio preload endpoint.
@@ -184,9 +184,9 @@ function toLmstudioPreloadError(reason: unknown, message: string): Error {
 }
 
 function waitForLmstudioPreload(
-  preload: Promise<LmstudioPreparedModel | undefined>,
+  preload: Promise<string | undefined>,
   signal?: AbortSignal,
-): Promise<LmstudioPreparedModel | undefined> {
+): Promise<string | undefined> {
   if (!signal) {
     return preload;
   }
@@ -217,7 +217,7 @@ async function ensureLmstudioModelLoadedBestEffort(params: {
   options: StreamOptions;
   ctx: ProviderWrapStreamFnContext;
   modelHeaders?: Record<string, string>;
-}): Promise<LmstudioPreparedModel> {
+}): Promise<string> {
   const providerConfig = params.ctx.config?.models?.providers?.[LMSTUDIO_PROVIDER_ID];
   const providerHeaders = { ...providerConfig?.headers, ...params.modelHeaders };
   const runtimeApiKey =
@@ -237,7 +237,7 @@ async function ensureLmstudioModelLoadedBestEffort(params: {
           headers: providerHeaders,
         });
 
-  return await prepareLmstudioModelForInference({
+  return await ensureLmstudioModelLoaded({
     baseUrl: params.baseUrl,
     apiKey: runtimeApiKey ?? configuredApiKey,
     headers,
@@ -284,7 +284,7 @@ export function wrapLmstudioInferencePreload(ctx: ProviderWrapStreamFnContext): 
 
     const cooldownEntry = isPreloadCoolingDown(preloadKey, Date.now());
     const existing = preloadInFlight.get(preloadKey);
-    const preloadPromise: Promise<LmstudioPreparedModel | undefined> | undefined =
+    const preloadPromise: Promise<string | undefined> | undefined =
       existing ??
       (cooldownEntry
         ? undefined
@@ -298,9 +298,9 @@ export function wrapLmstudioInferencePreload(ctx: ProviderWrapStreamFnContext): 
               modelHeaders: resolveModelHeaders(model),
             })
               .then(
-                (preparedModel) => {
+                (resolvedModelKey) => {
                   recordPreloadSuccess(preloadKey);
-                  return preparedModel;
+                  return resolvedModelKey;
                 },
                 (error: unknown) => {
                   const resolvedModelKey = resolveLmstudioModelKeyFromError(error);
@@ -321,10 +321,10 @@ export function wrapLmstudioInferencePreload(ctx: ProviderWrapStreamFnContext): 
           })());
 
     return (async () => {
-      let preparedModel: LmstudioPreparedModel | undefined;
+      let resolvedModelKey: string | undefined;
       if (preloadPromise) {
         try {
-          preparedModel = await waitForLmstudioPreload(preloadPromise, options?.signal);
+          resolvedModelKey = await waitForLmstudioPreload(preloadPromise, options?.signal);
         } catch (error) {
           // A caller owns its wait, not the shared model load needed by other
           // in-flight requests; cancellation must never become preload backoff.
@@ -334,8 +334,7 @@ export function wrapLmstudioInferencePreload(ctx: ProviderWrapStreamFnContext): 
             consecutiveFailures?: number;
             cooldownMs?: number;
           };
-          const resolvedModelKey = resolveLmstudioModelKeyFromError(error);
-          preparedModel = resolvedModelKey ? { modelKey: resolvedModelKey } : undefined;
+          resolvedModelKey = resolveLmstudioModelKeyFromError(error);
           const cause = annotated.cause ?? error;
           const failures = annotated.consecutiveFailures ?? 1;
           const cooldownSec = Math.max(0, Math.round((annotated.cooldownMs ?? 0) / 1000));
@@ -346,8 +345,7 @@ export function wrapLmstudioInferencePreload(ctx: ProviderWrapStreamFnContext): 
           );
         }
       } else if (cooldownEntry) {
-        const resolvedModelKey = cooldownEntry.resolvedModelKey;
-        preparedModel = resolvedModelKey ? { modelKey: resolvedModelKey } : undefined;
+        resolvedModelKey = cooldownEntry.resolvedModelKey;
         log.debug(
           `LM Studio inference preload for "${modelKey}" skipped while backoff active (${cooldownEntry.consecutiveFailures} prior failures)`,
         );
@@ -355,23 +353,11 @@ export function wrapLmstudioInferencePreload(ctx: ProviderWrapStreamFnContext): 
       // LM Studio uses OpenAI-compatible streaming usage payloads when requested via
       // `stream_options.include_usage`. Force this compat flag at call time so usage
       // reporting remains enabled even when catalog entries omitted compat metadata.
-      const streamModel = withLmstudioResolvedModelKey(model, preparedModel?.modelKey);
-      const instanceId = preparedModel?.instanceId;
+      const streamModel = withLmstudioResolvedModelKey(model, resolvedModelKey);
       const stream = streamWithThinkingLevel(
         withLmstudioUsageCompat(streamModel),
         context,
-        instanceId
-          ? {
-              ...options,
-              async onPayload(payload, payloadModel) {
-                // Instance IDs route this request; model and transcript identity stay canonical.
-                asRecord(payload).model = instanceId;
-                const replacement = await options?.onPayload?.(payload, payloadModel);
-                asRecord(replacement ?? payload).model = instanceId;
-                return replacement;
-              },
-            }
-          : options,
+        options,
       );
       const resolvedStream = stream instanceof Promise ? await stream : stream;
       return resolvedStream;

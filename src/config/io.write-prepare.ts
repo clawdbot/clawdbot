@@ -1,7 +1,6 @@
 // Prepares config writes by diffing current state and preserving metadata.
 import { isDeepStrictEqual } from "node:util";
 import { expectDefined } from "@openclaw/normalization-core";
-import { asOptionalRecord, readStringField } from "@openclaw/normalization-core/record-coerce";
 import {
   hasAgentRosterProperty,
   listAgentEntries,
@@ -16,10 +15,9 @@ import { isRecord } from "../utils.js";
 import { configIncludeOwnsAgentRosterValues } from "./agent-roster-provenance.js";
 import { containsEnvVarReference } from "./env-substitution.js";
 import { coerceConfig } from "./io.read-helpers.js";
-import type { ConfigWriteInputBasis } from "./io.types.js";
 import { createConfigIncludeOwnershipError } from "./io.write-errors.js";
 import { parseLegacyAgentRoster, projectLegacyAgentRosterEntries } from "./legacy.roster.js";
-import { createMergePatch } from "./merge-patch.js";
+import { applyMergePatch, createMergePatch } from "./merge-patch.js";
 import { normalizeAgentModelMapForConfig, normalizeAgentModelRefForConfig } from "./model-input.js";
 import { isSecretRefShape } from "./redact-snapshot.secret-ref.js";
 import {
@@ -27,7 +25,7 @@ import {
   hasUnresolvedConfigPath,
   hasUnresolvedConfigPathInSubtree,
 } from "./resolution-facts.js";
-import { projectRuntimeChangesOntoSource } from "./source-value-projection.js";
+import { projectSourceOntoRuntimeShape } from "./runtime-source-projection.js";
 import type { OpenClawConfig } from "./types.js";
 
 const AGENT_ROSTER_PATHS = [
@@ -123,6 +121,10 @@ function isMutableSiblingPathAtInclude(
   );
 }
 
+function formatConfigPath(path: string[]): string {
+  return path.length > 0 ? path.join(".") : "<root>";
+}
+
 function findContainingArrayPath(root: unknown, path: string[]): string[] | undefined {
   let current = root;
   const currentPath: string[] = [];
@@ -175,7 +177,7 @@ function getPathValue(value: unknown, path: string[]): unknown {
   let current = value;
   for (const segment of path) {
     if (Array.isArray(current)) {
-      const index = parseConfigPathArrayIndex(segment);
+      const index = parseArrayIndexPathSegment(segment);
       if (index === undefined || index >= current.length) {
         return undefined;
       }
@@ -197,7 +199,7 @@ function setPathValue(value: unknown, path: string[], nextValue: unknown): unkno
   const head = expectDefined(path[0], "config path head");
   const tail = path.slice(1);
   if (Array.isArray(value)) {
-    const index = parseConfigPathArrayIndex(head);
+    const index = parseArrayIndexPathSegment(head);
     if (index === undefined || index >= value.length) {
       return value;
     }
@@ -226,6 +228,10 @@ function pathOverlapsAny(path: string[], candidates: readonly string[][] | undef
   );
 }
 
+function isIncludeOwnedPath(rootAuthoredConfig: unknown, path: string[]): boolean {
+  return findOverlappingIncludeOwnedPath(rootAuthoredConfig, path) !== undefined;
+}
+
 function findOverlappingIncludeOwnedPath(
   rootAuthoredConfig: unknown,
   path: string[],
@@ -245,8 +251,8 @@ function setPathValueCreatingParents(value: unknown, path: string[], nextValue: 
   }
   const head = expectDefined(path[0], "config path head");
   const tail = path.slice(1);
-  const index = parseConfigPathArrayIndex(head);
-  if (Array.isArray(value) || index !== undefined) {
+  if (Array.isArray(value) || isNumericPathSegment(head)) {
+    const index = parseArrayIndexPathSegment(head);
     if (index === undefined) {
       return value;
     }
@@ -268,7 +274,7 @@ function deletePathValue(value: unknown, path: string[]): unknown {
   const head = expectDefined(path[0], "config path head");
   const tail = path.slice(1);
   if (Array.isArray(value)) {
-    const index = parseConfigPathArrayIndex(head);
+    const index = parseArrayIndexPathSegment(head);
     if (index === undefined || index >= value.length || tail.length === 0) {
       return value;
     }
@@ -291,7 +297,7 @@ function deletePathValue(value: unknown, path: string[]): unknown {
 function normalizeTouchedAgentModelMapEntries(params: {
   projectedSource: unknown;
   patch: unknown;
-  touchedPaths?: readonly (readonly string[])[];
+  explicitSetPaths?: readonly (readonly string[])[];
   explicitSetValueSource: unknown;
 }): unknown {
   const touchedMaps = new Map<string, { path: string[]; canonicalKeys: Set<string> }>();
@@ -326,7 +332,7 @@ function normalizeTouchedAgentModelMapEntries(params: {
     }
   }
   for (const modelMapPath of explicitModelMaps) {
-    for (const explicitPath of params.touchedPaths ?? []) {
+    for (const explicitPath of params.explicitSetPaths ?? []) {
       if (pathStartsWith(explicitPath, modelMapPath) && explicitPath.length > modelMapPath.length) {
         const modelId = explicitPath[modelMapPath.length];
         if (modelId) {
@@ -588,7 +594,7 @@ function includeOwnershipError(rootAuthoredConfig: unknown, includePath: string[
     (entry): entry is string => typeof entry === "string",
   );
   return createConfigIncludeOwnershipError({
-    ownedConfigPath: includePath.length > 0 ? includePath.join(".") : "<root>",
+    ownedConfigPath: formatConfigPath(includePath),
     ...(includeTargets.length > 0 ? { includeTargets } : {}),
   });
 }
@@ -627,7 +633,7 @@ function preserveUntouchedIncludes(params: {
       throw includeOwnershipError(params.rootAuthoredConfig, includePath);
     }
     if (includeIsArrayEntry) {
-      const index = parseConfigPathArrayIndex(includePath.at(-1) ?? "");
+      const index = parseArrayIndexPathSegment(includePath.at(-1) ?? "");
       const nextArray = getPathValue(params.nextConfig, containingArrayPath);
       const sourceArray = getPathValue(params.sourceConfig, containingArrayPath);
       const runtimeArray = getPathValue(params.runtimeConfig, containingArrayPath);
@@ -678,7 +684,7 @@ function hasPathValue(value: unknown, path: readonly string[]): boolean {
   const head = expectDefined(path[0], "config path head");
   const tail = path.slice(1);
   if (Array.isArray(value)) {
-    const index = parseConfigPathArrayIndex(head);
+    const index = parseArrayIndexPathSegment(head);
     if (index === undefined || index >= value.length) {
       return false;
     }
@@ -711,7 +717,7 @@ function mergeMissingExplicitValues(
     let changed = false;
     const next = [...currentValue];
     for (const [key, childExplicitValue] of Object.entries(explicitValue)) {
-      const index = parseConfigPathArrayIndex(key);
+      const index = parseArrayIndexPathSegment(key);
       if (index === undefined) {
         continue;
       }
@@ -748,7 +754,7 @@ function mergeMissingExplicitValues(
   return { changed, value: changed ? next : currentValue };
 }
 
-export function injectExplicitlySetPaths(params: {
+function injectExplicitlySetPaths(params: {
   valueSource: unknown;
   persistedCandidate: unknown;
   runtimeConfig: unknown;
@@ -1204,7 +1210,7 @@ function canonicalizeAgentRosterForExplicitWrite(params: {
       if (path[0] !== "agents" || path[1] !== "list" || path.length !== 4 || path[3] !== "id") {
         return [];
       }
-      const index = parseConfigPathArrayIndex(path[2] ?? "");
+      const index = parseArrayIndexPathSegment(path[2] ?? "");
       return index === undefined ? [] : [index];
     }),
   );
@@ -1222,7 +1228,7 @@ function canonicalizeAgentRosterForExplicitWrite(params: {
       continue;
     }
     if (path.length === 3) {
-      const index = parseConfigPathArrayIndex(path[2] ?? "");
+      const index = parseArrayIndexPathSegment(path[2] ?? "");
       if (index !== undefined) {
         structurallyExplicitLegacyIndexes.add(index);
       }
@@ -1325,7 +1331,7 @@ function canonicalizeAgentRosterForExplicitWrite(params: {
     if (path.length === 2) {
       return [[]];
     }
-    const index = parseConfigPathArrayIndex(path[2] ?? "");
+    const index = parseArrayIndexPathSegment(path[2] ?? "");
     const explicitEntry =
       explicitRoster?.kind === "list" && Array.isArray(explicitRoster.value) && index !== undefined
         ? explicitRoster.value[index]
@@ -1358,7 +1364,7 @@ function canonicalizeAgentRosterForExplicitWrite(params: {
       if (path[0] !== "agents" || path[1] !== "list" || path.length !== 4 || path[3] !== "id") {
         continue;
       }
-      const index = parseConfigPathArrayIndex(path[2] ?? "");
+      const index = parseArrayIndexPathSegment(path[2] ?? "");
       const explicitEntry = index === undefined ? undefined : explicitRoster.value[index];
       const oldId = index === undefined ? undefined : legacyIdsByIndex.get(index);
       const nextId = isRecord(explicitEntry) ? explicitEntry.id : undefined;
@@ -1500,7 +1506,7 @@ function canonicalizeAgentRosterForExplicitWrite(params: {
           "Config write cannot unset an agent id; delete the complete roster entry instead.",
         );
       }
-      const index = parseConfigPathArrayIndex(unsetPath[2] ?? "");
+      const index = parseArrayIndexPathSegment(unsetPath[2] ?? "");
       const usesExplicitIdentity =
         index !== undefined && structurallyExplicitLegacyIndexes.has(index);
       const explicitResolvedId =
@@ -1573,46 +1579,30 @@ export function projectAuthoredAgentRosterForWrite(params: {
   return setPathValueCreatingParents(withoutLegacyRoster, ["agents", "entries"], entries);
 }
 
-type ConfigWriteSourceProjectionParams = {
-  inputBasis?: ConfigWriteInputBasis;
+export function resolvePersistCandidateForWrite(params: {
   runtimeConfig: unknown;
   sourceConfig: unknown;
+  sourceConfigValid?: boolean;
+  sourceConfigBeforeMigrations?: unknown;
   nextConfig: unknown;
+  rootAuthoredConfig?: unknown;
+  agentRosterIncludeOwned?: boolean;
+  keyedAgentEntryIncludePaths?: readonly (readonly string[])[];
   unsetPaths?: readonly string[][];
   explicitSetPaths?: readonly (readonly string[])[];
   explicitSetValueSource?: unknown;
-};
-
-export function projectConfigWriteSource(params: ConfigWriteSourceProjectionParams): unknown {
-  const inputBasis = params.inputBasis ?? { kind: "runtime", config: params.runtimeConfig };
-  // Source candidates own every value, including null; merge-patch null means deletion.
-  if (inputBasis.kind === "source") {
-    return structuredClone(params.nextConfig);
-  }
-  const patch = createMergePatch(inputBasis.config, params.nextConfig);
+  persistCanonicalAgentRoster?: boolean;
+  allowedAgentRosterRemovals?: readonly string[];
+  allowIncludeAncestorExplicitSetPaths?: boolean;
+  preserveLegacyAgentRoster?: boolean;
+}): unknown {
+  const patch = createMergePatch(params.runtimeConfig, params.nextConfig);
   const projectedSource = normalizeTouchedAgentModelMapEntries({
-    projectedSource: params.sourceConfig,
+    projectedSource: projectSourceOntoRuntimeShape(params.sourceConfig, params.runtimeConfig),
     patch,
-    touchedPaths: [...(params.explicitSetPaths ?? []), ...(params.unsetPaths ?? [])],
+    explicitSetPaths: params.explicitSetPaths,
     explicitSetValueSource: params.explicitSetValueSource ?? params.nextConfig,
   });
-  return projectRuntimeChangesOntoSource(projectedSource, inputBasis.config, params.nextConfig);
-}
-
-export function resolvePersistCandidateForWrite(
-  params: ConfigWriteSourceProjectionParams & {
-    sourceConfigValid?: boolean;
-    sourceConfigBeforeMigrations?: unknown;
-    rootAuthoredConfig?: unknown;
-    agentRosterIncludeOwned?: boolean;
-    keyedAgentEntryIncludePaths?: readonly (readonly string[])[];
-    persistCanonicalAgentRoster?: boolean;
-    allowedAgentRosterRemovals?: readonly string[];
-    allowIncludeAncestorExplicitSetPaths?: boolean;
-    preserveLegacyAgentRoster?: boolean;
-  },
-): unknown {
-  const inputBasis = params.inputBasis ?? { kind: "runtime", config: params.runtimeConfig };
   const rootAuthoredConfig = params.rootAuthoredConfig ?? params.sourceConfig;
   const wantsCanonicalRoster = shouldPersistCanonicalAgentRoster(params);
   const includeOwnsRoster =
@@ -1661,9 +1651,7 @@ export function resolvePersistCandidateForWrite(
     ? params.explicitSetPaths?.filter((path) => !pathTargetsAgentRoster(path))
     : preserveKeyedEntryIncludes
       ? (params.explicitSetPaths ?? []).filter(
-          (path) =>
-            findOverlappingIncludeOwnedPath(includeProjectionRootAuthoredConfig, [...path]) ===
-            undefined,
+          (path) => !isIncludeOwnedPath(includeProjectionRootAuthoredConfig, [...path]),
         )
       : params.explicitSetPaths;
   const explicitSetValueSource = persistCanonicalRoster
@@ -1678,7 +1666,7 @@ export function resolvePersistCandidateForWrite(
         unsetPaths: params.unsetPaths,
       })
     : (params.explicitSetValueSource ?? params.nextConfig);
-  let persistedBase = projectConfigWriteSource(params);
+  let persistedBase = applyMergePatch(projectedSource, patch);
   if (persistCanonicalRoster) {
     persistedBase = deletePathValue(persistedBase, ["agents", "entries"]);
     persistedBase = deletePathValue(persistedBase, ["agents", "list"]);
@@ -1688,7 +1676,7 @@ export function resolvePersistCandidateForWrite(
     }
   }
   const withPreservedIncludes = preserveUntouchedIncludes({
-    runtimeConfig: inputBasis.config,
+    runtimeConfig: params.runtimeConfig,
     sourceConfig: params.sourceConfig,
     sourceConfigBeforeMigrations: includeProjectionSourceBeforeMigrations,
     nextConfig: params.nextConfig,
@@ -1699,7 +1687,7 @@ export function resolvePersistCandidateForWrite(
   const persisted = injectExplicitlySetPaths({
     valueSource: explicitSetValueSource,
     persistedCandidate: withPreservedIncludes,
-    runtimeConfig: inputBasis.config,
+    runtimeConfig: params.runtimeConfig,
     sourceConfig: params.sourceConfig,
     sourceConfigBeforeMigrations: includeProjectionSourceBeforeMigrations,
     explicitSetPaths,
@@ -1728,8 +1716,8 @@ export function resolvePersistCandidateForWrite(
     nextConfig: params.nextConfig,
     persistedCandidate: withAuthoredRoster,
   });
-  // Source edits and invalid-config repairs own omitted params as well as explicit values.
-  return params.sourceConfigValid === false || inputBasis.kind === "source"
+  // Invalid snapshots are complete repairs; omitted params must stay omitted.
+  return params.sourceConfigValid === false
     ? withSchema
     : preserveAuthoredAgentParams({
         sourceConfig: params.sourceConfig,
@@ -1740,15 +1728,26 @@ export function resolvePersistCandidateForWrite(
       });
 }
 
+function readRootSchemaUri(value: unknown): string | undefined {
+  if (!isRecord(value) || typeof value.$schema !== "string") {
+    return undefined;
+  }
+  return value.$schema;
+}
+
+function hasOwnRootSchemaKey(value: unknown): boolean {
+  return isRecord(value) && Object.hasOwn(value, "$schema");
+}
+
 function preserveRootSchemaUri(params: {
   rootAuthoredConfig: unknown;
   nextConfig: unknown;
   persistedCandidate: unknown;
 }): unknown {
-  if (isRecord(params.nextConfig) && Object.hasOwn(params.nextConfig, "$schema")) {
+  if (hasOwnRootSchemaKey(params.nextConfig)) {
     return params.persistedCandidate;
   }
-  const sourceSchema = readStringField(asOptionalRecord(params.rootAuthoredConfig), "$schema");
+  const sourceSchema = readRootSchemaUri(params.rootAuthoredConfig);
   if (sourceSchema === undefined || !isRecord(params.persistedCandidate)) {
     return params.persistedCandidate;
   }
@@ -1758,4 +1757,11 @@ function preserveRootSchemaUri(params: {
   };
 }
 
+function isNumericPathSegment(raw: string): boolean {
+  return parseArrayIndexPathSegment(raw) !== undefined;
+}
+
+function parseArrayIndexPathSegment(raw: string): number | undefined {
+  return parseConfigPathArrayIndex(raw);
+}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -61,7 +61,8 @@ function createRouteSessions() {
 type AppLifecycleState = {
   loginToken: string;
   loginPassword: string;
-  loginShowGatewaySecret: boolean;
+  loginShowGatewayToken: boolean;
+  loginShowGatewayPassword: boolean;
   disconnectedCallback: () => void;
   synchronizeGateway: (gateway: ApplicationGateway) => void;
 };
@@ -282,11 +283,13 @@ function committedRouterState(
 describe("OpenClaw app lifecycle", () => {
   it("hides revealed login credentials when the app connection epoch ends", () => {
     const app = document.createElement("openclaw-app") as unknown as AppLifecycleState;
-    app.loginShowGatewaySecret = true;
+    app.loginShowGatewayToken = true;
+    app.loginShowGatewayPassword = true;
 
     app.disconnectedCallback();
 
-    expect(app.loginShowGatewaySecret).toBe(false);
+    expect(app.loginShowGatewayToken).toBe(false);
+    expect(app.loginShowGatewayPassword).toBe(false);
   });
 
   it("hides revealed login credentials when the Gateway source changes", () => {
@@ -310,11 +313,13 @@ describe("OpenClaw app lifecycle", () => {
       },
     } as ApplicationGateway;
     app.synchronizeGateway(firstGateway);
-    app.loginShowGatewaySecret = true;
+    app.loginShowGatewayToken = true;
+    app.loginShowGatewayPassword = true;
 
     app.synchronizeGateway(secondGateway);
 
-    expect(app.loginShowGatewaySecret).toBe(false);
+    expect(app.loginShowGatewayToken).toBe(false);
+    expect(app.loginShowGatewayPassword).toBe(false);
     expect(app.loginToken).toBe("second");
     expect(app.loginPassword).toBe("second-password");
   });

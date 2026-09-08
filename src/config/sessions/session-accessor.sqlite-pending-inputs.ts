@@ -134,9 +134,7 @@ export function withSessionPendingInputRelocation<T>(
 ): T {
   const owner = owners.current.getStore();
   const record = asOptionalRecord(message);
-  const ownsSource = owner?.transcriptInputId === sourceInputId;
-  const claimsOwner = record?.role === "user" && record.idempotencyKey === owner?.idempotencyKey;
-  if (!owner || (!ownsSource && !claimsOwner)) {
+  if (!owner || record?.role !== "user" || record.idempotencyKey !== owner.idempotencyKey) {
     return append();
   }
   assertPendingInputOwnerCurrent(owner);

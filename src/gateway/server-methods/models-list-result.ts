@@ -12,13 +12,16 @@ import {
   modelCatalogBrowseRequiresFullDiscovery,
   type ModelCatalogBrowseView,
 } from "../../agents/model-catalog-browse.js";
-import { createModelCatalogView } from "../../agents/model-catalog-view.js";
+import {
+  findModelCatalogRouteDonor,
+  projectModelCatalogEntryForRoute,
+  resolveConfiguredModelCatalogOverrides,
+} from "../../agents/model-catalog-route.js";
 import {
   resolveLogicalModelCatalogEntryState,
   prepareLogicalVisibleModelCatalog,
 } from "../../agents/model-catalog-visibility.js";
 import type { ModelCatalogSnapshot, ModelCatalogEntry } from "../../agents/model-catalog.types.js";
-import { createModelFastModeResolver } from "../../agents/model-fast-mode.js";
 import { modelKey } from "../../agents/model-ref-shared.js";
 import {
   dedupeModelCatalogEntries,
@@ -31,6 +34,7 @@ import {
 import {
   createOpenAIModelRoutesResolver,
   openAIModelCatalogRoutePolicy,
+  resolveModelCatalogIdentityKey,
 } from "../../agents/openai-model-routes.js";
 import { publishedModelCatalogOwnerMatchesAgent } from "../../agents/prepared-model-catalog-owner.js";
 import { isPreparedModelCatalogFull } from "../../agents/prepared-model-runtime.full-catalog.js";
@@ -84,20 +88,58 @@ function resolveModelsListView(params: Record<string, unknown>): ModelCatalogBro
 export function createGatewayAgentModelCatalogProjector(params: ModelsListAuthProjectionParams) {
   const authProjection = createModelsListAuthProjection(params);
   const { evaluateEntry, evaluateNative, snapshot } = authProjection;
-  const view = createModelCatalogView({
-    cfg: params.cfg,
-    catalog: snapshot.entries,
-    routeVariants: snapshot.routeVariants.length > 0 ? snapshot.routeVariants : snapshot.entries,
-  });
+  const projectionCatalog =
+    snapshot.routeVariants.length > 0 ? snapshot.routeVariants : snapshot.entries;
+  const routeVariantsByKey = new Map<string, ModelCatalogEntry[]>();
+  for (const entry of projectionCatalog) {
+    const key = resolveModelCatalogIdentityKey(entry);
+    const variants = routeVariantsByKey.get(key) ?? [];
+    variants.push(entry);
+    routeVariantsByKey.set(key, variants);
+  }
+  const resolveRouteVariants = (entry: ModelCatalogEntry) =>
+    routeVariantsByKey.get(resolveModelCatalogIdentityKey(entry)) ?? [entry];
+  const logicalEntries: ModelCatalogEntry[] = [];
+  const logicalEntryKeys = new Set<string>();
+  for (const entry of snapshot.entries) {
+    const key = resolveModelCatalogIdentityKey(entry);
+    if (!logicalEntryKeys.has(key)) {
+      logicalEntryKeys.add(key);
+      logicalEntries.push(entry);
+    }
+  }
   let projectedCatalog: Promise<ModelCatalogEntry[]> | undefined;
   return {
     ...authProjection,
     projectCatalog: () =>
       (projectedCatalog ??= Promise.all(
-        view.logicalEntries.map(async (entry) => {
-          const routeVariants = view.variantsOf(entry) ?? [entry];
+        logicalEntries.map(async (entry) => {
+          const routeVariants = resolveRouteVariants(entry);
           const evaluation = evaluateNative(entry, await evaluateEntry(entry, routeVariants));
-          const { entry: projected, donor } = view.project(entry, evaluation);
+          const state = resolveLogicalModelCatalogEntryState({
+            evaluation,
+            routePolicy: openAIModelCatalogRoutePolicy,
+          });
+          const overrides = resolveConfiguredModelCatalogOverrides({
+            cfg: params.cfg,
+            entry,
+            policy: openAIModelCatalogRoutePolicy,
+          });
+          const projected = projectModelCatalogEntryForRoute({
+            entry,
+            projection: state.routeProjection,
+            catalog: routeVariants,
+            ...(overrides ? { overrides } : {}),
+          });
+          if (state.routeProjection.kind !== "selected") {
+            return projected;
+          }
+          const donor = findModelCatalogRouteDonor({
+            entry,
+            route: state.routeProjection.route,
+            policy: openAIModelCatalogRoutePolicy,
+            catalog: routeVariants,
+          });
           if (donor && Object.hasOwn(donor, "compat")) {
             projected.compat = donor.compat;
           }
@@ -112,7 +154,6 @@ export function createGatewayAgentModelCatalogProjector(params: ModelsListAuthPr
 
 function createPublicModelsListProjector(params: {
   thinkingCatalog: ModelCatalogEntry[];
-  fastMode: ReturnType<typeof createModelFastModeResolver>;
   cfg: OpenClawConfig;
   agentId: string;
   configuredEntriesByKey: ReturnType<typeof resolveConfiguredModelEntries>["byKey"];
@@ -178,11 +219,9 @@ function createPublicModelsListProjector(params: {
     const projectedAvailability = params.preserveUnknownAvailability
       ? evaluation.availability
       : (evaluation.availability ?? false);
-    const supportsFastMode = params.fastMode(entry, evaluation, preparedEntry.agentRuntime?.id);
     return Object.assign(
       {},
       preparedEntry,
-      supportsFastMode === undefined ? {} : { supportsFastMode },
       projectedAvailability === undefined ? {} : { available: projectedAvailability },
       projectedAvailability === false && evaluation.unavailableReason
         ? {
@@ -473,13 +512,6 @@ export async function prepareModelsListResult(
     );
     const projectPublic = createPublicModelsListProjector({
       thinkingCatalog: catalog,
-      fastMode: createModelFastModeResolver({
-        cfg,
-        agentId,
-        catalog: inventory,
-        metadataSnapshot,
-        pluginRegistry: preparedPluginRegistry,
-      }),
       cfg,
       agentId,
       configuredEntriesByKey,
@@ -488,7 +520,7 @@ export async function prepareModelsListResult(
       ...(capableProviders ? { apiKeyCapabilities: capableProviders } : {}),
     });
     return {
-      isCurrent: () => isCurrent() && inventoryProjector.isCurrent(),
+      isCurrent,
       read: () => ({
         models: entries.map(({ entry, host }) => projectPublic(entry, evaluateNative(entry, host))),
         ...outcomeProjection,
@@ -540,20 +572,13 @@ export async function prepareModelsListResult(
   });
   const projectPublic = createPublicModelsListProjector({
     thinkingCatalog: catalog,
-    fastMode: createModelFastModeResolver({
-      cfg,
-      agentId,
-      catalog,
-      metadataSnapshot,
-      pluginRegistry: preparedPluginRegistry,
-    }),
     cfg,
     agentId,
     configuredEntriesByKey,
     ...(capableProviders ? { apiKeyCapabilities: capableProviders } : {}),
   });
   return {
-    isCurrent: () => isCurrent() && projector.isCurrent(),
+    isCurrent,
     read: () => ({
       models: readCatalog().map((entry) => {
         const evaluation = evaluations.get(evaluationKey(entry));

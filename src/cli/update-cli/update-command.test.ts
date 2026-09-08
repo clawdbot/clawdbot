@@ -977,7 +977,6 @@ describe("updatePluginsAfterCoreUpdate (invalid config)", () => {
     const result = await updatePluginsAfterCoreUpdate({
       root: "/tmp/openclaw-test",
       channel: "stable",
-      configWriteOptions: {},
       configSnapshot: {
         valid: false,
         issues: [],

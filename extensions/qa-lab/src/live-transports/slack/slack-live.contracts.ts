@@ -118,7 +118,6 @@ export function assertSlackCodexApprovalModelSupported(modelRef: string) {
 
 export type SlackQaMessageScenarioRun = {
   afterNoReply?: (context: SlackQaScenarioContext) => Promise<string | void>;
-  captureBeforeReply?: (messages: readonly SlackObservedMessage[]) => boolean;
   cleanup?: (context: Omit<SlackQaScenarioContext, "sentTs">) => Promise<void>;
   kind?: "message";
   expectReply: boolean;

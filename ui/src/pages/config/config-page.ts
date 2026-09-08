@@ -13,7 +13,6 @@ import type { ModelCatalogEntry } from "../../api/types.ts";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { pathForRoute, type RouteId } from "../../app-route-paths.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
-import { hasNativeBrowserBridge } from "../../app/native-browser-host.ts";
 import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { isBrowserPanelAvailable } from "../../app/panel-availability.ts";
 import { isAppearancePref, type ResettableServerUiPrefKey } from "../../app/server-prefs-state.ts";
@@ -1298,7 +1297,7 @@ export class ConfigPage extends OpenClawLightDomElement {
               })
           : undefined,
       sectionPrelude:
-        activeSection === "browser" && browserPanelAvailable && !hasNativeBrowserBridge()
+        activeSection === "browser" && browserPanelAvailable
           ? renderBrowserLinkPreferencesRow({
               enabled: this.settings.openLinksInControlUiBrowser === true,
               onChange: (enabled) => this.setSetting("openLinksInControlUiBrowser", enabled),

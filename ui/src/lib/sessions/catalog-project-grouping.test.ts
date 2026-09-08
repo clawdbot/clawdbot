@@ -212,27 +212,23 @@ describe("groupCatalogSessionsByPerson", () => {
     expect(result.groups[0]?.title).toBe("Created by Ada");
   });
 
-  it.each([
-    ["profile", "profile-ada", "profile-ada"],
-    ["profile", "gateway-owner", "Shared owner"],
-    ["agent", "gateway-owner", "gateway-owner"],
-  ] as const)("labels a blank %s actor %s", (type, id, expected) => {
+  it("falls back to the actor id when the label is missing or blank", () => {
     const result = groupCatalogSessionsByPerson([
       {
         ...session("one"),
         createdActor: {
           type: "human",
-          id,
-          identity: { type, id },
+          id: "profile-ada",
+          identity: { type: "profile", id: "profile-ada" },
           label: "  ",
         },
       },
     ]);
 
     expect(result.groups[0]).toMatchObject({
-      key: `person:${type}:${id}`,
-      legacySectionKey: `person:${id}`,
-      label: expected,
+      key: "person:profile:profile-ada",
+      legacySectionKey: "person:profile-ada",
+      label: "profile-ada",
     });
   });
 

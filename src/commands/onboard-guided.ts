@@ -592,12 +592,10 @@ async function runGuidedOnboardingFlow(
     const recommendedConfig = recommendationOutcome.config;
     if (recommendedConfig !== persistedConfig) {
       const { writeWizardConfigFile } = await import("../wizard/setup.shared.js");
-      persistedConfig = (
-        await writeWizardConfigFile(recommendedConfig, {
-          allowConfigSizeDrop: false,
-          mergeBase: persistedConfig,
-        })
-      ).nextConfig;
+      persistedConfig = await writeWizardConfigFile(recommendedConfig, {
+        allowConfigSizeDrop: false,
+        mergeBase: persistedConfig,
+      });
     }
     recommendationOutcome.commitResult();
   }

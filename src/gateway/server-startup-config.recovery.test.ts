@@ -57,7 +57,6 @@ const pluginMetadataSnapshot = vi.hoisted((): PluginMetadataSnapshot => {
     diagnostics: [],
     byPluginId: new Map(),
     normalizePluginId: (pluginId) => pluginId,
-    declaredProviderOwners: new Map(),
     owners: emptyOwners,
     metrics: zeroMetrics,
   };

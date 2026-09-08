@@ -569,10 +569,10 @@ export function runCommand(
       );
       forceKillTimer.unref();
     }, resolvedTimeoutMs);
-    child.stdout?.setEncoding("utf8").on("data", (chunk) => {
+    child.stdout?.on("data", (chunk) => {
       stdout = appendBoundedTail(stdout, chunk, outputCaptureChars);
     });
-    child.stderr?.setEncoding("utf8").on("data", (chunk) => {
+    child.stderr?.on("data", (chunk) => {
       stderr = appendBoundedTail(stderr, chunk, outputCaptureChars);
     });
     child.on("error", (error) => {
@@ -1324,10 +1324,9 @@ async function delayWithAbort(delayMs: number, signal?: AbortSignal) {
   }
 }
 
-export function configureKitchenSink(env: KitchenSinkEnv, port: number) {
+function configureKitchenSink(env: KitchenSinkEnv, port: number) {
   const configPath = env.OPENCLAW_CONFIG_PATH;
   const config = asRecord(fs.existsSync(configPath) ? readJson(configPath) : {});
-  const frozenTarget = env.OPENCLAW_FROZEN_PLUGIN_PRERELEASE_FIXTURE_DIALECT === "legacy";
   const gateway = asRecord(config.gateway);
   const plugins = asRecord(config.plugins);
   const pluginEntries = asRecord(plugins.entries);
@@ -1352,11 +1351,7 @@ export function configureKitchenSink(env: KitchenSinkEnv, port: number) {
   config.plugins = {
     ...plugins,
     enabled: true,
-    ...(frozenTarget
-      ? {}
-      : {
-          allow: [...new Set([...(Array.isArray(plugins.allow) ? plugins.allow : []), PLUGIN_ID])],
-        }),
+    allow: [...new Set([...(Array.isArray(plugins.allow) ? plugins.allow : []), PLUGIN_ID])],
     entries: {
       ...pluginEntries,
       [PLUGIN_ID]: {
@@ -1384,7 +1379,8 @@ export function configureKitchenSink(env: KitchenSinkEnv, port: number) {
       ...new Set([...(Array.isArray(tools.alsoAllow) ? tools.alsoAllow : []), ...EXPECTED_TOOLS]),
     ],
   };
-  const ttsConfig = {
+  config.tts = {
+    ...tts,
     provider: tts.provider ?? speechProvider,
     providers: {
       ...ttsProviders,
@@ -1393,12 +1389,6 @@ export function configureKitchenSink(env: KitchenSinkEnv, port: number) {
       },
     },
   };
-  if (frozenTarget) {
-    const messages = asRecord(config.messages);
-    config.messages = { ...messages, tts: { ...asRecord(messages.tts), ...ttsConfig } };
-  } else {
-    config.tts = { ...tts, ...ttsConfig };
-  }
   writeJson(configPath, config);
 }
 

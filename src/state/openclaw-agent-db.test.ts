@@ -7,6 +7,10 @@ import type { DatabaseSync } from "node:sqlite";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import {
+  beginAgentDeletion,
+  claimCompletedAgentDeletion,
+} from "../agents/agent-lifecycle-registry.js";
+import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
@@ -19,13 +23,7 @@ import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.j
 import { VERSION } from "../version.js";
 import {
   assertAgentDeletionPathFence,
-  beginAgentDeletionJournal,
-  claimCompletedAgentDeletionJournal,
-  completeAgentDeletionJournalInDatabase,
   prepareAgentDeletionPathFence,
-  removeAgentDeletionJournal,
-  updateAgentDeletionJournalDatabasePaths,
-  updateAgentDeletionJournalCleanupPaths,
 } from "./agent-deletion-journal.js";
 import { AGENT_MEDIA_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import {
@@ -896,10 +894,7 @@ describe("openclaw agent database", () => {
       workspaceDir: path.join(stateDir, "workspace-deleted"),
       sessionsDir: path.join(stateDir, "sessions-deleted"),
     };
-    const deletion = beginAgentDeletionJournal(
-      { ...entry, operationId: "deletion", deleteFiles: true },
-      { env },
-    );
+    const deletion = beginAgentDeletion(entry, { env });
     const databasePaths = [path.join(entry.agentDir, "openclaw-agent.sqlite")];
     const cleanupPaths = [
       {
@@ -914,20 +909,13 @@ describe("openclaw agent database", () => {
         done: false,
       },
     ];
-    updateAgentDeletionJournalDatabasePaths(deletion.agentId, deletion.operationId, databasePaths, {
-      env,
-    });
-    updateAgentDeletionJournalCleanupPaths(deletion.agentId, deletion.operationId, cleanupPaths, {
-      env,
-    });
+    deletion.fenceDatabasePaths(databasePaths);
+    deletion.fenceCleanupPaths(cleanupPaths);
 
-    const recovery = beginAgentDeletionJournal(
-      { ...entry, operationId: "recovery", deleteFiles: true },
-      { env },
-    );
-    expect(recovery.databasePaths).toEqual(databasePaths);
-    expect(recovery.cleanupPaths).toEqual(cleanupPaths);
-    removeAgentDeletionJournal(recovery.agentId, recovery.operationId, { env });
+    const recovery = beginAgentDeletion(entry, { env });
+    expect(recovery.entry.databasePaths).toEqual(databasePaths);
+    expect(recovery.entry.cleanupPaths).toEqual(cleanupPaths);
+    recovery.rollback();
   });
 
   it("fences registration and lease claims beneath another agent's pending deletion", () => {
@@ -947,10 +935,8 @@ describe("openclaw agent database", () => {
       env,
     });
     registerOpenClawAgentDatabase({ agentId: "deleted", path: registeredSidecarPath, env });
-    const deletion = beginAgentDeletionJournal(
+    const deletion = beginAgentDeletion(
       {
-        operationId: "deletion",
-        deleteFiles: true,
         agentId: "deleted",
         agentDir: linkedAgentDir,
         workspaceDir: path.join(stateDir, "workspace-deleted"),
@@ -972,7 +958,7 @@ describe("openclaw agent database", () => {
         ).toThrow("deletion owns");
       }
     } finally {
-      removeAgentDeletionJournal(deletion.agentId, deletion.operationId, { env });
+      deletion.rollback();
     }
 
     expect(() =>
@@ -997,10 +983,8 @@ describe("openclaw agent database", () => {
       path: foreignDatabasePath,
       env,
     });
-    const deletion = beginAgentDeletionJournal(
+    const deletion = beginAgentDeletion(
       {
-        operationId: "deletion",
-        deleteFiles: true,
         agentId: "deleted",
         agentDir: path.join(stateDir, "agents", "deleted", "agent"),
         workspaceDir,
@@ -1012,7 +996,7 @@ describe("openclaw agent database", () => {
     expect(() => assertNoOpenClawAgentDatabaseLeases("deleted", { env })).toThrow("deletion owns");
     releaseOpenClawAgentDatabaseLease(leaseId, { env });
     expect(() => assertNoOpenClawAgentDatabaseLeases("deleted", { env })).not.toThrow();
-    removeAgentDeletionJournal(deletion.agentId, deletion.operationId, { env });
+    deletion.rollback();
   });
 
   it("rejects a database claim prepared before deletion cleanup completes", () => {
@@ -1020,10 +1004,8 @@ describe("openclaw agent database", () => {
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const agentDir = path.join(stateDir, "agents", "deleted", "agent");
     const databasePath = path.join(agentDir, "survivor.sqlite");
-    const deletion = beginAgentDeletionJournal(
+    const deletion = beginAgentDeletion(
       {
-        operationId: "deletion",
-        deleteFiles: true,
         agentId: "deleted",
         agentDir,
         workspaceDir: path.join(stateDir, "workspace-deleted"),
@@ -1036,15 +1018,7 @@ describe("openclaw agent database", () => {
       { env },
     );
 
-    runOpenClawStateWriteTransaction(
-      (sharedStateDatabase) =>
-        completeAgentDeletionJournalInDatabase(
-          sharedStateDatabase,
-          deletion.agentId,
-          deletion.operationId,
-        ),
-      { env },
-    );
+    deletion.finish();
 
     expect(() =>
       runOpenClawStateWriteTransaction(
@@ -3203,10 +3177,8 @@ describe("openclaw agent database", () => {
     const original = openOpenClawAgentDatabase({ agentId: "worker-1", env });
     const originalInode = fs.statSync(original.path).ino;
     const archivedDir = path.join(stateDir, "trash", "worker-1-agent");
-    const deletion = beginAgentDeletionJournal(
+    const deletion = beginAgentDeletion(
       {
-        operationId: "deletion",
-        deleteFiles: true,
         agentId: "worker-1",
         agentDir: path.dirname(original.path),
         workspaceDir: path.join(stateDir, "workspace-worker-1"),
@@ -3224,16 +3196,8 @@ describe("openclaw agent database", () => {
         "agent worker-1 is deleted",
       );
 
-      runOpenClawStateWriteTransaction(
-        (sharedStateDatabase) =>
-          completeAgentDeletionJournalInDatabase(
-            sharedStateDatabase,
-            deletion.agentId,
-            deletion.operationId,
-          ),
-        { env },
-      );
-      expect(claimCompletedAgentDeletionJournal("worker-1", deletion.operationId, { env })).toBe(
+      deletion.finish();
+      expect(claimCompletedAgentDeletion("worker-1", deletion.entry.operationId, { env })).toBe(
         true,
       );
       const recreated = openOpenClawAgentDatabase({ agentId: "worker-1", env });
@@ -3244,15 +3208,7 @@ describe("openclaw agent database", () => {
         expect.objectContaining({ agentId: "worker-1", path: recreated.path }),
       ]);
     } finally {
-      runOpenClawStateWriteTransaction(
-        (sharedStateDatabase) =>
-          completeAgentDeletionJournalInDatabase(
-            sharedStateDatabase,
-            deletion.agentId,
-            deletion.operationId,
-          ),
-        { env },
-      );
+      deletion.finish();
     }
   });
 
@@ -3261,10 +3217,8 @@ describe("openclaw agent database", () => {
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const agentDir = path.join(stateDir, "agents", "worker-1", "agent");
     const databasePath = path.join(agentDir, "openclaw-agent.sqlite");
-    const deletion = beginAgentDeletionJournal(
+    const deletion = beginAgentDeletion(
       {
-        operationId: "deletion",
-        deleteFiles: true,
         agentId: "worker-1",
         agentDir,
         workspaceDir: path.join(stateDir, "workspace-worker-1"),
@@ -3272,15 +3226,7 @@ describe("openclaw agent database", () => {
       },
       { env },
     );
-    runOpenClawStateWriteTransaction(
-      (sharedStateDatabase) =>
-        completeAgentDeletionJournalInDatabase(
-          sharedStateDatabase,
-          deletion.agentId,
-          deletion.operationId,
-        ),
-      { env },
-    );
+    deletion.finish();
 
     expect(() =>
       registerOpenClawAgentDatabase({ agentId: "worker-1", path: databasePath, env }),
@@ -3290,9 +3236,7 @@ describe("openclaw agent database", () => {
     ).not.toThrow();
     unregisterOpenClawAgentDatabase({ agentId: "worker-2", path: databasePath, env });
 
-    expect(claimCompletedAgentDeletionJournal("worker-1", deletion.operationId, { env })).toBe(
-      true,
-    );
+    expect(claimCompletedAgentDeletion("worker-1", deletion.entry.operationId, { env })).toBe(true);
     expect(() =>
       registerOpenClawAgentDatabase({ agentId: "worker-1", path: databasePath, env }),
     ).not.toThrow();
@@ -3308,10 +3252,8 @@ describe("openclaw agent database", () => {
       path: databasePath,
       env,
     });
-    const deletion = beginAgentDeletionJournal(
+    const deletion = beginAgentDeletion(
       {
-        operationId: "deletion",
-        deleteFiles: true,
         agentId: "worker-1",
         agentDir: path.dirname(databasePath),
         workspaceDir: path.join(stateDir, "workspace-worker-1"),
@@ -3330,7 +3272,7 @@ describe("openclaw agent database", () => {
       expect(() => assertNoOpenClawAgentDatabaseLeases("worker-1", { env })).not.toThrow();
     } finally {
       releaseOpenClawAgentDatabaseLease(leaseId, { env });
-      removeAgentDeletionJournal(deletion.agentId, deletion.operationId, { env });
+      deletion.rollback();
     }
   });
 

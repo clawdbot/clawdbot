@@ -1,7 +1,7 @@
 import { hashRuntimeConfigValue } from "../config/runtime-snapshot.js";
 import {
   listRuntimePluginIdsFromRegistry,
-  createRuntimePluginManifestLookup,
+  registryMatchesManifestPluginIds,
 } from "../plugins/active-runtime-registry.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
@@ -76,8 +76,10 @@ export function loadPreparedInboundPluginRegistry(
       workspaceDir: metadataSnapshot.workspaceDir,
       allowWorkspaceScopedSnapshot: true,
     }) === metadataSnapshot &&
-    listRuntimePluginIdsFromRegistry(activeRegistry).every(
-      createRuntimePluginManifestLookup(activeRegistry, metadataSnapshot.manifestRegistry.plugins),
+    registryMatchesManifestPluginIds(
+      activeRegistry,
+      metadataSnapshot.manifestRegistry.plugins,
+      listRuntimePluginIdsFromRegistry(activeRegistry),
     )
       ? activeRegistry
       : undefined;

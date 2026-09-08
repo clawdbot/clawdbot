@@ -1,3 +1,4 @@
+// ACP Core module implements session interaction mode behavior.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
 type AcpSessionInteractionMode = "interactive" | "parent-owned-background";

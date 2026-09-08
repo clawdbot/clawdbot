@@ -174,18 +174,13 @@ export async function readProviderTextResponse(
   return new TextDecoder().decode(bytes);
 }
 
-type ProviderErrorPayloadMetadata = {
-  detail?: string;
-  code?: string;
-  type?: string;
-};
-
-function resolveProviderErrorPayloadMetadata(payload: unknown): ProviderErrorPayloadMetadata {
+/** Formats common provider JSON error payload shapes into one readable detail string. */
+export function formatProviderErrorPayload(payload: unknown): string | undefined {
   const root = asOptionalRecord(payload);
   const detailObject = asOptionalRecord(root?.detail);
   const subject = asOptionalRecord(root?.error) ?? detailObject ?? root;
   if (!subject) {
-    return { detail: undefined };
+    return undefined;
   }
   const errorDescription =
     trimToUndefined(subject.error_description) ?? trimToUndefined(root?.error_description);
@@ -202,21 +197,50 @@ function resolveProviderErrorPayloadMetadata(payload: unknown): ProviderErrorPay
   const metadata = [type ? `type=${type}` : undefined, code ? `code=${code}` : undefined]
     .filter((value): value is string => Boolean(value))
     .join(", ");
-  const detail = message
-    ? `${truncateErrorDetail(message)}${metadata ? ` [${metadata}]` : ""}`
-    : metadata
-      ? `[${metadata}]`
-      : undefined;
-  return { detail, code, type };
+  if (message && metadata) {
+    return `${truncateErrorDetail(message)} [${metadata}]`;
+  }
+  if (message) {
+    return truncateErrorDetail(message);
+  }
+  if (metadata) {
+    return `[${metadata}]`;
+  }
+  return undefined;
 }
 
-/** Formats common provider JSON error payload shapes into one readable detail string. */
-export function formatProviderErrorPayload(payload: unknown): string | undefined {
-  return resolveProviderErrorPayloadMetadata(payload).detail;
+type ProviderErrorPayloadMetadata = {
+  detail?: string;
+  code?: string;
+  type?: string;
+};
+
+function extractProviderErrorPayloadMetadata(payload: unknown): ProviderErrorPayloadMetadata {
+  const root = asOptionalRecord(payload);
+  const detailObject = asOptionalRecord(root?.detail);
+  const subject = asOptionalRecord(root?.error) ?? detailObject ?? root;
+  if (!subject) {
+    return {};
+  }
+
+  const detail = formatProviderErrorPayload(payload);
+  const type = trimToUndefined(subject.type);
+  const errorDescription =
+    trimToUndefined(subject.error_description) ?? trimToUndefined(root?.error_description);
+  const oauthCode = errorDescription ? trimToUndefined(root?.error) : undefined;
+  const code = trimToUndefined(subject.code) ?? trimToUndefined(subject.status) ?? oauthCode;
+  return {
+    ...(detail ? { detail: redactSensitiveText(detail) } : {}),
+    ...(code ? { code } : {}),
+    ...(type ? { type } : {}),
+  };
 }
 
 /** Metadata extracted from a non-2xx provider response body and headers. */
-type ProviderHttpErrorInfo = ProviderErrorPayloadMetadata & {
+type ProviderHttpErrorInfo = {
+  detail?: string;
+  code?: string;
+  type?: string;
   body?: string;
   requestId?: string;
 };
@@ -263,7 +287,7 @@ async function extractProviderErrorInfo(
       : rawRequestId;
   const rawBody = trimToUndefined(prefix?.text);
   if (!rawBody) {
-    return { requestId };
+    return requestId ? { requestId } : {};
   }
   // Redact before metadata extraction or preview truncation can split a credential.
   const safeBody = options?.requestHeaders
@@ -273,20 +297,19 @@ async function extractProviderErrorInfo(
     : rawBody;
   const body = redactProviderErrorBody(safeBody);
   try {
-    const metadata = resolveProviderErrorPayloadMetadata(JSON.parse(safeBody));
+    const metadata = extractProviderErrorPayloadMetadata(JSON.parse(safeBody));
     return {
-      // Public formatting stays raw; HTTP details are redacted before choosing the fallback.
-      detail: (metadata.detail && redactSensitiveText(metadata.detail)) || body,
-      code: metadata.code,
-      type: metadata.type,
+      ...(metadata.detail ? { detail: metadata.detail } : { detail: body }),
+      ...(metadata.code ? { code: metadata.code } : {}),
+      ...(metadata.type ? { type: metadata.type } : {}),
       body,
-      requestId,
+      ...(requestId ? { requestId } : {}),
     };
   } catch {
     return {
       detail: body,
       body,
-      requestId,
+      ...(requestId ? { requestId } : {}),
     };
   }
 }

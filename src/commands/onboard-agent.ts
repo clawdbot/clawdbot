@@ -62,8 +62,6 @@ export async function ensureOnboardingAgent(params: {
   beforePersistentApply?: () => void;
 }): Promise<{
   config: OpenClawConfig;
-  /** Comparison basis for the returned proposal, including any agent-creation rebase. */
-  configBase: OpenClawConfig;
   agentId: string;
   bootstrapPending: boolean;
   createdAgent: boolean;
@@ -100,7 +98,6 @@ export async function ensureOnboardingAgent(params: {
   ) {
     return {
       config: params.config,
-      configBase: params.baseConfig ?? params.config,
       agentId: resolveAmbientOwnerAgentId(params.config),
       bootstrapPending: false,
       createdAgent: false,
@@ -119,7 +116,6 @@ export async function ensureOnboardingAgent(params: {
         candidate: params.config,
         currentRuntime: effective,
       }),
-      configBase: effective,
       agentId: resolveAmbientOwnerAgentId(effective),
       bootstrapPending: false,
       createdAgent: false,
@@ -168,7 +164,6 @@ export async function ensureOnboardingAgent(params: {
       : [];
   return {
     config,
-    configBase: after.config,
     agentId: created.agentId,
     bootstrapPending: created.bootstrapPending,
     createdAgent: created.status === "created",

@@ -1,3 +1,4 @@
+// Media Understanding Common module implements provider supports behavior.
 import type { MediaUnderstandingCapability } from "./types.js";
 
 type MediaCapabilityProvider = {

@@ -25,7 +25,6 @@ import {
 const log = createSubsystemLogger("agents/agent-command");
 
 type PreparedRecoveryOwnerTarget = object & {
-  sessionAgentId: string;
   isNewSession: boolean;
   previousSessionId?: string;
   sessionId: string;
@@ -84,8 +83,6 @@ async function claimAgentCommandRecoveryOwner(params: {
       transferredLease.lifecycleGeneration === params.lifecycleGeneration &&
       transferredLease.sessionId === expectedLeaseSessionId &&
       transferredLease.sessionKey === params.prepared.sessionKey &&
-      (transferredLease.agentId === undefined ||
-        transferredLease.agentId === params.prepared.sessionAgentId) &&
       path.resolve(transferredLease.storePath) === path.resolve(params.prepared.storePath);
     if (!matchesPreparedTarget) {
       // Gateway transfers a persisted fence before preparation; bind it again after
@@ -108,11 +105,6 @@ async function claimAgentCommandRecoveryOwner(params: {
   if (!sessionKey) {
     return undefined;
   }
-  const target = {
-    agentId: params.prepared.sessionAgentId,
-    sessionKey,
-    storePath: params.prepared.storePath,
-  };
   if (params.mode === "reject_uncoordinated") {
     const recoveryInspection = await inspectMainSessionRecoveryRequired({
       allowMissingSession:
@@ -120,7 +112,7 @@ async function claimAgentCommandRecoveryOwner(params: {
         params.opts.sessionId?.trim() === params.prepared.sessionId,
       expectedSessionId: params.prepared.previousSessionId ?? params.prepared.sessionId,
       lifecycleGeneration: params.lifecycleGeneration,
-      target,
+      target: { sessionKey, storePath: params.prepared.storePath },
     });
     if (recoveryInspection.kind === "invalidated") {
       throw createSessionWorkStartChangedError(sessionKey);
@@ -142,7 +134,7 @@ async function claimAgentCommandRecoveryOwner(params: {
     sessionId: params.prepared.previousSessionId ?? params.prepared.sessionId,
     replacementSessionId: params.prepared.isNewSession ? params.prepared.sessionId : undefined,
     runId: params.opts.runId,
-    target,
+    target: { sessionKey, storePath: params.prepared.storePath },
   });
   if (claim.kind === "invalidated") {
     throw createSessionWorkStartChangedError(sessionKey);

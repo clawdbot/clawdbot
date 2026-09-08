@@ -3,7 +3,6 @@ import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { toErrorObject } from "../../infra/errors.js";
 import { resolveExecutablePath } from "../../infra/executable-path.js";
-import { mergePathPrepend } from "../../infra/path-prepend.js";
 import { BLOCKED_TOOL_CALL_ABORT_FLOOR_MS } from "../../logging/diagnostic-run-activity.js";
 import type {
   CliBackendExecute,
@@ -20,7 +19,6 @@ import { FailoverError, isSignalTimeoutReason } from "../failover-error.js";
 import { withAgentQuestionAnswerAuthority } from "../harness/host-private-capabilities.js";
 import { runStructuredInput } from "../harness/structured-input-execution.js";
 import { compileStructuredInputQuestions } from "../harness/structured-input.js";
-import { resolveExecToolConfig } from "../lazy-exec-tool.js";
 import { recordAgentCleanupFailure } from "../run-cleanup-timeout.js";
 import { resolveToolLoopDetectionConfig } from "../tool-loop-detection-config.js";
 import { normalizeToolPolicyName } from "../tool-policy.js";
@@ -49,7 +47,6 @@ function createPluginToolPermissionHandler(params: {
   context: PreparedCliRunContext;
   abortSignal: AbortSignal;
   onPendingApproval: (delta: 1 | -1) => void;
-  env: NodeJS.ProcessEnv;
 }): (request: CliBackendToolPermissionRequest) => Promise<CliBackendToolPermissionResult> {
   const run = params.context.params;
   const permission = resolveExecDefaults({
@@ -219,17 +216,7 @@ function createPluginToolPermissionHandler(params: {
         sessionKey: run.sessionKey,
         agentId: run.agentId,
         toolCallId: request.toolCallId,
-        cwd: request.cwd,
-        fallbackCwd: params.context.cwd ?? params.context.workspaceDir,
-        bindingEnv: params.env,
-        env: {
-          ...params.env,
-          PATH: mergePathPrepend(
-            params.env.PATH,
-            resolveExecToolConfig({ cfg: run.config, agentId: run.agentId }).pathPrepend ?? [],
-          ),
-        },
-        assertActive,
+        cwd: params.context.cwd ?? params.context.workspaceDir,
         abortSignal: signal,
         ask: permission.ask,
       });
@@ -254,7 +241,7 @@ function createPluginToolPermissionHandler(params: {
     if (outcome.grantAlways) {
       currentGrants.add(toolName);
     }
-    return { behavior: "allow", updatedInput: outcome.updatedInput ?? toolInput };
+    return { behavior: "allow", updatedInput: toolInput };
   };
 }
 
@@ -595,7 +582,6 @@ export async function executePluginOwnedProcess(params: {
         context: params.context,
         abortSignal: signal,
         onPendingApproval: updatePendingApproval,
-        env: params.env,
       }),
       requestUserInput: createPluginUserInputHandler({
         context: params.context,

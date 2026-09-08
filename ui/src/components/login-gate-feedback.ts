@@ -8,16 +8,6 @@ import {
   resolvePairingHint,
   shouldShowInsecureContextHint,
 } from "../lib/connection-hints.ts";
-import { formatGatewayHost } from "../lib/gateway-host.ts";
-import { classifyGatewaySecret } from "../lib/gateway-secret-shape.ts";
-
-function isPasswordModeErrorCode(code: string | null): boolean {
-  return (
-    code === ConnectErrorDetailCodes.AUTH_PASSWORD_MISSING ||
-    code === ConnectErrorDetailCodes.AUTH_PASSWORD_MISMATCH ||
-    code === ConnectErrorDetailCodes.AUTH_PASSWORD_NOT_CONFIGURED
-  );
-}
 
 type LoginFailureKind =
   | "auth-required"
@@ -45,6 +35,8 @@ type LoginFailurePlacement = "form" | "status";
 export type LoginFailureTone = "pending" | "warn" | "danger";
 
 type LoginFormField = "url" | "credential";
+
+export type CredentialMode = "token" | "password";
 
 export type LoginFailureStep = {
   text: string;
@@ -75,9 +67,26 @@ export type LoginFailureFeedback = {
 
 export type LoginFailureFeedbackParams = Parameters<typeof resolveAuthHintKind>[0] & {
   gatewayUrl?: string;
-  secret?: string;
-  reconnectPending?: boolean;
 };
+
+export const PASSWORD_MODE_CODES = new Set<string>([
+  ConnectErrorDetailCodes.AUTH_PASSWORD_MISSING,
+  ConnectErrorDetailCodes.AUTH_PASSWORD_MISMATCH,
+  ConnectErrorDetailCodes.AUTH_PASSWORD_NOT_CONFIGURED,
+]);
+
+export function formatGatewayHost(gatewayUrl: string | undefined): string {
+  const raw = gatewayUrl?.trim() ?? "";
+  if (!raw) {
+    return t("common.unknown");
+  }
+  try {
+    const url = new URL(raw);
+    return url.host || raw;
+  } catch {
+    return raw;
+  }
+}
 
 function buildFeedback(params: {
   kind: LoginFailureKind;
@@ -194,7 +203,7 @@ export function resolveLoginFailureFeedback(
       stepKeys: [
         ...(pairing.requestId ? [] : ["login.failure.pairing.stepLatest"]),
         { key: "login.failure.pairing.stepDashboard", commands: ["openclaw dashboard"] },
-        ...(params.reconnectPending ? [] : ["login.failure.pairing.stepReconnect"]),
+        "login.failure.pairing.stepReconnect",
       ],
       stepParams: { host },
     });
@@ -267,7 +276,6 @@ export function resolveLoginFailureFeedback(
   }
 
   const authHintKind = resolveAuthHintKind(params);
-  const expectsPassword = isPasswordModeErrorCode(lastErrorCode);
   if (authHintKind === "trusted-proxy") {
     return buildFeedback({
       kind: "trusted-proxy",
@@ -289,23 +297,22 @@ export function resolveLoginFailureFeedback(
       tone: "warn",
       field: "credential",
       rawError,
-      titleKey: expectsPassword
-        ? "login.failure.authRequired.passwordTitle"
-        : "login.failure.authRequired.title",
+      titleKey:
+        lastErrorCode && PASSWORD_MODE_CODES.has(lastErrorCode)
+          ? "login.failure.authRequired.passwordTitle"
+          : "login.failure.authRequired.title",
       summaryKey: "login.failure.authRequired.summary",
-      stepKeys: expectsPassword
-        ? ["login.failure.authRequired.stepPassword", "login.failure.authRequired.stepConnect"]
-        : [
-            {
-              key: "login.failure.authRequired.stepPaste",
-              commands: ["openclaw gateway auth-token --show"],
-            },
-            {
-              key: "login.failure.authRequired.stepGenerate",
-              commands: ["openclaw doctor --generate-gateway-token"],
-            },
-            "login.failure.authRequired.stepConnect",
-          ],
+      stepKeys: [
+        {
+          key: "login.failure.authRequired.stepPaste",
+          commands: ["openclaw gateway auth-token --show"],
+        },
+        {
+          key: "login.failure.authRequired.stepGenerate",
+          commands: ["openclaw doctor --generate-gateway-token"],
+        },
+        "login.failure.authRequired.stepConnect",
+      ],
       stepParams: { host },
     });
   }
@@ -315,26 +322,16 @@ export function resolveLoginFailureFeedback(
       placement: "form",
       field: "credential",
       rawError,
-      titleKey: expectsPassword
-        ? "login.failure.authRequired.passwordTitle"
-        : lastErrorCode === ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH
-          ? "login.failure.authRequired.title"
-          : "login.failure.authFailed.title",
-      summaryKey:
-        (lastErrorCode === ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH ||
-          lastErrorCode === ConnectErrorDetailCodes.AUTH_PASSWORD_MISMATCH) &&
-        classifyGatewaySecret(params.secret ?? "") === "setup-code"
-          ? "login.setupCodeHint"
-          : "login.failure.authFailed.summary",
-      stepKeys: expectsPassword
-        ? ["login.failure.authRequired.stepPassword", "login.failure.authRequired.stepConnect"]
-        : [
-            {
-              key: "login.failure.authFailed.stepDashboard",
-              commands: ["openclaw dashboard --no-open", "openclaw gateway auth-token --show"],
-            },
-            "login.failure.authFailed.stepReplace",
-          ],
+      titleKey: "login.failure.authFailed.title",
+      summaryKey: "login.failure.authFailed.summary",
+      stepKeys: [
+        {
+          key: "login.failure.authFailed.stepDashboard",
+          commands: ["openclaw dashboard --no-open", "openclaw gateway auth-token --show"],
+        },
+        "login.failure.authFailed.stepReplace",
+        "login.failure.authFailed.stepMode",
+      ],
       stepParams: { host },
     });
   }

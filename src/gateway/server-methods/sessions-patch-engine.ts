@@ -21,7 +21,6 @@ import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "../opera
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { resolvePluginSessionOwnershipError } from "../session-plugin-ownership.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
-import { hasSessionReadAccessChanged } from "../session-sharing-policy.js";
 import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
 import {
   resolveCanonicalGatewaySessionStoreKey,
@@ -71,13 +70,7 @@ type PreparedPatchTarget = SessionPatchArchiveTarget & {
 };
 
 type MutationOutcome =
-  | {
-      ok: true;
-      applied: boolean;
-      accessChanged: boolean;
-      entry: SessionEntry;
-      cleanupError?: ErrorShape;
-    }
+  | { ok: true; applied: boolean; entry: SessionEntry; cleanupError?: ErrorShape }
   | { ok: false; error: ErrorShape };
 
 type WorktreeTransition = Awaited<ReturnType<typeof prepareSessionPatchWorktreeTransition>>;
@@ -456,7 +449,6 @@ export async function executeSessionPatchMutations(params: {
                           projectedOutcomes.push({
                             ok: true,
                             applied: false,
-                            accessChanged: false,
                             entry: unreadAck.entry,
                           });
                           continue;
@@ -559,17 +551,7 @@ export async function executeSessionPatchMutations(params: {
                           primaryKey,
                           projected.entry,
                         );
-                        projectedOutcomes.push({
-                          ok: true,
-                          applied: true,
-                          // The replacement writer validates this row snapshot at COMMIT.
-                          // Unknown generations and canonical moves still invalidate access.
-                          accessChanged:
-                            primaryKey !== target.canonicalKey ||
-                            previousSessionKeys.length > 0 ||
-                            hasSessionReadAccessChanged(existingEntry, projected.entry),
-                          entry: cloned,
-                        });
+                        projectedOutcomes.push({ ok: true, applied: true, entry: cloned });
                       } catch (error) {
                         projectedOutcomes.push({
                           ok: false,
@@ -700,9 +682,7 @@ export async function executeSessionPatchMutations(params: {
     category: params.patch.category,
     targets: prepared.flatMap((target) => {
       const outcome = outcomes[target.index];
-      return outcome?.ok && outcome.applied
-        ? [{ target, entry: outcome.entry, accessChanged: outcome.accessChanged }]
-        : [];
+      return outcome?.ok && outcome.applied ? [{ target, entry: outcome.entry }] : [];
     }),
   });
   timing?.finish();

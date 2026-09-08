@@ -1,6 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { replaceSessionWithBranchedTranscript } from "../../config/sessions/session-accessor.js";
-import type { SessionTranscriptContextVersion } from "../../config/sessions/session-accessor.sqlite-transcript-state.js";
 import { parseOpaqueLeafEntry, parseParentLinkedOpaqueEntry } from "./session-manager-codec.js";
 import type { SessionManagerPersistenceTarget } from "./session-manager-core.js";
 import { SessionManagerEntries } from "./session-manager-entries.js";
@@ -72,10 +71,10 @@ export class SessionManagerBranching extends SessionManagerEntries {
         if (node.entry.type === "label") {
           continue;
         }
-        // This is the selected path in a new session, not an inactive side branch.
-        // Its navigation controls are omitted, so copied entries must advance the leaf.
-        const branchEntry: SessionEntry = { ...node.entry, parentId: tailId };
-        delete branchEntry.appendMode;
+        const branchEntry: SessionEntry =
+          node.entry.parentId === tailId
+            ? node.entry
+            : ({ ...node.entry, parentId: tailId } as SessionEntry);
         entries.push(branchEntry);
         tailId = branchEntry.id;
         continue;
@@ -93,7 +92,6 @@ export class SessionManagerBranching extends SessionManagerEntries {
   }
 
   async createBranchedSession(leafId: string): Promise<string | undefined> {
-    this.assertTranscriptWriteActive();
     this.ensureCompletePersistedHistory();
     const previousSessionId = this.sessionId;
     const branchPath = this.collectBranchedSessionPath(leafId);
@@ -149,16 +147,12 @@ export class SessionManagerBranching extends SessionManagerEntries {
     ]);
     branch.opaqueFileEntries = branchPath.opaqueEntries;
     branch.buildIndex();
-    const adoptBranch = (
-      target?: SessionManagerPersistenceTarget,
-      version?: SessionTranscriptContextVersion,
-    ) => {
+    const adoptBranch = (target?: SessionManagerPersistenceTarget) => {
       this.fileEntries = branch.fileEntries;
       this.opaqueFileEntries = branch.opaqueFileEntries;
       this.sessionId = newSessionId;
       this.buildIndex();
       this.persistenceTarget = target;
-      this.transcriptVersion = version;
       this.persistenceHeaderPending = false;
     };
     if (persistenceTarget) {
@@ -166,7 +160,6 @@ export class SessionManagerBranching extends SessionManagerEntries {
         persistenceTarget,
         { sessionId: newSessionId, events: branch.getPersistedFileEntries() },
         adoptBranch,
-        () => this.assertTranscriptWriteActive(),
       );
     } else {
       adoptBranch();

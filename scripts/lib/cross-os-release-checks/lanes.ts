@@ -61,7 +61,6 @@ import {
 } from "./installed.ts";
 import { installLaneCompanions } from "./lane-companions.ts";
 import { maybeRunDiscordRoundtrip } from "./network-smokes.ts";
-import { runPackagedSelfUpdateTransition } from "./packaged-self-update.ts";
 import {
   reserveGatewayPortForLane,
   runCleanup,
@@ -251,15 +250,6 @@ export async function runUpgradeLane(
     const baseline = {
       version: readInstalledVersion(lane.prefixDir),
     };
-
-    if (baseline.version === "2026.9.2" && params.build.candidateVersion === "2026.9.3") {
-      return await runPackagedSelfUpdateTransition({
-        ...params,
-        lane,
-        env,
-        baselineVersion: baseline.version,
-      });
-    }
 
     const updateEnv = buildRealUpdateEnv(env);
     const updateArgs = buildPackagedUpgradeUpdateArgs(params.candidateUrl);

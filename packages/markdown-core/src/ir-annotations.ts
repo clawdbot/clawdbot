@@ -3,7 +3,6 @@ import type {
   AssistantTranscriptRoleImageMeta,
   AssistantTranscriptRoleTokenMeta,
 } from "./assistant-transcript.js";
-import { copyHtmlTags } from "./ir-metadata.js";
 import { mergeAnnotationSpans, type MarkdownAnnotationSpan } from "./ir-spans.js";
 import type { MarkdownIR } from "./ir.js";
 
@@ -36,13 +35,13 @@ export function annotateAssistantTranscriptRoleMessageBoundary(ir: MarkdownIR): 
     ...boundarySpan,
     type: "assistant_transcript_role",
   };
-  return copyHtmlTags(ir, {
+  return {
     ...ir,
     // A role-looking link must not remain clickable after its label becomes a
     // message-leading transcript header.
     links: ir.links.filter((link) => !rangesOverlap(link, annotation)),
     annotations: mergeAnnotationSpans([...(ir.annotations ?? []), annotation]),
-  });
+  };
 }
 
 export function appendAssistantTranscriptRoleText(
@@ -64,8 +63,7 @@ export function appendAssistantTranscriptRoleText(
   });
 }
 
-/** Image alternatives are plain text, including labels projected for annotations. */
-export function appendImageAlternative(
+export function appendAssistantTranscriptRoleImage(
   target: AnnotationTarget,
   meta: AssistantTranscriptRoleImageMeta["assistantTranscriptRoleImage"],
 ): void {

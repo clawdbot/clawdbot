@@ -8,21 +8,14 @@ import {
   GATEWAY_STORE_TEST_HELLO as HELLO,
   stubGatewayStoreTestGlobals,
 } from "./gateway-store.test-support.ts";
-import { loadSettings, persistSessionToken, saveSettings } from "./settings.ts";
+import { loadSettings } from "./settings.ts";
 import { resolveApplicationStartupSettings } from "./startup-settings.ts";
 
 function stubBuildReloadDocument(href = "http://127.0.0.1:18789/chat/main") {
   const replace = vi.fn<(url: string) => void>();
   const location = Object.assign(new URL(href), { replace });
   vi.stubGlobal("location", location);
-  vi.stubGlobal("window", Object.assign(new EventTarget(), { location }));
-  vi.stubGlobal(
-    "document",
-    Object.assign(new EventTarget(), {
-      documentElement: { getAttribute: () => null },
-      querySelector: () => null,
-    }),
-  );
+  vi.stubGlobal("window", { location });
   const probe = createDeferred<Response>();
   const fetchMock = vi.fn<typeof fetch>(() => probe.promise);
   vi.stubGlobal("fetch", fetchMock);
@@ -37,41 +30,13 @@ describe("createApplicationGateway authentication diagnostics", () => {
     store = createStore();
   });
 
-  afterEach(async () => {
+  afterEach(() => {
     store.gateway.stop();
-    await vi.dynamicImportSettled();
     setAvatarGatewayOrigin(null);
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
     vi.useRealTimers();
   });
-
-  it.each(["token", "password", "trusted-proxy", undefined] as const)(
-    "persists the submitted secret only after a token-mode hello (%s)",
-    (authMode) => {
-      const gatewayUrl = store.gateway.connection.gatewayUrl;
-      const secret = "synthetic-gateway-secret";
-      persistSessionToken(gatewayUrl, "previous-token");
-      const write = vi.spyOn(sessionStorage, "setItem");
-      store.gateway.connect({ token: secret });
-      const retired = store.current();
-      saveSettings({ ...loadSettings(), token: secret });
-      expect(write).not.toHaveBeenCalled();
-      expect(loadSettings().token).toBe("previous-token");
-
-      store.current().opts.onHello?.({ ...HELLO, snapshot: { authMode } });
-      expect(loadSettings().token).toBe(authMode === "token" ? secret : "");
-      expect(store.gateway.connection.token).toBe(secret);
-      if (authMode !== "token") {
-        expect(write).not.toHaveBeenCalled();
-      }
-
-      // Late hello from a replaced client must not persist its submitted secret.
-      store.gateway.connect({ token: "replacement-secret" });
-      retired.opts.onHello?.({ ...HELLO, snapshot: { authMode: "token" } });
-      expect(loadSettings().token).toBe(authMode === "token" ? secret : "");
-    },
-  );
 
   function rejectStaleBuild() {
     store.current().opts.onClose?.({

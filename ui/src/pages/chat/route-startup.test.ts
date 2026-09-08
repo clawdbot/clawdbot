@@ -1,10 +1,8 @@
 // @vitest-environment node
 import { createRouter, definePage } from "@openclaw/uirouter";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayEventFrame } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { chatHistoryRequests } from "./chat-history-state.ts";
 import { createState } from "./chat-history.inflight.test-support.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { loadChatRoute } from "./route-loader.ts";
@@ -14,7 +12,6 @@ const sessionKey = "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef";
 const message = { role: "assistant", content: "Selected conversation", id: "reply" };
 const cleanups: Array<() => void> = [];
 afterEach(() => {
-  vi.useRealTimers();
   for (const cleanup of cleanups.splice(0)) {
     cleanup();
   }
@@ -73,12 +70,7 @@ function fixture() {
       },
     },
     agents: { state: { agentsList: { mainKey: "main" } } },
-    sessions: {
-      canonicalListRevision: 1,
-      list: vi.fn(),
-      state: { result: null },
-      whenCachedRosterSettled: async () => undefined,
-    },
+    sessions: { canonicalListRevision: 1, list: vi.fn() },
   } as unknown as ApplicationContext;
   const loadRoute = async () => {
     await router.navigate("chat", context, undefined, {
@@ -95,18 +87,8 @@ describe("short chat startup", () => {
   it("renders the selected short-link history using the authoritative startup reply once", async () => {
     const h = fixture();
     await expect(h.loadRoute()).resolves.toMatchObject({ kind: "session", sessionKey });
-    vi.useFakeTimers();
-    const read = createDeferred();
-    chatHistoryRequests(h.state).initialSnapshotHydration = {
-      sessionKey,
-      promise: read.promise,
-      startedBeforeReady: true,
-    };
-    const loading = loadChatHistory(h.state, { startup: true, deferBranches: true });
-    await vi.advanceTimersByTimeAsync(0);
+    await loadChatHistory(h.state, { startup: true, deferBranches: true });
     expect(h.state.chatMessages).toEqual([message]);
-    read.resolve();
-    await loading;
     expect(h.request).toHaveBeenCalledOnce();
     expect(h.request).toHaveBeenCalledWith(
       "chat.startup",

@@ -115,7 +115,6 @@ export async function spawnSubagentDirect(
       groupId: swarmGroupId,
       schedulerGroupKey: swarmSchedulerGroupKey,
       launchReplayKey: swarmLaunchReplayKey,
-      soleImplicitMember,
       reservationPending,
     },
     admission: {
@@ -269,7 +268,6 @@ export async function spawnSubagentDirect(
           : "quiet";
     const envelope = buildSubagentSpawnEnvelope({
       completionMode,
-      soleCollectorChild: soleImplicitMember,
       spawnMode,
       task,
       requesterSessionKey,

@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { resolveControlUiAssetHealth } from "./control-ui-assets.js";
 import { readPackageVersion } from "./package-json.js";
 import { resolveStableNodePath } from "./stable-node-path.js";
@@ -19,7 +18,6 @@ import {
   prepareGitMutation,
   readBranchName,
   resolveChannelTag,
-  resolveReleaseTagRemote,
   selectGitInspectionTarget,
   withGitTargetInspectionRoot,
 } from "./update-runner-git-target.js";
@@ -293,66 +291,6 @@ export async function updateGitCheckout(params: {
     }
     return mutationPrepared ? rollbackError(reason) : buildError(reason);
   };
-  const fetchTarget = async (root: string, targetStep: typeof step, name: string) => {
-    const fetch = await runStep(
-      targetStep(
-        name,
-        ["git", "-C", root, "fetch", "--all", "--prune", "--no-tags", "--no-prune-tags"],
-        root,
-      ),
-    );
-    if (fetch.exitCode !== 0 || channel === "dev") {
-      return fetch.exitCode === 0;
-    }
-    const remote = await runStep(targetStep("git remote", ["git", "-C", root, "remote"], root));
-    if (remote.exitCode !== 0) {
-      return false;
-    }
-    const remotes = normalizeStringEntries((remote.stdoutTail ?? "").split("\n"));
-    const tracked = await runStep(
-      targetStep(
-        "git config update upstream",
-        ["git", "-C", root, "config", "--get", `branch.${DEV_BRANCH}.remote`],
-        root,
-      ),
-    );
-    if (tracked.exitCode !== 0 && tracked.exitCode !== 1) {
-      return false;
-    }
-    const tagRemote = resolveReleaseTagRemote(remotes, (tracked.stdoutTail ?? "").trim());
-    if (!tagRemote) {
-      steps.push({
-        name: "git release remote",
-        command: "git remote",
-        cwd: root,
-        durationMs: 0,
-        exitCode: 1,
-        stderrTail:
-          "Cannot determine the release remote. Set branch.main.remote to the remote that publishes releases.",
-      });
-      return false;
-    }
-    // Only the release authority may replace shared tag refs. Disable pruning
-    // even when Git config enables it, so operator-only tags survive.
-    const tags = await runStep(
-      targetStep(
-        `git fetch tags ${tagRemote}`,
-        [
-          "git",
-          "-C",
-          root,
-          "fetch",
-          "--no-tags",
-          "--no-prune",
-          "--no-prune-tags",
-          tagRemote,
-          "+refs/tags/*:refs/tags/*",
-        ],
-        root,
-      ),
-    );
-    return tags.exitCode === 0;
-  };
 
   const statusCheck = await runStep(step("clean check", gitCleanCheckArgs(gitRoot), gitRoot));
   if (statusCheck.exitCode !== 0) {
@@ -394,7 +332,22 @@ export async function updateGitCheckout(params: {
         ...step(...args),
         runCommand: runInspectionCommand,
       });
-      if (!(await fetchTarget(inspectionRoot, inspectionStep, "git target inspection fetch"))) {
+      const fetched = await runStep(
+        inspectionStep(
+          "git target inspection fetch",
+          [
+            "git",
+            "-C",
+            inspectionRoot,
+            "fetch",
+            "--all",
+            "--prune",
+            channel === "dev" ? "--no-tags" : "--tags",
+          ],
+          inspectionRoot,
+        ),
+      );
+      if (fetched.exitCode !== 0) {
         return { status: "error" as const, reason: "fetch-failed" };
       }
       const inspectTarget = async (revision: string, root = inspectionRoot) => {
@@ -519,8 +472,21 @@ export async function updateGitCheckout(params: {
       return buildError("target-metadata-preflight");
     }
     if (!inspectedTarget) {
-      if (!(await fetchTarget(gitRoot, step, "git fetch"))) {
-        return buildError("fetch-failed");
+      const fetchFailure = await runRequiredStep(
+        "git fetch",
+        [
+          "git",
+          "-C",
+          gitRoot,
+          "fetch",
+          "--all",
+          "--prune",
+          channel === "dev" ? "--no-tags" : "--tags",
+        ],
+        "fetch-failed",
+      );
+      if (fetchFailure) {
+        return fetchFailure;
       }
     }
     const tag =

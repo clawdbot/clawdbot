@@ -324,7 +324,16 @@ function countJsonlLines(filePath: string): number {
 }
 
 function isPathUnderRoot(targetPath: string, rootPath: string): boolean {
-  return isPathUnderRootWithPathOps(targetPath, rootPath, path);
+  const normalizedTarget = path.resolve(targetPath);
+  const normalizedRoot = path.resolve(rootPath);
+  const rootToken = path.parse(normalizedRoot).root;
+  if (normalizedRoot === rootToken) {
+    return normalizedTarget.startsWith(rootToken);
+  }
+  return (
+    normalizedTarget === normalizedRoot ||
+    normalizedTarget.startsWith(`${normalizedRoot}${path.sep}`)
+  );
 }
 
 const tryResolveRealPath = safeRealpathSync;

@@ -1,3 +1,4 @@
+// Agent Core module implements kill tree behavior.
 import { spawn, spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 

@@ -554,8 +554,9 @@ export async function applySystemAgentSetup(
           await import("../plugins/registry-refresh.js");
         beforePersistentApply?.();
         await refreshPluginRegistryAfterConfigMutation({
-          configPath: committed.path,
+          config: nextConfig,
           reason: "source-changed",
+          workspaceDir: onboardingTarget.workspaceDir,
           traceCommand: "openclaw-setup",
           logger: {
             warn: (message) => lines.push(message),

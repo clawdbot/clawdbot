@@ -120,7 +120,6 @@ describe("onboarding main-agent creation", () => {
       }),
     ).resolves.toEqual({
       config,
-      configBase: config,
       agentId: "main",
       bootstrapPending: false,
       createdAgent: false,

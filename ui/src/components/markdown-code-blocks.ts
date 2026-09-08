@@ -59,10 +59,7 @@ function shouldRenderCodeBlockInteraction(env: unknown): boolean {
 }
 
 function encodeCodeBlockCopyPayload(value: string): string {
-  // DOMPurify removes attributes containing XML comment ends or closing tags.
-  // JSON escapes survive sanitization and decode only as clipboard text.
-  const payload = JSON.stringify(value).replaceAll("<", "\\u003c").replaceAll(">", "\\u003e");
-  return `${blockArtCopyPayloadPrefix}${payload}`;
+  return `${blockArtCopyPayloadPrefix}${JSON.stringify(value)}`;
 }
 
 function decodeCodeBlockCopyPayload(value: string, encoding?: string): string {

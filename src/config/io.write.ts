@@ -53,7 +53,6 @@ import {
 } from "./io.read-helpers.js";
 import { loggedConfigWarningFingerprints, setBoundedConfigIoWarningEntry } from "./io.state.js";
 import type {
-  ConfigWriteInputBasis,
   ConfigWriteOptions,
   InternalConfigWriteResult,
   ReadConfigFileSnapshotInternalResult,
@@ -100,10 +99,6 @@ export async function writeConfigFileFromContext(
       }
     : await readSnapshot();
   const snapshot = snapshotRead.snapshot;
-  const inputBasis: ConfigWriteInputBasis = {
-    kind: options.inputBase ?? "runtime",
-    config: options.inputBase === "source" ? snapshot.sourceConfig : snapshot.runtimeConfig,
-  };
   if (options.baseSnapshot) {
     assertBaseSnapshotStillCurrent(snapshot, configPath, deps.fs);
   }
@@ -134,7 +129,7 @@ export async function writeConfigFileFromContext(
   let persistCandidate: unknown = nextConfig;
   let envRefMap: Map<string, string> | null = null;
   const changedPaths = new Set<string>();
-  collectChangedPaths(inputBasis.config, nextConfig, "", changedPaths);
+  collectChangedPaths(snapshot.config, nextConfig, "", changedPaths);
   for (const changedPath of [...explicitSetPaths, ...(options.unsetPaths ?? [])]) {
     const normalizedPath = changedPath.filter((segment) => segment.length > 0).join(".");
     if (normalizedPath) {
@@ -152,7 +147,6 @@ export async function writeConfigFileFromContext(
       provenance: snapshot.includeProvenance,
     });
     persistCandidate = resolvePersistCandidateForWrite({
-      inputBasis,
       runtimeConfig: snapshot.config,
       sourceConfig: snapshot.resolved,
       sourceConfigValid: snapshot.valid,
@@ -198,16 +192,14 @@ export async function writeConfigFileFromContext(
     }
   }
 
+  persistCandidate = applyUnsetPathsForWrite(persistCandidate as OpenClawConfig, unsetPaths);
   const envForRestore = options.envSnapshotForRestore ?? deps.env;
-  const resolveValidationCandidate = (candidate: unknown) => {
-    // Validate removals now; apply them once to the final authored output after materialization.
-    const config = applyUnsetPathsForWrite(candidate as OpenClawConfig, unsetPaths);
-    return containsConfigIncludeDirective(config)
+  const resolveValidationCandidate = (candidate: unknown) =>
+    containsConfigIncludeDirective(candidate)
       ? context.resolveRuntimePreflightSourceConfig(
-          restoreEnvVarRefs(config, snapshot.parsed, envForRestore) as OpenClawConfig,
+          restoreEnvVarRefs(candidate, snapshot.parsed, envForRestore) as OpenClawConfig,
         )
-      : config;
-  };
+      : candidate;
   const validationCandidate = resolveValidationCandidate(persistCandidate);
   const validateCandidate = (candidate: unknown) => {
     const result = validateConfigObjectRawWithPlugins(candidate, {

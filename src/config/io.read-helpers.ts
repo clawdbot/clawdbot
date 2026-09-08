@@ -1,10 +1,9 @@
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
 import JSON5 from "json5";
-import { sha256Hex } from "../infra/crypto-digest.js";
 import { loadDotEnv } from "../infra/dotenv.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { collectErrorGraphCandidates, extractErrorCode } from "../infra/errors.js";
@@ -38,15 +37,26 @@ import type { OpenClawConfig } from "./types.js";
 export function hashConfigRaw(raw: string | null): string {
   // Present-file hashes stay compatible with last-known-good recovery metadata.
   // Missing needs a distinct token so optimistic writes reject missing-to-empty races.
-  return raw === null ? hashConfigIncludeRaw(null) : sha256Hex(raw);
+  if (raw === null) {
+    return hashConfigIncludeRaw(null);
+  }
+  return crypto.createHash("sha256").update(raw).digest("hex");
 }
 
 export function resolveConfigSnapshotHash(snapshot: {
   hash?: string;
   raw?: string | null;
 }): string | null {
-  const hash = normalizeNullableString(snapshot.hash);
-  return hash ?? (typeof snapshot.raw === "string" ? hashConfigRaw(snapshot.raw) : null);
+  if (typeof snapshot.hash === "string") {
+    const trimmed = snapshot.hash.trim();
+    if (trimmed) {
+      return trimmed;
+    }
+  }
+  if (typeof snapshot.raw !== "string") {
+    return null;
+  }
+  return hashConfigRaw(snapshot.raw);
 }
 
 export function coerceConfig(value: unknown): OpenClawConfig {
@@ -54,12 +64,22 @@ export function coerceConfig(value: unknown): OpenClawConfig {
 }
 
 export function hasConfigMeta(value: unknown): boolean {
-  return isRecord(asOptionalRecord(value)?.meta);
+  if (!isRecord(value)) {
+    return false;
+  }
+  return isRecord(value.meta);
 }
 
 export function resolveGatewayMode(value: unknown): string | null {
-  const gateway = asOptionalRecord(asOptionalRecord(value)?.gateway);
-  return normalizeNullableString(gateway?.mode);
+  if (!isRecord(value)) {
+    return null;
+  }
+  const gateway = value.gateway;
+  if (!isRecord(gateway) || typeof gateway.mode !== "string") {
+    return null;
+  }
+  const trimmed = gateway.mode.trim();
+  return trimmed.length > 0 ? trimmed : null;
 }
 
 export function visitConfigValueTree(
@@ -369,8 +389,6 @@ export function resolveManagedRuntimeEnvBaseline(): {
   generation: number;
   sourceConfig: OpenClawConfig;
 } {
-  // Accepted restart candidates publish env before the runtime snapshot advances.
-  // Managed writes must stay on that publication generation to avoid mixed env refs.
   const published = getPublishedConfigRuntimeEnvState();
   return {
     generation: published.generation,
@@ -378,12 +396,8 @@ export function resolveManagedRuntimeEnvBaseline(): {
   };
 }
 
-export function createManagedRuntimeEnvBase(
-  env: NodeJS.ProcessEnv = process.env,
-): NodeJS.ProcessEnv {
-  return createConfigRuntimeEnvBase(resolveManagedRuntimeEnvBaseline().sourceConfig, env, {
-    // Copied caller environments still carry the published layer's recorded ownership.
-    ownedEnv: getPublishedConfigRuntimeEnvState().ownedEnv,
+export function createManagedRuntimeEnvBase(): NodeJS.ProcessEnv {
+  return createConfigRuntimeEnvBase(resolveManagedRuntimeEnvBaseline().sourceConfig, process.env, {
     preservedKeys: GATEWAY_CONFIG_SELECTION_ENV_KEYS,
   });
 }

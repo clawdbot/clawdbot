@@ -6,13 +6,8 @@ import {
 } from "../../infra/kysely-sync.js";
 import { coerceRequiredSqliteNumber as sqliteNumber } from "../../infra/sqlite-number.js";
 import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
-import {
-  createOpenClawAgentDatabaseClaim,
-  type OpenClawAgentDatabaseClaim,
-} from "../../state/openclaw-agent-db-identity.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
-  borrowOpenClawAgentDatabase,
   getOpenClawAgentDatabaseIfOpen,
   isIncognitoOpenClawAgentSqlitePath,
   openOpenClawAgentDatabase,
@@ -55,7 +50,7 @@ import {
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
 import { listTranscriptInstancesFromDatabase } from "./session-accessor.sqlite-history.js";
-import { prepareSessionIdentityPublication } from "./session-accessor.sqlite-identity.js";
+import { emitCommittedSessionIdentityDiff } from "./session-accessor.sqlite-identity.js";
 import { kickSessionEntryMaintenanceAfterWrite } from "./session-accessor.sqlite-maintenance-kick.js";
 import { createFallbackSessionEntry } from "./session-accessor.sqlite-normalize.js";
 import {
@@ -101,7 +96,7 @@ type SqliteSessionEntryPatchOptions = SessionEntryPatchOptions & {
   skipMaintenance?: boolean;
   /** Recheck owner cancellation after async preparation, immediately before committing. */
   shouldCommit?: () => boolean;
-  /** Synchronous owner bookkeeping after COMMIT, before identity observers can cancel the caller. */
+  /** Synchronous owner bookkeeping after COMMIT, before observers can cancel the caller. */
   onCommitted?: (entry: SessionEntry) => void;
 };
 
@@ -145,24 +140,6 @@ export function resolveSessionEntry(
 /** Loads one session entry from the additive SQLite session store. */
 export function loadSessionEntry(scope: SessionAccessScope): SessionEntry | undefined {
   return resolveSessionEntry(scope).existing;
-}
-
-/** Admission retains the exact owner that supplied its row across asynchronous policy work. */
-export function loadSessionEntryWithDatabase(scope: SessionAccessScope): {
-  entry: SessionEntry | undefined;
-  databaseClaim: OpenClawAgentDatabaseClaim;
-} {
-  const resolved = resolveSqliteScope(scope);
-  const options = toDatabaseOptions(resolved);
-  const database = openOpenClawAgentDatabase(options);
-  const borrowed = borrowOpenClawAgentDatabase(options);
-  const databaseClaim = createOpenClawAgentDatabaseClaim(database, borrowed.release);
-  try {
-    return { entry: readSessionEntryRow(database, resolved.sessionKey)?.entry, databaseClaim };
-  } catch (error) {
-    databaseClaim.release();
-    throw error;
-  }
 }
 
 /** Loads one session entry without opening its agent database writable. */
@@ -429,14 +406,15 @@ export async function replaceSessionEntry(
 export function replaceSessionEntrySync(scope: SessionAccessScope, entry: SessionEntry): void {
   const resolved = resolveSqliteScope(scope);
   assertCanonicalSessionWriteScope(resolved);
-  const publish = runOpenClawAgentWriteTransaction((database) => {
+  let previous = new Map<string, SessionEntry>();
+  let current = new Map<string, SessionEntry>();
+  runOpenClawAgentWriteTransaction((database) => {
     const identityKeys = collectSessionEntryLookupKeys(database, resolved.sessionKey);
-    const previous = readSessionIdentitySnapshot(database, identityKeys);
+    previous = readSessionIdentitySnapshot(database, identityKeys);
     writeSessionEntry(database, resolved.sessionKey, entry);
-    const current = readSessionIdentitySnapshot(database, identityKeys);
-    return prepareSessionIdentityPublication(database, resolved.agentId, previous, current);
+    current = readSessionIdentitySnapshot(database, identityKeys);
   }, toDatabaseOptions(resolved));
-  publish();
+  emitCommittedSessionIdentityDiff(resolved.agentId, previous, current);
 }
 
 /** Patches one entry in the additive SQLite session store. */
@@ -556,19 +534,21 @@ async function patchSqliteSessionEntrySnapshot(
       // The updater may dispose the prepared handle; re-admit before the synchronous commit.
       return withDatabase(() => {
         let result: SessionEntry | null = null;
-        const publish = runOpenClawAgentWriteTransaction((writeDatabase) => {
+        let previousIdentity = new Map<string, SessionEntry>();
+        let currentIdentity = new Map<string, SessionEntry>();
+        runOpenClawAgentWriteTransaction((writeDatabase) => {
           if (options.shouldCommit?.() === false) {
-            return undefined;
+            return;
           }
           const fresh = params.readSnapshot(writeDatabase);
           assertLifecycleTargetSnapshotUnchanged(prepared, fresh, params.operationLabel);
           options.assertCommitAllowed?.();
           if (!next) {
             result = cloneSessionEntry(writeBase);
-            return undefined;
+            return;
           }
           // Commit reads own these entries; update callbacks only receive detached copies.
-          const previousIdentity = new Map(fresh.map((row) => [row.sessionKey, row.entry]));
+          previousIdentity = new Map(fresh.map((row) => [row.sessionKey, row.entry]));
           const selectedPreviousEntry = fresh[0]?.entry ?? writeBase;
           const persisted = writeSessionEntry(writeDatabase, sessionKey, next, {
             ...(options.consumePendingReset ? { consumePendingReset: true } : {}),
@@ -576,21 +556,15 @@ async function patchSqliteSessionEntrySnapshot(
           });
           wrote = true;
           // Identity observers only consume sessionId, already owned by this canonical write.
-          const currentIdentity = new Map([[sessionKey, persisted]]);
+          currentIdentity = new Map([[sessionKey, persisted]]);
           result = cloneSessionEntry(persisted);
-          return prepareSessionIdentityPublication(
-            writeDatabase,
-            resolved.agentId,
-            previousIdentity,
-            currentIdentity,
-          );
         }, databaseOptions);
         try {
           if (next && result) {
             options.onCommitted?.(cloneSessionEntry(result));
           }
         } finally {
-          publish?.();
+          emitCommittedSessionIdentityDiff(resolved.agentId, previousIdentity, currentIdentity);
         }
         return result;
       });

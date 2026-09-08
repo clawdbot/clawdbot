@@ -7,7 +7,7 @@ import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-meta
 import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import { refreshPluginRegistryForPreparedConfig } from "../plugins/registry-refresh.js";
+import { refreshPluginRegistryAfterConfigMutation } from "../plugins/registry-refresh.js";
 import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeRegistryScope,
@@ -36,7 +36,6 @@ function embeddedRoute(agentHarnessRuntimeOverride: string): SystemAgentConfigur
     agentId: "main",
     agentDir: "/tmp/openclaw-agent",
     agentHarnessRuntimeOverride,
-    sourceConfig: {},
     runConfig: {
       agents: {
         defaults: {
@@ -74,7 +73,7 @@ describe("revalidateSetupInferenceOwner", () => {
             configSchema: { type: "object" },
           });
           await state.writeText("plugin/index.js", 'throw new Error("metadata must not execute");');
-          await refreshPluginRegistryForPreparedConfig({
+          await refreshPluginRegistryAfterConfigMutation({
             config,
             workspaceDir: state.workspaceDir,
             reason: "source-changed",

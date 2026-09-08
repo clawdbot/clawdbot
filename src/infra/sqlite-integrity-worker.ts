@@ -1,13 +1,8 @@
-import { fork } from "node:child_process";
 import fs from "node:fs";
+import { Worker } from "node:worker_threads";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { sameFileIdentity, type FileIdentityStat } from "./fs-safe-advanced.js";
 import { resolveRuntimeProcessEntrypointUrl } from "./runtime-process-url.js";
-import { resolveRuntimeWorkerArgv } from "./runtime-worker-url.js";
-import {
-  SQLITE_INSPECTION_TIMEOUT_MS,
-  sqliteInspectionTimeoutError,
-} from "./sqlite-readonly-worker.js";
 
 export type SqliteIntegrityWorkerInput = {
   pathname: string;
@@ -28,12 +23,6 @@ export type SqliteIntegrityWorkerResult =
       };
     };
 
-export type SqliteIntegrityWorkerPhase = "opening" | "checking" | "closing";
-
-export type SqliteIntegrityWorkerMessage =
-  | SqliteIntegrityWorkerResult
-  | { type: "phase"; phase: SqliteIntegrityWorkerPhase };
-
 export function readSqliteIntegrityFileIdentity(
   pathname: string,
   expected?: FileIdentityStat,
@@ -45,7 +34,7 @@ export function readSqliteIntegrityFileIdentity(
   return { dev: current.dev, ino: current.ino };
 }
 
-/** The caller retains its owning lease until the read-only child closes. */
+/** The caller retains its owning lease until the read-only Worker exits. */
 export function assertSqliteIntegrityInWorker(
   pathname: string,
   busyTimeoutMs: number,
@@ -56,52 +45,36 @@ export function assertSqliteIntegrityInWorker(
   // detects observed path swaps; it is not native descriptor authority.
   const identity = readSqliteIntegrityFileIdentity(pathname);
   const entry = resolveRuntimeProcessEntrypointUrl("sqliteIntegrity");
-  const worker = fork(entry, [], {
-    execArgv: resolveRuntimeWorkerArgv(entry).slice(0, -1),
-    serialization: "advanced",
-    stdio: ["ignore", "ignore", "ignore", "ipc"],
-    timeout: SQLITE_INSPECTION_TIMEOUT_MS,
-    killSignal: "SIGKILL",
-    signal,
+  const worker = new Worker(entry, {
+    workerData: { pathname, identity, busyTimeoutMs } satisfies SqliteIntegrityWorkerInput,
+    execArgv: entry.pathname.endsWith(".ts") ? ["--import", "tsx"] : undefined,
   });
   return new Promise((resolve, reject) => {
     let result: SqliteIntegrityWorkerResult | undefined;
     let failure: Error | undefined;
-    let lastObservedPhase: SqliteIntegrityWorkerPhase | "starting" | "result-received" = "starting";
-    worker.on("message", (message: SqliteIntegrityWorkerMessage) => {
-      if ("type" in message && message.type === "phase") {
-        if (
-          !result &&
-          (message.phase === "opening" ||
-            message.phase === "checking" ||
-            message.phase === "closing")
-        ) {
-          lastObservedPhase = message.phase;
-        }
-      } else if ("ok" in message) {
-        result = message;
-        lastObservedPhase = "result-received";
-      }
+    const abort = () => {
+      // A termination request cannot interrupt SQLite's native call. Exit owns
+      // completion, so the caller cannot release its lease while a scan remains.
+      void worker.terminate().catch((error: unknown) => {
+        failure = toStringifiedError(error);
+      });
+    };
+    signal.addEventListener("abort", abort, { once: true });
+    worker.on("message", (message: SqliteIntegrityWorkerResult) => {
+      result = message;
     });
     worker.on("error", (error) => {
       failure = toStringifiedError(error);
     });
-    // Native cancellation/timeout kills the child; ownership ends only at close.
-    worker.once("close", (code, closeSignal) => {
+    worker.once("exit", (code) => {
+      signal.removeEventListener("abort", abort);
       try {
         signal.throwIfAborted();
         if (failure) {
           throw failure;
         }
-        if (worker.killed && closeSignal === "SIGKILL") {
-          const error = sqliteInspectionTimeoutError("integrity check", pathname);
-          error.message += ` (lastObservedPhase=${lastObservedPhase})`;
-          throw error;
-        }
         if (code !== 0 || !result) {
-          throw new Error(
-            `SQLite integrity worker exited ${code} without a completed check (lastObservedPhase=${lastObservedPhase})`,
-          );
+          throw new Error(`SQLite integrity worker exited ${code} without a completed check`);
         }
         readSqliteIntegrityFileIdentity(pathname, identity);
         if (!result.ok) {
@@ -119,16 +92,8 @@ export function assertSqliteIntegrityInWorker(
         reject(toStringifiedError(error));
       }
     });
-    if (!signal.aborted) {
-      worker.send(
-        { pathname, identity, busyTimeoutMs } satisfies SqliteIntegrityWorkerInput,
-        (error) => {
-          if (error) {
-            failure = error;
-            worker.kill("SIGKILL");
-          }
-        },
-      );
+    if (signal.aborted) {
+      abort();
     }
   });
 }

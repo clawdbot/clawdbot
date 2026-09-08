@@ -74,7 +74,6 @@ export type StatusSummary = {
   channelSummary: string[];
   queuedSystemEvents: string[];
   startupMigrationWarning?: string;
-  secretEgressProxy?: import("../secrets/egress-proxy/certificates.js").SecretEgressCertificateStatus;
   degradedSecretOwners?: Array<{
     ownerKind: "account" | "capability" | "gateway" | "provider" | "route";
     ownerId: string;

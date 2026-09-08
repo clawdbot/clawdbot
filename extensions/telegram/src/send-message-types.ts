@@ -13,7 +13,6 @@ export type TelegramSendOpts = {
   accountId?: string;
   verbose?: boolean;
   mediaUrl?: string;
-  mediaUrls?: readonly string[];
   mediaAccess?: OutboundMediaAccess;
   mediaLocalRoots?: readonly string[];
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
@@ -52,8 +51,6 @@ export type TelegramSendOpts = {
   forceDocument?: boolean;
   /** Persist each concrete platform send before any later chunk can fail. */
   onDeliveryResult?: (result: TelegramSendResult) => Promise<void> | void;
-  /** @internal Cancel remaining physical sends for the current delivery. */
-  signal?: AbortSignal;
   /** @internal Revalidate durable custody before a send operation, not after throttle waits. */
   onPlatformSendDispatch?: () => Promise<void>;
   /** @internal Synchronously fence custody after refresh and immediately before Telegram I/O. */
@@ -68,8 +65,7 @@ export type TelegramApiCallOpts = Pick<
 export type TelegramThreadedSendOpts = TelegramApiCallOpts &
   Pick<TelegramSendOpts, "replyToMessageId" | "messageThreadId">;
 
-export type TelegramMessageActionOpts = TelegramApiCallOpts &
-  Pick<TelegramSendOpts, "signal" | "assertPlatformSendAuthorized"> & { notify?: boolean };
+export type TelegramMessageActionOpts = TelegramApiCallOpts & { notify?: boolean };
 
 export type TelegramSendResult = {
   messageId: string;

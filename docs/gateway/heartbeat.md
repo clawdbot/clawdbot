@@ -115,8 +115,6 @@ If you want a heartbeat to do something very specific (e.g. "check Gmail PubSub 
 - For alerts, return only the alert text; do not include a silent acknowledgment.
 - Delivery selects the last outbound-capable non-reasoning payload. Separate reasoning or thinking payloads remain internal; a reasoning-only result produces no alert.
 - Tool error warnings remain enabled during heartbeat turns.
-- `openclaw system heartbeat last --json` reports a confirmed message-tool send to the heartbeat recipient as `sent`, without sending another acknowledgment.
-- If the heartbeat starts background work without sending an update, its status event reports `skipped` with reason `background-work`. Check the task for completion; this is not an all-clear acknowledgment.
 
 Outside heartbeats, stray `HEARTBEAT_OK` at the start/end of a message is stripped and logged; a message that is only `HEARTBEAT_OK` is dropped.
 
@@ -419,8 +417,6 @@ The agent can also update its own scratch: during a heartbeat turn, `heartbeat_r
 
 <Note>
 **Migrating from HEARTBEAT.md or config-only cadence?** Run `openclaw doctor --fix`. Doctor first creates or updates the system-owned monitor rows from `agents.*.heartbeat`, then imports each agent's workspace `HEARTBEAT.md` into the monitor's scratch, converts any valid legacy `tasks:` entries into automation jobs, archives the original under the state directory (`backups/heartbeat-migration/`), and removes the file. Runtime heartbeat instructions come from database scratch only; the runtime never reads `HEARTBEAT.md`.
-
-If the workspace and state directory are on different filesystems, Doctor keeps the original file in a private `HEARTBEAT.md.doctor-archived.*` directory beside its former location. The state-directory backup remains an immutable snapshot; later writes through an already-open file descriptor remain recoverable in the workspace archive.
 </Note>
 
 If scratch exists but is effectively empty (only blank lines, Markdown/HTML comments, Markdown headings like `# Heading`, fence markers, or empty checklist stubs), OpenClaw skips the heartbeat run to save API calls. That skip is reported as `reason=empty-heartbeat-file`. Scheduled interval monitors without due tasks resolve this skip before deferring behind busy execution queues. If no scratch exists, the heartbeat still runs and the model decides what to do.

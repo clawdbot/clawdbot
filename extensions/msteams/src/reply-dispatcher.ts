@@ -179,7 +179,6 @@ export function createMSTeamsReplyDispatcher(params: {
     (hookRunner?.hasHooks("message_sending") ?? false)
   );
   const streamController = createTeamsReplyStreamController({
-    tableMode,
     allowProviderPreview,
     conversationType,
     context: params.context,
@@ -230,11 +229,6 @@ export function createMSTeamsReplyDispatcher(params: {
   };
 
   const pendingDeliveries: PendingDelivery[] = [];
-  // onIdle can overlap later deliveries. Join both close and fallback sends
-  // before another payload can mutate or overtake the native segment.
-  let pendingSettlement: Promise<void> | undefined;
-  const findPendingNativeDelivery = () =>
-    pendingDeliveries.find((candidate) => candidate.native && !candidate.nativeSettled);
 
   const joinAcceptedContents = (contents: readonly (string | undefined)[]): string =>
     contents.filter((content): content is string => Boolean(content)).join("\n");
@@ -444,20 +438,9 @@ export function createMSTeamsReplyDispatcher(params: {
   const delivery: ChannelInboundTurnPlan["delivery"] = {
     observeMessageSent: true,
     deliver: async (payload) => {
-      if (pendingSettlement) {
-        await pendingSettlement;
-      }
       const preparedPayload = streamController.preparePayload(payload);
       const native = streamController.claimNativeDelivery();
-      if (preparedPayload && !native && findPendingNativeDelivery()) {
-        // Close the earlier native segment before later blocks can overtake
-        // its final text or escape a Stop discovered by that closing request.
-        await settleDelivery();
-      }
-      const messages =
-        preparedPayload && !streamController.wasCanceled()
-          ? renderReplyPayload(preparedPayload)
-          : [];
+      const messages = preparedPayload ? renderReplyPayload(preparedPayload) : [];
       if (!native && messages.length === 0) {
         return {
           visibleReplySent: false,
@@ -494,70 +477,67 @@ export function createMSTeamsReplyDispatcher(params: {
     },
   };
 
-  const settleDelivery = (): Promise<void> =>
-    (pendingSettlement ??= Promise.resolve()
-      .then(async () => {
-        await flushPendingMessages();
+  const settleDelivery = async (): Promise<void> => {
+    await flushPendingMessages();
 
-        const nativeDelivery = findPendingNativeDelivery();
-        if (!nativeDelivery) {
-          await streamController.finalize();
-          return;
-        }
-        let nativeResult;
-        try {
-          nativeResult = await streamController.finalize();
-        } catch (error) {
-          nativeDelivery.errors.push(error);
-          nativeDelivery.nativeSettled = true;
-          settlePendingDelivery(nativeDelivery);
-          return;
-        }
+    const nativeDelivery = pendingDeliveries.find(
+      (candidate) => candidate.native && !candidate.nativeSettled,
+    );
+    if (!nativeDelivery) {
+      await streamController.finalize();
+      return;
+    }
+    let nativeResult;
+    try {
+      nativeResult = await streamController.finalize();
+    } catch (error) {
+      nativeDelivery.errors.push(error);
+      nativeDelivery.nativeSettled = true;
+      settlePendingDelivery(nativeDelivery);
+      return;
+    }
 
-        if (nativeResult.visibleReplySent) {
-          nativeDelivery.nativeResult = {
-            messageIds: nativeResult.messageId ? [nativeResult.messageId] : [],
-            ...(nativeResult.content !== undefined ? { content: nativeResult.content } : {}),
-          };
-        }
-        const hasPostNativePayloads = Boolean(nativeResult.postNativePayloads?.length);
-        if (nativeResult.logicalContent !== undefined) {
-          nativeDelivery.content = nativeResult.logicalContent;
-        } else if (
-          nativeResult.content !== undefined &&
-          ((!nativeResult.fallbackPayload && !hasPostNativePayloads) ||
-            nativeDelivery.content === undefined)
-        ) {
-          nativeDelivery.content = nativeResult.content;
-        }
-        const afterNativePayloads = [
-          ...(nativeResult.fallbackPayload ? [nativeResult.fallbackPayload] : []),
-          ...(nativeResult.postNativePayloads ?? []),
-        ];
-        if (afterNativePayloads.length > 0) {
-          nativeDelivery.messages.push(
-            ...afterNativePayloads.flatMap((payload) => renderReplyPayload(payload)),
-          );
-          nativeDelivery.blockSettled = nativeDelivery.messages.length === 0;
-        }
-        nativeDelivery.nativeSettled = true;
-        if (!nativeDelivery.blockSettled) {
-          await flushPendingMessages();
-        }
-        settlePendingDelivery(nativeDelivery);
-        if (nativeResult.messageId) {
-          try {
-            params.onSentMessageIds?.([nativeResult.messageId]);
-          } catch (error) {
-            params.log.warn?.("failed to record sent Teams message id", {
-              error: formatUnknownError(error),
-            });
-          }
-        }
-      })
-      .finally(() => {
-        pendingSettlement = undefined;
-      }));
+    if (nativeResult.visibleReplySent) {
+      nativeDelivery.nativeResult = {
+        messageIds: nativeResult.messageId ? [nativeResult.messageId] : [],
+        ...(nativeResult.content !== undefined ? { content: nativeResult.content } : {}),
+      };
+    }
+    const hasPostNativePayloads = Boolean(nativeResult.postNativePayloads?.length);
+    if (nativeResult.logicalContent !== undefined) {
+      nativeDelivery.content = nativeResult.logicalContent;
+    } else if (
+      nativeResult.content !== undefined &&
+      ((!nativeResult.fallbackPayload && !hasPostNativePayloads) ||
+        nativeDelivery.content === undefined)
+    ) {
+      nativeDelivery.content = nativeResult.content;
+    }
+    const afterNativePayloads = [
+      ...(nativeResult.fallbackPayload ? [nativeResult.fallbackPayload] : []),
+      ...(nativeResult.postNativePayloads ?? []),
+    ];
+    if (afterNativePayloads.length > 0) {
+      nativeDelivery.messages.push(
+        ...afterNativePayloads.flatMap((payload) => renderReplyPayload(payload)),
+      );
+      nativeDelivery.blockSettled = nativeDelivery.messages.length === 0;
+    }
+    nativeDelivery.nativeSettled = true;
+    if (!nativeDelivery.blockSettled) {
+      await flushPendingMessages();
+    }
+    settlePendingDelivery(nativeDelivery);
+    if (nativeResult.messageId) {
+      try {
+        params.onSentMessageIds?.([nativeResult.messageId]);
+      } catch (error) {
+        params.log.warn?.("failed to record sent Teams message id", {
+          error: formatUnknownError(error),
+        });
+      }
+    }
+  };
 
   // Pipe agent tool/plan/approval/command events into the stream controller's
   // progress-draft surface. In "progress" stream mode this lets the live

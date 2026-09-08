@@ -1,3 +1,4 @@
+// Model Catalog Core module implements provider model id normalization behavior.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { parseModelCatalogRef } from "./model-catalog-refs.js";
 import {

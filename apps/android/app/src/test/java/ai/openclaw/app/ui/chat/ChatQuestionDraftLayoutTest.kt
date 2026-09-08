@@ -7,13 +7,10 @@ import ai.openclaw.app.NodeApp
 import ai.openclaw.app.NodeRuntime
 import ai.openclaw.app.NodeRuntimeMode
 import ai.openclaw.app.SecurePrefs
-import ai.openclaw.app.bindNodeRuntimeTestFixture
-import ai.openclaw.app.chat.AndroidClientDatabases
 import ai.openclaw.app.chat.ChatController
 import ai.openclaw.app.chat.ChatQuestionPrompt
 import ai.openclaw.app.chat.ChatQuestionStatus
 import ai.openclaw.app.closeNodeRuntimeTestFixture
-import ai.openclaw.app.drainWithMainLooper
 import ai.openclaw.app.gateway.QuestionListResult
 import ai.openclaw.app.gateway.QuestionRecord
 import ai.openclaw.app.gateway.QuestionSecretStore
@@ -71,7 +68,6 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
-import org.robolectric.util.ReflectionHelpers
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicReference
 
@@ -93,16 +89,11 @@ class ChatQuestionDraftLayoutTest {
   @Before
   fun setUp() {
     app = RuntimeEnvironment.getApplication() as NodeApp
-    originalAnimatorScale = Settings.Global.getString(app.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE)
     prefs = SecurePrefs(app, app.getSharedPreferences("chat-question-${UUID.randomUUID()}", Context.MODE_PRIVATE))
     AndroidScreenshotFixture.configure(AndroidScreenshotScene.Chat)
     runtime = NodeRuntime(app, prefs, NodeRuntimeMode.ScreenshotFixture)
     originalRuntime = app.peekRuntime()
-    bindNodeRuntimeTestFixture(app, runtime)
-    // Construct the real backing stores before testing question interactions, not cold startup.
-    drainWithMainLooper {
-      ReflectionHelpers.getField<AndroidClientDatabases>(runtime, "clientDatabases").clientStateDatabase()
-    }
+    setApplicationRuntime(runtime)
     controller =
       NodeRuntime::class.java
         .getDeclaredField("chat")
@@ -115,6 +106,7 @@ class ChatQuestionDraftLayoutTest {
         .apply { isAccessible = true }
         .get(controller) as suspend (String, String?) -> String
     question = runBlocking { Json.decodeFromString<QuestionListResult>(request("question.list", "{}")).questions.single() }
+    originalAnimatorScale = Settings.Global.getString(app.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE)
     Settings.Global.putFloat(app.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 0f)
   }
 
@@ -126,7 +118,7 @@ class ChatQuestionDraftLayoutTest {
       try {
         closeNodeRuntimeTestFixture(runtime)
       } finally {
-        bindNodeRuntimeTestFixture(app, originalRuntime)
+        setApplicationRuntime(originalRuntime)
         AndroidScreenshotFixture.configure(AndroidScreenshotScene.Home)
         Settings.Global.putString(app.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, originalAnimatorScale)
         shadowOf(Looper.getMainLooper()).idle()
@@ -321,5 +313,12 @@ class ChatQuestionDraftLayoutTest {
     assertEquals("Scrolling must not replace or remove the pending question", question, prompt.record)
     assertEquals(ChatQuestionStatus.Pending, prompt.status())
     assertTrue("Fixture must remain within the real pending question lifetime", System.currentTimeMillis() < question.expiresAtMs)
+  }
+
+  private fun setApplicationRuntime(value: NodeRuntime?) {
+    NodeApp::class.java
+      .getDeclaredField("runtimeInstance")
+      .apply { isAccessible = true }
+      .set(app, value)
   }
 }

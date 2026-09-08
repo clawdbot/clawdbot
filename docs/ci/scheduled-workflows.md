@@ -149,7 +149,7 @@ The pull request guard stays light: it only starts for changes under `.github/ac
 ### Platform-specific security shards
 
 - `CodeQL Android Critical Security` — scheduled Android security shard. Builds the Android app manually for CodeQL on the smallest Blacksmith Linux runner accepted by workflow sanity. Uploads under `/codeql-critical-security/android`.
-- `CodeQL macOS Critical Security` — weekly/manual macOS security shard. Builds the macOS app manually for CodeQL on GitHub-hosted macOS, filters dependency build results out of uploaded SARIF, and uploads under `/codeql-critical-security/macos`. Kept outside daily defaults because macOS build dominates runtime even when clean.
+- `CodeQL macOS Critical Security` — weekly/manual macOS security shard. Builds the macOS app manually for CodeQL on Blacksmith macOS, filters dependency build results out of uploaded SARIF, and uploads under `/codeql-critical-security/macos`. Kept outside daily defaults because macOS build dominates runtime even when clean.
 
 ### Critical Quality categories
 
@@ -241,18 +241,6 @@ gh workflow run duplicate-after-merge.yml \
   -f duplicate_prs='70530,70592' \
   -f apply=true
 ```
-
-### Update Migration
-
-`Update Migration` runs the expanded published-upgrade baseline set weekly on
-Sunday at 03:17 UTC and on manual dispatch. It keeps both `plugin-deps-cleanup`
-and `legacy-operator-state`, with no provider secrets. Its separate
-non-canceling schedule group coalesces pending runs and cannot cancel manual
-validation. See [Package Acceptance suite profiles](/ci/release-validation#suite-profiles)
-for runtime baseline resolution, per-baseline grouping, the 78–90
-runner-minute weekly planning allowance, and the successful-upgrade requirements.
-[Runner registration budgets](/ci/capacity#runner-registration-budget) account
-for the weekly burst separately from PR and main admission.
 
 ## ClawSweeper activity forwarding
 

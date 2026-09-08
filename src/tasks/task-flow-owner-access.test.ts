@@ -28,6 +28,7 @@ beforeEach(() => {
   configureTaskFlowRegistryRuntime({
     store: {
       loadSnapshot: () => ({ flows: new Map() }),
+      saveSnapshot: () => {},
       upsertFlow: () => {},
       deleteFlow: () => {},
     },

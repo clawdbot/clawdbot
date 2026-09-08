@@ -1,7 +1,6 @@
 /** Shared bundle MCP catalog, runtime, and manager types. */
 import type {
   CallToolResult,
-  GetPromptResult,
   ListResourceTemplatesResult,
   ListToolsResult,
 } from "@modelcontextprotocol/sdk/types.js";
@@ -163,11 +162,7 @@ export type SessionMcpRuntime = {
     params?: { cursor?: string },
   ) => Promise<ListResourceTemplatesResult>;
   listPrompts?: (serverName: string) => Promise<unknown>;
-  getPrompt?: (
-    serverName: string,
-    name: string,
-    args?: Record<string, string>,
-  ) => Promise<GetPromptResult>;
+  getPrompt?: (serverName: string, name: string, args?: Record<string, string>) => Promise<unknown>;
   /** Joins cleanup already owned by this runtime, without closing live shared peers.
    * Rejects when an earlier retirement or disposal could not confirm closure. */
   joinCleanup?: () => Promise<void>;

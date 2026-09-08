@@ -117,7 +117,6 @@ describe("codesign-mac-app temp file hygiene", () => {
       await mkdir(path.join(app, "Contents", "MacOS"), { recursive: true });
       await mkdir(binDir);
       await mkdir(captureDir);
-      await writeFile(path.join(app, "Contents", "MacOS", "openclaw-mac"), "#!/bin/sh\n");
       await writeFile(path.join(app, "Contents", "MacOS", "openclaw-mlx-tts"), "#!/bin/sh\n");
       await writeFile(path.join(app, "Contents", "MacOS", "OpenClaw"), "#!/bin/sh\n");
       await installFakeCodesign(binDir);
@@ -140,13 +139,12 @@ describe("codesign-mac-app temp file hygiene", () => {
       expect(result.stdout).toContain(`Codesign complete for ${app}`);
 
       const signLines = readFileSync(logPath, "utf8").trim().split("\n");
-      expect(signLines).toHaveLength(3);
-      expect(signLines[0]).toBe(`plain\t${path.join(app, "Contents", "MacOS", "openclaw-mac")}`);
-      expect(signLines[1]).toBe(
+      expect(signLines).toHaveLength(2);
+      expect(signLines[0]).toBe(
         `plain\t${path.join(app, "Contents", "MacOS", "openclaw-mlx-tts")}`,
       );
-      expect(signLines[2]).toContain(`entitled\t${app}\t`);
-      for (const line of signLines.slice(2)) {
+      expect(signLines[1]).toContain(`entitled\t${app}\t`);
+      for (const line of signLines.slice(1)) {
         const columns = line.split("\t");
         const entitlementPath = columns[2];
         const copiedEntitlementsPath = columns[3];

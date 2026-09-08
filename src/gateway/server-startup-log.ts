@@ -15,7 +15,6 @@ import {
 import { resolveThinkingDefault } from "../agents/model-thinking-default.js";
 import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { ensureSqliteLibrarySelected } from "../infra/bun-sqlite-library.js";
 import { getResolvedLoggerSettings } from "../logging.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { collectEnabledInsecureOrDangerousFlagsFromCurrentSnapshot } from "../security/dangerous-config-flags-current.js";
@@ -68,14 +67,6 @@ export async function logGatewayStartup(params: {
     `http server listening (${formatReadyDetails(params.loadedPluginIds, startupDurationLabel)})`,
   );
   params.log.info(`log file: ${getResolvedLoggerSettings().file}`);
-  const sqliteLibrary = ensureSqliteLibrarySelected();
-  if (sqliteLibrary.source !== "runtime") {
-    params.log.info(
-      `SQLite: using ${sanitizeForLog(sqliteLibrary.path)} (${sqliteLibrary.version}, extension loading enabled)`,
-    );
-  } else if (sqliteLibrary.ignoredOverride) {
-    params.log.warn(`SQLite: ${sqliteLibrary.ignoredOverride}; override ignored`);
-  }
   if (params.isNixMode) {
     params.log.info("gateway: running in Nix mode (config managed externally)");
   }

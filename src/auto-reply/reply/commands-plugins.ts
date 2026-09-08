@@ -8,7 +8,7 @@ import {
   resolveInstallConfigMutationPreflights,
   selectInstallMutationWriteOptions,
   type ConfigSnapshotForInstallPersist,
-} from "../../plugins/install-config-mutation.js";
+} from "../../plugins/install-persistence.js";
 import { createInstalledPluginOwnershipResolver } from "../../plugins/installed-plugin-package-ownership.js";
 import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.js";
 import { loadPluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
@@ -16,7 +16,7 @@ import { refreshPluginRegistryAfterConfigMutation } from "../../plugins/registry
 import type { PluginRecord } from "../../plugins/registry.js";
 import {
   buildAllPluginInspectReports,
-  withPluginDiagnosticsReportForInspection,
+  buildPluginDiagnosticsReport,
   buildPluginInspectReport,
   buildPluginRegistrySnapshotReport,
   formatPluginCompatibilityNotice,
@@ -224,41 +224,36 @@ export const handlePluginsCommand: CommandHandler = defineAuthorizedTextCommand(
 
       if (pluginsCommand.action === "inspect") {
         const metadataSnapshot = loadPluginMetadataSnapshot(reportParams);
-        const text = await withPluginDiagnosticsReportForInspection(
-          { ...reportParams, metadataSnapshot },
-          (report) => {
-            if (!pluginsCommand.name) {
-              return formatPluginsList(report);
-            }
-            if (normalizeOptionalLowercaseString(pluginsCommand.name) === "all") {
-              const ownershipResolver = createInstalledPluginOwnershipResolver(
-                metadataSnapshot.index,
-              );
-              const reports = buildAllPluginInspectReports({ config, report }).map((inspect) =>
-                buildPluginInspectJson(inspect, ownershipResolver),
-              );
-              return renderJsonBlock("🔌 Plugins", reports);
-            }
-            const inspect = buildPluginInspectReport({
-              id: pluginsCommand.name,
-              config,
-              report,
-            });
-            if (!inspect) {
-              return `🔌 No plugin named "${pluginsCommand.name}" found.`;
-            }
-            const payload = buildPluginInspectJson(
-              inspect,
-              createInstalledPluginOwnershipResolver(metadataSnapshot.index),
-            );
-            return renderJsonBlock(`🔌 Plugin "${inspect.plugin.id}"`, {
-              ...inspect,
-              compatibilityWarnings: payload.compatibilityWarnings,
-              install: payload.install,
-            });
-          },
+        const report = buildPluginDiagnosticsReport({ ...reportParams, metadataSnapshot });
+        if (!pluginsCommand.name) {
+          return commandReply(formatPluginsList(report));
+        }
+        if (normalizeOptionalLowercaseString(pluginsCommand.name) === "all") {
+          const ownershipResolver = createInstalledPluginOwnershipResolver(metadataSnapshot.index);
+          const reports = buildAllPluginInspectReports({ config, report }).map((inspect) =>
+            buildPluginInspectJson(inspect, ownershipResolver),
+          );
+          return commandReply(renderJsonBlock("🔌 Plugins", reports));
+        }
+        const inspect = buildPluginInspectReport({
+          id: pluginsCommand.name,
+          config,
+          report,
+        });
+        if (!inspect) {
+          return commandReply(`🔌 No plugin named "${pluginsCommand.name}" found.`);
+        }
+        const payload = buildPluginInspectJson(
+          inspect,
+          createInstalledPluginOwnershipResolver(metadataSnapshot.index),
         );
-        return commandReply(text);
+        return commandReply(
+          renderJsonBlock(`🔌 Plugin "${inspect.plugin.id}"`, {
+            ...inspect,
+            compatibilityWarnings: payload.compatibilityWarnings,
+            install: payload.install,
+          }),
+        );
       }
 
       const report = buildPluginRegistrySnapshotReport(reportParams);
@@ -272,7 +267,7 @@ export const handlePluginsCommand: CommandHandler = defineAuthorizedTextCommand(
 
       let registryWarning: string | undefined;
       try {
-        await setPluginEnabledFromCommand({
+        const committedConfig = await setPluginEnabledFromCommand({
           pluginId: plugin.id,
           enabled: pluginsCommand.action === "enable",
           action: pluginsCommand.action,
@@ -284,6 +279,7 @@ export const handlePluginsCommand: CommandHandler = defineAuthorizedTextCommand(
           }),
         });
         await refreshPluginRegistryAfterConfigMutation({
+          config: committedConfig,
           reason: "policy-changed",
           logger: {
             warn: (message) => {

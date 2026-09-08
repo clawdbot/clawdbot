@@ -351,8 +351,7 @@ actor MacGatewayProfileStore {
                 canPromote: token?.isEmpty == false,
                 usesBrowserIdentity: browserSession != nil,
                 browserSessionExpiresAt: browserSession?.expiresAt,
-                authKind: authKind,
-                browserSessionSubject: browserSession?.subject)
+                authKind: authKind)
         }
     }
 
@@ -574,10 +573,6 @@ actor MacGatewayConnectionFleet {
     struct Binding {
         let connection: GatewayConnection
         let chatStoreID: String
-    }
-
-    func existingConnection(profileID: String) -> GatewayConnection? {
-        self.connections[profileID]?.connection
     }
 
     func connection(profileID: String) async -> GatewayConnection {
