@@ -1518,23 +1518,35 @@ describe("models.authStatus", () => {
     expect(provider).toBeUndefined();
   });
 
-  it("keeps unresolved managed SecretRef markers visible as missing", async () => {
+  it.each([
+    { name: "managed marker", provider: { apiKey: NON_ENV_SECRETREF_MARKER } },
+    {
+      name: "request secret",
+      provider: {
+        request: {
+          auth: {
+            mode: "authorization-bearer" as const,
+            token: { source: "env" as const, provider: "default", id: "MISSING_PROXY_TOKEN" },
+          },
+        },
+      },
+    },
+  ])("keeps an unresolved $name missing without hiding healthy providers", async ({ provider }) => {
     const actualAuthHealth = await vi.importActual<typeof import("../../agents/auth-health.js")>(
       "../../agents/auth-health.js",
     );
     mocks.getRuntimeConfig.mockReturnValue({
-      models: {
-        providers: {
-          openai: Object.fromEntries([["apiKey", NON_ENV_SECRETREF_MARKER]]),
-        },
-      },
+      models: { providers: { openai: provider, openrouter: { apiKey: "synthetic-healthy-key" } } },
     });
     mocks.buildAuthHealthSummary.mockImplementationOnce(actualAuthHealth.buildAuthHealthSummary);
-
-    const provider = await firstAuthStatusProvider();
-    expect(provider?.provider).toBe("openai");
-    expect(provider?.apiKey).toBeUndefined();
-    expect(provider?.status).toBe("missing");
+    const result = await readAuthStatus();
+    expect(result.providers).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ provider: "openai", status: "missing" }),
+        expect.objectContaining({ provider: "openrouter", status: "static" }),
+      ]),
+    );
+    expect(result.providers.find((entry) => entry.provider === "openai")?.apiKey).toBeUndefined();
   });
 
   it("does not duplicate profile references as config API keys", async () => {
@@ -2374,6 +2386,7 @@ describe("models.authStatus", () => {
       expect((await readAuthStatus()).usageRefreshPending).toBeUndefined(),
     );
     const result = (await readAuthStatus()).providers[0];
+    expect(result?.status).toBe("static");
     expect(result?.usage).toEqual({
       providerId: provider,
       refreshedAt: 0,

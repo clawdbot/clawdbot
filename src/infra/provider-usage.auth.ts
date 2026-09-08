@@ -17,8 +17,8 @@ import {
   resolveUsableCustomProviderApiKey,
 } from "../agents/model-auth.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
-import { sanitizeConfiguredModelProviderRequest } from "../agents/provider-request-config.js";
 import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
+import { hasConfiguredSecretInput, type SecretInput } from "../config/types.secrets.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { loadManifestMetadataSnapshot } from "../plugins/manifest-contract-eligibility.js";
 import {
@@ -47,14 +47,21 @@ export type ProviderAuth = {
 
 type AuthStore = ReturnType<typeof ensureAuthProfileStore>;
 
-export function hasProviderUsageRequestAuth(config: OpenClawConfig, provider: string): boolean {
-  const request = sanitizeConfiguredModelProviderRequest(
-    config.models?.providers?.[provider]?.request,
-  );
-  return (
-    Boolean(request?.auth && request.auth.mode !== "provider-default") ||
-    new Headers(request?.headers).has("authorization")
-  );
+export function getRequestAuth(cfg: OpenClawConfig, provider: string): SecretInput | undefined {
+  const request = cfg.models?.providers?.[provider]?.request;
+  const auth = request?.auth;
+  const defaults = cfg.secrets?.defaults;
+  // Discovery records configured credentials without validating request secret values.
+  if (auth?.mode === "header" && hasConfiguredSecretInput(auth.value, defaults)) {
+    return auth.value;
+  }
+  if (auth?.mode === "authorization-bearer" && hasConfiguredSecretInput(auth.token, defaults)) {
+    return auth.token;
+  }
+  return Object.entries(request?.headers ?? {}).find(
+    ([name, value]) =>
+      name.toLowerCase() === "authorization" && hasConfiguredSecretInput(value, defaults),
+  )?.[1];
 }
 
 type UsageAuthState = {
@@ -698,7 +705,7 @@ export async function resolveProviderAuths(params: {
         provider,
       });
       const hasDirectCredentialSource =
-        hasProviderUsageRequestAuth(stateBase.cfg, provider) ||
+        Boolean(getRequestAuth(stateBase.cfg, provider)) ||
         Boolean(
           resolveProviderApiKeyFromConfig({
             state: directCredentialState,

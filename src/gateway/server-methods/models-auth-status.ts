@@ -38,8 +38,9 @@ import {
   resolveProviderIdForAuth,
 } from "../../agents/provider-auth-aliases.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { coerceSecretRef } from "../../config/types.secrets.js";
 import {
-  hasProviderUsageRequestAuth,
+  getRequestAuth,
   resolveProviderUsageAuthEnvCredentialProviders,
 } from "../../infra/provider-usage.auth.js";
 import { providerUsageLabel, resolveUsageProviderId } from "../../infra/provider-usage.shared.js";
@@ -360,6 +361,10 @@ function mapAuthStatusProvider(params: {
       ? { status: "ok" }
       : rawRollup;
   const apiKey = params.apiKeys.get(normalizeProviderId(provider.provider));
+  const requestAuth = getRequestAuth(config, provider.provider);
+  const hasStaticAuth =
+    apiKey ||
+    (typeof requestAuth === "string" && !coerceSecretRef(requestAuth, config.secrets?.defaults));
   const hasRefreshableProfile = provider.profiles.some(
     (profile) => profile.type === "oauth" || profile.type === "token",
   );
@@ -368,7 +373,9 @@ function mapAuthStatusProvider(params: {
     authProvider: authProviderKey,
     displayName: (usageKey ? providerUsageLabel(usageKey) : undefined) ?? provider.provider,
     status:
-      apiKey && !hasRefreshableProfile && rollup.status === "missing" ? "static" : rollup.status,
+      hasStaticAuth && !hasRefreshableProfile && rollup.status === "missing"
+        ? "static"
+        : rollup.status,
     expiry: buildExpiry(rollup.remainingMs, rollup.expiresAt),
     profiles: provider.profiles.map((profile) => {
       const metadata = resolveAuthProfileMetadata({
@@ -645,9 +652,7 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
         providerWideUsageIds.add(provider);
       }
       const usageProviderIds = new Set<UsageProviderId>(
-        [...activeUsageProviderIds].filter((provider) =>
-          hasProviderUsageRequestAuth(cfg, provider),
-        ),
+        [...activeUsageProviderIds].filter((provider) => getRequestAuth(cfg, provider)),
       );
       const usageTargets: Array<{ profileId: string; providerId: UsageProviderId }> = [];
       for (const profile of authHealth.profiles) {
