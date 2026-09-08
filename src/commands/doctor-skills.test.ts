@@ -109,6 +109,7 @@ describe("doctor skills", () => {
       expectedEnabled: true,
     },
   ])("honors skill-repair authority for $mode", async ({ update, available, expectedEnabled }) => {
+    mocks.note.mockClear();
     vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", update ? "1" : undefined);
     mocks.buildWorkspaceSkillStatus.mockReturnValue(
       createReport([
@@ -136,6 +137,10 @@ describe("doctor skills", () => {
       env: { EXISTING: "1" },
     });
     expect(cfg.skills?.entries?.["optional-tool"]?.enabled).toBe(true);
+    const output = mocks.note.mock.calls.map(([message]) => String(message)).join("\n");
+    expect(output.includes("Disable unused skills: openclaw doctor --fix")).toBe(
+      update && !available,
+    );
   });
 
   it("collects only unavailable skills that this agent is allowed to use", () => {

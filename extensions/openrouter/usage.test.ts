@@ -556,10 +556,12 @@ describe("OpenRouter usage", () => {
   it("releases capture tees before waiting for unread HTTP error bodies", async () => {
     const cancel = vi.fn();
     const release = vi.fn();
+    const branches: ReadableStream<Uint8Array>[] = [];
     const guardedFetch = vi
       .spyOn(ssrfRuntime, "fetchWithSsrFGuard")
       .mockImplementation(async (params) => {
         const [consumer, capture] = new ReadableStream<Uint8Array>({ cancel }).tee();
+        branches.push(consumer, capture);
         return {
           response: new Response(consumer, { status: 401 }),
           finalUrl: params.url,
@@ -569,18 +571,26 @@ describe("OpenRouter usage", () => {
           },
         };
       });
+    const operation = fetchOpenRouterUsage({
+      token: "router-key",
+      timeoutMs: 1000,
+      fetchFn: vi.fn(),
+    });
+    const settledOperation = operation.catch(() => undefined);
     try {
-      const snapshot = await fetchOpenRouterUsage({
-        token: "router-key",
-        timeoutMs: 1000,
-        fetchFn: vi.fn(),
-      });
+      await vi.waitFor(() => expect(release).toHaveBeenCalledTimes(2));
+      const snapshot = await operation;
       expect(snapshot.error).toBe("HTTP 401");
       expect(snapshot.windows).toEqual([]);
       expect(release).toHaveBeenCalledTimes(2);
       expect(cancel).toHaveBeenCalledTimes(2);
     } finally {
-      guardedFetch.mockRestore();
+      try {
+        await Promise.all(branches.map((branch) => branch.cancel()));
+        await settledOperation;
+      } finally {
+        guardedFetch.mockRestore();
+      }
     }
   });
 });

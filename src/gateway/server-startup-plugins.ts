@@ -59,8 +59,6 @@ export async function runGatewayStartupMaintenance(params: {
   minimalTestGateway: boolean;
   log: GatewayPluginBootstrapLog;
 }): Promise<void> {
-  const { assertConfiguredWorkspaceStateReady } = await import("../agents/workspace-state-dirs.js");
-  assertConfiguredWorkspaceStateReady({ cfg: params.cfgAtStart });
   const startupMaintenanceConfig = resolveGatewayStartupMaintenanceConfig({
     cfgAtStart: params.cfgAtStart,
     startupRuntimeConfig: params.startupRuntimeConfig,

@@ -177,6 +177,7 @@ jobs:
       - name: Establish source ancestry with main
         env:
           RELEASE_ANCESTRY_MODE: merge-base
+          RELEASE_ANCESTRY_SOURCE_REF: ${{ inputs.release_candidate_branch != '' && format('refs/heads/{0}', inputs.release_candidate_branch) || '' }}
           RELEASE_ANCESTRY_TARGET_REF: refs/heads/main
         run: |
           exec python3 -I -S .release-harness/.github/actions/git-owner/owner.py \

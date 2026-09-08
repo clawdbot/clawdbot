@@ -144,6 +144,40 @@ afterEach(() => {
 });
 
 describe("fresh producer results through persistence and model guards", () => {
+  it("retains structured values that fit the compact result budget", async () => {
+    const context = 4_096;
+    const value = Array.from({ length: 80 }, (_, id) => ({ id, ok: true }));
+    const runtime = createAgentHarnessToolSurfaceRuntimeCore({
+      config: { tools: { codeMode: { enabled: true } } },
+      model,
+      contextTokenBudget: context,
+      modelToolsEnabled: true,
+      sessionId,
+      executeTool: async () => {
+        throw new Error("This fixture has no catalog tools");
+      },
+    });
+    try {
+      const [exec] = runtime.compactTools([]).tools;
+      const frame = message(
+        await exec!.execute("compact-value", { code: `return ${JSON.stringify(value)};` }),
+        "exec",
+      );
+      const sent = await dispatch([frame], context);
+      expect(JSON.parse(text(toolResult(sent, 0)))).toMatchObject({
+        status: "completed",
+        value,
+        output: [],
+        replaySafe: false,
+        telemetry: { callCount: 0 },
+      });
+      expect(text(toolResult(sent, 0))).toBe(text(frame));
+      expect(resultDetails(frame).value).toEqual(value);
+    } finally {
+      runtime.cleanup();
+    }
+  });
+
   it.each([
     { name: "default accented", first: "🦞".repeat(9000), last: "é".repeat(18000) },
     { name: "ASCII", first: "a".repeat(40_000), last: "b".repeat(40_000) },

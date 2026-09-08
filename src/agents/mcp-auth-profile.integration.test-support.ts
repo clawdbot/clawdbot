@@ -541,11 +541,17 @@ async function runScopeScenario(root: string): Promise<void> {
     assert.equal(second.generation.pluginRegistry.providers.length, 1);
     assert.equal(disabled.generation.pluginRegistry.providers.length, 0);
     const checkScope = (owner: ScopedOwner, context?: HookContext) => {
-      assert.deepEqual(getPluginRuntimeGatewayRequestScope(), {
-        ...owner.request,
-        pluginRegistry: owner.generation.pluginRegistry,
-      });
-      assert.equal(getPluginRuntimeGenerationRegistry(), owner.generation.pluginRegistry);
+      const scope = getPluginRuntimeGatewayRequestScope();
+      assert(scope, "request scope must survive deferred auth");
+      assert.equal(scope.pluginId, owner.request.pluginId);
+      assert.equal(scope.isWebchatConnect === owner.request.isWebchatConnect, true);
+      assert.equal(scope.resolveGatewayContext === owner.request.resolveGatewayContext, true);
+      assert.equal(scope.pluginRegistry === owner.generation.pluginRegistry, true);
+      assert.equal(
+        scope.declaredProviderOwners === owner.generation.metadataSnapshot.declaredProviderOwners,
+        true,
+      );
+      assert.equal(getPluginRuntimeGenerationRegistry() === owner.generation.pluginRegistry, true);
       if (context) {
         assert.equal(context.config, owner.fixture.config);
         assert.equal(context.agentDir, owner.fixture.agentDir);
@@ -600,7 +606,10 @@ async function runScopeScenario(root: string): Promise<void> {
     assert(!providerEvents.some((event) => event.owner === "disabled"));
     assert.equal(getPluginRuntimeGatewayRequestScope(), undefined);
     assert.equal(getPluginRuntimeGenerationRegistry(), undefined);
-    assert.equal(getPluginRegistryState()?.activeRegistry, second.generation.pluginRegistry);
+    assert.equal(
+      getPluginRegistryState()?.activeRegistry === second.generation.pluginRegistry,
+      true,
+    );
   } finally {
     inspectHook = undefined;
     await endpoint.close();

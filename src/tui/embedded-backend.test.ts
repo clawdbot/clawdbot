@@ -195,9 +195,13 @@ vi.mock("../agents/defaults.js", () => ({
   DEFAULT_PROVIDER: "openai",
 }));
 
-vi.mock("../agents/model-selection.js", () => ({
+vi.mock("../agents/model-selection-shared.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/model-selection-shared.js")>()),
   buildAllowedModelSet: (params: { catalog: unknown[]; agentId?: string }) =>
     buildAllowedModelSetMock(params),
+}));
+
+vi.mock("../agents/model-selection.js", () => ({
   buildConfiguredModelCatalog: ({ cfg }: { cfg: { models?: { providers?: unknown } } }) =>
     Object.entries(
       (cfg.models?.providers as Record<string, { models?: Array<{ id: string }> }>) ?? {},

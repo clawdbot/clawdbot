@@ -82,8 +82,10 @@ sequenceDiagram
   - Events: `{type:"event", event, payload, seq?, stateVersion?}`
 - `hello-ok.features.methods` / `events` are discovery metadata, not a
   generated dump of every callable helper route.
-- Shared-secret auth uses `connect.params.auth.token` or
-  `connect.params.auth.password`, depending on the configured gateway auth mode.
+- Shared-secret auth accepts the configured secret in either
+  `connect.params.auth.token` or `connect.params.auth.password`.
+  `gateway.auth.mode` selects the configured value (`gateway.auth.token` or
+  `gateway.auth.password`), not the required wire field.
 - Identity-bearing modes such as Tailscale Serve
   (`gateway.auth.allowTailscale: true`) or non-loopback
   `gateway.auth.mode: "trusted-proxy"` satisfy auth from request headers

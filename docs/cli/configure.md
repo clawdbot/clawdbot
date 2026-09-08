@@ -42,6 +42,17 @@ Gateway, daemon, health, and web settings do not require an agent owner. Workspa
 
 ## Gateway section
 
+First-run `openclaw onboard` and `openclaw setup` generate a Gateway secret in
+token mode without a token/password picker. They preserve existing password
+mode; use their `--gateway-auth password` or `--gateway-password <value>` flags
+to choose a password explicitly. Tailscale Funnel still requires password mode.
+The local `configure` Gateway section retains its auth-mode picker for targeted
+reconfiguration. The mode selects the configured secret; clients may send it
+in either `auth.token` or `auth.password`.
+
+Remote configuration asks for one **Gateway secret** and stores it as
+`gateway.remote.token`, whether the remote Gateway calls it a token or password.
+
 For **Trusted Proxy** auth, enter comma-separated IPv4 or IPv6 addresses or CIDR ranges, such as `10.0.0.1, ::1, 10.0.0.0/24`. The wizard rejects malformed addresses and empty entries before saving; surrounding whitespace is ignored.
 
 For **Trusted Proxy** auth, entering an address or CIDR that matches a loopback source shows a security warning and asks for explicit consent before setting `gateway.auth.trustedProxy.allowLoopback`. Declining leaves it unset and warns that loopback proxy requests will be rejected at runtime. See [Trusted proxy auth](/gateway/trusted-proxy-auth#configure-with-the-wizard) for the trust requirements.

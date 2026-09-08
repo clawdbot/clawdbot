@@ -340,7 +340,11 @@ export function renderAppSidebarOnline(host: AppSidebarRenderHost) {
           ? nothing
           : html`<div class="sidebar-online__list">
               ${repeat(users, presenceUserKey, (user) => {
-                const activity = personActivityLink(user.identity?.id, routing, user.name);
+                const activity = personActivityLink(
+                  user.identity?.id,
+                  routing,
+                  presenceViewerLabel(user),
+                );
                 const tag = activity ? literal`a` : literal`button`;
                 return staticHtml`<div
                   class="sidebar-online__row"
@@ -384,7 +388,12 @@ export function renderAppSidebarOnline(host: AppSidebarRenderHost) {
 
 /** Zone 5: product chrome recedes to one slim footer bar. */
 export function renderAppSidebarFooterBar(host: AppSidebarRenderHost) {
-  const connectionStatus = resolveSidebarConnectionStatus(host);
+  const connectionStatus = resolveSidebarConnectionStatus({
+    offline: host.offline,
+    restartPending: host.restartPending,
+    suspensionPhase: host.suspensionPhase,
+    phase: host.sessionDataContext?.gateway.snapshot.phase,
+  });
   const selfUser = resolveCurrentSelfUser({
     snapshotUser: host.sessionDataContext?.gateway.snapshot.selfUser,
     presenceEntries: readPresenceEntries(host.sessionData.presencePayload),

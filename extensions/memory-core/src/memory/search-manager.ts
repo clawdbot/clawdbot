@@ -6,8 +6,7 @@ import type { MemorySearchManager } from "openclaw/plugin-sdk/memory-core-host-e
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import type { MemoryCoreAcquireLocalService } from "./embedding-local-service.js";
 
-const managerRuntimeLoader = createLazyRuntimeModule(() => import("../../manager-runtime.js"));
-const loadManagerRuntime = managerRuntimeLoader;
+const loadManagerRuntime = createLazyRuntimeModule(() => import("../../manager-runtime.js"));
 
 type MemorySearchManagerPurpose = "default" | "status" | "cli";
 type MemorySearchManagerParams = {
@@ -55,7 +54,7 @@ async function getBuiltinMemorySearchManager(
 }
 
 export async function closeAllMemorySearchManagers(): Promise<void> {
-  if (!managerRuntimeLoader.peek()) {
+  if (!loadManagerRuntime.peek()) {
     return;
   }
   const { closeAllMemoryIndexManagers } = await loadManagerRuntime();
@@ -66,7 +65,7 @@ export async function closeMemorySearchManager(params: {
   cfg: OpenClawConfig;
   agentId: string;
 }): Promise<void> {
-  if (!managerRuntimeLoader.peek()) {
+  if (!loadManagerRuntime.peek()) {
     return;
   }
   const { closeMemoryIndexManagersForAgent } = await loadManagerRuntime();

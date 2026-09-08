@@ -279,20 +279,27 @@ describe("openrouter music generation provider", () => {
         cfg: {},
         timeoutMs: outcome === "timeout" ? 1 : 1000,
       });
-      if (outcome === "completed") {
-        await expect(operation).resolves.toMatchObject({
-          tracks: [{ buffer: Buffer.from("wav-bytes") }],
-        });
-      } else {
-        await expect(operation).rejects.toThrow(
-          outcome === "timeout"
-            ? "OpenRouter music generation timed out after 1ms"
-            : "OpenRouter music generation failed: provider disconnected",
-        );
+      const settledOperation = operation.catch(() => undefined);
+      try {
+        await vi.waitFor(() => expect(release).toHaveBeenCalledOnce());
+        if (outcome === "completed") {
+          await expect(operation).resolves.toMatchObject({
+            tracks: [{ buffer: Buffer.from("wav-bytes") }],
+          });
+        } else {
+          await expect(operation).rejects.toThrow(
+            outcome === "timeout"
+              ? "OpenRouter music generation timed out after 1ms"
+              : "OpenRouter music generation failed: provider disconnected",
+          );
+        }
+        expect(release).toHaveBeenCalledOnce();
+        expect(cancel).toHaveBeenCalledOnce();
+        expect(consumer.locked).toBe(false);
+      } finally {
+        await Promise.all([capture.cancel(), ...(!consumer.locked ? [consumer.cancel()] : [])]);
+        await settledOperation;
       }
-      expect(release).toHaveBeenCalledOnce();
-      expect(cancel).toHaveBeenCalledOnce();
-      expect(consumer.locked).toBe(false);
     },
   );
 

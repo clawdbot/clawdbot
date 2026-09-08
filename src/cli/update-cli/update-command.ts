@@ -36,7 +36,7 @@ import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-version
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { assertOpenClawStateWriteAllowedAtPath } from "../../state/openclaw-state-ownership.js";
 import { VERSION } from "../../version.js";
-import { resolveCliName } from "../cli-name.js";
+import { CLI_NAME } from "../cli-name.js";
 import { createUpdateProgress } from "./progress.js";
 import {
   DEFAULT_PACKAGE_NAME,
@@ -76,7 +76,6 @@ import {
 import type { UpdateCommandRecoveryState } from "./update-command-service.js";
 import { withUpdateFailureTriage } from "./update-command-triage.js";
 
-const CLI_NAME = resolveCliName();
 const DEFAULT_UPDATE_STEP_TIMEOUT_MS = 30 * 60_000;
 
 export async function updateCommand(inputOpts: UpdateCommandOptions): Promise<void> {

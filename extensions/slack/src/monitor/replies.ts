@@ -38,6 +38,7 @@ import {
 } from "../native-data-fallback.js";
 import {
   hasSlackReplyStructuredContent,
+  iterateSlackReplyDeliveryMessages,
   resolveSlackReplyBlockResolution,
   resolveSlackReplyBlocks,
   type PreparedSlackReply,
@@ -280,44 +281,25 @@ export async function deliverReplies(params: {
         delivered ||= mediaDelivery !== "empty";
       }
 
-      for (const segment of segments) {
-        if (segment.kind === "text") {
-          const text = [outsideText, segment.text].filter(Boolean).join("\n\n");
-          outsideText = "";
-          if (!text) {
-            continue;
-          }
-          hookParts.push(text);
-          for (const chunk of chunkSlackTextAtHardLimit(text)) {
+      for (const message of iterateSlackReplyDeliveryMessages({
+        authoredTextPlacement,
+        segments,
+        text: outsideText,
+      })) {
+        hookParts.push(message.text);
+        if (message.textIsSlackPlainText) {
+          for (const chunk of chunkSlackTextAtHardLimit(message.text)) {
             lastResult = await sendReply({ text: chunk, threadTs, textIsSlackPlainText: true });
             delivered = true;
           }
           continue;
         }
-        const baseText = outsideText;
-        outsideText = "";
-        const accessibilityText =
-          buildSlackNativeDataAccessibilityText(baseText, segment.blocks) ||
-          buildSlackBlocksFallbackText(segment.blocks);
-        hookParts.push(accessibilityText);
-        const segmentPlacement = baseText
-          ? "outside-blocks"
-          : authoredTextPlacement === "blocks"
-            ? "blocks"
-            : "none";
         lastResult = await sendReply({
-          text: baseText,
+          ...(message.blocks
+            ? { ...message, text: message.nativeDataFallbackBaseText ?? "" }
+            : { text: message.text }),
           threadTs,
-          blocks: segment.blocks,
-          authoredTextPlacement: segmentPlacement,
-          ...(baseText ? { nativeDataFallbackBaseText: baseText } : {}),
         });
-        delivered = true;
-      }
-
-      if (outsideText && !reply.hasMedia) {
-        hookParts.push(outsideText);
-        lastResult = await sendReply({ text: outsideText, threadTs });
         delivered = true;
       }
     } catch (error) {

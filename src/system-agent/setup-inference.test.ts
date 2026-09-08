@@ -5899,6 +5899,7 @@ describe("resolvePersistentApplyInference", () => {
     const execution = {
       runner: "embedded" as const,
       runConfig: { agents: { defaults: { model: "openai/gpt-5.5" } } },
+      sourceConfig: { agents: { defaults: { model: "openai/gpt-5.5" } } },
       modelLabel: "openai/gpt-5.5",
       provider: "openai",
       model: "gpt-5.5",

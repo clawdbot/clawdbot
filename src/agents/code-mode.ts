@@ -202,7 +202,7 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
       // model-facing field prevents schema-valid empty calls from constrained models.
       code: Type.String({
         description:
-          'Required JS/TS; no Python, shell, `require`, or `import`. Emit output with `text(value)` or `json(value)`. Use `return value`; a trailing expression yields `null`. Call enabled async globals directly; independent calls may use Promise.all. Declared output fields may feed later calls in the same program; do not spend another `exec` merely inspecting them. Unknown output (`-> ?`) cannot feed guessed dependent logic in the same program: return it raw, observe it, then use a later `exec`. For discovery, use `catalog.search(query)`: `const [tool] = await catalog.search("..."); return await tool({...});`.',
+          "Required JS/TS; no Python, shell, `require`, or `import`. Use `return value`; a trailing expression yields `null`.",
       }),
       language: optionalStringEnum(["javascript", "typescript"] as const, {
         description:
@@ -254,7 +254,10 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
         }),
       );
       markCodeModePermissionChangeResult(result, signal);
-      return formatToolSearchControlResult(result, runtime, undefined, result.status);
+      return formatToolSearchControlResult(result, runtime, {
+        terminalBatchStatus: result.status,
+        compact: true,
+      });
     },
   } as AnyAgentTool);
   const waitTool = markCodeModeControlTool({
@@ -290,7 +293,10 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
         }),
       );
       markCodeModePermissionChangeResult(result, signal);
-      return formatToolSearchControlResult(result, runtime, undefined, result.status);
+      return formatToolSearchControlResult(result, runtime, {
+        terminalBatchStatus: result.status,
+        compact: true,
+      });
     },
   } as AnyAgentTool);
   return [execTool, waitTool];

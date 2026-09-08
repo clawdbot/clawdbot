@@ -38,6 +38,7 @@ import type {
 
 export type SessionState = {
   result: SessionsListResult | null;
+  resultCached?: boolean;
   agentId: string | null;
   modelOverrides: Readonly<Record<string, string | null>>;
   loading: boolean;
@@ -124,6 +125,8 @@ export type SessionResetOptions = {
 export type SessionResetResult = "completed" | "not-started" | "uncertain";
 
 export type SessionGateway = {
+  readonly connection?: { readonly gatewayUrl: string; readonly token?: string };
+  readonly connectionRevision?: number;
   readonly snapshot: {
     client: GatewayBrowserClient | null;
     phase: ApplicationGatewayPhase;
@@ -163,6 +166,7 @@ export type SessionCapability = {
   readonly state: SessionState;
   /** Advances only when a canonical sessions.list result is published. */
   readonly canonicalListRevision: number;
+  whenCachedRosterSettled: () => Promise<void>;
   /** Captures the current Gateway connection generation for read-only requests. */
   captureConnectionScope: () => SessionConnectionScope | null;
   /** Whether a captured read-only request still belongs to the active connection. */

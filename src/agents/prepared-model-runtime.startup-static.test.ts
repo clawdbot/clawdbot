@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => {
     pluginIds: [],
     index: { plugins: [{ pluginId: "openai", enabled: true }] },
     manifestRegistry: { plugins: [], diagnostics: [] },
+    declaredProviderOwners: new Map(),
     owners: {
       channels: new Map(),
       channelConfigs: new Map(),

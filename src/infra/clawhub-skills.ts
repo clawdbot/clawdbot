@@ -1,3 +1,4 @@
+import type { SkillsDetailResult } from "@openclaw/gateway-protocol";
 // ClawHub skill metadata, trust, install resolution, cards, and telemetry.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -64,36 +65,7 @@ type ClawHubSkillSearchWireEntry = Omit<
   install?: { kind?: string | null; reference?: string | null } | null;
 };
 
-export type ClawHubSkillDetail = {
-  skill: {
-    slug: string;
-    displayName: string;
-    summary?: string;
-    icon?: string | null;
-    tags?: Record<string, string>;
-    channel?: string | null;
-    isOfficial?: boolean | null;
-    createdAt: number;
-    updatedAt: number;
-  } | null;
-  latestVersion?: {
-    version: string;
-    createdAt: number;
-    changelog?: string;
-  } | null;
-  metadata?: {
-    os?: string[] | null;
-    systems?: string[] | null;
-  } | null;
-  owner?: {
-    handle?: string | null;
-    displayName?: string | null;
-    image?: string | null;
-    official?: boolean | null;
-    channel?: string | null;
-    isOfficial?: boolean | null;
-  } | null;
-};
+export type ClawHubSkillDetail = SkillsDetailResult;
 
 export type ClawHubSkillInstallResolutionResponse =
   | {

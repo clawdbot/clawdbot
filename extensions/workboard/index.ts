@@ -24,22 +24,26 @@ export default definePluginEntry({
   description: "Dashboard workboard for agent-owned issues and sessions.",
   register(api) {
     const store = WorkboardStore.openSqlite();
+    const resourceServices: Array<{ stop(): void }> = [];
+    registerWorkboardStoreLifecycle(api, store, () => {
+      for (const service of resourceServices) {
+        service.stop();
+      }
+    });
     const changeEvents = createWorkboardChangeEventService(store);
+    resourceServices.push(changeEvents);
     const automationNudge = createWorkboardAutomationNudgeService({
       store,
       gateway: api.runtime.gateway,
     });
+    resourceServices.push(automationNudge);
     const lifecycleSync = createWorkboardLifecycleService({
       store,
       worktrees: api.runtime.worktrees,
       readSessions: async (options) =>
         await readWorkboardLifecycleSessions(api.runtime.gateway, options),
     });
-    registerWorkboardStoreLifecycle(api, store, () => {
-      changeEvents.stop();
-      automationNudge.stop();
-      lifecycleSync.stop();
-    });
+    resourceServices.push(lifecycleSync);
     api.session.controls.registerControlUiDescriptor({
       surface: "tab",
       id: "workboard",

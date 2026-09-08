@@ -14,26 +14,10 @@ import {
   shouldHandleNavigationClick,
 } from "../lib/navigation-click.ts";
 import { hasNativeBrowserBridge } from "./native-browser-host.ts";
+import { webKitHostWindow, type WebKitHostMessages } from "./native-webkit-bridge.ts";
 
 type NativeLinkTarget = "external";
-
-type NativeLinkMessage = {
-  type: "open-link";
-  url: string;
-  target: NativeLinkTarget;
-};
-
-type WebKitMessageHandler = {
-  postMessage(message: NativeLinkMessage): void;
-};
-
-type NativeUpdateMessage = {
-  type: "start-update";
-};
-
-type WebKitUpdateMessageHandler = {
-  postMessage(message: NativeUpdateMessage): void;
-};
+type NativeLinkPoster = (message: WebKitHostMessages["openclawLink"]) => void;
 
 const NATIVE_UPDATE_DECLINED_EVENT = "openclaw:native-update-declined";
 export const NATIVE_UPDATE_AVAILABILITY_CHANGED_EVENT =
@@ -51,22 +35,14 @@ type NativeLinkRoutingOptions = {
   canPresentBrowserPanel?: () => boolean;
 };
 
-function getNativeLinkPoster(): WebKitMessageHandler["postMessage"] | undefined {
+function getNativeLinkPoster(): NativeLinkPoster | undefined {
   // Native hosts install this handler before navigation; its absence preserves browser behavior.
-  const handler = (
-    window as unknown as {
-      webkit?: { messageHandlers?: { openclawLink?: WebKitMessageHandler } };
-    }
-  ).webkit?.messageHandlers?.openclawLink;
+  const handler = webKitHostWindow()?.webkit?.messageHandlers?.openclawLink;
   return handler?.postMessage.bind(handler);
 }
 
-function getNativeUpdateHandler(): WebKitUpdateMessageHandler | undefined {
-  return (
-    window as unknown as {
-      webkit?: { messageHandlers?: { openclawUpdate?: WebKitUpdateMessageHandler } };
-    }
-  ).webkit?.messageHandlers?.openclawUpdate;
+function getNativeUpdateHandler() {
+  return webKitHostWindow()?.webkit?.messageHandlers?.openclawUpdate;
 }
 
 export function hasNativeUpdateBridge(): boolean {
@@ -120,7 +96,7 @@ function menuContainer(event: Event): HTMLElement {
 }
 
 function postNativeLink(
-  postMessage: WebKitMessageHandler["postMessage"],
+  postMessage: NativeLinkPoster,
   url: URL,
   target: NativeLinkTarget,
 ): boolean {
@@ -199,7 +175,7 @@ export function startNativeLinkRouting(options: NativeLinkRoutingOptions = {}): 
     menu = null;
   };
   const showMenu = async (
-    nativePostMessage: WebKitMessageHandler["postMessage"],
+    nativePostMessage: NativeLinkPoster,
     anchor: HTMLAnchorElement,
     url: URL,
     x: number,

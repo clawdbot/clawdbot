@@ -15,6 +15,7 @@ import {
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import {
+  createCallerModeSnapshot,
   expectBlockedTailInPlanOrder,
   expectPlanReceiptDescriptorsToMatch,
   snapshotFiles,
@@ -115,11 +116,7 @@ describe("legacy state migration read-only refusals", () => {
     const plan = await planLegacyStateMigrationsReadOnly({
       mode: "doctor",
       candidate: assertedCandidate,
-      snapshot: {
-        homeDir: fixture.homeDir,
-        configPath: fixture.configPath,
-        stateDir: fixture.stateDir,
-      },
+      snapshot: createCallerModeSnapshot(fixture),
       env: fixture.env,
     });
 
@@ -141,11 +138,7 @@ describe("legacy state migration read-only refusals", () => {
     const plan = await planLegacyStateMigrationsReadOnly({
       mode: "doctor",
       candidate: candidateAt(fixture.root),
-      snapshot: {
-        homeDir: fixture.homeDir,
-        configPath: fixture.configPath,
-        stateDir: fixture.stateDir,
-      },
+      snapshot: createCallerModeSnapshot(fixture),
       env: fixture.env,
       legacySessionSurfaces: { surfaces: [], failures: ["session surface unavailable"] },
     });
@@ -189,11 +182,7 @@ describe("legacy state migration read-only refusals", () => {
     const plan = await planLegacyStateMigrationsReadOnly({
       mode: "doctor",
       candidate: candidateAt(fixture.root),
-      snapshot: {
-        homeDir: fixture.homeDir,
-        configPath: fixture.configPath,
-        stateDir: fixture.stateDir,
-      },
+      snapshot: createCallerModeSnapshot(fixture),
       env: fixture.env,
       legacySessionSurfaces,
     });
@@ -218,11 +207,7 @@ describe("legacy state migration read-only refusals", () => {
     const plan = await planLegacyStateMigrationsReadOnly({
       mode: "doctor",
       candidate: candidateAt(fixture.root),
-      snapshot: {
-        homeDir: fixture.homeDir,
-        configPath: fixture.configPath,
-        stateDir: fixture.stateDir,
-      },
+      snapshot: createCallerModeSnapshot(fixture),
       env: { ...fixture.env, OPENCLAW_OAUTH_DIR: externalOAuthDir },
     });
 
@@ -263,11 +248,7 @@ describe("legacy state migration read-only refusals", () => {
       const plan = await planLegacyStateMigrationsReadOnly({
         mode: "doctor",
         candidate: candidateAt(fixture.root),
-        snapshot: {
-          homeDir: fixture.homeDir,
-          configPath: fixture.configPath,
-          stateDir: fixture.stateDir,
-        },
+        snapshot: createCallerModeSnapshot(fixture),
         env: {
           ...fixture.env,
           OPENCLAW_AGENT_DIR: pathStyle === "tilde" ? "~/relocated-auth" : authDir,
@@ -306,11 +287,7 @@ describe("legacy state migration read-only refusals", () => {
     const plan = await planLegacyStateMigrationsReadOnly({
       mode: "doctor",
       candidate: candidateAt(fixture.root),
-      snapshot: {
-        homeDir: fixture.homeDir,
-        configPath: fixture.configPath,
-        stateDir: fixture.stateDir,
-      },
+      snapshot: createCallerModeSnapshot(fixture),
       env: { ...fixture.env, OPENCLAW_OAUTH_DIR: oauthDir },
     });
 
@@ -345,11 +322,7 @@ describe("legacy state migration read-only refusals", () => {
     const plan = await planLegacyStateMigrationsReadOnly({
       mode: "doctor",
       candidate: candidateAt(fixture.root),
-      snapshot: {
-        homeDir: fixture.homeDir,
-        configPath: fixture.configPath,
-        stateDir: fixture.stateDir,
-      },
+      snapshot: createCallerModeSnapshot(fixture),
       env: fixture.env,
     });
 
@@ -411,11 +384,7 @@ describe("legacy state migration read-only refusals", () => {
     const plan = await planLegacyStateMigrationsReadOnly({
       mode: "automatic",
       candidate: candidateAt(fixture.root),
-      snapshot: {
-        homeDir: fixture.homeDir,
-        configPath: fixture.configPath,
-        stateDir: fixture.stateDir,
-      },
+      snapshot: createCallerModeSnapshot(fixture),
       env: fixture.env,
     });
     const plannedWorkshopIndex = plan.steps.findIndex((step) => step.refusal !== undefined);
@@ -495,11 +464,7 @@ module.exports = { stateMigrations: [{
     const plan = await planLegacyStateMigrationsReadOnly({
       mode: "automatic",
       candidate: candidateAt(fixture.root),
-      snapshot: {
-        homeDir: fixture.homeDir,
-        configPath: fixture.configPath,
-        stateDir: fixture.stateDir,
-      },
+      snapshot: createCallerModeSnapshot(fixture),
       env: fixture.env,
     });
 
@@ -558,11 +523,7 @@ module.exports = { stateMigrations: [{
     const plan = await planLegacyStateMigrationsReadOnly({
       mode: "doctor",
       candidate: candidateAt(fixture.root),
-      snapshot: {
-        homeDir: fixture.homeDir,
-        configPath: fixture.configPath,
-        stateDir: fixture.stateDir,
-      },
+      snapshot: createCallerModeSnapshot(fixture),
       env: fixture.env,
     });
 
@@ -591,11 +552,7 @@ module.exports = { stateMigrations: [{
     const plan = await planLegacyStateMigrationsReadOnly({
       mode: "doctor",
       candidate: candidateAt(fixture.root),
-      snapshot: {
-        homeDir: fixture.homeDir,
-        configPath: fixture.configPath,
-        stateDir: fixture.stateDir,
-      },
+      snapshot: createCallerModeSnapshot(fixture),
       env: fixture.env,
     });
 
@@ -647,11 +604,7 @@ module.exports = { stateMigrations: [{
       const authorizedPlan = await planLegacyStateMigrationsReadOnly({
         mode: "doctor",
         candidate: candidateAt(fixture.root),
-        snapshot: {
-          homeDir: fixture.homeDir,
-          configPath: fixture.configPath,
-          stateDir: fixture.stateDir,
-        },
+        snapshot: createCallerModeSnapshot(fixture),
         env: fixture.env,
       });
       expect(authorizedPlan.steps.find((step) => step.id === "migration-detection")).toBeDefined();
@@ -731,11 +684,7 @@ module.exports = { stateMigrations: [{
     const plan = await planLegacyStateMigrationsReadOnly({
       mode: "doctor",
       candidate: candidateAt(fixture.root),
-      snapshot: {
-        homeDir: fixture.homeDir,
-        configPath: fixture.configPath,
-        stateDir: fixture.stateDir,
-      },
+      snapshot: createCallerModeSnapshot(fixture),
       env: fixture.env,
     });
 
@@ -763,11 +712,7 @@ module.exports = { stateMigrations: [{
     const plan = await planLegacyStateMigrationsReadOnly({
       mode: "doctor",
       candidate: candidateAt(fixture.root),
-      snapshot: {
-        homeDir: fixture.homeDir,
-        configPath: fixture.configPath,
-        stateDir: fixture.stateDir,
-      },
+      snapshot: createCallerModeSnapshot(fixture),
       env: fixture.env,
     });
 
@@ -798,11 +743,7 @@ module.exports = { stateMigrations: [{
     const plan = await planLegacyStateMigrationsReadOnly({
       mode: "doctor",
       candidate: candidateAt(fixture.root),
-      snapshot: {
-        homeDir: fixture.homeDir,
-        configPath: fixture.configPath,
-        stateDir: fixture.stateDir,
-      },
+      snapshot: createCallerModeSnapshot(fixture),
       env: fixture.env,
     });
 
@@ -847,11 +788,7 @@ module.exports = { stateMigrations: [{
     const plan = await planLegacyStateMigrationsReadOnly({
       mode: "doctor",
       candidate: candidateAt(fixture.root),
-      snapshot: {
-        homeDir: fixture.homeDir,
-        configPath: fixture.configPath,
-        stateDir: fixture.stateDir,
-      },
+      snapshot: createCallerModeSnapshot(fixture),
       env: fixture.env,
     });
     const pluginDoctorConfig = Object.defineProperty({}, "meta", {
@@ -915,11 +852,7 @@ module.exports = { stateMigrations: [{
       const plan = await planLegacyStateMigrationsReadOnly({
         mode: "automatic",
         candidate: candidateAt(fixture.root),
-        snapshot: {
-          homeDir: fixture.homeDir,
-          configPath: fixture.configPath,
-          stateDir: fixture.stateDir,
-        },
+        snapshot: createCallerModeSnapshot(fixture),
         env: fixture.env,
       });
       const failure = new Error(`synthetic automatic ${blockerId} failure`);
@@ -962,11 +895,7 @@ module.exports = { stateMigrations: [{
     const plan = await planLegacyStateMigrationsReadOnly({
       mode: "doctor",
       candidate: candidateAt(fixture.root),
-      snapshot: {
-        homeDir: fixture.homeDir,
-        configPath: fixture.configPath,
-        stateDir: fixture.stateDir,
-      },
+      snapshot: createCallerModeSnapshot(fixture),
       env: fixture.env,
     });
     const lastTouchedAt = "2026-09-02T00:00:00.000Z";
@@ -1019,11 +948,7 @@ module.exports = { stateMigrations: [{
     const plan = await planLegacyStateMigrationsReadOnly({
       mode: "doctor",
       candidate: candidateAt(fixture.root),
-      snapshot: {
-        homeDir: fixture.homeDir,
-        configPath: fixture.configPath,
-        stateDir: fixture.stateDir,
-      },
+      snapshot: createCallerModeSnapshot(fixture),
       env: fixture.env,
     });
     const params = Object.defineProperty(

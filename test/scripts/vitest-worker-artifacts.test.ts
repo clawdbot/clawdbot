@@ -283,11 +283,16 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
       const file=name=>path.join(directory,name);
       fs.writeFileSync(file('input'),'compiler input');
       const spawn=cp.spawn;
-      let compiler, closed=false, ready=false, finished=false, readyClosed, leafPid;
+      let compiler, compilerClose, closed=false, ready=false, finished=false, readyJoined, leafPid;
+      // Node marks streams closed before delivering their deferred close events.
+      const compilerJoined=()=>Boolean(compiler &&
+        (compiler.exitCode!==null || compiler.signalCode!==null) &&
+        [compiler.stdout,compiler.stderr].every(pipe=>!pipe || pipe.closed) &&
+        inspectManagedProcessGroup(compiler,{errorPolicy:'indeterminate'})==='dead');
       cp.spawn=(bin,args,options)=>{
         if(args[0]!==${JSON.stringify(path.join(root, compilerEntry))}) return spawn(bin,args,options);
         compiler=spawn(bin,[...${JSON.stringify(fixturePreloadArgs(preload))},...args],options);
-        compiler.once('close',()=>{closed=true;});
+        compilerClose=new Promise(resolve=>compiler.once('close',()=>{closed=true;resolve();}));
         return compiler;
       };
       syncFixtureBuiltinExports();
@@ -296,7 +301,7 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
       const owner=createVitestWorkerRun(), generation=owner.descriptor.directory;
       const child=spawn(process.execPath,['--input-type=module','--eval',${JSON.stringify(preparationClient.replace("await requestVitestWorkerArtifacts();", 'await requestVitestWorkerArtifacts();process.send("borrower-ready");'))}],{detached:true,stdio:['ignore','ignore','pipe','ipc']});
       child.stderr.resume();
-      child.on('message',message=>{if(message==='borrower-ready'){ready=true;readyClosed=closed;}});
+      child.on('message',message=>{if(message==='borrower-ready'){ready=true;readyJoined=compilerJoined();}});
       const completion=owner.borrow(child,createVitestProcessCompletion({child,detached:true}));
       void completion.then(()=>{finished=true;},()=>{finished=true;});
       const observe=async name=>{
@@ -316,10 +321,10 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
           } else fs.writeFileSync(file('release'),'release');
         }
         const result=await completion;
-        assert.equal(closed,true,'ready must wait for actual compiler close');
+        assert.equal(compilerJoined(),true,'ready must wait for compiler termination and output closure');
         assert.equal(inspectManagedProcessGroup(compiler,{errorPolicy:'indeterminate'}),'dead');
         if(mode==='close before ready') {
-          assert.equal(result.code,0);assert.equal(readyClosed,true);await owner.dispose();
+          assert.equal(result.code,0);assert.equal(readyJoined,true);await owner.dispose();
         } else {
           assert.notEqual(result.code,0);
           const error=await (disposal??owner.dispose()).then(()=>{throw new Error('expected compiler failure');},error=>error);
@@ -341,12 +346,14 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
           }
         }
         assert.equal(fs.existsSync(generation),mode==='uncertain output');
+        await compilerClose;
         console.log(JSON.stringify({mode,compilerPid:compiler.pid,compilerClosed:closed,compilerGroup:'dead',borrowerCode:result.code,retained:fs.existsSync(generation),leafPid}));
       } finally {
         fs.writeFileSync(file('release'),'release');
         child.kill('SIGTERM');
         await completion.catch(()=>{});
         await owner.dispose().catch(()=>{});
+        await compilerClose;
         assert.equal(inspectManagedProcessGroup(child,{errorPolicy:'indeterminate'}),'dead');
         if(compiler) {
           assert.equal(closed,true);
@@ -638,7 +645,7 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
               assistantTexts:[],sessionKey:'agent:main:fixture-hook',provider:'fixture-provider',
               lastAssistant:{role:'assistant',content:[],stopReason:'error',provider:'fixture-provider',model:'fixture-model',errorMessage},
             });
-            const registry = createEmptyPluginRegistry();
+            let registry = createEmptyPluginRegistry();
             let scopedCalls = 0;
             registry.providers.push({pluginId:'fixture-hook',provider:{id:'fixture-provider',label:'Fixture',auth:[],
               classifyFailoverReason(context) {
@@ -649,6 +656,18 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
             const unprepared = buildEmbeddedRunPayloads(input('403 fixture refusal'));
             assert.deepEqual(unprepared,[{text:'⚠️ fixture-provider/fixture-model request failed (authentication failed, HTTP 403). Re-authenticate the provider and try again.',isError:true}], 'an unprepared error must retain safe provider, model and status facts');
             assert.deepEqual(observed(),[], 'error formatting must not materialize the provider');
+            let scopedPreparationRecordCount = 0;
+            if (${scope === "scoped"}) {
+              const {loadOpenClawPlugins} = await import(${JSON.stringify(pathToFileURL(path.join(root, "src/plugins/loader.ts")).href)});
+              const scopedHook = registry.providers[0].provider.classifyFailoverReason;
+              registry = loadOpenClawPlugins({config:{plugins:{allow:['fixture-hook'],entries:{'fixture-hook':{enabled:true}}}},onlyPluginIds:['fixture-hook'],activate:false});
+              const loadedOwner = registry.providers.find(entry=>entry.pluginId==='fixture-hook');
+              assert(loadedOwner, 'the real loader must establish the scoped provider owner');
+              loadedOwner.provider.classifyFailoverReason = scopedHook;
+              const preparationRecords = observed();
+              assert.deepEqual(preparationRecords.map(record=>record.event),['import','register']);
+              scopedPreparationRecordCount = preparationRecords.length;
+            }
             const providerOwner = ${scope === "prepared" ? "resolveProviderRuntimePluginHandle({provider:'fixture-provider'}).plugin" : "undefined"};
             if (${scope === "prepared"}) {
               assert.equal(providerOwner?.id,'fixture-provider');
@@ -667,7 +686,7 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
             };
             const payloads = withPluginRuntimeRegistryScope(registry,call);
             const callMs = performance.now()-callStarted;
-            const records = observed();
+            const records = observed().slice(scopedPreparationRecordCount);
             if (${scope === "scoped"}) {
               assert.ok(scopedCalls > 0, 'payload errors must reach the scoped provider hook');
               assert.deepEqual(records,[]);
@@ -680,8 +699,12 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
             assert.ok(payloads.some(payload=>payload.isError && payload.text.includes('temporarily overloaded')));
             assert.equal(getPluginRegistryState()?.activeRegistry ?? null,null,'preparation and error handling must not install a global registry');
             if (${scope === "scoped"}) {
-              const config = {};
-              const metadataSnapshot = createPluginMetadataSnapshot({config,manifestRegistry:{plugins:[],diagnostics:[]}});
+              const {getPluginRuntimeLoadContext} = await import(${JSON.stringify(pathToFileURL(path.join(root, "src/plugins/runtime/load-context.ts")).href)});
+              const loadContext = getPluginRuntimeLoadContext(registry);
+              const config = loadContext?.rawConfig;
+              const manifestRegistry = loadContext?.manifestRegistry;
+              assert(manifestRegistry, 'the loaded registry must retain its manifest owner');
+              const metadataSnapshot = createPluginMetadataSnapshot({config,manifestRegistry});
               setActivePluginRegistry(registry,'fixture-active');
               try {
                 assert.deepEqual(call(),payloads,'preparation must select the active loaded provider');
@@ -700,7 +723,7 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
                 });
               } finally {await clearActivePluginRegistry();}
               assert.deepEqual(render(),unprepared,'presentation outside the scope still needs an explicit owner');
-              assert.deepEqual(observed(),[],'loaded lookups must not import the fixture plugin');
+              assert.deepEqual(observed().slice(scopedPreparationRecordCount),[],'loaded lookups must not reimport the fixture plugin');
             }
             console.log(JSON.stringify({pid:process.pid,mode:${JSON.stringify(mode)},scope:${JSON.stringify(scope)},importMs:imported-started,callMs,scopedCalls,records,payloads,rss:process.memoryUsage().rss}));
           `,

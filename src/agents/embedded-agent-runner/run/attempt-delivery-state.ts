@@ -1,3 +1,4 @@
+import { hasAsyncActivity } from "./attempt-terminal-evidence.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
 
 export function copyAttemptDeliveryState(attempt: EmbeddedRunAttemptResult) {
@@ -15,6 +16,7 @@ export function copyAttemptDeliveryState(attempt: EmbeddedRunAttemptResult) {
     heartbeatToolResponse: attempt.heartbeatToolResponse,
     successfulCronAdds: attempt.successfulCronAdds,
     acceptedSessionSpawns: attempt.acceptedSessionSpawns,
+    ...(hasAsyncActivity(attempt.toolMetas) ? { asyncWorkStarted: true as const } : {}),
     requesterContinuationSettled: attempt.requesterContinuationSettled,
   };
 }

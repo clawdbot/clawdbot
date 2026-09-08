@@ -20,8 +20,8 @@ Key references:
 
 Auth is enforced at the WebSocket handshake via the configured gateway auth path:
 
-- `connect.params.auth.token`
-- `connect.params.auth.password`
+- the configured shared secret in either `connect.params.auth.token` or
+  `connect.params.auth.password`; `gateway.auth.mode` selects the configured value
 - Tailscale Serve identity headers when `gateway.auth.allowTailscale: true`
 - trusted-proxy identity headers when `gateway.auth.mode: "trusted-proxy"`
 
@@ -46,8 +46,9 @@ The Control UI is an **admin surface** (chat, config, exec approvals). Do not ex
 
 - **Localhost**: open `http://127.0.0.1:18789/`.
 - **Gateway TLS**: when `gateway.tls.enabled: true`, dashboard/status links use `https://` and Control UI WebSocket links use `wss://`.
-- **Shared-secret token source**: `gateway.auth.token` (or `OPENCLAW_GATEWAY_TOKEN`). Manual token entry
-  is kept in sessionStorage for the current tab and selected gateway URL, not localStorage.
+- **Shared-secret token source**: `gateway.auth.token` (or `OPENCLAW_GATEWAY_TOKEN`). After a successful
+  token-mode connection, manual entry is kept in sessionStorage for the current tab and selected
+  Gateway URL, not localStorage.
 - **Host-authorized browser handoff**: `openclaw dashboard` issues a short-lived, single-use bootstrap
   instead of putting the shared Gateway token in the browser launch URL. The bootstrap is bound to
   that browser's signed device identity and exchanged for a durable administrator credential. A
@@ -121,7 +122,7 @@ Non-goals for v1:
   - Password: resolve the configured `gateway.auth.password` or `OPENCLAW_GATEWAY_PASSWORD`
   - SecretRef-managed token: run `openclaw gateway auth-token --show`; if resolution fails, repair the external secret provider and rerun it
   - Runtime token generated because no shared secret was configured: run `openclaw doctor --generate-gateway-token`, restart the Gateway, then use the configured token
-- In the dashboard settings, paste the token or password into the auth field, then connect.
+- In the dashboard settings, paste the token or password into **Gateway secret**, then connect.
 - The UI language picker lives in **Settings → Appearance → Language**.
 
 ## Related

@@ -155,6 +155,10 @@ export type ReadConfigFileSnapshotWithPluginMetadataResult = {
   pluginMetadataSnapshot?: PluginMetadataSnapshot;
 };
 
+export type PreparedConfigRecovery = ReadConfigFileSnapshotWithPluginMetadataResult & {
+  apply: (beforeCommit?: () => void) => Promise<void>;
+};
+
 export type BestEffortConfigSnapshot = {
   config: OpenClawConfig;
   sourceConfig: OpenClawConfig;
