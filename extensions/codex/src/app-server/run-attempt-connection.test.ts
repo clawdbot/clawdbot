@@ -35,6 +35,104 @@ import { withCodexThreadLifecycleBinding } from "./thread-lifecycle-adoption.js"
 setupRunAttemptTestHooks();
 
 describe("prepareCodexAttemptConnection", () => {
+  function createCustomProviderParams(authMode = "api-key") {
+    const sessionFile = path.join(tempDir, "custom-provider.jsonl");
+    const params = createParams(sessionFile, path.join(tempDir, "custom-provider-workspace"), {
+      provider: "test-proxy",
+    });
+    params.model = {
+      ...params.model,
+      provider: "test-proxy",
+      api: "openai-responses",
+      baseUrl: "https://proxy.example/v1",
+    };
+    const runtimePlan = createCodexRuntimePlanFixture();
+    // Generic providers prepare transport/auth facts without a provider-owned modelRoute.
+    params.runtimePlan = {
+      ...runtimePlan,
+      auth: {
+        providerForAuth: "test-proxy",
+        authProfileProviderForAuth: "test-proxy",
+        selectedAuthMode: authMode,
+      },
+    };
+    params.resolvedApiKey = "synthetic-prepared-proxy-key";
+    params.config = { tools: { exec: { mode: "auto" } } };
+    registerCodexTestSessionIdentity(sessionFile, params.sessionId, params.sessionKey);
+    return params;
+  }
+
+  it("prepares a generic custom provider's resolved key and endpoint without granting approval identity", async () => {
+    const params = createCustomProviderParams();
+    const connection = await prepareCodexAttemptConnection({
+      params,
+      options: {
+        bindingStore: testCodexAppServerBindingStore,
+        pluginConfig: { appServer: { providerIds: ["test-proxy"] } },
+      },
+    });
+
+    expect(connection.startupPreparedAuth).toEqual({
+      kind: "api-key",
+      apiKey: "synthetic-prepared-proxy-key",
+      customProvider: { provider: "test-proxy", baseUrl: "https://proxy.example/v1" },
+    });
+    expect(connection.startupClientAuthProfileId).toBeNull();
+    expect(connection.appServer.approvalsReviewer).toBe("user");
+  });
+
+  it.each([
+    {
+      name: "missing resolved key",
+      authMode: "api-key",
+      missingKey: true,
+      missingRoute: false,
+      error: "Prepared Codex API-key route is missing its resolved API key",
+    },
+    {
+      name: "subscription authentication",
+      authMode: "subscription",
+      missingKey: false,
+      missingRoute: false,
+      error: "Configured Codex providers require an allowlisted, prepared Responses API-key route",
+    },
+    {
+      name: "unknown authentication mode",
+      authMode: "unknown",
+      missingKey: false,
+      missingRoute: false,
+      error: "Configured Codex providers require an allowlisted, prepared Responses API-key route",
+    },
+    {
+      name: "missing prepared endpoint",
+      authMode: "api-key",
+      missingKey: false,
+      missingRoute: true,
+      error: "Configured Codex providers require an allowlisted, prepared Responses API-key route",
+    },
+  ])(
+    "rejects a generic custom provider with $name",
+    async ({ authMode, missingKey, missingRoute, error }) => {
+      const params = createCustomProviderParams(authMode);
+      if (missingKey) {
+        delete params.resolvedApiKey;
+      }
+      if (missingRoute) {
+        params.model = { ...params.model, baseUrl: "" };
+      }
+
+      await expect(
+        prepareCodexAttemptConnection({
+          params,
+          options: {
+            bindingStore: testCodexAppServerBindingStore,
+            pluginConfig: { appServer: { providerIds: ["test-proxy"] } },
+          },
+        }),
+      ).rejects.toThrow(error);
+    },
+  );
+
   it("retains the recovered generation fence after connection preparation", async () => {
     const workspaceDir = path.join(tempDir, "recovered-workspace");
     const params = createParams(path.join(tempDir, "recovered.jsonl"), workspaceDir);

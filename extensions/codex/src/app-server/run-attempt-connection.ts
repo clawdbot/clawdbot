@@ -34,6 +34,7 @@ import {
   resolveOpenClawExecPolicyForCodexAppServer,
   type CodexAppServerRuntimeOptions,
 } from "./config.js";
+import { resolveCodexCustomProviderBinding } from "./custom-provider-policy.js";
 import { createCodexDynamicToolBuildStageTracker } from "./dynamic-tool-build.js";
 import { resolveCodexNativeHookRelayEvents } from "./native-hook-relay.js";
 import { isCodexAppServerProfilerEnabled } from "./profiler-flag.js";
@@ -282,6 +283,13 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     : await resolveCodexAppServerPreparedAuthHandoff({
         authRequirement: preparedAuthRoute?.authRequirement,
         resolvedApiKey: params.resolvedApiKey,
+        customProvider: resolveCodexCustomProviderBinding({
+          provider: params.provider,
+          route: preparedAuthRoute,
+          preparedModel: params.model,
+          preparedAuthMode: params.runtimePlan?.auth.selectedAuthMode,
+          pluginConfig,
+        }),
         authProfileId: resolvedStartupAuthProfileId,
         authProfileStore: params.authProfileStore,
         agentDir,

@@ -67,6 +67,7 @@ import type {
   CodexTurnEnvironmentParams,
   JsonObject,
 } from "./protocol.js";
+import { CodexAppServerScopedRequestRejectedError } from "./request.js";
 import {
   ensureCodexSandboxExecServerEnvironment,
   releaseCodexSandboxExecServerEnvironment,
@@ -720,6 +721,7 @@ function shouldRetireCodexStartupClient(
   // an uncertain native write owns its retirement at the resume boundary.
   return (
     !isCodexAppServerStartSelectionChangedError(error) &&
+    !(error instanceof CodexAppServerScopedRequestRejectedError) &&
     !isCodexAppServerOverloadError(error) &&
     !(error instanceof AgentHarnessPreflightError && error.scope === undefined) &&
     (isCodexAppServerBrokenPipeError(error) || !spawnedBy)

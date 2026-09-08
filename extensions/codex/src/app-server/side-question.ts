@@ -60,6 +60,7 @@ import {
   withMcpElicitationsApprovalPolicy,
   type CodexAppServerRuntimeOptions,
 } from "./config.js";
+import { resolveCodexCustomProviderBinding } from "./custom-provider-policy.js";
 import {
   resolveCodexExternalSandboxPolicyForOpenClawSandbox,
   resolveCodexMessageToolProvider,
@@ -255,6 +256,13 @@ export async function runCodexAppServerSideQuestion(
     : await resolveCodexAppServerPreparedAuthHandoff({
         authRequirement: preparedRuntimeAuth.plan.modelRoute?.authRequirement,
         resolvedApiKey: preparedRuntimeAuth.resolvedApiKey,
+        customProvider: resolveCodexCustomProviderBinding({
+          provider: params.provider,
+          route: preparedRuntimeAuth.plan.modelRoute,
+          preparedModel: params.runtimeModel,
+          preparedAuthMode: preparedRuntimeAuth.plan.selectedAuthMode,
+          pluginConfig,
+        }),
         authProfileId: preparedRuntimeAuth.plan.forwardedAuthProfileId,
         authProfileStore: preparedRuntimeAuth.authProfileStore,
         agentDir: params.agentDir,

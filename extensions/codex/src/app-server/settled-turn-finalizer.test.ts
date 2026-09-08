@@ -184,6 +184,104 @@ describe("runCodexSettledTurnFinalization", () => {
     );
   });
 
+  it("carries the captured custom provider and its generic prepared key into private finalization", async () => {
+    const provider = "responses-proxy";
+    const baseUrl = "https://proxy.example/v1";
+    const attempt = createAttempt("api-key");
+    if (!attempt.runtimePlan) {
+      throw new Error("Custom finalizer fixture requires a runtime plan");
+    }
+    attempt.model = { ...attempt.model, provider, api: "openai-responses", baseUrl };
+    attempt.resolvedApiKey = "synthetic-custom-prepared-key";
+    attempt.runtimePlan = {
+      ...attempt.runtimePlan,
+      auth: {
+        selectedAuthMode: "api-key",
+        providerForAuth: provider,
+        authProfileProviderForAuth: provider,
+      },
+    };
+    const settledAttempt = createSettledAttempt({
+      model: "custom-native-model",
+      modelProvider: provider,
+    });
+    mocks.runBounded.mockResolvedValue({
+      ...boundedResult(),
+      nativeSelection: { model: "custom-native-model", modelProvider: provider },
+    });
+
+    const result = await runCodexSettledTurnFinalization(
+      { attempt, settledAttempt },
+      { pluginConfig: { appServer: { providerIds: [provider] } } },
+    );
+
+    expect(authBridge.resolveCodexAppServerPreparedAuthHandoff).toHaveBeenCalledWith(
+      expect.objectContaining({
+        customProvider: { provider, baseUrl },
+        resolvedApiKey: "synthetic-custom-prepared-key",
+      }),
+    );
+    expect(mocks.runBounded).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: { mode: "required", id: "custom-native-model" },
+        modelProvider: provider,
+        isolation: "private-stdio",
+        preparedAuth: {
+          kind: "api-key",
+          apiKey: "synthetic-custom-prepared-key",
+          customProvider: { provider, baseUrl },
+        },
+      }),
+    );
+    expect(result.assistant).toMatchObject({
+      provider,
+      model: "custom-native-model",
+      api: "openai-responses",
+    });
+  });
+
+  it.each([true, false])(
+    "rejects a captured custom provider with another prepared credential route (concrete route: %s)",
+    async (concreteRoute) => {
+      const attempt = createAttempt("api-key");
+      attempt.resolvedApiKey = "synthetic-other-provider-key";
+      if (!attempt.runtimePlan) {
+        throw new Error("Custom finalizer fixture requires a runtime plan");
+      }
+      if (!concreteRoute) {
+        attempt.model = {
+          ...attempt.model,
+          provider: "other-proxy",
+          api: "openai-responses",
+          baseUrl: "https://other.example/v1",
+        };
+        attempt.runtimePlan = {
+          ...attempt.runtimePlan,
+          auth: {
+            selectedAuthMode: "api-key",
+            providerForAuth: "other-proxy",
+            authProfileProviderForAuth: "other-proxy",
+          },
+        };
+      }
+      await expect(
+        runCodexSettledTurnFinalization(
+          {
+            attempt,
+            settledAttempt: createSettledAttempt({
+              model: "custom-native-model",
+              modelProvider: "responses-proxy",
+            }),
+          },
+          { pluginConfig: { appServer: { providerIds: ["responses-proxy"] } } },
+        ),
+      ).rejects.toThrow("does not match the prepared credential route");
+      expect(authBridge.resolveCodexAppServerPreparedAuthHandoff).not.toHaveBeenCalled();
+      expect(mocks.runBounded).not.toHaveBeenCalled();
+      expect(mocks.mirror).not.toHaveBeenCalled();
+    },
+  );
+
   it.each([undefined, "openai"])(
     "uses captured model/profile and returned native attribution (captured provider: %s)",
     async (modelProvider) => {
