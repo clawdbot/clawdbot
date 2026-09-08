@@ -149,6 +149,35 @@ describe("parseInlineDirectives", () => {
     expect(result.text).toBe("    keep this indent\n        and this one");
   });
 
+  test.each([
+    ["quoted four-space", '> Example\n>\n>     print("a  b")'],
+    ["quoted tab", '> Example\n>\n> \t\tprint("a  b")'],
+    ["nested quote", '> > Example\n> >\n> >     print("a  b")'],
+  ])("preserves %s code bytes after recording reply intent", (_name, code) => {
+    const result = parseInlineDirectives(`[[reply_to_current]]\n${code}`);
+
+    expect(result.hasReplyTag).toBe(true);
+    expect(result.replyToCurrent).toBe(true);
+    expect(result.text).toBe(code);
+  });
+
+  test("normalizes a single tab after a quote marker as prose", () => {
+    const result = parseInlineDirectives('[[reply_to_current]]\n> \tprint("a  b")');
+
+    expect(result.hasReplyTag).toBe(true);
+    expect(result.replyToCurrent).toBe(true);
+    expect(result.text).toBe('> print("a b")');
+  });
+
+  test("preserves quoted directive examples beside an active audio directive", () => {
+    const code = "> Example\n>\n>     [[reply_to:literal-example]]";
+    const result = parseInlineDirectives(`[[audio_as_voice]]\n${code}`);
+
+    expect(result.audioAsVoice).toBe(true);
+    expect(result.hasReplyTag).toBe(false);
+    expect(result.text).toBe(code);
+  });
+
   test("preserves fenced code block indentation after stripping a reply tag", () => {
     const input = [
       "[[reply_to_current]]",
