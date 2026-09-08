@@ -22,6 +22,11 @@ const BACKUP_RESTORE_WARNINGS = [
   "Approvals and delivery/dedupe state also roll back; review pending approvals before resuming the Gateway.",
   "Plugin node_modules are not archived; after activation, run `openclaw plugins update <id>` or reinstall with `openclaw plugins install <spec> --force`.",
   "Generated plugin-skills links are not archived; after activation, run `openclaw skills list` or start an agent session to rebuild them.",
+  // Creation reports each omitted link in its own summary, but the manifest is
+  // sealed into the archive before the archiver walks the tree, so an archive
+  // cannot record which links were omitted. This advisory is therefore static:
+  // it tells an operator restoring someone else's archive what to look for.
+  "Symbolic links whose target was outside the backup are omitted, so some restored links dangle; the `openclaw backup create` run that wrote the archive listed each omitted link and its target, and recreating them after activation is manual.",
 ] as const;
 
 type BackupRestoreOptions = {
