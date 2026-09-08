@@ -492,25 +492,36 @@ export class SessionManagerPersistence extends SessionManagerCore {
     if (entry.type !== "message") {
       let committedMutationAt: number | null | undefined;
       let effectiveParentId = entry.parentId;
+      const loadedVersion = this.transcriptVersion;
+      const outcome = appendTranscriptEventSnapshotSync(scope, entry, {
+        ...(options?.appendIntent === "active-branch"
+          ? { appendIntent: options.appendIntent }
+          : {}),
+        ...(expectedMutationAt !== undefined ? { expectedMutationAt } : {}),
+        captureMutationAtInTransaction: (mutationAt) => {
+          committedMutationAt = mutationAt;
+        },
+        captureEffectiveParentIdInTransaction: (parentId) => {
+          effectiveParentId = parentId;
+        },
+      });
       this.transcriptVersion = requireTranscriptEventAppend(
-        appendTranscriptEventSnapshotSync(scope, entry, {
-          ...(options?.appendIntent === "active-branch"
-            ? { appendIntent: options.appendIntent }
-            : {}),
-          ...(expectedMutationAt !== undefined ? { expectedMutationAt } : {}),
-          captureMutationAtInTransaction: (mutationAt) => {
-            committedMutationAt = mutationAt;
-          },
-          captureEffectiveParentIdInTransaction: (parentId) => {
-            effectiveParentId = parentId;
-          },
-        }),
+        outcome,
         `Session transcript entry was not persisted: ${entry.id}`,
       );
       this.transcriptMutationAt = committedMutationAt;
-      return effectiveParentId === entry.parentId
+      const before = outcome.ok ? outcome.value.before : undefined;
+      const reloadAfterAppend =
+        loadedVersion !== undefined &&
+        before !== undefined &&
+        (before.generation !== loadedVersion.generation || before.rawSeq !== loadedVersion.rawSeq);
+      return effectiveParentId === entry.parentId && !reloadAfterAppend
         ? undefined
-        : { appended: true, effectiveParentId };
+        : {
+            appended: true,
+            effectiveParentId,
+            ...(reloadAfterAppend ? { reloadAfterAppend: true } : {}),
+          };
     }
     const appendOptions = copyCodeModeSourceAppendOptions(options, {
       cwd: this.cwd,

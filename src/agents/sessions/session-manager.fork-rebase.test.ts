@@ -6,6 +6,7 @@ import {
   appendTranscriptMessage,
   appendTranscriptMessageSync,
   loadTranscriptEvents,
+  replaceTranscriptEventsSync,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
@@ -103,6 +104,47 @@ describe("SessionManager stale-parent rebase", () => {
         }),
       ]),
     );
+  });
+
+  it("reloads a stale control append after an unchanged-parent prefix rewrite", async () => {
+    const dir = tempDirs.make("openclaw-session-manager-");
+    const target = {
+      agentId: "main",
+      sessionId: "stale-control-prefix",
+      sessionKey: "agent:main:stale-control-prefix",
+      storePath: path.join(dir, "sessions.json"),
+    };
+    await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+    const base = await appendTranscriptMessage(target, {
+      eventId: "base",
+      message: { role: "user", content: "old", timestamp: 1 },
+      now: 1,
+    });
+    const manager = SessionManager.open(target, dir);
+    const persisted = (await loadTranscriptEvents(target)) as SessionEntry[];
+    expect(
+      replaceTranscriptEventsSync(
+        target,
+        persisted.map((entry) =>
+          entry.type === "message" && entry.id === base.messageId
+            ? Object.assign({}, entry, {
+                message: { role: "user" as const, content: "rewritten", timestamp: 2 },
+              })
+            : entry,
+        ),
+      ),
+    ).toBe(true);
+
+    const modelChangeId = manager.appendModelChange("openai", "gpt-5.6");
+
+    expect(manager.getBranch().map((entry) => entry.id)).toEqual([base.messageId, modelChangeId]);
+    const reloadedBase = manager.getEntry(base.messageId);
+    expect(reloadedBase?.type).toBe("message");
+    expect(
+      reloadedBase?.type === "message" && reloadedBase.message.role === "user"
+        ? reloadedBase.message.content
+        : undefined,
+    ).toBe("rewritten");
   });
 
   it("rejects a stale prepared assistant after a newer user turn", async () => {
