@@ -431,7 +431,12 @@ function collectRawSessionText(content: unknown): string | null {
       continue;
     }
     const record = block as { type?: unknown; text?: unknown };
-    if (record.type === "text" && typeof record.text === "string") {
+    // Transcripts also persist provider-shaped text blocks (input_text/output_text);
+    // dropping them leaves sessions-source chunks empty. See #137265.
+    if (
+      (record.type === "text" || record.type === "input_text" || record.type === "output_text") &&
+      typeof record.text === "string"
+    ) {
       parts.push(record.text);
     }
   }
