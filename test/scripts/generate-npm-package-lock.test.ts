@@ -110,6 +110,18 @@ describe("generate-npm-package-lock", () => {
     });
   });
 
+  it("preserves range selectors containing comparison operators", () => {
+    expect(
+      normalizeOverrides({
+        "undici@>=7.0.0 <8.0.0": "7.29.1",
+        "undici@>=8.0.0 <8.9.0": "8.10.2",
+      }),
+    ).toEqual({
+      "undici@>=7.0.0 <8.0.0": "7.29.1",
+      "undici@>=8.0.0 <8.9.0": "8.10.2",
+    });
+  });
+
   it.each([false, true])(
     "retains parent and child overrides during normalization (childrenFirst=%s)",
     (childrenFirst) => {
