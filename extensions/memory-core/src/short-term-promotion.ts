@@ -52,6 +52,21 @@ function calculateConsolidationComponent(recallDays: string[]): number {
   return clampScore(0.55 * spacing + 0.45 * span);
 }
 
+// Resolve the newest valid recall-day timestamp (start-of-day, matching
+// calculateConsolidationComponent's day-parsing convention) for use as a
+// recency fallback when lastRecalledAt is malformed. Returns NaN when no
+// recall day parses to a finite value.
+function resolveNewestRecallDayMs(recallDays: readonly string[]): number {
+  let newest = Number.NaN;
+  for (const day of recallDays) {
+    const parsed = Date.parse(`${day}T00:00:00.000Z`);
+    if (Number.isFinite(parsed) && (Number.isNaN(newest) || parsed > newest)) {
+      newest = parsed;
+    }
+  }
+  return newest;
+}
+
 function calculateConceptualComponent(conceptTags: string[]): number {
   return clampScore(conceptTags.length / 6);
 }
@@ -160,15 +175,28 @@ export async function rankShortTermPromotionCandidates(
       continue;
     }
     const diversity = clampScore(contextDiversity / 5);
+    // Resolve an effective recall timestamp for recency scoring. The shared
+    // freshness owner (entryWithinLookback in dreaming-phases.ts) treats
+    // recallDays as the first freshness source and lastRecalledAt as the
+    // fallback; mirror that order here so a malformed lastRecalledAt with a
+    // fresh recallDays value is not under-scored relative to its dreaming
+    // eligibility. Only assign zero recency when neither source is valid.
+    const recallDays = entry.recallDays ?? [];
     const lastRecalledAtMs = Date.parse(entry.lastRecalledAt);
-    const ageDays = Number.isFinite(lastRecalledAtMs)
-      ? Math.max(0, (nowMs - lastRecalledAtMs) / DAY_MS)
-      : 0;
+    const newestRecallDayMs = resolveNewestRecallDayMs(recallDays);
+    // Resolve the newest valid source across lastRecalledAt and recallDays,
+    // matching the dreaming freshness owner's "resolve sources together" rule.
+    // A stale-but-valid lastRecalledAt must not shadow a newer recallDays value.
+    const validSources = [lastRecalledAtMs, newestRecallDayMs].filter(Number.isFinite);
+    const effectiveRecalledAtMs = validSources.length > 0 ? Math.max(...validSources) : Number.NaN;
+    const hasEffectiveRecall = Number.isFinite(effectiveRecalledAtMs);
+    const ageDays = hasEffectiveRecall ? Math.max(0, (nowMs - effectiveRecalledAtMs) / DAY_MS) : 0;
     if (maxAgeDays >= 0 && ageDays > maxAgeDays) {
       continue;
     }
-    const recency = clampScore(calculateRecencyComponent(ageDays, halfLifeDays));
-    const recallDays = entry.recallDays ?? [];
+    const recency = hasEffectiveRecall
+      ? clampScore(calculateRecencyComponent(ageDays, halfLifeDays))
+      : 0;
     const conceptTags = entry.conceptTags ?? [];
     const consolidation = Math.max(
       calculateConsolidationComponent(recallDays),
