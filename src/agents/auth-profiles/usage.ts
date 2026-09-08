@@ -1262,26 +1262,6 @@ export async function markInlineProviderApiKeyFailure(params: {
 }
 
 /**
- * Mark a profile as transiently failed. Applies stepped backoff cooldown.
- * Cooldown times: 30s, 1min, 5min (capped).
- * Uses store lock to avoid overwriting concurrent usage updates.
- */
-export async function markAuthProfileCooldown(params: {
-  store: AuthProfileStore;
-  profileId: string;
-  agentDir?: string;
-  runId?: string;
-}): Promise<void> {
-  await markAuthProfileFailure({
-    store: params.store,
-    profileId: params.profileId,
-    reason: "unknown",
-    agentDir: params.agentDir,
-    runId: params.runId,
-  });
-}
-
-/**
  * Clear cooldown for a profile (e.g., manual reset).
  * Uses store lock to avoid overwriting concurrent usage updates.
  */

@@ -35,7 +35,7 @@ export type ApiKeyCredential = {
 };
 
 /** Static token credential that OpenClaw does not refresh. */
-export type TokenCredential = {
+type TokenCredential = {
   /**
    * Static bearer-style token (often OAuth access token / PAT).
    * Not refreshable by OpenClaw (unlike `type: "oauth"`).

@@ -53,26 +53,22 @@ import {
   loginAuthStorageOAuthProvider,
   resolveAuthStoragePluginOAuthCredential,
 } from "./auth-storage-oauth-registry.js";
+import type {
+  AuthCredential,
+  AuthStorageBackend,
+  AuthStorageData,
+  LockResult,
+} from "./auth-storage-types.js";
 import { resolveConfigValue } from "./resolve-config-value.js";
 
-export type ApiKeyCredential = {
-  type: "api_key";
-  key: string;
-};
-
-export type OAuthCredential = {
-  type: "oauth";
-} & OAuthCredentials;
-
-export type TokenCredential = {
-  type: "token";
-  token: string;
-  expires?: number;
-};
-
-export type AuthCredential = ApiKeyCredential | OAuthCredential | TokenCredential;
-
-export type AuthStorageData = Record<string, AuthCredential>;
+export type {
+  ApiKeyCredential,
+  AuthCredential,
+  AuthStorageBackend,
+  AuthStorageData,
+  OAuthCredential,
+  TokenCredential,
+} from "./auth-storage-types.js";
 export { OAuthProviderConfiguredUnavailableError };
 export const AUTH_STORAGE_CREATE_DEPRECATION_CODE = "AUTH_STORAGE_CREATE_DEPRECATED" as const;
 export const FILE_AUTH_STORAGE_BACKEND_DEPRECATION_CODE =
@@ -127,17 +123,6 @@ export type AuthStatus = {
     | "models_json_command";
   label?: string;
 };
-
-type LockResult<T> = {
-  result: T;
-  next?: string;
-};
-
-export interface AuthStorageBackend {
-  readonly migrationOwnerAgentDir?: string;
-  withLock<T>(fn: (current: string | undefined) => LockResult<T>): T;
-  withLockAsync<T>(fn: (current: string | undefined) => Promise<LockResult<T>>): Promise<T>;
-}
 
 function projectAuthStorageData(store: AuthProfileStore | null): AuthStorageData {
   const projected: AuthStorageData = {};

@@ -76,7 +76,7 @@ export type SecretStoreEntryMetadata = {
   valuePreview?: string;
 };
 
-export type SecretStoreEgressBinding = {
+type SecretStoreEgressBinding = {
   name: string;
   sentinel: string;
   allowedHosts: string[];

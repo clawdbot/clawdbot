@@ -15,7 +15,7 @@ import type {
   AuthStorageBackend,
   AuthStorageData,
   OAuthCredential,
-} from "./auth-storage.js";
+} from "./auth-storage-types.js";
 
 export function isAuthStorageOAuthRefreshFence(
   provider: string,
