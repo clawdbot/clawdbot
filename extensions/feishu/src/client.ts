@@ -30,6 +30,8 @@ type FeishuClientSdk = Pick<
   typeof Lark,
   | "AppType"
   | "Client"
+  | "CTenantAccessToken"
+  | "DefaultCache"
   | "defaultHttpInstance"
   | "Domain"
   | "EventDispatcher"
@@ -40,6 +42,8 @@ type FeishuClientSdk = Pick<
 const feishuClientSdk: FeishuClientSdk = {
   AppType: Lark.AppType,
   Client: Lark.Client,
+  CTenantAccessToken: Lark.CTenantAccessToken,
+  DefaultCache: Lark.DefaultCache,
   defaultHttpInstance: Lark.defaultHttpInstance,
   Domain: Lark.Domain,
   EventDispatcher: Lark.EventDispatcher,
@@ -229,6 +233,110 @@ type FeishuProxyAwareHttpRequestOptions<D> = Lark.HttpRequestOptions<D> & {
   proxy?: false;
 };
 
+const INVALID_TENANT_ACCESS_TOKEN_CODE = 99991663;
+
+export function isInvalidTenantAccessTokenResponse(value: unknown): boolean {
+  if (!isRecord(value)) {
+    return false;
+  }
+  const code = value.code;
+  if (
+    code === INVALID_TENANT_ACCESS_TOKEN_CODE ||
+    code === String(INVALID_TENANT_ACCESS_TOKEN_CODE)
+  ) {
+    return true;
+  }
+  const response = isRecord(value.response) ? value.response : undefined;
+  const data = isRecord(response?.data) ? response.data : undefined;
+  return (
+    data?.code === INVALID_TENANT_ACCESS_TOKEN_CODE ||
+    data?.code === String(INVALID_TENANT_ACCESS_TOKEN_CODE)
+  );
+}
+
+function readAuthorizationBearer(headers: unknown): string | undefined {
+  const value = readHeader(headers, "authorization");
+  return value?.startsWith("Bearer ") ? value.slice("Bearer ".length) : undefined;
+}
+
+function cloneRequestWithAuthorization<D>(
+  request: FeishuProxyAwareHttpRequestOptions<D>,
+  token: string,
+): FeishuProxyAwareHttpRequestOptions<D> {
+  return {
+    ...request,
+    headers: {
+      ...(isRecord(request.headers) ? request.headers : {}),
+      Authorization: `Bearer ${token}`,
+    },
+  };
+}
+
+type TenantTokenRecovery = {
+  isCurrentToken: (token: string) => boolean;
+  recoverToken: (failedToken: string) => Promise<string>;
+};
+
+class RecoverableTenantTokenCache extends feishuClientSdk.DefaultCache {
+  private currentToken?: string;
+  private pendingRefresh?: Promise<string>;
+
+  constructor(
+    private readonly appId: string,
+    private readonly refreshToken: () => Promise<string>,
+  ) {
+    super();
+  }
+
+  override async set(...args: Parameters<Lark.Cache["set"]>): Promise<boolean> {
+    const [key, value, , options] = args;
+    const result = await super.set(...args);
+    if (key === feishuClientSdk.CTenantAccessToken && options?.namespace === this.appId && value) {
+      this.currentToken = value;
+    }
+    return result;
+  }
+
+  isCurrentToken(token: string): boolean {
+    return this.currentToken === token;
+  }
+
+  async recoverToken(failedToken: string): Promise<string> {
+    if (this.currentToken && this.currentToken !== failedToken) {
+      return this.currentToken;
+    }
+    if (this.pendingRefresh) {
+      return this.pendingRefresh;
+    }
+
+    const refresh = (async () => {
+      // A late stale response must not expire a token already refreshed by a peer.
+      await super.set(feishuClientSdk.CTenantAccessToken, "", Date.now() - 1, {
+        namespace: this.appId,
+      });
+      if (this.currentToken && this.currentToken !== failedToken) {
+        return this.currentToken;
+      }
+      if (this.currentToken === failedToken) {
+        this.currentToken = undefined;
+      }
+      const token = await this.refreshToken();
+      if (!token) {
+        throw new Error("Feishu tenant access token refresh returned no token");
+      }
+      return token;
+    })();
+    this.pendingRefresh = refresh;
+    try {
+      return await refresh;
+    } finally {
+      if (this.pendingRefresh === refresh) {
+        this.pendingRefresh = undefined;
+      }
+    }
+  }
+}
+
 // Multi-account client cache
 const clientCache = new Map<
   string,
@@ -253,6 +361,7 @@ function resolveSdkDomain(domain: FeishuDomain | undefined): Lark.Domain {
 function createFeishuHttpInstance(
   defaultTimeoutMs: number,
   configuredDomain?: FeishuDomain,
+  tenantTokenRecovery?: TenantTokenRecovery,
 ): Lark.HttpInstance {
   // SAFETY: The SDK owns this Axios instance and unwraps responses to its HttpInstance contract.
   const base = feishuClientSdk.defaultHttpInstance as Lark.HttpInstance;
@@ -298,8 +407,29 @@ function createFeishuHttpInstance(
   }
 
   return {
-    request: async (opts) =>
-      base.request(await injectRequestOptions(normalizeMultipartUploadData(opts))),
+    request: async (opts) => {
+      const normalized = normalizeMultipartUploadData(opts);
+      const bearer = readAuthorizationBearer(normalized.headers);
+      const recoverableToken =
+        bearer && tenantTokenRecovery?.isCurrentToken(bearer) ? bearer : undefined;
+      const request = await injectRequestOptions(normalized);
+      if (!recoverableToken || !tenantTokenRecovery) {
+        return base.request(request);
+      }
+
+      try {
+        const result = await base.request(request);
+        if (!isInvalidTenantAccessTokenResponse(result)) {
+          return result;
+        }
+      } catch (error) {
+        if (!isInvalidTenantAccessTokenResponse(error)) {
+          throw error;
+        }
+      }
+      const token = await tenantTokenRecovery.recoverToken(recoverableToken);
+      return base.request(cloneRequestWithAuthorization(request, token));
+    },
     get: async (url, opts) => base.get(resolveRequestUrl(url), await injectRequestOptions(opts)),
     post: async (url, data, opts) =>
       base.post(resolveRequestUrl(url), data, await injectRequestOptions(opts)),
@@ -353,12 +483,17 @@ export function createFeishuClient(creds: FeishuClientCredentials): Lark.Client 
   }
 
   // Create new client with timeout-aware HTTP instance
+  const cache = new RecoverableTenantTokenCache(appId, () =>
+    client.tokenManager.getTenantAccessToken({}),
+  );
+  const httpInstance = createFeishuHttpInstance(defaultHttpTimeoutMs, domain, cache);
   const client = new feishuClientSdk.Client({
     appId,
     appSecret,
     appType: feishuClientSdk.AppType.SelfBuild,
+    cache,
     domain: resolveSdkDomain(domain),
-    httpInstance: createFeishuHttpInstance(defaultHttpTimeoutMs, domain),
+    httpInstance,
   });
 
   // Cache it

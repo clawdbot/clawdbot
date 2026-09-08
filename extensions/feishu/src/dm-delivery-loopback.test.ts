@@ -25,6 +25,7 @@ type RecordedFeishuRequest = {
 describe("Feishu DM delivery over the real Lark SDK", () => {
   it("preserves routing, card byte envelopes and physical-send receipts", async () => {
     const requests: RecordedFeishuRequest[] = [];
+    const tokenCalls = new Map<string, number>();
     const server = createServer((request, response) => {
       void (async () => {
         const chunks: Buffer[] = [];
@@ -64,15 +65,23 @@ describe("Feishu DM delivery over the real Lark SDK", () => {
             sendJson(401, { code: 99991663, msg: "unknown loopback test application" });
             return;
           }
+          const appId = String(body.app_id);
+          const tokenCall = (tokenCalls.get(appId) ?? 0) + 1;
+          tokenCalls.set(appId, tokenCall);
+          const token = appId === "cli_dm_primary" ? "tat-primary" : "tat-secondary";
           sendJson(200, {
             code: 0,
             msg: "ok",
-            tenant_access_token: body.app_id === "cli_dm_primary" ? "tat-primary" : "tat-secondary",
+            tenant_access_token: tokenCall === 1 ? `${token}-stale` : token,
             expire: 7200,
           });
           return;
         }
 
+        if (record.authorization?.endsWith("-stale")) {
+          sendJson(401, { code: 99991663, msg: "invalid tenant access token" });
+          return;
+        }
         if (
           record.authorization !== "Bearer tat-primary" &&
           record.authorization !== "Bearer tat-secondary"
@@ -306,6 +315,18 @@ describe("Feishu DM delivery over the real Lark SDK", () => {
             receiveIdType: "open_id",
             receiveId: "ou_dm_forbidden",
           }),
+        ]),
+      );
+      // Media delivery swaps timeout-owned client generations for the primary
+      // account; both accounts must still recover their first stale token.
+      expect(tokenCalls.get("cli_dm_primary")).toBeGreaterThanOrEqual(2);
+      expect(tokenCalls.get("cli_dm_secondary")).toBe(2);
+      expect(requests).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ authorization: "Bearer tat-primary-stale" }),
+          expect.objectContaining({ authorization: "Bearer tat-primary" }),
+          expect.objectContaining({ authorization: "Bearer tat-secondary-stale" }),
+          expect.objectContaining({ authorization: "Bearer tat-secondary" }),
         ]),
       );
 

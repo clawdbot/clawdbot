@@ -23,9 +23,45 @@ const requestInterceptorState = vi.hoisted(() => {
     }),
   };
 });
+const tenantAccessTokenKey = vi.hoisted(() => Symbol("tenant-access-token"));
+const tenantTokenRefreshMock = vi.hoisted(() => vi.fn<() => Promise<string>>());
+const defaultCacheCtorMock = vi.hoisted(
+  () =>
+    class DefaultCacheMock {
+      private readonly values = new Map<string, unknown>();
+
+      private cacheKey(key: string | symbol, namespace?: string) {
+        return `${namespace ?? ""}/${String(key)}`;
+      }
+
+      async get(key: string | symbol, options?: { namespace?: string }) {
+        return this.values.get(this.cacheKey(key, options?.namespace));
+      }
+
+      async set(
+        key: string | symbol,
+        value: unknown,
+        expiresAt?: number,
+        options?: { namespace?: string },
+      ) {
+        const keyName = this.cacheKey(key, options?.namespace);
+        if (expiresAt !== undefined && expiresAt <= Date.now()) {
+          this.values.delete(keyName);
+        } else {
+          this.values.set(keyName, value);
+        }
+        return true;
+      }
+    },
+);
 const clientCtorMock = vi.hoisted(() =>
-  vi.fn(function clientCtor() {
-    return { connected: true };
+  vi.fn(function clientCtor(options: Record<string, unknown>) {
+    return {
+      connected: true,
+      appId: options.appId,
+      cache: options.cache,
+      tokenManager: { getTenantAccessToken: tenantTokenRefreshMock },
+    };
   }),
 );
 const wsClientCtorMock = vi.hoisted(() =>
@@ -156,6 +192,16 @@ type HttpInstanceLike = {
   patch: (url: string, body?: unknown, options?: Record<string, unknown>) => Promise<unknown>;
 };
 
+type TenantTokenCache = {
+  get: (key: string | symbol, options?: { namespace?: string }) => Promise<unknown>;
+  set: (
+    key: string | symbol,
+    value: unknown,
+    expiresAt?: number,
+    options?: { namespace?: string },
+  ) => Promise<boolean>;
+};
+
 function requireHttpInstance(value: unknown): HttpInstanceLike {
   if (
     isObjectRecord(value) &&
@@ -166,6 +212,13 @@ function requireHttpInstance(value: unknown): HttpInstanceLike {
     return value as HttpInstanceLike;
   }
   throw new Error("expected Feishu HTTP instance");
+}
+
+function requireTenantTokenCache(value: unknown): TenantTokenCache {
+  if (isObjectRecord(value) && typeof value.get === "function" && typeof value.set === "function") {
+    return value as TenantTokenCache;
+  }
+  throw new Error("expected Feishu tenant token cache");
 }
 
 function readCallOptions(
@@ -200,6 +253,8 @@ function firstWsClientOptions(): {
 beforeAll(async () => {
   vi.doMock("@larksuiteoapi/node-sdk", () => ({
     AppType: { SelfBuild: "self" },
+    CTenantAccessToken: tenantAccessTokenKey,
+    DefaultCache: defaultCacheCtorMock,
     Domain: { Feishu: 0, Lark: 1 },
     LoggerLevel: { info: "info" },
     Client: clientCtorMock,
@@ -233,6 +288,7 @@ beforeEach(() => {
   }
   resetFeishuProxyAgentForTest();
   vi.clearAllMocks();
+  tenantTokenRefreshMock.mockResolvedValue("fresh-token");
 });
 
 afterEach(() => {
@@ -782,6 +838,164 @@ describe("createFeishuClient HTTP timeout", () => {
       "Feishu managed proxy is active but no proxy agent could be created",
     );
     expect(mockBaseHttpInstance.request).not.toHaveBeenCalled();
+  });
+});
+
+describe("createFeishuClient tenant token recovery", () => {
+  async function createRecoveryFixture(accountId: string) {
+    const appId = `app_${accountId}`;
+    createFeishuClient({
+      appId,
+      appSecret: "tenant-recovery-placeholder", // pragma: allowlist secret
+      accountId,
+    });
+    const options = readCallOptions(clientCtorMock);
+    const cache = requireTenantTokenCache(options.cache);
+    await cache.set(tenantAccessTokenKey, "stale-token", Date.now() + 60_000, {
+      namespace: appId,
+    });
+    tenantTokenRefreshMock.mockImplementation(async () => {
+      await cache.set(tenantAccessTokenKey, "fresh-token", Date.now() + 60_000, {
+        namespace: appId,
+      });
+      return "fresh-token";
+    });
+    return {
+      cache,
+      httpInstance: requireHttpInstance(options.httpInstance),
+    };
+  }
+
+  it("replays once after a fulfilled invalid-tenant response", async () => {
+    const { httpInstance } = await createRecoveryFixture("fulfilled");
+    mockBaseHttpInstance.request
+      .mockResolvedValueOnce({ code: 99991663, msg: "invalid tenant access token" })
+      .mockResolvedValueOnce({ code: 0, data: { message_id: "om_recovered" } });
+
+    await expect(
+      httpInstance.request({
+        url: "https://open.feishu.cn/open-apis/im/v1/messages",
+        method: "POST",
+        headers: { Authorization: "Bearer stale-token" },
+      }),
+    ).resolves.toEqual({ code: 0, data: { message_id: "om_recovered" } });
+
+    expect(tenantTokenRefreshMock).toHaveBeenCalledOnce();
+    expect(mockBaseHttpInstance.request).toHaveBeenCalledTimes(2);
+    expect(readCallOptions(mockBaseHttpInstance.request, 1).headers).toEqual({
+      Authorization: "Bearer fresh-token",
+    });
+  });
+
+  it("recovers an SDK rejection carrying the exact invalid-tenant code", async () => {
+    const { httpInstance } = await createRecoveryFixture("thrown");
+    mockBaseHttpInstance.request
+      .mockRejectedValueOnce({
+        response: { status: 401, data: { code: "99991663", msg: "invalid token" } },
+      })
+      .mockResolvedValueOnce({ code: 0 });
+
+    await expect(
+      httpInstance.request({
+        url: "https://open.feishu.cn/open-apis/drive/v1/files/file/comments",
+        headers: { Authorization: "Bearer stale-token" },
+      }),
+    ).resolves.toEqual({ code: 0 });
+    expect(tenantTokenRefreshMock).toHaveBeenCalledOnce();
+  });
+
+  it("does not recover non-matching or explicit bearer credentials", async () => {
+    const { httpInstance } = await createRecoveryFixture("non-match");
+    mockBaseHttpInstance.request.mockResolvedValue({
+      code: 99991664,
+      msg: "user access token is invalid",
+    });
+
+    await expect(
+      httpInstance.request({
+        url: "https://open.feishu.cn/open-apis/im/v1/messages",
+        headers: { Authorization: "Bearer stale-token" },
+      }),
+    ).resolves.toMatchObject({ code: 99991664 });
+    mockBaseHttpInstance.request.mockResolvedValue({
+      code: 99991663,
+      msg: "invalid tenant access token",
+    });
+    await expect(
+      httpInstance.request({
+        url: "https://open.feishu.cn/open-apis/im/v1/messages",
+        headers: { Authorization: "Bearer explicit-user-token" },
+      }),
+    ).resolves.toMatchObject({ code: 99991663 });
+
+    expect(tenantTokenRefreshMock).not.toHaveBeenCalled();
+    expect(mockBaseHttpInstance.request).toHaveBeenCalledTimes(2);
+  });
+
+  it("joins concurrent stale failures and keeps a newer cached token", async () => {
+    const { cache, httpInstance } = await createRecoveryFixture("concurrent");
+    let releaseRefresh!: () => void;
+    let markRefreshComplete!: () => void;
+    const refreshGate = new Promise<void>((resolve) => {
+      releaseRefresh = resolve;
+    });
+    const refreshComplete = new Promise<void>((resolve) => {
+      markRefreshComplete = resolve;
+    });
+    tenantTokenRefreshMock.mockImplementation(async () => {
+      await refreshGate;
+      await cache.set(tenantAccessTokenKey, "fresh-token", Date.now() + 60_000, {
+        namespace: "app_concurrent",
+      });
+      markRefreshComplete();
+      return "fresh-token";
+    });
+    let staleCalls = 0;
+    mockBaseHttpInstance.request.mockImplementation(async (options) => {
+      const authorization = isObjectRecord(options.headers)
+        ? options.headers.Authorization
+        : undefined;
+      if (authorization !== "Bearer stale-token") {
+        return { code: 0 };
+      }
+      staleCalls += 1;
+      if (staleCalls === 2) {
+        await refreshComplete;
+      }
+      return { code: 99991663, msg: "invalid tenant access token" };
+    });
+
+    const first = httpInstance.request({
+      url: "https://open.feishu.cn/open-apis/im/v1/messages",
+      headers: { Authorization: "Bearer stale-token" },
+    });
+    const second = httpInstance.request({
+      url: "https://open.feishu.cn/open-apis/im/v1/messages",
+      headers: { Authorization: "Bearer stale-token" },
+    });
+    await vi.waitFor(() => expect(tenantTokenRefreshMock).toHaveBeenCalledOnce());
+    releaseRefresh();
+
+    await expect(Promise.all([first, second])).resolves.toEqual([{ code: 0 }, { code: 0 }]);
+    expect(tenantTokenRefreshMock).toHaveBeenCalledOnce();
+    expect(mockBaseHttpInstance.request).toHaveBeenCalledTimes(4);
+  });
+
+  it("limits invalid-tenant recovery to one replay", async () => {
+    const { httpInstance } = await createRecoveryFixture("one-replay");
+    mockBaseHttpInstance.request.mockResolvedValue({
+      code: 99991663,
+      msg: "invalid tenant access token",
+    });
+
+    await expect(
+      httpInstance.request({
+        url: "https://open.feishu.cn/open-apis/im/v1/messages",
+        headers: { Authorization: "Bearer stale-token" },
+      }),
+    ).resolves.toMatchObject({ code: 99991663 });
+    expect(tenantTokenRefreshMock).toHaveBeenCalledOnce();
+    expect(mockBaseHttpInstance.request).toHaveBeenCalledTimes(2);
   });
 });
 
