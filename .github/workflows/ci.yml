@@ -5094,6 +5094,7 @@ jobs:
             -only-testing:OpenClawTests/NotificationServingPreferenceTests \
             -only-testing:OpenClawTests/RootTabsSourceGuardTests \
             -only-testing:OpenClawTests/TraceHeadingVisualProofTests \
+            -only-testing:OpenClawTests/ChatComposerTextViewIOSTests \
             test
           xcodebuild \
             -project apps/ios/OpenClaw.xcodeproj \
@@ -5103,6 +5104,34 @@ jobs:
             -resultBundlePath apps/ios/build/LifecycleTestResults/OpenClawWatchDeliveryUITests.xcresult \
             -parallel-testing-enabled NO \
             -only-testing:OpenClawUITests/OpenClawSnapshotUITests/testWatchMessageDeliveryIsReachableFromSettings \
+            -only-testing:OpenClawUITests/OpenClawSnapshotUITests/testChatComposerReturnInsertsNewlineWithoutSending \
+            test
+          # Apple's XCUIElement keyboard contract documents key events for macOS and iPadOS 15+;
+          # keep the hardware-keyboard coverage on an iPad while phone lifecycle coverage stays above.
+          ipad_simulator_id="$(
+            xcrun simctl list devices available --json | node --input-type=module -e '
+              const chunks = [];
+              for await (const chunk of process.stdin) chunks.push(chunk);
+              const runtimes = JSON.parse(Buffer.concat(chunks).toString("utf8")).devices;
+              const simulator = Object.values(runtimes)
+                .flat()
+                .find((device) => device.isAvailable && device.name.startsWith("iPad"));
+              if (!simulator) {
+                console.error("No available iPad simulator for hardware Return UI tests");
+                process.exit(1);
+              }
+              process.stdout.write(simulator.udid);
+            '
+          )"
+          xcodebuild \
+            -project apps/ios/OpenClaw.xcodeproj \
+            -scheme OpenClawUITests \
+            -configuration Debug \
+            -destination "platform=iOS Simulator,id=${ipad_simulator_id}" \
+            -resultBundlePath apps/ios/build/LifecycleTestResults/OpenClawHardwareReturnUITests.xcresult \
+            -parallel-testing-enabled NO \
+            -only-testing:OpenClawUITests/OpenClawSnapshotUITests/testChatComposerHardwareReturnSendsAndShiftReturnKeepsDraft \
+            -only-testing:OpenClawUITests/OpenClawSnapshotUITests/testChatComposerHardwareReturnPreservesDraftDuringActiveRun \
             test
 
       - name: Run focused Apple Watch operation simulator tests

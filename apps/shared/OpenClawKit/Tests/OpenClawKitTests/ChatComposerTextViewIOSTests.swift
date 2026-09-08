@@ -60,7 +60,60 @@ struct ChatComposerTextViewIOSTests {
         #expect(downCalls == 1)
         #expect(!textView.handleHardwareKey(.keyboardUpArrow, modifierFlags: .shift))
         #expect(textView.handleHardwareKey(.keyboardUpArrow, modifierFlags: .alphaShift))
-        #expect(!textView.handleHardwareKey(.keyboardReturnOrEnter, modifierFlags: []))
+    }
+
+    @Test func registeredReturnCommandsSendOnlyForBareAndCommandModifiers() throws {
+        let textView = ChatComposerTextViewIOSFactory.makeConfiguredTextView()
+        var sendCalls = 0
+        textView.onSend = { sendCalls += 1 }
+
+        let sendAction = #selector(ChatComposerUITextView.handleSendKeyCommand(_:))
+        let commands = try #require(textView.keyCommands)
+        let sendCommands = commands.filter { $0.action == sendAction }
+        #expect(sendCommands.count == 4)
+        #expect(sendCommands.compactMap(\.input) == ["\r", "\r", "\r", "\r"])
+        #expect(
+            sendCommands.map(\.modifierFlags) == [
+                [],
+                .command,
+                .numericPad,
+                [.command, .numericPad],
+            ])
+        for command in sendCommands {
+            #expect(command.wantsPriorityOverSystemBehavior)
+            textView.handleSendKeyCommand(command)
+        }
+        #expect(sendCalls == 4)
+    }
+
+    @Test func physicalReturnPreservesMarkedTextUntilCompositionCompletes() throws {
+        let textView = ChatComposerTextViewIOSFactory.makeConfiguredTextView()
+        var sendCalls = 0
+        textView.onSend = { sendCalls += 1 }
+        textView.setMarkedText("draft", selectedRange: NSRange(location: 5, length: 0))
+
+        #expect(textView.markedTextRange != nil)
+        let sendAction = #selector(ChatComposerUITextView.handleSendKeyCommand(_:))
+        #expect(textView.keyCommands?.contains { $0.action == sendAction } == false)
+        #expect(
+            !textView.canPerformAction(
+                sendAction,
+                withSender: nil))
+        textView.handleSendKeyCommand(
+            UIKeyCommand(
+                input: "\r",
+                modifierFlags: [],
+                action: #selector(ChatComposerUITextView.handleSendKeyCommand(_:))))
+        #expect(sendCalls == 0)
+        #expect(textView.text == "draft")
+
+        textView.unmarkText()
+        let commands = try #require(textView.keyCommands)
+        let sendCommand = try #require(commands.first { $0.action == sendAction })
+        #expect(commands.filter { $0.action == sendAction }.count == 4)
+        #expect(textView.canPerformAction(sendAction, withSender: nil))
+        textView.handleSendKeyCommand(sendCommand)
+        #expect(sendCalls == 1)
     }
 }
 #endif

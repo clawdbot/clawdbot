@@ -524,6 +524,73 @@ final class OpenClawSnapshotUITests: XCTestCase {
         self.attachScreenshot(named: "chat-composer-return")
     }
 
+    func testChatComposerHardwareReturnSendsAndShiftReturnKeepsDraft() throws {
+        self.launchApp(for: ScreenshotTarget(
+            initialTab: "chat",
+            initialDestination: "chat",
+            name: "chat-composer-hardware-return"))
+
+        let app = try XCTUnwrap(self.app)
+        let input = self.chatMessageInput(in: app)
+        XCTAssertTrue(input.waitForExistence(timeout: 8))
+        input.tap()
+
+        input.typeText("first message")
+        input.typeKey(.return, modifierFlags: [])
+        let firstMessageSent = expectation(
+            for: NSPredicate(format: "value == %@", ""),
+            evaluatedWith: input)
+        wait(for: [firstMessageSent], timeout: 3)
+        XCTAssertTrue(app.staticTexts["first message"].waitForExistence(timeout: 5))
+        XCTAssertTrue(
+            app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "I can help with"))
+                .firstMatch.waitForExistence(timeout: 5))
+
+        input.typeText("second message")
+        self.waitForEnabled(app.buttons["chat-send-message"])
+        input.typeKey(.return, modifierFlags: [.command])
+        let secondMessageSent = expectation(
+            for: NSPredicate(format: "value == %@", ""),
+            evaluatedWith: input)
+        wait(for: [secondMessageSent], timeout: 3)
+        XCTAssertTrue(app.staticTexts["second message"].waitForExistence(timeout: 5))
+
+        input.typeText("draft")
+        input.typeKey(.return, modifierFlags: [.shift])
+        XCTAssertEqual(input.value as? String, "draft\n")
+        XCTAssertTrue(app.buttons["chat-send-message"].waitForExistence(timeout: 3))
+        self.attachScreenshot(named: "chat-composer-hardware-return")
+    }
+
+    func testChatComposerHardwareReturnPreservesDraftDuringActiveRun() throws {
+        self.launchApp(
+            for: ScreenshotTarget(
+                initialTab: "chat",
+                initialDestination: "chat",
+                name: "chat-composer-hardware-return-blocked"),
+            additionalArguments: ["--openclaw-hold-initial-chat-run"])
+
+        let app = try XCTUnwrap(self.app)
+        let input = self.chatMessageInput(in: app)
+        XCTAssertTrue(input.waitForExistence(timeout: 8))
+        input.tap()
+        input.typeText("Keep the first run active.")
+        input.typeKey(.return, modifierFlags: [])
+        XCTAssertTrue(app.buttons["Stop response"].waitForExistence(timeout: 8))
+
+        input.typeText("Keep this draft.")
+        let send = app.buttons["chat-send-message"]
+        XCTAssertTrue(send.waitForExistence(timeout: 3))
+        XCTAssertFalse(send.isEnabled)
+        let sendModifiers: [XCUIElement.KeyModifierFlags] = [[], .command]
+        for modifiers in sendModifiers {
+            input.typeKey(.return, modifierFlags: modifiers)
+            XCTAssertEqual(input.value as? String, "Keep this draft.")
+            XCTAssertFalse(app.staticTexts["Keep this draft."].exists)
+        }
+        self.attachScreenshot(named: "chat-composer-hardware-return-blocked")
+    }
+
     func testVoiceNoteDraftKeepsStopAvailableDuringActiveResponse() throws {
         try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone voice-note composer proof only")
         self.launchApp(

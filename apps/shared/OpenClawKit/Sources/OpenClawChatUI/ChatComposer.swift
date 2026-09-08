@@ -733,6 +733,9 @@ struct OpenClawChatComposer: View {
                 onFocusChange: { focused in
                     self.isFocused = focused
                 },
+                onSend: {
+                    self.sendDraftIfEnabled()
+                },
                 onHistoryUp: {
                     !self.isSlashPopoverPresented && self.viewModel.recallPreviousInput(caretOnFirstLine: $0)
                 },

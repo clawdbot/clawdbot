@@ -10,6 +10,7 @@ struct ChatComposerTextViewIOS: UIViewRepresentable {
     var minHeight: CGFloat
     var maxHeight: CGFloat
     var onFocusChange: (Bool) -> Void
+    var onSend: () -> Void
     var onHistoryUp: (Bool) -> Bool
     var onHistoryDown: () -> Bool
 
@@ -21,6 +22,7 @@ struct ChatComposerTextViewIOS: UIViewRepresentable {
         let textView = ChatComposerTextViewIOSFactory.makeConfiguredTextView()
         textView.delegate = context.coordinator
         textView.text = self.text
+        textView.onSend = self.onSend
         self.configureHistoryHandlers(textView)
         return textView
     }
@@ -29,6 +31,7 @@ struct ChatComposerTextViewIOS: UIViewRepresentable {
         context.coordinator.parent = self
         textView.isEditable = self.isEnabled
         textView.isSelectable = self.isEnabled
+        textView.onSend = self.onSend
         self.configureHistoryHandlers(textView)
 
         // UIKit owns user-initiated focus. A false focus request is not a blur request;
@@ -103,8 +106,22 @@ struct ChatComposerTextViewIOS: UIViewRepresentable {
 
 @MainActor
 final class ChatComposerUITextView: UITextView {
+    var onSend: (() -> Void)?
     var onHistoryUp: ((Bool) -> Bool)?
     var onHistoryDown: (() -> Bool)?
+
+    override var keyCommands: [UIKeyCommand]? {
+        let inheritedCommands = super.keyCommands ?? []
+        guard self.markedTextRange == nil else { return inheritedCommands }
+        // Priority keeps hardware Return from being consumed as text input; omitting these
+        // commands during IME composition lets UIKit confirm marked text normally.
+        return inheritedCommands + [
+            self.makeSendKeyCommand(modifierFlags: []),
+            self.makeSendKeyCommand(modifierFlags: .command),
+            self.makeSendKeyCommand(modifierFlags: .numericPad),
+            self.makeSendKeyCommand(modifierFlags: [.command, .numericPad]),
+        ]
+    }
 
     override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
         var unhandledPresses = presses
@@ -124,7 +141,8 @@ final class ChatComposerUITextView: UITextView {
         modifierFlags: UIKeyModifierFlags) -> Bool
     {
         let commandModifiers: UIKeyModifierFlags = [.shift, .control, .alternate, .command]
-        guard modifierFlags.isDisjoint(with: commandModifiers) else { return false }
+        let activeModifiers = modifierFlags.intersection(commandModifiers)
+        guard activeModifiers.isEmpty else { return false }
         switch keyCode {
         case .keyboardUpArrow:
             return self.onHistoryUp?(self.caretOnFirstLine) == true
@@ -133,6 +151,28 @@ final class ChatComposerUITextView: UITextView {
         default:
             return false
         }
+    }
+
+    @objc
+    func handleSendKeyCommand(_: UIKeyCommand) {
+        guard self.markedTextRange == nil else { return }
+        self.onSend?()
+    }
+
+    override func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool {
+        if action == #selector(self.handleSendKeyCommand(_:)) {
+            return self.markedTextRange == nil
+        }
+        return super.canPerformAction(action, withSender: sender)
+    }
+
+    private func makeSendKeyCommand(modifierFlags: UIKeyModifierFlags) -> UIKeyCommand {
+        let command = UIKeyCommand(
+            input: "\r",
+            modifierFlags: modifierFlags,
+            action: #selector(self.handleSendKeyCommand(_:)))
+        command.wantsPriorityOverSystemBehavior = true
+        return command
     }
 
     private var caretOnFirstLine: Bool {

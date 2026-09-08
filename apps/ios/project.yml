@@ -430,6 +430,8 @@ targets:
         group: Tests
       - path: ../shared/OpenClawKit/Tests/OpenClawKitTests/ChatPasteboardTests.swift
         group: Tests
+      - path: ../shared/OpenClawKit/Tests/OpenClawKitTests/ChatComposerTextViewIOSTests.swift
+        group: Tests
       - path: WatchApp/Sources/WatchDeferredPayloadOrdering.swift
         group: WatchApp/Sources
     dependencies:
