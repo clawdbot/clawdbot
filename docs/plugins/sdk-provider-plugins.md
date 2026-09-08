@@ -1294,6 +1294,12 @@ catalog, API-key auth, and dynamic model resolution.
         The shared factory always supplies the client's `model` and the original
         `input` array after those fields, preserving response-count validation.
 
+        If your endpoint caps the number of embedding inputs it accepts per
+        request, declare `maxInputsPerRequest` on the provider (or pass it to
+        `createRemoteEmbeddingProvider`); memory request batching splits below
+        that cap instead of sending oversized arrays. Providers without a
+        declaration get a conservative default of 64 items per request.
+
         Providers that accept model aliases can expose
         `normalizeModel(options): string`. Memory uses this synchronous hook for
         both creation options and cold index identity checks. Keep it configuration-only:

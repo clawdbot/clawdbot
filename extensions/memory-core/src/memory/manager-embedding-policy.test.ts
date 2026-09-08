@@ -40,6 +40,35 @@ describe("memory embedding policy", () => {
     expect(batches[0]).toHaveLength(4);
   });
 
+  it("caps batches at the provider input-item limit before the token budget", () => {
+    const tinyChunks = Array.from({ length: 100 }, (_, index) => chunk(`item-${index}`));
+    const batches = buildMemoryEmbeddingBatches(tinyChunks, 8000, 64);
+
+    expect(batches.map((batch) => batch.length)).toEqual([64, 36]);
+  });
+
+  it("splits per input when the provider allows a single item per request", () => {
+    const chunks = [chunk("a"), chunk("b"), chunk("c")];
+    const batches = buildMemoryEmbeddingBatches(chunks, 8000, 1);
+
+    expect(batches.map((batch) => batch.length)).toEqual([1, 1, 1]);
+  });
+
+  it("keeps one oversized chunk in its own batch regardless of the input cap", () => {
+    const big = "c".repeat(9000);
+    const batches = buildMemoryEmbeddingBatches([chunk(big), chunk("tiny")], 8000, 64);
+
+    expect(batches.map((batch) => batch.length)).toEqual([1, 1]);
+  });
+
+  it("does not cap batch size when no input-item limit is resolved", () => {
+    const tinyChunks = Array.from({ length: 100 }, (_, index) => chunk(`item-${index}`));
+    const batches = buildMemoryEmbeddingBatches(tinyChunks, 8000);
+
+    expect(batches).toHaveLength(1);
+    expect(batches[0]).toHaveLength(100);
+  });
+
   it("budgets multibyte text and structured inline data by their actual UTF-8 bytes", () => {
     const textChunks = [chunk("é"), chunk("😀"), chunk("a")];
     expect(buildMemoryEmbeddingBatches(textChunks, 5).map((batch) => batch.length)).toEqual([1, 2]);

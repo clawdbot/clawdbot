@@ -42,6 +42,7 @@ export {
   postJsonWithRetry,
   readEmbeddingBatchJsonl,
   resolveEmbeddingEndpointUrl,
+  resolveEmbeddingMaxInputsPerRequest,
   resolveBatchCompletionFromStatus,
   resolveCompletedBatchResult,
   resolveRemoteEmbeddingBearerClient,
