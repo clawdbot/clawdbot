@@ -17,7 +17,9 @@ import {
   projectDiagnosticValue,
 } from "../utils/diagnostics.js";
 import { createAssistantMessageEventStream } from "../utils/event-stream.js";
+import { shortHash } from "../utils/hash.js";
 import { headersToRecord } from "../utils/headers.js";
+import { repairJson } from "../utils/json-parse.js";
 import { projectProviderError, type ProviderErrorProjection } from "../utils/provider-error.js";
 import { isTransientNetworkError } from "../utils/retryable-network-errors.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
@@ -74,16 +76,77 @@ export function coerceTransportToolCallArguments(argumentsValue: unknown): Recor
   return {};
 }
 
-/** Admit only complete object-shaped terminal tool arguments; partial parsing is preview-only. */
+const MALFORMED_TOOL_CALL_TERMINAL_ERROR_CODE = "malformed_tool_call_arguments";
+
+/**
+ * Bounded, content-free diagnostics for a rejected terminal argument buffer. Carried as the
+ * error `cause` and mirrored onto the error's `errorCode` / `errorBody` fields so
+ * `projectProviderError` surfaces them on the terminal assistant message.
+ */
+type MalformedToolCallArgumentsDiagnostics = {
+  code: typeof MALFORMED_TOOL_CALL_TERMINAL_ERROR_CODE;
+  argumentChars: number;
+  argumentHash: string;
+  repairAttempted: boolean;
+};
+
+function createMalformedToolCallArgumentsError(
+  value: unknown,
+  errorMessage: string,
+  repairAttempted: boolean,
+): Error {
+  const text = typeof value === "string" ? value : undefined;
+  const diagnostics: MalformedToolCallArgumentsDiagnostics = {
+    code: MALFORMED_TOOL_CALL_TERMINAL_ERROR_CODE,
+    argumentChars: text?.length ?? 0,
+    argumentHash: text === undefined ? "" : shortHash(text),
+    repairAttempted,
+  };
+  const error = new Error(errorMessage, { cause: diagnostics });
+  Object.assign(error, {
+    errorCode: MALFORMED_TOOL_CALL_TERMINAL_ERROR_CODE,
+    errorBody: JSON.stringify(diagnostics),
+  });
+  return error;
+}
+
+/**
+ * Repair a complete-but-invalid terminal argument buffer. Anthropic fine-grained tool
+ * streaming skips server-side JSON validation, so a finished tool_use block can carry raw
+ * control characters or invalid escapes inside string values. Only string-literal repairs
+ * are applied and every valid escape is preserved as written; truncated or non-object
+ * buffers stay rejected so a cut-off write never executes with partial arguments.
+ */
+function repairTerminalToolCallArguments(value: string): Record<string, unknown> | null {
+  const repaired = repairJson(value, { preserveValidControlEscapes: true });
+  if (repaired === value) {
+    return null;
+  }
+  return parseJsonObjectPreservingUnsafeIntegers(repaired);
+}
+
+/**
+ * Admit only complete object-shaped terminal tool arguments; partial parsing is preview-only.
+ * `repairStringLiterals` opts a stream whose provider may deliver unvalidated tool input into
+ * string-literal repair before rejection.
+ */
 export function parseTerminalToolCallArguments(
   value: unknown,
   errorMessage = MALFORMED_TOOL_CALL_TERMINAL_ERROR_MESSAGE,
+  options?: { repairStringLiterals?: boolean },
 ): Record<string, unknown> {
   const parsed = parseJsonObjectPreservingUnsafeIntegers(value);
-  if (!parsed) {
-    throw new Error(errorMessage);
+  if (parsed) {
+    return parsed;
   }
-  return parsed;
+  const repairStringLiterals = options?.repairStringLiterals === true && typeof value === "string";
+  if (repairStringLiterals) {
+    const repaired = repairTerminalToolCallArguments(value);
+    if (repaired) {
+      return repaired;
+    }
+  }
+  throw createMalformedToolCallArgumentsError(value, errorMessage, repairStringLiterals);
 }
 
 /** Validate a complete sibling set before mutating any call into executable state. */
@@ -91,9 +154,11 @@ export function finalizeTerminalToolCallArguments<T extends { arguments: Record<
   calls: readonly T[],
   readArguments: (call: T) => unknown,
   errorMessage?: string,
+  options?: { repairStringLiterals?: boolean },
 ): void {
   const validated = calls.map(
-    (call) => [call, parseTerminalToolCallArguments(readArguments(call), errorMessage)] as const,
+    (call) =>
+      [call, parseTerminalToolCallArguments(readArguments(call), errorMessage, options)] as const,
   );
   for (const [call, argumentsValue] of validated) {
     call.arguments = argumentsValue;

@@ -25,6 +25,16 @@ describe("json-parse repairJson invalid \\u escapes", () => {
     expect(parseJsonWithRepair(input)).toEqual({ path: expected });
   });
 
+  it("preserves valid control escapes after a Windows-path prefix when asked to", () => {
+    // JS string is: {"oldText":"C:\nnext"} — a legitimately escaped newline after "C:".
+    const escaped = '{"oldText":"C:\\nnext","raw":"a\nb"}';
+    expect(parseJsonWithRepair(escaped)).toEqual({ oldText: "C:\\nnext", raw: "a\nb" });
+    expect(JSON.parse(repairJson(escaped, { preserveValidControlEscapes: true }))).toEqual({
+      oldText: "C:\nnext",
+      raw: "a\nb",
+    });
+  });
+
   it("preserves legitimate JSON control escapes outside Windows paths", () => {
     expect(parseJsonWithRepair('{"message":"line\\nnext\\ttabbed"}')).toEqual({
       message: "line\nnext\ttabbed",

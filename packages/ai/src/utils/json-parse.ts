@@ -31,8 +31,17 @@ function escapeControlCharacter(char: string): string {
  * Repairs malformed JSON string literals by:
  * - escaping raw control characters inside strings
  * - doubling backslashes before invalid escape characters
+ *
+ * By default a valid control escape (`\n`, `\t`, ...) that follows a Windows-path-looking
+ * prefix is treated as an unescaped path separator and doubled. Pass
+ * `preserveValidControlEscapes` when the text is authoritative (for example a completed
+ * tool-call argument buffer) and every valid escape must survive as written.
  */
-export function repairJson(json: string): string {
+export function repairJson(
+  json: string,
+  options?: { preserveValidControlEscapes?: boolean },
+): string {
+  const preserveValidControlEscapes = options?.preserveValidControlEscapes === true;
   let repaired = "";
   let inString = false;
   let stringValuePrefix = "";
@@ -80,7 +89,11 @@ export function repairJson(json: string): string {
         continue;
       }
 
-      if (JSON_CONTROL_ESCAPES.has(nextChar) && looksLikeWindowsPathPrefix(stringValuePrefix)) {
+      if (
+        !preserveValidControlEscapes &&
+        JSON_CONTROL_ESCAPES.has(nextChar) &&
+        looksLikeWindowsPathPrefix(stringValuePrefix)
+      ) {
         repaired += "\\\\";
         stringValuePrefix += "\\";
         continue;
