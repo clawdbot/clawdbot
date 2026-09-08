@@ -642,6 +642,61 @@ describe("Talk client Gateway control owner", () => {
     },
   );
 
+  it("fences delegated admission when replacement lands after readiness settles", async () => {
+    const backend = vi.fn(async () => ({ text: "must not run" }));
+    let replaceOwner = async () => {};
+    const runAgentConsult = Object.assign(
+      vi.fn(
+        async (
+          _args: unknown,
+          _signal: AbortSignal,
+          ready?: () => Promise<void>,
+          assertCurrent?: () => void,
+        ) => {
+          await ready?.();
+          await replaceOwner();
+          assertCurrent?.();
+          return await backend();
+        },
+      ),
+      {
+        claimAppend: vi.fn(() => true),
+        claimFailureAppend: vi.fn(() => true),
+      },
+    );
+    const common = {
+      voiceSessionId: "voice-post-readiness-replacement",
+      sessionTarget,
+      connId: "conn-post-readiness-replacement",
+      context: controlContext(),
+      runToolAgentConsult: backend,
+      runAgentConsult,
+      appendTranscript: vi.fn(async () => undefined),
+      flushTranscript: vi.fn(async () => undefined),
+      closeLogicalSession: vi.fn(async () => undefined),
+    };
+    const owner = createTalkClientGatewayControlOwner(common);
+    let replacement: ReturnType<typeof createTalkClientGatewayControlOwner> | undefined;
+    replaceOwner = async () => {
+      replacement = createTalkClientGatewayControlOwner(common);
+      await replacement.adoptProvider(vi.fn(async () => undefined));
+      replacement.activate();
+    };
+    await owner.adoptProvider(vi.fn(async () => undefined));
+    owner.activate();
+    owner.runAgentConsult.adoptCompletionClaims?.();
+
+    try {
+      await expect(owner.runAgentConsult({ prompt: "queued task" })).rejects.toThrow(
+        /closed|not active/,
+      );
+      expect(backend).not.toHaveBeenCalled();
+    } finally {
+      await owner.close();
+      await replacement?.close();
+    }
+  });
+
   it("keeps delegation steering pending until transcript admission publishes the backend", async () => {
     const flush = createDeferred();
     const finish = createDeferred<{ text: string }>();

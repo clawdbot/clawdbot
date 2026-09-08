@@ -776,10 +776,12 @@ describe("Talk client agent consult admission", () => {
       isRunCurrent: () => true,
     });
     const readiness = vi.fn(() => ready.promise);
+    const assertCurrent = vi.fn();
     const run = runner.runOwnedArgs(
       { question: "first task" },
       new AbortController().signal,
       readiness,
+      assertCurrent,
     );
     const steer = runner.runOwnedArgs.steer;
     if (!steer) {
@@ -789,11 +791,13 @@ describe("Talk client agent consult admission", () => {
 
     try {
       expect(readiness).toHaveBeenCalledOnce();
+      expect(assertCurrent).not.toHaveBeenCalled();
       expect(mocks.consultRealtimeVoiceAgent).not.toHaveBeenCalled();
       await Promise.resolve();
       expect(mocks.controlRealtimeVoiceAgentRun).not.toHaveBeenCalled();
       ready.resolve();
       await steering;
+      expect(assertCurrent).toHaveBeenCalledOnce();
       expect(mocks.consultRealtimeVoiceAgent).toHaveBeenCalledOnce();
       expect(mocks.controlRealtimeVoiceAgentRun).toHaveBeenCalledOnce();
       finish.resolve();

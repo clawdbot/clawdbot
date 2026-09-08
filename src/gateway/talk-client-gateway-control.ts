@@ -68,6 +68,7 @@ type LifecycleBoundTalkAgentConsult = ((
   args: unknown,
   signal: AbortSignal,
   ready?: () => Promise<void>,
+  assertCurrent?: () => void,
 ) => Promise<{ text: string }>) &
   TalkAgentConsultLifecycleMethods;
 
@@ -439,8 +440,11 @@ export function createTalkClientGatewayControlOwner(params: {
       consultControllers.set(consultId, { controller, closeDisposition: "detach" });
       try {
         if (completionClaimsAdopted) {
-          return await params.runAgentConsult({ question: prompt }, delegatedSignal, () =>
-            awaitProviderConsultReadiness(delegatedSignal),
+          return await params.runAgentConsult(
+            { question: prompt },
+            delegatedSignal,
+            () => awaitProviderConsultReadiness(delegatedSignal),
+            assertActive,
           );
         }
         await awaitProviderConsultReadiness(delegatedSignal);

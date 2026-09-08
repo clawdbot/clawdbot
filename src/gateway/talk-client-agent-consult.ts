@@ -228,6 +228,7 @@ export function createTalkClientAgentConsultRunner(params: {
     signal?: AbortSignal,
     owner?: PromptOwner,
     ready?: () => Promise<void>,
+    assertCurrent?: () => void,
   ) => {
     const parsedArgs = parseRealtimeVoiceAgentConsultArgs(args);
     const voiceSessionId = params.getVoiceSessionId();
@@ -239,6 +240,9 @@ export function createTalkClientAgentConsultRunner(params: {
     }
     await ready?.();
     signal?.throwIfAborted();
+    // Readiness can outlive its physical browser owner. Recheck after that
+    // suspension and keep this path synchronous until backend admission.
+    assertCurrent?.();
     // Relays own admission before their lazy record registration. Browser callbacks
     // must validate the durable call before accepting a new run.
     if (!params.registerRun) {
@@ -448,7 +452,12 @@ export function createTalkClientAgentConsultRunner(params: {
     }
     return { text: "" };
   };
-  const runOwnedArgs = async (args: unknown, signal?: AbortSignal, ready?: () => Promise<void>) => {
+  const runOwnedArgs = async (
+    args: unknown,
+    signal?: AbortSignal,
+    ready?: () => Promise<void>,
+    assertCurrent?: () => void,
+  ) => {
     if (promptOwner) {
       throw new Error("A Talk consult is already active");
     }
@@ -465,7 +474,7 @@ export function createTalkClientAgentConsultRunner(params: {
     promptOwner = owner;
     signal?.addEventListener("abort", revokeRegistrationOnAbort, { once: true });
     try {
-      return await runArgs(args, signal, owner, ready);
+      return await runArgs(args, signal, owner, ready, assertCurrent);
     } catch (error) {
       resolveRegistration(undefined);
       throw error;
