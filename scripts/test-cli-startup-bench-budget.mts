@@ -5,6 +5,10 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { z } from "zod";
 import { booleanFlag, intFlag, parseFlagArgs, stringFlag } from "./lib/arg-utils.mts";
 import { budgetFloatFlag, readBudgetEnvNumber } from "./lib/budget-number-args.mts";
+import {
+  assertCompatibleCliStartupMemoryMetrics,
+  cliStartupMemoryMetric,
+} from "./lib/cli-startup-memory-contract.mts";
 import { readJsonFile } from "./test-report-utils.mts";
 
 const CLI_STARTUP_BENCH_FIXTURE_PATH = "test/fixtures/cli-startup-bench.json";
@@ -50,7 +54,7 @@ function formatMs(value: number) {
 }
 
 function formatMb(value: number) {
-  return `${value.toFixed(1)}MB`;
+  return `${value.toFixed(1)}MiB`;
 }
 
 if (process.argv.slice(2).includes("--help")) {
@@ -210,6 +214,21 @@ const shouldRequireEveryBaselineCase = opts.preset === "all";
 const matchedBaselineCaseIds = [...baselineCases.keys()].filter((id) => currentCases.has(id));
 
 let failed = false;
+
+try {
+  cliStartupMemoryMetric(isRecord(current) ? current.primary : undefined);
+  if (!opts.skipBaseline) {
+    assertCompatibleCliStartupMemoryMetrics(
+      isRecord(baseline) ? baseline.primary : undefined,
+      isRecord(current) ? current.primary : undefined,
+    );
+  }
+} catch (error) {
+  console.error(
+    `[test-cli-startup-bench-budget] ${error instanceof Error ? error.message : String(error)}`,
+  );
+  process.exit(1);
+}
 
 if (currentCases.size === 0) {
   console.error(

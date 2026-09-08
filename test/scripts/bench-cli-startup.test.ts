@@ -1,27 +1,278 @@
 // Bench Cli Startup tests cover bench cli startup script behavior.
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { testing } from "../../scripts/bench-cli-startup.ts";
 import { forceKillVitestProcessGroup } from "../../scripts/vitest-process-group.mts";
 import { withEnv } from "../../src/test-utils/env.js";
 import { isProcessAlive, waitForDead } from "../helpers/process-wait.js";
-import { createTempDirTracker } from "../helpers/temp-dir.js";
+import { createTempDirTracker, useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+
+const repoRoot = join(__dirname, "../..");
+
+function runBenchmarkCli(args: string[]) {
+  return spawnSync(process.execPath, ["--import", "tsx", "scripts/bench-cli-startup.ts", ...args], {
+    cwd: repoRoot,
+    encoding: "utf8",
+  });
+}
 
 describe("bench-cli-startup", () => {
+  const memoryTempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+  it.each(["warning", "ca", "windows"])(
+    "attributes RSS to the runtime through the actual %s respawn plan",
+    (mode) => {
+      const tmpDir = memoryTempDirs.make("openclaw-cli-rss-respawn-");
+      const entryPath = join(tmpDir, "entry.mjs");
+      const caPath = join(tmpDir, "ca.pem");
+      writeFileSync(caPath, "");
+      writeFileSync(
+        entryPath,
+        `
+import { Worker, isMainThread } from "node:worker_threads";
+const usage = process.resourceUsage();
+const runtime = process.env.FIXTURE_RUNTIME === "1";
+process.resourceUsage = () => ({ ...usage, maxRSS: (runtime ? 32 : 64) * 1024 });
+if (isMainThread && !runtime) {
+  const { tsImport } = await import(${JSON.stringify(pathToFileURL(createRequire(import.meta.url).resolve("tsx/esm/api")).href)});
+  const { buildCliRespawnPlan, runCliRespawnPlan } = await tsImport(
+    ${JSON.stringify(resolve(repoRoot, "src/entry.respawn.ts"))}, import.meta.url);
+  const plan = buildCliRespawnPlan({
+    platform: ${JSON.stringify(mode === "windows" ? "win32" : "linux")},
+    env: { ...process.env, OPENCLAW_NO_RESPAWN: "0", NODE_EXTRA_CA_CERTS: "",
+      OPENCLAW_NODE_OPTIONS_READY: ${JSON.stringify(mode === "ca" ? "1" : "")},
+      OPENCLAW_NODE_EXTRA_CA_CERTS_READY: "" },
+    autoNodeExtraCaCerts: ${JSON.stringify(mode === "ca" ? caPath : "")}
+  });
+  if (!plan) throw new Error("fixture must exercise a real respawn");
+  plan.env.FIXTURE_RUNTIME = "1";
+  runCliRespawnPlan(plan);
+} else if (isMainThread) {
+  await new Promise((resolve, reject) => {
+    const worker = new Worker(new URL(import.meta.url));
+    worker.once("error", reject);
+    worker.once("exit", resolve);
+  });
+  console.log("runtime ready");
+}
+`,
+      );
+      const result = runBenchmarkCli([
+        "--entry",
+        entryPath,
+        "--case",
+        "health",
+        "--runs",
+        "1",
+        "--warmup",
+        "0",
+        "--json",
+      ]);
+      expect(result.status, result.stderr).toBe(0);
+      const report = JSON.parse(result.stdout);
+      const sample = report.primary.cases[0].samples[0];
+      expect(sample.maxRssMb).toBe(32);
+      expect(report.primary.memoryMetric).toBe("cli-runtime-max-rss-v1");
+      expect(sample.memory.processes).toHaveLength(2);
+      const runtime = sample.memory.processes.find(
+        (record: { role: string }) => record.role === "runtime",
+      );
+      const launcher = sample.memory.processes.find(
+        (record: { role: string }) => record.role === "launcher",
+      );
+      expect(runtime).toMatchObject({
+        pid: sample.memory.runtimePid,
+        parentPid: launcher.pid,
+        metricKind: "process-high-water-rss",
+        maxRssBytes: 32 * 1024 * 1024,
+      });
+      expect(launcher.maxRssBytes).toBe(64 * 1024 * 1024);
+    },
+  );
+
+  it("does not count RSS telemetry as first output from a silent entry", () => {
+    const tmpDir = memoryTempDirs.make("openclaw-cli-rss-silent-");
+    const entryPath = join(tmpDir, "entry.mjs");
+    writeFileSync(entryPath, "");
+    const result = runBenchmarkCli([
+      "--entry",
+      entryPath,
+      "--case",
+      "version",
+      "--runs",
+      "1",
+      "--warmup",
+      "0",
+      "--json",
+    ]);
+    expect(result.status, result.stderr).toBe(0);
+    const sample = JSON.parse(result.stdout).primary.cases[0].samples[0];
+    expect(sample.maxRssMb).toBeGreaterThan(0);
+    expect(sample.firstOutputMs).toBeNull();
+  });
+
+  it("selects the same runtime when its launcher exits first", () => {
+    const tmpDir = memoryTempDirs.make("openclaw-cli-rss-parent-first-");
+    const entryPath = join(tmpDir, "entry.mjs");
+    writeFileSync(
+      entryPath,
+      `
+import { fork } from "node:child_process";
+const runtime = process.env.FIXTURE_RUNTIME === "1";
+const usage = process.resourceUsage();
+process.resourceUsage = () => ({ ...usage, maxRSS: (runtime ? 32 : 64) * 1024 });
+if (runtime) {
+  process.once("disconnect", () => console.log("runtime ready"));
+  process.send("ready");
+} else {
+  const child = fork(process.argv[1], process.argv.slice(2), {
+    env: { ...process.env, FIXTURE_RUNTIME: "1" },
+    stdio: ["ignore", "inherit", "inherit", "ipc"]
+  });
+  child.once("message", () => process.exit(0));
+}
+`,
+    );
+    const result = runBenchmarkCli([
+      "--entry",
+      entryPath,
+      "--case",
+      "health",
+      "--runs",
+      "1",
+      "--warmup",
+      "0",
+      "--json",
+    ]);
+    expect(result.status, result.stderr).toBe(0);
+    const sample = JSON.parse(result.stdout).primary.cases[0].samples[0];
+    expect(sample.maxRssMb).toBe(32);
+    expect(
+      sample.memory.processes.map((record: { role: string }) => record.role).toSorted(),
+    ).toEqual(["launcher", "runtime"]);
+  });
+
+  it.each(["missing", "ambiguous", "auxiliary", "unrecognized"])(
+    "handles %s descendant identity without falling back to the launcher",
+    (mode) => {
+      const tmpDir = memoryTempDirs.make("openclaw-cli-rss-identity-");
+      const entryPath = join(tmpDir, "entry.mjs");
+      const otherEntryPath = join(tmpDir, "other.mjs");
+      writeFileSync(otherEntryPath, 'console.log("other entry");');
+      writeFileSync(
+        entryPath,
+        `
+import { fork } from "node:child_process";
+const mode = ${JSON.stringify(mode)};
+if (process.env.FIXTURE_RUNTIME === "1") {
+  if (mode === "missing") process.kill(process.pid, "SIGKILL");
+  else console.log("child ready");
+} else {
+  await Promise.all(Array.from({ length: mode === "ambiguous" ? 2 : 1 }, () =>
+    new Promise((resolve, reject) => {
+      const args = [...process.argv.slice(2), ...(mode === "auxiliary" ? ["aux"] : [])];
+      const child = fork(mode === "unrecognized" ? ${JSON.stringify(otherEntryPath)} : process.argv[1], args, {
+        env: { ...process.env, FIXTURE_RUNTIME: "1" },
+        stdio: ["ignore", "inherit", "inherit", "ipc"]
+      });
+      child.once("error", reject);
+      child.once("exit", resolve);
+    })
+  ));
+  console.log("parent ready");
+}
+`,
+      );
+      const result = runBenchmarkCli([
+        "--entry",
+        entryPath,
+        "--case",
+        "health",
+        "--runs",
+        "1",
+        "--warmup",
+        "0",
+        "--json",
+      ]);
+      expect(result.status, result.stderr).toBe(mode === "auxiliary" ? 0 : 1);
+      const sample = JSON.parse(result.stdout).primary.cases[0].samples[0];
+      if (mode === "auxiliary") {
+        expect(sample.maxRssMb).toBeGreaterThan(0);
+        expect(
+          sample.memory.processes.map((record: { role: string }) => record.role).toSorted(),
+        ).toEqual(["auxiliary", "runtime"]);
+      } else {
+        expect(sample.maxRssMb).toBeNull();
+        expect(sample.memory.runtimePid).toBeNull();
+        expect(result.stderr).toContain(
+          mode === "missing"
+            ? "missing process high-water RSS"
+            : mode === "unrecognized"
+              ? "unrecognized CLI entry"
+              : "ambiguous CLI runtime identity",
+        );
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "follows an aliased launcher's direct dist handoff",
+    () => {
+      const tmpDir = memoryTempDirs.make("openclaw-cli-rss-alias-");
+      const launcher = join(tmpDir, "openclaw.mjs");
+      const alias = join(tmpDir, "cli");
+      const dist = join(tmpDir, "dist");
+      mkdirSync(dist);
+      const entry = join(dist, "entry.mjs");
+      writeFileSync(
+        launcher,
+        `
+import { fork } from "node:child_process";
+const usage = process.resourceUsage();
+process.resourceUsage = () => ({ ...usage, maxRSS: 64 * 1024 });
+const child = fork(${JSON.stringify(entry)}, process.argv.slice(2), {
+  stdio: ["ignore", "inherit", "inherit", "ipc"]
+});
+child.once("exit", (code) => process.exit(code));
+`,
+      );
+      writeFileSync(
+        entry,
+        `
+const usage = process.resourceUsage();
+process.resourceUsage = () => ({ ...usage, maxRSS: 32 * 1024 });
+console.log("runtime ready");
+`,
+      );
+      symlinkSync(launcher, alias);
+      const result = runBenchmarkCli([
+        "--entry",
+        alias,
+        "--case",
+        "health",
+        "--runs",
+        "1",
+        "--warmup",
+        "0",
+        "--json",
+      ]);
+      expect(result.status, result.stderr).toBe(0);
+      const sample = JSON.parse(result.stdout).primary.cases[0].samples[0];
+      expect(sample.maxRssMb).toBe(32);
+      expect(
+        sample.memory.processes.map((record: { role: string }) => record.role).toSorted(),
+      ).toEqual(["launcher", "runtime"]);
+    },
+  );
+
   it("rejects unknown CLI options before running benchmarks", () => {
     expect(() => testing.validateCliArgs(["--wat"])).toThrow("Unknown argument: --wat");
 
-    const result = spawnSync(
-      process.execPath,
-      ["--import", "tsx", "scripts/bench-cli-startup.ts", "--wat", "--help"],
-      {
-        cwd: join(__dirname, "../.."),
-        encoding: "utf8",
-      },
-    );
+    const result = runBenchmarkCli(["--wat", "--help"]);
 
     expect(result.status).toBe(1);
     expect(result.stdout).toBe("");
@@ -36,14 +287,7 @@ describe("bench-cli-startup", () => {
   });
 
   it("rejects duplicate benchmark cases before running benchmarks", () => {
-    const result = spawnSync(
-      process.execPath,
-      ["--import", "tsx", "scripts/bench-cli-startup.ts", "--case", "version", "--case", "version"],
-      {
-        cwd: join(__dirname, "../.."),
-        encoding: "utf8",
-      },
-    );
+    const result = runBenchmarkCli(["--case", "version", "--case", "version"]);
 
     expect(result.status).toBe(1);
     expect(result.stdout).toBe("");
@@ -139,7 +383,7 @@ try {
             "--json",
           ],
           {
-            cwd: join(__dirname, "../.."),
+            cwd: repoRoot,
             encoding: "utf8",
             env: {
               ...process.env,
@@ -221,10 +465,7 @@ try {
       writeFileSync(baselinePath, JSON.stringify(makeReport(100, 50)), "utf8");
       writeFileSync(candidatePath, JSON.stringify(makeReport(125, 60)), "utf8");
 
-      const { comparison } = testing.readBenchmarkComparison(baselinePath, candidatePath);
-      testing.writeJsonOutput(outputPath, comparison);
-      expect(existsSync(outputPath)).toBe(true);
-      expect(JSON.parse(readFileSync(outputPath, "utf8"))).toEqual({
+      const comparison = {
         baseline: baselinePath,
         candidate: candidatePath,
         deltas: [
@@ -237,7 +478,53 @@ try {
             maxRssAvgDeltaPct: 20,
           },
         ],
-      });
+      };
+      const result = runBenchmarkCli([
+        "--compare-baseline",
+        baselinePath,
+        "--compare-candidate",
+        candidatePath,
+        "--output",
+        outputPath,
+        "--json",
+      ]);
+
+      expect(result.status).toBe(0);
+      expect(result.stderr).toBe("");
+      expect(JSON.parse(result.stdout)).toEqual(comparison);
+      expect(JSON.parse(readFileSync(outputPath, "utf8"))).toEqual(comparison);
+
+      const attributed = {
+        primary: { ...makeReport(125, 60).primary, memoryMetric: "cli-runtime-max-rss-v1" },
+      };
+      writeFileSync(candidatePath, JSON.stringify(attributed), "utf8");
+      const incompatible = runBenchmarkCli([
+        "--compare-baseline",
+        baselinePath,
+        "--compare-candidate",
+        candidatePath,
+        "--json",
+      ]);
+      expect(incompatible.status).toBe(1);
+      expect(incompatible.stdout).toBe("");
+      expect(incompatible.stderr).toContain("Incompatible CLI RSS metrics");
+
+      writeFileSync(
+        baselinePath,
+        JSON.stringify({
+          primary: { ...makeReport(100, 50).primary, memoryMetric: "cli-runtime-max-rss-v1" },
+        }),
+        "utf8",
+      );
+      const compatible = runBenchmarkCli([
+        "--compare-baseline",
+        baselinePath,
+        "--compare-candidate",
+        candidatePath,
+        "--json",
+      ]);
+      expect(compatible.status, compatible.stderr).toBe(0);
+      expect(JSON.parse(compatible.stdout)).toEqual(comparison);
     } finally {
       tempDirs.cleanup();
     }

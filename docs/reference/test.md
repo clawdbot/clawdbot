@@ -937,7 +937,13 @@ Presets:
 - `real`: `health`, `status`, `status --json`, `sessions`, `sessions --json`, `tasks --json`, `tasks list --json`, `tasks audit --json`, `agents list --json`, `gateway status`, `gateway status --json`, `gateway health --json`, `config get gateway.port`
 - `all`: both presets combined
 
-Output includes `sampleCount`, avg, p50, p95, min/max, exit-code/signal distribution, and max RSS per command. `--cpu-prof-dir` / `--heap-prof-dir` write V8 profiles per run.
+Output includes `sampleCount`, avg, p50, p95, min/max, exit-code/signal distribution, and runtime-process high-water RSS per command. `primary.memoryMetric` identifies `cli-runtime-max-rss-v1`; the existing `maxRssMb` fields use MiB. Each sample's `memory` records PID, parent PID, role, and high-water RSS in bytes. The runtime is the terminal process in a unique matching CLI invocation chain; launcher and auxiliary observations are not added to it. This is not simultaneous process-tree memory.
+
+High-water RSS is observed when the preload's `exit` listener runs. Allocations in later application exit handlers are outside this observation; this is not a full-lifetime OS measurement.
+
+The benchmark preload records observations in temporary files, separate from stdout/stderr and first-output timing. Missing or ambiguous runtime identity fails the sample. This instrumented launch is separate from the no-preload, no-respawn `scripts/check-cli-startup-memory.mjs` diagnostic. `--cpu-prof-dir` / `--heap-prof-dir` write V8 profiles per run.
+
+Reports without `memoryMetric` have legacy last-marker attribution. Comparison, enforced fixture budgets, and source-summary memory trends reject mixed legacy/runtime metrics rather than silently comparing different processes. Historical fixtures cannot be relabeled; any replacement baseline needs separate validation and approval.
 
 Saved output: `pnpm test:startup:bench:smoke` writes `.artifacts/cli-startup-bench-smoke.json`; `pnpm test:startup:bench:save` writes `.artifacts/cli-startup-bench-all.json` (`runs=5 warmup=1`). Checked-in fixture: `test/fixtures/cli-startup-bench.json`, refreshed by `pnpm test:startup:bench:update`, compared by `pnpm test:startup:bench:check`.
 

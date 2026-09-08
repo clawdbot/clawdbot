@@ -115,6 +115,24 @@ function writeSourceFixture(sourceDir: string) {
   });
 }
 
+it("labels CLI RSS semantics and rejects mixed-metric memory trends", () => {
+  const sourceDir = mkTmpRoot();
+  const baselineDir = mkTmpRoot();
+  writeSourceFixture(sourceDir);
+  writeSourceFixture(baselineDir);
+  expect(buildMarkdown(sourceDir, baselineDir)).toContain("RSS metric: legacy-last-marker");
+  const cliPath = path.join(sourceDir, "cli-startup.json");
+  const cli = JSON.parse(fs.readFileSync(cliPath, "utf8"));
+  cli.primary.memoryMetric = "cli-runtime-max-rss-v1";
+  writeJson(cliPath, cli);
+  expect(() => buildMarkdown(sourceDir, baselineDir)).toThrow("Incompatible CLI RSS metrics");
+  writeJson(path.join(baselineDir, "cli-startup.json"), cli);
+  expect(buildMarkdown(sourceDir, baselineDir)).toContain("RSS metric: cli-runtime-max-rss-v1");
+  cli.primary.memoryMetric = "unknown-metric";
+  writeJson(cliPath, cli);
+  expect(() => buildMarkdown(sourceDir, baselineDir)).toThrow("Unknown CLI RSS metric");
+});
+
 function writeSqliteV2Fixture(
   sourceDir: string,
   queries: Array<Record<string, unknown>> = [

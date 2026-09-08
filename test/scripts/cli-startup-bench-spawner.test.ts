@@ -3,7 +3,8 @@ import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const SCRIPT_PATHS = [
   "scripts/test-cli-startup-bench-budget.mts",
@@ -11,6 +12,66 @@ const SCRIPT_PATHS = [
 ];
 
 describe("CLI startup benchmark script spawners", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+  it("rejects incompatible reused RSS metrics and still enforces compatible RSS budgets", () => {
+    const tmpDir = tempDirs.make("openclaw-bench-rss-contract-");
+    const baselinePath = path.join(tmpDir, "baseline.json");
+    const reportPath = path.join(tmpDir, "current.json");
+    const makeReport = (rss: number, memoryMetric?: string) => ({
+      primary: {
+        memoryMetric,
+        cases: [
+          {
+            id: "version",
+            name: "--version",
+            samples: [{ exitCode: 0, signal: null, maxRssMb: rss }],
+            summary: { durationMs: { avg: 10 }, maxRssMb: { avg: rss } },
+          },
+        ],
+      },
+    });
+    const run = () =>
+      spawnSync(
+        process.execPath,
+        [
+          "--import",
+          "tsx",
+          "scripts/test-cli-startup-bench-budget.mts",
+          "--baseline",
+          baselinePath,
+          "--report",
+          reportPath,
+          "--preset",
+          "startup",
+        ],
+        {
+          cwd: process.cwd(),
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            OPENCLAW_STARTUP_BENCH_ENFORCE_NONCANONICAL_ARCH: "1",
+            OPENCLAW_STARTUP_BENCH_MAX_RSS_REGRESSION_PCT: "20",
+          },
+        },
+      );
+    fs.writeFileSync(baselinePath, JSON.stringify(makeReport(10)));
+    fs.writeFileSync(reportPath, JSON.stringify(makeReport(10, "cli-runtime-max-rss-v1")));
+    const incompatible = run();
+    expect(incompatible.status).toBe(1);
+    expect(incompatible.stderr).toContain("Incompatible CLI RSS metrics");
+
+    fs.writeFileSync(baselinePath, JSON.stringify(makeReport(10, "cli-runtime-max-rss-v1")));
+    expect(run().status).toBe(0);
+    fs.writeFileSync(reportPath, JSON.stringify(makeReport(13, "cli-runtime-max-rss-v1")));
+    const regression = run();
+    expect(regression.status).toBe(1);
+    expect(regression.stderr).toContain("avg RSS 13.0MiB exceeded 12.0MiB");
+
+    fs.writeFileSync(reportPath, JSON.stringify(makeReport(10, "unknown-metric")));
+    expect(run().stderr).toContain("Unknown CLI RSS metric");
+  });
+
   it("use the active Node executable for benchmark child processes", () => {
     for (const scriptPath of SCRIPT_PATHS) {
       const source = fs.readFileSync(path.resolve(process.cwd(), scriptPath), "utf8");
