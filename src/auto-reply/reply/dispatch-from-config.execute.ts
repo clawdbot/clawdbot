@@ -55,6 +55,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
     normalizeReplyMediaPayload,
     notifySessionMetadataChanges,
     onToolResultFromReplyOptions,
+    onReasoningStream,
     params,
     reasoningPayloadsEnabled,
     replyConfig,
@@ -136,7 +137,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                         }
                       },
                     }),
-                onReasoningStream: wrapProgressCallback(params.replyOptions?.onReasoningStream),
+                onReasoningStream,
                 streamReasoningInNonStreamModes:
                   params.replyOptions?.streamReasoningInNonStreamModes,
                 onReasoningEnd: wrapProgressCallback(params.replyOptions?.onReasoningEnd),

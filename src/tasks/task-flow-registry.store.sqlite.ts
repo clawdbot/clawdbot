@@ -9,7 +9,6 @@ import {
 import {
   bindExecutionOwnerLifecycleMetadata,
   deleteExecutionOwnerLifecycleMetadata,
-  pruneOrphanedExecutionOwnerLifecycleMetadata,
 } from "../audit/execution-owner-lifecycle-binding-store.js";
 import {
   executeSqliteQuerySync,
@@ -150,24 +149,6 @@ function getFlowRegistryKysely(db: DatabaseSync) {
   return getNodeSqliteKysely<FlowRegistryStoreDatabase>(db);
 }
 
-function pruneFlowsNotInSnapshot(params: { db: DatabaseSync; ids: readonly string[] }) {
-  const tempTableName = "openclaw_live_flow_ids";
-  params.db.exec(`CREATE TEMP TABLE IF NOT EXISTS ${tempTableName} (id TEXT PRIMARY KEY)`);
-  params.db.exec(`DELETE FROM ${tempTableName}`);
-  const insert = params.db.prepare(`INSERT OR IGNORE INTO ${tempTableName} (id) VALUES (?)`);
-  for (const id of params.ids) {
-    insert.run(id);
-  }
-  params.db.exec(`
-    DELETE FROM flow_runs
-    WHERE NOT EXISTS (
-      SELECT 1 FROM ${tempTableName}
-      WHERE ${tempTableName}.id = flow_runs.flow_id
-    )
-  `);
-  params.db.exec(`DELETE FROM ${tempTableName}`);
-}
-
 function readTaskFlowRegistrySnapshot(db: DatabaseSync): TaskFlowRegistryStoreSnapshot {
   const query = getFlowRegistryKysely(db)
     .selectFrom("flow_runs")
@@ -274,23 +255,6 @@ export function loadTaskFlowRegistryStateFromSqliteReadOnly(): TaskFlowRegistryS
       flows: new Map(),
     }
   );
-}
-
-export function saveTaskFlowRegistryStateToSqlite(snapshot: TaskFlowRegistryStoreSnapshot) {
-  withWriteTransaction(({ db }) => {
-    const kysely = getFlowRegistryKysely(db);
-    const flowIds = [...snapshot.flows.keys()];
-    if (flowIds.length === 0) {
-      executeSqliteQuerySync(db, kysely.deleteFrom("flow_runs"));
-      pruneOrphanedExecutionOwnerLifecycleMetadata(db, "flow");
-      return;
-    }
-    pruneFlowsNotInSnapshot({ db, ids: flowIds });
-    for (const flow of snapshot.flows.values()) {
-      upsertTaskFlowRowInDatabase(db, bindTaskFlowRecord(flow));
-    }
-    pruneOrphanedExecutionOwnerLifecycleMetadata(db, "flow");
-  });
 }
 
 export function upsertTaskFlowRegistryRecordToSqlite(flow: TaskFlowRecord) {

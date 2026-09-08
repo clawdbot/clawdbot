@@ -11,6 +11,7 @@ import { ensureProfileForEmail, setUserProfileRole } from "../state/user-profile
 import { configureTaskRegistryRuntime } from "../tasks/task-registry.store.js";
 import type { TaskRecord } from "../tasks/task-registry.types.js";
 import { resetTaskRegistryForTests } from "../tasks/task-runtime.test-helpers.js";
+import { createInMemoryTaskRegistryStore } from "../test-utils/task-registry-store.js";
 import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
 import {
   connectReq,
@@ -100,8 +101,8 @@ test("expires task cursors when a profile merge changes the same caller's sessio
       resetTaskRegistryForTests({ persist: false });
       configureTaskRegistryRuntime({
         store: {
+          ...createInMemoryTaskRegistryStore(),
           loadSnapshot: () => ({ tasks, deliveryStates: new Map() }),
-          saveSnapshot: () => {},
         },
       });
       const stateDir = process.env.OPENCLAW_STATE_DIR;
