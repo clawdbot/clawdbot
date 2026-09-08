@@ -618,6 +618,114 @@ describe("handleModelsCommand", () => {
     ]);
   });
 
+  it.each<{
+    agentAllow?: string[];
+    allow?: string[];
+    expected: string[];
+    fallbacks?: string[];
+    legacyAllow?: string[];
+    name: string;
+    primary?: string;
+    view?: "all";
+  }>([
+    { name: "provider wildcards", allow: ["anthropic/*"], expected: [] },
+    { name: "exact refs", allow: ["anthropic/claude-sonnet-4-6"], expected: [] },
+    {
+      name: "an allowed CLI model",
+      allow: ["claude-cli/claude-sonnet-4-6"],
+      expected: ["claude-sonnet-4-6"],
+    },
+    {
+      name: "CLI provider wildcards",
+      allow: ["claude-cli/*"],
+      expected: ["claude-sonnet-4-6"],
+    },
+    {
+      name: "a pinned deprecated CLI model",
+      allow: ["claude-cli/claude-opus-4-6"],
+      expected: ["claude-opus-4-6"],
+    },
+    {
+      name: "an excluded CLI primary",
+      allow: ["anthropic/*"],
+      primary: "claude-cli/claude-sonnet-4-6",
+      expected: [],
+    },
+    {
+      name: "an excluded CLI fallback under provider wildcards",
+      allow: ["anthropic/*"],
+      fallbacks: ["claude-cli/claude-sonnet-4-6"],
+      expected: [],
+    },
+    {
+      name: "configured CLI fallback retention under exact refs",
+      allow: ["anthropic/claude-sonnet-4-6"],
+      fallbacks: ["claude-cli/claude-sonnet-4-6"],
+      expected: ["claude-sonnet-4-6"],
+    },
+    { name: "an agent restriction", allow: [], agentAllow: ["anthropic/*"], expected: [] },
+    {
+      name: "an unrestricted agent override",
+      allow: ["anthropic/*"],
+      agentAllow: [],
+      expected: ["claude-opus-4-6", "claude-sonnet-4-6"],
+    },
+    {
+      name: "an empty explicit allowlist",
+      allow: [],
+      expected: ["claude-opus-4-6", "claude-sonnet-4-6"],
+    },
+    {
+      name: "legacy provider wildcards",
+      legacyAllow: ["anthropic/*"],
+      expected: ["claude-opus-4-6", "claude-sonnet-4-6"],
+    },
+    {
+      name: "explicit all browse",
+      allow: ["anthropic/*"],
+      view: "all",
+      expected: ["claude-opus-4-6", "claude-sonnet-4-6"],
+    },
+  ])(
+    "honors $name when listing CLI runtime models",
+    async ({ agentAllow, allow, expected, fallbacks, legacyAllow, primary, view }) => {
+      modelCatalogMocks.loadModelCatalog.mockResolvedValue([
+        { provider: "anthropic", id: "claude-sonnet-4-6", name: "Claude Sonnet" },
+        { provider: "claude-cli", id: "claude-sonnet-4-6", name: "Claude Sonnet (CLI)" },
+        {
+          provider: "claude-cli",
+          id: "claude-opus-4-6",
+          name: "Claude Opus (CLI)",
+          status: "deprecated",
+        },
+      ]);
+      modelProviderAuthMocks.authenticatedProviders = new Set(["anthropic", "claude-cli"]);
+      const config: OpenClawConfig = {
+        agents: {
+          defaults: {
+            model: {
+              primary: primary ?? "anthropic/claude-sonnet-4-6",
+              ...(fallbacks ? { fallbacks } : {}),
+            },
+            ...(allow !== undefined ? { modelPolicy: { allow } } : {}),
+            ...(legacyAllow
+              ? { models: Object.fromEntries(legacyAllow.map((ref) => [ref, {}])) }
+              : {}),
+          },
+          ...(agentAllow !== undefined
+            ? { entries: { main: { modelPolicy: { allow: agentAllow } } } }
+            : {}),
+        },
+      };
+      const originalConfig = structuredClone(config);
+
+      const data = await buildPreparedModelsProviderData(config, "main", { view });
+
+      expect([...(data.byProvider.get("claude-cli") ?? [])].toSorted()).toEqual(expected);
+      expect(config).toEqual(originalConfig);
+    },
+  );
+
   it("does not treat standalone CLI backends as canonical provider aliases", async () => {
     cliBackendsTesting.setDepsForTest({
       resolvePluginSetupRegistry: () => ({
