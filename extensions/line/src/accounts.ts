@@ -11,6 +11,11 @@ import {
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/account-resolution";
 import { tryReadSecretFileSync } from "openclaw/plugin-sdk/secret-file-runtime";
+import {
+  hasConfiguredSecretInput,
+  resolveSecretInputString,
+} from "openclaw/plugin-sdk/secret-input";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   LineAccountConfig,
   LineConfig,
@@ -46,13 +51,22 @@ function resolveLineCredential(params: {
     accountId === DEFAULT_ACCOUNT_ID ? [accountConfig, baseConfig] : [accountConfig];
 
   for (const [index, config] of candidates.entries()) {
-    const credential = config?.[credentialKey]?.trim();
-    if (credential) {
-      return { value: credential, source: "config", status: "available" };
+    const scope = index === 0 ? `accounts.${accountId}.` : "";
+    const credential = resolveSecretInputString({
+      value: config?.[credentialKey],
+      path: `channels.line.${scope}${credentialKey}`,
+      mode: "inspect",
+    });
+    if (credential.status === "available") {
+      return { value: credential.value, source: "config", status: "available" };
+    }
+    // A configured reference owns this credential even while the runtime has not resolved it:
+    // falling through would authenticate with a different credential than the operator named.
+    if (credential.status === "configured_unavailable") {
+      return { value: "", source: "config", status: "configured_unavailable" };
     }
     const file = config?.[fileKey];
     if (file?.trim()) {
-      const scope = index === 0 ? `accounts.${accountId}.` : "";
       const result = tryReadSecretFileSync(
         file,
         "LINE credential file",
@@ -138,16 +152,28 @@ export function resolveLineAccount(params: {
   };
 }
 
+/**
+ * Whether the channel root admits a default account. Only the access token does that; a
+ * root-level signing secret alone never adds one, so it would have no account to serve.
+ */
+export function channelRootAdmitsDefaultLineAccount(params: {
+  config: { channelAccessToken?: unknown; tokenFile?: unknown } | undefined;
+  env?: NodeJS.ProcessEnv;
+}): boolean {
+  const env = params.env ?? process.env;
+  return (
+    hasConfiguredSecretInput(params.config?.channelAccessToken) ||
+    Boolean(normalizeOptionalString(params.config?.tokenFile)) ||
+    Boolean(normalizeOptionalString(env.LINE_CHANNEL_ACCESS_TOKEN))
+  );
+}
+
 export function listLineAccountIds(cfg: OpenClawConfig): string[] {
   const lineConfig = cfg.channels?.line as LineConfig | undefined;
   const accounts = lineConfig?.accounts;
   const ids = new Set<string>();
 
-  if (
-    lineConfig?.channelAccessToken?.trim() ||
-    lineConfig?.tokenFile ||
-    process.env.LINE_CHANNEL_ACCESS_TOKEN?.trim()
-  ) {
+  if (channelRootAdmitsDefaultLineAccount({ config: lineConfig })) {
     ids.add(DEFAULT_ACCOUNT_ID);
   }
 

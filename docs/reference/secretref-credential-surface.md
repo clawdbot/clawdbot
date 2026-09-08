@@ -55,6 +55,10 @@ Source generation fails if a present channel secret-contract artifact cannot loa
 - `channels.irc.accounts.*.password`
 - `channels.irc.nickserv.password`
 - `channels.irc.password`
+- `channels.line.accounts.*.channelAccessToken`
+- `channels.line.accounts.*.channelSecret`
+- `channels.line.channelAccessToken`
+- `channels.line.channelSecret`
 - `channels.matrix.accessToken`
 - `channels.matrix.accounts.*.accessToken`
 - `channels.matrix.accounts.*.password`

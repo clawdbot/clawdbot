@@ -4,6 +4,7 @@ import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
 import { hasLineCredentials } from "./account-helpers.js";
 import { lineConfigAdapter } from "./config-adapter.js";
 import { LineChannelConfigSchema } from "./config-schema.js";
+import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
 import type { ResolvedLineAccount } from "./types.js";
 
 const lineChannelMeta = {
@@ -47,7 +48,11 @@ export const lineChannelPluginCommon = {
         },
       }),
   },
+  secrets: {
+    secretTargetRegistryEntries,
+    collectRuntimeConfigAssignments,
+  },
 } satisfies Pick<
   ChannelPlugin<ResolvedLineAccount>,
-  "meta" | "capabilities" | "reload" | "configSchema" | "config"
+  "meta" | "capabilities" | "reload" | "configSchema" | "config" | "secrets"
 >;
