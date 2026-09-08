@@ -287,15 +287,10 @@ export class MultiSelect extends OpenClawLightDomElement {
     }
   };
 
-  // Leaving the field keeps a typed custom value rather than dropping it, the
-  // same contract the free-text chip input had.
   private readonly handleFocusOut = (event: FocusEvent) => {
     const next = event.relatedTarget;
     if (next instanceof Node && this.contains(next)) {
       return;
-    }
-    if (this.allowCustom) {
-      this.commitTypedQuery();
     }
     this.closeMenu();
   };
