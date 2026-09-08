@@ -17,6 +17,9 @@ Both catalogs use the same OpenCode API key. OpenClaw keeps the runtime provider
 split so upstream per-model routing stays correct, but onboarding and docs treat them
 as one OpenCode setup.
 
+OpenClaw sends the stable conversation identity required by OpenCode on requests to
+`https://opencode.ai`. Direct runtime callers should provide `sessionId` in stream options.
+
 ## Getting started
 
 <Tabs>

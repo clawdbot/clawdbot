@@ -68,6 +68,7 @@ import {
 import { resolveCacheRetention } from "./cache-retention.js";
 import { resolveCloudflareBaseUrl } from "./cloudflare.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.js";
+import { resolveOpencodeSessionHeaders } from "./session-affinity.js";
 import { adjustMaxTokensForThinking, buildBaseOptions } from "./simple-options.js";
 import { transformMessages } from "./transform-messages.js";
 
@@ -505,7 +506,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
           apiKey,
           options?.interleavedThinking ?? true,
           shouldUseFineGrainedToolStreamingBeta(model, context),
-          options?.headers,
+          resolveOpencodeSessionHeaders(model, options),
           copilotDynamicHeaders,
           cacheSessionId,
         );
