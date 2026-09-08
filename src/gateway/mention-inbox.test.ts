@@ -671,7 +671,6 @@ describe("human mention directory", () => {
   });
 });
 
-
 describe("mentions.dismiss padded ids", () => {
   it("dismisses a live mention when mentions.dismiss receives a padded id", async () => {
     await withInbox(async (f) => {
