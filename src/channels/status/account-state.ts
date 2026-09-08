@@ -25,6 +25,12 @@ type ChannelAccountState =
       linked: boolean | undefined;
       reason: string;
       failure: string | null;
+      // The account can be disabled by config (e.g. not in plugins.allow)
+      // while the plugin is still actually running via auto-load. Carrying
+      // the recorded runtime liveness here lets the projection below report
+      // it instead of always clobbering it with `running: false`.
+      running: boolean;
+      connected?: boolean;
     }
   | { kind: "unconfigured"; reason: string; failure: string | null }
   | { kind: "unlinked"; reason: string; failure: string | null }
@@ -99,12 +105,20 @@ function assertNeverState(state: never): never {
 export function resolveChannelAccountState(input: ChannelAccountStateInput): ChannelAccountState {
   const failure = input.runtime?.lastError ?? null;
   if (!input.enabled) {
+    const running = input.runtime?.running === true;
     return {
       kind: "disabled",
       configured: input.configured,
       linked: input.linked,
       reason: input.disabledReason ?? "disabled",
       failure,
+      running,
+      // Same tri-state rule as the `running` branch below: only report
+      // connectivity when the account is actually live, and leave it absent
+      // rather than manufacturing a `false` for socketless transports.
+      ...(running && typeof input.runtime?.connected === "boolean"
+        ? { connected: input.runtime.connected }
+        : {}),
     };
   }
   if (!input.configured) {
@@ -157,7 +171,8 @@ function projectChannelAccountState(state: ChannelAccountState): {
       return {
         configured: state.configured,
         ...(typeof state.linked === "boolean" ? { linked: state.linked } : {}),
-        running: false,
+        running: state.running,
+      ...(typeof state.connected === "boolean" ? { connected: state.connected } : {}),
         stateReason: state.reason,
         lastError: state.failure,
       };
