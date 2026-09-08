@@ -369,16 +369,9 @@ export async function buildReplyPayloads(params: {
       // Aggregate coverage suppresses plain text split across streamed blocks; rich content needs
       // exact evidence. Partial coverage cannot safely reconstruct a formatted remainder, so
       // preserve the complete final rather than silently truncate it.
-      const hasRichContent = hasOutboundReplyContent(
-        { ...payload, text: undefined, mediaUrl: undefined, mediaUrls: undefined },
-        { trimText: true },
-      );
-      const wasSent = hasRichContent
-        ? params.blockReplyPipeline?.hasSentExactPayload?.(payload)
-        : params.blockReplyPipeline?.hasSentPayload(payload);
-      if (wasSent) {
-        return null;
-      }
+      // Queue admission must not suppress final; canonical delivery receipt is checked
+      // via wasReplyDeliveredAsBlock in dispatch. Preserve final here even if block was
+      // queued (see #135652).
       return payload;
     }
     if (!reply.trimmedText) {
@@ -390,10 +383,9 @@ export async function buildReplyPayloads(params: {
       mediaUrls: undefined,
       audioAsVoice: undefined,
     });
-    const textWasSent = params.blockReplyPipeline?.hasSentPayload(textOnlyPayload)
-      ? true
-      : hasDirectlySentText(textOnlyPayload);
-    if (!textWasSent) {
+    // Text suppression must use delivery receipt, not queue admission.
+    // Preserve text here; wasReplyDeliveredAsBlock handles deduplication.
+    if (!hasDirectlySentText(textOnlyPayload)) {
       return payload;
     }
     return copyReplyPayloadMetadata(payload, {
@@ -413,9 +405,8 @@ export async function buildReplyPayloads(params: {
     ? dedupedPayloads.flatMap((payload) => preserveUnsentMediaAfterBlockSend(payload) ?? [])
     : params.blockStreamingEnabled
       ? dedupedPayloads.flatMap((payload) =>
-          params.blockReplyPipeline?.hasSentPayload(payload) || isDirectlySentBlockPayload(payload)
-            ? []
-            : (preserveDirectlyUnsentPayload(payload) ?? []),
+          // Queue admission must not suppress final; rely on delivery receipt.
+          isDirectlySentBlockPayload(payload) ? [] : (preserveDirectlyUnsentPayload(payload) ?? []),
         )
       : params.directlySentBlockKeys?.size
         ? dedupedPayloads.flatMap((payload) =>
@@ -426,9 +417,8 @@ export async function buildReplyPayloads(params: {
         : dedupedPayloads;
   const blockSentMediaUrls = await normalizeSentMediaUrlsForDedupe({
     sentMediaUrls: [
-      ...(params.blockStreamingEnabled
-        ? (params.blockReplyPipeline?.getSentMediaUrls() ?? [])
-        : []),
+      // Block pipeline media is based on queue admission; final media filtering must use
+      // delivery receipt via wasReplyDeliveredAsBlock, so don't filter here.
       ...(params.directlySentBlockPayloads ?? []).flatMap(
         (payload) => resolveSendableOutboundReplyParts(payload).mediaUrls,
       ),

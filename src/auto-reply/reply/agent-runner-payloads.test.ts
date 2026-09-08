@@ -1050,8 +1050,9 @@ describe("buildReplyPayloads media filter integration", () => {
       hasBuffered: () => false,
       getSentMediaUrls: () => [],
     };
-    // The final text-only payload matches what the pipeline already sent,
-    // so it should be dropped.
+    // Queue admission must not suppress final; delivery receipt is checked via
+    // wasReplyDeliveredAsBlock in dispatch. Preserve final here even though block
+    // was queued (see #135652).
     const { replyPayloads } = await buildTestReplyPayloads({
       blockStreamingEnabled: true,
       blockReplyPipeline: pipeline,
@@ -1059,7 +1060,7 @@ describe("buildReplyPayloads media filter integration", () => {
       payloads: [{ text: "response", replyToId: "post-123" }],
     });
 
-    expect(replyPayloads).toHaveLength(0);
+    expect(replyPayloads).toHaveLength(1);
   });
 
   it("drops a text-only final with an empty envelope assembled from multiple streamed blocks", async () => {
@@ -1075,13 +1076,15 @@ describe("buildReplyPayloads media filter integration", () => {
       getSentMediaUrls: () => [],
     };
 
+    // Preserve final at build time even when block was queued; deduplication
+    // via delivery receipt happens in dispatch (see #135652).
     const { replyPayloads } = await buildTestReplyPayloads({
       blockStreamingEnabled: true,
       blockReplyPipeline: pipeline,
       payloads: [{ text: "first block second block", channelData: {} }],
     });
 
-    expect(replyPayloads).toHaveLength(0);
+    expect(replyPayloads).toHaveLength(1);
   });
 
   it("preserves final rich content when only its text was streamed", async () => {
@@ -1151,13 +1154,14 @@ describe("buildReplyPayloads media filter integration", () => {
       getSentMediaUrls: () => ["/tmp/generated.png"],
     };
 
+    // Queue admission must not filter final media; preserve and rely on delivery receipt.
     const { replyPayloads } = await buildTestReplyPayloads({
       blockStreamingEnabled: true,
       blockReplyPipeline: pipeline,
       payloads: [{ text: "response", mediaUrl: "/tmp/generated.png" }],
     });
 
-    expect(replyPayloads).toHaveLength(0);
+    expect(replyPayloads).toHaveLength(1);
   });
 
   it("drops final caption and media already sent as one coalesced block payload", async () => {
@@ -1176,13 +1180,14 @@ describe("buildReplyPayloads media filter integration", () => {
     pipeline.enqueue({ mediaUrls: ["file:///photo.png"] });
     await pipeline.flush({ force: true });
 
+    // Final is preserved at build time; deduplication via delivery receipt happens in dispatch.
     const { replyPayloads } = await buildTestReplyPayloads({
       blockStreamingEnabled: true,
       blockReplyPipeline: pipeline,
       payloads: [{ text: "Preview below", mediaUrls: ["file:///photo.png"] }],
     });
 
-    expect(replyPayloads).toHaveLength(0);
+    expect(replyPayloads).toHaveLength(1);
   });
 
   it("preserves post-stream error payloads when block pipeline streamed successfully", async () => {
