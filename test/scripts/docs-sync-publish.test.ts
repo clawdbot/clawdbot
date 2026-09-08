@@ -79,6 +79,30 @@ function collectPages(entry: unknown, pages: string[] = []): string[] {
   return pages;
 }
 
+function findNestedGroup(pages: unknown, groupName: string) {
+  if (!Array.isArray(pages)) {
+    return undefined;
+  }
+  return pages.find((entry) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      return false;
+    }
+    return "group" in entry && entry.group === groupName;
+  });
+}
+
+function findNestedGroupByPage(pages: unknown, page: string) {
+  if (!Array.isArray(pages)) {
+    return undefined;
+  }
+  return pages.find((entry) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      return false;
+    }
+    return "pages" in entry && collectPages(entry.pages).includes(page);
+  });
+}
+
 describe("docs-sync-publish", () => {
   it("executes the copied MDX checker and shared anchor runtime closures", () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-docs-sync-runtime-"));
@@ -348,10 +372,12 @@ fs.writeFileSync('package-lock.json', JSON.stringify(lock));
       (entry) => entry.language === "zh-Hans",
     );
     const german = config.navigation.languages.find((entry) => entry.language === "de");
+    const turkish = config.navigation.languages.find((entry) => entry.language === "tr");
 
     expect(english).toBeDefined();
     expect(simplifiedChinese).toBeDefined();
     expect(german).toBeDefined();
+    expect(turkish).toBeDefined();
     expect(english!.tabs.slice(-4).map((tab) => tab.tab)).toEqual([
       "Gateway & Ops",
       "Reference",
@@ -431,9 +457,65 @@ fs.writeFileSync('package-lock.json', JSON.stringify(lock));
     );
     expect(new Set(collectPages(simplifiedChineseReleaseTab))).toHaveLength(releaseRoutes.length);
 
+    const simplifiedChineseGatewayTab = simplifiedChinese!.tabs.find(
+      (tab) => tab.tab === "网关与运维",
+    );
+    const simplifiedChineseGateway = simplifiedChineseGatewayTab?.groups?.find(
+      (group) => group.group === "网关",
+    );
+    const ambiguousChineseGroups = [
+      ["zh-CN/gateway/configuration", "Configuration"],
+      ["zh-CN/gateway/authentication", "Authentication and secrets"],
+      ["zh-CN/gateway/health", "Health and diagnostics"],
+      ["zh-CN/gateway/gateway-lock", "Scaling and operations"],
+    ] as const;
+    for (const [page, expectedGroup] of ambiguousChineseGroups) {
+      expect(findNestedGroupByPage(simplifiedChineseGateway?.pages, page)).toEqual(
+        expect.objectContaining({ group: expectedGroup }),
+      );
+    }
+
     expect(collectPages(german)).toHaveLength(collectPages(englishWithoutClawHub).length);
     expect(german!.tabs[0]?.tab).toBe("Loslegen");
     expect(german!.tabs[0]?.groups?.[0]?.group).toBe("Überblick");
+
+    expect(turkish!.tabs[0]?.tab).toBe("Başlangıç");
+    expect(turkish!.tabs[0]?.groups?.[0]?.group).toBe("Genel bakış");
+    const nestedTurkishCases = [
+      {
+        child: "Geçiş",
+        parent: "Bakım",
+        page: "tr/install/migrating",
+        tab: "Kurulum",
+      },
+      {
+        child: "Web tarayıcısı",
+        parent: "Araçlar",
+        page: "tr/tools/browser",
+        tab: "Yetenekler",
+      },
+      {
+        child: "Yapılandırma",
+        parent: "Gateway",
+        page: "tr/gateway/configuration",
+        tab: "Gateway ve operasyonlar",
+      },
+      {
+        child: "Gateway ve hizmet",
+        parent: "CLI komutları",
+        page: "tr/cli/backup",
+        tab: "Başvuru",
+      },
+    ];
+    for (const testCase of nestedTurkishCases) {
+      const tab = turkish!.tabs.find((entry) => entry.tab === testCase.tab);
+      const parent = tab?.groups?.find((entry) => entry.group === testCase.parent);
+      expect(findNestedGroup(parent?.pages, testCase.child)).toEqual(
+        expect.objectContaining({
+          pages: expect.arrayContaining([testCase.page]),
+        }),
+      );
+    }
 
     for (const locale of config.navigation.languages.filter(
       (entry) => entry.language !== "en" && entry.language !== "zh-Hans",
