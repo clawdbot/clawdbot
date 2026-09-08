@@ -3,6 +3,8 @@ name: Dependency Guard
 on:
   pull_request_target: # zizmor: ignore[dangerous-triggers] checks trusted base script only; never checks out PR head
     types: [opened, reopened, synchronize, ready_for_review]
+  issue_comment: # zizmor: ignore[dangerous-triggers] trusted base script validates the admin/secops command; never checks out PR head
+    types: [created]
 
 permissions:
   contents: read
@@ -10,12 +12,12 @@ permissions:
   issues: write
 
 concurrency:
-  group: dependency-guard-${{ github.event.pull_request.number }}
+  group: dependency-guard-${{ github.event.pull_request.number || github.event.issue.number }}
   cancel-in-progress: true
 
 jobs:
   dependency-guard-detect:
-    if: ${{ !github.event.pull_request.draft }}
+    if: ${{ github.event_name == 'pull_request_target' && !github.event.pull_request.draft }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
@@ -39,7 +41,7 @@ jobs:
         run: node scripts/github/dependency-guard.mjs
 
   dependency-guard-autoscrub:
-    if: ${{ !github.event.pull_request.draft && needs.dependency-guard-detect.outputs.autoscrub == 'true' }}
+    if: ${{ github.event_name == 'pull_request_target' && !github.event.pull_request.draft && needs.dependency-guard-detect.outputs.autoscrub == 'true' }}
     needs: dependency-guard-detect
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -87,7 +89,7 @@ jobs:
         run: node scripts/github/dependency-guard.mjs
 
   dependency-guard:
-    if: ${{ !github.event.pull_request.draft && always() }}
+    if: ${{ github.event_name == 'pull_request_target' && !github.event.pull_request.draft && always() }}
     needs:
       - dependency-guard-detect
       - dependency-guard-autoscrub
@@ -107,3 +109,56 @@ jobs:
           OPENCLAW_SECURITY_APPROVERS: vincentkoc,steipete,joshavant
           OPENCLAW_SECURITY_TEAM_SLUG: openclaw-secops
         run: node scripts/github/dependency-guard.mjs
+
+  dependency-guard-command:
+    if: >-
+      ${{
+        github.event_name == 'issue_comment' && github.event.issue.pull_request &&
+        github.event.issue.state == 'open' &&
+        startsWith(github.event.comment.body, '/allow-dependencies-change') &&
+        contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
+      }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: write
+      contents: read
+      issues: read
+      pull-requests: read
+    steps:
+      - name: Re-run dependency guard for the current PR head
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          head_sha="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.head.sha')"
+          if [[ ! "$head_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Dependency Guard resolved an invalid pull request head SHA." >&2
+            exit 1
+          fi
+
+          latest_run="$(
+            gh api "repos/${REPOSITORY}/actions/workflows/dependency-guard.yml/runs?event=pull_request_target&head_sha=${head_sha}&per_page=20" \
+              --jq ".workflow_runs | map(select(.head_sha == \"${head_sha}\")) | sort_by(.created_at) | last | {id, status, conclusion}"
+          )"
+          run_id="$(jq -r '.id // empty' <<<"$latest_run")"
+          status="$(jq -r '.status // empty' <<<"$latest_run")"
+          conclusion="$(jq -r '.conclusion // empty' <<<"$latest_run")"
+
+          if [[ -z "$run_id" ]]; then
+            echo "No Dependency Guard run exists for ${head_sha}; a new PR-head event is required." >&2
+            exit 1
+          fi
+          if [[ "$status" != "completed" ]]; then
+            echo "Dependency Guard run ${run_id} is ${status}; it will read the approval before enforcing."
+            exit 0
+          fi
+          if [[ "$conclusion" != "failure" ]]; then
+            echo "Dependency Guard run ${run_id} concluded ${conclusion}; no re-run is needed."
+            exit 0
+          fi
+
+          gh api --method POST "repos/${REPOSITORY}/actions/runs/${run_id}/rerun-failed-jobs" --silent
+          echo "Re-ran failed Dependency Guard jobs for ${head_sha} (run ${run_id})."

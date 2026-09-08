@@ -51,6 +51,7 @@ describe("dependency guard workflow", () => {
     expect(parsed.jobs).toHaveProperty("dependency-guard-detect");
     expect(parsed.jobs).toHaveProperty("dependency-guard-autoscrub");
     expect(parsed.jobs).toHaveProperty("dependency-guard");
+    expect(parsed.jobs).toHaveProperty("dependency-guard-command");
     expect(parsed.jobs?.["dependency-guard"]?.name).toBeUndefined();
   });
 
@@ -59,6 +60,10 @@ describe("dependency guard workflow", () => {
     const parsed = readWorkflow();
 
     expect(workflow).toContain("pull_request_target:");
+    expect(workflow).toContain("issue_comment:");
+    expect(workflow).toContain(
+      "startsWith(github.event.comment.body, '/allow-dependencies-change')",
+    );
     expect(workflow).toContain("checks trusted base script only; never checks out PR head");
     expect(parsed.permissions).toEqual({
       contents: "read",
@@ -82,7 +87,6 @@ describe("dependency guard workflow", () => {
       "pnpm install",
       "npm install",
       "pnpm dlx",
-      "actions: write",
       "id-token: write",
       "github.rest.issues.createLabel",
     ];
@@ -175,6 +179,26 @@ describe("dependency guard workflow", () => {
     expect(checkoutStep.with?.ref).toBe("${{ github.event.pull_request.base.sha }}");
     expect(checkoutStep.with?.["persist-credentials"]).toBe(false);
     expect(runStep.run).toBe("node scripts/github/dependency-guard.mjs");
+  });
+
+  it("re-runs the failed PR-head guard after a maintainer approval command", () => {
+    const commandJob = readWorkflow().jobs?.["dependency-guard-command"];
+    const commandStep = workflowStep(commandJob?.steps ?? [], 0, "dependency guard command step");
+
+    expect(commandJob?.if).toContain("github.event_name == 'issue_comment'");
+    expect(commandJob?.if).toContain("github.event.issue.pull_request");
+    expect(commandJob?.if).toContain("github.event.comment.author_association");
+    expect(commandJob?.permissions).toEqual({
+      actions: "write",
+      contents: "read",
+      issues: "read",
+      "pull-requests": "read",
+    });
+    expect(commandStep.env?.GH_TOKEN).toBe("${{ github.token }}");
+    expect(commandStep.env?.PR_NUMBER).toBe("${{ github.event.issue.number }}");
+    expect(commandStep.run).toContain("head_sha=");
+    expect(commandStep.run).toContain("event=pull_request_target&head_sha=${head_sha}");
+    expect(commandStep.run).toContain("rerun-failed-jobs");
   });
 
   it("uses a dedicated checked-in script and bounded sticky comments", () => {
