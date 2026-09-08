@@ -4,7 +4,6 @@ import {
   ErrorCodes,
   errorShape,
   type SessionCatalog,
-  type SessionCatalogLocator,
   type SessionCatalogShareRoute,
   type SessionsCatalogArchiveParams,
   type SessionsCatalogContinueParams,
@@ -32,7 +31,7 @@ import { authorizeGatewaySessionCreation } from "../operator-role-policy.js";
 import { projectSessionParticipant } from "../session-identity-projection.js";
 import type { SessionActorProfileIdentity } from "../session-utils-contracts.js";
 import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
-import { authorizeSessionCatalogThread } from "./session-catalog-authorization.js";
+import { authorizeSessionCatalogRequest } from "./session-catalog-authorization.js";
 import { continueAuthorizedSessionCatalog } from "./session-catalog-continue.js";
 import {
   createSessionCatalogRequestEntrySnapshot,
@@ -54,12 +53,7 @@ import {
   filterSessionCatalogHost,
   resolveSessionCatalogVisibility,
 } from "./session-catalog-visibility.js";
-import type {
-  GatewayClient,
-  GatewayRequestContext,
-  GatewayRequestHandlers,
-  RespondFn,
-} from "./types.js";
+import type { GatewayClient, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 const SESSION_CATALOG_SEARCH_MAX_UTF16_UNITS = 500;
@@ -251,35 +245,6 @@ function providerOrRespond(
     );
   }
   return provider;
-}
-
-async function authorizeCatalogRequest(params: {
-  access: "read" | "mutate";
-  request: SessionCatalogLocator & { agentId?: string };
-  provider: SessionCatalogProvider;
-  respond: RespondFn;
-  context: GatewayRequestContext;
-  client: GatewayClient | null;
-}): Promise<{ agentId: string; allowProcessHomeFallback: boolean } | null> {
-  const resolvedAgent = resolveAgentIdOrRespondError({
-    rawAgentId: params.request.agentId,
-    respond: params.respond,
-    cfg: params.context.getRuntimeConfig(),
-    normalize: normalizeOptionalString,
-  });
-  if (!resolvedAgent) {
-    return null;
-  }
-  const authorization = await authorizeSessionCatalogThread({
-    access: params.access,
-    agentId: resolvedAgent.agentId,
-    client: params.client,
-    context: params.context,
-    provider: params.provider,
-    request: params.request,
-    respond: params.respond,
-  });
-  return authorization ? { agentId: resolvedAgent.agentId, ...authorization } : null;
 }
 
 function registrationOrRespond(catalogId: string, respond: RespondFn) {
@@ -570,7 +535,7 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
-      const authorization = await authorizeCatalogRequest({
+      const authorization = await authorizeSessionCatalogRequest({
         access: "read",
         request,
         provider,
@@ -587,6 +552,12 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
         agentId: authorization.agentId,
         allowProcessHomeFallback: authorization.allowProcessHomeFallback,
       });
+      if (
+        authorization.revalidateBeforePublish &&
+        !(await authorization.revalidateBeforePublish())
+      ) {
+        return;
+      }
       const profiles = new Map<string, SessionActorProfileIdentity | undefined>();
       respond(true, {
         ...page,
@@ -636,7 +607,7 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
-      const authorization = await authorizeCatalogRequest({
+      const authorization = await authorizeSessionCatalogRequest({
         access: "mutate",
         request,
         provider,
@@ -703,7 +674,7 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
-      const authorization = await authorizeCatalogRequest({
+      const authorization = await authorizeSessionCatalogRequest({
         access: "mutate",
         request,
         provider,

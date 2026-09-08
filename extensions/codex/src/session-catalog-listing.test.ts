@@ -568,8 +568,8 @@ describe("Codex supervision catalog", () => {
       expect(audience.prepareVisibility({ host: local, sessionEntries })(native)).toBe(true);
       for (const privacy of [
         { visibility: "draft" as const },
-        { incognito: true },
-        { initializationPending: true },
+        { incognito: true as const },
+        { initializationPending: true as const },
       ]) {
         const entry = {
           ...adoptedEntry({ sourceThreadId: native.threadId, sourceHomeId: native.sourceHomeId }),

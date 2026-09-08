@@ -1,11 +1,12 @@
-import {
-  sessionCatalogAdoptedSourceKey,
-  type SessionCatalogProvider,
-} from "openclaw/plugin-sdk/session-catalog";
+import type { SessionCatalogProvider } from "openclaw/plugin-sdk/session-catalog";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CODEX_LOCAL_SESSION_HOST_ID } from "./session-catalog-parsing.js";
 
 export type CodexSupervisionMarker = { sourceThreadId: string; sourceHomeId?: string };
+
+function adoptedSourceKey(hostId: string, threadId: string): string {
+  return `${hostId}\0${threadId}`;
+}
 
 export function readCodexSupervisionMarker(entry: {
   pluginExtensions?: Record<string, unknown>;
@@ -41,7 +42,7 @@ export const codexOwnerLocalAudience = {
         // The marker is published with the initial entry, before binding/fork completion.
         // Any current adoption claim denies native visibility, even while initialization is pending.
         adoptedSources.add(
-          sessionCatalogAdoptedSourceKey(
+          adoptedSourceKey(
             marker.sourceHomeId ?? CODEX_LOCAL_SESSION_HOST_ID,
             marker.sourceThreadId,
           ),
@@ -50,13 +51,11 @@ export const codexOwnerLocalAudience = {
     }
     return (session) =>
       !adoptedSources.has(
-        sessionCatalogAdoptedSourceKey(session.sourceHomeId ?? host.hostId, session.threadId),
+        adoptedSourceKey(session.sourceHomeId ?? host.hostId, session.threadId),
       ) &&
       !(
         host.hostId === CODEX_LOCAL_SESSION_HOST_ID &&
-        adoptedSources.has(
-          sessionCatalogAdoptedSourceKey(CODEX_LOCAL_SESSION_HOST_ID, session.threadId),
-        )
+        adoptedSources.has(adoptedSourceKey(CODEX_LOCAL_SESSION_HOST_ID, session.threadId))
       );
   },
 } satisfies Exclude<NonNullable<SessionCatalogProvider["audience"]>, string>;
