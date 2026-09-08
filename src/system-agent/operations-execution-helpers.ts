@@ -194,6 +194,8 @@ export function resolveTuiAgentId(params: {
 
 export type ExecuteOptions = {
   approved?: boolean;
+  /** Host-owned origin for team members; never supplied by model tool arguments. */
+  requesterAgentId?: string;
   operatorApprovalOnly?: boolean;
   deps?: SystemAgentCommandDeps;
   auditDetails?: Record<string, unknown>;

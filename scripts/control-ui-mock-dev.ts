@@ -19,6 +19,7 @@ import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../src/gateway/control-ui-cont
 import { controlUiPluginAssetRoot } from "../src/gateway/control-ui-plugin-assets-contract.js";
 import { buildUpdateRestartSentinelPayload } from "../src/infra/update-restart-sentinel-payload.js";
 import type { UpdateRunResult } from "../src/infra/update-runner.js";
+import { buildNewAgentWelcome } from "../src/system-agent/new-agent-welcome.js";
 import type { UpdateAvailable, UpdateScheduleState } from "../ui/src/api/types.ts";
 import {
   controlUiSessionPath,
@@ -3181,8 +3182,12 @@ async function createMockGatewayPlugin(
   const prepared = await prepareControlUiMockGatewayScenario(scenario);
   const initScript = escapeScriptContent(createControlUiMockGatewayInitScript(prepared.scenario));
   const sameOriginGatewayScript = escapeScriptContent(createControlUiMockSameOriginGatewayScript());
+  const newAgentWelcome = await buildNewAgentWelcome({
+    engine: { noteAssistantMessage: () => {} },
+  });
   const statefulInitScript = escapeScriptContent(
-    createControlUiPreviewInitScript() + skillLibraryMockInitScript(prepared.scenario.models),
+    createControlUiPreviewInitScript(newAgentWelcome) +
+      skillLibraryMockInitScript(prepared.scenario.models),
   );
   const bootstrapBody = JSON.stringify(createControlUiMockBootstrapConfig(prepared.scenario));
   const pluginIconIds = new Set(

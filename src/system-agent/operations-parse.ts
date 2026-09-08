@@ -1,4 +1,5 @@
 // OpenClaw operation grammar, approval descriptions, and public types.
+import { listAgentRoles } from "../agents/agent-roles.js";
 import { parseConfigSetPath } from "../cli/config-cli-path.js";
 import type { ConfigSetOptions } from "../cli/config-set-input.js";
 import type { DoctorOptions } from "../commands/doctor.types.js";
@@ -105,7 +106,11 @@ const MODEL_SETUP_RE = new RegExp(
   "i",
 );
 const CREATE_AGENT_RE = new RegExp(
-  String.raw`^(?:create|add|set\s*up|new)\s+(?:(?:an?|new|my)\s+)?agent\s+(?<agent>[a-z0-9_-]+)(?:\s+workspace\s+(?<workspace>${ARG_WORD}))?(?:\s+model\s+(?<model>\S+))?$`,
+  String.raw`^(?:create|add|set\s*up|new)\s+(?:(?:an?|new|my)\s+)?agent\s+(?<agent>[a-z0-9_-]+)(?:\s+role\s+(?<role>\S+))?(?:\s+workspace\s+(?<workspace>${ARG_WORD}))?(?:\s+model\s+(?<model>\S+))?$`,
+  "i",
+);
+const CREATE_TEAM_RE = new RegExp(
+  String.raw`^create\s+team(?:\s+coordinator\s+(?<coordinatorId>\S+))?(?:\s+prefix\s+(?<prefix>\S+))?(?:\s+workspace\s+(?<workspaceRoot>${ARG_WORD}))?$`,
   "i",
 );
 // "talk to agent for ~/Projects/work" is a documented selector; "for|in" are
@@ -455,13 +460,33 @@ export function parseSystemAgentOperation(input: string): SystemAgentOperation {
   }
   const createMatch = trimmed.match(CREATE_AGENT_RE);
   if (createMatch?.groups?.agent) {
+    const role = listAgentRoles().find((candidate) => candidate === createMatch.groups?.role);
+    if (createMatch.groups.role && !role) {
+      return {
+        kind: "none",
+        message: `Unknown agent role. Choose ${listAgentRoles().join(", ")}.`,
+      };
+    }
     const workspace = trimShellishToken(createMatch.groups.workspace);
     const model = createMatch.groups.model;
     return {
       kind: "create-agent",
       agentId: normalizeExplicitSystemAgentId(createMatch.groups.agent),
+      ...(role ? { role } : {}),
       ...(workspace ? { workspace } : {}),
       ...(model ? { model } : {}),
+    };
+  }
+  const teamMatch = trimmed.match(CREATE_TEAM_RE);
+  if (teamMatch) {
+    const coordinatorId = teamMatch.groups?.coordinatorId;
+    const prefix = teamMatch.groups?.prefix;
+    const workspaceRoot = trimShellishToken(teamMatch.groups?.workspaceRoot);
+    return {
+      kind: "create-team",
+      ...(coordinatorId ? { coordinatorId } : {}),
+      ...(prefix ? { prefix } : {}),
+      ...(workspaceRoot ? { workspaceRoot } : {}),
     };
   }
   const talkMatch = trimmed.match(TALK_AGENT_RE);
@@ -525,6 +550,7 @@ export function isPersistentSystemAgentOperation(operation: SystemAgentOperation
     operation.kind === "plugin-install" ||
     operation.kind === "plugin-activate-artifact" ||
     operation.kind === "plugin-uninstall" ||
+    operation.kind === "create-team" ||
     (operation.kind === "create-agent" &&
       !operation.model?.trim() &&
       !isReservedSystemAgentId(operation.agentId)) ||
@@ -560,7 +586,21 @@ export function describeSystemAgentPersistentOperation(operation: SystemAgentOpe
     case "create-agent":
       return [
         `create agent ${operation.agentId} with workspace ${formatCreateAgentWorkspace(operation.workspace)}`,
+        operation.role
+          ? `role: ${operation.role === "coordinator" ? "Chief of staff" : operation.role.charAt(0).toUpperCase() + operation.role.slice(1)}`
+          : undefined,
         operation.requesterAgentId ? `requested by agent ${operation.requesterAgentId}` : undefined,
+      ]
+        .filter(Boolean)
+        .join(", ");
+    case "create-team":
+      return [
+        "create team of 4: chief of staff, researcher, writer, reviewer",
+        operation.coordinatorId ? `coordinator id: ${operation.coordinatorId}` : undefined,
+        operation.prefix ? `prefix: ${operation.prefix}` : undefined,
+        operation.workspaceRoot
+          ? `workspace root: ${shortenHomePath(resolveUserPath(operation.workspaceRoot))}`
+          : undefined,
       ]
         .filter(Boolean)
         .join(", ");
@@ -593,7 +633,7 @@ export function formatSystemAgentPersistentPlan(
 }
 
 function formatCreateAgentWorkspace(workspace: string | undefined): string {
-  return workspace ? shortenHomePath(resolveUserPath(workspace)) : shortenHomePath(process.cwd());
+  return workspace ? shortenHomePath(resolveUserPath(workspace)) : "the default for this agent";
 }
 
 function formatConfigSetValueForPlan(configPath: string, value: string): string {

@@ -500,12 +500,34 @@ describe("openclaw tool", () => {
     expect(mocks.readConfigFileSnapshot).not.toHaveBeenCalled();
   });
 
-  it("maps create_agent with optional workspace and model", async () => {
+  it.each([
+    {
+      args: { action: "create_agent", agentId: "work", workspace: "/tmp/work" },
+      operation: { kind: "create-agent", agentId: "work", workspace: "/tmp/work" },
+    },
+    {
+      args: { action: "create_agent", agentId: "editor", role: "writer" },
+      operation: { kind: "create-agent", agentId: "editor", role: "writer" },
+    },
+    {
+      args: {
+        action: "create_team",
+        coordinatorId: "lead",
+        prefix: "docs",
+        workspaceRoot: "/tmp/team",
+      },
+      operation: {
+        kind: "create-team",
+        coordinatorId: "lead",
+        prefix: "docs",
+        workspaceRoot: "/tmp/team",
+      },
+    },
+    { args: { action: "create_team" }, operation: { kind: "create-team" } },
+  ])("stages and hands off the exact creation proposal: $args", async ({ args, operation }) => {
     const proposalRef: { current?: string } = {};
     await createSystemAgentTool({ surface: "cli", proposalRef }).execute("t6a", {
-      action: "create_agent",
-      agentId: "work",
-      workspace: "/tmp/work",
+      ...args,
       approved: true,
     });
     const directiveRef: { current?: SystemAgentToolDirective } = {};
@@ -516,14 +538,12 @@ describe("openclaw tool", () => {
       directiveRef,
     });
     await tool.execute("t6", {
-      action: "create_agent",
-      agentId: "work",
-      workspace: "/tmp/work",
+      ...args,
       approved: true,
     });
     expect(directiveRef.current).toEqual({
       kind: "approved-operation",
-      operation: { kind: "create-agent", agentId: "work", workspace: "/tmp/work" },
+      operation,
     });
     expect(mocks.executeSystemAgentOperation).not.toHaveBeenCalled();
   });
@@ -531,6 +551,9 @@ describe("openclaw tool", () => {
   it("rejects unknown or underspecified actions as input errors", async () => {
     const tool = createSystemAgentTool({ surface: "cli" });
     await expect(tool.execute("t5", { action: "config_get" })).rejects.toThrow(/path/);
+    await expect(
+      tool.execute("bad-role", { action: "create_agent", agentId: "work", role: "unknown" }),
+    ).rejects.toThrow(/unknown role/);
   });
 
   it("records interactive directives for the host without executing operations", async () => {

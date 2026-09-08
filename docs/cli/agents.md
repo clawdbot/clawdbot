@@ -61,19 +61,19 @@ Bundled roles are [Claw sources](/cli/claws): each role directory contains a
 `CLAW.md` manifest with identity and `SOUL.md` content, plus its operating
 program in `workspace/AGENTS.md`. Available roles:
 
-| Role          | Purpose                                                                  |
-| ------------- | ------------------------------------------------------------------------ |
-| `coordinator` | Delegate bounded tasks to matching specialists and verify their results. |
-| `researcher`  | Gather evidence and return a cited research brief.                       |
-| `writer`      | Turn a brief and source material into a usable draft.                    |
-| `reviewer`    | Check artifacts against requirements and return actionable findings.     |
+| Role          | Title          | Purpose                                                              |
+| ------------- | -------------- | -------------------------------------------------------------------- |
+| `coordinator` | Chief of staff | Coordinate specialists as your single point of contact.              |
+| `researcher`  | Researcher     | Gather evidence and return a cited research brief.                   |
+| `writer`      | Writer         | Turn a brief and source material into a usable draft.                |
+| `reviewer`    | Reviewer       | Check artifacts against requirements and return actionable findings. |
 
 A role seeds `AGENTS.md`, `SOUL.md`, and a complete `IDENTITY.md`; `USER.md`
 still uses the standard template. Existing workspace files are preserved. The
 role's name, emoji, and theme are saved in agent config, and new role workspaces
 skip the identity ceremony: no `BOOTSTRAP.md` is created. The bundled roles
 leave skills unchanged.
-Role delegation settings are also applied. Standalone coordinators target the
+Role delegation settings are also applied. A standalone chief of staff targets the
 standard specialist ids; use the team command to create and wire all four agents.
 Unknown roles are rejected with the available role names. A workspace with an
 unfinished bootstrap cannot adopt a role; complete its bootstrap or choose a
@@ -90,7 +90,7 @@ Options: `--preset <name>` (default and only bundled preset: `team`),
 `--coordinator <id>` (default: `coordinator`), `--prefix <p>`,
 `--workspace-root <dir>`, `--non-interactive`, `--json`.
 
-Creates a coordinator plus `researcher`, `writer`, and `reviewer` from the role
+Creates a chief of staff (`coordinator`) plus `researcher`, `writer`, and `reviewer` from the role
 templates. Each workspace lives at `<workspace-root>/<agentId>`; the default
 root is the installation's default workspace directory. `--prefix editorial`
 namespaces every id, producing `editorial-coordinator`, `editorial-researcher`,

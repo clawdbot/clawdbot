@@ -516,6 +516,9 @@ export class ChatTurnRouter {
       }
       return await execute(operation, capture, {
         approved,
+        ...(this.options.requesterAgentId
+          ? { requesterAgentId: this.options.requesterAgentId }
+          : {}),
         deps: this.commandDeps(),
         beforePersistentApply,
         onVerifiedInferenceChanged: this.callbacks.rebindVerifiedInference,

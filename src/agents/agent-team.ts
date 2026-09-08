@@ -9,6 +9,7 @@ import {
   withConfigMutationExclusive,
 } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { readAgentDeletionJournal } from "../state/agent-deletion-journal.js";
 import { resolveUserPath } from "../utils.js";
@@ -26,7 +27,7 @@ type TeamResult =
       config: OpenClawConfig;
       configHash?: string;
     }
-  | { status: "error"; message: string };
+  | { status: "error"; message: string; retainedAgents?: CreateAgentSuccess[] };
 
 /** Create a directed fleet through the same lifecycle owner as individual agents. */
 export async function createAgentTeam(
@@ -38,6 +39,7 @@ export async function createAgentTeam(
     bootstrapFirstAgent?: boolean;
     expectedConfigHash?: string | null;
     beforePersistentApply?: () => void;
+    provenance?: Parameters<typeof createAgent>[0]["provenance"];
   } = {},
 ): Promise<TeamResult> {
   const preset = await loadAgentTeamPreset(params.preset);
@@ -117,60 +119,71 @@ export async function createAgentTeam(
     const existingAmbientOwnerId = lockedConfig.agents?.defaults?.systemAgent?.agentId?.trim();
     const ambientOwnerId = existingAmbientOwnerId || coordinatorId;
     const agents: CreateAgentSuccess[] = [];
+    const fail = (message: string): Extract<TeamResult, { status: "error" }> => ({
+      status: "error",
+      message: `${message}${agents.length ? ` Created agents retained: ${agents.map(({ agentId }) => agentId).join(", ")}.` : ""}`,
+      ...(agents.length ? { retainedAgents: agents } : {}),
+    });
     let config = lockedConfig;
     let configHash: string | undefined;
-    for (const [index, member] of members.entries()) {
-      const created = await createAgent({
-        role: member.role,
-        entry: {
-          id: member.id,
-          workspace: path.join(workspaceRoot, member.id),
-          subagents:
-            index === 0
-              ? { allowAgents: ids.slice(1), delegationMode: "prefer" }
-              : { allowAgents: [] },
-        },
-        bootstrapFirstAgent: index === 0 && bootstrapFirstAgent,
-        ...(index === 0 && Object.hasOwn(params, "expectedConfigHash")
-          ? { expectedConfigHash: params.expectedConfigHash }
-          : {}),
-        beforePersistentApply: params.beforePersistentApply,
-      });
-      if (created.status === "error") {
-        return {
-          status: "error",
-          message: `${created.message}${agents.length ? ` Created agents retained: ${agents.map(({ agentId }) => agentId).join(", ")}.` : ""}`,
-        };
+    try {
+      for (const [index, member] of members.entries()) {
+        const created = await createAgent({
+          role: member.role,
+          entry: {
+            id: member.id,
+            workspace: path.join(workspaceRoot, member.id),
+            subagents:
+              index === 0
+                ? { allowAgents: ids.slice(1), delegationMode: "prefer" }
+                : { allowAgents: [] },
+          },
+          bootstrapFirstAgent: index === 0 && bootstrapFirstAgent,
+          ...(index === 0 && Object.hasOwn(params, "expectedConfigHash")
+            ? { expectedConfigHash: params.expectedConfigHash }
+            : {}),
+          beforePersistentApply: params.beforePersistentApply,
+          provenance: params.provenance,
+          onCommitted: ({ config: createdConfig, ...summary }) => {
+            config = createdConfig;
+            configHash = summary.configHash;
+            agents.push(summary);
+          },
+        });
+        if (created.status === "error") {
+          return fail(created.message);
+        }
       }
-      const { config: createdConfig, ...summary } = created;
-      config = createdConfig;
-      configHash = created.configHash;
-      agents.push(summary);
-    }
-    if (!existingAmbientOwnerId) {
-      const committed = await transformConfigFileWithRetry({
-        maxAttempts: 1,
-        writeOptions: params.beforePersistentApply
-          ? { assertConfigPathForWrite: params.beforePersistentApply }
-          : undefined,
-        transform: (currentConfig) => ({
-          nextConfig: {
-            ...currentConfig,
-            agents: {
-              ...currentConfig.agents,
-              defaults: {
-                ...currentConfig.agents?.defaults,
-                systemAgent: {
-                  ...currentConfig.agents?.defaults?.systemAgent,
-                  agentId: coordinatorId,
+      if (!existingAmbientOwnerId) {
+        const committed = await transformConfigFileWithRetry({
+          maxAttempts: 1,
+          writeOptions: params.beforePersistentApply
+            ? { assertConfigPathForWrite: params.beforePersistentApply }
+            : undefined,
+          transform: (currentConfig) => ({
+            nextConfig: {
+              ...currentConfig,
+              agents: {
+                ...currentConfig.agents,
+                defaults: {
+                  ...currentConfig.agents?.defaults,
+                  systemAgent: {
+                    ...currentConfig.agents?.defaults?.systemAgent,
+                    agentId: coordinatorId,
+                  },
                 },
               },
             },
-          },
-        }),
-      });
-      config = committed.nextConfig;
-      configHash = committed.persistedHash ?? undefined;
+          }),
+        });
+        config = committed.nextConfig;
+        configHash = committed.persistedHash ?? undefined;
+      }
+    } catch (error) {
+      if (!agents.length) {
+        throw error;
+      }
+      return fail(formatErrorMessage(error));
     }
     return {
       status: "created",
