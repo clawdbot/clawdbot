@@ -145,6 +145,11 @@ function buildFoundryModel(
     reasoning: boolean;
     input: Array<"text" | "image">;
     compat: Record<string, unknown>;
+    contextWindow: number;
+    contextTokens: number;
+    maxTokens: number;
+    metadataSource: "models-add";
+    params: Record<string, unknown>;
   }> = {},
 ) {
   return {
@@ -1020,6 +1025,7 @@ assert.equal(afterOldest, 130, "the evicted account must refresh through az");
                 cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
                 contextWindow: 128_000,
                 maxTokens: 16_384,
+                params: { canonicalModelId: "gpt-5.4" },
               },
               {
                 id: "alias-two",
@@ -1050,7 +1056,62 @@ assert.equal(afterOldest, 130, "the evicted account must refresh through az");
       "text",
       "image",
     ]);
+    expect(config.models?.providers?.["microsoft-foundry"]?.models[0]).toMatchObject({
+      contextWindow: 1_050_000,
+      maxTokens: 128_000,
+    });
+    expect(config.models?.providers?.["microsoft-foundry"]?.models[1]).toMatchObject({
+      contextWindow: 128_000,
+      maxTokens: 16_384,
+    });
   });
+
+  it.each([
+    {
+      label: "operator-reduced model limits",
+      overrides: { contextWindow: 96_000, maxTokens: 12_000 },
+      expected: { contextWindow: 96_000, maxTokens: 12_000 },
+    },
+    {
+      label: "an explicit effective context cap",
+      overrides: { contextTokens: 80_000 },
+      expected: { contextWindow: 128_000, contextTokens: 80_000, maxTokens: 16_384 },
+    },
+    {
+      label: "manually added model metadata",
+      overrides: { metadataSource: "models-add" as const },
+      expected: { contextWindow: 128_000, maxTokens: 16_384 },
+    },
+    {
+      label: "missing provider-owned generation provenance",
+      overrides: { params: {} },
+      expected: { contextWindow: 128_000, maxTokens: 16_384 },
+    },
+  ])(
+    "preserves $label when selecting an existing Foundry model",
+    async ({ overrides, expected }) => {
+      const provider = registerProvider();
+      const config = buildFoundryConfig({
+        models: [
+          buildFoundryModel({
+            id: "existing-gpt-deployment",
+            name: "gpt-5.2",
+            params: { canonicalModelId: "gpt-5.2" },
+            ...overrides,
+          }),
+        ],
+      });
+
+      await provider.onModelSelected?.({
+        config,
+        model: "microsoft-foundry/existing-gpt-deployment",
+        prompter: {} as never,
+        agentDir: defaultFoundryAgentDir,
+      });
+
+      expect(config.models?.providers?.["microsoft-foundry"]?.models[0]).toMatchObject(expected);
+    },
+  );
 
   it("preserves an explicit per-model Foundry endpoint when switching models", async () => {
     const provider = registerProvider();
@@ -1501,6 +1562,7 @@ assert.equal(afterOldest, 130, "the evicted account must refresh through az");
         name: "gpt-5.4",
         input: ["text"],
         compat: { supportsStrictMode: false },
+        params: { canonicalModelId: "gpt-5.4" },
       }),
     });
 
@@ -1512,6 +1574,27 @@ assert.equal(afterOldest, 130, "the evicted account must refresh through az");
     expect(normalized?.compat?.supportsStore).toBe(false);
     expect(normalized?.compat?.supportsStrictMode).toBe(false);
     expect(normalized?.compat?.maxTokensField).toBe("max_completion_tokens");
+    expect(normalized?.contextWindow).toBe(1_050_000);
+    expect(normalized?.maxTokens).toBe(128_000);
+  });
+
+  it("preserves explicit limits when normalizing an existing Foundry deployment", () => {
+    const provider = registerProvider();
+
+    const normalized = provider.normalizeResolvedModel?.({
+      provider: "microsoft-foundry",
+      modelId: "deployment-gpt5",
+      model: buildFoundryModel({
+        id: "deployment-gpt5",
+        name: "gpt-5.2",
+        contextWindow: 96_000,
+        maxTokens: 12_000,
+        params: { canonicalModelId: "gpt-5.2" },
+      }),
+    });
+
+    expect(normalized?.contextWindow).toBe(96_000);
+    expect(normalized?.maxTokens).toBe(12_000);
   });
 
   it("preserves explicit image capability for non-heuristic Foundry deployments", () => {
@@ -1736,7 +1819,23 @@ assert.equal(afterOldest, 130, "the evicted account must refresh through az");
     ["gpt-5.4-pro", 1_050_000, 128_000],
     ["gpt-5.4-mini", 400_000, 128_000],
     ["gpt-5.4-nano", 400_000, 128_000],
+    ["gpt-5.3-codex", 400_000, 128_000],
+    ["gpt-5.3-chat", 128_000, 16_384],
+    ["gpt-5.2", 400_000, 128_000],
+    ["gpt-5.2-codex", 400_000, 128_000],
+    ["gpt-5.2-chat", 128_000, 16_384],
+    ["gpt-5.1", 400_000, 128_000],
+    ["gpt-5.1-codex", 400_000, 128_000],
+    ["gpt-5.1-codex-mini", 400_000, 128_000],
+    ["gpt-5.1-codex-max", 400_000, 128_000],
+    ["gpt-5.1-chat", 128_000, 16_384],
+    ["gpt-5", 400_000, 128_000],
+    ["gpt-5-mini", 400_000, 128_000],
+    ["gpt-5-nano", 400_000, 128_000],
+    ["gpt-5-codex", 400_000, 128_000],
     ["gpt-5-chat", 128_000, 16_384],
+    ["gpt-5-pro", 400_000, 128_000],
+    ["gpt-5.99-unverified", 128_000, 16_384],
     ["gpt-4o-mini", 128_000, 16_384],
   ] as const)(
     "uses Foundry-native token limits for %s",
@@ -2010,6 +2109,22 @@ assert.equal(afterOldest, 130, "the evicted account must refresh through az");
       "medium",
       "high",
     ]);
+  });
+
+  it("excludes unsupported none reasoning effort for Foundry GPT-5.1 Codex Max", () => {
+    const result = buildFoundryAuthResult({
+      profileId: "microsoft-foundry:default",
+      apiKey: "test-api-key",
+      endpoint: "https://example.services.ai.azure.com",
+      modelId: "deployment-codex-max",
+      modelNameHint: "gpt-5.1-codex-max",
+      api: "openai-responses",
+      authMethod: "api-key",
+    });
+
+    const model = result.configPatch?.models?.providers?.["microsoft-foundry"]?.models[0];
+    expect(model?.thinkingLevelMap?.off).toBe(null);
+    expect(model?.compat?.supportedReasoningEfforts).toEqual(["medium", "high", "xhigh"]);
   });
 
   it("omits minimal from newer Foundry GPT-5.x reasoning effort metadata", () => {

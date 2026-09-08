@@ -226,7 +226,11 @@ function resolveFoundryOpenAIModelTokenLimits(
   if (/^gpt-5\.(?:4(?:-pro)?|5|6(?:-(?:sol|terra|luna))?)$/u.test(normalized)) {
     return { contextWindow: 1_050_000, maxTokens: 128_000 };
   }
-  if (/^gpt-5\.4-(?:mini|nano)$/u.test(normalized)) {
+  if (
+    /^(?:gpt-5(?:-(?:mini|nano|codex|pro))?|gpt-5\.(?:1(?:-codex(?:-(?:mini|max))?)?|2(?:-codex)?|3-codex|4-(?:mini|nano)))$/u.test(
+      normalized,
+    )
+  ) {
     return { contextWindow: 400_000, maxTokens: 128_000 };
   }
   return undefined;
@@ -301,7 +305,7 @@ function resolveFoundryReasoningEfforts(value?: string | null): string[] | undef
     return undefined;
   }
   if (normalized === "gpt-5.1-codex-max") {
-    return ["none", "medium", "high", "xhigh"];
+    return ["medium", "high", "xhigh"];
   }
   if (normalized === "gpt-5-pro") {
     return ["high"];
