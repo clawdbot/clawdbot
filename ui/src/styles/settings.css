@@ -540,7 +540,12 @@ wa-switch.settings-toggle {
    shrinks via flex because .settings-input/.settings-secret set min-width: 0. */
 .settings-row:not(.settings-row--stacked)
   :is(.settings-row__control, .cfg-scalar-input__control)
-  > :is(.settings-input, .settings-secret, .settings-phone-presentation, .settings-input-with-hint) {
+  > :is(
+    .settings-input,
+    .settings-secret,
+    .settings-phone-presentation,
+    .settings-input-with-hint
+  ) {
   width: 340px;
 }
 
@@ -886,7 +891,7 @@ textarea.settings-input {
     right: 0;
   }
 
-  .settings-secret > :is(input, textarea) {
+  .settings-secret:has(.settings-secret__toggle) > :is(input, textarea) {
     padding-right: calc(44px + var(--space-2));
   }
 
@@ -913,7 +918,7 @@ textarea.settings-input {
       right: 0;
     }
 
-    .settings-secret > :is(input, textarea) {
+    .settings-secret:has(.settings-secret__toggle) > :is(input, textarea) {
       padding-right: calc(44px + var(--space-2));
     }
 
