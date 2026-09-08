@@ -37,6 +37,32 @@ describe("inbound dedupe", () => {
     );
   });
 
+  it("refuses one physical inbound re-entering under a different session scope", () => {
+    // A mid-turn model-fallback / harness re-entry can re-present the SAME physical
+    // inbound under a different resolved session scope (main vs direct). Route +
+    // provider messageId are identical, so admission must refuse the re-entry
+    // instead of admitting a duplicate run that re-delivers the final. Before the
+    // session-independent key this second claim returned "claimed" (two runs).
+    const agentScope: MsgContext = {
+      ...sharedInboundContext,
+      SessionKey: "agent:main:discord:channel:c1",
+    };
+    // Re-entry that resolves a DIFFERENT session scope for the same physical
+    // inbound: here the session context is absent (empty scope). Previously this
+    // produced a distinct dedupe key and was admitted as a second run.
+    const reentryWithoutSession: MsgContext = {
+      ...sharedInboundContext,
+      SessionKey: undefined,
+    };
+
+    const firstPass = claim(agentScope);
+    // In-flight re-entry under a different scope must NOT get its own claim.
+    expect(claimInboundDedupe(reentryWithoutSession).status).toBe("inflight");
+    firstPass.commit();
+    // After the first pass commits, the re-entry is a hard duplicate.
+    expect(claimInboundDedupe(reentryWithoutSession).status).toBe("duplicate");
+  });
+
   it.each([
     { CommandSource: "native", CommandBody: "/stop", CommandAuthorized: true },
     { CommandSource: "text", CommandBody: "/steer keep working", CommandAuthorized: true },

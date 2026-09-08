@@ -3,9 +3,9 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { logVerbose } from "../../globals.js";
 import { resolveGlobalDedupeCache } from "../../infra/dedupe.js";
 import { channelRouteDedupeKey } from "../../plugin-sdk/channel-route.js";
-import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import type { MsgContext } from "../templating.js";
@@ -37,22 +37,20 @@ const resolveInboundPeerId = (ctx: MsgContext) =>
   ctx.OriginatingTo ?? ctx.To ?? ctx.From ?? ctx.SessionKey;
 
 function resolveInboundDedupeSessionScope(ctx: MsgContext): string {
+  // One command event can legitimately target several distinct sessions, so those
+  // addressed operations must stay separately deduped by their explicit target.
   const commandTarget = resolveCommandTurnTargetSessionKey(ctx);
-  // One command event can target several sessions; dedupe each addressed operation.
   if (commandTarget) {
     return commandTarget;
   }
-  const sessionKey = normalizeOptionalString(ctx.SessionKey) || "";
-  if (!sessionKey) {
-    return "";
-  }
-  const parsed = parseAgentSessionKey(sessionKey);
-  if (!parsed) {
-    return sessionKey;
-  }
-  // The same physical inbound message should never run twice for the same
-  // agent, even if a routing bug presents it under both main and direct keys.
-  return `agent:${parsed.agentId}`;
+  // Normal inbound replies: DO NOT scope on the resolved session. A single
+  // physical inbound can be re-processed under a *different* session scope than
+  // its first pass (empty vs agent:<id>, or main vs direct after a mid-turn
+  // model-fallback/harness re-entry), which previously produced two distinct
+  // dedupe keys and let the same message deliver its final twice. Route + provider
+  // messageId already uniquely identify the physical inbound, so an empty scope
+  // makes the admission claim session-independent and refuses every re-entry.
+  return "";
 }
 
 function buildInboundDedupeKey(ctx: MsgContext): string | null {
@@ -87,6 +85,10 @@ export function claimInboundDedupe(
   }
   const duplicate = inboundDedupeCache.peek(key);
   if (inboundDedupeInFlight.has(key)) {
+    // A re-entry (commonly a mid-turn model-fallback/harness re-run) reached
+    // admission for an inbound whose first pass is still in flight. Refusing it
+    // here is what prevents a duplicate final delivery; surface it for triage.
+    logVerbose(`inbound-dedupe: refused re-entry for in-flight inbound key=${key}`);
     return { status: duplicate ? "duplicate" : "inflight" };
   }
   // Spend recovery on the first claim, even if its old receipt expired. A later
