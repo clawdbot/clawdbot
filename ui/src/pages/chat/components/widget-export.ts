@@ -1,3 +1,4 @@
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { beginClipboardCopy } from "../../../lib/clipboard.ts";
 
 const WIDGET_SNAPSHOT_REQUEST_TYPE = "openclaw:widget-snapshot-request";
@@ -89,19 +90,17 @@ export async function exportWidget(
   title: string | undefined,
   runtime: WidgetExportRuntime = {},
 ): Promise<"png" | "html" | "rerender-required"> {
-  const filename =
-    Array.from((title ?? "").trim(), (character) => {
-      const codePoint = character.codePointAt(0) ?? 0;
-      return codePoint <= 0x1f || codePoint === 0x7f || '<>:"/\\|?*'.includes(character)
-        ? "-"
-        : character;
-    })
-      .join("")
-      .replace(/\s+/g, "-")
-      .replace(/-+/g, "-")
-      .replace(/^[. -]+|[. -]+$/g, "")
-      .slice(0, 120)
-      .replace(/[. -]+$/g, "") || "widget";
+  const rawStem = Array.from((title ?? "").trim(), (character) => {
+    const codePoint = character.codePointAt(0) ?? 0;
+    return codePoint <= 0x1f || codePoint === 0x7f || '<>:"/\\|?*'.includes(character)
+      ? "-"
+      : character;
+  })
+    .join("")
+    .replace(/\s+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^[. -]+|[. -]+$/g, "");
+  const filename = truncateUtf16Safe(rawStem, 120).replace(/[. -]+$/g, "") || "widget";
   const snapshot = (runtime.requestSnapshot ?? requestWidgetSnapshot)(
     frame,
     runtime.timeoutMs === undefined ? {} : { timeoutMs: runtime.timeoutMs },

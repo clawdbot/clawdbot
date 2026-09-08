@@ -13,6 +13,7 @@ import {
   resolveReleaseDependencyRiskAcceptance,
 } from "./lib/release-dependency-risk-acceptance.mts";
 import { REPORT_CLI_PARSE_OPTIONS } from "./lib/report-cli-helpers.mts";
+import type { generateNpmPackageLocksReport } from "./npm-package-locks-report.mts";
 
 /**
  * Dependency evidence reports generated for release artifacts.
@@ -45,6 +46,13 @@ export const DEPENDENCY_EVIDENCE_REPORTS = [
     policy: "report-only",
     json: "dependency-changes-report.json",
     markdown: "dependency-changes-report.md",
+  },
+  {
+    name: "npm package-lock mirrors",
+    command: "pnpm deps:npm-lock:report",
+    policy: "report-only",
+    json: "npm-package-locks.json",
+    markdown: "npm-package-locks.md",
   },
 ];
 
@@ -226,27 +234,31 @@ async function readJson<T>(filePath: string): Promise<T> {
  * Reads generated reports and collects summary counts.
  */
 export async function collectDependencyEvidenceSummaryCounts(evidenceDir: string) {
-  const [vulnerability, transitiveRisk, ownershipSurface, dependencyChanges] = await Promise.all([
-    readJson<Awaited<ReturnType<typeof runDependencyVulnerabilityGate>>>(
-      reportPath(evidenceDir, "dependency-vulnerability-gate.json"),
-    ),
-    readJson<{
-      findingCount: number;
-      metadataFailures: unknown[];
-      workspaceExcludedFindingCount: number;
-    }>(reportPath(evidenceDir, "transitive-manifest-risk-report.json")),
-    readJson<{ summary: { buildRiskPackageCount: number; lockfilePackageCount: number } }>(
-      reportPath(evidenceDir, "dependency-ownership-surface-report.json"),
-    ),
-    readJson<{
-      summary: {
-        addedPackages: number;
-        changedPackages: number;
-        dependencyFileChanges: number;
-        removedPackages: number;
-      };
-    }>(reportPath(evidenceDir, "dependency-changes-report.json")),
-  ]);
+  const [vulnerability, transitiveRisk, ownershipSurface, dependencyChanges, npmLocks] =
+    await Promise.all([
+      readJson<Awaited<ReturnType<typeof runDependencyVulnerabilityGate>>>(
+        reportPath(evidenceDir, "dependency-vulnerability-gate.json"),
+      ),
+      readJson<{
+        findingCount: number;
+        metadataFailures: unknown[];
+        workspaceExcludedFindingCount: number;
+      }>(reportPath(evidenceDir, "transitive-manifest-risk-report.json")),
+      readJson<{ summary: { buildRiskPackageCount: number; lockfilePackageCount: number } }>(
+        reportPath(evidenceDir, "dependency-ownership-surface-report.json"),
+      ),
+      readJson<{
+        summary: {
+          addedPackages: number;
+          changedPackages: number;
+          dependencyFileChanges: number;
+          removedPackages: number;
+        };
+      }>(reportPath(evidenceDir, "dependency-changes-report.json")),
+      readJson<Awaited<ReturnType<typeof generateNpmPackageLocksReport>>>(
+        reportPath(evidenceDir, "npm-package-locks.json"),
+      ),
+    ]);
   return {
     vulnerabilityBlockers: vulnerability.blockers.length,
     vulnerabilityFindings: vulnerability.findings.length,
@@ -263,6 +275,10 @@ export async function collectDependencyEvidenceSummaryCounts(evidenceDir: string
     dependencyAddedPackages: dependencyChanges.summary.addedPackages,
     dependencyRemovedPackages: dependencyChanges.summary.removedPackages,
     dependencyChangedPackages: dependencyChanges.summary.changedPackages,
+    npmLockPackages: npmLocks.packages.length,
+    npmLocklessPackages: npmLocks.packages.filter((entry) => !entry.bundleRuntimeDependencies)
+      .length,
+    npmPartialLockPackages: npmLocks.packagesWithOmittedWorkspaceDependencies,
   };
 }
 
@@ -318,6 +334,9 @@ export function renderDependencyEvidenceSummary({
     `- Dependency change baseline: \`${baseRef}\``,
     `- Dependency file changes: ${counts.dependencyFileChanges}`,
     `- Resolved package changes: +${counts.dependencyAddedPackages} -${counts.dependencyRemovedPackages} changed ${counts.dependencyChangedPackages}`,
+    `- npm package-lock mirrors: ${counts.npmLockPackages}`,
+    `- Lockless packages (bundleRuntimeDependencies=false): ${counts.npmLocklessPackages}`,
+    `- Partial npm package-lock mirrors (workspace omissions): ${counts.npmPartialLockPackages}`,
     "",
     "## Reports",
     "",
@@ -325,6 +344,7 @@ export function renderDependencyEvidenceSummary({
     "- `transitive-manifest-risk-report.md`",
     "- `dependency-ownership-surface-report.md`",
     "- `dependency-changes-report.md`",
+    "- `npm-package-locks.md`",
   ].join("\n")}\n`;
 }
 
@@ -347,6 +367,9 @@ export function renderDependencyEvidenceStepSummary({
     `- Ownership/install surface lockfile packages: \`${counts.ownershipLockfilePackages}\``,
     `- Dependency file changes: \`${counts.dependencyFileChanges}\``,
     `- Resolved package changes: \`+${counts.dependencyAddedPackages} -${counts.dependencyRemovedPackages} changed ${counts.dependencyChangedPackages}\``,
+    `- npm package-lock mirrors: ${counts.npmLockPackages}`,
+    `- Lockless packages (bundleRuntimeDependencies=false): ${counts.npmLocklessPackages}`,
+    `- Partial npm package-lock mirrors (workspace omissions): ${counts.npmPartialLockPackages}`,
   ].join("\n")}\n`;
 }
 
@@ -421,7 +444,7 @@ async function runEvidenceReports(
 /**
  * Generates dependency evidence reports, manifest, and summaries for a release.
  */
-async function generateDependencyReleaseEvidence({
+export async function generateDependencyReleaseEvidence({
   rootDir: sourceRoot = process.cwd(),
   outputDir: requestedOutputDir,
   releaseRef,

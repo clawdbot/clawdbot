@@ -186,7 +186,7 @@ describe("worker node enrollment", () => {
     const prepareArtifact = vi.fn(async () => artifact());
     const manager = createManager({ prepareArtifact });
 
-    await expect(manager.prepare(createRequested())).resolves.toBeUndefined();
+    await expect(manager.prepare(createRequested())).resolves.toBe(artifact().tarballSha256);
     expect(prepareArtifact).toHaveBeenCalledOnce();
   });
 

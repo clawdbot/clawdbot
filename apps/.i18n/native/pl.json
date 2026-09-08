@@ -1693,6 +1693,7 @@
     "native.apple.05f711cec069ec47": "Wymagane parowanie. W już sparowanym kliencie OpenClaw uruchom /pair approve, a następnie ponownie sprawdź połączenie.",
     "native.apple.0603402116243f9e": "Nowy czat w drzewie roboczym",
     "native.apple.060e3947436fa930": "Nie udało się przetworzyć %1$@: %2$@",
+    "native.apple.0644a7702bb80de1": "Sesja logowania w przeglądarce wygasła. Połącz się ponownie z tym Gateway.",
     "native.apple.067bbf8e4b7d1837": "Usłyszano: %@",
     "native.apple.06aa02b192d6a1b3": "Sprawdzanie",
     "native.apple.06ced75261e8a242": "PID aplikacji",

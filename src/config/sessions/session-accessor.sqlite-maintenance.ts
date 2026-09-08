@@ -6,6 +6,7 @@ import { coerceRequiredSqliteNumber as sqliteNumber } from "../../infra/sqlite-n
 import { getChildLogger } from "../../logging/logger.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
+  deferOpenClawAgentPostCommitPublication,
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
   type OpenClawAgentDatabase,
@@ -25,7 +26,7 @@ import {
   readSessionEntryStore,
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
-import { emitCommittedSessionEntryRemovals } from "./session-accessor.sqlite-identity.js";
+import { prepareCommittedSessionEntryRemovals } from "./session-accessor.sqlite-identity.js";
 import {
   collectProjectedReferencedSessionIds,
   collectSessionStateIdsForEntry,
@@ -598,6 +599,10 @@ export async function finalizeSessionEntryMaintenancePlansAfterWriterReleaseBest
                 new Set(committedEntryRemovals.map((removal) => removal.sessionKey)),
               );
               deletePlannedLifecycleArtifactEntries(database, committedEntryRemovals);
+              deferOpenClawAgentPostCommitPublication(
+                database,
+                prepareCommittedSessionEntryRemovals(scope.agentId, committedEntryRemovals),
+              );
             }, toDatabaseOptions(scope));
             return committed;
           }),
@@ -621,7 +626,6 @@ export async function finalizeSessionEntryMaintenancePlansAfterWriterReleaseBest
     }
     deletedEntries +=
       batch.workItems - (batch.entryRemovals.length - committedEntryRemovals.length);
-    emitCommittedSessionEntryRemovals(scope.agentId, committedEntryRemovals);
     for (const removal of committedEntryRemovals) {
       if (removal.maintenanceReason === "model-run-pruned") {
         committedCounts.modelRunPruned += 1;

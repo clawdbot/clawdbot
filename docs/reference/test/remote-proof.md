@@ -78,8 +78,8 @@ names must be UTF-8; symlink targets remain raw bytes. Symlinked repository Crab
 configuration or ignore files, and privacy-excluded runtime configuration, are
 rejected before upload rather than changing their trust or privacy treatment.
 
-Local test commands in [Run tests locally](/reference/test/local) are the normal
-trusted development path. Keep proof proportional to the touched contract.
+Local test commands below are the normal trusted development path. Keep proof
+proportional to the touched contract.
 
 For untrusted proof, lazily warm with `--provider aws`. Every run must set
 `CRABBOX_ENV_ALLOW=CI`, pass `--provider aws --no-hydrate`, and use

@@ -358,6 +358,7 @@ export function registerDefaultAuthTokenSuite(): void {
         expect(Object.keys(auth ?? {}).toSorted()).toEqual([
           "deviceToken",
           "issuedAtMs",
+          "method",
           "recoveryMigrationAllowed",
           "recoveryScope",
           "role",
@@ -386,6 +387,7 @@ export function registerDefaultAuthTokenSuite(): void {
         expect(Object.keys(auth ?? {}).toSorted()).toEqual([
           "deviceToken",
           "issuedAtMs",
+          "method",
           "recoveryMigrationAllowed",
           "recoveryScope",
           "role",

@@ -991,7 +991,7 @@ export async function resolveCommandSecretRefsViaGateway(params: {
       );
     }
     throw new Error(
-      `${params.commandName}: failed to resolve secrets from the active gateway snapshot (${formatErrorMessage(err)}). Start the gateway and retry.`,
+      `${params.commandName}: failed to resolve secrets from the active gateway snapshot (${formatErrorMessage(err)}). Local resolution also failed. Check the configured secret sources and gateway access, then retry.`,
       { cause: err },
     );
   }

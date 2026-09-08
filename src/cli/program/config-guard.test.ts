@@ -410,6 +410,7 @@ describe("ensureConfigReady", () => {
         migrateLegacyConfig: false,
         invalidConfigNote: false,
         requireStartupMigrationCheckpoint: true,
+        validateStartupConfig: expect.any(Function),
       });
       expect(getProcessPluginCache() === preflightCache).toBe(true);
       // Cache reuse must not freeze the Gateway inventory before its final config read.

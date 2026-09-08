@@ -49,42 +49,51 @@ describe("exa web search provider", () => {
     }
   });
 
-  it("aborts the guarded Exa request without losing the caller's reason", async () => {
+  it("aborts the guarded Exa request without losing the caller's reason", async ({
+    onTestFinished,
+  }) => {
+    const tool = requireExaTool({ apiKey: "exa-test-key" });
+    const controller = new AbortController();
+    const reason = new Error("Exa request canceled in flight");
     const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(
       async (_url, init) =>
         await new Promise<Response>((_resolve, reject) => {
-          if (!init?.signal) {
+          const signal = init?.signal;
+          if (!signal) {
             reject(new Error("Exa request lost caller cancellation"));
             return;
           }
-          init.signal.addEventListener("abort", () => reject(init.signal?.reason as Error), {
-            once: true,
-          });
+          const rejectAbort = () => {
+            const abortReason: unknown = signal.reason;
+            reject(
+              abortReason instanceof Error
+                ? abortReason
+                : new Error("Exa request lost caller cancellation reason"),
+            );
+          };
+          if (signal.aborted) {
+            rejectAbort();
+            return;
+          }
+          signal.addEventListener("abort", rejectAbort, { once: true });
+          // Cancel at transport entry, after cold runtime loading has completed.
+          controller.abort(reason);
+          expect(signal.aborted).toBe(true);
         }),
     );
-    const tool = createExaWebSearchProvider().createTool({
-      config: {
-        plugins: { entries: { exa: { config: { webSearch: { apiKey: "exa-test-key" } } } } },
-      },
-      searchConfig: {},
-    });
-    if (!tool) {
-      throw new Error("Expected tool definition");
-    }
-    const controller = new AbortController();
     const result = tool.execute(
       { query: "exa in-flight cancellation" },
       { signal: controller.signal },
     );
-
-    try {
-      await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
-      controller.abort(new Error("Exa request canceled in flight"));
-      await expect(result).rejects.toThrow("Exa request canceled in flight");
-      expect(fetchMock.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
-    } finally {
+    onTestFinished(async () => {
+      controller.abort(reason);
+      await result.catch(() => {});
       fetchMock.mockRestore();
-    }
+    });
+
+    await expect(result).rejects.toBe(reason);
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(fetchMock.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
   });
 
   it("exposes the expected metadata and selection wiring", () => {

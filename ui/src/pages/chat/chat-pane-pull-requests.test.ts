@@ -6,7 +6,7 @@ import {
   CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT,
   type ControlUiSessionPullRequest,
 } from "../../../../src/gateway/control-ui-contract.js";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { GatewayBrowserClient, GatewayEventListener } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import {
   SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
@@ -61,6 +61,7 @@ function emitSnapshot(
   emitGatewayEvent: (event: string, payload: unknown) => void,
   sessionKey: string,
   snapshot: {
+    repository?: { owner: string; repo: string };
     branch?: {
       owner: string;
       repo: string;
@@ -102,6 +103,7 @@ function createPublicationPane(scope?: "global" | "per-sender") {
   });
   const client = createGatewayBrowserClientFixture({ request });
   const initial = createInitializationContext();
+  const eventListeners = new Set<GatewayEventListener>();
   const hello = gatewayHelloForMethods(
     ["sessions.github.publish", SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD],
     ["operator.read", "operator.write"],
@@ -117,6 +119,10 @@ function createPublicationPane(scope?: "global" | "per-sender") {
   }
   const gateway: ApplicationContext["gateway"] = {
     ...initial.gateway,
+    subscribeEvents: (listener) => {
+      eventListeners.add(listener);
+      return () => eventListeners.delete(listener);
+    },
     snapshot: {
       ...initial.gateway.snapshot,
       client,
@@ -178,10 +184,83 @@ function createPublicationPane(scope?: "global" | "per-sender") {
     });
     return pane.chatProps!.githubPublication!;
   };
-  return { pane, state, context, request, options, shared, account, generation, settled };
+  const emitGatewayEvent = (event: string, payload: unknown) => {
+    for (const listener of eventListeners) {
+      listener({ type: "event", event, payload });
+    }
+  };
+  return {
+    pane,
+    state,
+    context,
+    request,
+    options,
+    shared,
+    account,
+    generation,
+    settled,
+    emitGatewayEvent,
+  };
 }
 
 describe("chat pane pushed pull request state", () => {
+  it.each(["unavailable", "rate-limited"] as const)(
+    "applies retained and replaced repository snapshots during %s",
+    async (status) => {
+      const epoch = {};
+      const setPullRequestSummary = vi.fn();
+      const { pane, emitGatewayEvent } = createPullRequestPane({
+        capturePullRequestEpoch: vi.fn(() => epoch),
+        setPullRequestSummary,
+      } as unknown as SessionCapability);
+      const key = "agent:main:current";
+      const repository = { owner: "openclaw", repo: "openclaw" };
+      pane.refreshSessionPullRequests();
+      await Promise.resolve();
+      emitSnapshot(emitGatewayEvent, key, {
+        repository,
+        branch: { ...repository, branch: "feature/demo" },
+        pullRequests: [pullRequest(111532, "open")],
+        rateLimited: false,
+        status: "ready",
+      });
+      pane.refreshSessionPullRequests();
+      const failure = { pullRequests: [], rateLimited: status === "rate-limited", status };
+      emitSnapshot(emitGatewayEvent, key, { ...failure, repository });
+      pane.refreshSessionPullRequests();
+      expect(pane.sessionPullRequests).toHaveLength(1);
+      expect(pane.sessionPullRequestsBranch?.branch).toBe("feature/demo");
+
+      const replacement = { owner: "other", repo: "checkout" };
+      emitSnapshot(emitGatewayEvent, key, { ...failure, repository: replacement });
+      pane.refreshSessionPullRequests();
+      expect(pane.githubRepo).toEqual(replacement);
+      expect(pane.sessionPullRequests).toEqual([]);
+      expect(pane.sessionPullRequestsBranch).toBeUndefined();
+      expect(setPullRequestSummary).toHaveBeenLastCalledWith(key, undefined, epoch);
+    },
+  );
+
+  it("passes repository-only session context to chat rendering and clears it on a session switch", async () => {
+    const { pane, state, emitGatewayEvent } = createPublicationPane();
+    pane.refreshSessionPullRequests();
+    await Promise.resolve();
+    emitSnapshot(emitGatewayEvent, state.sessionKey, {
+      repository: { owner: "openclaw", repo: "openclaw" },
+      pullRequests: [],
+      rateLimited: false,
+      status: "ready",
+    });
+    pane.refreshSessionPullRequests();
+    pane.render();
+    expect(pane.chatProps?.githubRepo).toEqual({ owner: "openclaw", repo: "openclaw" });
+
+    state.sessionKey = "agent:main:another-checkout";
+    pane.refreshSessionPullRequests();
+    pane.render();
+    expect(pane.chatProps?.githubRepo).toBeNull();
+  });
+
   it.each(["global", "per-sender"] as const)(
     "preserves the selected raw-global owner through publication RPCs in %s scope",
     async (scope) => {
@@ -391,6 +470,7 @@ describe("chat pane pushed pull request state", () => {
   it("clears the pane snapshot when the Gateway source disconnects", () => {
     const { pane } = createPullRequestPane({} as SessionCapability);
     pane.sessionPullRequests = [pullRequest(111532, "open")];
+    pane.githubRepo = { owner: "openclaw", repo: "openclaw" };
 
     pane.applyGatewaySnapshot({
       ...pane.context.gateway.snapshot,
@@ -398,6 +478,7 @@ describe("chat pane pushed pull request state", () => {
     });
 
     expect(pane.sessionPullRequests).toEqual([]);
+    expect(pane.githubRepo).toBeNull();
   });
 
   it("clears the pane snapshot while a structural replacement is pending", async () => {
@@ -423,6 +504,7 @@ describe("chat pane pushed pull request state", () => {
     pane.refreshSessionPullRequests();
     await Promise.resolve();
     expect(pane.sessionPullRequests).toHaveLength(1);
+    expect(pane.githubRepo).toEqual({ owner: "openclaw", repo: "openclaw" });
 
     emitGatewayEvent("sessions.changed", {
       sessionKey: "agent:main:current",
@@ -434,6 +516,7 @@ describe("chat pane pushed pull request state", () => {
 
     expect(pane.sessionPullRequests).toEqual([]);
     expect(pane.sessionPullRequestsBranch).toBeUndefined();
+    expect(pane.githubRepo).toBeNull();
     expect(setPullRequestSummary).toHaveBeenLastCalledWith("agent:main:current", undefined, epoch);
   });
 

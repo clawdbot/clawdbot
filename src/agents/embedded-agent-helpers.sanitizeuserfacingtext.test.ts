@@ -6,6 +6,8 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { markInboundContextLabel } from "../auto-reply/reply/inbound-context-marker.js";
+import { createCommandError } from "../process/command-error.js";
+import type { SpawnResult } from "../process/exec-result.js";
 import {
   downgradeOpenAIFunctionCallReasoningPairs,
   dropStaleOpenAIReasoning,
@@ -212,6 +214,53 @@ describe("sanitizeUserFacingText", () => {
       }),
     ).toBe("LLM request failed: connection refused by the provider endpoint.");
   });
+
+  it("preserves the production Git inventory timeout and its hint instead of provider copy", () => {
+    const header =
+      "Error: git ls-tree -r --format=%(objectsize) c79ad267ba623c1a323f1f6e8b60228bd5a30ce5 -- failed (timed out after 120 seconds; signal SIGTERM):";
+    const hint = "Check repository access and disk space.";
+    const text = `${header}\n…\n4514\n4168\n…\n${hint}`;
+    const rendered = renderUserFacingText(text, { errorContext: true });
+    expect(rendered).toBe(`${header} ${hint}`);
+    expect(rendered).not.toBe("LLM request timed out.");
+  });
+
+  it.each([
+    ["Error: fetch failed", "LLM request failed: network connection error."],
+    ["Error: request timed out", "LLM request timed out."],
+  ])("keeps provider presentation for unmarked errors: %s", (text, expected) => {
+    expect(renderUserFacingText(text, { errorContext: true })).toBe(expected);
+  });
+
+  it.each([
+    { termination: "exit", code: 23, signal: null },
+    { termination: "no-output-timeout", code: null, signal: "SIGTERM" },
+    { termination: "signal", code: null, signal: "SIGKILL" },
+    { termination: "signal", code: null, signal: null },
+    { termination: "exit", code: null, signal: null, outputLimitExceeded: true },
+    { termination: "exit", code: null, signal: null },
+  ] satisfies Array<Partial<SpawnResult>>)(
+    "preserves command failure metadata and the bounded recovery tail: %j",
+    (metadata) => {
+      const error = createCommandError(
+        "worktree setup",
+        {
+          stdout: "",
+          stderr: `Provider rate limit reached\nCreate   the fixture input and retry ${"x".repeat(600)}`,
+          killed: false,
+          ...metadata,
+        },
+        { timeoutMs: 120_000 },
+      );
+      const header = String(error).split("\n", 1)[0];
+      const rendered = renderUserFacingText(String(error), { errorContext: true });
+      expect(rendered).toContain(`${header} Create the fixture input and retry`);
+      expect(rendered).not.toContain("Provider rate limit");
+      expect(rendered).not.toMatch(/\s{2,}/u);
+      expect(rendered.length).toBeLessThanOrEqual(500);
+      expect(rendered).toMatch(/\.\.\.$/u);
+    },
+  );
 
   it.each(["disk full", "ENOSPC: no space left on device"])(
     "rewrites disk-space failures with errorContext: %s",

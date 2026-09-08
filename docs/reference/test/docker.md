@@ -77,7 +77,7 @@ Drives the interactive wizard via a pseudo-tty, verifies config/workspace/sessio
 
 ## QR import smoke (Docker)
 
-Ensures the maintained QR runtime helper loads under the supported Docker Node runtimes (Node 24 default, Node 22 compatible):
+Ensures the maintained QR runtime helper loads under the default Docker Node 24 runtime:
 
 ```bash
 pnpm test:docker:qr

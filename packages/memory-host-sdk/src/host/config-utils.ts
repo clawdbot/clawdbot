@@ -1,4 +1,3 @@
-// Memory Host SDK helper module supports config utils behavior.
 import path from "node:path";
 import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import {

@@ -5167,7 +5167,7 @@ surfaces:
             description: Hosted installer and local-prefix install paths on macOS
           - name: Node 24 recommendation
             coverageIds: [macos-host.node-24-recommendation]
-            description: Node 24.15+ recommendation and WAL-reset-safe Node runtime floor
+            description: Node 24.16+ LTS support and WAL-reset-safe Node runtime floor
           - name: App-triggered CLI install
             coverageIds: [macos-host.app-triggered-cli-install]
             description: App-triggered CLI install and runtime discovery

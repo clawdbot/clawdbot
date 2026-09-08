@@ -27,6 +27,8 @@ After gateway auth succeeds, connecting from a new browser or device usually req
   </Step>
 </Steps>
 
+Keep the page open while approval is pending. It retries automatically and connects on its own once the request is approved; **Check now** lets you retry immediately.
+
 If the browser retries pairing with changed auth details (role/scopes/public key), the previous pending request is superseded and a new `requestId` is created; re-run `openclaw devices list` before approving.
 
 Switching an already-paired browser from read access to write/admin access through ordinary stored or shared credentials is treated as an approval upgrade, not a silent reconnect: OpenClaw keeps the old approval active, blocks the broader reconnect, and asks you to approve the new scope set explicitly. The narrow exception is a fresh owner handoff issued on the Gateway host by `openclaw dashboard` or graphical onboarding; it can upgrade only the same signed browser that redeems that one-time handoff.

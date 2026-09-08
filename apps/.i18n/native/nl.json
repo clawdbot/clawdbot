@@ -1693,6 +1693,7 @@
     "native.apple.05f711cec069ec47": "Koppeling vereist. Voer /pair approve uit in een al gekoppelde OpenClaw-client en controleer de verbinding opnieuw.",
     "native.apple.0603402116243f9e": "Nieuwe chat in worktree",
     "native.apple.060e3947436fa930": "Kon %1$@ niet verwerken: %2$@",
+    "native.apple.0644a7702bb80de1": "De browseraanmelding is verlopen. Maak opnieuw verbinding met deze Gateway.",
     "native.apple.067bbf8e4b7d1837": "Gehoord: %@",
     "native.apple.06aa02b192d6a1b3": "Bezig met beoordelen",
     "native.apple.06ced75261e8a242": "App-PID",

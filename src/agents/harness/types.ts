@@ -1,3 +1,5 @@
+// Harness contracts depend on the model-ref data shape, not its runtime normalization.
+import type { ProviderModelRef as ModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import type { SessionToolOverrides } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 /**
@@ -9,7 +11,6 @@ import type {
   ProviderRouteOverridePresence,
 } from "../../plugin-sdk/provider-model-types.js";
 import type { McpToolCatalog } from "../agent-bundle-mcp-types.js";
-import type { ModelRef } from "../model-ref-shared.js";
 import type { AgentHarnessHostCapabilities } from "./host-capability-types.js";
 import type { AgentHarnessRuntimeArtifactBinding } from "./runtime-artifact.types.js";
 
@@ -540,7 +541,7 @@ export type AgentHarnessModelCatalogParams = {
   agentId: string;
   agentDir: string;
   workspaceDir: string;
-  configuredModelRefs?: readonly import("../model-ref-shared.js").ModelRef[];
+  configuredModelRefs?: readonly ModelRef[];
 };
 
 type AgentHarnessModelCatalogCapability = {

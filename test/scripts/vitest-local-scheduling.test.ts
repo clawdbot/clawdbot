@@ -1,9 +1,47 @@
-import { describe, expect, it } from "vitest";
+import os from "node:os";
+import { describe, expect, it, vi } from "vitest";
 import {
   resolveLocalVitestEnv,
   resolveLocalFullSuiteProfile,
   resolveLocalVitestScheduling,
 } from "../../scripts/lib/vitest-local-scheduling.mts";
+
+describe("vitest scheduling host snapshot", () => {
+  it("sizes separately loaded project configs against one host reading", async () => {
+    // Vite bundles each project config on its own, so each project gets its own copy
+    // of this module. Vitest refuses a run whose projects share sequence.groupOrder
+    // but disagree on maxWorkers, so two module instances that resolve while the
+    // load average moves must still agree; without a process-wide snapshot they
+    // return 12 and 3.
+    const host = os as unknown as Record<string, unknown>;
+    const saved = {
+      availableParallelism: os.availableParallelism,
+      totalmem: os.totalmem,
+      freemem: os.freemem,
+      loadavg: os.loadavg,
+    };
+    host.availableParallelism = () => 16;
+    host.totalmem = () => 512 * 1024 ** 3;
+    host.freemem = () => 256 * 1024 ** 3;
+    try {
+      host.loadavg = () => [0, 0, 0];
+      vi.resetModules();
+      const first = await import("../../scripts/lib/vitest-local-scheduling.mts");
+      const before = first.resolveLocalVitestScheduling({});
+      host.loadavg = () => [64, 64, 64];
+      vi.resetModules();
+      const second = await import("../../scripts/lib/vitest-local-scheduling.mts");
+      const after = second.resolveLocalVitestScheduling({});
+      // Guard against a vacuous pass: distinct instances, and the stub drives the reading.
+      expect(second).not.toBe(first);
+      expect(os.loadavg()[0]).toBe(64);
+      expect(after.maxWorkers).toBe(before.maxWorkers);
+      expect(after.throttledBySystem).toBe(before.throttledBySystem);
+    } finally {
+      Object.assign(host, saved);
+    }
+  });
+});
 
 describe("local Vitest scheduling", () => {
   it.each([

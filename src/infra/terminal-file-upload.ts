@@ -42,7 +42,8 @@ const uploadQueue = new BoundedSerialQueue({
 
 type CleanupState = {
   retentionMs: number;
-  deadlines: Map<string, number>;
+  // One deadline per observed upload, including legacy inventories above the admission limit.
+  deadlines: Map<string, { dev: bigint; ino: bigint; expiresAt: number }>;
   timer?: ReturnType<typeof setTimeout>;
   nextAt?: number;
 };
@@ -260,7 +261,7 @@ async function scanUploads(
       const directory = path.join(root, entry.name);
       let stats;
       try {
-        stats = await lstat(directory);
+        stats = await lstat(directory, { bigint: true });
       } catch (error) {
         if (hasErrnoCode(error, "ENOENT")) {
           continue;
@@ -269,19 +270,29 @@ async function scanUploads(
       }
       if (
         !stats.isDirectory() ||
-        (typeof process.getuid === "function" && stats.uid !== process.getuid())
+        (typeof process.getuid === "function" && stats.uid !== BigInt(process.getuid()))
       ) {
         continue;
       }
       unseen.delete(directory);
-      let expiresAt = state.deadlines.get(directory) ?? stats.mtimeMs + state.retentionMs;
-      if (stats.mtimeMs > nowMs) {
-        // Persist the clamp so later root scans cannot keep extending a future-dated upload.
-        await assertHeld();
-        await lutimes(directory, stats.atime, new Date(nowMs));
-        state.deadlines.delete(directory);
-        expiresAt = nowMs + state.retentionMs;
+      let deadline = state.deadlines.get(directory);
+      if (!deadline || deadline.dev !== stats.dev || deadline.ino !== stats.ino) {
+        // Keep fractional milliseconds so recovery cannot expire an upload early.
+        const mtimeMs =
+          Number(stats.mtimeNs / 1_000_000n) + Number(stats.mtimeNs % 1_000_000n) / 1_000_000;
+        if (mtimeMs > nowMs) {
+          // Persist the clamp so another process cannot extend a future-dated upload.
+          await assertHeld();
+          await lutimes(directory, stats.atime, new Date(nowMs));
+        }
+        deadline = {
+          dev: stats.dev,
+          ino: stats.ino,
+          expiresAt: Math.min(mtimeMs, nowMs) + state.retentionMs,
+        };
+        state.deadlines.set(directory, deadline);
       }
+      const { expiresAt } = deadline;
       if (expiresAt <= nowMs) {
         await assertHeld();
         if (await removeTerminalUploadDirectory(directory)) {
@@ -410,26 +421,31 @@ export async function stageTerminalUpload(
         await assertHeld();
         const directory = await mkdtemp(path.join(root, TERMINAL_UPLOAD_PREFIX));
         const targetPath = path.join(directory, sanitizeTerminalUploadName(name));
+        let identity: { dev: bigint; ino: bigint } | undefined;
         try {
+          const { dev, ino } = await lstat(directory, { bigint: true });
+          identity = { dev, ino };
           await assertHeld();
           await writeFile(targetPath, Buffer.from(contentBase64, "base64"), {
             flag: "wx",
             mode: 0o600,
           });
+          const expiresAt = Date.now() + (options?.cleanupAfterMs ?? TERMINAL_UPLOAD_RETENTION_MS);
+          state.deadlines.set(directory, { ...identity, expiresAt });
+          cleanupRoots.set(root, state);
+          scheduleCleanup(root, state, expiresAt);
+          return { path: targetPath, size };
         } catch (error) {
           if (!(await removeTerminalUploadDirectory(directory))) {
             const retryAt = Date.now() + TERMINAL_UPLOAD_CLEANUP_RETRY_MS;
-            state.deadlines.set(directory, retryAt);
+            if (identity) {
+              state.deadlines.set(directory, { ...identity, expiresAt: retryAt });
+            }
             cleanupRoots.set(root, state);
             scheduleCleanup(root, state, retryAt);
           }
           throw error;
         }
-        const expiresAt = Date.now() + (options?.cleanupAfterMs ?? TERMINAL_UPLOAD_RETENTION_MS);
-        state.deadlines.set(directory, expiresAt);
-        cleanupRoots.set(root, state);
-        scheduleCleanup(root, state, expiresAt);
-        return { path: targetPath, size };
       });
     },
     { weight: contentBase64.length, sealOnOverflow: false },

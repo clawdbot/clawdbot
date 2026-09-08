@@ -249,7 +249,9 @@ send_guided_skip_ui_flow() {
   send $'\r' 0.8
   wait_for_log "How should I set things up?" 120 || return $?
   send $'\r' 0.8
-  wait_for_log "Use Current model?" 120 || return $?
+  wait_for_log "Model/auth provider" 120 || return $?
+  send $'\r' 0.8
+  wait_for_log "Use which detected AI?" 120 || return $?
   send $'\r' 0.8
 }
 

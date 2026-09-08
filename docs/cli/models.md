@@ -37,6 +37,8 @@ For `models status`, `OPENCLAW_AGENT_DIR` overrides the inspected auth directory
 
 `models set` and `models set-image` require the provider to be declared by an installed plugin or configured under `models.providers`. An unknown provider exits nonzero without changing config. If the provider is known but the model is absent from the local catalog, the command saves the selection and prints a warning because newly released and self-hosted models may not be cataloged yet. `openclaw doctor --json` reports configured unknown providers; add `--severity-min info` to also see active models that the local catalog cannot confirm.
 
+Default-model, alias, and fallback changes resolve provider-owned model aliases using the current plugin configuration. When stored entries resolve to the selected model, their settings move to its canonical key; existing canonical settings take precedence. Adding an alias replaces the model's previous alias. If config changes during that preparation, the command rejects the write; rerun it against the updated config.
+
 ### Status
 
 Bare `openclaw models` is equivalent to `openclaw models status`.
@@ -60,6 +62,8 @@ Options:
 | `--probe-concurrency <n>` | Concurrent probes.                                                                                                                       |
 | `--probe-max-tokens <n>`  | Probe max tokens (best effort).                                                                                                          |
 | `--agent <id>`            | Configured agent id; overrides `OPENCLAW_AGENT_DIR`.                                                                                     |
+
+`--probe-timeout` requires a positive number; `--probe-concurrency` and `--probe-max-tokens` require positive integers. Omit these options to use their defaults (`8000`, `2`, and `8`, respectively); explicitly empty values are rejected.
 
 Probe rows can come from auth profiles, env credentials, or `models.json`. Probe status buckets: `ok`, `auth`, `rate_limit`, `billing`, `timeout`, `format`, `unknown`, `no_model`.
 

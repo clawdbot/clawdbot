@@ -39,6 +39,12 @@ Exec approvals are enforced locally on the execution host:
 - **Gateway host** -> `openclaw` process on the gateway machine.
 - **Node host** -> node runner (macOS companion app or headless node host).
 
+The `claude-cli` backend also checks native Bash commands against the agent's
+exec allowlist when `ask: "on-miss"`. This authorizes command arguments while
+Claude Code owns execution; it does not provide OpenClaw sandboxing. See
+[Native Bash and the exec allowlist](/gateway/cli-backends#native-bash-and-the-exec-allowlist)
+for matching, prompting, and binding restrictions.
+
 ### Trust model
 
 - Gateway-authenticated callers are trusted operators for that Gateway.

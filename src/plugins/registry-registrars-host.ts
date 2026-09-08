@@ -17,6 +17,7 @@ import {
   type PluginTrustedToolPolicyRegistration,
 } from "./host-hooks.js";
 import { validateControlUiNativeRoutePlacement } from "./registry-control-ui-policy.js";
+import { getPluginRegistryInspectionResources } from "./registry-inspection-resources.js";
 import type { PluginRegistryState } from "./registry-state.js";
 import type {
   PluginRecord,
@@ -424,6 +425,16 @@ export function createHostRegistrars(state: PluginRegistryState) {
     if (lifecycle.cleanup !== undefined && typeof lifecycle.cleanup !== "function") {
       reportRegistrationError(record, `runtime lifecycle cleanup must be a function: ${id}`);
       return;
+    }
+    const inspection = getPluginRegistryInspectionResources(registry);
+    const dispose = inspection ? lifecycle.dispose : undefined;
+    if (dispose !== undefined && typeof dispose !== "function") {
+      reportRegistrationError(record, `runtime lifecycle dispose must be a function: ${id}`);
+      return;
+    }
+    if (inspection && dispose) {
+      // A disposer may be inherited and require the original registration as its receiver.
+      inspection.register(record.id, { id, dispose: () => dispose.call(lifecycle) });
     }
     registry.runtimeLifecycles.push({
       pluginId: record.id,

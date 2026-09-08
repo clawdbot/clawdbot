@@ -155,6 +155,11 @@ export type PluginSessionActionRegistration = {
 export type PluginRuntimeLifecycleRegistration = {
   id: string;
   description?: string;
+  /**
+   * Releases this registration's resources after an explicitly owned inspection.
+   * Raw loaders do not invoke this callback. Host cleanup notifications stay separate.
+   */
+  dispose?: () => void | Promise<void>;
   cleanup?: (ctx: {
     reason: PluginHostCleanupReason;
     sessionKey?: string;

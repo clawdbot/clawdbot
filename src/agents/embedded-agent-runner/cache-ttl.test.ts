@@ -116,6 +116,14 @@ describe("readLastCacheTtlTimestamp", () => {
             modelId: "gemini-3.1-pro-preview",
           },
         },
+        {
+          type: "custom",
+          customType: "openclaw.cache-ttl",
+          data: {
+            prunedToolResults: [],
+            frozenToolResults: [{ key: "tool:new:43", sourceHash: "hash" }],
+          },
+        },
       ],
     };
 

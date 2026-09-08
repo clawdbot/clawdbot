@@ -1,5 +1,6 @@
 import { nothing } from "lit";
 import { t } from "../../i18n/index.ts";
+import { icons } from "../icons.ts";
 import { renderPanelTabStrip, type PanelTabStripTab } from "../panel-tab-strip.ts";
 import type { BrowserPanelTab } from "./browser-client.ts";
 
@@ -29,7 +30,8 @@ export function renderBrowserPanelTabs(params: {
       id: tab.id,
       domId: `browser-tab-${tab.id}`,
       label,
-      title: tab.url,
+      title: `${t(tab.kind === "native" ? "browser.nativeTab" : "browser.remoteTab")}: ${tab.url}`,
+      icon: tab.kind === "native" ? icons.monitor : icons.globe,
       closeLabel: `${t("browser.closeTab")}: ${label}`,
     };
   });

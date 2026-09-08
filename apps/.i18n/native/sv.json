@@ -1693,6 +1693,7 @@
     "native.apple.05f711cec069ec47": "Parkoppling krävs. Kör /pair approve i en redan parkopplad OpenClaw-klient och kontrollera sedan anslutningen igen.",
     "native.apple.0603402116243f9e": "Ny chatt i arbetsträd",
     "native.apple.060e3947436fa930": "Kunde inte bearbeta %1$@: %2$@",
+    "native.apple.0644a7702bb80de1": "Inloggningen i webbläsaren har gått ut. Anslut till denna Gateway igen.",
     "native.apple.067bbf8e4b7d1837": "Hörde: %@",
     "native.apple.06aa02b192d6a1b3": "Granskar",
     "native.apple.06ced75261e8a242": "Appens PID",

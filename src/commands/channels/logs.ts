@@ -80,7 +80,7 @@ function matchesChannel(
 }
 
 function parseLinesOption(value: unknown): number {
-  if (value === undefined || value === null || value === "") {
+  if (value === undefined || value === null) {
     return DEFAULT_LIMIT;
   }
   const parsed = parseStrictPositiveInteger(value);

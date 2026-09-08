@@ -18,6 +18,15 @@ There is no graph DSL and no separate workflow format. The program is the
 orchestration. Swarm adds awaitable collector children, structured results,
 bounded concurrency, and progress reporting to that program.
 
+## When to use Swarm
+
+Use ordinary `sessions_spawn` announcing runs for one or a few children. Reserve
+Swarm for large parallel fan-out: several similar children (about five or more),
+typically driven by Code Mode `agents.run` with control flow such as `Promise.all`.
+Collectors (`collect: true`) send no completion notification and cannot be steered;
+their results must be explicitly collected. Use `outputSchema` for structured
+results and `groupId` to group a batch.
+
 ## Enable Swarm
 
 Swarm needs no enablement setting. Omitted `tools.swarm`, an empty object, or

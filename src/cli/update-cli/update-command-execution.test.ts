@@ -1,6 +1,9 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
+import { withTestDir } from "../../test-helpers/temp-dir.js";
 import type { captureTargetDatabaseSchemaContext } from "./schema-preflight.js";
 import type { PreManagedServiceStop } from "./update-command-service.js";
 
@@ -26,13 +29,18 @@ const mocks = vi.hoisted(() => ({
   runtimeError: vi.fn(),
   revalidateSchemaContext:
     vi.fn<typeof import("./update-command-managed-context.js").revalidateUpdateDatabaseContext>(),
+  validateCanary: vi.fn(),
   serviceStopped: false,
   shouldBlockServiceUpdate: vi.fn(),
   verifyPackageRecovery: vi.fn(),
 }));
 
-vi.mock("../../infra/update-global.js", () => ({
+vi.mock("../../infra/update-global.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/update-global.js")>()),
   verifyPackageUpdateRecovery: mocks.verifyPackageRecovery,
+}));
+vi.mock("../../infra/update-candidate-canary.js", () => ({
+  validateUpdateCandidateCanary: mocks.validateCanary,
 }));
 
 vi.mock("./update-command-plugin-preflight.js", () => ({
@@ -64,7 +72,8 @@ vi.mock("./update-command-handoff.js", () => ({
   handoffUpdateFromGateway: vi.fn(),
 }));
 
-vi.mock("./update-command-managed-context.js", () => ({
+vi.mock("./update-command-managed-context.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./update-command-managed-context.js")>()),
   captureOwnedManagedUpdateContext: mocks.captureManagedContext,
   captureOwnedManagedUpdatePreflightContext: mocks.captureManagedPreflight,
   revalidateUpdateDatabaseContext: mocks.revalidateSchemaContext,
@@ -174,6 +183,13 @@ function inspectOrStopService(phase: "inspect" | "prepare" = "prepare"): PreMana
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.serviceStopped = false;
+  mocks.validateCanary.mockResolvedValue({
+    status: "ok",
+    phase: "readiness",
+    steps: [],
+    durationMs: 1,
+    logTail: [],
+  });
   mocks.captureManagedContext.mockResolvedValue(undefined);
   mocks.captureManagedPreflight.mockResolvedValue(schemaContext("default"));
   mocks.captureSchemaContext.mockResolvedValue(schemaContext("invoker"));
@@ -195,6 +211,90 @@ beforeEach(() => {
 });
 
 describe("mutable update execution", () => {
+  it.each(["available", "unavailable", "changed-owner"] as const)(
+    "admits local artifacts from the staged version before rehearsal: %s",
+    async (outcome) => {
+      await withTestDir({ prefix: "openclaw-staged-plugin-admission-" }, async (stage) => {
+        await fs.writeFile(
+          path.join(stage, "package.json"),
+          JSON.stringify({ name: "openclaw", version: "1.0.7" }),
+        );
+        const events: string[] = [];
+        mocks.pluginPreflight.mockImplementation(async ({ targetVersion }) => {
+          events.push("preflight");
+          expect(targetVersion).toBe("1.0.7");
+          expect(mocks.serviceStopped).toBe(false);
+          if (outcome === "unavailable") {
+            throw new UpdatePreMutationError(
+              "plugin-target-unavailable",
+              "fixture plugin is unavailable",
+            );
+          }
+        });
+        mocks.revalidateSchemaContext.mockImplementation(async (context) => {
+          if (outcome === "changed-owner" && events.includes("preflight")) {
+            throw new UpdatePreMutationError("database-schema-preflight", "fixture owner changed");
+          }
+          return context;
+        });
+        mocks.validateCanary.mockImplementation(async () => {
+          events.push("rehearsal");
+          return { status: "ok", phase: "readiness", steps: [], durationMs: 1, logTail: [] };
+        });
+        mocks.runPackageUpdate.mockImplementation(async ({ validateCandidate }) => {
+          events.push("staged");
+          expect(mocks.prepareMutableUpdate).not.toHaveBeenCalled();
+          try {
+            await validateCandidate(stage);
+            return successfulUpdate;
+          } catch (error) {
+            if (!(error instanceof UpdatePreMutationError)) {
+              throw error;
+            }
+            return { ...successfulUpdate, status: "error", reason: "package-update-failed" };
+          }
+        });
+        const execution = await executeMutableUpdate({
+          ...executionParams("package"),
+          tag: "/tmp/candidate.tgz",
+          packageInstallSpec: "/tmp/candidate.tgz",
+          packageTargetVersion: undefined,
+        });
+        expect(events).toEqual(
+          outcome === "available" ? ["staged", "preflight", "rehearsal"] : ["staged", "preflight"],
+        );
+        expect(execution?.mutationStarted).toBe(false);
+        expect(mocks.serviceStopped).toBe(false);
+        expect(execution?.result.status).toBe(outcome === "available" ? "ok" : "error");
+        if (outcome !== "available") {
+          expect(mocks.validateCanary).not.toHaveBeenCalled();
+          expect(mocks.prepareMutableUpdate).not.toHaveBeenCalled();
+          expect(execution?.result.reason).toBe(
+            outcome === "unavailable" ? "plugin-target-unavailable" : "database-schema-preflight",
+          );
+        }
+      });
+    },
+  );
+
+  it("leaves a staged local same-version no-op free of plugin or mutable preparation", async () => {
+    mocks.runPackageUpdate.mockResolvedValue({
+      ...successfulUpdate,
+      status: "skipped",
+      reason: "already-current",
+    });
+    const execution = await executeMutableUpdate({
+      ...executionParams("package"),
+      tag: "/tmp/candidate.tgz",
+      packageInstallSpec: "/tmp/candidate.tgz",
+      packageTargetVersion: undefined,
+    });
+    expect(execution?.result.reason).toBe("already-current");
+    expect(mocks.prepareMutableUpdate).not.toHaveBeenCalled();
+    expect(mocks.pluginPreflight).not.toHaveBeenCalled();
+    expect(mocks.serviceStopped).toBe(false);
+  });
+
   it.each([
     "@openclaw/example@1.0.1: Package not found on npm",
     "@openclaw/example@1.0.1: npm view failed: ECONNRESET",

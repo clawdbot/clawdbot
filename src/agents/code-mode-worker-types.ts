@@ -4,6 +4,7 @@ import type { CodeModeApiVirtualFile } from "./code-mode-namespaces.js";
 
 // Also bounds queued ordinary guest requests independently of configured in-flight slots.
 export const MAX_CODE_MODE_PENDING_TOOL_CALLS = 128;
+export const CODE_MODE_WORKER_WATCHDOG_GRACE_MS = 2_000;
 
 type CodeModeBridgeMethod =
   | "search"
@@ -57,6 +58,7 @@ type CodeModeWorkerInput =
       source: string;
       language?: CodeModeLanguage;
       prelude?: string;
+      preflightDeclarations?: string;
       executionTimeoutMs?: number;
       config: CodeModeConfig;
       catalog: unknown[];
@@ -80,6 +82,26 @@ export type CodeModeWorkerPayload = CodeModeWorkerInput & {
 export type CodeModeSettlementMode =
   | { kind: "awaiting" }
   | { kind: "draining"; requiredRequestIds: string[] };
+
+/** Transient worker boundary; no heap serialization and no resumable handle. */
+export type CodeModeWorkerBoundary = {
+  status: "boundary";
+  pendingRequests: PendingBridgeRequest[];
+  canceledRequestIds: string[];
+  settlementMode: CodeModeSettlementMode;
+  output: CodeModeOutputSource;
+  /** QuickJS-owned allocations, not WASM capacity or process RSS. */
+  memoryUsedBytes: number;
+};
+
+export type CodeModeWorkerContinuation =
+  | { kind: "checkpoint" }
+  | {
+      kind: "continue";
+      timeoutMs: number;
+      settledRequests: SettledBridgeRequest[];
+      pendingRequests: PendingBridgeRequest[];
+    };
 
 export type CodeModeFailurePhase = "input" | "guest" | "bridge" | "host";
 

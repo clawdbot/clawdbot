@@ -149,7 +149,8 @@ export function extractAssistantTextForPhase(
   const sanitizeBlockText = (text: string) => (sanitizeText ? sanitizeText(text) : text);
   const inlineText = typeof entry.text === "string" ? entry.text : entry.content;
   if (typeof inlineText === "string") {
-    return messagePhase === phase ? sanitizeBlockText(inlineText).trim() || undefined : undefined;
+    const text = messagePhase === phase ? sanitizeBlockText(inlineText) : undefined;
+    return text?.trim() ? text : undefined;
   }
 
   if (!Array.isArray(entry.content)) {
@@ -191,7 +192,7 @@ export function extractAssistantTextForPhase(
       }
     }
   }
-  return parts.join(joinWith).trim() || undefined;
+  return parts.length ? parts.join(joinWith) : undefined;
 }
 
 /** Returns user-visible assistant text, preferring final answers over legacy unphased text. */

@@ -217,6 +217,41 @@ describe("Team Reports schedule boundaries", () => {
 });
 
 describe("Team Reports scheduler lifecycle", () => {
+  it("reports the earliest due time and last completed run while another run is active", async () => {
+    const { scheduler, github } = setup({
+      caughtUp: false,
+      schedule: { intradayEveryHours: 4 },
+    });
+    expect(scheduler.health()).toEqual({ running: false, warnings: 0 });
+    scheduler.start();
+    expect(scheduler.health()).toEqual({
+      running: true,
+      nextDueMs: Date.parse("2026-08-20T12:01:00Z"),
+      warnings: 0,
+    });
+    scheduler.generate();
+    expect(scheduler.health().lastRun).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(scheduler.health()).toEqual({
+      running: true,
+      lastRun: { status: "ok", kind: "manual", finishedAtMs: Date.parse("2026-08-20T12:00:00Z") },
+      nextDueMs: Date.parse("2026-08-20T16:00:00Z"),
+      warnings: 0,
+    });
+    const blocked = createDeferred<Awaited<ReturnType<GithubSource["collect"]>>>();
+    github.collect.mockImplementationOnce(() => blocked.promise);
+    scheduler.generate({ intraday: true });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(scheduler.health().lastRun).toEqual({
+      status: "ok",
+      kind: "manual",
+      finishedAtMs: Date.parse("2026-08-20T12:00:00Z"),
+    });
+    blocked.resolve({ items: [], status: healthy });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(scheduler.health().lastRun?.finishedAtMs).toBe(Date.parse("2026-08-20T12:01:00Z"));
+  });
+
   it("catches up yesterday once after the startup delay and also publishes today's partial", async () => {
     const { scheduler, store, github } = setup({ caughtUp: false });
     scheduler.start();
@@ -438,11 +473,13 @@ describe("Team Reports scheduler lifecycle", () => {
     expect(stored?.summary?.warnings).toEqual([reason]);
     expect(stored?.markdown).toContain(`> ${reason}`);
     expect(scheduler.status().sourceWarnings).toEqual(["Roster coverage warning", reason]);
+    expect(scheduler.health().warnings).toBe(2);
     expect(context.logger.warn.mock.calls).toEqual([[reason]]);
     complete.mockResolvedValue(modelResponse());
     scheduler.generate({ intraday: true });
     await vi.advanceTimersByTimeAsync(0);
     expect(scheduler.status().sourceWarnings).toEqual(["Roster coverage warning"]);
+    expect(scheduler.health().warnings).toBe(1);
   });
 
   it("reports source failures with redacted errors and clears health on the next successful run", async () => {
@@ -456,6 +493,11 @@ describe("Team Reports scheduler lifecycle", () => {
       error: "Access failed for [redacted]",
     });
     expect(context.serviceHealth.reportFailure).toHaveBeenCalledOnce();
+    expect(scheduler.health().lastRun).toEqual({
+      status: "error",
+      kind: "manual",
+      finishedAtMs: Date.now(),
+    });
     expect(JSON.stringify(context.logger.error.mock.calls)).not.toContain("fixture-github-token");
     const succeeded = scheduler.generate();
     await vi.advanceTimersByTimeAsync(0);

@@ -91,7 +91,10 @@ openclaw config get meta.lastTouchedVersion
 </Steps>
 
 <Warning>
-For intentional downgrade or emergency recovery only, set `OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS=1` for the single command. Leave it unset for normal operation.
+For an intentional downgrade, follow [Downgrade](/install/updating#downgrade).
+Use the managed compatibility checks or restore the verified pre-update backup
+with its matching release. Do not remove `meta.lastTouchedVersion` or override
+the guard to run older code against migrated state.
 </Warning>
 
 ## Protocol mismatch after rollback

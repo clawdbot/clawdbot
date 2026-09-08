@@ -92,6 +92,13 @@ export async function stageSandboxMedia(params: {
   const stagedUrlAliases = new Set<number>();
   const inputDirectory = stagedInputDirectory(crypto.randomUUID());
   let stagingReady = false;
+  const prepareDestination = async () => {
+    if (!stagingReady) {
+      // Keep the privacy marker ahead of file publication, after source validation.
+      await ensureStagedInputDirectory(effectiveWorkspaceDir, inputDirectory, abortSignal);
+      stagingReady = true;
+    }
+  };
 
   for (const entry of pathEntries) {
     abortSignal?.throwIfAborted();
@@ -113,10 +120,6 @@ export async function stageSandboxMedia(params: {
     const dest = path.join(effectiveWorkspaceDir, relativeDest);
 
     try {
-      if (!stagingReady) {
-        await ensureStagedInputDirectory(effectiveWorkspaceDir, inputDirectory, abortSignal);
-        stagingReady = true;
-      }
       if (ctx.MediaRemoteHost) {
         await stageRemoteFileIntoRoot({
           remoteHost: ctx.MediaRemoteHost,
@@ -124,6 +127,7 @@ export async function stageSandboxMedia(params: {
           rootDir: effectiveWorkspaceDir,
           relativeDestPath: relativeDest,
           abortSignal,
+          prepareDestination,
         });
       } else {
         const copySource = await fs.realpath(source).catch(() => source);
@@ -132,6 +136,7 @@ export async function stageSandboxMedia(params: {
           rootDir: effectiveWorkspaceDir,
           relativeDestPath: relativeDest,
           abortSignal,
+          prepareDestination,
         });
       }
     } catch (err) {
@@ -245,6 +250,7 @@ async function stageLocalFileIntoRoot(params: {
   rootDir: string;
   relativeDestPath: string;
   abortSignal?: AbortSignal;
+  prepareDestination: () => Promise<void>;
 }): Promise<void> {
   const root = await fsRoot(params.rootDir);
   const source = await readLocalFileSafely({
@@ -252,6 +258,8 @@ async function stageLocalFileIntoRoot(params: {
     maxBytes: SANDBOX_MEDIA_MAX_BYTES,
   });
   // A completed read must not start a new copy after cancellation.
+  params.abortSignal?.throwIfAborted();
+  await params.prepareDestination();
   params.abortSignal?.throwIfAborted();
   await root.create(params.relativeDestPath, source.buffer);
 }
@@ -262,6 +270,7 @@ async function stageRemoteFileIntoRoot(params: {
   rootDir: string;
   relativeDestPath: string;
   abortSignal?: AbortSignal;
+  prepareDestination: () => Promise<void>;
 }): Promise<void> {
   const { abortSignal } = params;
   const safeRemoteHost = normalizeScpRemoteHost(params.remoteHost);

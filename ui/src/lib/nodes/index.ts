@@ -835,6 +835,19 @@ export function loadDeviceAuthToken(params: {
   return canonicalDeviceAuthTokens(store.tokens)[role] ?? null;
 }
 
+export function loadCurrentDeviceAuthToken(gatewayUrl: string): string | null {
+  const identity = readStoredDeviceIdentity(getSafeLocalStorage());
+  if (!identity) {
+    return null;
+  }
+  const entry = loadDeviceAuthToken({
+    deviceId: identity.deviceId,
+    gatewayUrl,
+    role: "operator",
+  });
+  return entry?.scopes.includes("operator.read") ? entry.token : null;
+}
+
 export function storeDeviceAuthToken(params: {
   deviceId: string;
   gatewayUrl: string;
@@ -931,8 +944,7 @@ async function generateIdentity(): Promise<DeviceIdentity> {
 // would raise a new unpaired request each time and never retain approval.
 let sessionDeviceIdentity: DeviceIdentity | null = null;
 
-export async function loadOrCreateDeviceIdentity(): Promise<DeviceIdentity> {
-  const storage = getSafeLocalStorage();
+function readStoredDeviceIdentity(storage: Storage | null): StoredIdentity | null {
   try {
     const raw = storage?.getItem(DEVICE_IDENTITY_STORAGE_KEY);
     if (raw) {
@@ -943,25 +955,38 @@ export async function loadOrCreateDeviceIdentity(): Promise<DeviceIdentity> {
         typeof parsed.publicKey === "string" &&
         typeof parsed.privateKey === "string"
       ) {
-        const derivedId = await fingerprintPublicKey(base64UrlDecode(parsed.publicKey));
-        if (derivedId !== parsed.deviceId) {
-          const updated: StoredIdentity = {
-            ...parsed,
-            deviceId: derivedId,
-          };
-          storage?.setItem(DEVICE_IDENTITY_STORAGE_KEY, JSON.stringify(updated));
-          return {
-            deviceId: derivedId,
-            publicKey: parsed.publicKey,
-            privateKey: parsed.privateKey,
-          };
-        }
+        return parsed;
+      }
+    }
+  } catch {
+    // Unavailable or malformed browser storage carries no usable identity.
+  }
+  return null;
+}
+
+export async function loadOrCreateDeviceIdentity(): Promise<DeviceIdentity> {
+  const storage = getSafeLocalStorage();
+  const parsed = readStoredDeviceIdentity(storage);
+  try {
+    if (parsed) {
+      const derivedId = await fingerprintPublicKey(base64UrlDecode(parsed.publicKey));
+      if (derivedId !== parsed.deviceId) {
+        const updated: StoredIdentity = {
+          ...parsed,
+          deviceId: derivedId,
+        };
+        storage?.setItem(DEVICE_IDENTITY_STORAGE_KEY, JSON.stringify(updated));
         return {
-          deviceId: parsed.deviceId,
+          deviceId: derivedId,
           publicKey: parsed.publicKey,
           privateKey: parsed.privateKey,
         };
       }
+      return {
+        deviceId: parsed.deviceId,
+        publicKey: parsed.publicKey,
+        privateKey: parsed.privateKey,
+      };
     }
   } catch {
     // Invalid local identity is replaced below.
