@@ -1,3 +1,4 @@
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { createCapturedThinkingConfigStream } from "openclaw/plugin-sdk/provider-test-contracts";
 import { describe, expect, it } from "vitest";
 import { GOOGLE_GEMINI_PROVIDER_HOOKS } from "./provider-hooks.js";
@@ -91,6 +92,72 @@ describe("GOOGLE_GEMINI_PROVIDER_HOOKS.wrapStreamFn", () => {
       | { thinkingConfig?: unknown }
       | undefined;
     expect(capturedConfig?.thinkingConfig).toEqual(expected);
+  });
+});
+
+describe("GOOGLE_GEMINI_PROVIDER_HOOKS.wrapStreamFn serviceTier", () => {
+  function captureServiceTierCall(params: {
+    api: string;
+    extraParams?: Record<string, unknown>;
+    initialPayload?: Record<string, unknown>;
+  }) {
+    let capturedPayload: Record<string, unknown> | undefined;
+    const streamFn: StreamFn = (model, _context, options) => {
+      const payload = (params.initialPayload ? { ...params.initialPayload } : {}) as Record<
+        string,
+        unknown
+      >;
+      options?.onPayload?.(payload as never, model as never);
+      capturedPayload = payload;
+      return {} as never;
+    };
+    const wrapped = GOOGLE_GEMINI_PROVIDER_HOOKS.wrapStreamFn({
+      provider: "google",
+      modelId: "gemini-3-flash-preview",
+      extraParams: params.extraParams,
+      streamFn,
+    });
+    void wrapped(
+      { api: params.api, provider: "google", id: "gemini-3-flash-preview" } as never,
+      {
+        messages: [],
+      } as never,
+      {},
+    );
+    return capturedPayload;
+  }
+
+  it("maps params.serviceTier onto the direct AI Studio payload", () => {
+    const payload = captureServiceTierCall({
+      api: "google-generative-ai",
+      extraParams: { serviceTier: "flex" },
+    });
+    expect(payload?.serviceTier).toBe("flex");
+  });
+
+  it("does not set serviceTier on Vertex payloads", () => {
+    const payload = captureServiceTierCall({
+      api: "google-vertex",
+      extraParams: { serviceTier: "flex" },
+    });
+    expect(payload?.serviceTier).toBeUndefined();
+  });
+
+  it("keeps an explicit payload serviceTier over params", () => {
+    const payload = captureServiceTierCall({
+      api: "google-generative-ai",
+      extraParams: { serviceTier: "flex" },
+      initialPayload: { serviceTier: "priority" },
+    });
+    expect(payload?.serviceTier).toBe("priority");
+  });
+
+  it("ignores invalid serviceTier params", () => {
+    const payload = captureServiceTierCall({
+      api: "google-generative-ai",
+      extraParams: { serviceTier: "turbo" },
+    });
+    expect(payload?.serviceTier).toBeUndefined();
   });
 });
 

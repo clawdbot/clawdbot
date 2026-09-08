@@ -12,6 +12,7 @@ import { createPayloadPatchStreamWrapper } from "openclaw/plugin-sdk/provider-st
 import { buildProviderToolCompatFamilyHooks } from "openclaw/plugin-sdk/provider-tools";
 import { stripGoogleProviderPrefix } from "./model-id.js";
 import { resolveGoogleThinkingProfile } from "./provider-policy.js";
+import { applyGoogleServiceTierToPayload, resolveGoogleServiceTier } from "./service-tier.js";
 import { sanitizeGoogleThinkingPayload } from "./thinking-api.js";
 
 // Google-family gRPC status codes stay with the shared Gemini provider hook.
@@ -28,7 +29,8 @@ function classifyGoogleFailoverCode(code: string | undefined) {
   }
 }
 
-function wrapGoogleThinkingStream(ctx: ProviderWrapStreamFnContext) {
+function wrapGoogleStream(ctx: ProviderWrapStreamFnContext) {
+  const serviceTier = resolveGoogleServiceTier(ctx.extraParams);
   return createPayloadPatchStreamWrapper(ctx.streamFn, ({ payload, model }) => {
     if (model.api !== "google-generative-ai" && model.api !== "google-vertex") {
       return;
@@ -38,6 +40,10 @@ function wrapGoogleThinkingStream(ctx: ProviderWrapStreamFnContext) {
       modelId: stripGoogleProviderPrefix(model.id).replace(/^models\//u, ""),
       thinkingLevel: ctx.thinkingLevel,
     });
+    // Vertex ignores a request-body serviceTier; only direct AI Studio honors it.
+    if (serviceTier && model.api === "google-generative-ai") {
+      applyGoogleServiceTierToPayload(payload, serviceTier);
+    }
   });
 }
 
@@ -48,7 +54,7 @@ export const GOOGLE_GEMINI_PROVIDER_HOOKS = {
   ...buildProviderToolCompatFamilyHooks("gemini"),
   resolveThinkingProfile: (context: ProviderDefaultThinkingPolicyContext) =>
     resolveGoogleThinkingProfile(context) satisfies ProviderThinkingProfile | undefined,
-  wrapStreamFn: wrapGoogleThinkingStream,
+  wrapStreamFn: wrapGoogleStream,
   classifyFailoverReason: ({ code }: ProviderFailoverErrorContext) =>
     classifyGoogleFailoverCode(code),
 };
