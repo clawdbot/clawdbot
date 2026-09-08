@@ -57,6 +57,49 @@ describe("Gateway GitHub publication attribution", () => {
     });
   });
 
+  it("publishes a description that repeats the session-footer shape without stalling", async () => {
+    const config = {
+      gateway: { publicOrigin: "https://team.example", controlUi: { basePath: "/control" } },
+    };
+    mocks.getConfigSnapshot.mockReturnValue({ config, sourceConfig: config });
+    mocks.attribution.mockReturnValue({ trailers: [], logins: [], prompt: "" });
+    const coordinator = createGitHubPublicationCoordinator({
+      placements: createWorkerSessionPlacementStore({
+        database: openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } }),
+      }),
+    });
+
+    // A footer-shaped run that never completes a footer: the stripper's repeated
+    // group used to split the whitespace between units exponentially.
+    const unit = "\t---\n[View the OpenClaw team session]()";
+    const adversarial = `Body text.${unit.repeat(26)}X`;
+    expect(adversarial.length).toBeLessThan(8 * 1024); // inside GitHubPublicationBodySchema
+
+    const started = process.hrtime.bigint();
+    const result = await coordinator.requestForSession({
+      sessionKey: SESSION_KEY,
+      agentId: "main",
+      idempotencyKey: "footer-shaped-description",
+      title: "fix: keep publication responsive",
+      body: adversarial,
+    });
+    const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
+
+    expect(result).toMatchObject({ status: "published" });
+    const post = commandCalls.find(({ argv }) => argv.includes("POST"));
+    const published = JSON.parse(post?.input ?? "null") as { body: string };
+    // Nothing was stripped (the run never completes a footer), and the canonical
+    // footer is still appended exactly once.
+    expect(published.body.startsWith("Body text.")).toBe(true);
+    expect(published.body).toContain("X\n\n<!-- openclaw-publication:");
+    expect(
+      published.body.endsWith(
+        "---\n[View the OpenClaw team session](https://team.example/control/chat/main/dashboard/publication)",
+      ),
+    ).toBe(true);
+    expect(elapsedMs).toBeLessThan(5_000);
+  });
+
   it("publishes without a session footer when the configured URL is not external HTTPS", async () => {
     const config = { gateway: { publicOrigin: "http://127.0.0.1:18789" } };
     mocks.getConfigSnapshot.mockReturnValue({ config, sourceConfig: config });
