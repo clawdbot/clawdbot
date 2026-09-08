@@ -2646,6 +2646,17 @@
                 "group": "Testing",
                 "pages": [
                   "help/testing",
+                  {
+                    "group": "Testing guide",
+                    "pages": [
+                      "help/testing/suites",
+                      "help/testing/live-workflows",
+                      "help/testing/docker",
+                      "help/testing/qa-runners",
+                      "help/testing/contracts",
+                      "help/testing/writing-tests"
+                    ]
+                  },
                   "help/testing-updates-plugins",
                   "help/testing-live"
                 ]
