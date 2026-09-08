@@ -224,7 +224,7 @@ describe("OAuth refresh generation fence", () => {
     });
   });
 
-  it("rejects a serialized provider refresh result for a different OAuth account", async () => {
+  it("terminally fences invalid serialized provider outcomes", async () => {
     const profileId = "openai:default";
     const expired = createCredential({
       access: "account-a-access",
@@ -242,8 +242,7 @@ describe("OAuth refresh generation fence", () => {
         return update.result;
       },
     };
-
-    await expect(
+    const run = (refresh: () => Promise<{ apiKey: string; credential: OAuthCredential } | null>) =>
       refreshSerializedOAuthCredential({
         backend,
         provider: "openai",
@@ -255,21 +254,24 @@ describe("OAuth refresh generation fence", () => {
         readCredential: (data) => data[profileId],
         writeCredential: (data, credential) => ({ ...data, [profileId]: credential }),
         canRefresh: async () => true,
-        refresh: async () => ({
-          apiKey: "account-b-access",
-          credential: createCredential({
-            access: "account-b-access",
-            refresh: "account-b-refresh",
-            expires: Date.now() + 600_000,
-            accountId: "acct-b",
-          }),
-        }),
+        refresh,
         resolve: async (credential) => ({ apiKey: credential.access, credential }),
         commit: () => {},
-      }),
+      });
+
+    await expect(
+      run(async () => ({
+        apiKey: "account-b-access",
+        credential: createCredential({
+          access: "account-b-access",
+          refresh: "account-b-refresh",
+          expires: Date.now() + 600_000,
+          accountId: "acct-b",
+        }),
+      })),
     ).rejects.toThrow("different OAuth account");
 
-    const stored = JSON.parse(persisted)[profileId] as OAuthCredential;
+    let stored = JSON.parse(persisted)[profileId] as OAuthCredential;
     expect(stored).toMatchObject({
       type: "oauth",
       provider: "openai",
@@ -278,6 +280,22 @@ describe("OAuth refresh generation fence", () => {
     });
     expect(stored.access).toContain(":failed:access:");
     expect(JSON.stringify(stored)).not.toContain("account-b-access");
+
+    for (const providerRejection of [{ reason: "invalid_grant", status: 401 }, undefined]) {
+      persisted = JSON.stringify({ [profileId]: expired });
+      // oxlint-disable-next-line prefer-promise-reject-errors -- providers can reject with unknown non-Error values.
+      const failure = await run(() => Promise.reject(providerRejection)).catch(
+        (error: unknown) => error,
+      );
+      expect(failure).toBeInstanceOf(Error);
+      expect(failure).toMatchObject({ message: "OAuth refresh failed", cause: providerRejection });
+      if (providerRejection) {
+        expect(failure).toMatchObject(providerRejection);
+      }
+      stored = JSON.parse(persisted)[profileId] as OAuthCredential;
+      expect(isPendingOAuthRefreshFence(stored)).toBe(false);
+      expect(stored.access).toContain(":failed:access:");
+    }
   });
 
   it.each([{ outcome: "throw" as const }, { outcome: "null" as const }])(

@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
+import { toErrorObject } from "../../infra/errors.js";
 import { hasUsableOAuthCredential } from "./credential-state.js";
 import {
   createFailedOAuthRefreshFence,
@@ -228,22 +229,29 @@ export async function refreshSerializedOAuthCredential<TData>(params: {
     }
   };
 
-  const settleFailure = (initiatingError?: unknown): null => {
+  const settleFailure = (failure?: { error: unknown }): null => {
+    const normalizedInitiatingError = failure
+      ? toErrorObject(failure.error, "OAuth refresh failed")
+      : undefined;
     try {
       markFailed();
     } catch (cleanupError) {
-      if (initiatingError === undefined) {
-        throw cleanupError;
+      const normalizedCleanupError = toErrorObject(
+        cleanupError,
+        "OAuth refresh terminal fencing failed",
+      );
+      if (!normalizedInitiatingError) {
+        throw normalizedCleanupError;
       }
-      // oxlint-disable-next-line preserve-caught-error -- errors retains cleanupError; cause must remain the provider failure.
+      // oxlint-disable-next-line preserve-caught-error -- errors retains cleanupError; cause must remain the initiating failure.
       throw new AggregateError(
-        [initiatingError, cleanupError],
+        [normalizedInitiatingError, normalizedCleanupError],
         "OAuth refresh failed and terminal fencing could not be completed.",
-        { cause: initiatingError },
+        { cause: normalizedInitiatingError },
       );
     }
-    if (initiatingError !== undefined) {
-      throw initiatingError;
+    if (normalizedInitiatingError) {
+      throw normalizedInitiatingError;
     }
     return null;
   };
@@ -253,7 +261,7 @@ export async function refreshSerializedOAuthCredential<TData>(params: {
     try {
       refreshed = await params.refresh(claim.credential, claim.data);
     } catch (error) {
-      return settleFailure(error);
+      return settleFailure({ error });
     }
     if (!refreshed) {
       return settleFailure();
@@ -291,7 +299,7 @@ export async function refreshSerializedOAuthCredential<TData>(params: {
       params.commit(settled.data);
       return settled.persisted ? refreshed : await params.resolve(settled.credential);
     } catch (error) {
-      return settleFailure(error);
+      return settleFailure({ error });
     }
   })();
   void settlement.catch(() => {});
