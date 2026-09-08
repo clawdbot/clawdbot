@@ -16,7 +16,7 @@ import { refreshPluginRegistryAfterConfigMutation } from "../../plugins/registry
 import type { PluginRecord } from "../../plugins/registry.js";
 import {
   buildAllPluginInspectReports,
-  buildPluginDiagnosticsReport,
+  withPluginDiagnosticsReportForInspection,
   buildPluginInspectReport,
   buildPluginRegistrySnapshotReport,
   formatPluginCompatibilityNotice,
@@ -224,36 +224,41 @@ export const handlePluginsCommand: CommandHandler = defineAuthorizedTextCommand(
 
       if (pluginsCommand.action === "inspect") {
         const metadataSnapshot = loadPluginMetadataSnapshot(reportParams);
-        const report = buildPluginDiagnosticsReport({ ...reportParams, metadataSnapshot });
-        if (!pluginsCommand.name) {
-          return commandReply(formatPluginsList(report));
-        }
-        if (normalizeOptionalLowercaseString(pluginsCommand.name) === "all") {
-          const ownershipResolver = createInstalledPluginOwnershipResolver(metadataSnapshot.index);
-          const reports = buildAllPluginInspectReports({ config, report }).map((inspect) =>
-            buildPluginInspectJson(inspect, ownershipResolver),
-          );
-          return commandReply(renderJsonBlock("🔌 Plugins", reports));
-        }
-        const inspect = buildPluginInspectReport({
-          id: pluginsCommand.name,
-          config,
-          report,
-        });
-        if (!inspect) {
-          return commandReply(`🔌 No plugin named "${pluginsCommand.name}" found.`);
-        }
-        const payload = buildPluginInspectJson(
-          inspect,
-          createInstalledPluginOwnershipResolver(metadataSnapshot.index),
+        const text = await withPluginDiagnosticsReportForInspection(
+          { ...reportParams, metadataSnapshot },
+          (report) => {
+            if (!pluginsCommand.name) {
+              return formatPluginsList(report);
+            }
+            if (normalizeOptionalLowercaseString(pluginsCommand.name) === "all") {
+              const ownershipResolver = createInstalledPluginOwnershipResolver(
+                metadataSnapshot.index,
+              );
+              const reports = buildAllPluginInspectReports({ config, report }).map((inspect) =>
+                buildPluginInspectJson(inspect, ownershipResolver),
+              );
+              return renderJsonBlock("🔌 Plugins", reports);
+            }
+            const inspect = buildPluginInspectReport({
+              id: pluginsCommand.name,
+              config,
+              report,
+            });
+            if (!inspect) {
+              return `🔌 No plugin named "${pluginsCommand.name}" found.`;
+            }
+            const payload = buildPluginInspectJson(
+              inspect,
+              createInstalledPluginOwnershipResolver(metadataSnapshot.index),
+            );
+            return renderJsonBlock(`🔌 Plugin "${inspect.plugin.id}"`, {
+              ...inspect,
+              compatibilityWarnings: payload.compatibilityWarnings,
+              install: payload.install,
+            });
+          },
         );
-        return commandReply(
-          renderJsonBlock(`🔌 Plugin "${inspect.plugin.id}"`, {
-            ...inspect,
-            compatibilityWarnings: payload.compatibilityWarnings,
-            install: payload.install,
-          }),
-        );
+        return commandReply(text);
       }
 
       const report = buildPluginRegistrySnapshotReport(reportParams);

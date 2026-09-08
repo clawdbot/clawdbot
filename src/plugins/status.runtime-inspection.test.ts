@@ -2,9 +2,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { handlePluginsCommand } from "../auto-reply/reply/commands-plugins.js";
+import { buildPluginsCommandParams } from "../auto-reply/reply/commands.test-harness.js";
 import { runPluginsInspectCommand } from "../cli/plugins-inspect-command.js";
 import { readConfigFileSnapshotForWrite, writeConfigFile } from "../config/config.js";
 import { defaultRuntime } from "../runtime.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnv, withEnvAsync } from "../test-utils/env.js";
 import { setGatewayPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
@@ -13,6 +16,7 @@ import { selectInstallMutationWriteOptions } from "./install-config-mutation.js"
 import { persistPluginInstall } from "./install-persistence.js";
 import { readPersistedInstalledPluginIndexInstallRecords } from "./installed-plugin-index-records.js";
 import { readPersistedInstalledPluginIndex } from "./installed-plugin-index-store.js";
+import { loadAndActivateRootPluginRegistry } from "./loader.js";
 import {
   cleanupPluginLoaderFixturesForTest,
   makePluginLoaderTempDir,
@@ -24,7 +28,12 @@ import { mutateManagedPluginEnabled } from "./management-mutations.js";
 import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
+import {
+  capturePluginRegistryLifecycleEpoch,
+  capturePluginRegistryLifecycleSignal,
+} from "./registry-lifecycle.js";
 import { getActivePluginRegistry } from "./runtime.js";
+import { withPluginRuntimeRegistryScope } from "./runtime/gateway-request-scope.js";
 import { applySlotSelectionForPlugin } from "./slot-selection.js";
 import * as statusSnapshot from "./status-snapshot.js";
 import {
@@ -42,6 +51,141 @@ describe("plugin runtime inspection", () => {
   afterAll(() => {
     cleanupPluginLoaderFixturesForTest();
   });
+
+  it.each(["inspect", "inspect native-chat-inspection", "inspect all", "inspect missing"])(
+    "releases chat inspection while the active native registration stays usable: %s",
+    async (selection) => {
+      const stateDir = makePluginLoaderTempDir();
+      const key = `__openclaw_chat_inspection_${selection}`;
+      const started = createDeferredCore();
+      const finish = createDeferredCore();
+      const connections: Array<{
+        database: DatabaseSync;
+        mode: string;
+        disposals: number;
+        cleanups: number;
+      }> = [];
+      Object.defineProperty(globalThis, key, {
+        value: { connections, started, finish },
+        configurable: true,
+      });
+      const plugin = writePlugin({
+        id: "native-chat-inspection",
+        body: `
+const { DatabaseSync } = require("node:sqlite");
+module.exports = { id: "native-chat-inspection", register(api) {
+  const state = globalThis[${JSON.stringify(key)}];
+  const database = new DatabaseSync(${JSON.stringify(path.join(stateDir, "connection-"))} + state.connections.length + ".sqlite");
+  database.exec("CREATE TABLE owned (value INTEGER); INSERT INTO owned VALUES (42)");
+  const connection = { database, mode: api.registrationMode, disposals: 0, cleanups: 0 };
+  state.connections.push(connection);
+  class NativeLifecycle {
+    id = "native-chat-resource";
+    #database = database;
+    async dispose() {
+      connection.disposals++;
+      state.started.resolve();
+      await state.finish.promise;
+      this.#database.close();
+    }
+    cleanup = () => { connection.cleanups++; };
+  }
+  api.registerRuntimeLifecycle(new NativeLifecycle());
+} };`,
+      });
+      let command: ReturnType<typeof handlePluginsCommand> | undefined;
+      try {
+        await withEnvAsync(
+          {
+            OPENCLAW_HOME: stateDir,
+            OPENCLAW_STATE_DIR: stateDir,
+            OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
+          },
+          async () => {
+            useNoBundledPlugins();
+            const config = {
+              commands: { text: true, plugins: true },
+              plugins: {
+                allow: [plugin.id],
+                load: { paths: [plugin.file] },
+                slots: { memory: "none" },
+              },
+            };
+            await writeConfigFile(config);
+            const active = loadAndActivateRootPluginRegistry({
+              config,
+              workspaceDir: stateDir,
+              cache: false,
+            });
+            const epoch = capturePluginRegistryLifecycleEpoch(active);
+            const signal = capturePluginRegistryLifecycleSignal(active, epoch);
+            expect(epoch).toBeDefined();
+            expect(signal?.aborted).toBe(false);
+            const activeConnection = connections[0];
+            expect(activeConnection?.mode).toBe("full");
+            const readActive = () =>
+              activeConnection?.database.prepare("SELECT value FROM owned").get();
+            expect(readActive()).toEqual({ value: 42 });
+            let replied = false;
+            command = withPluginRuntimeRegistryScope(active, () =>
+              handlePluginsCommand(
+                buildPluginsCommandParams({
+                  commandBodyNormalized: `/plugins ${selection}`,
+                  cfg: config,
+                  workspaceDir: stateDir,
+                }),
+                true,
+              ),
+            ).then((result) => {
+              replied = true;
+              return result;
+            });
+            await Promise.race([started.promise, command]);
+            expect(connections).toHaveLength(2);
+            const inspection = connections[1];
+            expect(inspection?.mode).toBe("discovery");
+            expect(inspection?.disposals).toBe(1);
+            expect(inspection?.database.isOpen).toBe(true);
+            expect(replied).toBe(false);
+            expect(readActive()).toEqual({ value: 42 });
+            expect(getActivePluginRegistry()).toBe(active);
+            expect(capturePluginRegistryLifecycleEpoch(active)).toBe(epoch);
+            expect(signal?.aborted).toBe(false);
+            finish.resolve();
+            const result = await command;
+            expect(result?.shouldContinue).toBe(false);
+            expect(result?.reply?.text).toContain(
+              selection === "inspect missing"
+                ? 'No plugin named "missing" found.'
+                : selection === "inspect"
+                  ? "Plugins ("
+                  : "```json",
+            );
+            expect(inspection?.database.isOpen).toBe(false);
+            expect(inspection?.disposals).toBe(1);
+            expect(activeConnection?.disposals).toBe(0);
+            expect(connections.map((connection) => connection.cleanups)).toEqual([0, 0]);
+            expect(readActive()).toEqual({ value: 42 });
+            expect(getActivePluginRegistry()).toBe(active);
+            expect(capturePluginRegistryLifecycleEpoch(active)).toBe(epoch);
+            expect(signal?.aborted).toBe(false);
+          },
+        );
+      } finally {
+        finish.resolve();
+        try {
+          await command;
+        } finally {
+          for (const { database } of connections) {
+            if (database.isOpen) {
+              database.close();
+            }
+          }
+          Reflect.deleteProperty(globalThis, key);
+        }
+      }
+    },
+  );
 
   it.each([
     "single",
