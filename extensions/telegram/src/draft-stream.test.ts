@@ -512,6 +512,24 @@ describe("createTelegramDraftStream", () => {
     },
   );
 
+  it("does not consume an all-mode reply target after Telegram accepts the preview", async () => {
+    const api = createMockDraftApi();
+    const stream = createDraftStream(api, {
+      replyToMessageId: 411,
+      replyToMode: "all",
+      thread: { id: 42, scope: "forum" },
+    });
+
+    stream.update("Progress");
+    await stream.flush();
+
+    expectPreviewSend(api, "Progress", {
+      message_thread_id: 42,
+      reply_parameters: { message_id: 411, allow_sending_without_reply: true },
+    });
+    expect(stream.hasConsumedReplyTarget()).toBe(false);
+  });
+
   it.each(["first", "batched"] as const)(
     "reserves a pending %s reply target before Telegram accepts the preview",
     async (replyToMode) => {
