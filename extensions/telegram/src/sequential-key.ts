@@ -1,5 +1,5 @@
 // Telegram plugin module implements sequential key behavior.
-import type { Message, UserFromGetMe } from "grammy/types";
+import type { BusinessMessagesDeleted, Message, UserFromGetMe } from "grammy/types";
 import { parseExecApprovalCommandText } from "openclaw/plugin-sdk/approval-reply-runtime";
 import {
   listChatCommands,
@@ -44,6 +44,9 @@ type TelegramSequentialKeyContext = {
   update?: {
     message?: Message;
     edited_message?: Message;
+    business_message?: Message;
+    edited_business_message?: Message;
+    deleted_business_messages?: BusinessMessagesDeleted;
     channel_post?: Message;
     edited_channel_post?: Message;
     callback_query?: { message?: Message; data?: string };
@@ -150,6 +153,17 @@ function isTelegramControlLaneText(params: { rawText?: string; botUsername?: str
   return isTelegramReadOnlyControlLaneText(params);
 }
 
+function resolveTelegramBusinessConnectionId(msg?: Message): string | undefined {
+  const businessConnectionId = msg?.business_connection_id;
+  return businessConnectionId && businessConnectionId.trim() ? businessConnectionId : undefined;
+}
+
+function formatTelegramChatLane(params: { businessConnectionId?: string; chatId: number }): string {
+  return params.businessConnectionId
+    ? `telegram:business:${params.businessConnectionId}:${params.chatId}`
+    : `telegram:${params.chatId}`;
+}
+
 export function getTelegramSequentialKey(ctx: TelegramSequentialKeyContext): string {
   const reaction = ctx.update?.message_reaction;
   if (reaction?.chat?.id) {
@@ -174,32 +188,41 @@ export function getTelegramSequentialKey(ctx: TelegramSequentialKeyContext): str
     ctx.editedChannelPost ??
     ctx.update?.message ??
     ctx.update?.edited_message ??
+    ctx.update?.business_message ??
+    ctx.update?.edited_business_message ??
     ctx.update?.channel_post ??
     ctx.update?.edited_channel_post ??
     ctx.update?.callback_query?.message;
-  const chatId = msg?.chat?.id ?? ctx.chat?.id;
+  const deletedBusinessMessages = ctx.update?.deleted_business_messages;
+  const businessConnectionId =
+    resolveTelegramBusinessConnectionId(msg) ?? deletedBusinessMessages?.business_connection_id;
+  const chatId = msg?.chat?.id ?? deletedBusinessMessages?.chat?.id ?? ctx.chat?.id;
   const rawText = msg?.text ?? msg?.caption;
   const botUsername = ctx.me?.username;
+  const chatLane =
+    typeof chatId === "number"
+      ? formatTelegramChatLane({ businessConnectionId, chatId })
+      : undefined;
   if (isTelegramControlLaneText({ rawText, botUsername })) {
-    if (typeof chatId === "number") {
-      return `telegram:${chatId}:control`;
+    if (chatLane) {
+      return `${chatLane}:control`;
     }
     return "telegram:control";
   }
   if (isBtwRequestText(rawText, botUsername ? { botUsername } : undefined)) {
     const messageId = msg?.message_id;
-    if (typeof chatId === "number" && typeof messageId === "number") {
-      return `telegram:${chatId}:btw:${messageId}`;
+    if (chatLane && typeof messageId === "number") {
+      return `${chatLane}:btw:${messageId}`;
     }
-    if (typeof chatId === "number") {
-      return `telegram:${chatId}:btw`;
+    if (chatLane) {
+      return `${chatLane}:btw`;
     }
     return "telegram:btw";
   }
   const callbackData = ctx.update?.callback_query?.data;
   if (hasTelegramQuestionCallbackPrefix(callbackData)) {
-    if (typeof chatId === "number") {
-      return `telegram:${chatId}:question`;
+    if (chatLane) {
+      return `${chatLane}:question`;
     }
     return "telegram:question";
   }
@@ -207,10 +230,13 @@ export function getTelegramSequentialKey(ctx: TelegramSequentialKeyContext): str
     hasTelegramApprovalCallbackPrefix(callbackData) ||
     (callbackData && parseExecApprovalCommandText(callbackData) !== null)
   ) {
-    if (typeof chatId === "number") {
-      return `telegram:${chatId}:approval`;
+    if (chatLane) {
+      return `${chatLane}:approval`;
     }
     return "telegram:approval";
+  }
+  if (businessConnectionId && chatLane) {
+    return chatLane;
   }
   // Raw durable-ingress fixtures and malformed updates can carry a partial
   // message. Treat missing chat identity as an unknown lane instead of

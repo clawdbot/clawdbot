@@ -171,4 +171,34 @@ describe("enforceTelegramDmAccess", () => {
       "telegram pairing request",
     );
   });
+
+  it("sends pairing challenges through the Business connection for unauthorized Business DMs", async () => {
+    const sendMessage = vi.fn(async () => undefined);
+    createChannelPairingChallengeIssuerMock.mockReturnValueOnce(
+      ({
+        sendPairingReply,
+      }: Parameters<ReturnType<typeof createChannelPairingChallengeIssuer>>[0]) =>
+        (async () => {
+          await sendPairingReply("Pairing code: 123456");
+        })(),
+    );
+
+    const allowed = await enforceTelegramDmAccess({
+      isGroup: false,
+      dmPolicy: "pairing",
+      msg: createDmMessage({ business_connection_id: "biz-conn-123" }),
+      chatId: 42,
+      effectiveDmAllow: normalizeAllowFrom([]),
+      accountId: "main",
+      bot: { api: { sendMessage } } as never,
+      logger: { info: vi.fn() },
+      upsertPairingRequest: upsertChannelPairingRequestMock,
+    });
+
+    expect(allowed).toBe(false);
+    expect(sendMessage).toHaveBeenCalledWith(42, expect.stringContaining("Pairing code:"), {
+      business_connection_id: "biz-conn-123",
+      parse_mode: "HTML",
+    });
+  });
 });

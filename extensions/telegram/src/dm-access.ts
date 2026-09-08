@@ -157,9 +157,14 @@ export async function enforceTelegramDmAccess(params: {
         },
         sendPairingReply: async (text) => {
           const html = renderTelegramHtmlText(text);
+          const businessConnectionId = msg.business_connection_id;
           await withTelegramApiErrorLogging({
             operation: "sendMessage",
-            fn: () => bot.api.sendMessage(chatId, html, { parse_mode: "HTML" }),
+            fn: () =>
+              bot.api.sendMessage(chatId, html, {
+                ...(businessConnectionId ? { business_connection_id: businessConnectionId } : {}),
+                parse_mode: "HTML",
+              }),
           });
         },
         onReplyError: (err) => {
