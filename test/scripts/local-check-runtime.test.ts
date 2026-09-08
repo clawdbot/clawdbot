@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 import {
   applyLocalOxlintPolicy,
   applyLocalTsgoPolicy,
-  ensureRepoToolNodeModulesLink,
+  ensureRepoNodeModulesLink,
   resolveLocalCheckEnv,
   resolveRepoToolBinPath,
 } from "../../scripts/lib/local-check-runtime.mts";
@@ -67,11 +67,10 @@ describe("local-check-runtime", () => {
     { platform: "linux" as const, linkType: "dir" },
     { platform: "win32" as const, linkType: "junction" },
   ])(
-    "links dependency-less $platform worktrees to the selected checkout's modules",
+    "links relocated $platform declaration output to its explicit package dependencies",
     ({ platform, linkType }) => {
       const primaryRoot = createTempDir("openclaw-primary-toolchain-");
-      const cwd = path.join(primaryRoot, ".codex", "worktrees", "task", "openclaw");
-      const commonDir = path.join(primaryRoot, ".git");
+      const cwd = path.join(primaryRoot, ".artifacts", "declarations");
       const primaryTsgo = path.join(primaryRoot, "node_modules", ".bin", "tsgo");
       const primaryNodeModules = path.join(primaryRoot, "node_modules");
       const localNodeModules = path.join(cwd, "node_modules");
@@ -80,7 +79,6 @@ describe("local-check-runtime", () => {
       const linkTypes: Array<Parameters<typeof fs.symlinkSync>[2]> = [];
       const linkOptions = {
         cwd,
-        resolveCommonDir: () => commonDir,
         platform,
         symlink: (...args: Parameters<typeof fs.symlinkSync>) => {
           linkTypes.push(args[2]);
@@ -88,28 +86,24 @@ describe("local-check-runtime", () => {
         },
       };
 
-      expect(ensureRepoToolNodeModulesLink(primaryTsgo, linkOptions)).toBe(localNodeModules);
+      expect(ensureRepoNodeModulesLink(primaryNodeModules, linkOptions)).toBe(localNodeModules);
       expect(fs.realpathSync(localNodeModules)).toBe(fs.realpathSync(primaryNodeModules));
 
       // The stable link is idempotent for concurrent and later local runners.
-      expect(ensureRepoToolNodeModulesLink(primaryTsgo, linkOptions)).toBe(localNodeModules);
+      expect(ensureRepoNodeModulesLink(primaryNodeModules, linkOptions)).toBe(localNodeModules);
       expect(linkTypes).toEqual([linkType]);
     },
   );
 
   it("leaves existing worktree node_modules directories locally owned", () => {
     const primaryRoot = createTempDir("openclaw-primary-toolchain-");
-    const commonDir = path.join(primaryRoot, ".git");
     const primaryTsgo = path.join(primaryRoot, "node_modules", ".bin", "tsgo");
     const cwd = path.join(primaryRoot, "worktree");
     const localNodeModules = path.join(cwd, "node_modules");
     fs.mkdirSync(path.dirname(primaryTsgo), { recursive: true });
     fs.mkdirSync(localNodeModules, { recursive: true });
 
-    ensureRepoToolNodeModulesLink(primaryTsgo, {
-      cwd,
-      resolveCommonDir: () => commonDir,
-    });
+    ensureRepoNodeModulesLink(path.join(primaryRoot, "node_modules"), { cwd });
 
     expect(fs.lstatSync(localNodeModules).isDirectory()).toBe(true);
     expect(fs.lstatSync(localNodeModules).isSymbolicLink()).toBe(false);
