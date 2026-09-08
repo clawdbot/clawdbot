@@ -108,6 +108,15 @@ function isExpectedNonErrorLaneFailure(err: unknown): boolean {
   return err instanceof Error && err.name === "LiveSessionModelSwitchError";
 }
 
+/**
+ * Observers of the edge where a lane finishes a task and can admit again.
+ *
+ * Kept out of `LaneState` so lane retirement cannot silently drop a waiter, and
+ * consulted only after a task completes — the map is empty in the common case,
+ * so the completion path pays one `Map.size` check.
+ */
+const laneReleaseListeners = new Map<string, Set<() => void>>();
+
 function isQuietProbeLane(lane: string): boolean {
   // setup-inference.ts retains its temp session key, so its derived session lane
   // needs the same expected-failure treatment as the explicit probe lane.
@@ -432,15 +441,44 @@ function drainLane(
   return started;
 }
 
+function notifyCommandLaneReleased(lane: string): void {
+  if (laneReleaseListeners.size === 0) {
+    return;
+  }
+  const listeners = laneReleaseListeners.get(lane);
+  if (!listeners || listeners.size === 0) {
+    return;
+  }
+  // Only a lane that can actually start work is "released". A completion that
+  // merely handed the slot to the next queued item must not wake waiters.
+  if (!isCommandLaneAdmissible(lane)) {
+    return;
+  }
+  // Snapshot: a listener normally unsubscribes itself as its first act, and may
+  // unsubscribe siblings, so the live set must not be the iteration source.
+  for (const listener of Array.from(listeners)) {
+    try {
+      listener();
+    } catch (err) {
+      diag.error(`lane release listener failed: lane=${lane} error="${String(err)}"`);
+    }
+  }
+}
+
 function drainReadyCommandLane(lane: string, completedState?: LaneState): void {
   if (getLaneGroup(lane)) {
     drainCommandLaneGroup(lane, drainLane);
-    return;
+  } else {
+    // An idle scoped lane may have been retired and recreated while an older
+    // task was finishing. Preserve the completion's captured state so its drain
+    // cannot retire a newer registry entry that it never owned.
+    drainLane(lane, Number.POSITIVE_INFINITY, completedState);
   }
-  // An idle scoped lane may have been retired and recreated while an older
-  // task was finishing. Preserve the completion's captured state so its drain
-  // cannot retire a newer registry entry that it never owned.
-  drainLane(lane, Number.POSITIVE_INFINITY, completedState);
+  // `completedState` is only supplied by the task-completion path, which is the
+  // one caller that represents a lane actually letting go of a slot.
+  if (completedState) {
+    notifyCommandLaneReleased(lane);
+  }
 }
 
 /**
@@ -626,6 +664,44 @@ export function getCommandLaneSnapshot(lane: string = CommandLane.Main): Command
   return snapshot;
 }
 
+/**
+ * Whether `lane` could start another task right now.
+ *
+ * Read-only: it never creates, retires, or drains a lane. `blockedBy` already
+ * folds in the lane's own width and any group budget or sibling reservation, so
+ * a queue that is non-empty is the only extra condition — an enqueue landing
+ * behind a queued item is admitted later, not now.
+ */
+export function isCommandLaneAdmissible(lane: string = CommandLane.Main): boolean {
+  const snapshot = getCommandLaneSnapshot(lane);
+  return (snapshot.blockedBy ?? null) === null && snapshot.queuedCount === 0;
+}
+
+/**
+ * Observe the edge where `lane` completes a task and becomes admissible again.
+ *
+ * The listener fires synchronously inside the completing task's tail, after the
+ * lane has drained whatever was queued behind it, and only when the lane can
+ * take new work. It is a readiness hint, not a lease: by the time a listener
+ * enqueues, another caller may already have taken the slot, so callers must
+ * still tolerate being queued. Returns an idempotent unsubscribe.
+ */
+export function subscribeCommandLaneRelease(lane: string, listener: () => void): () => void {
+  const resolved = normalizeLane(lane);
+  const listeners = laneReleaseListeners.get(resolved) ?? new Set<() => void>();
+  listeners.add(listener);
+  laneReleaseListeners.set(resolved, listeners);
+  return () => {
+    const current = laneReleaseListeners.get(resolved);
+    if (!current?.delete(listener)) {
+      return;
+    }
+    if (current.size === 0) {
+      laneReleaseListeners.delete(resolved);
+    }
+  };
+}
+
 /** Per-lane work totals for every live lane; diagnostics composition lives in command-lane-diagnostics.ts. */
 export function listCommandLaneTotals(): Array<{
   lane: string;
@@ -698,6 +774,11 @@ export function resetCommandLane(lane: string = CommandLane.Main): number {
   // whole group so the reset lane cannot reclaim them ahead of older siblings.
   drainReadyCommandLane(cleaned);
   return released;
+}
+
+/** Drops every lane-release observer. Test-reset only; production never unwinds these globally. */
+export function clearCommandLaneReleaseListenersForTest(): void {
+  laneReleaseListeners.clear();
 }
 
 /**

@@ -6048,6 +6048,40 @@ describe("requester settle wake trigger", () => {
     }
   });
 
+  it("parks a lane-deferred announce instead of spending a retry rung or giving up", async () => {
+    // `resolveDeferredCleanupDecision` is stubbed to give up in this file, so a
+    // deferral reaching the ordinary retry path would settle the row as expired.
+    // It must not: no announce turn was attempted, so there is nothing to fail.
+    const endedAt = Date.now();
+    const entry = createRunEntry({ endedAt, expectsCompletionMessage: true });
+    const resumeSubagentRun = vi.fn();
+    const controller = createLifecycleController({
+      entry,
+      resumeSubagentRun,
+      runSubagentAnnounceFlow: vi.fn(async () => "deferred_requester_busy" as const),
+    });
+
+    await controller.completeSubagentRun(
+      makeSubagentCompletion(entry, { endedAt, triggerCleanup: true }),
+    );
+
+    await waitForLifecycleState(() =>
+      expect(entry.delivery?.lastError).toBe("announce deferred: requester session lane busy"),
+    );
+    expect(helperMocks.logAnnounceGiveUp).not.toHaveBeenCalled();
+    expect(entry.cleanupCompletedAt).toBeUndefined();
+    expect(entry.delivery?.status).toBe("pending");
+    expect(entry.delivery?.payload).toBeDefined();
+    expect(entry.delivery?.attemptCount).toBeUndefined();
+    // The requester lane is free in this test, so the park's re-read finds it
+    // takeable and re-drives the row without waiting for the backstop. That
+    // release path also retires the backstop deadline it just armed, because
+    // `resumeSubagentRun` would otherwise treat it as a hard not-before gate
+    // and reschedule the full delay instead of announcing.
+    await waitForLifecycleState(() => expect(resumeSubagentRun).toHaveBeenCalledWith(entry.runId));
+    expect(entry.delivery?.nextAttemptAt).toBeUndefined();
+  });
+
   it.each([false, true])(
     "reserves Gateway roots before the limiter (queued row replaced: %s)",
     async (replaceQueued) => {

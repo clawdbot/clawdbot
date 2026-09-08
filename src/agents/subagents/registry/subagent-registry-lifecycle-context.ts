@@ -63,6 +63,18 @@ export interface SubagentLifecycleCommonContext {
   newerGenerationOwnsSession(entry: SubagentRunRecord): boolean;
 }
 
+/**
+ * Holds the lane-release subscription for announces parked on a busy requester.
+ * Not exported: `SubagentLifecycleCleanupContext` below is the only surface any
+ * caller needs, and a second exported name would invite a partial context.
+ */
+interface SubagentLifecycleLaneParkContext extends SubagentLifecycleCommonContext {
+  /** Registers the lane-release unsubscribe for a parked announce, replacing any prior one. */
+  setRequesterLaneReleaseWaiter(runId: string, unsubscribe: () => void): void;
+  /** Removes and returns the waiter's unsubscribe, so callers can release exactly once. */
+  takeRequesterLaneReleaseWaiter(runId: string): (() => void) | undefined;
+}
+
 export interface SubagentLifecycleCompletionContext extends SubagentLifecycleCommonContext {
   acquireTerminalCompletionLock(runId: string): Promise<() => void>;
   bumpCleanupGeneration(entry: SubagentRunRecord): number;
@@ -73,7 +85,8 @@ export interface SubagentLifecycleCompletionContext extends SubagentLifecycleCom
   startSubagentAnnounceCleanupFlow(runId: string, entry: SubagentRunRecord): boolean;
 }
 
-export interface SubagentLifecycleCleanupContext extends SubagentLifecycleCommonContext {
+export interface SubagentLifecycleCleanupContext
+  extends SubagentLifecycleCommonContext, SubagentLifecycleLaneParkContext {
   addScheduledResumeTimer(timer: ReturnType<typeof setTimeout>): void;
   bumpCleanupGeneration(entry: SubagentRunRecord): number;
   clearCleanupFailureCount(entry: SubagentRunRecord): void;

@@ -133,6 +133,8 @@ const repositoryScriptEntries = [
   "scripts/oxlint-boundary-guards.mjs!",
   "scripts/plugin-prerelease-liveish-matrix.mts!",
   "scripts/pre-commit/guard-staged-content.mjs!",
+  // Maintainer proof harnesses are invoked manually from PR evidence.
+  "scripts/proof-135481-announce-lane-defer-drain.ts!",
   // Generates the checked-in native protocol models from core descriptor metadata.
   "scripts/protocol-gen.ts!",
   "scripts/pr-lib/ci-dispatch.mjs!",
@@ -502,6 +504,15 @@ const config = {
     // asserted by the focused Beam mirror tests; production wires only the service.
     "extensions/beam/src/mirror.ts": ["exports", "types"],
     "src/infra/heartbeat-wake.ts": ["exports"],
+    // The lane-release observer registry has no global production unwind: the
+    // listeners are deliberately held outside LaneState so lane retirement
+    // cannot drop a parked announce's waiter. Only the test reset clears them.
+    "src/process/command-queue.ts": ["exports"],
+    // The park's backstop cadence and its distinguishing delivery error string
+    // are contract constants asserted by the focused park tests; production
+    // reads both in-module. The full-tree scan still audits every named export
+    // here against those consumers.
+    "src/agents/subagents/registry/subagent-registry-lane-park.ts": ["exports"],
   },
   workspaces: {
     ".": {

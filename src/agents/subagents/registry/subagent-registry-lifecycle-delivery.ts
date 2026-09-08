@@ -87,7 +87,12 @@ export const recordAnnounceDeliveryResult = (
   if (typeof delivery.enqueuedAt === "number") {
     deliveryState.enqueuedAt ??= delivery.enqueuedAt;
   }
-  if (!delivery.delivered && delivery.disposition !== "intentional_non_delivery") {
+  if (
+    !delivery.delivered &&
+    delivery.disposition !== "intentional_non_delivery" &&
+    // A lane-busy park never reached a sink, so it is not sink evidence.
+    delivery.disposition !== "deferred_requester_busy"
+  ) {
     if (
       delivery.reason === "steer_dropped" ||
       delivery.phases?.some((phase) => phase.reason === "steer_dropped")
@@ -509,7 +514,16 @@ export const loadPendingFinalDeliveryPayload = (
   };
 };
 
-export const markPendingFinalDelivery = (args: { entry: SubagentRunRecord; error?: string }) => {
+export const markPendingFinalDelivery = (args: {
+  entry: SubagentRunRecord;
+  error?: string;
+  /**
+   * Set false when the caller parked without starting a transport attempt.
+   * Counting a park would let the retry ladder expire a requester that is
+   * merely busy, which is the failure this park exists to avoid.
+   */
+  countAttempt?: boolean;
+}) => {
   const now = Date.now();
   const payload: PendingFinalDeliveryPayload = loadPendingFinalDeliveryPayload(args.entry);
 
@@ -517,7 +531,9 @@ export const markPendingFinalDelivery = (args: { entry: SubagentRunRecord; error
   delivery.status = "pending";
   delivery.createdAt ??= now;
   delivery.lastAttemptAt = now;
-  delivery.attemptCount = (delivery.attemptCount ?? 0) + 1;
+  if (args.countAttempt !== false) {
+    delivery.attemptCount = (delivery.attemptCount ?? 0) + 1;
+  }
   delivery.lastError = args.error ?? null;
   delivery.payload = payload;
 };
