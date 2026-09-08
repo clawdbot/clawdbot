@@ -30,8 +30,7 @@ function buildOAuthRefreshSecretDigest(params: {
   ]);
   // Refresh markers correlate provider-issued high-entropy OAuth token generations;
   // they are not used for password storage or credential verification.
-  // codeql[js/insufficient-password-hash]
-  return createHash("sha256").update(generationInput).digest("hex");
+  return createHash("sha256").update(generationInput).digest("hex"); // lgtm[js/insufficient-password-hash]
 }
 
 function parseOAuthRefreshFence(credential: OAuthRefreshFenceCredential | undefined):
