@@ -197,15 +197,17 @@
 /* Keep the destination responsive without flashing a loader on fast history.
    Removing the skeleton when content arrives also cancels its pending reveal. */
 .chat-thread-inner > openclaw-panel-loading-skeleton {
-  animation: chat-skeleton-reveal 0s 500ms backwards;
+  animation: chat-skeleton-reveal 150ms ease-out 500ms backwards;
 }
 
 @keyframes chat-skeleton-reveal {
   from {
     visibility: hidden;
+    opacity: 0;
   }
   to {
     visibility: visible;
+    opacity: 1;
   }
 }
 

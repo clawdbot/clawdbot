@@ -25,7 +25,7 @@ suite.define(() => {
   it("switches immediately but shows a skeleton only for slow history", async () => {
     const context = await suite.newBrowserContext({
       ...createControlUiE2eContextOptions(),
-      reducedMotion: "reduce",
+      reducedMotion: "no-preference",
     });
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
@@ -47,10 +47,24 @@ suite.define(() => {
       );
       await loader.waitFor({ state: "attached" });
       expect(await loader.evaluate((node) => getComputedStyle(node).visibility)).toBe("hidden");
+      const opacity = await loader.evaluate(async (node) => {
+        const animation = node.getAnimations()[0];
+        await animation.ready;
+        animation.pause();
+        return [499, 575, 650].map((time) => {
+          animation.currentTime = time;
+          return Number(getComputedStyle(node).opacity);
+        });
+      });
+      expect(opacity[0]).toBe(0);
+      expect(opacity[1]).toBeGreaterThan(0);
+      expect(opacity[1]).toBeLessThan(1);
+      expect(opacity[2]).toBe(1);
       await gateway.resolveDeferred("chat.startup");
       const previous = page.locator(".chat-thread").getByText("Previous conversation.");
       await previous.waitFor({ state: "visible" });
       expect(await loader.count()).toBe(0);
+      await page.emulateMedia({ reducedMotion: "reduce" });
       await gateway.deferNext("chat.startup");
       const [revealDelay] = await Promise.all([
         page.evaluate(
@@ -103,6 +117,7 @@ suite.define(() => {
       expect(revealDelay.delay).toBeGreaterThanOrEqual(480);
       expect(revealDelay.previousVisible).toBe(false);
       expect(revealDelay.delay).toBeLessThan(1_000);
+      expect(await loader.evaluate((node) => getComputedStyle(node).opacity)).toBe("1");
       expect(
         await page
           .locator(".chat-pane-cache__pane--visible")
