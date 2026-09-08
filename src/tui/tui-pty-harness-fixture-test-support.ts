@@ -132,18 +132,7 @@ export async function writeTuiPtyFixtureScript(dir: string) {
           expiresAtMs: Date.now() + 120_000,
         };
       }
-      let pendingPluginApproval: {
-        id: string;
-        request: {
-          title: string;
-          description: string;
-          toolName: string;
-          allowedDecisions: string[];
-          sessionKey: string;
-        };
-        createdAtMs: number;
-        expiresAtMs: number;
-      } | null = initialPluginApprovalSessionKey
+      let pendingPluginApproval: ReturnType<typeof pluginApproval> | null = initialPluginApprovalSessionKey
         ? pluginApproval(initialPluginApprovalSessionKey)
         : null;
       let pendingPluginApprovalRun: { runId: string; sessionKey: string } | null = null;
