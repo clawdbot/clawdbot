@@ -17,7 +17,11 @@ import { isTransientSqliteBackupPath } from "./backup-volatile-filter.js";
 import { hasErrnoCode } from "./errno.js";
 import { collectErrorGraphCandidates, formatErrorMessage } from "./errors.js";
 import { sameFileIdentity } from "./fs-safe-advanced.js";
-import { resolveSqliteDatabaseFilePaths, SQLITE_SIDECAR_SUFFIXES } from "./sqlite-files.js";
+import {
+  isAppleDoubleMetadataFile,
+  resolveSqliteDatabaseFilePaths,
+  SQLITE_SIDECAR_SUFFIXES,
+} from "./sqlite-files.js";
 import { createVerifiedSqliteSnapshot } from "./sqlite-snapshot.js";
 import {
   createLegacyAuditDatabaseWitness,
@@ -107,6 +111,9 @@ export function classifyBackupSqliteSource(
   inventory: BackupResourceInventory,
 ): "excluded" | "sqlite" | undefined {
   const resolvedSourcePath = path.resolve(sourcePath);
+  if (isAppleDoubleMetadataFile(resolvedSourcePath)) {
+    return "excluded";
+  }
   const transient = isTransientSqliteBackupPath(resolvedSourcePath);
   const databasePath = resolveSqliteBackupDatabasePath(resolvedSourcePath);
   if (!transient && !databasePath) {

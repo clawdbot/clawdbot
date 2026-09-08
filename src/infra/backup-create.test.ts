@@ -7,6 +7,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import * as tar from "tar";
 import { describe, expect, it, vi } from "vitest";
 import { saveAuthProfileStore } from "../agents/auth-profiles/store-runtime.js";
+import type { BackupResourceInventory } from "../commands/backup-resource-inventory.js";
 import { backupRestoreCommand } from "../commands/backup-restore.js";
 import { backupVerifyCommand, verifyBackupArchive } from "../commands/backup-verify.js";
 import { CONFIG_AUDIT_MAX_ENTRIES, CONFIG_AUDIT_SCOPE } from "../config/io.audit.js";
@@ -32,6 +33,7 @@ import {
   formatBackupCreateSummary,
   type BackupCreateResult,
 } from "./backup-create.js";
+import { classifyBackupSqliteSource } from "./backup-sqlite-snapshot.js";
 import { writeTarArchiveWithRetry } from "./backup-tar-retry.js";
 import { isVolatileBackupPath } from "./backup-volatile-filter.js";
 import { createBackupVolatileStatCache } from "./backup-volatile-stat-cache.js";
@@ -39,6 +41,8 @@ import { acquireGatewayLock } from "./gateway-lock.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import { createSqliteAuditRecordStore } from "./sqlite-audit-record-store.js";
 import { detectLegacyAuditLogs, migrateLegacyAuditLogs } from "./state-migrations.audit-logs.js";
+
+const APPLE_DOUBLE_MAGIC = Buffer.from([0x00, 0x05, 0x16, 0x07]);
 
 function makeResult(overrides: Partial<BackupCreateResult> = {}): BackupCreateResult {
   return {
@@ -54,6 +58,27 @@ function makeResult(overrides: Partial<BackupCreateResult> = {}): BackupCreateRe
     skippedVolatileCount: 0,
     ...overrides,
   };
+}
+
+function createBackupClassificationInventory(stateDir: string): BackupResourceInventory {
+  return {
+    stateDir,
+    agentRoots: [],
+    regenerableRoots: [],
+    isIncluded: () => true,
+    isTraversable: () => true,
+    isPackageContent: () => false,
+    isVolatile: () => false,
+  };
+}
+
+async function withBackupClassificationDir(run: (dir: string) => Promise<void>): Promise<void> {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backup-classify-"));
+  try {
+    await run(dir);
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
 }
 
 async function listArchiveEntries(archivePath: string): Promise<string[]> {
@@ -566,6 +591,60 @@ describe("createBackupVolatileStatCache", () => {
         expect(entries.some((entry) => entry.endsWith("/logs/gateway.log"))).toBe(false);
       },
     );
+  });
+});
+
+describe("backup SQLite AppleDouble classification", () => {
+  it("excludes genuine AppleDouble metadata without treating it as SQLite", async () => {
+    await withBackupClassificationDir(async (dir) => {
+      const filePath = path.join(dir, "._cron.sqlite");
+      await fs.writeFile(filePath, APPLE_DOUBLE_MAGIC);
+      expect(classifyBackupSqliteSource(filePath, createBackupClassificationInventory(dir))).toBe(
+        "excluded",
+      );
+    });
+  });
+
+  it("does not open a matching directory as a file", async () => {
+    await withBackupClassificationDir(async (dir) => {
+      const directoryPath = path.join(dir, "._example.sqlite");
+      await fs.mkdir(directoryPath);
+      expect(() =>
+        classifyBackupSqliteSource(directoryPath, createBackupClassificationInventory(dir)),
+      ).not.toThrow();
+    });
+  });
+
+  it("does not follow a matching symlink to AppleDouble metadata", async () => {
+    await withBackupClassificationDir(async (dir) => {
+      const filePath = path.join(dir, "._target.sqlite");
+      const linkPath = path.join(dir, "._link.sqlite");
+      await fs.writeFile(filePath, APPLE_DOUBLE_MAGIC);
+      await fs.symlink(filePath, linkPath);
+      expect(classifyBackupSqliteSource(linkPath, createBackupClassificationInventory(dir))).toBe(
+        "sqlite",
+      );
+    });
+  });
+
+  it("keeps a matching-name SQLite hardlink alias on the sanitized snapshot path", async () => {
+    await withBackupClassificationDir(async (dir) => {
+      const filePath = path.join(dir, "._alias.sqlite");
+      await fs.writeFile(filePath, Buffer.from("SQLite format 3\0"));
+      expect(classifyBackupSqliteSource(filePath, createBackupClassificationInventory(dir))).toBe(
+        "sqlite",
+      );
+    });
+  });
+
+  it("keeps ordinary SQLite files classified as databases", async () => {
+    await withBackupClassificationDir(async (dir) => {
+      const filePath = path.join(dir, "cron.sqlite");
+      await fs.writeFile(filePath, Buffer.from("SQLite format 3\0"));
+      expect(classifyBackupSqliteSource(filePath, createBackupClassificationInventory(dir))).toBe(
+        "sqlite",
+      );
+    });
   });
 });
 
