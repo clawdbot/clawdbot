@@ -90,7 +90,7 @@ jobs:
           pr-body: |
             ## What Problem This Solves
 
-            Refresh stale CI shard weights from successful main-push CI runs.
+            Refresh stale CI shard weights from successful main-push CI runs and release Gateway samples.
 
             ## Why This Change Was Made
 
