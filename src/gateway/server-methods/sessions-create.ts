@@ -151,9 +151,10 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       respond(false, undefined, explicitlyRequestedAgent.error);
       return;
     }
+    const catalogRequestedKey = normalizeOptionalString(p.key) ?? "global";
     const catalogAgentId = catalogId
       ? normalizeAgentId(
-          parseAgentSessionKey(explicitlyRequestedKey)?.agentId ?? explicitlyRequestedAgent.agentId,
+          parseAgentSessionKey(catalogRequestedKey)?.agentId ?? explicitlyRequestedAgent.agentId,
         )
       : undefined;
     const catalogTarget =
@@ -454,6 +455,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
         requestedCwd ??
         inheritedSource?.workspace ??
         resolveAgentWorkspaceDir(cfg, target.agentId);
+      // Git discovery permits subdirectory workspaces with an ancestor .git entry.
       if (!requestedProjectGitUrl && !insideGitCheckout(workspace)) {
         respond(
           false,
@@ -462,18 +464,17 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
         );
         return;
       }
-      let baseCommit: string | undefined;
       // Reuse validates the binding, not a selected ref that may have since disappeared.
-      if (worktreeBaseRef && !requestedProjectGitUrl && !existingTargetEntry?.worktree) {
-        const resolved = await resolveSessionWorktreeBase(workspace, worktreeBaseRef, signal);
-        if (!resolved.ok) {
-          respond(false, undefined, resolved.error);
-          return;
-        }
-        baseCommit = resolved.value;
+      const resolvedBase =
+        worktreeBaseRef && !requestedProjectGitUrl && !existingTargetEntry?.worktree
+          ? await resolveSessionWorktreeBase(workspace, worktreeBaseRef, signal)
+          : undefined;
+      if (resolvedBase && !resolvedBase.ok) {
+        return respond(false, undefined, resolvedBase.error);
       }
+      const baseCommit = resolvedBase?.value;
       if (deferWorktree) {
-        // Persist intent before slow setup so the admitted turn can retry it.
+        // Persist intent before setup so the admitted turn can retry in this session.
         pendingWorktree = {
           ...(requestedProjectGitUrl ? {} : { workspace }),
           name: requestedWorktreeName,
@@ -500,8 +501,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
               ? await generateWorktreeSessionTitle({
                   cfg,
                   agentId: lifecycleTarget.agentId,
-                  // A new personal selection is not owned by this chat until
-                  // creation commits; pre-commit naming uses its saved account.
+                  // Pre-commit naming uses the saved account until this chat owns a new selection.
                   entry:
                     requestedModel && !personalModelSelection
                       ? { ...lifecycleTarget.entry, ...lifecycleTarget.titleModelSelection }

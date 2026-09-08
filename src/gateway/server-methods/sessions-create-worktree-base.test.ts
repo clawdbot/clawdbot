@@ -3,34 +3,34 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, expect, test, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { managedWorktrees } from "../agents/worktrees/service.js";
-import { loadSessionEntry } from "../config/sessions/session-accessor.js";
-import { refreshProjectClone } from "../projects/project-clone.js";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { managedWorktrees } from "../../agents/worktrees/service.js";
+import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
+import { refreshProjectClone } from "../../projects/project-clone.js";
 import {
   registerClonedProjectRegistry,
   registerProjectRegistry,
-} from "../projects/project-registry.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import type { ChatAbortControllerEntry } from "./chat-abort.js";
+} from "../../projects/project-registry.js";
+import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import type { ChatAbortControllerEntry } from "../chat-abort.js";
 import {
   controlUiClient,
   initializeRepository,
   settleWorkspaceRuns,
-} from "./server.sessions.create.projects.test-support.js";
-import { dispatchInboundMessageMock, testState } from "./test-helpers.js";
+} from "../server.sessions.create.projects.test-support.js";
+import { dispatchInboundMessageMock, testState } from "../test-helpers.js";
 import {
   directSessionReq,
   setupGatewaySessionsHandlerTestHarness,
-} from "./test/server-sessions.test-helpers.js";
+} from "../test/server-sessions.test-helpers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
 const execFileAsync = promisify(execFile);
 const projectCloneMocks = vi.hoisted(() => ({ materialize: vi.fn() }));
 
-vi.mock("../projects/project-clone.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../projects/project-clone.js")>();
+vi.mock("../../projects/project-clone.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../projects/project-clone.js")>();
   return { ...actual, materializeProjectClone: projectCloneMocks.materialize };
 });
 
