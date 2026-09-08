@@ -151,7 +151,7 @@ describe("parseInlineDirectives", () => {
 
   test.each([
     ["quoted four-space", '> Example\n>\n>     print("a  b")'],
-    ["quoted tab", '> Example\n>\n> \tprint("a  b")'],
+    ["quoted tab", '> Example\n>\n> \t\tprint("a  b")'],
     ["nested quote", '> > Example\n> >\n> >     print("a  b")'],
   ])("preserves %s code bytes after recording reply intent", (_name, code) => {
     const result = parseInlineDirectives(`[[reply_to_current]]\n${code}`);
@@ -159,6 +159,14 @@ describe("parseInlineDirectives", () => {
     expect(result.hasReplyTag).toBe(true);
     expect(result.replyToCurrent).toBe(true);
     expect(result.text).toBe(code);
+  });
+
+  test("normalizes a single tab after a quote marker as prose", () => {
+    const result = parseInlineDirectives('[[reply_to_current]]\n> \tprint("a  b")');
+
+    expect(result.hasReplyTag).toBe(true);
+    expect(result.replyToCurrent).toBe(true);
+    expect(result.text).toBe('> print("a b")');
   });
 
   test("preserves quoted directive examples beside an active audio directive", () => {
