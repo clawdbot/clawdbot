@@ -145,6 +145,27 @@ async function openPullPreviewPage(deferPreview = false): Promise<{
   const commentLink = page.getByRole("link", { name: "the review comment", exact: true });
   const card = page.locator(".github-link-hovercard");
   await pullLink.waitFor({ state: "visible" });
+  // Count transient portals as well as empty mounts; settled DOM checks miss flashes.
+  await page.evaluate(() => {
+    document.body.dataset.previewMounts = "0";
+    document.body.dataset.previewEmptyMounts = "0";
+    new MutationObserver((records) => {
+      for (const record of records) {
+        for (const node of record.addedNodes) {
+          if (node instanceof Element && node.matches(".github-link-hovercard")) {
+            document.body.dataset.previewMounts = String(
+              Number(document.body.dataset.previewMounts) + 1,
+            );
+            if (!node.querySelector(".github-link-hovercard__title")?.textContent?.trim()) {
+              document.body.dataset.previewEmptyMounts = String(
+                Number(document.body.dataset.previewEmptyMounts) + 1,
+              );
+            }
+          }
+        }
+      }
+    }).observe(document.body, { childList: true, subtree: true });
+  });
   return { card, commentLink, gateway, page, pullLink };
 }
 
@@ -173,7 +194,7 @@ describeControlUiE2e("GitHub link hover cards", () => {
     { theme: "dark", reducedMotion: "no-preference", width: 1180, fails: false },
     { theme: "dark", reducedMotion: "reduce", width: 390, fails: true },
   ] as const)(
-    "shimmers while pending ($theme, $reducedMotion, $width, fails=$fails)",
+    "waits silently for data ($theme, $reducedMotion, $width, fails=$fails)",
     async (scenario) => {
       const { card, gateway, page, pullLink } = await openPullPreviewPage(true);
       await page.emulateMedia({
@@ -185,23 +206,11 @@ describeControlUiE2e("GitHub link hover cards", () => {
       const request = await gateway.waitForRequest("controlUi.githubPreview");
       expect(request.params).toMatchObject({ agentId: "main" });
 
-      await expect.poll(() => card.getAttribute("aria-label")).toBe("Loading GitHub details…");
-      const skeleton = card.locator('[aria-hidden="true"]');
-      await skeleton.waitFor({ state: "visible" });
-      expect(await card.locator("a").count()).toBe(0);
-      expect((await card.textContent())?.trim()).toBe("");
-      const placeholder = skeleton.locator(".skeleton").first();
-      await placeholder.waitFor({ state: "visible" });
-      const animating = () =>
-        placeholder.evaluate((element) =>
-          element
-            .getAnimations({ subtree: true })
-            .some((animation) => animation.playState === "running"),
-        );
-      await expect.poll(animating).toBe(scenario.reducedMotion === "no-preference");
-      const bounds = await card.boundingBox();
-      expect(bounds!.x).toBeGreaterThanOrEqual(0);
-      expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(scenario.width);
+      await page.clock.runFor(1_000);
+      expect(await card.count()).toBe(0);
+      expect(await page.locator("body").getAttribute("data-preview-mounts")).toBe("0");
+      expect(await pullLink.getAttribute("aria-haspopup")).toBeNull();
+      await captureArtifact(page, "github-hovercard-pending-silent");
 
       if (scenario.fails) {
         const error = "GitHub API rate limit exceeded (HTTP 403). Try again in 2 minutes.";
@@ -211,11 +220,26 @@ describeControlUiE2e("GitHub link hover cards", () => {
         expect(await pullLink.getAttribute("aria-expanded")).toBeNull();
         expect(await pullLink.getAttribute("aria-haspopup")).toBeNull();
         expect(await pullLink.evaluate((element) => element === document.activeElement)).toBe(true);
-        await captureArtifact(page, "github-hovercard-failure-dismissed");
+        expect(await page.locator("body").getAttribute("data-preview-mounts")).toBe("0");
+        await captureArtifact(page, "github-hovercard-failure-silent");
       } else {
         await gateway.resolveDeferred("controlUi.githubPreview");
         await expectText(card, pullPreviewResponse.title);
-        expect(await card.getAttribute("aria-label")).not.toBe("Loading GitHub details…");
+        expect(await page.locator("body").getAttribute("data-preview-mounts")).toBe("1");
+        expect(await page.locator("body").getAttribute("data-preview-empty-mounts")).toBe("0");
+        const bounds = await card.boundingBox();
+        expect(bounds!.x).toBeGreaterThanOrEqual(0);
+        expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(scenario.width);
+        await page.keyboard.press("Tab");
+        expect(
+          await card
+            .locator("a")
+            .first()
+            .evaluate((element) => element === document.activeElement),
+        ).toBe(true);
+        await page.keyboard.press("Escape");
+        await expect.poll(() => card.count()).toBe(0);
+        expect(await pullLink.evaluate((element) => element === document.activeElement)).toBe(true);
       }
       expect(await card.locator(".skeleton").count()).toBe(0);
     },
@@ -230,22 +254,6 @@ describeControlUiE2e("GitHub link hover cards", () => {
     });
     await expect.poll(() => card.count()).toBe(0);
 
-    // Record transient portal mounts too: a loading flash would disappear before a count assertion.
-    await page.evaluate(() => {
-      document.body.dataset.previewMounts = "0";
-      const observer = new MutationObserver((records) => {
-        for (const record of records) {
-          for (const node of record.addedNodes) {
-            if (node instanceof Element && node.matches(".github-link-hovercard")) {
-              document.body.dataset.previewMounts = String(
-                Number(document.body.dataset.previewMounts) + 1,
-              );
-            }
-          }
-        }
-      });
-      observer.observe(document.body, { childList: true });
-    });
     await page.keyboard.press("Tab");
     expect(await commentLink.evaluate((element) => element === document.activeElement)).toBe(true);
     await commentLink.hover();
@@ -266,6 +274,29 @@ describeControlUiE2e("GitHub link hover cards", () => {
     expect(popup.url()).toBe(PULL_HREF);
   });
 
+  it.each(["pointer", "focus"])(
+    "does not show a late successful response after %s leaves",
+    async (trigger) => {
+      const { card, gateway, page, pullLink } = await openPullPreviewPage(true);
+      if (trigger === "pointer") {
+        await pullLink.hover();
+      } else {
+        await pullLink.focus();
+      }
+      await gateway.waitForRequest("controlUi.githubPreview");
+      if (trigger === "pointer") {
+        await page.mouse.move(1, 1);
+      } else {
+        await pullLink.evaluate((element) => element.blur());
+      }
+      await gateway.resolveDeferred("controlUi.githubPreview");
+      await page.clock.runFor(300);
+      expect(await card.count()).toBe(0);
+      expect(await page.locator("body").getAttribute("data-preview-mounts")).toBe("0");
+      expect(await pullLink.getAttribute("aria-controls")).toBeNull();
+    },
+  );
+
   it("reloads a dismissed pending preview on rehover and caches the successful response", async () => {
     const proofDir =
       artifactDir ?? createControlUiE2eArtifactDir("github-link-hovercard-cancellation");
@@ -273,16 +304,28 @@ describeControlUiE2e("GitHub link hover cards", () => {
 
     await pullLink.hover();
     await gateway.waitForRequest("controlUi.githubPreview");
-    await expect.poll(() => card.getAttribute("aria-label")).toBe("Loading GitHub details…");
+    expect(await card.count()).toBe(0);
+    expect(await page.locator("body").getAttribute("data-preview-mounts")).toBe("0");
     await page.mouse.move(1, 1);
     await expect.poll(() => card.count()).toBe(0);
 
+    await gateway.deferNext("controlUi.githubPreview");
     await pullLink.hover();
-    await card.waitFor({ state: "visible" });
+    await expect
+      .poll(async () => (await gateway.getRequests("controlUi.githubPreview")).length)
+      .toBe(2);
+    expect(await card.count()).toBe(0);
     // The abandoned response arrives after rehover; a fresh request must own
     // the rendered result, and the retired response must not poison its cache.
+    await gateway.resolveDeferred("controlUi.githubPreview", {
+      ...pullPreviewResponse,
+      title: "Stale result",
+    });
+    await page.clock.runFor(300);
+    expect(await page.locator("body").getAttribute("data-preview-mounts")).toBe("0");
     await gateway.resolveDeferred("controlUi.githubPreview");
-    await expect.poll(() => card.getAttribute("data-loading")).toBe("false");
+    await expectText(card, pullPreviewResponse.title);
+    expect(await page.locator("body").getAttribute("data-preview-empty-mounts")).toBe("0");
     // Capture the settled state even when the title assertion below fails.
     await page.screenshot({
       path: path.join(proofDir, "github-hovercard-cancellation-rehover.png"),

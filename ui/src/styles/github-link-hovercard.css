@@ -204,42 +204,6 @@
   color: var(--danger);
 }
 
-.github-link-hovercard__skeleton .skeleton {
-  display: block;
-  height: 14px;
-  border-radius: var(--radius-sm);
-}
-
-.github-link-hovercard__skeleton .github-link-hovercard__placeholder--badge {
-  width: 60px;
-  height: 25px;
-  flex-shrink: 0;
-  border-radius: var(--radius-full);
-}
-
-.github-link-hovercard__placeholder--repo {
-  width: 45%;
-}
-
-.github-link-hovercard__placeholder--time {
-  width: 14%;
-  margin-left: auto;
-}
-
-.github-link-hovercard__skeleton .github-link-hovercard__placeholder--title {
-  width: 90%;
-  height: 20px;
-}
-
-.github-link-hovercard__placeholder--author {
-  width: 35%;
-}
-
-.github-link-hovercard__skeleton .github-link-hovercard__placeholder--metrics {
-  width: 38%;
-  height: 25px;
-}
-
 @media (max-width: 560px) {
   .github-link-hovercard {
     padding: 14px;
