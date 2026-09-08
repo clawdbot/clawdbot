@@ -578,15 +578,40 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       }
 
       {
-        mockAgentOnce([{ text: "hello" }]);
-        const res = await postChatCompletions(port, {
-          user: "alice",
-          model: "openclaw",
-          messages: [{ role: "user", content: "hi" }],
-        });
-        expect(res.status).toBe(200);
+        agentCommandMock.mockClear();
+        const keys: string[] = [];
+        for (let i = 0; i < 2; i += 1) {
+          mockAgentOnce([{ text: "hello" }]);
+          const res = await postChatCompletions(port, {
+            user: "raycast-extension",
+            model: "openclaw",
+            messages: [{ role: "user", content: "hi" }],
+          });
+          expect(res.status).toBe(200);
+          const opts = agentCommandMock.mock.calls.at(-1)?.[0] as
+            | FirstAgentCommandOptions
+            | undefined;
+          keys.push(opts?.sessionKey ?? "");
+          await res.text();
+        }
+        expect(keys[0]).not.toContain("openai-user:raycast-extension");
+        expect(keys[1]).not.toContain("openai-user:raycast-extension");
+        expect(keys[0]).not.toBe(keys[1]);
+      }
 
-        expect(firstAgentCommandOptions()?.sessionKey ?? "").toContain("openai-user:alice");
+      {
+        mockAgentOnce([{ text: "hello" }]);
+        const res = await postChatCompletions(
+          port,
+          {
+            user: "raycast:extension",
+            model: "openclaw",
+            messages: [{ role: "user", content: "hi" }],
+          },
+          { "x-openclaw-session-key": "customer-case-42" },
+        );
+        expect(res.status).toBe(200);
+        expect(firstAgentCommandOptions()?.sessionKey).toBe("customer-case-42");
         await res.text();
       }
 
