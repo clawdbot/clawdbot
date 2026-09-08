@@ -346,6 +346,8 @@ export class MatrixClient {
     | undefined;
   private readonly autoBootstrapCrypto: boolean;
   private stopPersistPromise: Promise<void> | null = null;
+  private syncStopPromise: Promise<void> | null = null;
+  private cancelSyncStopWait: (() => void) | null = null;
   private verificationSummaryListenerBound = false;
   private currentSyncState: MatrixSyncState | null = null;
 
@@ -643,6 +645,11 @@ export class MatrixClient {
       return;
     }
 
+    this.cancelSyncStopWait?.();
+    this.cancelSyncStopWait = null;
+    this.syncStopPromise = null;
+    this.currentSyncState = null;
+
     throwIfMatrixStartupAborted(opts.abortSignal);
     await this.ensureCryptoSupportInitialized();
     throwIfMatrixStartupAborted(opts.abortSignal);
@@ -702,9 +709,54 @@ export class MatrixClient {
       clearInterval(this.idbPersistTimer);
       this.idbPersistTimer = null;
     }
-    this.currentSyncState = null;
-    this.client.stopClient();
+    if (!this.syncStopPromise) {
+      this.syncStopPromise = this.waitForStoppedSyncState();
+    }
     this.started = false;
+  }
+
+  private async waitForStoppedSyncState(): Promise<void> {
+    if (!this.started) {
+      this.currentSyncState = null;
+      this.client.stopClient();
+      return;
+    }
+
+    await new Promise<void>((resolve, reject) => {
+      let settled = false;
+      const settle = (error?: Error) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearTimeout(timeout);
+        this.off("sync.state", onSyncState);
+        this.cancelSyncStopWait = null;
+        this.currentSyncState = null;
+        if (error) {
+          reject(error);
+        } else {
+          resolve();
+        }
+      };
+      const onSyncState = (state: MatrixSyncState) => {
+        if (state === "STOPPED") {
+          settle();
+        }
+      };
+      const timeout = setTimeout(() => {
+        settle(new Error("Matrix sync did not reach STOPPED within 5000ms"));
+      }, 5_000);
+      timeout.unref?.();
+
+      this.on("sync.state", onSyncState);
+      this.cancelSyncStopWait = () => settle();
+      try {
+        this.client.stopClient();
+      } catch (error) {
+        settle(error instanceof Error ? error : new Error(String(error)));
+      }
+    });
   }
 
   async drainPendingDecryptions(reason = "matrix client shutdown"): Promise<void> {
@@ -714,21 +766,11 @@ export class MatrixClient {
   stop(): void {
     this.stopSyncWithoutPersist();
     this.decryptBridge?.stop();
-    // Final persist on shutdown
-    this.syncStore?.markCleanShutdown();
-    if (loadedMatrixCryptoRuntime) {
-      const { persistIdbToDisk } = loadedMatrixCryptoRuntime;
-      this.stopPersistPromise = Promise.all([
-        persistIdbToDisk({
-          snapshotPath: this.idbSnapshotPath,
-          databasePrefix: this.cryptoDatabasePrefix,
-        }).catch(noop),
-        this.syncStore?.flush().catch(noop),
-      ]).then(() => undefined);
-      return;
-    }
-    this.stopPersistPromise = loadMatrixCryptoRuntime()
-      .then(async ({ persistIdbToDisk }) => {
+    this.stopPersistPromise = (this.syncStopPromise ?? Promise.resolve())
+      .then(async () => {
+        // Persist only after matrix-js-sdk confirms sync has stopped mutating crypto state.
+        this.syncStore?.markCleanShutdown();
+        const { persistIdbToDisk } = loadedMatrixCryptoRuntime ?? (await loadMatrixCryptoRuntime());
         await Promise.all([
           persistIdbToDisk({
             snapshotPath: this.idbSnapshotPath,
@@ -748,6 +790,7 @@ export class MatrixClient {
 
   stopWithoutPersist(): void {
     this.stopSyncWithoutPersist();
+    void this.syncStopPromise?.catch(noop);
     this.decryptBridge?.stop();
     this.stopPersistPromise = Promise.resolve();
   }

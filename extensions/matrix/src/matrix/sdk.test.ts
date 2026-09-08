@@ -771,6 +771,35 @@ describe("MatrixClient request hardening", () => {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
   });
+
+  it("waits for the SDK STOPPED state before persisting shutdown state", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-matrix-sdk-stop-"));
+
+    try {
+      const client = new MatrixClient("https://matrix.example.org", "token", {
+        storageRootDir: tempDir,
+      });
+      const store = lastCreateClientOpts?.store as { flush: () => Promise<void> } | undefined;
+      if (!store) {
+        throw new Error("expected Matrix sync store");
+      }
+      const flushSpy = vi.spyOn(store, "flush").mockResolvedValue();
+
+      await client.start();
+      const stopping = client.stopAndPersist();
+      await vi.waitFor(() => {
+        expect(matrixJsClient.stopClient).toHaveBeenCalledTimes(1);
+      });
+      expect(flushSpy).not.toHaveBeenCalled();
+
+      matrixJsClient.emit("sync", "STOPPED", "SYNCING", undefined);
+      await stopping;
+
+      expect(flushSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("MatrixClient event bridge", () => {
