@@ -10,7 +10,11 @@ import {
 } from "./externalized-bundled-plugins.js";
 import { resolveDefaultPluginExtensionsDir } from "./install-paths.js";
 import { resolvePluginInstallDir } from "./install.js";
-import { resolvePackageExtensionEntries, type PackageManifest } from "./manifest.js";
+import {
+  loadPluginManifest,
+  resolvePackageExtensionEntries,
+  type PackageManifest,
+} from "./manifest.js";
 import { validatePackageExtensionEntriesForInstall } from "./package-entry-resolution.js";
 import { reconcileRegisteredOpenClawHostLinks } from "./plugin-peer-link.js";
 import { resetPluginSlotsToDefaults } from "./slots.js";
@@ -23,6 +27,15 @@ export async function hasRunnableInstalledNpmPayload(params: {
 }): Promise<boolean> {
   const extensions = resolvePackageExtensionEntries(params.manifest);
   if (extensions.status !== "ok") {
+    return false;
+  }
+  // Entry-file presence alone does not establish a loadable native plugin: the
+  // required openclaw.plugin.json must also parse and declare its id/configSchema.
+  // npm-installed packages may deploy via hardlinks, so do not reject them here.
+  // Missing, malformed, or reserved-id manifests fail closed, preserving the
+  // disable-on-failure default for genuinely unusable prior installs.
+  const nativeManifest = loadPluginManifest(params.installPath, false);
+  if (!nativeManifest.ok) {
     return false;
   }
   const validation = await validatePackageExtensionEntriesForInstall({

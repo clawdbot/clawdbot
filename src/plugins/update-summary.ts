@@ -33,8 +33,12 @@ export function recordPluginUpdateFailure(params: {
   };
 }): { config: OpenClawConfig; changed: boolean } {
   const options = params.options ?? {};
+  // Preserve the prior install only for failure codes whose rejected candidate
+  // never replaced it (metadata probing or staged-artifact validation). The caller
+  // must also confirm the prior payload is still runnable via installedPayloadRunnable.
   const preserveInstalledPayload =
-    options.code === PLUGIN_INSTALL_ERROR_CODE.NPM_METADATA_FAILURE &&
+    (options.code === PLUGIN_INSTALL_ERROR_CODE.NPM_METADATA_FAILURE ||
+      options.code === PLUGIN_INSTALL_ERROR_CODE.STAGED_ARTIFACT_FAILURE) &&
     options.installedPayloadRunnable === true;
   if (params.disableOnFailure && !params.dryRun && !preserveInstalledPayload) {
     const message =
