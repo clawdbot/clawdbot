@@ -1,5 +1,7 @@
+import type { MessagingToolSend } from "../../agents/embedded-agent-messaging.types.js";
 import type { ReplyPayload } from "../../shared/reply-payload.types.js";
 import { resolveAgentTurnExecutionStatus } from "./agent-runner-execution-status.js";
+import type { AgentTurnExecutionResult } from "./agent-runner-execution.types.js";
 import type { ReplyDispatchDeliveryOutcome } from "./reply-dispatch-outcome.js";
 import { isReplyOperationSuperseded } from "./reply-operation-abort.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
@@ -42,6 +44,8 @@ export type ReplyOperationRunState = {
   messageInjectionAborted?: true;
   agentTurn?: ReturnType<typeof resolveAgentTurnExecutionStatus>;
   agentTurnOwner?: ReplyOperation;
+  messagingToolSentTargets?: MessagingToolSend[];
+  backgroundWorkStarted?: boolean;
   preRunRejection?: ReplyPreRunRejectionCode;
 };
 
@@ -62,12 +66,21 @@ export function resolveReplyOperationRunState(
 export function recordReplyOperationAgentTurn(
   states: readonly ReplyOperationRunState[] | undefined,
   owner: ReplyOperation | undefined,
-  outcome?: Parameters<typeof resolveAgentTurnExecutionStatus>[0],
+  outcome?: AgentTurnExecutionResult["outcome"],
 ): void {
   for (const state of states ?? []) {
     state.agentTurn = resolveAgentTurnExecutionStatus(
       outcome ?? (owner?.result?.kind === "aborted" ? owner.result : undefined),
     );
+    if (outcome?.kind === "settled") {
+      state.messagingToolSentTargets = outcome.result.messagingToolSentTargets?.slice();
+      state.backgroundWorkStarted = Boolean(
+        outcome.result.asyncWorkStarted || outcome.result.acceptedSessionSpawns?.length,
+      );
+    } else if (!owner || state.agentTurnOwner !== owner) {
+      state.messagingToolSentTargets = undefined;
+      state.backgroundWorkStarted = false;
+    }
     state.agentTurnOwner = owner;
   }
 }
