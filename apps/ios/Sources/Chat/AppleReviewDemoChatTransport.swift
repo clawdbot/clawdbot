@@ -322,6 +322,34 @@ struct LocalFixtureChatTransport: OpenClawChatTransport {
             })
     }
 
+    func listQuestions() async throws -> [QuestionRecord] {
+        guard ProcessInfo.processInfo.arguments.contains("--openclaw-protected-question-fixture") else { return [] }
+        let now = Int(Date().timeIntervalSince1970 * 1000)
+        return [
+            QuestionRecord(
+                id: "screenshot-protected-question",
+                questions: [
+                    Question(
+                        questionid: "credential",
+                        header: "Authentication",
+                        question: "Enter a synthetic credential",
+                        options: [],
+                        isother: true,
+                        issecret: true,
+                        secretstore: QuestionSecretStoreBinding(
+                            name: "SYNTHETIC_CREDENTIAL",
+                            kind: AnyCodable("secret"),
+                            reason: "Verifies protected entry focus.")),
+                ],
+                agentid: self.fixture.defaultAgentID,
+                sessionkey: self.fixture.sessionKey,
+                runid: "screenshot-protected-question-run",
+                createdatms: now,
+                expiresatms: now + 600_000,
+                status: .pending),
+        ]
+    }
+
     func listChildSessions(parentKey: String) async throws -> [OpenClawChatSessionEntry] {
         guard ProcessInfo.processInfo.arguments.contains("--openclaw-swarm-chat-fixture") else { return [] }
         let groupID = "swarm:\(parentKey):research"

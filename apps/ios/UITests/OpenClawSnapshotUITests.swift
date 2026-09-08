@@ -48,6 +48,9 @@ final class OpenClawSnapshotUITests: XCTestCase {
     }
 
     func testReleaseChatScreenshot() {
+        if UIDevice.current.userInterfaceIdiom == .phone {
+            self.assertProtectedQuestionKeepsFocus()
+        }
         self.captureReleaseScreenshot(Self.chatScreenshotTarget) { app in
             let input = self.chatMessageInput(in: app)
             XCTAssertTrue(input.waitForExistence(timeout: 8))
@@ -66,6 +69,42 @@ final class OpenClawSnapshotUITests: XCTestCase {
                 XCTAssertTrue(keyboard.waitForNonExistence(timeout: 3))
             }
         }
+    }
+
+    private func assertProtectedQuestionKeepsFocus() {
+        self.launchApp(
+            for: Self.chatScreenshotTarget,
+            additionalArguments: [
+                "--openclaw-empty-chat-fixture",
+                "--openclaw-protected-question-fixture",
+            ])
+        guard let app = self.app else {
+            XCTFail("Protected-question fixture app is unavailable")
+            return
+        }
+
+        let protectedInput = app.secureTextFields["Secret value"]
+        XCTAssertTrue(protectedInput.waitForExistence(timeout: 8))
+        self.waitForHittable(true, of: protectedInput)
+        let submit = app.buttons["Submit"]
+        XCTAssertTrue(submit.waitForExistence(timeout: 3))
+        XCTAssertFalse(submit.isEnabled)
+
+        protectedInput.tap()
+        let keyboard = app.keyboards.firstMatch
+        XCTAssertTrue(keyboard.waitForExistence(timeout: 3))
+
+        // Repositioning within an already-focused protected field must not let the
+        // message-list background gesture resign its first responder.
+        protectedInput.tap()
+        Thread.sleep(forTimeInterval: 1.2)
+        self.attachScreenshot(named: "protected-question-focused")
+        XCTAssertTrue(keyboard.exists)
+
+        protectedInput.typeText("synthetic-focus-probe")
+        XCTAssertTrue(keyboard.exists)
+        self.waitForEnabled(submit)
+        self.attachScreenshot(named: "protected-question-typed")
     }
 
     func testReleaseAgentScreenshot() {
