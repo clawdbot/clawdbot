@@ -12,7 +12,9 @@ import {
 } from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { runWithSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
+import { prepareStateDatabaseCanonicalMutation } from "../infra/state-database-coordinator.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { getFileLockProcessStartTime, isPidDefinitelyDead } from "../shared/pid-alive.js";
 import {
   assertAgentDeletionPathFence,
@@ -53,6 +55,36 @@ const maintenanceAuthority = new AsyncLocalStorage<{
   authority: OpenClawStateLeaseContext;
   databasePath: string;
 }>();
+
+const maintenanceHandles = resolveGlobalSingleton(
+  Symbol.for("openclaw.agentDatabaseMaintenanceHandles"),
+  () => new WeakMap<DatabaseSync, () => void>(),
+);
+
+/** Keep mutation-owned cached and coalesced handles private to their exact interval. */
+export function registerAgentDatabaseMaintenanceAccess(database: DatabaseSync): void {
+  const owner = maintenanceAuthority.getStore();
+  if (!owner) {
+    return;
+  }
+  const assertMutation = prepareStateDatabaseCanonicalMutation(owner.databasePath);
+  if (!assertMutation) {
+    throw new Error("Agent database requires its live maintenance mutation scope.");
+  }
+  const assertCurrent = () => {
+    if (maintenanceAuthority.getStore() !== owner) {
+      throw new Error("Agent database belongs to another maintenance mutation scope.");
+    }
+    assertMutation();
+    owner.authority.assertOwned();
+  };
+  assertCurrent();
+  maintenanceHandles.set(database, assertCurrent);
+}
+
+export function assertAgentDatabaseMaintenanceAccess(database: DatabaseSync): void {
+  maintenanceHandles.get(database)?.();
+}
 
 export function runWithAgentDatabaseMaintenanceAuthority<T>(
   authority: OpenClawStateLeaseContext,
@@ -115,10 +147,21 @@ export function claimOpenClawAgentDatabaseLease(
           .where("lease_key", "=", AGENT_DATABASE_MAINTENANCE_LEASE.key)
           .where("expires_at", ">", Date.now()),
       );
-      if (maintenance) {
-        throw new Error(
-          "Agent database maintenance is in progress; retry after openclaw doctor --fix completes.",
-        );
+      const authority = maintenanceAuthority.getStore();
+      if (maintenance || authority) {
+        // The updater's Doctor may use normal agent stores only inside its own
+        // live canonical-mutation scope. Plain maintenance and foreign tasks
+        // remain excluded; neither a saved owner nor a missing/expired row grants access.
+        if (
+          !authority ||
+          authority.databasePath !== path.resolve(database.path) ||
+          !prepareStateDatabaseCanonicalMutation(database.path)
+        ) {
+          throw new Error(
+            "Agent database maintenance is in progress; retry after openclaw doctor --fix completes.",
+          );
+        }
+        authority.authority.assertOwnedInTransaction(database.db);
       }
       assertAgentDeletionPathFence(database, deletionFence);
       executeSqliteQuerySync(

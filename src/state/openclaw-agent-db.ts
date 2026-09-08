@@ -48,6 +48,8 @@ import type {
 } from "./openclaw-agent-db-contract.js";
 import { registerOpenClawAgentDatabaseIdentity } from "./openclaw-agent-db-identity.js";
 import {
+  assertAgentDatabaseMaintenanceAccess,
+  registerAgentDatabaseMaintenanceAccess,
   assertOpenClawAgentDatabaseLease,
   claimOpenClawAgentDatabaseLease,
   releaseOpenClawAgentDatabaseLease,
@@ -381,6 +383,7 @@ function* openOpenClawAgentDatabaseSteps(
     ensureOpenClawAgentDatabasePermissions(pathname, databaseOptions);
     const database = { agentId, db, path: pathname, walMaintenance };
     openedDatabase = database;
+    registerAgentDatabaseMaintenanceAccess(db);
     const cleanup = registerAgentDeletionDatabaseCleanup(database, databaseOptions);
     if (cleanup) {
       const release = retainAgentDatabase(db);
@@ -539,6 +542,7 @@ export function getOpenClawAgentDatabaseIfOpen(
     );
   }
   assertAgentDeletionDatabaseCleanupAccess(database, options);
+  assertAgentDatabaseMaintenanceAccess(database.db);
   return database;
 }
 

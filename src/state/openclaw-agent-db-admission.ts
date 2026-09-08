@@ -11,6 +11,7 @@ import type {
   OpenClawAgentDatabase,
   OpenClawAgentDatabaseOptions,
 } from "./openclaw-agent-db-contract.js";
+import { assertAgentDatabaseMaintenanceAccess } from "./openclaw-agent-db-lease.js";
 import {
   agentDatabaseLifecycle as cache,
   retainAgentDatabase,
@@ -67,6 +68,7 @@ export function createOpenClawAgentDatabaseAdmissionOwner(
         }
         // Coalesced callers keep their own scope; admission cannot lend its cleanup authority.
         assertAgentDeletionDatabaseCleanupAccess(database, options);
+        assertAgentDatabaseMaintenanceAccess(database.db);
         return operation(database);
       })
       .finally(() => {
@@ -134,6 +136,7 @@ export function createOpenClawAgentDatabaseAdmissionOwner(
           pending.releaseBorrow = retainAgentDatabase(step.value.db);
           admission.complete(step.value);
           assertAgentDeletionDatabaseCleanupAccess(step.value, options);
+          assertAgentDatabaseMaintenanceAccess(step.value.db);
           return { done: true as const, result: await operation(step.value) };
         });
         if (outcome.done) {

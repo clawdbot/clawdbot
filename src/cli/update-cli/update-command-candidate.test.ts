@@ -3,6 +3,10 @@ import path from "node:path";
 import { inspect } from "node:util";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import {
+  writePersistedAuthProfileStoreRaw,
+  readPersistedSharedAuthProfileStoreRaw,
+} from "../../agents/auth-profiles/sqlite.js";
 import * as doctor from "../../commands/doctor.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import * as services from "../../daemon/service.js";
@@ -19,6 +23,7 @@ import {
   loadUpdateRecovery,
   prepareUpdateRecoveryHandoff,
 } from "../../infra/update-run-recovery.js";
+import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -52,6 +57,7 @@ async function fixture(
     prepared: ReturnType<typeof prepareUpdateRecoveryHandoff>["record"];
   }) => Promise<void>,
   wrongRuntime = false,
+  legacyAuth = false,
 ) {
   const home = await fs.realpath(dirs.make("candidate-phase-"));
   const root = await fs.realpath(process.cwd());
@@ -63,6 +69,7 @@ async function fixture(
     OPENCLAW_CONFIG_PATH: path.join(home, "state", "openclaw.json"),
     OPENCLAW_PROFILE: undefined,
     OPENCLAW_HOME: undefined,
+    OPENCLAW_AGENT_DIR: undefined,
     OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
   };
   const control = path.join(home, "control");
@@ -73,6 +80,21 @@ async function fixture(
       readRuntime: vi.fn(async () => ({ status: "stopped", missingUnit: true })),
     }),
   );
+  const agentDir = path.join(env.OPENCLAW_STATE_DIR, "agents/main/agent");
+  if (legacyAuth) {
+    await withOwnedManagedUpdateEnv(env, async () => {
+      writePersistedAuthProfileStoreRaw(
+        {
+          version: 1,
+          profiles: {
+            "openai:legacy": { type: "api_key", provider: "openai", key: "fixture-only-auth-key" },
+          },
+        },
+        agentDir,
+      );
+      await closeOpenClawAgentDatabasesAsync();
+    });
+  }
   const run = createUpdateRun({ trigger: "cli" }, { env });
   await fs.writeFile(env.OPENCLAW_CONFIG_PATH, "{}\n");
   const dbPath = openOpenClawStateDatabase({ env }).path;
@@ -115,6 +137,15 @@ async function fixture(
       resources: [
         { sourcePath: env.OPENCLAW_CONFIG_PATH, kind: "config", restore: "replace" },
         { sourcePath: dbPath, kind: "sqlite", restore: "replace" },
+        ...(legacyAuth
+          ? [
+              {
+                sourcePath: path.join(agentDir, "openclaw-agent.sqlite"),
+                kind: "sqlite" as const,
+                restore: "replace" as const,
+              },
+            ]
+          : []),
       ],
       exclusions: [],
       preimages: {
@@ -323,23 +354,42 @@ it.each(["success", "failure", "resume"] as const)(
   },
 );
 
-it("runs the actual candidate Doctor under held state owners before preparing plugin continuation", async () => {
-  await fixture(async ({ params, handoff, fence }) => {
-    const recovery = await acceptUpdateCommandCandidate({
-      handoff,
-      finalization: params,
-      fence,
-      moduleUrl: import.meta.url,
-    });
-    const next = await runUpdateCommandCandidateMutations(params);
-    expect(next, inspect(params.failure, { depth: 8 })).toBeDefined();
-    expect(
-      recovery
-        .getRecord()
-        .effects.filter((e) => e.kind === "runtime-mutation")
-        .map((e) => e.resourceId),
-    ).toEqual(["doctor", "plugins"]);
-    expect(recovery.getRecord().afterImages).toHaveLength(2);
-    expect(recovery.getRecord().verification).toBeNull();
-  });
-});
+it.each([false, true])(
+  "runs the actual candidate Doctor under held state owners before preparing plugin continuation (legacy auth: %s)",
+  async (legacyAuth) => {
+    await fixture(
+      async ({ params, handoff, fence }) => {
+        const recovery = await acceptUpdateCommandCandidate({
+          handoff,
+          finalization: params,
+          fence,
+          moduleUrl: import.meta.url,
+        });
+        const next = await runUpdateCommandCandidateMutations(params);
+        expect(next, inspect(params.failure, { depth: 8 })).toBeDefined();
+        expect(
+          recovery
+            .getRecord()
+            .effects.filter((e) => e.kind === "runtime-mutation")
+            .map((e) => e.resourceId),
+        ).toEqual(["doctor", "plugins"]);
+        expect(recovery.getRecord().afterImages).toHaveLength(2);
+        expect(recovery.getRecord().verification).toBeNull();
+        if (legacyAuth) {
+          expect(readPersistedSharedAuthProfileStoreRaw(params.opts.run!.env)).toEqual({
+            version: 1,
+            profiles: {
+              "openai:legacy": {
+                type: "api_key",
+                provider: "openai",
+                key: "fixture-only-auth-key",
+              },
+            },
+          });
+        }
+      },
+      false,
+      legacyAuth,
+    );
+  },
+);

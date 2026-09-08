@@ -1,6 +1,8 @@
+import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import * as os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { inspect } from "node:util";
 import { afterEach, expect, it, vi } from "vitest";
 import { WebSocketServer, type WebSocket } from "ws";
@@ -18,6 +20,7 @@ import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import * as packageRecovery from "../../infra/package-update-recovery.js";
 import { swapStagedPackageInstall } from "../../infra/package-update-swap.js";
 import { createPackageSwapFixture } from "../../infra/package-update-swap.test-support.js";
+import * as runtimeWorker from "../../infra/runtime-worker-url.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import { buildCheckpointReaderRuntime } from "../../infra/update-checkpoint-runtime.test-support.js";
 import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
@@ -72,6 +75,7 @@ it.each([
   "replay-conflict",
   "replay-shadowed",
   "rollback",
+  "rollback-worker-gap",
   "rollback-old",
   "rollback-interrupted",
   "rollback-interference",
@@ -106,7 +110,13 @@ it.each([
     if (packageGap) {
       vi.mocked(os.platform).mockReturnValue("linux");
     }
-    const rollback = mode === "rollback" || older || interference || interrupted || replay;
+    const rollback =
+      mode === "rollback-worker-gap" ||
+      mode === "rollback" ||
+      older ||
+      interference ||
+      interrupted ||
+      replay;
     if (replay) {
       useShortRealReplayLeases(mode === "replay-package-gap-slow-checkpoint" ? 10_000 : 30_000);
     }
@@ -598,6 +608,24 @@ it.each([
               packageUpdateNodeRunner: process.execPath,
               updateStepTimeoutMs: 30_000,
             };
+            if (mode === "rollback-worker-gap") {
+              // Source tests normally launch workers outside the movable install. Model
+              // the packaged import.meta URL only while the real rename leaves a gap.
+              const resolve = runtimeWorker.resolveRuntimeWorkerUrl;
+              vi.spyOn(runtimeWorker, "resolveRuntimeWorkerUrl").mockImplementation((input) =>
+                resolve(
+                  input.distWorkerPath === "infra/sqlite-readonly-location.worker.js" &&
+                    !existsSync(pkg.packageRoot)
+                    ? {
+                        ...input,
+                        currentModuleUrl: pathToFileURL(
+                          path.join(pkg.packageRoot, "dist/runtime.js"),
+                        ).href,
+                      }
+                    : input,
+                ),
+              );
+            }
             if (replay) {
               resume = packageGap
                 ? await interruptPackageGapReplay(params, mode)

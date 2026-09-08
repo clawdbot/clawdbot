@@ -13,8 +13,14 @@ import {
   UpdateRecoveryConflictError,
   type UpdateRecoveryRecord,
 } from "./update-run-recovery-schema.js";
-import { mutateRecovery, readRecoveries } from "./update-run-recovery-store.js";
-import { assertExactUpdateRecoveryClaim, type UpdateRecoveryFence } from "./update-run-recovery.js";
+import { assertExactRecovery } from "./update-run-recovery-snapshot.js";
+import {
+  assertExecutingClaim,
+  mutateRecovery,
+  readRecoveries,
+  writeRecovery,
+} from "./update-run-recovery-store.js";
+import type { UpdateRecoveryFence } from "./update-run-recovery.js";
 
 function assertPackage(record: UpdateRecoveryRecord, observed: PackageRecoveryVerified): void {
   const descriptor = observed.descriptor;
@@ -43,9 +49,22 @@ export function createUpdateRecoveryPackageHooks(params: {
   const { fence } = params;
   const options = params.options ?? {};
   const transactionId = params.getRecord().transactionId;
+  // Package effects already own writable custody. Recheck the exact executable
+  // record in that existing-schema transaction, without launching a reader from
+  // the package whose pathname may currently be between renames. No row changes.
+  const assertClaim = (record: UpdateRecoveryRecord) =>
+    writeRecovery(
+      fence,
+      (db) => {
+        assertExactRecovery(db, record);
+        assertExecutingClaim(record);
+      },
+      options,
+      "existing-schema",
+    );
   const accept = (record: UpdateRecoveryRecord) => {
     params.onRecord(record);
-    return () => assertExactUpdateRecoveryClaim(record, fence, options);
+    return () => assertClaim(record);
   };
   return {
     transactionId,
@@ -102,7 +121,7 @@ export function createUpdateRecoveryPackageHooks(params: {
       if (found && context.mode === "resume") {
         // This includes a committed observation whose acknowledgement was lost.
         // Reacquire the SAME effect; afterEffect verifies the exact prior outcome.
-        assertExactUpdateRecoveryClaim(accepted, fence, options);
+        assertClaim(accepted);
         if (
           !found.package ||
           !isDeepStrictEqual(found.package.intent, effect) ||
@@ -175,7 +194,7 @@ export function createUpdateRecoveryPackageHooks(params: {
         );
         params.onRecord(accepted);
       }
-      const assertCurrent = () => assertExactUpdateRecoveryClaim(accepted, fence, options);
+      const assertCurrent = () => assertClaim(accepted);
       return {
         assertCurrent,
         async afterEffect(value, outcome) {

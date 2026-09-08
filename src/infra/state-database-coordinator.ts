@@ -389,6 +389,31 @@ export function hasStateDatabaseSourceExclusion(databasePath: string): boolean {
   return true;
 }
 
+/** Capture the exact task-local mutation interval, never just its physical owner. */
+export function prepareStateDatabaseCanonicalMutation(
+  databasePath: string,
+): (() => void) | undefined {
+  const pathname = resolveLifecycleCoordinatorPath("state-handles", {
+    databasePath,
+    runtimeDirectory: resolveStateLifecycleRuntimeDirectory(),
+    uid: typeof process.getuid === "function" ? process.getuid() : undefined,
+  });
+  const scope = canonicalWriteScopes.getStore()?.get(pathname);
+  if (!scope?.mutation) {
+    return undefined;
+  }
+  const assertCurrent = () => {
+    if (!scope.active || canonicalWriteScopes.getStore()?.get(pathname) !== scope) {
+      throw new SqliteCoordinatorError(
+        "SQLite canonical mutation scope is closed or no longer current",
+      );
+    }
+    scope.assertCurrent();
+  };
+  assertCurrent();
+  return assertCurrent;
+}
+
 /** The mutation owner alone supplies private snapshots while its native source
  * may still be open. This never authorizes a child process or a source reopen. */
 export function prepareStateDatabaseMutationSnapshot(databasePath: string) {
