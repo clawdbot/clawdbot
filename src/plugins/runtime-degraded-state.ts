@@ -1,4 +1,6 @@
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveRealpathOrAbsolute } from "../infra/boundary-path.js";
+import { redactToolPayloadText } from "../logging/redact.js";
 
 /** Boot-stable quarantine state for configured plugins whose payload failed verification. */
 
@@ -112,7 +114,7 @@ export function degradedPluginMatchesRoot(plugin: DegradedPlugin, rootDir: strin
 export function toPublicPluginVerificationDiagnostic(
   diagnostic: PluginVerificationDiagnostic,
 ): PublicPluginVerificationDiagnostic {
-  const detail =
+  const privatePathRedactedDetail =
     diagnostic.reason === "missing-openclaw-peer-link"
       ? 'Plugin declares peerDependency "openclaw", but its host peer link is missing or invalid.'
       : diagnostic.installPath
@@ -121,7 +123,7 @@ export function toPublicPluginVerificationDiagnostic(
   return {
     kind: diagnostic.kind,
     reason: diagnostic.reason,
-    detail,
+    detail: truncateUtf16Safe(redactToolPayloadText(privatePathRedactedDetail), 1_000),
   };
 }
 
