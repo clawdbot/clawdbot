@@ -3,9 +3,16 @@ import { describe, expect, it } from "vitest";
 import {
   avoidTrailingHighSurrogateBreak,
   sliceUtf16Safe,
+  toWellFormedUtf16,
   truncateUtf16Safe,
   truncateWithMarker,
 } from "./utf16-slice.js";
+
+describe("toWellFormedUtf16", () => {
+  it("replaces lone surrogates without changing valid pairs", () => {
+    expect(toWellFormedUtf16(`a\ud83d🚀\ude80b`)).toBe("a�🚀�b");
+  });
+});
 
 describe("avoidTrailingHighSurrogateBreak", () => {
   it("keeps ordinary and terminal boundaries unchanged", () => {
