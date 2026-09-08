@@ -1,11 +1,23 @@
 // Docker E2E Observability tests cover docker e2e observability script behavior.
 import { spawnSync } from "node:child_process";
-import { readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const installDiagnosticsScript = path.resolve("scripts/lib/openclaw-e2e-install-diagnostics.mjs");
+const tsxPreload = path.resolve("scripts/tsx.mjs");
+const typedOnboardingScript = path.resolve("scripts/e2e/release-typed-onboarding-docker.sh");
+const installDiagnosticsPrefix = "[release typed onboarding install] ";
+
+function publishInstallDiagnostics(diagnosticsPath: string, extraArgs: string[] = []) {
+  return spawnSync(
+    process.execPath,
+    [...extraArgs, "--import", tsxPreload, installDiagnosticsScript, "publish", diagnosticsPath],
+    { encoding: "utf8" },
+  );
+}
 
 function successTail(scriptPath: string): string {
   const script = readFileSync(scriptPath, "utf8");
@@ -34,6 +46,204 @@ function runSuccessTail(scriptPath: string) {
 }
 
 describe("Docker E2E observability", () => {
+  it("publishes one redacted, control-safe install diagnostic stream", () => {
+    const tempDir = tempDirs.make("openclaw-install-diagnostics-publish-");
+    const diagnosticsPath = path.join(tempDir, "install.log");
+    writeFileSync(
+      diagnosticsPath,
+      "\u001B[31mOPENAI_API_KEY=sk-openclaw-install-secret-1234567890\u001B[0m\n::error::fixture failure\nplain\u0000text\n",
+      { mode: 0o622 },
+    );
+    chmodSync(diagnosticsPath, 0o622);
+
+    const result = publishInstallDiagnostics(diagnosticsPath);
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).not.toContain("sk-openclaw-install-secret-1234567890");
+    expect(result.stdout).not.toMatch(/^::/mu);
+    expect(result.stdout).not.toContain("\u001B");
+    expect(result.stdout).not.toContain("\u0000");
+    expect(result.stdout.match(/fixture failure/g)).toHaveLength(1);
+    for (const line of result.stdout.trimEnd().split("\n")) {
+      expect(line.startsWith(installDiagnosticsPrefix)).toBe(true);
+    }
+  });
+
+  it("keeps captured UTF-8 tails publishable within the byte limit", () => {
+    const tempDir = tempDirs.make("openclaw-install-diagnostics-utf8-");
+    const diagnosticsPath = path.join(tempDir, "install.log");
+    writeFileSync(diagnosticsPath, "", { mode: 0o622 });
+    chmodSync(diagnosticsPath, 0o622);
+    const env = {
+      ...process.env,
+      OPENCLAW_E2E_INSTALL_DIAGNOSTICS_UID: String(process.getuid?.() ?? 0),
+      OPENCLAW_E2E_LOG_TAIL_BYTES: "4",
+    };
+
+    const capture = spawnSync(
+      process.execPath,
+      [installDiagnosticsScript, "capture", diagnosticsPath],
+      { encoding: "utf8", env, input: "éabc" },
+    );
+    const published = spawnSync(
+      process.execPath,
+      ["--import", tsxPreload, installDiagnosticsScript, "publish", diagnosticsPath],
+      { encoding: "utf8", env },
+    );
+
+    expect(capture.status, capture.stderr).toBe(0);
+    expect(readFileSync(diagnosticsPath)).toEqual(Buffer.from("abc"));
+    expect(published.status, published.stderr).toBe(0);
+    expect(published.stdout).toBe(`${installDiagnosticsPrefix}abc\n`);
+  });
+
+  it("uses only the fixed omission marker for unsafe input or redaction failure", () => {
+    const tempDir = tempDirs.make("openclaw-install-diagnostics-omission-");
+    const targetPath = path.join(tempDir, "target.log");
+    const diagnosticsPath = path.join(tempDir, "install.log");
+    const loaderPath = path.join(tempDir, "throwing-redactor-loader.mjs");
+    writeFileSync(targetPath, "private fixture bytes\n", { mode: 0o622 });
+    chmodSync(targetPath, 0o622);
+    symlinkSync(targetPath, diagnosticsPath);
+    writeFileSync(
+      loaderPath,
+      `
+export async function load(url, context, nextLoad) {
+  if (url.endsWith("/src/logging/redact.ts")) {
+    return {
+      format: "module",
+      shortCircuit: true,
+      source: "export function redactSensitiveText() { throw new Error(); }",
+    };
+  }
+  return nextLoad(url, context);
+}
+`,
+      "utf8",
+    );
+
+    const unsafeResult = publishInstallDiagnostics(diagnosticsPath);
+    const redactionResult = publishInstallDiagnostics(targetPath, [
+      "--experimental-loader",
+      loaderPath,
+    ]);
+    expect(unsafeResult.status, unsafeResult.stderr).toBe(0);
+    expect(redactionResult.status, redactionResult.stderr).toBe(0);
+    expect(unsafeResult.stdout).toBe(`${installDiagnosticsPrefix}[diagnostics omitted]\n`);
+    expect(redactionResult.stdout).toBe(`${installDiagnosticsPrefix}[diagnostics omitted]\n`);
+    expect(`${unsafeResult.stdout}${redactionResult.stdout}`).not.toContain(
+      "private fixture bytes",
+    );
+  });
+
+  it.each([
+    [1, ""],
+    [143, "TERM"],
+    [130, "INT"],
+    [129, "HUP"],
+  ] as const)("preserves typed onboarding cleanup status %i (%s)", (status, signal) => {
+    const tempDir = tempDirs.make("openclaw-typed-onboarding-cleanup-");
+    const script = readFileSync(typedOnboardingScript, "utf8");
+    const start = script.indexOf("exec 5>&1");
+    const end = script.indexOf("trap 'exit 129' HUP", start) + "trap 'exit 129' HUP".length;
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    const cleanupSetup = script.slice(start, end);
+    const harness = [
+      "set -Eeuo pipefail",
+      `ROOT_DIR=${JSON.stringify(process.cwd())}`,
+      "PACKAGE_TGZ=",
+      "AUTO_PREPUBLISH_PLUGIN_REGISTRY_ROOT=",
+      "docker_e2e_cleanup_package_tgz() { :; }",
+      cleanupSetup,
+      `install_diagnostics_dir=${JSON.stringify(path.join(tempDir, "owned"))}`,
+      'mkdir -m 700 "$install_diagnostics_dir"',
+      'install_diagnostics_path="$install_diagnostics_dir/install.log"',
+      'printf "OPENAI_API_KEY=sk-openclaw-cleanup-secret-1234567890\\n" >"$install_diagnostics_path"',
+      'chmod 622 "$install_diagnostics_path"',
+      signal ? `kill -${signal} "$$"` : `exit ${status}`,
+    ].join("\n");
+
+    const result = spawnSync("/bin/bash", ["-c", harness], {
+      encoding: "utf8",
+      timeout: 5_000,
+    });
+
+    expect(result.status, result.stderr).toBe(status);
+    expect(readdirSync(tempDir)).toEqual([]);
+    expect(result.stdout).not.toContain("sk-openclaw-cleanup-secret-1234567890");
+    expect(result.stdout.match(/\[diagnostics omitted\]|OPENAI_API_KEY=/g)).toHaveLength(1);
+  });
+
+  it("mounts current diagnostics support outside frozen scenario cleanup", () => {
+    const wrapper = readFileSync(typedOnboardingScript, "utf8");
+    const scenario = readFileSync("scripts/e2e/lib/release-typed-onboarding/scenario.sh", "utf8");
+
+    expect(wrapper).toContain(
+      '-v "$install_diagnostics_path:/tmp/openclaw-install-diagnostics.log:rw"',
+    );
+    expect(wrapper).toContain(
+      '-v "$ROOT_DIR/scripts/lib/openclaw-e2e-instance.sh:/app/scripts/lib/openclaw-e2e-instance.sh:ro"',
+    );
+    expect(wrapper).not.toContain('-v "$install_diagnostics_dir:/tmp/openclaw-install-diagnostics');
+    expect(scenario).toContain('rm -rf "$scenario_tmp"');
+    expect(scenario).not.toContain("openclaw-install-diagnostics.log");
+  });
+
+  it("resolves the wrapper sidecar owner inside the container namespace", () => {
+    const tempDir = tempDirs.make("openclaw-typed-onboarding-owner-");
+    const script = readFileSync(typedOnboardingScript, "utf8");
+    const startMarker = '-i "$IMAGE_NAME" bash -c \'\n';
+    const endMarker = "\n' bash bash scripts/e2e/lib/release-typed-onboarding/scenario.sh";
+    const start = script.indexOf(startMarker);
+    const end = script.indexOf(endMarker, start);
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    const containerSetup = script.slice(start + startMarker.length, end);
+    const diagnosticsPath = path.join(tempDir, "install.log");
+    writeFileSync(diagnosticsPath, "", { mode: 0o622 });
+    chmodSync(diagnosticsPath, 0o622);
+    const statPath = path.join(tempDir, "stat");
+    writeFileSync(
+      statPath,
+      [
+        "#!/bin/sh",
+        'if [ "${1:-}" = "-f" ]; then',
+        '  printf "poisoned stat output\\n"',
+        "  exit 1",
+        "fi",
+        'printf "%s\\n" "$OPENCLAW_TEST_UID"',
+      ].join("\n"),
+      "utf8",
+    );
+    chmodSync(statPath, 0o755);
+    const uid = process.getuid?.() ?? 0;
+
+    const result = spawnSync(
+      "/bin/bash",
+      [
+        "-c",
+        containerSetup,
+        "bash",
+        "/bin/bash",
+        "-c",
+        'printf "%s" "$OPENCLAW_E2E_INSTALL_DIAGNOSTICS_UID"',
+      ],
+      {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          OPENCLAW_E2E_INSTALL_DIAGNOSTICS: diagnosticsPath,
+          OPENCLAW_E2E_INSTALL_DIAGNOSTICS_UID: String(uid + 1),
+          PATH: `${tempDir}:${process.env.PATH}`,
+        },
+      },
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toBe(String(uid));
+  });
+
   it("prints the bounded heartbeat log before signal cleanup", () => {
     const tempDir = tempDirs.make("openclaw-heartbeat-signal-log-");
     const result = spawnSync(
@@ -138,7 +348,7 @@ fi
       );
       const dockerCommands = readFileSync(path.join(tempDir, "docker-cleanup"), "utf8");
       expect(dockerCommands.trimEnd().split("\n").at(-1)).toBe("rm -f proof-container");
-      expect(readdirSync(tempDir).sort()).toEqual(["container-stdin", "docker-cleanup"]);
+      expect(readdirSync(tempDir).toSorted()).toEqual(["container-stdin", "docker-cleanup"]);
       expect(result.stdout).not.toContain("old log head");
       if (status === 0) {
         expect(result.stdout).toBe("");

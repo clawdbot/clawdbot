@@ -1,4 +1,4 @@
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync, spawnSync, type SpawnSyncReturns } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -61,7 +61,7 @@ function runBash(
   env?: Record<string, string | undefined>,
   timeout?: number,
   separator = "\n",
-): ReturnType<typeof spawnSync> {
+): SpawnSyncReturns<string> {
   return spawnSync("/bin/bash", ["-c", Array.isArray(script) ? script.join(separator) : script], {
     encoding: "utf8",
     env: env === undefined ? undefined : shellTestEnv(env),
@@ -74,7 +74,7 @@ function runBashWithHelper(
   env?: Record<string, string | undefined>,
   timeout?: number,
   separator = "\n",
-): ReturnType<typeof spawnSync> {
+): SpawnSyncReturns<string> {
   return runBash(
     ["set -euo pipefail", `source ${shellQuote(helperPath)}`, ...lines],
     env,
@@ -86,7 +86,7 @@ function runBashWithHelper(
 function runSourcedHelper(
   script: string,
   overrides: Record<string, string | undefined> | null = {},
-): ReturnType<typeof spawnSync> {
+): SpawnSyncReturns<string> {
   return spawnSync(
     "bash",
     ["-lc", ["set -euo pipefail", `source ${shellQuote(helperPath)}`, script].join("; ")],
@@ -524,11 +524,138 @@ describe("scripts/lib/openclaw-e2e-instance.sh", () => {
         OPENCLAW_TEST_TIMEOUT_ARGS: fixture.timeoutArgsPath,
       });
 
-      expect(result.status).toBe(1);
+      expect(result.status).toBe(42);
       expect(result.stderr).toContain("npm install failed for fixture package");
       expect(result.stderr).toContain("recent npm tail");
       expect(result.stderr).not.toContain("DO_NOT_PRINT_OLD_NPM_LOG");
       expect(fs.readFileSync(fixture.logPath, "utf8")).toContain("DO_NOT_PRINT_OLD_NPM_LOG");
+    });
+  });
+
+  it("retains the complete install log and a bounded diagnostics sidecar", () => {
+    withTempDir("openclaw-e2e-instance-install-sidecar-", (tempDir) => {
+      const fixture = createPackageInstallFixture(tempDir);
+      const diagnosticsPath = path.join(tempDir, "install-diagnostics.log");
+      fs.writeFileSync(diagnosticsPath, "", { mode: 0o622 });
+      fs.chmodSync(diagnosticsPath, 0o622);
+      writeFakeTimeout(path.join(tempDir, "timeout"), true);
+      writeBashExecutable(path.join(tempDir, "npm"), [
+        'printf "DO_NOT_PUBLISH_OLD_NPM_LOG\\n"',
+        'i=0; while [ "$i" -lt 220 ]; do printf "x"; i=$((i + 1)); done',
+        'printf "\\nrecent npm tail\\n"',
+        "exit 42",
+      ]);
+
+      const result = runPackageInstall(fixture, {
+        PATH: `${tempDir}${path.delimiter}${hostPath}`,
+        OPENCLAW_CURRENT_PACKAGE_TGZ: fixture.packagePath,
+        OPENCLAW_E2E_INSTALL_DIAGNOSTICS: diagnosticsPath,
+        OPENCLAW_E2E_INSTALL_DIAGNOSTICS_UID: String(process.getuid?.() ?? 0),
+        OPENCLAW_E2E_LOG_TAIL_BYTES: "80",
+        OPENCLAW_E2E_NPM_INSTALL_TIMEOUT: "42s",
+        OPENCLAW_TEST_TIMEOUT_ARGS: fixture.timeoutArgsPath,
+      });
+
+      expect(result.status).toBe(42);
+      expect(result.stderr).toContain("npm install failed for fixture package");
+      expect(result.stderr).not.toContain("recent npm tail");
+      expect(fs.readFileSync(fixture.logPath, "utf8")).toContain("DO_NOT_PUBLISH_OLD_NPM_LOG");
+      const diagnostics = fs.readFileSync(diagnosticsPath, "utf8");
+      expect(diagnostics).toContain("recent npm tail");
+      expect(diagnostics).not.toContain("DO_NOT_PUBLISH_OLD_NPM_LOG");
+      expect(Buffer.byteLength(diagnostics)).toBeLessThanOrEqual(80);
+    });
+  });
+
+  it("publishes failed install diagnostics once with the ERR handler enabled", () => {
+    withTempDir("openclaw-e2e-instance-install-err-sidecar-", (tempDir) => {
+      const fixture = createPackageInstallFixture(tempDir);
+      const diagnosticsPath = path.join(tempDir, "install-diagnostics.log");
+      fs.writeFileSync(diagnosticsPath, "", { mode: 0o622 });
+      fs.chmodSync(diagnosticsPath, 0o622);
+      writeFakeTimeout(path.join(tempDir, "timeout"), true);
+      writeBashExecutable(path.join(tempDir, "npm"), ['printf "recent npm tail\\n"', "exit 42"]);
+
+      const result = runBashWithHelper(
+        [
+          `INSTALL_LOG=${shellQuote(fixture.logPath)}`,
+          'dump_debug_logs() { openclaw_e2e_dump_logs "$INSTALL_LOG"; }',
+          "openclaw_e2e_enable_failure_diagnostics",
+          `openclaw_e2e_install_package "$INSTALL_LOG" ${shellQuote("fixture package")} ${shellQuote(fixture.prefixPath)}`,
+        ],
+        {
+          PATH: `${tempDir}${path.delimiter}${hostPath}`,
+          OPENCLAW_CURRENT_PACKAGE_TGZ: fixture.packagePath,
+          OPENCLAW_E2E_INSTALL_DIAGNOSTICS: diagnosticsPath,
+          OPENCLAW_E2E_INSTALL_DIAGNOSTICS_UID: String(process.getuid?.() ?? 0),
+          OPENCLAW_E2E_NPM_INSTALL_TIMEOUT: "42s",
+          OPENCLAW_TEST_TIMEOUT_ARGS: fixture.timeoutArgsPath,
+        },
+      );
+      const published = spawnSync(
+        process.execPath,
+        [
+          "--import",
+          path.resolve("scripts/tsx.mjs"),
+          path.resolve("scripts/lib/openclaw-e2e-install-diagnostics.mjs"),
+          "publish",
+          diagnosticsPath,
+        ],
+        { encoding: "utf8" },
+      );
+
+      expect(result.status, result.stderr).toBe(42);
+      expect(published.status, published.stderr).toBe(0);
+      expect(result.stderr).not.toContain("recent npm tail");
+      expect(`${result.stderr}${published.stdout}`.match(/recent npm tail/g)).toHaveLength(1);
+    });
+  });
+
+  it("returns the diagnostics capture status when npm succeeds", () => {
+    withTempDir("openclaw-e2e-instance-install-capture-failure-", (tempDir) => {
+      const fixture = createPackageInstallFixture(tempDir);
+      const diagnosticsPath = path.join(tempDir, "diagnostics-directory");
+      fs.mkdirSync(diagnosticsPath);
+      writeFakeTimeout(path.join(tempDir, "timeout"), true);
+      writeFakeNpm(path.join(tempDir, "npm"));
+
+      const result = runPackageInstall(fixture, {
+        PATH: `${tempDir}${path.delimiter}${hostPath}`,
+        OPENCLAW_CURRENT_PACKAGE_TGZ: fixture.packagePath,
+        OPENCLAW_E2E_INSTALL_DIAGNOSTICS: diagnosticsPath,
+        OPENCLAW_E2E_INSTALL_DIAGNOSTICS_UID: String(process.getuid?.() ?? 0),
+        OPENCLAW_E2E_NPM_INSTALL_TIMEOUT: "42s",
+        OPENCLAW_TEST_NPM_ARGS: fixture.npmArgsPath,
+        OPENCLAW_TEST_NPM_BIN: path.join(tempDir, "npm"),
+        OPENCLAW_TEST_TIMEOUT_ARGS: fixture.timeoutArgsPath,
+      });
+
+      expect(result.status).toBe(74);
+    });
+  });
+
+  it("clears captured install diagnostics after npm succeeds", () => {
+    withTempDir("openclaw-e2e-instance-install-capture-success-", (tempDir) => {
+      const fixture = createPackageInstallFixture(tempDir);
+      const diagnosticsPath = path.join(tempDir, "install-diagnostics.log");
+      fs.writeFileSync(diagnosticsPath, "stale diagnostics\n", { mode: 0o622 });
+      fs.chmodSync(diagnosticsPath, 0o622);
+      writeFakeTimeout(path.join(tempDir, "timeout"), true);
+      writeFakeNpm(path.join(tempDir, "npm"));
+
+      const result = runPackageInstall(fixture, {
+        PATH: `${tempDir}${path.delimiter}${hostPath}`,
+        OPENCLAW_CURRENT_PACKAGE_TGZ: fixture.packagePath,
+        OPENCLAW_E2E_INSTALL_DIAGNOSTICS: diagnosticsPath,
+        OPENCLAW_E2E_INSTALL_DIAGNOSTICS_UID: String(process.getuid?.() ?? 0),
+        OPENCLAW_E2E_NPM_INSTALL_TIMEOUT: "42s",
+        OPENCLAW_TEST_NPM_ARGS: fixture.npmArgsPath,
+        OPENCLAW_TEST_NPM_BIN: path.join(tempDir, "npm"),
+        OPENCLAW_TEST_TIMEOUT_ARGS: fixture.timeoutArgsPath,
+      });
+
+      expectShellSuccess(result);
+      expect(fs.readFileSync(diagnosticsPath, "utf8")).toBe("");
     });
   });
 
@@ -547,6 +674,36 @@ describe("scripts/lib/openclaw-e2e-instance.sh", () => {
       expect(result.status).toBe(2);
       expect(result.stderr).toContain(`invalid ${envName}: ${value}`);
       expect(result.stdout).not.toContain("old log");
+    });
+  });
+
+  it("does not replay a partial byte tail when the fallback succeeds", () => {
+    withTempDir("openclaw-e2e-instance-log-tail-fallback-", (tempDir) => {
+      const logPath = path.join(tempDir, "install.log");
+      const redactorPath = path.join(tempDir, "redactor.mjs");
+      fs.writeFileSync(logPath, "recent npm tail\n", "utf8");
+      fs.writeFileSync(
+        redactorPath,
+        "export const redactSensitiveText = (value) => value;\n",
+        "utf8",
+      );
+      writeBashExecutable(path.join(tempDir, "tail"), [
+        'printf "recent npm tail\\n"',
+        'if [ "${1:-}" = "-c" ]; then exit 1; fi',
+      ]);
+
+      const result = runBashWithHelper(
+        [`openclaw_e2e_print_log ${shellQuote(logPath)}`],
+        {
+          PATH: `${tempDir}${path.delimiter}${hostPath}`,
+          OPENCLAW_E2E_REDACTOR_MODULE: redactorPath,
+        },
+        undefined,
+        "; ",
+      );
+
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout.match(/recent npm tail/g)).toHaveLength(1);
     });
   });
 

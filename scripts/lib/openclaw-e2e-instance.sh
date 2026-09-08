@@ -217,7 +217,7 @@ child.on("error", (error) => {
 }
 openclaw_e2e_print_log() {
   local path="$1"
-  local max_bytes max_lines redactor_module
+  local bounded_log max_bytes max_lines redactor_module
   max_bytes="$(openclaw_e2e_read_nonnegative_int_env OPENCLAW_E2E_LOG_TAIL_BYTES 262144)" || return $?
   max_lines="$(openclaw_e2e_read_nonnegative_int_env OPENCLAW_E2E_LOG_TAIL_LINES 120)" || return $?
   [ -f "$path" ] || return 0
@@ -228,7 +228,12 @@ openclaw_e2e_print_log() {
     echo "[failure log omitted: canonical redactor unavailable]"
     return 0
   fi
-  if ! { tail -c "$max_bytes" "$path" 2>/dev/null | tail -n "$max_lines" || tail -n "$max_lines" "$path" || true; } | \
+  bounded_log="$(mktemp "${TMPDIR:-/tmp}/openclaw-e2e-log-tail.XXXXXX")" || return $?
+  if ! tail -c "$max_bytes" "$path" >"$bounded_log" 2>/dev/null; then
+    : >"$bounded_log"
+    tail -n "$max_lines" "$path" >"$bounded_log" 2>/dev/null || true
+  fi
+  if ! tail -n "$max_lines" "$bounded_log" | \
     node --input-type=module -e '
       import { text } from "node:stream/consumers";
       import { pathToFileURL } from "node:url";
@@ -237,6 +242,7 @@ openclaw_e2e_print_log() {
     ' "$redactor_module"; then
     echo "[failure log omitted: canonical redaction failed]"
   fi
+  rm -f "$bounded_log"
 }
 openclaw_e2e_enable_failure_diagnostics() {
   # Keep diagnostics outside command log redirections, including inherited traps.
@@ -251,24 +257,44 @@ openclaw_e2e_install_package() {
   local prefix="${3:-}"
   local package_tgz="${OPENCLAW_CURRENT_PACKAGE_TGZ:?missing OPENCLAW_CURRENT_PACKAGE_TGZ}"
   local timeout_value="${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-600s}"
+  local diagnostics_path="${OPENCLAW_E2E_INSTALL_DIAGNOSTICS:-}"
+  local diagnostics_tool="${BASH_SOURCE[0]%/*}/openclaw-e2e-install-diagnostics.mjs"
   local args=(-g)
+  OPENCLAW_E2E_SUPPRESS_INSTALL_LOG_DUMP=""
   if [ -n "$prefix" ]; then
     args+=("--prefix" "$prefix")
   fi
   echo "Installing $label..."
-  if openclaw_e2e_maybe_timeout "$timeout_value" npm install "${args[@]}" "$package_tgz" --no-fund --no-audit >"$log_file" 2>&1; then
+  local install_status=0
+  if [ -n "$diagnostics_path" ]; then
+    local pipeline_status=()
+    if openclaw_e2e_maybe_timeout "$timeout_value" npm install "${args[@]}" "$package_tgz" --no-fund --no-audit 2>&1 |
+      tee "$log_file" |
+      node "$diagnostics_tool" capture "$diagnostics_path"
+    then
+      pipeline_status=("${PIPESTATUS[@]}")
+    else
+      pipeline_status=("${PIPESTATUS[@]}")
+    fi
+    install_status="${pipeline_status[0]:-1}"
+    [ "$install_status" -ne 0 ] || install_status="${pipeline_status[2]:-1}"
+    [ "$install_status" -ne 0 ] || install_status="${pipeline_status[1]:-1}"
+    if [ "$install_status" -eq 0 ]; then
+      node "$diagnostics_tool" clear "$diagnostics_path" || return $?
+      return 0
+    fi
+  elif openclaw_e2e_maybe_timeout "$timeout_value" npm install "${args[@]}" "$package_tgz" --no-fund --no-audit >"$log_file" 2>&1; then
     return 0
   else
-    local install_status=$?
-    if [ "$install_status" -eq 124 ] || [ "$install_status" -eq 137 ]; then
-      echo "npm install timed out after $timeout_value for $label" >&2
-    fi
-    echo "npm install failed for $label" >&2
-    if [ -f "$log_file" ]; then
-      openclaw_e2e_print_log "$log_file" >&2
-    fi
-    exit 1
+    install_status=$?
   fi
+  if [ "$install_status" -eq 124 ] || [ "$install_status" -eq 137 ]; then
+    echo "npm install timed out after $timeout_value for $label" >&2
+  fi
+  echo "npm install failed for $label" >&2
+  [ -n "$diagnostics_path" ] || openclaw_e2e_print_log "$log_file" >&2
+  OPENCLAW_E2E_SUPPRESS_INSTALL_LOG_DUMP="$log_file"
+  return "$install_status"
 }
 openclaw_e2e_find_dep_package() {
   local dep_path="$1"
@@ -577,6 +603,9 @@ openclaw_e2e_enable_openclaw_cli_timeout() {
 openclaw_e2e_dump_logs() {
   local path
   for path in "$@"; do
+    if [ "$path" = "${OPENCLAW_E2E_SUPPRESS_INSTALL_LOG_DUMP:-}" ]; then
+      continue
+    fi
     openclaw_e2e_print_log "$path"
   done
 }
