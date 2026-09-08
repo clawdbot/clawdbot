@@ -248,6 +248,45 @@ describe("config schema", () => {
     }
   });
 
+  it("rejects mixed command and URL transports for root and node-host MCP servers", () => {
+    for (const { config, path } of [
+      {
+        config: {
+          mcp: {
+            servers: {
+              mixed: { command: "node", url: "https://mcp.example.com/mcp" },
+            },
+          },
+        },
+        path: ["mcp", "servers", "mixed", "url"],
+      },
+      {
+        config: {
+          nodeHost: {
+            mcp: {
+              servers: {
+                mixed: { command: "node", url: "https://mcp.example.com/mcp" },
+              },
+            },
+          },
+        },
+        path: ["nodeHost", "mcp", "servers", "mixed", "url"],
+      },
+    ]) {
+      const result = OpenClawSchema.safeParse(config);
+      expect(result.success).toBe(false);
+      if (result.success) {
+        throw new Error("Expected mixed MCP transports to fail validation");
+      }
+      expect(result.error.issues).toContainEqual(
+        expect.objectContaining({
+          message: 'MCP server cannot define both a non-empty "command" and "url"',
+          path,
+        }),
+      );
+    }
+  });
+
   it("rejects blank or whitespace-padded node-host MCP server names", () => {
     for (const serverName of ["", "  ", " docs "]) {
       expect(() =>

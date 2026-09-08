@@ -351,6 +351,18 @@ const McpServerSchema = z
         path: ["disabled"],
       });
     }
+    if (
+      typeof data.command === "string" &&
+      data.command.trim().length > 0 &&
+      typeof data.url === "string" &&
+      data.url.trim().length > 0
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'MCP server cannot define both a non-empty "command" and "url"',
+        path: ["url"],
+      });
+    }
     if (data.oauth?.identity === "per-requester") {
       if (data.auth !== "oauth") {
         ctx.addIssue({
