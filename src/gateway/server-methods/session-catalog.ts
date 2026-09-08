@@ -43,6 +43,7 @@ import {
   type CatalogListProgressSubscriber,
 } from "./session-catalog-list-lifetime.js";
 import {
+  allowCatalogProcessHomeRead,
   allowProcessHomeFallback,
   createSessionCatalogRequestNodeSnapshot,
   listSessionCatalogProvider,
@@ -372,7 +373,6 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
       return;
     }
     const search = normalizeSessionCatalogSearch(request.search);
-    const allowHomeFallback = allowProcessHomeFallback(context.logGateway);
     // Cached provider enumeration is not permission. Each synchronous delivery gets current
     // caller facts and one canonical index, never the provider's pre-await planning snapshot.
     const projectResult = (result: CatalogListEnumeration): CatalogListResult => {
@@ -437,7 +437,7 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
       client,
       request,
       search,
-      allowProcessHomeFallback: allowHomeFallback,
+      allowProcessHomeFallback: allowProcessHomeFallback(context.logGateway),
       visibilityKey: resolveSessionCatalogVisibility(client, config).cacheKey,
     });
     const cache = catalogListCache(config, catalogRegistrations);
@@ -490,11 +490,7 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
       const listNodes = createSessionCatalogRequestNodeSnapshot();
       const catalogList = await Promise.all(
         selected.map(async (provider): Promise<SessionCatalog> => {
-          const providerAllowHomeFallback = allowProcessHomeFallback(context.logGateway, {
-            access: "read",
-            client,
-            provider,
-          });
+          const providerAllowHomeFallback = allowCatalogProcessHomeRead(provider, client);
           const shareRoute = catalogRegistrations.shareRoutes.get(provider);
           const createTarget = resolveProviderCreateTarget(provider, resolvedAgent.agentId, config);
           const createSession = createTarget.ok
@@ -556,7 +552,6 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
       progress.finishListing();
     }
   },
-
   "sessions.catalog.read": async ({ params, respond, context, client }) => {
     if (
       !assertValidParams(

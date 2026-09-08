@@ -44,6 +44,14 @@ export function allowProcessHomeFallback(
   return allowed;
 }
 
+export function allowCatalogProcessHomeRead(
+  provider: SessionCatalogProvider,
+  client: GatewayClient | null,
+  logGateway?: { warn: (message: string, fields?: Record<string, unknown>) => void },
+): boolean {
+  return allowProcessHomeFallback(logGateway, { access: "read", client, provider });
+}
+
 // Catalog adapters may scan local databases or invoke external CLIs. Bound the
 // expensive provider operation itself so adding providers cannot multiply the cap.
 const sessionCatalogListAdmission = new SessionCatalogListAdmission(
