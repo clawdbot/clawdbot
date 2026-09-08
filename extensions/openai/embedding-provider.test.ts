@@ -99,6 +99,15 @@ afterEach(async () => {
 });
 
 describe("OpenAI embedding provider HTTP contract", () => {
+  it("declares the OpenAI input-array cap for request batching", async () => {
+    const server = await startEmbeddingServer();
+    const { provider } = await createOpenAiEmbeddingProvider(
+      createOptions({ remote: { baseUrl: server.baseUrl } }),
+    );
+
+    expect(provider.maxInputsPerRequest).toBe(2048);
+  });
+
   it.each([
     { name: "omitted", fields: { input_type: "document" } },
     {

@@ -50,6 +50,7 @@ export {
   type BatchHttpClientConfig,
 } from "./host/batch-utils.js";
 export { enforceEmbeddingMaxInputTokens } from "./host/embedding-chunk-limits.js";
+export { resolveEmbeddingMaxInputsPerRequest } from "./host/embedding-model-limits.js";
 export {
   isMissingEmbeddingApiKeyError,
   mapBatchEmbeddingsByIndex,

@@ -47,6 +47,8 @@ export type EmbeddingProvider = {
   model: string;
   dimensions?: number;
   maxInputTokens?: number;
+  /** Provider-documented cap on input items per embeddings request; request batching splits below it. */
+  maxInputsPerRequest?: number;
   embed: (input: EmbeddingInput, options?: EmbeddingProviderCallOptions) => Promise<number[]>;
   embedBatch: (
     inputs: EmbeddingInput[],

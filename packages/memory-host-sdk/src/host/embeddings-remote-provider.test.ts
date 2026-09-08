@@ -23,6 +23,19 @@ function createProvider(batchQueryInputs?: boolean) {
   });
 }
 
+function createProviderWithInputCap(maxInputsPerRequest: number) {
+  return createRemoteEmbeddingProvider({
+    id: "fixture",
+    client: {
+      baseUrl: "https://embeddings.example.test/v1",
+      headers: { Authorization: "Bearer fixture" },
+      model: "fixture-model",
+    },
+    errorPrefix: "fixture embeddings failed",
+    maxInputsPerRequest,
+  });
+}
+
 beforeEach(() => {
   mocks.fetchRemoteEmbeddingVectors.mockReset();
   mocks.fetchRemoteEmbeddingVectors.mockImplementation(async ({ body }: { body: unknown }) => {
@@ -55,5 +68,10 @@ describe("remote embedding provider request grouping", () => {
       "first",
       "second",
     ]);
+  });
+
+  it("exposes the declared per-request input cap on the provider", () => {
+    expect(createProviderWithInputCap(2048).maxInputsPerRequest).toBe(2048);
+    expect(createProvider().maxInputsPerRequest).toBeUndefined();
   });
 });

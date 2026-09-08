@@ -19,6 +19,7 @@ export function filterNonEmptyMemoryChunks<T extends MemoryEmbeddingChunk>(chunk
 export function buildMemoryEmbeddingBatches<T extends MemoryEmbeddingChunk>(
   chunks: T[],
   maxTokens: number,
+  maxInputsPerRequest?: number,
 ): T[][] {
   const batches: T[][] = [];
   let current: T[] = [];
@@ -28,7 +29,15 @@ export function buildMemoryEmbeddingBatches<T extends MemoryEmbeddingChunk>(
     const estimate = chunk.embeddingInput
       ? estimateStructuredEmbeddingInputBytes(chunk.embeddingInput)
       : estimateUtf8Bytes(chunk.text);
-    const wouldExceed = current.length > 0 && currentTokens + estimate > maxTokens;
+    // The byte budget models request cost; the input cap models the provider's
+    // hard per-request array limit. A small chunk must still close a batch
+    // once the provider refuses more items, or the request fails wholesale.
+    const inputCapReached =
+      typeof maxInputsPerRequest === "number" &&
+      maxInputsPerRequest > 0 &&
+      current.length >= maxInputsPerRequest;
+    const wouldExceed =
+      inputCapReached || (current.length > 0 && currentTokens + estimate > maxTokens);
     if (wouldExceed) {
       batches.push(current);
       current = [];
