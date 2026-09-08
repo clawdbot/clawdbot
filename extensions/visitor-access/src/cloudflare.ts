@@ -1,3 +1,4 @@
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { z } from "zod";
 import type { VisitorAccessConfig } from "./config.js";
 import { VisitorAccessError } from "./errors.js";
@@ -167,7 +168,11 @@ export class VisitorPolicyClient {
     }
     let data: unknown;
     try {
-      data = await response.json();
+      data = await readProviderJsonResponse(response, "Cloudflare visitor access response", {
+        requestHeaders: {
+          Authorization: `Bearer ${this.config.apiToken}`,
+        },
+      });
     } catch {
       throw new VisitorAccessError(
         "Cloudflare returned an unreadable response; retry and inspect the visitor policy.",

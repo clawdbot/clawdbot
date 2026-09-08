@@ -33,12 +33,58 @@ function visitorGrant(email: string, overrides: Partial<VisitorGrant> = {}): Vis
   return { email, createdAt: NOW - DAY_MS, expiresAt: NOW + DAY_MS, ...overrides };
 }
 
+function oversizedGithubResponse() {
+  const prefix = new TextEncoder().encode('{"email":"Visitor@Example.com","padding":"');
+  const suffix = new TextEncoder().encode('"}');
+  const chunk = new Uint8Array(1024 * 1024).fill(120);
+  const totalPaddingBytes = 32 * 1024 * 1024;
+  let phase = 0;
+  let remaining = totalPaddingBytes;
+  let enqueuedBytes = 0;
+  let canceled = false;
+  const body = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (phase === 0) {
+        phase = 1;
+        enqueuedBytes += prefix.byteLength;
+        controller.enqueue(prefix);
+        return;
+      }
+      if (remaining > 0) {
+        const next = Math.min(remaining, chunk.byteLength);
+        remaining -= next;
+        enqueuedBytes += next;
+        controller.enqueue(chunk.subarray(0, next));
+        return;
+      }
+      controller.enqueue(suffix);
+      controller.close();
+    },
+    cancel() {
+      canceled = true;
+    },
+  });
+  return {
+    response: new Response(body, { headers: { "content-type": "application/json" } }),
+    state: {
+      get canceled() {
+        return canceled;
+      },
+      get enqueuedBytes() {
+        return enqueuedBytes;
+      },
+      totalPaddingBytes,
+    },
+  };
+}
+
 function visitorFixture(
   options: {
     config?: Partial<VisitorAccessConfig>;
     grants?: VisitorGrant[];
     emails?: string[];
     githubEmail?: string | null;
+    githubResponse?: Response;
   } = {},
 ) {
   const resolved = { ...config, ...options.config };
@@ -102,7 +148,7 @@ function visitorFixture(
       if (!/^\/users\/[a-z0-9-]+$/.test(url.pathname) || method !== "GET") {
         throw new Error("Unexpected GitHub request");
       }
-      return Response.json({ email: options.githubEmail ?? null });
+      return options.githubResponse ?? Response.json({ email: options.githubEmail ?? null });
     }
     if (url.origin !== "https://api.cloudflare.com" || !url.pathname.startsWith(policiesPath)) {
       throw new Error("Unexpected Cloudflare endpoint");
@@ -188,6 +234,27 @@ describe("VisitorAccessService", () => {
     expect(result).toContain("2026-09-11T12:00:00.000Z");
     expect(result).toContain("https://team.openclaw.ai");
     expect(result).toContain("GitHub account");
+  });
+
+  it("bounds GitHub email responses while accepting a legitimate large body", async () => {
+    const legitimate = visitorFixture({
+      githubResponse: Response.json({
+        email: "Visitor@Example.com",
+        padding: "x".repeat(1024 * 1024),
+      }),
+    });
+    await expect(legitimate.service.invite({ github: "Visitor" })).resolves.toContain(
+      "visitor@example.com",
+    );
+
+    const oversized = oversizedGithubResponse();
+    const fixture = visitorFixture({ githubResponse: oversized.response });
+    await expect(fixture.service.invite({ github: "Visitor" })).rejects.toThrow(
+      "GitHub email lookup failed",
+    );
+    expect(oversized.state.canceled).toBe(true);
+    expect(oversized.state.enqueuedBytes).toBeLessThan(oversized.state.totalPaddingBytes);
+    expect(fixture.emails()).toEqual([]);
   });
 
   it("asks for an explicit account email when GitHub has no public email, without granting access", async () => {

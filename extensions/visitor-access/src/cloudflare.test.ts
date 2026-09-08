@@ -35,6 +35,51 @@ function fetchSequence(...responses: Response[]) {
   return fetcher;
 }
 
+function oversizedJsonResponse() {
+  const prefix = new TextEncoder().encode('{"success":true,"result":[],"padding":"');
+  const suffix = new TextEncoder().encode('"}');
+  const chunk = new Uint8Array(1024 * 1024).fill(120);
+  const totalPaddingBytes = 32 * 1024 * 1024;
+  let phase = 0;
+  let remaining = totalPaddingBytes;
+  let enqueuedBytes = 0;
+  let canceled = false;
+  const body = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (phase === 0) {
+        phase = 1;
+        enqueuedBytes += prefix.byteLength;
+        controller.enqueue(prefix);
+        return;
+      }
+      if (remaining > 0) {
+        const next = Math.min(remaining, chunk.byteLength);
+        remaining -= next;
+        enqueuedBytes += next;
+        controller.enqueue(chunk.subarray(0, next));
+        return;
+      }
+      controller.enqueue(suffix);
+      controller.close();
+    },
+    cancel() {
+      canceled = true;
+    },
+  });
+  return {
+    response: new Response(body, { headers: { "content-type": "application/json" } }),
+    state: {
+      get canceled() {
+        return canceled;
+      },
+      get enqueuedBytes() {
+        return enqueuedBytes;
+      },
+      totalPaddingBytes,
+    },
+  };
+}
+
 function requestBody(fetcher: ReturnType<typeof fetchSequence>, index: number) {
   const body = fetcher.mock.calls[index]?.[1]?.body;
   if (typeof body !== "string") {
@@ -44,6 +89,26 @@ function requestBody(fetcher: ReturnType<typeof fetchSequence>, index: number) {
 }
 
 describe("VisitorPolicyClient", () => {
+  it("bounds successful JSON responses while accepting a legitimate large body", async () => {
+    const legitimate = new VisitorPolicyClient(
+      config,
+      vi
+        .fn<typeof fetch>()
+        .mockResolvedValue(
+          Response.json({ success: true, result: [], padding: "x".repeat(1024 * 1024) }),
+        ),
+    );
+    await expect(legitimate.read()).resolves.toBeUndefined();
+
+    const oversized = oversizedJsonResponse();
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(oversized.response);
+    await expect(new VisitorPolicyClient(config, fetcher).read()).rejects.toThrow(
+      "Cloudflare returned an unreadable response",
+    );
+    expect(oversized.state.canceled).toBe(true);
+    expect(oversized.state.enqueuedBytes).toBeLessThan(oversized.state.totalPaddingBytes);
+  });
+
   it("creates only the named app policy when absent, leaving other policies untouched", async () => {
     const maintainers = { id: "maintainers", name: "GitHub organization", decision: "allow" };
     const fetcher = fetchSequence(
