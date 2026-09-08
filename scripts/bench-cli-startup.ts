@@ -837,10 +837,11 @@ function readSampleMemory(directory: string, entryPid: number | undefined): Samp
       throw new Error("unrecognized CLI entry with matching command arguments");
     }
     const invocation = observations.filter((record) => record.matchesInvocation);
-    let current = invocation.find((record) => record.pid === entryPid);
-    if (!current) {
+    const entryObservation = invocation.find((record) => record.pid === entryPid);
+    if (!entryObservation) {
       throw new Error("missing CLI entry process identity");
     }
+    let current: RssObservation = entryObservation;
     const lineage = new Set<number>();
     // Respawns preserve CLI argv and the preload. Follow the unique invocation
     // chain, not exit order, RSS magnitude, or platform-specific ready flags.
