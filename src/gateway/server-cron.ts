@@ -1320,6 +1320,7 @@ export function buildGatewayCronService(params: {
     current: CronJob,
     patch: Parameters<typeof updateCron>[1],
     nowMs: number,
+    commitGuard?: () => void,
   ): Promise<void> | undefined => {
     if (
       current.schedule.kind !== "stream" ||
@@ -1343,7 +1344,9 @@ export function buildGatewayCronService(params: {
       return undefined;
     }
     // Do not await under the cron store lock: stop synchronously closes owner
-    // admission, then drains through its queue while the update commits.
+    // admission, then drains through its queue while the update commits. Its
+    // precommit effects need current authority after any awaited precondition.
+    commitGuard?.();
     return streamWatchersRef.current?.stop(
       current.id,
       patch.schedule !== undefined ? "schedule-update" : "disabled",
@@ -1400,7 +1403,7 @@ export function buildGatewayCronService(params: {
   cron.update = async (jobId, patch, opts) => {
     let lifecycleStop: Promise<void> | undefined;
     const routeAfterValidation = (current: CronJob, nowMs: number) => {
-      lifecycleStop = queueStreamStopAfterValidation(current, patch, nowMs);
+      lifecycleStop = queueStreamStopAfterValidation(current, patch, nowMs, opts?.commitGuard);
     };
     try {
       const result = await updateCronWithPrecondition(jobId, patch, routeAfterValidation, opts);
@@ -1422,7 +1425,7 @@ export function buildGatewayCronService(params: {
     let lifecycleStop: Promise<void> | undefined;
     const routeAfterPrecondition = async (current: CronJob, nowMs: number) => {
       await precondition(current, nowMs);
-      lifecycleStop = queueStreamStopAfterValidation(current, patch, nowMs);
+      lifecycleStop = queueStreamStopAfterValidation(current, patch, nowMs, opts?.commitGuard);
     };
     try {
       const result = await updateCronWithPrecondition(jobId, patch, routeAfterPrecondition, opts);
@@ -1443,6 +1446,10 @@ export function buildGatewayCronService(params: {
   const removeCron = cron.remove.bind(cron);
   cron.remove = async (jobId, opts) => {
     const previous = cron.getJob(jobId);
+    if (previous?.schedule.kind === "stream") {
+      // Reject before stop or its recovery routing can affect the live source.
+      opts?.commitGuard?.();
+    }
     try {
       if (previous?.schedule.kind === "stream") {
         await streamWatchersRef.current?.stop(jobId, "removed", previous);

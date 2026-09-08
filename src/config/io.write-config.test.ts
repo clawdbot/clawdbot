@@ -3021,53 +3021,65 @@ describe("config io write", () => {
   );
 
   for (const writer of ["direct", "runtime"] as const) {
-    itWithHome(`rechecks ${writer} publication authority after backup work`, async (home) => {
-      const { configPath, raw } = await writeConfigFixture(home, {
-        gateway: { mode: "local", port: 18789 },
-      });
-      const events: string[] = [];
-      let active = true;
-      setRuntimeConfigSnapshotRefreshHandler({
-        preflight: () => {
-          events.push("preflight");
-        },
-        refresh: () => true,
-      });
-      mockMaintainConfigBackups.mockImplementationOnce(async () => {
-        await Promise.resolve();
-        events.push("backup");
-        active = false;
-      });
-      await withEnvAsync(
-        { OPENCLAW_CONFIG_PATH: configPath, OPENCLAW_TEST_FAST: "1" },
-        async () => {
-          const write =
-            writer === "runtime"
-              ? writeConfigFile
-              : createFastConfigIO(home, { configPath }).writeConfigFile;
-          await expect(
-            write(
-              { gateway: { mode: "local", port: 19001 } },
-              {
-                beforeCommit: async () => {
-                  events.push("commit");
-                  if (!active) {
-                    throw new Error("approval expired");
-                  }
+    for (const revokedAt of ["backup", "asynchronous prerequisite"] as const) {
+      itWithHome(`rechecks ${writer} publication authority after ${revokedAt}`, async (home) => {
+        const { configPath, raw } = await writeConfigFixture(home, {
+          gateway: { mode: "local", port: 18789 },
+        });
+        const events: string[] = [];
+        let active = true;
+        setRuntimeConfigSnapshotRefreshHandler({
+          preflight: () => {
+            events.push("preflight");
+          },
+          refresh: () => true,
+        });
+        mockMaintainConfigBackups.mockImplementationOnce(async () => {
+          await Promise.resolve();
+          events.push("backup");
+          if (revokedAt === "backup") {
+            active = false;
+          }
+        });
+        await withEnvAsync(
+          { OPENCLAW_CONFIG_PATH: configPath, OPENCLAW_TEST_FAST: "1" },
+          async () => {
+            const write =
+              writer === "runtime"
+                ? writeConfigFile
+                : createFastConfigIO(home, { configPath }).writeConfigFile;
+            await expect(
+              write(
+                { gateway: { mode: "local", port: 19001 } },
+                {
+                  beforeCommit: async () => {
+                    await Promise.resolve();
+                    events.push("prerequisite");
+                    if (revokedAt === "asynchronous prerequisite") {
+                      active = false;
+                    }
+                  },
+                  commitGuard: () => {
+                    events.push("commit");
+                    if (!active) {
+                      throw new Error("approval expired");
+                    }
+                  },
                 },
-              },
-            ),
-          ).rejects.toThrow("approval expired");
-        },
-      );
-      expect(events).toEqual(["preflight", "backup", "commit"]);
-      expect(await fs.readFile(configPath, "utf8")).toBe(raw);
-    });
+              ),
+            ).rejects.toThrow("approval expired");
+          },
+        );
+        expect(events).toEqual(["preflight", "backup", "prerequisite", "commit"]);
+        expect(await fs.readFile(configPath, "utf8")).toBe(raw);
+      });
+    }
   }
 
-  for (const guarded of [false, true]) {
+  for (const guardOption of ["none", "beforeCommit", "commitGuard"] as const) {
+    const guarded = guardOption !== "none";
     itWithHome(
-      `${guarded ? "rejects" : "preserves"} copy fallback for ${guarded ? "guarded" : "ordinary"} publication`,
+      `${guarded ? "rejects" : "preserves"} copy fallback for ${guarded ? guardOption : "ordinary"} publication`,
       async (home) => {
         const { configPath, raw } = await writeConfigFixture(home, {
           gateway: { mode: "local", port: 18789 },
@@ -3085,18 +3097,18 @@ describe("config io write", () => {
             },
           },
         });
-        const beforeCommit = vi.fn();
+        const guard = vi.fn();
         const write = io.writeConfigFile(
           { gateway: { mode: "local", port: 19001 } },
-          guarded ? { beforeCommit } : {},
+          guarded ? { [guardOption]: guard } : {},
         );
         if (guarded) {
           await expect(write).rejects.toBe(denied);
-          expect(beforeCommit).toHaveBeenCalledOnce();
+          expect(guard).toHaveBeenCalledOnce();
           expect(await fs.readFile(configPath, "utf8")).toBe(raw);
         } else {
           await write;
-          expect(beforeCommit).not.toHaveBeenCalled();
+          expect(guard).not.toHaveBeenCalled();
           expect(await readPersistedConfig(configPath)).toMatchObject({ gateway: { port: 19001 } });
         }
       },

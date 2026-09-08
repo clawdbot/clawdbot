@@ -313,6 +313,8 @@ type ManagedPluginEnableRequest = {
   enabled: boolean;
   acknowledgeCapabilities?: PluginCapabilityConsentAcknowledgment;
   env?: NodeJS.ProcessEnv;
+  /** Request authority must survive both the lifecycle wait and durable commits. */
+  commitGuard?: () => void;
 };
 
 /** Commit plugin policy without requiring the management catalog's hosted projection. */
@@ -325,7 +327,8 @@ export async function mutateManagedPluginEnabled(
 ) {
   const env = params.env ?? process.env;
   const cli = params.caller === "cli";
-  return await withPluginLifecycleLease({ env }, async () => {
+  return await withPluginLifecycleLease({ env }, async (lease) => {
+    params.commitGuard?.();
     if (cli) {
       assertConfigWriteAllowedInCurrentMode({ env });
     }
@@ -355,6 +358,7 @@ export async function mutateManagedPluginEnabled(
           acknowledge: params.acknowledgeCapabilities,
           onCapabilityConsent: params.onCapabilityConsent,
           metadata,
+          ...(params.commitGuard ? { commitGuard: params.commitGuard } : {}),
         });
       }
     };
@@ -390,13 +394,24 @@ export async function mutateManagedPluginEnabled(
     }
     const changedPaths = new Set<string>();
     collectChangedPaths(snapshot.config, next, "", changedPaths);
+    const writeOptions = cli
+      ? { explicitSetPaths: [["plugins", "entries", policyPluginId]] }
+      : snapshot.writeOptions;
     await replaceConfigFile({
       nextConfig: next,
       baseHash: snapshot.baseHash,
       // CLI alias writes preserve merged canonical settings during source projection.
-      writeOptions: cli
-        ? { explicitSetPaths: [["plugins", "entries", policyPluginId]] }
-        : snapshot.writeOptions,
+      writeOptions: {
+        ...writeOptions,
+        ...(params.commitGuard
+          ? {
+              commitGuard: () => {
+                lease.assertOwned();
+                params.commitGuard?.();
+              },
+            }
+          : {}),
+      },
     });
     const registryWarnings: string[] = [];
     await refreshPluginRegistryAfterConfigMutation({

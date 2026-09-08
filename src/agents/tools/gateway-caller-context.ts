@@ -1,7 +1,7 @@
 // Ambient trusted caller context for model-mediated Gateway tool calls.
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { ExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
-import type { ChannelAdministratorAuthority } from "../../gateway/channel-administrator-authority.js";
+import type { ChannelAdministratorAuthority } from "../../gateway/channel-administrator-authority.types.js";
 import type { CronCreatorAuthorityGrant } from "../../gateway/cron-creator-authority-grant.types.js";
 import type {
   GatewayContextResolver,

@@ -1304,6 +1304,43 @@ unrelated inbound runtime helpers.
       (for example the Microsoft Teams or Google Chat plugin package) for real patterns.
     </Note>
 
+    ### Native human source attestation
+
+    `ChannelIngressContextBinding` from
+    `openclaw/plugin-sdk/channel-ingress-runtime` accepts optional
+    `nativeHumanSource` facts. Omit this field unless the owning adapter can
+    authenticate the original human sender and inbound conversation. Omission
+    preserves ordinary channel admission and operation; it grants no additional
+    administrator authority.
+
+    | Field | Required fact when `nativeHumanSource` is present |
+    | --- | --- |
+    | `senderId` | The original platform-authenticated human user ID, matching the ingress principal. |
+    | `conversationId` | The authenticated inbound conversation ID, before reply routing or auto-thread creation. For DMs, use the native DM conversation ID, not a substituted recipient ID. |
+
+    Supply these facts only for a fresh `user_request` with its stable native
+    `messageId`. Keep the binding's `agentId` and `sessionKey` aligned with the
+    final dispatch route, while retaining the original source conversation.
+    Use the host-provided ingress resolver and context builder; copying fields
+    onto a context object does not create an authenticated source.
+
+    Never attest bot-authored or webhook-authored messages, relays, remapped
+    proxy identities, native forwards or message snapshots, room events,
+    heartbeats, replays, continuations, or spawned input. An authenticated HTTP
+    webhook transport alone is not proof that its message was authored by a
+    native human. Do not infer source identity from display names, quoted text,
+    session keys, or delivery destinations. Do not serialize or reuse an
+    authenticated source across turns; host admission consumes it once and
+    binds it to the current channel owner lifecycle.
+
+    These are source facts, not an administrator grant. The host separately
+    applies [explicit administrator policy](/tools/slash-commands#trusted-discord-administrators),
+    which currently supports configured Discord owners. Only explicitly
+    supported core operations receive elevation. Plugin RPC names, operator
+    scopes, and descriptors cannot opt plugin handlers into that authority.
+    Unlisted methods retain ordinary authorization; supplying administrator
+    authority to an unsupported handler is rejected.
+
   </Step>
 
 <a id="step-6-test"></a>

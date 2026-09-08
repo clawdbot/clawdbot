@@ -4,11 +4,11 @@ import {
   type AgentRunDelegatedAuthority,
 } from "../infra/agent-run-registry.js";
 import type { AgentRuntimeIdentity } from "./agent-runtime-identity-token.js";
-import type { GatewayClient } from "./server-methods/types.js";
-
-/** Opaque host-owned authority; its public fields cannot recreate the capability. */
-export type ChannelAdministratorAuthority = Readonly<{ runId: string }>;
-export type ChannelAdministratorGrant = Readonly<{ runId: string; token: string }>;
+import type {
+  ChannelAdministratorAuthority,
+  ChannelAdministratorGrant,
+} from "./channel-administrator-authority.types.js";
+import type { GatewayClient } from "./server-methods/client-types.js";
 
 type AuthorityState = {
   signal: AbortSignal;
@@ -120,7 +120,7 @@ export function mintChannelAdministratorGrant(
 }
 
 /** Redeem at the router, retaining live policy and execution fences through commit. */
-export function redeemChannelAdministratorGrant(
+function redeemChannelAdministratorGrant(
   grant: ChannelAdministratorGrant,
   identity: AgentRuntimeIdentity,
   method: string,

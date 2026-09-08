@@ -208,7 +208,7 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
   "commands.ownerAllowFrom":
     "Explicit owner allowlist for owner-scoped commands. Use channel-native IDs (optionally prefixed like \"whatsapp:+15551234567\"). '*' is ignored.",
   "commands.channelAdministrators":
-    "Opt-in administrator grants for available agent operations from trusted Discord conversations. Each grant matches an exact channel, accountId, senderId, and conversationId; the sender must also remain in commands.ownerAllowFrom. Omitted or empty disables grants. Tool availability, sandboxing, execution approvals, and credential entry remain independent.",
+    "Opt-in administrator grants for supported core-owned Gateway operations exposed by available agent tools in trusted Discord conversations. Each grant matches an exact channel, accountId, senderId, and conversationId; the sender must also remain in commands.ownerAllowFrom. Omitted or empty disables grants. Tool availability, sandboxing, execution approvals, and credential entry remain independent.",
   "commands.channelAdministrators.*.channel":
     'Channel provider for this administrator grant. Currently only "discord" is supported.',
   "commands.channelAdministrators.*.accountId":

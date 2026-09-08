@@ -28,6 +28,7 @@ import {
 } from "../process/gateway-work-admission.js";
 import type { RunExit } from "../process/supervisor/types.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
+import { fakeSupervisor } from "./cron-stream-watchers.test-helpers.js";
 
 type RunCronIsolatedAgentTurnMock = (params: {
   abortSignal?: AbortSignal;
@@ -1505,6 +1506,102 @@ describe("buildGatewayCronService", () => {
       state.cron.stop();
     }
   });
+
+  it.each([
+    { method: "update", change: "disable" },
+    { method: "update", change: "schedule" },
+    { method: "updateWithPrecondition", change: "disable" },
+    { method: "updateWithPrecondition", change: "schedule" },
+    { method: "remove", change: "remove" },
+  ] as const)(
+    "keeps a stream source untouched when authority is revoked before $method $change",
+    async ({ method, change }) => {
+      const fake = fakeSupervisor();
+      getProcessSupervisorMock.mockReturnValue(fake.supervisor);
+      const cfg = createCronConfig(`server-cron-stream-revoked-${method}-${change}`);
+      cfg.cron = { ...cfg.cron, triggers: { enabled: true } };
+      const state = loadCronService(cfg);
+      const preconditionEntered = createDeferred();
+      const resumePrecondition = createDeferred();
+
+      try {
+        const streamJob = await addSystemEventJob(state, "guarded stream source", "event", {
+          schedule: { kind: "stream", command: ["source"] },
+          sessionTarget: "main",
+        });
+        expect(fake.spawn).toHaveBeenCalledOnce();
+        const source = fake.runs[0];
+        if (!source) {
+          throw new Error("Expected the initial stream source to be running");
+        }
+        const sourceIdentity = streamJob.state.streamSourceIdentity;
+        expect(sourceIdentity).toEqual(expect.any(String));
+        let authorized = method === "updateWithPrecondition";
+        const commitGuard = () => {
+          if (!authorized) {
+            throw new Error("stream mutation authority revoked");
+          }
+        };
+        const precondition = async () => {
+          commitGuard();
+          preconditionEntered.resolve();
+          await resumePrecondition.promise;
+        };
+        const patch =
+          change === "schedule"
+            ? { schedule: { kind: "stream" as const, command: ["replacement-source"] } }
+            : { enabled: false };
+        const mutation =
+          method === "remove"
+            ? state.cron.remove(streamJob.id, { commitGuard })
+            : method === "update"
+              ? state.cron.update(streamJob.id, patch, { commitGuard })
+              : state.cron.updateWithPrecondition(streamJob.id, patch, precondition, {
+                  commitGuard,
+                });
+        const rejected = expect(mutation).rejects.toThrow("stream mutation authority revoked");
+        if (method === "updateWithPrecondition") {
+          await preconditionEntered.promise;
+          authorized = false;
+          resumePrecondition.resolve();
+        }
+        await rejected;
+
+        // Rejecting the durable write is insufficient: source cancellation,
+        // detached output, or a replacement run would already lose events.
+        expect(source.cancel).not.toHaveBeenCalled();
+        expect(source.detachOutput).not.toHaveBeenCalled();
+        expect(fake.spawn).toHaveBeenCalledOnce();
+        const unchanged = await state.cron.readJob(streamJob.id);
+        expect(unchanged?.enabled).toBe(true);
+        expect(unchanged?.schedule).toEqual(streamJob.schedule);
+        expect(unchanged?.state.streamSourceIdentity).toBe(sourceIdentity);
+
+        // A current guard still permits ordinary lifecycle teardown.
+        authorized = true;
+        if (method === "remove") {
+          await expect(state.cron.remove(streamJob.id, { commitGuard })).resolves.toMatchObject({
+            removed: true,
+          });
+          expect(await state.cron.readJob(streamJob.id)).toBeUndefined();
+        } else {
+          const updated =
+            method === "update"
+              ? await state.cron.update(streamJob.id, patch, { commitGuard })
+              : await state.cron.updateWithPrecondition(streamJob.id, patch, precondition, {
+                  commitGuard,
+                });
+          expect(updated).toMatchObject(patch);
+        }
+        expect(source.cancel).toHaveBeenCalledOnce();
+        expect(source.detachOutput).toHaveBeenCalledOnce();
+      } finally {
+        resumePrecondition.resolve();
+        await state.stopStreamWatchers?.();
+        state.cron.stop();
+      }
+    },
+  );
 
   it("discards a stale reconcile list snapshot that raced a direct mutation route", async () => {
     let resolveWait!: (result: RunExit) => void;

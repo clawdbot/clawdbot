@@ -1,8 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
+  admitChannelAdministratorRequest,
   createChannelAdministratorAuthority,
-  redeemChannelAdministratorGrant,
+  getChannelAdministratorRequestAuthority,
 } from "../../gateway/channel-administrator-authority.js";
 import { readInProcessAgentRuntimeIdentity } from "../../gateway/in-process-agent-runtime-identity.js";
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
@@ -655,11 +656,20 @@ describe("trusted channel administrator in-process dispatch", () => {
         const identity = readInProcessAgentRuntimeIdentity(options)!;
         expect(options.syntheticScopes).toEqual(["operator.admin"]);
         expect(identity.turnSourceChannel).toBe("discord");
-        const commit = redeemChannelAdministratorGrant(
-          identity.channelAdministratorGrant!,
-          identity,
+        const admitted = admitChannelAdministratorRequest(
+          {
+            connect: {
+              minProtocol: 1,
+              maxProtocol: 1,
+              role: "operator",
+              scopes: options.syntheticScopes,
+              client: { id: "gateway-client", version: "test", platform: "test", mode: "backend" },
+            },
+            internal: { agentRuntimeIdentity: identity, syntheticClient: true },
+          },
           method,
-        );
+        )!;
+        const commit = getChannelAdministratorRequestAuthority(admitted.client)!;
         commit();
         allowed = false;
         expect(commit).toThrow("revoked");
@@ -682,10 +692,13 @@ describe("trusted channel administrator in-process dispatch", () => {
             const dispatch = () =>
               kind === "request"
                 ? callAgentToolGatewayRequest({
-                    method: "sessions.create",
-                    params: { agentId: "main" },
+                    method: "cron.update",
+                    params: { id: "owned-job", patch: { name: "updated" } },
                   })
-                : callInProcessGatewayTool("sessions.create", { agentId: "main" });
+                : callInProcessGatewayTool("cron.update", {
+                    id: "owned-job",
+                    patch: { name: "updated" },
+                  });
             await expect(dispatch()).rejects.toThrow("revoked");
             expect(mocks.dispatch).toHaveBeenCalledOnce();
           },

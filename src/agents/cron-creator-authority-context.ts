@@ -2,10 +2,8 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { CronScheduledToolCallerOrigin } from "../cron/scheduled-tool-policy.js";
-import {
-  assertChannelAdministratorAuthority,
-  type ChannelAdministratorAuthority,
-} from "../gateway/channel-administrator-authority.js";
+import { assertChannelAdministratorAuthority } from "../gateway/channel-administrator-authority.js";
+import type { ChannelAdministratorAuthority } from "../gateway/channel-administrator-authority.types.js";
 import {
   CRON_MANAGEMENT_METHODS,
   createCronCreatorAuthorityRunScope,

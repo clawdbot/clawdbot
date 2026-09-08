@@ -3,16 +3,16 @@ import { buildChannelInboundEventContext } from "../inbound-event/context.js";
 import { createHostChannelInboundEventContextBuilder } from "../inbound-event/host-context-builder.js";
 import {
   configureChannelAdmissionEvidenceCollection,
-  consumeAuthenticatedChannelAdministratorSource,
   copyChannelParticipantAdmissionEvidence,
   readChannelContextAdmissionEvidence,
 } from "./admission-evidence.js";
+import { consumeAuthenticatedChannelAdministratorSource } from "./authenticated-administrator-source.js";
 import { registerChannelIngressHostOwner } from "./ingress-host-owner.js";
 import { resolveStableChannelMessageIngress } from "./runtime.js";
 
 const cleanups: Array<() => void> = [];
 afterEach(() => {
-  for (const cleanup of cleanups.splice(0).reverse()) {
+  for (const cleanup of cleanups.splice(0).toReversed()) {
     cleanup();
   }
 });

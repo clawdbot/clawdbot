@@ -12,7 +12,7 @@ import {
   type OpenClawConfig,
 } from "../../config/config.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
-import type { ChannelAdministratorAuthority } from "../../gateway/channel-administrator-authority.js";
+import type { ChannelAdministratorAuthority } from "../../gateway/channel-administrator-authority.types.js";
 import {
   claimAgentRunDelegatedAuthority,
   releaseAgentRunDelegatedAuthority,
@@ -130,7 +130,7 @@ describe("getReplyFromConfig trusted channel administrator admission", () => {
   });
 
   afterEach(() => {
-    for (const cleanup of cleanups.splice(0).reverse()) {
+    for (const cleanup of cleanups.splice(0).toReversed()) {
       cleanup();
     }
     clearRuntimeConfigSnapshot();

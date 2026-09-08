@@ -3,6 +3,7 @@ import {
   assertChannelAdministratorAuthority,
   mintChannelAdministratorGrant,
 } from "../../gateway/channel-administrator-authority.js";
+import { resolveCoreChannelAdministratorMethodPolicy } from "../../gateway/methods/core-descriptors.js";
 import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 
 /** Bind every privileged RPC to its captured host run, never to tool arguments. */
@@ -11,9 +12,9 @@ export function prepareChannelAdministratorRequest(
   signal?: AbortSignal,
   runtimeIdentity?: AgentRuntimeIdentity,
 ): { identity: AgentRuntimeIdentity; assertCurrent: () => void } | undefined {
-  // Approval registration owns a narrower, request-lifetime claim. It does not
-  // need administrator scope and must keep the existing approval policy/lease.
-  if (method === "exec.approval.request" || method === "plugin.approval.request") {
+  // Unreviewed methods retain their normal authorization, including the narrower
+  // approval-registration lease; they cannot inherit blanket administrator scope.
+  if (!resolveCoreChannelAdministratorMethodPolicy(method)) {
     return undefined;
   }
   const caller = getGatewayToolCallerIdentity();

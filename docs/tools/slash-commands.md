@@ -214,13 +214,33 @@ patterns and surrounding whitespace are rejected for every field. A grant for a
 channel does not include its threads; add each trusted conversation separately.
 
 Only fresh authenticated messages from the configured human owner qualify.
-Bots, webhooks, forwarded messages, and spawned or background runs do not inherit
-the grant. Removing either the grant or the owner entry revokes administrator
-authority for subsequent operations, including operations awaiting completion.
+Bot-authored and webhook-authored messages, native forwards and snapshots,
+remapped identities, replays, and spawned or background runs do not inherit the
+grant. Ordinary direct messages and replies can qualify. Removing either the
+grant or the owner entry revokes administrator authority for subsequent
+operations, including operations awaiting publication.
 
-The role applies to available agent operations. It does not enable disabled tools
-or commands, change sandbox policy, skip execution approvals, or replace secure
-credential entry. `/config`, `/mcp`, and `/plugins` still require their respective
+The role elevates only these supported core operations when an enabled tool or
+command exposes them:
+
+| Area          | Supported operations                                                                                                                                   |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Automations   | Inspect jobs, status, run history, and scratch; create, update, remove, and run jobs; update scratch. Includes jobs outside the invoking conversation. |
+| Configuration | Read config and schemas; set, apply, and patch config.                                                                                                 |
+| Plugins       | Enable or disable an installed plugin with `plugins.setEnabled`.                                                                                       |
+| Sessions      | List session branches with `sessions.branches.list`.                                                                                                   |
+| Worktrees     | List repository branches with `worktrees.branches`.                                                                                                    |
+
+Other core operations and plugin-provided RPCs keep their ordinary authorization;
+they do not inherit blanket administrator access. For example, this role does
+not elevate plugin installation, updates, removal, or capability approvals.
+Session and worktree mutations also retain their ordinary authorization.
+Writes to `$include`-owned configuration files are not supported through this
+role; edit those files from a trusted shell instead.
+
+The role does not enable disabled tools or commands, bypass profile restrictions,
+change sandbox policy, skip execution approvals, or replace secure credential
+entry. `/config`, `/mcp`, and `/plugins` still require their respective
 `commands.*` flags and any channel write restrictions.
 
 ## Command list

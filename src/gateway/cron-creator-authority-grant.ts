@@ -10,10 +10,8 @@ import {
   type AgentRunDelegatedAuthority,
 } from "../infra/agent-run-registry.js";
 import type { AgentRuntimeIdentity } from "./agent-runtime-identity-token.js";
-import {
-  createChannelAdministratorAuthority,
-  type ChannelAdministratorAuthority,
-} from "./channel-administrator-authority.js";
+import { createChannelAdministratorAuthority } from "./channel-administrator-authority.js";
+import type { ChannelAdministratorAuthority } from "./channel-administrator-authority.types.js";
 import type { CronCreatorAuthorityGrant } from "./cron-creator-authority-grant.types.js";
 
 export const CRON_MANAGEMENT_METHODS = [

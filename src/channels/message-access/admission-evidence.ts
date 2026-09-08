@@ -11,6 +11,11 @@ import {
   ownDataValue,
   publicResultScopeKey,
 } from "./admission-evidence-scope-key.js";
+import {
+  bindAuthenticatedChannelAdministratorSource,
+  copyAuthenticatedChannelAdministratorSource,
+  prepareAuthenticatedChannelAdministratorSource,
+} from "./authenticated-administrator-source.js";
 import { readChannelIngressHostOwner, type ChannelIngressHostOwner } from "./ingress-host-owner.js";
 import type {
   ChannelIngressContextBinding,
@@ -73,28 +78,6 @@ type PreparedChannelAdmissionEvidence = Readonly<{
   kind: "prepared-channel-admission-evidence";
 }>;
 
-/** Verified source facts; administrator policy and run lifetime belong to the caller. */
-export type AuthenticatedChannelAdministratorSource = Readonly<{
-  channel: string;
-  accountId: string;
-  senderId: string;
-  conversationId: string;
-  assertActive: () => void;
-}>;
-
-type AuthenticatedNativeHumanSource = {
-  source: Omit<AuthenticatedChannelAdministratorSource, "assertActive">;
-  owner: ChannelIngressHostOwner;
-  ownerEpoch: object;
-  consumed: boolean;
-};
-
-type AuthenticatedNativeHumanContext = {
-  source: AuthenticatedNativeHumanSource;
-  originalContext: object;
-  scopeKey: string;
-};
-
 const CHANNEL_ADMISSION_EVIDENCE_MAX_CONTRIBUTIONS = 16;
 const CHANNEL_ADMISSION_EVIDENCE_MAX_AGE_MS = 30 * 24 * 60 * 60_000;
 const CHANNEL_ADMISSION_EVIDENCE_STATE_KEY = Symbol.for("openclaw.channelAdmissionEvidenceState");
@@ -108,9 +91,6 @@ const state = resolveGlobalSingleton(CHANNEL_ADMISSION_EVIDENCE_STATE_KEY, () =>
   evidenceByContext: new WeakMap<object, ChannelAdmissionEvidence>(),
   gatewayResolverByContext: new WeakMap<object, GatewayContextResolver>(),
   gatewayResolverConflictsByContext: new WeakSet<object>(),
-  nativeHumanSourceByPreparation: new WeakMap<object, AuthenticatedNativeHumanSource>(),
-  nativeHumanSourceByContext: new WeakMap<object, AuthenticatedNativeHumanContext>(),
-  nativeHumanSourceConflictsByContext: new WeakSet<object>(),
   scopeByContext: new WeakMap<object, string>(),
   consumedEvidence: new WeakSet<object>(),
   decisionSink: undefined as ((receipt: DecisionReceiptV1) => boolean) | undefined,
@@ -513,17 +493,15 @@ export function prepareHostChannelContextAdmissionEvidence(params: {
         binding.accountId === firstBinding.accountId,
     )
   ) {
-    // This carrier is always on and independent of diagnostic evidence collection.
-    state.nativeHumanSourceByPreparation.set(preparation, {
-      source: Object.freeze({
+    prepareAuthenticatedChannelAdministratorSource({
+      preparation,
+      source: {
         channel: firstBinding.channelId,
         accountId: firstBinding.accountId || "default",
         senderId: nativeSource.senderId,
         conversationId: nativeSource.conversationId,
-      }),
+      },
       owner: params.owner,
-      ownerEpoch: params.owner.epoch,
-      consumed: false,
     });
   }
   return preparation;
@@ -536,18 +514,10 @@ export function bindHostChannelContextAdmissionEvidence(params: {
 }): void {
   const preparedEvidence = state.evidenceByPreparation.get(params.preparation);
   const gatewayContextResolver = state.gatewayResolverByPreparation.get(params.preparation);
-  const nativeHumanSource = state.nativeHumanSourceByPreparation.get(params.preparation);
   state.evidenceByPreparation.delete(params.preparation);
   state.gatewayResolverByPreparation.delete(params.preparation);
-  state.nativeHumanSourceByPreparation.delete(params.preparation);
   const scopeKey = finalizedContextScopeKey(params.context);
-  if (nativeHumanSource && scopeKey !== undefined) {
-    state.nativeHumanSourceByContext.set(params.context, {
-      source: nativeHumanSource,
-      originalContext: params.context,
-      scopeKey,
-    });
-  }
+  bindAuthenticatedChannelAdministratorSource({ ...params, scopeKey });
   if (gatewayContextResolver && scopeKey !== undefined) {
     state.gatewayResolverByContext.set(params.context, gatewayContextResolver);
     state.scopeByContext.set(params.context, scopeKey);
@@ -579,66 +549,13 @@ export function readChannelContextGatewayContextResolver(
   return state.gatewayResolverByContext.get(context);
 }
 
-function isNativeHumanContextActive(
-  binding: AuthenticatedNativeHumanContext,
-  context: object,
-): boolean {
-  const { source, originalContext, scopeKey } = binding;
-  try {
-    return (
-      readChannelIngressHostOwner(source.source.channel) === source.owner &&
-      source.owner.epoch === source.ownerEpoch &&
-      source.owner.isLive() &&
-      finalizedContextScopeKey(originalContext) === scopeKey &&
-      finalizedContextScopeKey(context) === scopeKey &&
-      ownDataValue(originalContext, "SenderIsBot") !== true &&
-      ownDataValue(context, "SenderIsBot") !== true
-    );
-  } catch {
-    return false;
-  }
-}
-
-/** Consume one authentic native-human handoff; route fields alone never mint this source. */
-export function consumeAuthenticatedChannelAdministratorSource(
-  context: object,
-): AuthenticatedChannelAdministratorSource | undefined {
-  const binding = state.nativeHumanSourceByContext.get(context);
-  if (!binding || binding.source.consumed || !isNativeHumanContextActive(binding, context)) {
-    return undefined;
-  }
-  binding.source.consumed = true;
-  return Object.freeze({
-    ...binding.source.source,
-    assertActive: () => {
-      if (!isNativeHumanContextActive(binding, context)) {
-        throw new Error("authenticated channel administrator source is no longer active");
-      }
-    },
-  });
-}
-
 /** Preserve private evidence when an owner intentionally replaces a finalized context object. */
 export function copyChannelParticipantAdmissionEvidence(source: object, target: object): void {
   const evidence = state.evidenceByContext.get(source);
   const gatewayContextResolver = state.gatewayResolverByContext.get(source);
-  const nativeHumanSource = state.nativeHumanSourceByContext.get(source);
-  if (!evidence && !gatewayContextResolver && !nativeHumanSource) {
+  const hasNativeHumanSource = copyAuthenticatedChannelAdministratorSource(source, target);
+  if (!evidence && !gatewayContextResolver && !hasNativeHumanSource) {
     return;
-  }
-  if (
-    nativeHumanSource &&
-    !nativeHumanSource.source.consumed &&
-    isNativeHumanContextActive(nativeHumanSource, source) &&
-    isNativeHumanContextActive(nativeHumanSource, target)
-  ) {
-    const current = state.nativeHumanSourceByContext.get(target);
-    if (current && current.source !== nativeHumanSource.source) {
-      state.nativeHumanSourceByContext.delete(target);
-      state.nativeHumanSourceConflictsByContext.add(target);
-    } else if (!state.nativeHumanSourceConflictsByContext.has(target)) {
-      state.nativeHumanSourceByContext.set(target, nativeHumanSource);
-    }
   }
   const sourceScope = state.scopeByContext.get(source);
   const targetScope = finalizedContextScopeKey(target);

@@ -46,6 +46,7 @@ export function bindTestChannelParticipantAdmissionEvidence(params: {
   try {
     recordChannelIngressResolution({
       result,
+      owner,
       channelId: params.channelId,
       accountId: params.accountId,
       rawPrincipalRef: params.participantId,

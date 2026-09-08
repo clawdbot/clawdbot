@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createTestAdmittedRunContext } from "../agents/admitted-run-context.test-support.js";
+import type { CronJob, CronJobCreate } from "../cron/types.js";
 import {
   claimAgentRunDelegatedAuthority,
   releaseAgentRunDelegatedAuthority,
@@ -14,11 +15,10 @@ import {
   createChannelAdministratorAuthority,
   getChannelAdministratorRequestAuthority,
   mintChannelAdministratorGrant,
-  redeemChannelAdministratorGrant,
 } from "./channel-administrator-authority.js";
 import { createPluginGatewayMethodDescriptor } from "./methods/descriptor.js";
-import { createGatewayMethodRegistry } from "./methods/registry.js";
-import { handleGatewayRequest } from "./server-methods.js";
+import { createGatewayMethodRegistry, type GatewayMethodRegistry } from "./methods/registry.js";
+import { coreGatewayHandlers, handleGatewayRequest } from "./server-methods.js";
 import {
   readCronCallerScope,
   cronCreateMatchesCallerScope,
@@ -29,6 +29,7 @@ import type {
   GatewayClient,
   GatewayRequestContext,
   GatewayRequestHandler,
+  GatewayRequestHandlers,
 } from "./server-methods/types.js";
 
 afterEach(() => {
@@ -116,7 +117,7 @@ describe("trusted channel administrator request grants", () => {
     f.identity.channelAdministratorGrant = f.mint("cron.add");
     const client = admitChannelAdministratorRequest(f.client, "cron.add")!.client;
     const callerScope = readCronCallerScope(client)!;
-    const job = {
+    const job: CronJobCreate = {
       agentId: "research",
       name: "research update",
       enabled: true,
@@ -145,28 +146,47 @@ describe("trusted channel administrator request grants", () => {
     "rejects %s substitution without spending the valid grant",
     (field) => {
       const f = fixture();
-      const grant = f.mint();
-      const changed = structuredClone(f.identity);
+      f.identity.channelAdministratorGrant = f.mint();
+      let changed = structuredClone(f.identity);
       if (field === "run") {
-        changed.operationalRunInstance.runId = "child-run";
+        changed = {
+          ...changed,
+          operationalRunInstance: { ...changed.operationalRunInstance, runId: "child-run" },
+        };
       }
       if (field === "instance") {
-        changed.operationalRunInstance.instanceId = "other-instance";
+        changed = {
+          ...changed,
+          operationalRunInstance: {
+            ...changed.operationalRunInstance,
+            instanceId: "other-instance",
+          },
+        };
       }
       if (field === "claim") {
-        changed.delegatedAuthority.claimId = "other-claim";
+        changed = {
+          ...changed,
+          delegatedAuthority: { ...changed.delegatedAuthority, claimId: "other-claim" },
+        };
       }
       if (field === "lifecycle") {
-        changed.delegatedAuthority.lifecycleGeneration = "other-lifecycle";
+        changed = {
+          ...changed,
+          delegatedAuthority: {
+            ...changed.delegatedAuthority,
+            lifecycleGeneration: "other-lifecycle",
+          },
+        };
       }
       expect(() =>
-        redeemChannelAdministratorGrant(
-          grant,
-          changed,
+        admitChannelAdministratorRequest(
+          { ...f.client, internal: { ...f.client.internal, agentRuntimeIdentity: changed } },
           field === "method" ? "cron.remove" : "cron.get",
         ),
       ).toThrow();
-      expect(() => redeemChannelAdministratorGrant(grant, f.identity, "cron.get")).not.toThrow();
+      expect(admitChannelAdministratorRequest(f.client, "cron.get")).toMatchObject({
+        assertActive: expect.any(Function),
+      });
     },
   );
 
@@ -175,11 +195,9 @@ describe("trusted channel administrator request grants", () => {
     (reason) => {
       const f = fixture();
       const operation = new AbortController();
-      const guard = redeemChannelAdministratorGrant(
-        f.mint("cron.update", operation.signal),
-        f.identity,
-        "cron.update",
-      );
+      f.identity.channelAdministratorGrant = f.mint("cron.update", operation.signal);
+      const admitted = admitChannelAdministratorRequest(f.client, "cron.update")!;
+      const guard = getChannelAdministratorRequestAuthority(admitted.client)!;
       guard();
       if (reason === "policy") {
         f.revoke();
@@ -206,8 +224,8 @@ describe("trusted channel administrator request grants", () => {
 
   it("does not transfer a retained capability to a replacement with the same run id", () => {
     const f = fixture();
-    const grant = f.mint();
-    redeemChannelAdministratorGrant(grant, f.identity, "cron.get");
+    f.identity.channelAdministratorGrant = f.mint();
+    admitChannelAdministratorRequest(f.client, "cron.get")!.assertActive();
     releaseAgentRunDelegatedAuthority(f.authority);
     const { operationalRunInstance } = createTestAdmittedRunContext(f.capability.runId);
     const replacement = claimAgentRunDelegatedAuthority(operationalRunInstance);
@@ -216,78 +234,211 @@ describe("trusted channel administrator request grants", () => {
 
   it("rejects revocation while a minted request is awaiting dispatch", () => {
     const f = fixture();
-    const grant = f.mint();
+    f.identity.channelAdministratorGrant = f.mint();
     f.revoke();
-    expect(() => redeemChannelAdministratorGrant(grant, f.identity, "cron.get")).toThrow("revoked");
+    expect(() => admitChannelAdministratorRequest(f.client, "cron.get")).toThrow("revoked");
     expect(() => f.mint()).toThrow("revoked");
   });
 });
 
 describe("administrator Gateway dispatch", () => {
-  const method = "test.administrator";
   async function dispatch(
     f: ReturnType<typeof fixture>,
-    handler: GatewayRequestHandler,
-    grant = true,
+    method: string,
+    options: {
+      grant?: boolean;
+      params?: Record<string, unknown>;
+      methodRegistry?: GatewayMethodRegistry;
+      extraHandlers?: GatewayRequestHandlers;
+      context?: Partial<GatewayRequestContext>;
+    } = {},
   ) {
-    if (grant) {
+    if (options.grant !== false) {
       f.identity.channelAdministratorGrant = f.mint(method);
     }
     const respond = vi.fn();
-    const methodRegistry = createGatewayMethodRegistry([
-      createPluginGatewayMethodDescriptor({
-        pluginId: "test",
-        name: method,
-        handler,
-        scope: "operator.admin",
-      }),
-    ]);
     await handleGatewayRequest({
-      req: { type: "req", id: "admin-probe", method },
+      req: { type: "req", id: "admin-probe", method, params: options.params },
       respond,
       client: f.client,
       isWebchatConnect: () => false,
-      methodRegistry,
+      methodRegistry: options.methodRegistry,
+      extraHandlers: options.extraHandlers,
       context: {
         logGateway: { info: vi.fn(), warn: vi.fn() },
         getRuntimeConfig: () => ({}),
+        ...options.context,
       } as unknown as GatewayRequestContext,
     });
     return respond;
   }
 
-  it("keeps an ordinary Discord owner denied but admits an exact authorized administrator", async () => {
-    const handler = vi.fn<GatewayRequestHandler>(
-      ({ client, sessionMutationCommitGuard, respond }) => {
-        expect(client?.connect.scopes).toContain("operator.admin");
-        expect(readCronCallerScope(client)?.manageAll).toEqual(expect.any(Function));
-        sessionMutationCommitGuard?.();
-        respond(true, { ok: true });
-      },
+  function expectUnsupported(respond: ReturnType<typeof vi.fn>) {
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message: expect.stringContaining("not supported for this handler"),
+      }),
     );
-    const ordinary = await dispatch(fixture(), handler, false);
-    expect(ordinary).toHaveBeenCalledWith(
+  }
+
+  it.each(["test.administrator", "plugins.sessionAction", "plugins.install", "agents.files.set"])(
+    "does not grant unreviewed %s authority even when the transport requested admin scope",
+    async (method) => {
+      const f = fixture();
+      f.client.connect.scopes = ["operator.admin"];
+      const handler = vi.fn<GatewayRequestHandler>();
+      const respond = await dispatch(f, method, { extraHandlers: { [method]: handler } });
+      expectUnsupported(respond);
+      expect(handler).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["plugin", "aux", "core"] as const)(
+    "does not let a %s descriptor borrow a reviewed core name",
+    async (kind) => {
+      const f = fixture();
+      const method = "config.patch";
+      const handler = vi.fn<GatewayRequestHandler>();
+      const methodRegistry = createGatewayMethodRegistry([
+        {
+          name: method,
+          handler,
+          scope: "operator.admin",
+          owner: kind === "plugin" ? { kind, pluginId: "test" } : { kind, area: "test" },
+        },
+      ]);
+      expectUnsupported(await dispatch(f, method, { methodRegistry }));
+      expect(handler).not.toHaveBeenCalled();
+    },
+  );
+
+  it("does not elevate a classified core extra-handler override", async () => {
+    const handler = vi.fn<GatewayRequestHandler>();
+    expectUnsupported(
+      await dispatch(fixture(), "config.patch", { extraHandlers: { "config.patch": handler } }),
+    );
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("does not elevate a plugin descriptor wrapping the actual core handler", async () => {
+    const method = "config.patch";
+    const methodRegistry = createGatewayMethodRegistry([
+      createPluginGatewayMethodDescriptor({
+        pluginId: "test",
+        name: method,
+        handler: coreGatewayHandlers[method]!,
+        scope: "operator.admin",
+      }),
+    ]);
+    expectUnsupported(await dispatch(fixture(), method, { methodRegistry }));
+  });
+
+  it("preserves ordinary plugin authorization when no administrator grant is supplied", async () => {
+    const f = fixture();
+    const method = "test.administrator";
+    const handler = vi.fn<GatewayRequestHandler>(({ client, respond }) => {
+      expect(readCronCallerScope(client)?.manageAll).toBeUndefined();
+      respond(true, { ok: true });
+    });
+    const extraHandlers = { [method]: handler };
+    const denied = await dispatch(f, method, { grant: false, extraHandlers });
+    expect(denied).toHaveBeenCalledWith(
       false,
       undefined,
       expect.objectContaining({ message: expect.stringContaining("operator.admin") }),
     );
     expect(handler).not.toHaveBeenCalled();
-    const admin = await dispatch(fixture(), handler);
-    expect(admin).toHaveBeenCalledWith(true, { ok: true });
+    f.client.connect.scopes = ["operator.admin"];
+    const allowed = await dispatch(f, method, { grant: false, extraHandlers });
+    expect(allowed).toHaveBeenCalledWith(true, { ok: true });
     expect(handler).toHaveBeenCalledOnce();
   });
 
-  it("does not commit privileged work after revocation across an await", async () => {
+  const job: CronJob = {
+    id: "other-session-job",
+    agentId: "research",
+    name: "Research monitor",
+    enabled: true,
+    createdAtMs: 1,
+    updatedAtMs: 1,
+    schedule: { kind: "every", everyMs: 60_000 },
+    sessionTarget: "isolated",
+    wakeMode: "now",
+    payload: { kind: "agentTurn", message: "Summarize research." },
+    state: {},
+  };
+  const scratch = { content: "Other session scratch", revision: 1, updatedAtMs: 1 };
+
+  function scratchContext(
+    overrides: Partial<GatewayRequestContext["cron"]> = {},
+  ): Partial<GatewayRequestContext> {
+    return {
+      cron: {
+        getDefaultAgentId: () => "main",
+        getJob: () => job,
+        readJob: async () => job,
+        readScratch: async () => ({ scratch, currentRevision: 1 }),
+        ...overrides,
+      } as GatewayRequestContext["cron"],
+    };
+  }
+
+  it("admits the canonical cron handler for another session without elevating the connection", async () => {
+    const f = fixture();
+    const options = { params: { id: job.id }, context: scratchContext() };
+    const ordinary = await dispatch(f, "cron.scratch.get", { ...options, grant: false });
+    expect(ordinary).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ message: expect.stringContaining("operator.admin") }),
+    );
+    const admin = await dispatch(f, "cron.scratch.get", options);
+    expect(admin).toHaveBeenCalledWith(true, expect.objectContaining({ scratch }), undefined);
+    expect(f.client.connect.scopes).toEqual(["operator.read"]);
+    expect(readCronCallerScope(f.client)?.manageAll).toBeUndefined();
+  });
+
+  it("fences an admin-scoped read response after policy revocation during the read", async () => {
+    const f = fixture();
+    const respond = await dispatch(f, "cron.scratch.get", {
+      params: { id: job.id },
+      context: scratchContext({
+        readScratch: async () => {
+          await Promise.resolve();
+          f.revoke();
+          return { scratch, currentRevision: 1 };
+        },
+      }),
+    });
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ message: expect.stringContaining("revoked") }),
+    );
+  });
+
+  it("carries canonical cron mutation authority through awaited store preparation", async () => {
     const f = fixture();
     const effect = vi.fn();
-    await expect(
-      dispatch(f, async ({ sessionMutationCommitGuard }) => {
-        await Promise.resolve();
-        f.revoke();
-        sessionMutationCommitGuard?.();
-        effect();
+    const respond = await dispatch(f, "cron.scratch.set", {
+      params: { id: job.id, content: "New scratch" },
+      context: scratchContext({
+        writeScratch: async (_id, params) => {
+          await Promise.resolve();
+          f.revoke();
+          params.commitGuard?.();
+          effect();
+          return { ok: true, scratch, currentRevision: 1 };
+        },
       }),
-    ).rejects.toThrow("revoked");
+    });
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ message: expect.stringContaining("revoked") }),
+    );
     expect(effect).not.toHaveBeenCalled();
   });
 });

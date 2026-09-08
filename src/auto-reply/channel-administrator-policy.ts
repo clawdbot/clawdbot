@@ -1,4 +1,4 @@
-import { consumeAuthenticatedChannelAdministratorSource } from "../channels/message-access/admission-evidence.js";
+import { consumeAuthenticatedChannelAdministratorSource } from "../channels/message-access/authenticated-administrator-source.js";
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { isConfiguredCommandOwner } from "./command-auth.js";

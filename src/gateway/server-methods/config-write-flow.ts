@@ -262,12 +262,9 @@ export async function commitGatewayConfigWrite(params: {
         ...params.writeOptions,
         ...(params.commitGuard
           ? {
-              beforeCommit: () => {
-                const pending = params.writeOptions.beforeCommit?.();
-                if (pending) {
-                  return pending.then(() => params.commitGuard?.());
-                }
-                return params.commitGuard?.();
+              commitGuard: () => {
+                params.writeOptions.commitGuard?.();
+                params.commitGuard?.();
               },
             }
           : {}),

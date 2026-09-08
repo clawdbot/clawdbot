@@ -180,6 +180,7 @@ export type CommandsConfig = {
   /**
    * Opt-in administrator grants for available agent operations from exact Discord conversations.
    * Senders must also remain in ownerAllowFrom. Omitted or empty disables these grants.
+   * Only explicitly supported core Gateway handlers receive this authority.
    * Tool policy, sandboxing, execution approvals, and credential entry remain independent.
    */
   channelAdministrators?: ChannelAdministratorConfig[];

@@ -21,7 +21,7 @@ import {
 } from "../../gateway/agent-runtime-execution-lineage.js";
 import { mintAgentRuntimeIdentityToken } from "../../gateway/agent-runtime-identity-token.js";
 import { callGateway } from "../../gateway/call.js";
-import type { ChannelAdministratorGrant } from "../../gateway/channel-administrator-authority.js";
+import type { ChannelAdministratorGrant } from "../../gateway/channel-administrator-authority.types.js";
 import { resolveGatewayCredentialsFromConfig, trimToUndefined } from "../../gateway/credentials.js";
 import { resolveMessageActionTurnCapability } from "../../gateway/message-action-turn-capability.js";
 import {

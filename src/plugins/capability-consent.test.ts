@@ -5,8 +5,13 @@ import type {
   PluginAcceptedDeclaredSurface,
   PluginInstallRecord,
 } from "../config/types.plugins.js";
+import { readConfigMachineStateWithMetadata } from "../state/config-machine-state.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { resolvePluginArtifactDeclaredSurface } from "./capability-artifact.js";
-import { createManagedPluginArtifactConsentHandler } from "./capability-consent.js";
+import {
+  createManagedPluginArtifactConsentHandler,
+  resolvePluginCapabilityConsent,
+} from "./capability-consent.js";
 import {
   buildPluginCapabilitySummary,
   computeDeclaredSurfaceHash,
@@ -16,12 +21,14 @@ import {
   resolvePluginInstallRecordIntegrity,
 } from "./capability-summary.js";
 import { resolveInstalledPluginIndexInstallOwner } from "./installed-plugin-index-install-owner.js";
+import { writePersistedInstalledPluginIndexInstallRecords } from "./installed-plugin-index-records.js";
 import { loadInstalledPluginIndexWithDiscovery } from "./installed-plugin-index.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
 const tempDirs: string[] = [];
 
 afterEach(() => {
+  closeOpenClawStateDatabaseForTest();
   cleanupTrackedTempDirs(tempDirs);
 });
 
@@ -54,6 +61,88 @@ function createDeclaredSurface(
 }
 
 describe("plugin capability consent", () => {
+  it.each(["active", "consent", "persistence prerequisite"] as const)(
+    "checks current authority before durable capability acceptance: %s",
+    async (revokedAt) => {
+      const rootDir = createArtifactFixture({
+        "package.json": { name: "consent-plugin", openclaw: { extensions: ["./index.js"] } },
+        "index.js": "export {};",
+        "openclaw.plugin.json": {
+          id: "consent-plugin",
+          contracts: { tools: ["write"] },
+          configSchema: { type: "object" },
+        },
+      });
+      const env = {
+        HOME: rootDir,
+        OPENCLAW_STATE_DIR: path.join(rootDir, "state"),
+        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+        OPENCLAW_DISABLE_BUNDLED_SOURCE_OVERLAYS: "1",
+      };
+      const config = {
+        plugins: {
+          load: { paths: [rootDir] },
+          entries: { "consent-plugin": { enabled: false } },
+        },
+      };
+      await writePersistedInstalledPluginIndexInstallRecords(
+        { "consent-plugin": { source: "path", sourcePath: rootDir, installPath: rootDir } },
+        { config, env },
+      );
+      // Read the committed SQLite row independently of plugin metadata and install-record caches.
+      const readAcceptance = () =>
+        readConfigMachineStateWithMetadata<unknown>("plugins.installedIndex", { env });
+      const before = readAcceptance();
+      expect(before).toBeDefined();
+      let active = true;
+      let reviewedToken: string | undefined;
+
+      const pending = resolvePluginCapabilityConsent({
+        config,
+        env,
+        pluginId: "consent-plugin",
+        onCapabilityConsent: async (review) => {
+          reviewedToken = review.reviewToken;
+          await Promise.resolve();
+          if (revokedAt === "consent") {
+            active = false;
+          }
+          return { reviewToken: review.reviewToken };
+        },
+        beforePersistentEffect: async () => {
+          await Promise.resolve();
+          if (revokedAt === "persistence prerequisite") {
+            active = false;
+          }
+        },
+        commitGuard: () => {
+          if (!active) {
+            throw new Error("channel administrator revoked");
+          }
+        },
+      });
+
+      if (revokedAt === "active") {
+        await pending;
+        expect(readAcceptance()?.value).toMatchObject({
+          index: {
+            installRecords: {
+              "consent-plugin": {
+                acceptedSurface: { tools: ["write"] },
+                acceptedSurfaceHash: reviewedToken,
+                acceptedSurfaceAt: expect.any(String),
+              },
+            },
+          },
+        });
+      } else {
+        await expect(pending).rejects.toThrow("channel administrator revoked");
+        expect(readAcceptance()).toEqual(before);
+      }
+      expect(reviewedToken).toMatch(/^[a-f\d]{64}$/);
+    },
+  );
+
   it("merges every package-owned plugin into a sorted, duplicate-free capability surface", () => {
     expect(
       mergePluginDeclaredSurfaces([

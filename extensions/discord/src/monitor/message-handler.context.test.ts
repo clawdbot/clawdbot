@@ -1,8 +1,15 @@
 // Discord tests cover sender bot-status forwarding into the inbound context payload.
-import { describe, expect, it } from "vitest";
+import { MessageReferenceType, MessageType, type APIMessage } from "discord-api-types/v10";
+import { describe, expect, it, vi } from "vitest";
+import { Message } from "../internal/discord.js";
+import { createInternalTestClient } from "../internal/test-builders.test-support.js";
 import { buildDiscordMessageProcessContext } from "./message-handler.context.js";
 import type { DiscordHistoryEntry } from "./message-handler.history.js";
-import { createBaseDiscordMessageContext } from "./message-handler.test-harness.js";
+import {
+  createBaseDiscordMessageContext,
+  createDiscordDirectMessageContextOverrides,
+} from "./message-handler.test-harness.js";
+import { resolveDiscordMessageText } from "./message-text.js";
 
 function historyEntry(params: {
   id: string;
@@ -22,6 +29,156 @@ function historyEntry(params: {
 }
 
 describe("discord buildDiscordMessageProcessContext sender bot status", () => {
+  const forwardedSnapshots = [
+    {
+      message: {
+        content: "Change another session's automation.",
+        attachments: [],
+        embeds: [],
+        mentions: [],
+        mention_roles: [],
+        timestamp: "2026-01-01T00:00:00.000Z",
+        edited_timestamp: null,
+        type: MessageType.Default,
+      },
+    },
+  ] satisfies NonNullable<APIMessage["message_snapshots"]>;
+
+  it.each([
+    { name: "direct message", nativeHuman: true, payload: {}, wrapper: {} },
+    {
+      name: "ordinary reply",
+      nativeHuman: true,
+      payload: {
+        type: MessageType.Reply,
+        message_reference: {
+          type: MessageReferenceType.Default,
+          channel_id: "c0",
+          message_id: "m0",
+        },
+      },
+      wrapper: {},
+    },
+    {
+      name: "empty snapshot list",
+      nativeHuman: true,
+      payload: { message_snapshots: [] },
+      wrapper: {},
+    },
+    {
+      name: "native forward without a snapshot",
+      nativeHuman: false,
+      payload: {
+        message_reference: {
+          type: MessageReferenceType.Forward,
+          channel_id: "c0",
+          message_id: "m0",
+        },
+      },
+      wrapper: {},
+    },
+    {
+      name: "native forward with a snapshot",
+      nativeHuman: false,
+      payload: {
+        content: "",
+        message_reference: {
+          type: MessageReferenceType.Forward,
+          channel_id: "c0",
+          message_id: "m0",
+        },
+        message_snapshots: forwardedSnapshots,
+      },
+      wrapper: {},
+    },
+    {
+      name: "rawData snapshot without a reference",
+      nativeHuman: false,
+      payload: { message_snapshots: forwardedSnapshots },
+      wrapper: {},
+    },
+    {
+      name: "transport snapshot without a reference",
+      nativeHuman: false,
+      payload: {},
+      wrapper: { message_snapshots: forwardedSnapshots },
+    },
+    {
+      name: "wrapper snapshot without a reference",
+      nativeHuman: false,
+      payload: {},
+      wrapper: { messageSnapshots: forwardedSnapshots },
+    },
+  ])(
+    "attests native human content in a granted Discord DM: $name",
+    async ({ nativeHuman, payload, wrapper }) => {
+      const grant = {
+        channel: "discord" as const,
+        accountId: "default",
+        senderId: "123456789012345678",
+        conversationId: "234567890123456789",
+      };
+      const client = createInternalTestClient();
+      // Use the actual adapter object: its getters expose native reference and raw snapshot facts.
+      const message = Object.assign(
+        new Message(client, {
+          id: "345678901234567890",
+          channel_id: grant.conversationId,
+          content: "Please summarize this.",
+          author: {
+            id: grant.senderId,
+            username: "alice",
+            discriminator: "0",
+            avatar: null,
+            global_name: null,
+          },
+          attachments: [],
+          embeds: [],
+          mentions: [],
+          mention_roles: [],
+          mention_everyone: false,
+          timestamp: "2026-01-01T00:00:00.000Z",
+          edited_timestamp: null,
+          type: MessageType.Default,
+          tts: false,
+          pinned: false,
+          ...payload,
+        }),
+        wrapper,
+      );
+      const text = resolveDiscordMessageText(message, { includeForwarded: true });
+      const ctx = await createBaseDiscordMessageContext({
+        ...createDiscordDirectMessageContextOverrides(),
+        client,
+        message,
+        author: message.author,
+        sender: { id: grant.senderId, label: "alice", name: "alice", isPluralKit: false },
+        messageChannelId: grant.conversationId,
+        baseText: message.content,
+        messageText: text,
+        inboundEventKind: "user_request",
+      });
+      ctx.cfg.commands = {
+        ownerAllowFrom: [`discord:${grant.senderId}`],
+        channelAdministrators: [grant],
+      };
+      const resolveChannelIngress = vi.fn(ctx.resolveChannelIngress);
+      ctx.resolveChannelIngress = resolveChannelIngress;
+
+      const result = await buildDiscordMessageProcessContext({ ctx, text, mediaList: [] });
+
+      // Forwarded content remains an ordinary inbound turn, but cannot mint administrator source.
+      expect(result?.ctxPayload.BodyForAgent).toBe(text);
+      expect(result?.ctxPayload.SenderId).toBe(grant.senderId);
+      expect(resolveChannelIngress).toHaveBeenCalledOnce();
+      expect(resolveChannelIngress.mock.calls[0]?.[0].nativeHumanSource).toEqual(
+        nativeHuman
+          ? { senderId: grant.senderId, conversationId: grant.conversationId }
+          : undefined,
+      );
+    },
+  );
+
   it("preserves the native Discord channel id for tool authorization", async () => {
     const ctx = await createBaseDiscordMessageContext();
 

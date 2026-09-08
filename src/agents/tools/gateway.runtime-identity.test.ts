@@ -9,8 +9,9 @@ import {
 import { resolveExecutionIdentitySpawnFacts } from "../../gateway/agent-turn/agent-run-execution-lineage.js";
 import type { CallGatewayOptions } from "../../gateway/call.js";
 import {
+  admitChannelAdministratorRequest,
   createChannelAdministratorAuthority,
-  redeemChannelAdministratorGrant,
+  getChannelAdministratorRequestAuthority,
 } from "../../gateway/channel-administrator-authority.js";
 import { createTestApprovalManager } from "../../gateway/exec-approval-manager.test-support.js";
 import {
@@ -869,11 +870,25 @@ describe("trusted channel administrator Gateway transport", () => {
           expect(identity?.turnSourceChannel).toBe("discord");
           expect(identity?.turnSourceLocal).toBeUndefined();
           expect(identity?.channelAdministratorGrant).toBeDefined();
-          const guard = redeemChannelAdministratorGrant(
-            identity!.channelAdministratorGrant!,
-            identity!,
+          const admitted = admitChannelAdministratorRequest(
+            {
+              connect: {
+                minProtocol: 1,
+                maxProtocol: 1,
+                role: "operator",
+                scopes: call.scopes,
+                client: {
+                  id: "gateway-client",
+                  version: "test",
+                  platform: "test",
+                  mode: "backend",
+                },
+              },
+              internal: { agentRuntimeIdentity: identity },
+            },
             "cron.get",
-          );
+          )!;
+          const guard = getChannelAdministratorRequestAuthority(admitted.client)!;
           guard();
           allowed = false;
           expect(guard).toThrow("revoked");
