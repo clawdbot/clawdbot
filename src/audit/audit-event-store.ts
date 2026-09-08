@@ -15,6 +15,7 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
+import { parseSkillSelectionAuditRow } from "./audit-event-store.skill-selection.js";
 import {
   AUDIT_EVENT_SCHEMA_VERSION,
   AUDIT_INBOUND_MESSAGE_COMPLETED_REASONS,
@@ -29,6 +30,7 @@ import {
   type InboundMessageAuditEventRecord,
   type MessageAuditEventInput,
   type OutboundMessageAuditEventRecord,
+  type SkillSelectionAuditEventRecord,
   type ToolActionAuditEventRecord,
 } from "./audit-event-types.js";
 import {
@@ -471,6 +473,9 @@ export function rowToAuditEvent(row: AuditEventRow): AuditEventRecord {
   if (row.kind === "tool_action") {
     return parseToolActionRow(row);
   }
+  if (row.kind === "skill_selection") {
+    return parseSkillSelectionAuditRow(row);
+  }
   if (row.kind !== "message") {
     corruptAuditRow(row, "invalid kind");
   }
@@ -530,7 +535,10 @@ function bindAuditEvent(db: DatabaseSync, input: AuditEventInput): Insertable<Au
     session_id: input.kind === AUDIT_ACTIVITY_MESSAGE_KIND ? null : (input.sessionId ?? null),
     run_id: input.runId ?? null,
     tool_call_id: input.kind === "tool_action" ? (input.toolCallId ?? null) : null,
-    tool_name: input.kind === "tool_action" ? input.toolName : null,
+    tool_name:
+      input.kind === "tool_action" || input.kind === "skill_selection"
+        ? (input.toolName ?? null)
+        : null,
     direction: input.kind === AUDIT_ACTIVITY_MESSAGE_KIND ? input.direction : null,
     channel: input.kind === AUDIT_ACTIVITY_MESSAGE_KIND ? input.channel : null,
     conversation_kind: input.kind === "message" ? input.conversationKind : null,

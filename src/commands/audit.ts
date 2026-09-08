@@ -63,6 +63,8 @@ type AuditCliEvent = {
   agentId?: string;
   runId?: string;
   toolName?: string;
+  selectedSkill?: string;
+  selectedOverlay?: string;
 };
 
 function parseAuditTimestamp(value: string | undefined, flag: string): number | undefined {
@@ -121,7 +123,7 @@ function short(value: string | undefined, maxChars: number): string {
 }
 
 function formatAuditRows(events: readonly AuditCliEvent[]): string[] {
-  const rows = ["TIME\tKIND\tDIRECTION\tCHANNEL\tSTATUS\tAGENT\tRUN\tACTION"];
+  const rows = ["TIME\tKIND\tDIRECTION\tCHANNEL\tSTATUS\tAGENT\tRUN\tACTION\tSELECTED"];
   for (const event of events) {
     rows.push(
       [
@@ -133,6 +135,11 @@ function formatAuditRows(events: readonly AuditCliEvent[]): string[] {
         short(event.agentId, 18),
         short(event.runId, 18),
         event.toolName ? `${event.action}:${short(event.toolName, 28)}` : event.action,
+        event.selectedSkill
+          ? `skill:${short(event.selectedSkill, 28)}`
+          : event.selectedOverlay
+            ? `overlay:${short(event.selectedOverlay, 28)}`
+            : "-",
       ].join("\t"),
     );
   }
@@ -168,6 +175,10 @@ function hasMessageSpecificFilters(options: AuditListCommandOptions): boolean {
   return (
     options.kind === "message" || options.direction !== undefined || options.channel !== undefined
   );
+}
+
+function hasActivityOnlyFilters(options: AuditListCommandOptions): boolean {
+  return options.kind === "skill_selection" || options.status === "observed";
 }
 
 function validateAuditFilter(
@@ -218,7 +229,7 @@ function toLegacyAuditListParams(params: AuditActivityListParams): AuditListPara
     ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
     ...(params.runId ? { runId: params.runId } : {}),
     ...(params.kind === "agent_run" || params.kind === "tool_action" ? { kind: params.kind } : {}),
-    ...(params.status ? { status: params.status } : {}),
+    ...(params.status && params.status !== "observed" ? { status: params.status } : {}),
     ...(params.after !== undefined ? { after: params.after } : {}),
     ...(params.before !== undefined ? { before: params.before } : {}),
     ...(params.limit !== undefined ? { limit: params.limit } : {}),
@@ -242,6 +253,12 @@ async function queryAuditActivity(
     if (hasMessageSpecificFilters(options)) {
       throw new Error(
         "The connected Gateway does not support message audit filters. Upgrade the Gateway to use --kind message, --direction, or --channel.",
+        { cause: error },
+      );
+    }
+    if (hasActivityOnlyFilters(options)) {
+      throw new Error(
+        "The connected Gateway does not support skill-selection audit records. Upgrade the Gateway to use --kind skill_selection or --status observed.",
         { cause: error },
       );
     }

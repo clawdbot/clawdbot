@@ -106,6 +106,81 @@ describe("audit gateway methods", () => {
     expect(listAuditEvents).not.toHaveBeenCalled();
   });
 
+  it("keeps skill selection records out of the shipped audit.list result shape", async () => {
+    listAuditEvents.mockReturnValue({
+      events: [
+        {
+          schemaVersion: 1,
+          eventId: "event-skill-1",
+          sequence: 11,
+          sourceSequence: 3,
+          occurredAt: 101,
+          kind: "skill_selection",
+          action: "skill.selection.observed",
+          status: "observed",
+          actorType: "agent",
+          actorId: "main",
+          agentId: "main",
+          runId: "run-1",
+          toolName: "debug-toolkit",
+          redaction: "metadata_only",
+        },
+      ],
+    });
+
+    const respond = await runAuditHandler("audit.list", {});
+
+    expect(respond).toHaveBeenCalledWith(true, { events: [] });
+  });
+
+  it("returns observed skill selection records through audit.activity.list", async () => {
+    listAuditEvents.mockReturnValue({
+      events: [
+        {
+          schemaVersion: 1,
+          eventId: "event-skill-1",
+          sequence: 11,
+          sourceSequence: 3,
+          occurredAt: 101,
+          kind: "skill_selection",
+          action: "skill.selection.observed",
+          status: "observed",
+          actorType: "agent",
+          actorId: "main",
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          runId: "run-1",
+          toolName: "debug-toolkit",
+          redaction: "metadata_only",
+        },
+      ],
+    });
+
+    const respond = await runAuditHandler("audit.activity.list", { kind: "skill_selection" });
+
+    expect(respond).toHaveBeenCalledWith(true, {
+      events: [
+        {
+          eventType: "skill_selection",
+          schemaVersion: 1,
+          eventId: "event-skill-1",
+          sequence: 11,
+          sourceSequence: 3,
+          occurredAt: 101,
+          kind: "skill_selection",
+          action: "skill.selection.observed",
+          status: "observed",
+          actor: { type: "agent", id: "main" },
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          runId: "run-1",
+          selectedSkill: "debug-toolkit",
+          redaction: "metadata_only",
+        },
+      ],
+    });
+  });
+
   it("returns versioned message activity without synthetic run provenance", async () => {
     listAuditEvents.mockReturnValue({
       events: [

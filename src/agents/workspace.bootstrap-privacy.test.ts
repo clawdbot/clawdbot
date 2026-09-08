@@ -62,9 +62,11 @@ describe("filterBootstrapFilesForSession privacy", () => {
   it.each([
     "agent:default:discord:channel:c1",
     "agent:default:telegram:group:-1001234567890:topic:99",
-  ])("drops only MEMORY.md for shared sessions (%s)", (sessionKey) => {
+  ])("drops root USER.md and MEMORY.md for shared sessions (%s)", (sessionKey) => {
     const result = filterBootstrapFilesForSession(mockFiles, sessionKey);
-    expect(result).toStrictEqual(mockFiles.filter((file) => file.name !== "MEMORY.md"));
+    expect(result).toStrictEqual(
+      mockFiles.filter((file) => file.name !== "USER.md" && file.name !== "MEMORY.md"),
+    );
   });
 
   it("prefers authoritative chat type over the session-key fallback", () => {
@@ -77,14 +79,22 @@ describe("filterBootstrapFilesForSession privacy", () => {
       chatType: "direct",
     });
 
-    expect(shared).toStrictEqual(mockFiles.filter((file) => file.name !== "MEMORY.md"));
+    expect(shared).toStrictEqual(
+      mockFiles.filter((file) => file.name !== "USER.md" && file.name !== "MEMORY.md"),
+    );
     expect(direct).toStrictEqual(mockFiles);
   });
 
-  it("drops root memory path aliases while preserving nested memory in shared sessions", () => {
+  it("drops root profile path aliases while preserving nested profile files in shared sessions", () => {
     const rootMemoryAlias: WorkspaceBootstrapFile = {
       name: "SOUL.md",
       path: "/w/private/../MEMORY.md",
+      content: "",
+      missing: false,
+    };
+    const rootUserAlias: WorkspaceBootstrapFile = {
+      name: "IDENTITY.md",
+      path: "/w/private/../USER.md",
       content: "",
       missing: false,
     };
@@ -94,14 +104,23 @@ describe("filterBootstrapFilesForSession privacy", () => {
       content: "",
       missing: false,
     };
+    const nestedUser: WorkspaceBootstrapFile = {
+      name: "USER.md",
+      path: "/w/packages/core/USER.md",
+      content: "",
+      missing: false,
+    };
 
-    const result = filterBootstrapFilesForSession([rootMemoryAlias, nestedMemory], {
-      sessionKey: "agent:default:opaque:binding",
-      chatType: "channel",
-      workspaceDir: "/w",
-    });
+    const result = filterBootstrapFilesForSession(
+      [rootMemoryAlias, rootUserAlias, nestedMemory, nestedUser],
+      {
+        sessionKey: "agent:default:opaque:binding",
+        chatType: "channel",
+        workspaceDir: "/w",
+      },
+    );
 
-    expect(result).toStrictEqual([nestedMemory]);
+    expect(result).toStrictEqual([nestedMemory, nestedUser]);
   });
 
   it.each([

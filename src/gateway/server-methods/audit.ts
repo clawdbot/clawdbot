@@ -73,6 +73,15 @@ function mapAuditActivityEvent(event: AuditEventRecord): AuditActivityEventV1 {
     const { actorType, actorId, ...activity } = event;
     return { ...activity, eventType: "tool_action", actor: { type: actorType, id: actorId } };
   }
+  if (event.kind === "skill_selection") {
+    const { actorType, actorId, toolName, ...activity } = event;
+    return {
+      ...activity,
+      eventType: "skill_selection",
+      actor: { type: actorType, id: actorId },
+      selectedSkill: toolName,
+    };
+  }
   if (event.direction === "inbound") {
     const { actorType, actorId, ...activity } = event;
     const actor =
@@ -132,12 +141,9 @@ export const auditHandlers: GatewayRequestHandlers = {
       },
     });
     respond(true, {
-      events: page.events.map((event) => {
-        if (event.kind === "message") {
-          throw new Error("legacy audit.list cannot project message records");
-        }
-        return mapLegacyAuditEvent(event);
-      }),
+      events: page.events
+        .filter((event) => event.kind !== "message" && event.kind !== "skill_selection")
+        .map(mapLegacyAuditEvent),
       ...(page.nextCursor !== undefined ? { nextCursor: String(page.nextCursor) } : {}),
     });
   },

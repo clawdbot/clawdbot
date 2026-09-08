@@ -118,12 +118,12 @@ describe("audit command parsing", () => {
   it.each([
     {
       options: { kind: "bogus" as never },
-      message: "--kind must be agent_run, tool_action, or message.",
+      message: "--kind must be agent_run, tool_action, skill_selection, or message.",
     },
     {
       options: { status: "bogus" as never },
       message:
-        "--status must be started, succeeded, failed, cancelled, timed_out, blocked, or unknown.",
+        "--status must be started, succeeded, failed, cancelled, timed_out, blocked, observed, or unknown.",
     },
     {
       options: { direction: "sideways" as never },
@@ -139,7 +139,7 @@ describe("audit command parsing", () => {
     },
     {
       options: { kind: "message" as const, sessionKey: "agent:main:main" },
-      message: "--session only applies to --kind agent_run or tool_action.",
+      message: "--session only applies to --kind agent_run, tool_action, or skill_selection.",
     },
     {
       options: { sessionKey: "agent:main:main", direction: "inbound" as const },
@@ -194,6 +194,15 @@ describe("audit command parsing", () => {
         },
         {
           occurredAt: 0,
+          kind: "skill_selection",
+          action: "skill.selection.observed",
+          status: "observed",
+          agentId: "main",
+          runId: "run-skill",
+          selectedSkill: "debug-toolkit",
+        },
+        {
+          occurredAt: 0,
           kind: "tool_action",
           action: "tool.action.finished",
           status: "failed",
@@ -203,7 +212,7 @@ describe("audit command parsing", () => {
     });
 
     await auditListCommand({}, runtime);
-    const [header, unsafeRow, messageRow, truncatedRow] = vi
+    const [header, unsafeRow, messageRow, skillRow, truncatedRow] = vi
       .mocked(runtime.log)
       .mock.calls.map(([line]) => line);
 
@@ -213,6 +222,8 @@ describe("audit command parsing", () => {
     expect(unsafeRow).toContain("main\\nforged");
     expect(unsafeRow).toContain("run\\tcolumn");
     expect(messageRow).toContain("message\tinbound\ttelegram\tsucceeded\t-\t-");
+    expect(skillRow).toContain("skill_selection\t-\t-\tobserved\tmain\trun-skill");
+    expect(skillRow).toContain("skill:debug-toolkit");
     expect(truncatedRow).toContain(`${"x".repeat(16)}…`);
     expect(truncatedRow).not.toContain("\uD83D");
   });

@@ -12,18 +12,20 @@ export const AUDIT_ACTIVITY_STATUSES = [
   "cancelled",
   "timed_out",
   "blocked",
+  "observed",
   "unknown",
 ] as const;
 export const AUDIT_ACTIVITY_MESSAGE_KIND = "message" as const;
 export const AUDIT_ACTIVITY_KINDS = [
   "agent_run",
   "tool_action",
+  "skill_selection",
   AUDIT_ACTIVITY_MESSAGE_KIND,
 ] as const;
 export const AUDIT_ACTIVITY_DIRECTIONS = ["inbound", "outbound"] as const;
 
 type AuditActivityKind = (typeof AUDIT_ACTIVITY_KINDS)[number];
-const AUDIT_ACTIVITY_NON_MESSAGE_KINDS = ["agent_run", "tool_action"] as const;
+const AUDIT_ACTIVITY_NON_MESSAGE_KINDS = ["agent_run", "tool_action", "skill_selection"] as const;
 
 export function findAuditActivityFilterConflict(filters: {
   kind?: AuditActivityKind;
@@ -283,6 +285,27 @@ export const AuditActivityToolActionV1Schema: TSchema = correlatedObject(
   ]),
 );
 
+const skillSelectionProperties = {
+  eventType: Type.Literal("skill_selection"),
+  ...commonProperties,
+  ...agentProperties,
+  kind: Type.Literal("skill_selection"),
+  action: Type.Literal("skill.selection.observed"),
+  status: Type.Literal("observed"),
+  selectedSkill: NonEmptyString,
+};
+
+/** V1 skill-selection activity record. */
+export const AuditActivitySkillSelectionV1Schema: TSchema = correlatedObject(
+  skillSelectionProperties,
+  Type.Union([
+    Type.Object({
+      action: Type.Literal("skill.selection.observed"),
+      status: Type.Literal("observed"),
+    }),
+  ]),
+);
+
 const inboundMessageProperties = {
   eventType: Type.Literal("inbound_message"),
   ...commonProperties,
@@ -460,6 +483,7 @@ export const AuditActivityOutboundMessageV1Schema: TSchema = correlatedObject(
 export const AuditActivityEventV1Schema: TSchema = Type.Union([
   AuditActivityAgentRunV1Schema,
   AuditActivityToolActionV1Schema,
+  AuditActivitySkillSelectionV1Schema,
   AuditActivityInboundMessageV1Schema,
   AuditActivityOutboundMessageV1Schema,
 ]);
@@ -536,6 +560,14 @@ export type AuditActivityToolActionV1 = AuditActivityAgentRecordBaseV1 & {
   toolCallId?: string;
   toolName?: string;
 } & AuditActivityToolActionV1Terminal;
+
+export type AuditActivitySkillSelectionV1 = AuditActivityAgentRecordBaseV1 & {
+  eventType: "skill_selection";
+  kind: "skill_selection";
+  action: "skill.selection.observed";
+  status: "observed";
+  selectedSkill: string;
+};
 
 type AuditActivityMessageRecordBaseV1 = AuditActivityRecordBaseV1 & {
   kind: "message";
@@ -643,6 +675,7 @@ export type AuditActivityOutboundMessageV1 = AuditActivityMessageRecordBaseV1 & 
 export type AuditActivityEventV1 =
   | AuditActivityAgentRunV1
   | AuditActivityToolActionV1
+  | AuditActivitySkillSelectionV1
   | AuditActivityInboundMessageV1
   | AuditActivityOutboundMessageV1;
 export type AuditActivityListParams = {

@@ -261,7 +261,7 @@ describe("audit event persistence", () => {
     const database = createDatabaseOptions();
     const { db } = openOpenClawStateDatabase(database);
     db.prepare("INSERT INTO sqlite_sequence (name, seq) VALUES ('audit_events', ?)").run(
-      BigInt(Number.MAX_SAFE_INTEGER),
+      Number.MAX_SAFE_INTEGER,
     );
 
     expect(() => recordAuditEvent(auditInput(), database)).toThrow(
@@ -341,6 +341,48 @@ describe("agent activity audit projection", () => {
       actorId: "unknown",
       agentId: "unknown",
     });
+  });
+
+  it("projects observed skill-selection metadata without prompt content", () => {
+    const projected = projectAgentEventToAudit(
+      agentEvent({
+        stream: "skill_selection",
+        data: {
+          kind: "skill_selection",
+          selectedSkill: "runtime-skill-loading-diagnostics",
+          selectionSource: "observed_runtime",
+          selectionConfidence: "observed",
+          selectionRule: "tool_invocation",
+          redaction: "metadata_only",
+        },
+      }),
+    );
+
+    expect(projected).toMatchObject({
+      kind: "skill_selection",
+      action: "skill.selection.observed",
+      status: "observed",
+      toolName: "runtime-skill-loading-diagnostics",
+      agentId: "coder",
+      sessionKey: "agent:coder:main",
+    });
+    expect(JSON.stringify(projected)).not.toContain("PRIVATE_PROMPT_CONTENT");
+  });
+
+  it("drops unobserved skill selection claims", () => {
+    const projected = projectAgentEventToAudit(
+      agentEvent({
+        stream: "skill_selection",
+        data: {
+          kind: "skill_selection",
+          selectionSource: "none",
+          selectionConfidence: "none",
+          redaction: "metadata_only",
+        },
+      }),
+    );
+
+    expect(projected).toBeUndefined();
   });
 
   it("does not share reused run id provenance across recorder instances", () => {
@@ -718,6 +760,38 @@ describe("agent activity audit projection", () => {
       { action: "agent.run.started", status: "started" },
       { action: "agent.run.finished", status: "failed" },
     ]);
+  });
+
+  it("records observed skill use between lifecycle start and terminal events", async () => {
+    const inputs: AuditEventInput[] = [];
+    const writer = captureAuditWriter(inputs);
+    const recorder = createAgentEventAuditRecorder({ writer, terminalSettleMs: 60_000 });
+    const lifecycleGeneration = "gateway-skill-use";
+
+    recorder.record(agentEvent({ lifecycleGeneration, seq: 1 }));
+    recorder.record(
+      agentEvent({
+        lifecycleGeneration,
+        seq: 2,
+        stream: "skill_selection",
+        data: {
+          kind: "skill_selection",
+          selectedSkill: "debug-toolkit",
+          selectionSource: "observed_runtime",
+          selectionConfidence: "observed",
+          selectionRule: "tool_invocation",
+          redaction: "metadata_only",
+        },
+      }),
+    );
+    recorder.record(agentEvent({ lifecycleGeneration, seq: 3, data: { phase: "end" } }));
+
+    expect(inputs.map(({ action, status }) => ({ action, status }))).toEqual([
+      { action: "agent.run.started", status: "started" },
+      { action: "skill.selection.observed", status: "observed" },
+      { action: "agent.run.finished", status: "succeeded" },
+    ]);
+    await recorder.stop();
   });
 
   it("keeps one start when a retry cancels a pending terminal", async () => {
