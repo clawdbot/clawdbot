@@ -113,7 +113,7 @@ type AgentRuntimeFollowupFallbackRouteResult = {
 };
 
 /** Tool-call id sanitizer mode for provider transcript policy. */
-type AgentRuntimeToolCallIdMode = "strict" | "strict9";
+type AgentRuntimeToolCallIdMode = "strict" | "strict9" | "strict-anthropic";
 
 /** Provider transcript sanitation, repair, and validation policy. */
 type AgentRuntimeTranscriptPolicy = {

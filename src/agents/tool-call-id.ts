@@ -13,7 +13,7 @@ import { sha256HexPrefixCore } from "../infra/crypto-digest.js";
 import { isThinkingLikeBlock } from "./thinking-block.js";
 import { isAllowedToolCallName, normalizeAllowedToolNames } from "./tool-call-shared.js";
 
-export type ToolCallIdMode = "strict" | "strict9";
+export type ToolCallIdMode = "strict" | "strict9" | "strict-anthropic";
 const NATIVE_ANTHROPIC_TOOL_USE_ID_RE = /^toolu_[A-Za-z0-9_]+$/;
 const NATIVE_KIMI_TOOL_CALL_ID_RE = /^functions\.[A-Za-z0-9_-]+:\d+$/;
 const OPENAI_TOOL_CALL_ID_RE = /^call_[A-Za-z0-9_-]+$/;
@@ -39,6 +39,9 @@ type ReplaySafeToolCallBlock = {
  *
  * - "strict" mode: only [a-zA-Z0-9]
  * - "strict9" mode: only [a-zA-Z0-9], length 9 (Mistral tool call requirement)
+ * - "strict-anthropic" mode: like "strict", but also rewrites native Kimi-format
+ *   ids ("functions.name:0") — Anthropic rejects "." and ":" in tool_use.id
+ *   (pattern ^[a-zA-Z0-9_-]+$), so Kimi-era history must not pass through verbatim.
  */
 function sanitizeToolCallId(id: string, mode: ToolCallIdMode = "strict"): string {
   if (!id || typeof id !== "string") {
@@ -59,7 +62,9 @@ function sanitizeToolCallId(id: string, mode: ToolCallIdMode = "strict"): string
     return shortHash("sanitized", STRICT9_LEN);
   }
 
-  if (isNativeKimiToolCallId(id)) {
+  // Native Kimi ids stay replay-safe for Kimi-bound history, but must be
+  // rewritten when the replay target is Anthropic (strict tool_use.id pattern).
+  if (mode !== "strict-anthropic" && isNativeKimiToolCallId(id)) {
     return id;
   }
 
