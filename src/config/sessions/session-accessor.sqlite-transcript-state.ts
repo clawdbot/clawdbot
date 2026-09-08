@@ -23,6 +23,7 @@ import {
 export type SessionTranscriptContextVersion = {
   generation: string | null;
   rawSeq: number | null;
+  updatedAt: number | null;
 };
 
 export function readTranscriptContextVersionInTransaction(
@@ -41,6 +42,11 @@ export function readTranscriptContextVersionInTransaction(
           .select("generation")
           .where("session_id", "=", sessionId)
           .as("generation"),
+        eb
+          .selectFrom("session_windows")
+          .select("transcript_updated_at")
+          .where("session_id", "=", sessionId)
+          .as("updatedAt"),
       ])
       .where("session_id", "=", sessionId),
   )!;

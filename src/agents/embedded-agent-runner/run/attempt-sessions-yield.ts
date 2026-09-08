@@ -172,6 +172,10 @@ export function stripSessionsYieldArtifacts(activeSession: {
         (entry.type === "message" && isTranscriptOnlyOpenClawAssistantMessage(entry.message)),
     },
   );
+
+  // Durable cleanup can reject a stale transcript fence. Update the live state
+  // only after it succeeds so both histories keep the same suffix on conflict.
+
   activeSession.agent.state.messages = strippedMessages;
   return removedEntries > 0;
 }

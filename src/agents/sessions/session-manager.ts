@@ -75,9 +75,10 @@ export class SessionManager extends SessionManagerBranching {
     persistenceTarget?: SessionManagerPersistenceTarget,
     loadedEntries?: FileEntry[],
     boundedContext?: SessionManagerBoundedContext,
+    transcriptMutationAt?: number | null,
     version?: SessionTranscriptContextVersion,
   ) {
-    super(cwd, persistenceTarget, loadedEntries, boundedContext, version);
+    super(cwd, persistenceTarget, loadedEntries, boundedContext, transcriptMutationAt, version);
     this.retainTranscriptWriter();
   }
 
@@ -164,6 +165,7 @@ export class SessionManager extends SessionManagerBranching {
         }
         const adopt = (version = prepared.transcriptVersion) => {
           prepared.transcriptVersion = version;
+          prepared.transcriptMutationAt = version?.updatedAt;
           Object.assign(this, prepared.captureTranscriptView());
         };
         if (publish) {
@@ -196,6 +198,7 @@ export class SessionManager extends SessionManagerBranching {
       target,
       entries,
       undefined,
+      snapshot.version.updatedAt,
       snapshot.version,
     );
   }

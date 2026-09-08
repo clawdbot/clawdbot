@@ -46,7 +46,6 @@ import {
 export type { SessionTranscriptContextVersion } from "./session-accessor.sqlite-transcript-state.js";
 
 type ContextEntry = SessionTreeEntry & { seq: number };
-
 type ModelContextRequest = { entry: ContextEntry; omitCheckpoint: boolean };
 type TranscriptContextSnapshot = {
   header: TranscriptEvent;
@@ -118,7 +117,11 @@ export function validateSessionTranscriptContextVersion(
     { throwOnMissingTable: true },
   );
   const current = result.found ? result.value : undefined;
-  if (current?.generation !== version?.generation || current?.rawSeq !== version?.rawSeq) {
+  if (
+    current?.generation !== version?.generation ||
+    current?.rawSeq !== version?.rawSeq ||
+    current?.updatedAt !== version?.updatedAt
+  ) {
     throw new SessionTranscriptReadFenceError("Session transcript changed during context read");
   }
 }

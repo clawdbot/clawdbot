@@ -113,6 +113,40 @@ function createTranscriptIdentityInserter(
   );
 }
 
+/** Inserts exact transcript rows without mutating the forward-only projection. */
+export function insertTranscriptRowsWithoutProjectionInTransaction(
+  database: OpenClawAgentDatabase,
+  sessionId: string,
+  rows: readonly {
+    event: TranscriptEvent;
+    seq: number;
+    createdAt: number;
+    messageIdempotencyKey?: string | null;
+  }[],
+  reservedMessageIdempotencyKeys: ReadonlySet<string> = new Set(),
+): void {
+  const insertEvent = createTranscriptEventInserter(database, sessionId);
+  const insertIdentity = createTranscriptIdentityInserter(database, sessionId, false);
+  for (const row of rows) {
+    const event = canonicalizeTranscriptEventMedia(row.event);
+    insertEvent({ seq: row.seq, eventJson: JSON.stringify(event), createdAt: row.createdAt });
+    const identity = readTranscriptEventIdentity(event);
+    if (!identity) {
+      continue;
+    }
+    if ("messageIdempotencyKey" in row) {
+      identity.messageIdempotencyKey = row.messageIdempotencyKey ?? null;
+    } else if (
+      identity.messageIdempotencyKey &&
+      (reservedMessageIdempotencyKeys.has(identity.messageIdempotencyKey) ||
+        readIdempotencyKeyOwner(database, sessionId, identity.messageIdempotencyKey))
+    ) {
+      identity.messageIdempotencyKey = null;
+    }
+    insertIdentity({ ...identity, seq: row.seq, createdAt: row.createdAt });
+  }
+}
+
 /** Returns the exact committed JSON, or false when an existing identity owns the event. */
 export function appendTranscriptEventInTransaction(
   database: OpenClawAgentDatabase,
@@ -207,7 +241,7 @@ function appendTranscriptEvent(
   return eventJson;
 }
 
-function scheduleTranscriptProjectionReconcile(
+export function scheduleTranscriptProjectionReconcile(
   database: OpenClawAgentDatabase,
   sessionId: string,
   projectionNeedsRebuild: boolean,
@@ -658,7 +692,7 @@ function readTranscriptEventIdentity(event: unknown) {
     : undefined;
 }
 
-function canonicalizeTranscriptEventMedia(event: TranscriptEvent): TranscriptEvent {
+export function canonicalizeTranscriptEventMedia(event: TranscriptEvent): TranscriptEvent {
   if (!isRecord(event)) {
     return event;
   }
@@ -678,7 +712,7 @@ export function readMessageIdempotencyKey(message: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
-function readEventTimestamp(event: unknown): number | undefined {
+export function readEventTimestamp(event: unknown): number | undefined {
   if (!isRecord(event)) {
     return undefined;
   }

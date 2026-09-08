@@ -1,7 +1,10 @@
 import {
   readActiveTranscriptEntryAnchor,
+  readTranscriptMutationAtSync,
+  validatePreparedAssistantAppendSync,
   type TranscriptEntryAnchor,
 } from "../../config/sessions/session-accessor.js";
+import { resolveSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
 import { applyAssistantDeliveryDirectives } from "../../config/sessions/transcript-assistant-delivery.js";
 import { isSessionTranscriptSideAppendEntry } from "../../config/sessions/transcript-tree.js";
 import type { ImageContent, Message, TextContent } from "../../llm/types.js";
@@ -38,6 +41,17 @@ import type {
   ThinkingLevelChangeEntry,
 } from "./session-manager-types.js";
 
+function isSqliteTranscriptMutationConflict(error: unknown): boolean {
+  let current = error;
+  for (let depth = 0; depth < 3 && current instanceof Error; depth += 1) {
+    if (current.name === "SqliteTranscriptMutationConflictError") {
+      return true;
+    }
+    current = current.cause;
+  }
+  return false;
+}
+
 export class SessionManagerEntries extends SessionManagerPersistence {
   protected appendEntry<T extends SessionEntry>(
     entry: T,
@@ -60,13 +74,82 @@ export class SessionManagerEntries extends SessionManagerPersistence {
       !this.pendingDeliberateAppend &&
       this.appendMode !== "side" &&
       !isSessionTranscriptSideAppendEntry(canonicalEntry);
-    const persistenceResult = this.persist(
-      canonicalEntry,
-      copyCodeModeSourceAppendOptions(options, {
-        ...options,
-        ...(activeBranchAppend ? { appendIntent: "active-branch" as const } : {}),
-      }),
-    );
+    const persistenceOptions = copyCodeModeSourceAppendOptions(options, {
+      ...options,
+      ...(activeBranchAppend ? { appendIntent: "active-branch" as const } : {}),
+    });
+    const preparedTurnAppend =
+      activeBranchAppend &&
+      canonicalEntry.type === "message" &&
+      (canonicalEntry.message.role === "assistant" || canonicalEntry.message.role === "toolResult");
+    let attemptOptions: AppendPersistenceOptions & { expectedMutationAt?: number | null } =
+      persistenceOptions;
+    const admittedUserId = this.persistenceTarget
+      ? resolveSessionTranscriptReadFence(this.persistenceTarget)?.entryId
+      : undefined;
+    if (preparedTurnAppend && this.persistenceTarget) {
+      const validatedMutationAt = validatePreparedAssistantAppendSync(
+        this.persistenceTarget,
+        canonicalEntry.parentId,
+        admittedUserId,
+      );
+      if (validatedMutationAt === undefined) {
+        throw this.createTranscriptMutationConflictError();
+      }
+      attemptOptions = copyCodeModeSourceAppendOptions(persistenceOptions, {
+        ...persistenceOptions,
+        expectedMutationAt: validatedMutationAt,
+      });
+    }
+    let persistenceResult;
+    try {
+      persistenceResult = this.persist(canonicalEntry, attemptOptions);
+    } catch (error) {
+      const deliberateBranchAppend = this.pendingDeliberateAppend;
+      const sideBranchAppend =
+        this.appendMode === "side" || isSessionTranscriptSideAppendEntry(canonicalEntry);
+      const retryableExplicitParentAppend = deliberateBranchAppend || sideBranchAppend;
+      if (
+        (!activeBranchAppend && !retryableExplicitParentAppend) ||
+        !isSqliteTranscriptMutationConflict(error)
+      ) {
+        throw error;
+      }
+      const canRetryPreparedAppend =
+        retryableExplicitParentAppend ||
+        canonicalEntry.type !== "message" ||
+        canonicalEntry.message.role === "user" ||
+        preparedTurnAppend;
+      if (!canRetryPreparedAppend) {
+        throw error;
+      }
+      // Preserve the prepared parent so storage can distinguish a descendant tail from an
+      // unrelated branch. Turn-bound assistant and tool-result messages may follow only a
+      // descendant tail with no newer user turn; compatible reset and reentrant writes remain.
+      const retryOptions: AppendPersistenceOptions & { expectedMutationAt?: number | null } =
+        preparedTurnAppend
+          ? (() => {
+              const validatedMutationAt = this.persistenceTarget
+                ? validatePreparedAssistantAppendSync(
+                    this.persistenceTarget,
+                    canonicalEntry.parentId,
+                    admittedUserId,
+                  )
+                : undefined;
+              if (validatedMutationAt === undefined) {
+                throw error;
+              }
+              return copyCodeModeSourceAppendOptions(persistenceOptions, {
+                ...persistenceOptions,
+                expectedMutationAt: validatedMutationAt,
+              });
+            })()
+          : copyCodeModeSourceAppendOptions(persistenceOptions, {
+              ...persistenceOptions,
+              expectedMutationAt: this.readPersistedTranscriptMutationAt(),
+            });
+      persistenceResult = this.persist(canonicalEntry, retryOptions);
+    }
     if (persistenceResult?.adoptedMessageId) {
       this.reloadPersistedTranscript();
       // Context-excluded users have no payload in byId. The exact SQLite replay
@@ -78,10 +161,22 @@ export class SessionManagerEntries extends SessionManagerPersistence {
       }
       canonicalEntry.id = persistenceResult.adoptedMessageId;
     } else if (
-      persistenceResult?.effectiveParentId !== undefined &&
-      persistenceResult.effectiveParentId !== canonicalEntry.parentId
+      persistenceResult?.reloadAfterAppend ||
+      (persistenceResult?.effectiveParentId !== undefined &&
+        persistenceResult.effectiveParentId !== canonicalEntry.parentId)
     ) {
-      this.reloadPersistedTranscript();
+      if (admittedUserId) {
+        if (this.transcriptMutationAt === undefined) {
+          throw new Error("Session transcript append mutation fence was not returned");
+        }
+        this.reloadPersistedTranscriptAfterAppend(
+          this.transcriptMutationAt,
+          canonicalEntry.id,
+          admittedUserId,
+        );
+      } else {
+        this.reloadPersistedTranscript();
+      }
     } else {
       if (
         !isSessionTranscriptSideAppendEntry(canonicalEntry) &&
@@ -107,6 +202,21 @@ export class SessionManagerEntries extends SessionManagerPersistence {
       // Detached managers append locally; only the storage owner supplies a durable anchor.
       appended: persistenceResult?.appended ?? true,
     };
+  }
+
+  private readPersistedTranscriptMutationAt(): number | null {
+    if (!this.persistenceTarget) {
+      return null;
+    }
+    return readTranscriptMutationAtSync(this.persistenceTarget);
+  }
+
+  private createTranscriptMutationConflictError(): Error {
+    const error = new Error(
+      `SQLite transcript changed while preparing rewrite for ${this.persistenceTarget?.sessionId ?? this.sessionId}`,
+    );
+    error.name = "SqliteTranscriptMutationConflictError";
+    return error;
   }
 
   resolveCurrentTurnEntryId(isInterruptedTail?: (entry: SessionEntry) => boolean): string | null {
