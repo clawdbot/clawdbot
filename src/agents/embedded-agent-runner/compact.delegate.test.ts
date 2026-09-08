@@ -10,6 +10,7 @@ import {
 import type { ProviderConfigInput } from "../sessions/model-registry.js";
 import {
   applyExtraParamsToAgentMock,
+  buildEmbeddedSystemPromptMock,
   hookRunner,
   limitHistoryTurnsMock,
   loadCompactHooksHarness,
@@ -33,6 +34,8 @@ let databases: typeof import("../../state/openclaw-agent-db.js");
 let streamResolution: typeof import("./stream-resolution.js");
 let replay: typeof import("../openai-transport-stream.test-support.js").testing;
 let accounting: typeof import("./run/compaction-accounting-bridge.js");
+let requestBudgets: typeof import("../sessions/compaction/request-budget.js");
+let pressure: typeof import("./run/preemptive-compaction.js");
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(() => {
     databases.closeOpenClawAgentDatabasesForTest();
@@ -62,6 +65,8 @@ beforeAll(async () => {
     streamResolution,
     { testing: replay },
     accounting,
+    requestBudgets,
+    pressure,
   ] = await Promise.all([
     import("../../context-engine/delegate.js"),
     import("../sessions/index.js"),
@@ -70,6 +75,8 @@ beforeAll(async () => {
     import("./stream-resolution.js"),
     import("../openai-transport-stream.test-support.js"),
     import("./run/compaction-accounting-bridge.js"),
+    import("../sessions/compaction/request-budget.js"),
+    import("./run/preemptive-compaction.js"),
   ]);
 });
 
@@ -176,6 +183,143 @@ async function createFixture(operation: "summary" | "endpoint", globalAlias = fa
 }
 
 describe("direct compactor through the context-engine delegate", () => {
+  it.each([
+    { budget: "absent", pendingPrompt: "" },
+    { budget: "foreground", pendingPrompt: "" },
+    { budget: "foreground with pending input", pendingPrompt: "Unrecorded request. ".repeat(500) },
+  ])(
+    "records server checkpoint pressure with $budget budget",
+    async ({ budget, pendingPrompt }) => {
+      const fixture = await createFixture("endpoint");
+      const compactorPrompt = "Summarize the deployment discussion.";
+      buildEmbeddedSystemPromptMock.mockReturnValue(compactorPrompt);
+      const requestBudget = requestBudgets.createCompactionRequestBudget({
+        contextWindow: model.contextWindow,
+        reserveTokens: 16_384,
+        systemPrompt: "Help the operator deploy safely using the available tools.",
+        tools: [
+          {
+            name: "lookup_deployment",
+            description: "Available deployment target and its constraints. ".repeat(500),
+            parameters: { type: "object", properties: { target: { type: "string" } } },
+          },
+        ],
+        pendingPrompt,
+      });
+      const hasBudget = budget !== "absent";
+      accounting.attachCompactionAccountingRecorder(fixture.runtimeContext, {
+        ...(hasBudget ? { requestBudget } : {}),
+        recordUsage: fixture.recordUsage,
+        recordCompaction: fixture.recordCompaction,
+      });
+      const manager = sessions.SessionManager.open(fixture.target, workspaceDir);
+      const discardedAssistantText = "Old deployment diagnostic material. ".repeat(3_000);
+      manager.appendMessage({ role: "user", content: "Read the deployment log.", timestamp: 2 });
+      manager.appendMessage(
+        createAssistant(model, [{ type: "text", text: discardedAssistantText }]),
+      );
+      manager.appendMessage({
+        role: "user",
+        content: "Continue with the next step.",
+        timestamp: 3,
+      });
+      manager.appendMessage(createAssistant(model, [{ type: "text", text: "Ready to continue." }]));
+      manager.flushPendingPersistence();
+      const retainedUsers = manager
+        .buildSessionContext()
+        .messages.filter((message) => message.role === "user")
+        .map((message) => {
+          if (typeof message.content !== "string") {
+            throw new Error("Expected plain-text fixture input");
+          }
+          return {
+            type: "message" as const,
+            role: "user" as const,
+            content: [{ type: "input_text" as const, text: message.content }],
+          };
+        });
+      const checkpoint = {
+        type: "compaction" as const,
+        id: "cmp_budget",
+        encrypted_content: "opaque",
+      };
+      const output = [...retainedUsers, checkpoint];
+      requestPreparedCompaction.mockImplementationOnce(
+        async (_stream, requestModel, _context, options) => ({
+          item: checkpoint,
+          output,
+          historyMode: "retained-users",
+          usage: { input_tokens: 30_000, output_tokens: 200 },
+          model: requestModel,
+          replayMetadata: replay.buildOpenAIResponsesReasoningReplayMetadata(requestModel, options),
+        }),
+      );
+
+      const result = await delegate({
+        sessionId: fixture.target.sessionId,
+        sessionKey: fixture.target.sessionKey,
+        sessionTarget: fixture.target,
+        runtimeContext: fixture.runtimeContext,
+      });
+      expect(result, JSON.stringify(result)).toMatchObject({ ok: true, compacted: true });
+      expect(result.result?.details).toMatchObject({ compactionKind: "server-endpoint" });
+      databases.closeOpenClawAgentDatabasesForTest();
+      const messages = sessions.SessionManager.open(fixture.target).buildSessionContext().messages;
+      expect(messages.at(-1)).toMatchObject({
+        providerReplay: {
+          type: "openai-responses-retained-compaction",
+          data: "opaque",
+          compactedWindow: { state: "ready", output: JSON.stringify(output) },
+        },
+      });
+      expect(
+        messages.some(
+          (message) =>
+            message.role === "assistant" &&
+            message.content.some(
+              (block) => block.type === "text" && block.text === discardedAssistantText,
+            ),
+        ),
+      ).toBe(true);
+      const endpointCall = requestPreparedCompaction.mock.calls[0];
+      if (!endpointCall) {
+        throw new Error("Expected the provider endpoint to receive the compaction request");
+      }
+      const replayContext = {
+        model: endpointCall[1],
+        sessionId: endpointCall[3].sessionId,
+        authProfileId: endpointCall[3].authProfileId,
+        enabled: true,
+      };
+      const replayHistory =
+        pressure.estimateLlmBoundaryTokenPressure({ messages, prompt: "", replay: replayContext }) -
+        pressure.estimateRenderedLlmBoundaryTokenPressure({ prompt: "" });
+      const expected = hasBudget
+        ? requestBudget.fixedTokens + replayHistory
+        : pressure.estimateLlmBoundaryTokenPressure({
+            messages,
+            systemPrompt: compactorPrompt,
+            prompt: "",
+            replay: replayContext,
+          });
+      // The large stored prefix is retained for audit, but only the accepted window
+      // plus foreground fixed cost belongs in the committed context snapshot.
+      expect(requestBudgets.estimateCompactionHistoryTokens(messages)).toBeGreaterThan(20_000);
+      expect(replayHistory).toBeGreaterThan(0);
+      expect(replayHistory).toBeLessThan(1_000);
+      expect(requestBudget.fixedTokens).toBeGreaterThan(5_000);
+      if (pendingPrompt) {
+        expect(requestBudget.pendingTokens).toBeGreaterThan(1_000);
+      } else {
+        expect(requestBudget.pendingTokens).toBe(0);
+      }
+      expect(result.result?.tokensAfter).toBe(expected);
+      expect(fixture.recordCompaction).toHaveBeenCalledExactlyOnceWith(expected);
+      expect(requestPreparedCompaction).toHaveBeenCalledOnce();
+      expect(fixture.stream).not.toHaveBeenCalled();
+    },
+  );
+
   it.each([
     { operation: "summary", partial: false, threadId: "thread-route" },
     { operation: "summary", partial: true, threadId: 0 },
