@@ -153,6 +153,13 @@ exit "$probe_status"
 
   it.each([
     { startStatus: 0, readyStatus: 0, activeStatus: 3, mutation: "none" },
+    {
+      startStatus: 0,
+      readyStatus: 0,
+      activeStatus: 3,
+      mutation: "none",
+      scenario: "sqlite-volume",
+    },
     { startStatus: 43, readyStatus: 0, activeStatus: 3, mutation: "none" },
     { startStatus: 0, readyStatus: 42, activeStatus: 3, mutation: "none" },
     { startStatus: 0, readyStatus: 0, activeStatus: 0, mutation: "none" },
@@ -161,7 +168,7 @@ exit "$probe_status"
     { startStatus: 0, readyStatus: 0, activeStatus: 3, mutation: "env" },
   ])(
     "requires prepared service readiness before the final updater (start=$startStatus, ready=$readyStatus, active=$activeStatus, mutation=$mutation)",
-    ({ startStatus, readyStatus, activeStatus, mutation }) => {
+    ({ startStatus, readyStatus, activeStatus, mutation, scenario = "base" }) => {
       const root = tempDirs.make("openclaw-repaired-service-start-");
       const bin = path.join(root, "bin");
       mkdirSync(bin);
@@ -223,6 +230,9 @@ update_candidate() {
 node() {
   if [ "$#" -eq 3 ] && [ "$1" = scripts/e2e/lib/upgrade-survivor/assertions.mjs ] && [ "$2" = assert-restart-serving-turn ]; then
     printf 'serving-turn\\n' >>"$PROBE_EVENTS"
+  elif [ "$#" -eq 2 ] && [ "$2" = assert-state ]; then
+    [ "\${OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE:-survival}" = post-inference ] || return 96
+    printf 'volume-state\\n' >>"$PROBE_EVENTS"
   else
     command node "$@"
   fi
@@ -233,6 +243,13 @@ assert_survival() {
 }
 probe_status=0
 repair_fixture_plugin_consent || probe_status=$?
+if [ "$SCENARIO" = sqlite-volume ] && [ "$probe_status" -eq 0 ]; then
+openclaw_e2e_maybe_timeout() {
+  [ "$#" -eq 5 ] && [ "$2" = openclaw ] && [ "$3" = doctor ] && [ "$4" = --fix ] && [ "$5" = --non-interactive ] || return 95
+  printf 'volume-doctor\\n' >>"$PROBE_EVENTS"
+}
+  assert_volume_idempotence || probe_status=$?
+fi
 exit "$probe_status"
 `,
         ],
@@ -245,6 +262,7 @@ exit "$probe_status"
             OPENCLAW_STATE_DIR: path.join(root, "state"),
             OPENCLAW_UPGRADE_SURVIVOR_BASELINE: "openclaw@2026.8.1",
             OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE: "auto-auth",
+            OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: scenario,
             OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT: path.join(root, "runtime"),
             OPENCLAW_UPGRADE_SURVIVOR_SUMMARY_JSON: path.join(root, "artifacts", "summary.json"),
             OPENCLAW_CLAWHUB_URL: "",
@@ -278,6 +296,7 @@ exit "$probe_status"
                   "update",
                   "serving-turn",
                   "assert-survival",
+                  ...(scenario === "sqlite-volume" ? ["volume-doctor", "volume-state"] : []),
                 ],
       );
       if (activeStatus === 3) {

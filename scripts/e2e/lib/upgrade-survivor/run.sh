@@ -1688,7 +1688,8 @@ assert_volume_idempotence() {
     echo "SQLite volume idempotence exceeded budget: ${idempotence_seconds}s > ${budget}s" >&2
     return 1
   fi
-  node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-state
+  OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE="$survival_assert_stage" \
+    node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-state
 }
 
 validate_post_doctor_config() {
