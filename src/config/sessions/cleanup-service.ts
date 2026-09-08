@@ -8,6 +8,7 @@ import { getLogger } from "../../logging/logger.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import type { createAgentDeletionDatabaseCleanup } from "../../state/agent-deletion-cleanup.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
+import { pruneMissingTranscriptEntries } from "./cleanup-missing-transcripts.js";
 import {
   createSessionsCleanupFailure,
   SessionsCleanupFailureError,
@@ -22,7 +23,6 @@ import {
 import { resolveSessionStorePathCore } from "./paths.js";
 import {
   applySessionEntryLifecycleMutation,
-  inspectTranscriptEventsSync,
   listSessionEntriesCore,
   purgeDeletedAgentSessionEntries,
   type SessionEntryLifecycleRemoval,
@@ -40,7 +40,6 @@ import {
   countUnarchivedSessionEntries,
   pruneStaleModelRunEntries,
   pruneStaleEntries,
-  shouldPreserveMaintenanceEntry,
   shouldRunModelRunPrune,
   type ResolvedSessionMaintenanceConfig,
 } from "./store-maintenance.js";
@@ -110,49 +109,6 @@ function loadCleanupSessionStore(
   );
 }
 
-function isTranscriptMessageRole(role: unknown): boolean {
-  return (
-    role === "user" ||
-    role === "assistant" ||
-    role === "tool" ||
-    role === "toolResult" ||
-    role === "system"
-  );
-}
-
-function isTranscriptMessageRecord(entry: unknown): boolean {
-  if (!entry || typeof entry !== "object") {
-    return false;
-  }
-  const record = entry as { message?: unknown; role?: unknown; type?: unknown };
-  if (record.type === "message") {
-    return true;
-  }
-  if (
-    record.type === undefined &&
-    record.message &&
-    typeof record.message === "object" &&
-    isTranscriptMessageRole((record.message as { role?: unknown }).role)
-  ) {
-    return true;
-  }
-  return record.type === undefined && isTranscriptMessageRole(record.role);
-}
-
-function inspectConfirmedMessageFreeTranscript(params: {
-  agentId: string;
-  sessionId: string;
-  sessionKey: string;
-  storePath: string;
-}) {
-  try {
-    const inspection = inspectTranscriptEventsSync(params);
-    return inspection.events.some(isTranscriptMessageRecord) ? undefined : inspection;
-  } catch {
-    return undefined;
-  }
-}
-
 function isMainScopeStaleDirectSessionKey(params: {
   cfg: OpenClawConfig;
   targetAgentId: string;
@@ -212,58 +168,6 @@ function retireMainScopeDirectSessionEntries(params: {
     }
   }
   return retired;
-}
-
-function pruneMissingTranscriptEntries(params: {
-  store: Record<string, SessionEntry>;
-  target: SessionStoreTarget;
-  onPruned?: (
-    key: string,
-    entry: SessionEntry,
-    inspection?: ReturnType<typeof inspectConfirmedMessageFreeTranscript>,
-  ) => void;
-}): number {
-  let removed = 0;
-  for (const [key, entry] of Object.entries(params.store)) {
-    // `--fix-missing` cannot release harness ownership or delete a user-shelved archive.
-    if (
-      (entry?.modelSelectionLocked === true || entry?.archivedAt !== undefined) &&
-      shouldPreserveMaintenanceEntry({ key, entry })
-    ) {
-      continue;
-    }
-    const legacySessionFile = (entry as { sessionFile?: unknown }).sessionFile;
-    // Explicitly pending sessions and their shipped pre-flag shape may not have a first turn yet.
-    if (
-      parseAgentSessionKey(key) &&
-      (entry.initializationPending === true ||
-        (entry.sessionId === key &&
-          (typeof legacySessionFile !== "string" || !legacySessionFile.trim())))
-    ) {
-      continue;
-    }
-    if (!entry?.sessionId) {
-      if (parseAgentSessionKey(key)) {
-        // Agent-scoped keys without session ids are valid routing entries; keep them.
-        continue;
-      }
-      delete params.store[key];
-      removed += 1;
-      params.onPruned?.(key, entry);
-      continue;
-    }
-    const inspection = inspectConfirmedMessageFreeTranscript({
-      ...params.target,
-      sessionId: entry.sessionId,
-      sessionKey: key,
-    });
-    if (inspection) {
-      delete params.store[key];
-      removed += 1;
-      params.onPruned?.(key, entry, inspection);
-    }
-  }
-  return removed;
 }
 
 function addEntryArtifactPathsToSet(params: {
