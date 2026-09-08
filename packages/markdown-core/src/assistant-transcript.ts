@@ -75,10 +75,11 @@ function visibleTokenProjection(
   if (token.type === "html_inline" && options.isStructuralHtmlInline?.(token) === true) {
     return null;
   }
-  if (token.type === "text" || token.type === "html_inline" || token.type === RAW_HTML_TOKEN_TYPE) {
+  if (token.type === "text" || token.type === "html_inline") {
     return { text: token.content, excludedRanges: [] };
   }
-  if (token.type === "code_inline") {
+  // Raw lexemes own their contents but still contribute length to later text offsets.
+  if (token.type === "code_inline" || token.type === RAW_HTML_TOKEN_TYPE) {
     return { text: token.content, excludedRanges: [{ start: 0, end: token.content.length }] };
   }
   if (token.type === "image") {
@@ -216,11 +217,7 @@ function annotateInlineChildren(
       }
       spanCursor += 1;
     }
-    if (
-      token.type === "text" ||
-      token.type === "html_inline" ||
-      token.type === RAW_HTML_TOKEN_TYPE
-    ) {
+    if (token.type === "text" || token.type === "html_inline") {
       result.push(
         ...splitVisibleToken({
           TokenType,

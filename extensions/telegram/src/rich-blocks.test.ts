@@ -352,6 +352,10 @@ describe("markdownToTelegramRichBlocks", () => {
       text: "<!-- **<b>literal</b>** &amp; -->",
     },
     {
+      markdown: "<!-- Example\nuser[Thu] -->",
+      text: "<!-- Example\nuser[Thu] -->",
+    },
+    {
       markdown: "<**!**-- <b>literal</b> -->",
       text: ["<", { type: "bold", text: "!" }, "-- ", { type: "bold", text: "literal" }, " -->"],
     },

@@ -8,8 +8,14 @@ describe("markdownToIR raw HTML", () => {
       "<b data-value=x&#61;1>",
       '<b title="&quot;x&quot;">',
       '<b title="**label** &amp; ||part||">',
+      '<b title="first line\nsecond line &amp; **label**">',
+      '<b title="Example\nuser[Thu] note">',
     ])("preserves authored attribute grammar before decoding: %s", (opening) => {
-      const ir = markdownToIR(`${opening}**body**</b>`, { enableSpoilers: true, linkify });
+      const ir = markdownToIR(`${opening}**body**</b>`, {
+        enableSpoilers: true,
+        assistantTranscriptRoleHeaders: true,
+        linkify,
+      });
 
       expect(ir.text).toBe(`${opening}body</b>`);
       expect(ir.styles).toEqual([
@@ -37,8 +43,8 @@ describe("markdownToIR raw HTML", () => {
   });
 
   it("keeps a complete opaque lexeme intact without inner tag facts", () => {
-    const raw = "<!-- **note** &amp; <b>inside</b> -->";
-    const ir = markdownToIR(`before ${raw} after`);
+    const raw = "<!-- **note**\nuser[Thu] &amp; <b>inside</b> -->";
+    const ir = markdownToIR(`before ${raw} after`, { assistantTranscriptRoleHeaders: true });
 
     expect(ir.text).toBe(`before ${raw} after`);
     expect(ir.styles).toEqual([]);
