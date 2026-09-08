@@ -100,10 +100,13 @@ function createSelector(deps: SelectionDependencies) {
     for (const path of candidates) {
       let probe: LibraryProbe;
       try {
-        if (!deps.exists(path)) {
-          throw new Error("missing file");
+        // dlopen decides loadability: Apple's SQLite lives in the dyld shared cache with no
+        // file on disk, so a stat-first check would hide its real defect (OMIT_LOAD_EXTENSION).
+        try {
+          probe = deps.probe(path);
+        } catch (error) {
+          throw deps.exists(path) ? error : new Error("missing file", { cause: error });
         }
-        probe = deps.probe(path);
         if (!isSqliteWalResetSafeVersion(probe.version)) {
           throw new Error(`SQLite version ${probe.version} below the WAL safety floor`);
         }
