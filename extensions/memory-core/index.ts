@@ -196,11 +196,7 @@ function createLazyMemoryRuntime(host: MemoryCoreRuntimeHost): MemoryPluginRunti
     },
     async authorizeSearchHits(params) {
       const { createMemoryRuntime } = await loadRuntimeProviderModule();
-      const runtime = createMemoryRuntime(host);
-      if (!runtime.authorizeSearchHits) {
-        throw new Error("memory-core runtime search authorization is unavailable");
-      }
-      return await runtime.authorizeSearchHits(params);
+      return await createMemoryRuntime(host).authorizeSearchHits(params);
     },
     async classifyWorkspaceMemoryPaths(params) {
       const [{ classifyWorkspaceMemoryPaths }, dreamingState] = await Promise.all([
@@ -212,16 +208,14 @@ function createLazyMemoryRuntime(host: MemoryCoreRuntimeHost): MemoryPluginRunti
       }
       return await classifyWorkspaceMemoryPaths(params);
     },
-    resolveMemoryBackendConfig(params) {
-      return resolveMemoryBackendConfig(params);
-    },
+    resolveMemoryBackendConfig,
     async closeAllMemorySearchManagers() {
       const { memoryRuntime: runtime } = await loadRuntimeProviderModule();
-      await runtime.closeAllMemorySearchManagers?.();
+      await runtime.closeAllMemorySearchManagers();
     },
     async closeMemorySearchManager(params) {
       const { memoryRuntime: runtime } = await loadRuntimeProviderModule();
-      await runtime.closeMemorySearchManager?.(params);
+      await runtime.closeMemorySearchManager(params);
     },
   };
 }
