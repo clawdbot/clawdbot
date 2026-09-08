@@ -5,18 +5,27 @@ import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RawData, WebSocket } from "ws";
 import { WebSocketServer } from "ws";
-import * as ssrf from "../../src/infra/net/ssrf.js";
-import { createDeferred } from "../../test/helpers/promise.js";
 import { isDeepgramFluxModel } from "./audio-flux.js";
 import { transcribeDeepgramAudio } from "./audio.js";
 
 const runCommandBuffered = vi.hoisted(() => vi.fn());
+const prepareWebSocket = vi.hoisted(() => vi.fn<() => Promise<void>>());
 
 vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/media-runtime")>()),
   resolveFfmpegBin: () => "/usr/bin/ffmpeg",
 }));
 vi.mock("openclaw/plugin-sdk/process-runtime", () => ({ runCommandBuffered }));
+vi.mock("openclaw/plugin-sdk/provider-http", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/provider-http")>();
+  return {
+    ...actual,
+    openProviderWebSocket: async (params: Parameters<typeof actual.openProviderWebSocket>[0]) => {
+      await prepareWebSocket();
+      return await actual.openProviderWebSocket(params);
+    },
+  };
+});
 
 const cleanups: Array<() => Promise<void>> = [];
 
@@ -100,17 +109,18 @@ function mockDecodedPcm(pcm: Buffer): void {
 describe("Deepgram Flux audio", () => {
   afterEach(async () => {
     runCommandBuffered.mockReset();
+    prepareWebSocket.mockReset();
     vi.restoreAllMocks();
     vi.useRealTimers();
     await Promise.all(cleanups.splice(0).map((cleanup) => cleanup()));
   });
 
-  it("keeps decoding, DNS preparation, and transcription within one deadline", async () => {
-    const decodeStarted = createDeferred();
-    const releaseDecode = createDeferred();
-    const lookupStarted = createDeferred();
-    const releaseLookup = createDeferred();
-    const flushed = createDeferred();
+  it("keeps decoding, connection preparation, and transcription within one deadline", async () => {
+    const decodeStarted = Promise.withResolvers<void>();
+    const releaseDecode = Promise.withResolvers<void>();
+    const preparationStarted = Promise.withResolvers<void>();
+    const releasePreparation = Promise.withResolvers<void>();
+    const flushed = Promise.withResolvers<void>();
     const server = await createFluxServer({ onCloseStream: () => flushed.resolve() });
     runCommandBuffered.mockImplementationOnce(async () => {
       decodeStarted.resolve();
@@ -124,11 +134,9 @@ describe("Deepgram Flux audio", () => {
         termination: "exit",
       };
     });
-    const resolveHostname = ssrf.resolvePinnedHostnameWithPolicy;
-    vi.spyOn(ssrf, "resolvePinnedHostnameWithPolicy").mockImplementationOnce(async (...args) => {
-      lookupStarted.resolve();
-      await releaseLookup.promise;
-      return await resolveHostname(...args);
+    prepareWebSocket.mockImplementationOnce(async () => {
+      preparationStarted.resolve();
+      await releasePreparation.promise;
     });
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     let failure: unknown;
@@ -141,9 +149,9 @@ describe("Deepgram Flux audio", () => {
     await decodeStarted.promise;
     await vi.advanceTimersByTimeAsync(200);
     releaseDecode.resolve();
-    await lookupStarted.promise;
+    await preparationStarted.promise;
     await vi.advanceTimersByTimeAsync(300);
-    releaseLookup.resolve();
+    releasePreparation.resolve();
     await flushed.promise;
     await vi.advanceTimersByTimeAsync(499);
     expect(failure).toBeUndefined();

@@ -147,7 +147,7 @@ describe("openProviderWebSocket", () => {
     expect(await closed).toBe("closed");
   });
 
-  it.each(["deadline", "caller cancellation"] as const)(
+  it.each(["deadline", "caller cancellation", "socket termination"] as const)(
     "closes a stalled proxy CONNECT on %s",
     async (stop) => {
       const proxy = await createStalledHandshakeServer("connect");
@@ -170,8 +170,10 @@ describe("openProviderWebSocket", () => {
       );
       if (stop === "deadline") {
         await vi.advanceTimersByTimeAsync(1000);
-      } else {
+      } else if (stop === "caller cancellation") {
         controller.abort();
+      } else {
+        socket.terminate();
       }
       expect(socket.readyState).not.toBe(socket.CONNECTING);
       expect(await closed).toBe("closed");

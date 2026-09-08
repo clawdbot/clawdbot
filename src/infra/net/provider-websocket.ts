@@ -151,8 +151,9 @@ export async function openProviderWebSocket(
   });
   // DNS, proxy CONNECT, and the handshake share one deadline. The proxy's
   // pending socket must receive cancellation before the HTTP agent owns it.
+  const lifetime = new AbortController();
   const { signal, cleanup } = buildTimeoutAbortSignal({
-    signal: params.signal,
+    signal: params.signal ? AbortSignal.any([params.signal, lifetime.signal]) : lifetime.signal,
     timeoutMs: Math.max(1, params.timeoutMs),
     operation: "Provider WebSocket connection",
   });
@@ -171,6 +172,7 @@ export async function openProviderWebSocket(
     );
     agent = await racePromiseWithAbortSignal(pending, signal);
   } catch (error) {
+    lifetime.abort();
     cleanup();
     throw error;
   }
@@ -185,19 +187,19 @@ export async function openProviderWebSocket(
       ...targetTlsOptions(params.dispatcherPolicy),
     });
   } catch (error) {
+    lifetime.abort();
     cleanup();
     agent.destroy();
     throw error;
   }
+  const onAbort = () => socket.terminate();
+  signal?.addEventListener("abort", onAbort, { once: true });
   socket.once("open", cleanup);
   socket.once("close", () => {
+    signal?.removeEventListener("abort", onAbort);
+    lifetime.abort();
     cleanup();
     agent.destroy();
   });
-  if (signal) {
-    const onAbort = () => socket.terminate();
-    signal.addEventListener("abort", onAbort, { once: true });
-    socket.once("close", () => signal.removeEventListener("abort", onAbort));
-  }
   return socket;
 }
