@@ -550,6 +550,31 @@ describe("Control UI service worker notification scope", () => {
       `${nestedScope}chat?session=42#latest`,
     );
   });
+
+  it("opens the app scope when an implicit notification cannot focus its window", async () => {
+    const worker = createNotificationServiceWorker(nestedScope, [nestedScope], {
+      rejectFocus: true,
+    });
+
+    const close = await worker.dispatchNotificationClick({ url: nestedScope, explicitUrl: false });
+
+    expect(close).toHaveBeenCalledOnce();
+    expect(worker.windowClients[0]?.focus).toHaveBeenCalledOnce();
+    expect(worker.clients.openWindow).toHaveBeenCalledExactlyOnceWith(nestedScope);
+  });
+
+  it("keeps implicit focus recovery attached to the notification lifetime", async () => {
+    const worker = createNotificationServiceWorker(nestedScope, [nestedScope], {
+      rejectFocus: true,
+      rejectOpenWindow: true,
+    });
+
+    await expect(
+      worker.dispatchNotificationClick({ url: nestedScope, explicitUrl: false }),
+    ).rejects.toThrow("Unable to open replacement window");
+    expect(worker.windowClients[0]?.focus).toHaveBeenCalledOnce();
+    expect(worker.clients.openWindow).toHaveBeenCalledExactlyOnceWith(nestedScope);
+  });
 });
 
 type ActivateEventStub = {
@@ -598,11 +623,19 @@ type ServiceWorkerNotificationEventStub = {
 function createNotificationServiceWorker(
   scope: string,
   clientUrls: string[],
-  options: { rejectNavigation?: boolean } = {},
+  options: {
+    rejectFocus?: boolean;
+    rejectNavigation?: boolean;
+    rejectOpenWindow?: boolean;
+  } = {},
 ) {
   const listeners = new Map<string, (event: ServiceWorkerNotificationEventStub) => void>();
   const windowClients = clientUrls.map((url) => {
-    const focus = vi.fn(async () => undefined);
+    const focus = vi.fn(async () => {
+      if (options.rejectFocus) {
+        throw new Error("Window is no longer focusable");
+      }
+    });
     return {
       url,
       focus,
@@ -616,7 +649,12 @@ function createNotificationServiceWorker(
   });
   const clients = {
     matchAll: vi.fn(async () => windowClients),
-    openWindow: vi.fn(async (_url: string) => null),
+    openWindow: vi.fn(async (_url: string) => {
+      if (options.rejectOpenWindow) {
+        throw new Error("Unable to open replacement window");
+      }
+      return null;
+    }),
   };
   const showNotification = vi.fn(
     async (_title: string, _options: ServiceWorkerNotificationOptions) => undefined,
