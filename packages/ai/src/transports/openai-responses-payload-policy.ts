@@ -393,6 +393,11 @@ export function resolveOpenAIResponsesPayloadPolicy(
 ): OpenAIResponsesPayloadPolicy {
   const capabilities = resolveOpenAIResponsesPayloadCapabilities(model);
   const storeMode = options.storeMode ?? "provider-policy";
+  const api = normalizeOptionalLowercaseString(model.api);
+  // ChatGPT Codex Responses rejects omitted `store` and requires an explicit
+  // `store: false` (native codex path already does this; transport path must too).
+  const requiresExplicitStoreFalse =
+    api === "openai-chatgpt-responses" || api === "openclaw-openai-chatgpt-responses-transport";
   const explicitStore =
     storeMode === "preserve"
       ? undefined
@@ -402,7 +407,9 @@ export function resolveOpenAIResponsesPayloadPolicy(
           : undefined
         : capabilities.allowsResponsesStore
           ? true
-          : undefined;
+          : requiresExplicitStoreFalse && capabilities.supportsResponsesStoreField
+            ? false
+            : undefined;
   const isResponsesApi = isOpenAIResponsesApi(normalizeOptionalLowercaseString(model.api));
   const shouldStripDisabledReasoningPayload =
     isResponsesApi &&

@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { resolveOpenAIResponsesServerCompactionPlan } from "./openai-responses-payload-policy.js";
+import {
+  applyOpenAIResponsesPayloadPolicy,
+  resolveOpenAIResponsesPayloadPolicy,
+  resolveOpenAIResponsesServerCompactionPlan,
+} from "./openai-responses-payload-policy.js";
 
 describe("OpenAI Responses compact threshold", () => {
   it.each([
@@ -41,5 +45,29 @@ describe("OpenAI Responses compact threshold", () => {
         extraParams,
       ).threshold,
     ).toBe(expected);
+  });
+});
+
+describe("chatgpt responses store policy", () => {
+  it("chatgpt responses requires explicit store false on the transport path", () => {
+    const policy = resolveOpenAIResponsesPayloadPolicy({
+      api: "openai-chatgpt-responses",
+      provider: "openai",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+    });
+    expect(policy.explicitStore).toBe(false);
+
+    const payload: Record<string, unknown> = { model: "gpt-5.6-luna" };
+    applyOpenAIResponsesPayloadPolicy(payload, policy);
+    expect(payload.store).toBe(false);
+  });
+
+  it("openclaw chatgpt responses transport also emits store false", () => {
+    const policy = resolveOpenAIResponsesPayloadPolicy({
+      api: "openclaw-openai-chatgpt-responses-transport",
+      provider: "openai",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+    });
+    expect(policy.explicitStore).toBe(false);
   });
 });
