@@ -195,6 +195,7 @@ function registerCodexSessionCatalog(params: {
   const provider: SessionCatalogProvider = {
     id: "codex",
     label: "Codex",
+    adminProcessHomeRead: true,
     supportsProcessHomeIsolation: true,
     resolveCreateSession: ({ agentId }) =>
       resolveCodexCatalogCreateSession(
@@ -207,6 +208,7 @@ function registerCodexSessionCatalog(params: {
       const {
         agentId: requestedAgentId,
         allowProcessHomeFallback,
+        allowProcessHomeMutations,
         listNodes,
         onHost,
         waitUntil,
@@ -216,17 +218,39 @@ function registerCodexSessionCatalog(params: {
       } = query;
       const agentId = resolveRequestAgentId(requestedAgentId);
       const localHomes = [...catalogHomes(agentId, allowProcessHomeFallback)];
-      const mapHost = (host: CodexSessionCatalogHost) => ({
-        ...toGenericCatalogHost(host, localTerminalAvailable),
-        canStartTerminal:
-          host.kind === "gateway"
-            ? localTerminalAvailable &&
-              host.hostId === CODEX_LOCAL_SESSION_HOST_ID &&
-              localHomes.some(
-                (home) => home.hostId === host.hostId && home.appServer.start.transport === "stdio",
-              )
-            : host.canStartTerminal === true,
-      });
+      const readOnlyHomeIds = new Set(
+        allowProcessHomeMutations === false
+          ? localHomes
+              .filter((home) => home.usesProcessHomeFallback)
+              .map((home) => home.sourceHomeId)
+          : [],
+      );
+      const mapHost = (host: CodexSessionCatalogHost) => {
+        const generic = toGenericCatalogHost(host, localTerminalAvailable);
+        return {
+          ...generic,
+          sessions: generic.sessions.map((session) =>
+            session.sourceHomeId && readOnlyHomeIds.has(session.sourceHomeId)
+              ? Object.assign({}, session, {
+                  canContinue: false,
+                  canArchive: false,
+                  canOpenTerminal: false,
+                })
+              : session,
+          ),
+          canStartTerminal:
+            host.kind === "gateway"
+              ? localTerminalAvailable &&
+                host.hostId === CODEX_LOCAL_SESSION_HOST_ID &&
+                localHomes.some(
+                  (home) =>
+                    home.hostId === host.hostId &&
+                    home.appServer.start.transport === "stdio" &&
+                    !readOnlyHomeIds.has(home.sourceHomeId),
+                )
+              : host.canStartTerminal === true,
+        };
+      };
       return (
         await listCodexSessionCatalog({
           agentId,

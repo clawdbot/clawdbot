@@ -17,6 +17,8 @@ export type SessionCatalogListProviderParams = {
   agentId?: string;
   /** False when Gateway-local scans must not inherit a root from process HOME. */
   allowProcessHomeFallback?: boolean;
+  /** False when process-HOME rows admitted for reading must advertise no mutation actions. */
+  allowProcessHomeMutations?: boolean;
   /** Trimmed, non-empty search capped at 500 UTF-16 code units by the gateway. */
   search?: string;
   limitPerHost?: number;
@@ -190,6 +192,11 @@ export type SessionCatalogProvider = {
   shareRoute?: SessionCatalogShareRoute;
   /** Declares that every HOME-sensitive action honors the host isolation policy. */
   supportsProcessHomeIsolation?: true;
+  /**
+   * Allows effective Gateway admins to list/read this provider's process-HOME catalog.
+   * Providers must honor allowProcessHomeMutations when projecting actions for those rows.
+   */
+  adminProcessHomeRead?: true;
   /** Config-derived target; the Gateway memoizes it for one runtime-config object identity. */
   resolveCreateSession?: (
     params: SessionCatalogCreateParams,

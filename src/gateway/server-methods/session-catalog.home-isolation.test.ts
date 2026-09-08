@@ -51,12 +51,14 @@ async function call(
   method: keyof typeof sessionCatalogHandlers,
   params: unknown,
   logGateway?: { warn: (message: string, fields?: Record<string, unknown>) => void },
+  client?: { connect: { scopes: string[] } },
 ) {
   const respond = vi.fn();
   await sessionCatalogHandlers[method]?.({
     params,
     respond,
     context: { getRuntimeConfig: () => ({}), ...(logGateway ? { logGateway } : {}) },
+    client,
   } as never);
   return respond;
 }
@@ -176,6 +178,98 @@ describe("session catalog Gateway HOME isolation", () => {
     ]);
   });
 
+  it("allows only effective admins to read an opted-in process-HOME catalog", async () => {
+    const localHost = {
+      hostId: "gateway:local",
+      label: "Local",
+      kind: "gateway" as const,
+      connected: true,
+      sessions: [
+        {
+          threadId: "native-thread",
+          name: "Native exact title",
+          status: "idle",
+          archived: false,
+          canContinue: false,
+          canArchive: false,
+        },
+      ],
+    };
+    const list = vi.fn(async (request: Parameters<SessionCatalogProvider["list"]>[0]) =>
+      request.allowProcessHomeFallback === false ? [] : [localHost],
+    );
+    const read = vi.fn(async (request: Parameters<SessionCatalogProvider["read"]>[0]) => {
+      if (request.allowProcessHomeFallback === false) {
+        throw new Error("local Codex sessions are unavailable in isolated state");
+      }
+      return {
+        hostId: request.hostId,
+        threadId: request.threadId,
+        items: [{ type: "userMessage" as const, text: "native transcript" }],
+      };
+    });
+    hoisted.activeRegistry.sessionCatalogs = [
+      { provider: provider("codex", { adminProcessHomeRead: true, list, read }) },
+    ];
+    const admin = { connect: { scopes: ["operator.admin"] } };
+    const reader = { connect: { scopes: ["operator.read"] } };
+
+    await withProfile("isolated", async () => {
+      const adminList = await call(
+        "sessions.catalog.list",
+        { catalogId: "codex", search: "Native exact title" },
+        undefined,
+        admin,
+      );
+      expect(adminList).toHaveBeenCalledWith(true, {
+        catalogs: [expect.objectContaining({ id: "codex", hosts: [localHost] })],
+      });
+      const adminRead = await call(
+        "sessions.catalog.read",
+        { catalogId: "codex", hostId: "gateway:local", threadId: "native-thread" },
+        undefined,
+        admin,
+      );
+      expect(adminRead).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({ threadId: "native-thread" }),
+      );
+
+      const readerList = await call(
+        "sessions.catalog.list",
+        { catalogId: "codex" },
+        undefined,
+        reader,
+      );
+      expect(readerList).toHaveBeenCalledWith(true, {
+        catalogs: [expect.objectContaining({ id: "codex", hosts: [] })],
+      });
+      const readerRead = await call(
+        "sessions.catalog.read",
+        { catalogId: "codex", hostId: "gateway:local", threadId: "native-thread" },
+        undefined,
+        reader,
+      );
+      expect(readerRead).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({
+          code: "INVALID_REQUEST",
+          message: "local Codex sessions are unavailable in isolated state",
+        }),
+      );
+    });
+
+    expect(list.mock.calls.map(([request]) => request.allowProcessHomeFallback)).toEqual([
+      true,
+      false,
+    ]);
+    expect(read.mock.calls.map(([request]) => request.allowProcessHomeFallback)).toEqual([
+      true,
+      false,
+    ]);
+  });
+
   it.each([
     ["continue", "continueSession", {}],
     ["archive", "archive", { confirmNoOtherRunner: true }],
@@ -187,16 +281,26 @@ describe("session catalog Gateway HOME isolation", () => {
       return hook === "archive" ? { ok: true as const } : { sessionKey: "agent:main:known" };
     });
     hoisted.activeRegistry.sessionCatalogs = [
-      { provider: provider("test", { [hook]: rejectLocal } as Partial<SessionCatalogProvider>) },
+      {
+        provider: provider("test", {
+          adminProcessHomeRead: true,
+          [hook]: rejectLocal,
+        } as Partial<SessionCatalogProvider>),
+      },
     ];
 
     const respond = await withProfile("dev", () =>
-      call(`sessions.catalog.${method}`, {
-        catalogId: "test",
-        hostId: "gateway:local",
-        threadId: "known-thread",
-        ...extra,
-      }),
+      call(
+        `sessions.catalog.${method}`,
+        {
+          catalogId: "test",
+          hostId: "gateway:local",
+          threadId: "known-thread",
+          ...extra,
+        },
+        undefined,
+        { connect: { scopes: ["operator.admin"] } },
+      ),
     );
 
     expect(respond).toHaveBeenCalledWith(

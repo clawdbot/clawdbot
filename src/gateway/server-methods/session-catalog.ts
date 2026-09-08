@@ -1,5 +1,4 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   ErrorCodes,
   errorShape,
@@ -43,10 +42,13 @@ import {
   type CatalogListProgressSubscriber,
 } from "./session-catalog-list-lifetime.js";
 import {
+  allowCatalogProcessHomeRead,
+  catalogAllowsProcessHomeMutations,
   allowProcessHomeFallback,
   createSessionCatalogRequestNodeSnapshot,
   listSessionCatalogProvider,
   catalogRegistrationSnapshot,
+  normalizeSessionCatalogSearch,
   type CatalogRegistrationSnapshot,
 } from "./session-catalog-provider-access.js";
 import { catalogStartHandler } from "./session-catalog-terminal-start.js";
@@ -62,16 +64,8 @@ import type {
 } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
-const SESSION_CATALOG_SEARCH_MAX_UTF16_UNITS = 500;
 const SESSION_CATALOG_SHARE_WINDOW_MS = 3_000;
 const SESSION_CATALOG_LIST_CACHE_MAX_ENTRIES = 128;
-
-function normalizeSessionCatalogSearch(search: string | undefined): string | undefined {
-  const normalized = normalizeOptionalString(search);
-  return normalized
-    ? truncateUtf16Safe(normalized, SESSION_CATALOG_SEARCH_MAX_UTF16_UNITS)
-    : undefined;
-}
 
 function catalogError(error: unknown): { code: string; message: string } {
   const record =
@@ -372,9 +366,6 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
       return;
     }
     const search = normalizeSessionCatalogSearch(request.search);
-    const allowHomeFallback = allowProcessHomeFallback(context.logGateway);
-    // Cached provider enumeration is not permission. Each synchronous delivery gets current
-    // caller facts and one canonical index, never the provider's pre-await planning snapshot.
     const projectResult = (result: CatalogListEnumeration): CatalogListResult => {
       const currentConfig = context.getRuntimeConfig();
       const visibility = resolveSessionCatalogVisibility(client, currentConfig);
@@ -437,7 +428,7 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
       client,
       request,
       search,
-      allowProcessHomeFallback: allowHomeFallback,
+      allowProcessHomeFallback: allowProcessHomeFallback(context.logGateway),
       visibilityKey: resolveSessionCatalogVisibility(client, config).cacheKey,
     });
     const cache = catalogListCache(config, catalogRegistrations);
@@ -509,7 +500,11 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
             const hosts = await progress.runProvider(onHost, (lifetime) =>
               listSessionCatalogProvider(provider, {
                 agentId: resolvedAgent.agentId,
-                allowProcessHomeFallback: allowHomeFallback,
+                allowProcessHomeFallback: allowCatalogProcessHomeRead(provider, client),
+                allowProcessHomeMutations: catalogAllowsProcessHomeMutations(
+                  catalogRegistrations,
+                  provider,
+                ),
                 search,
                 limitPerHost: request.limitPerHost,
                 hostIds: request.hostIds,
@@ -551,7 +546,6 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
       progress.finishListing();
     }
   },
-
   "sessions.catalog.read": async ({ params, respond, context, client }) => {
     if (
       !assertValidParams(

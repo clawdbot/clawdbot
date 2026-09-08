@@ -120,6 +120,7 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
       pluginName: record.name,
       provider:
         state.getNativeCatalogGate(record)?.catalog(normalizedProvider) ?? normalizedProvider,
+      allowProcessHomeMutations: state.allowProcessHomeSessionCatalogs,
       source: record.source,
       rootDir: record.rootDir,
     });

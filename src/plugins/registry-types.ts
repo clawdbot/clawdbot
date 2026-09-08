@@ -187,6 +187,7 @@ type PluginSessionCatalogRegistration = {
   pluginId: string;
   pluginName?: string;
   provider: SessionCatalogProvider;
+  allowProcessHomeMutations?: boolean;
   source: string;
   rootDir?: string;
 };

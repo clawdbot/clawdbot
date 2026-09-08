@@ -1,3 +1,5 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { isControlUiReservedRouteSegment } from "@openclaw/session-url-contract";
 import {
   validateSessionCatalogShareRoute,
@@ -12,24 +14,52 @@ import type {
   SessionCatalogListProviderParams,
   SessionCatalogProvider,
 } from "../../plugins/session-catalog.js";
+import { ADMIN_SCOPE, authorizeOperatorScopesForRequiredScope } from "../method-scopes.js";
 import { SessionCatalogListAdmission } from "./session-catalog-list-admission.js";
+import type { GatewayClient } from "./types.js";
 
 const MAX_CONCURRENT_SESSION_CATALOG_LISTS = 4;
 const MAX_QUEUED_SESSION_CATALOG_LISTS = 32;
+const SESSION_CATALOG_SEARCH_MAX_UTF16_UNITS = 500;
 const PROCESS_HOME_CATALOG_SKIP_MESSAGE =
   "external session catalog HOME fallback skipped: isolated state; configure an explicit root to enable";
 
 let reportedProcessHomeCatalogSkip = false;
 
-export function allowProcessHomeFallback(logGateway?: {
-  warn: (message: string, fields?: Record<string, unknown>) => void;
-}): boolean {
-  const allowed = allowsProcessHomeSessionScan();
+export function normalizeSessionCatalogSearch(search: string | undefined): string | undefined {
+  const normalized = normalizeOptionalString(search);
+  return normalized
+    ? truncateUtf16Safe(normalized, SESSION_CATALOG_SEARCH_MAX_UTF16_UNITS)
+    : undefined;
+}
+
+export function allowProcessHomeFallback(
+  logGateway?: { warn: (message: string, fields?: Record<string, unknown>) => void },
+  params?: {
+    access: "read" | "mutate";
+    client: GatewayClient | null;
+    provider: SessionCatalogProvider;
+  },
+): boolean {
+  const scopes = Array.isArray(params?.client?.connect?.scopes) ? params.client.connect.scopes : [];
+  const adminRead =
+    params?.access === "read" &&
+    params.provider.adminProcessHomeRead === true &&
+    authorizeOperatorScopesForRequiredScope(ADMIN_SCOPE, scopes).allowed;
+  const allowed = allowsProcessHomeSessionScan() || adminRead;
   if (!allowed && !reportedProcessHomeCatalogSkip && logGateway) {
     reportedProcessHomeCatalogSkip = true;
     logGateway.warn(PROCESS_HOME_CATALOG_SKIP_MESSAGE, { reason: "isolated_state" });
   }
   return allowed;
+}
+
+export function allowCatalogProcessHomeRead(
+  provider: SessionCatalogProvider,
+  client: GatewayClient | null,
+  logGateway?: { warn: (message: string, fields?: Record<string, unknown>) => void },
+): boolean {
+  return allowProcessHomeFallback(logGateway, { access: "read", client, provider });
 }
 
 // Catalog adapters may scan local databases or invoke external CLIs. Bound the
@@ -60,6 +90,14 @@ export type CatalogRegistrationSnapshot = {
   providers: SessionCatalogProvider[];
   shareRoutes: ReadonlyMap<SessionCatalogProvider, SessionCatalogShareRoute>;
 };
+
+export function catalogAllowsProcessHomeMutations(
+  snapshot: CatalogRegistrationSnapshot,
+  provider: SessionCatalogProvider,
+): boolean | undefined {
+  return snapshot.registrations.find((entry) => entry.provider === provider)
+    ?.allowProcessHomeMutations;
+}
 
 let cachedCatalogRegistrations: CatalogRegistrationSnapshot | undefined;
 

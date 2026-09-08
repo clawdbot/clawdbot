@@ -21,7 +21,11 @@ export async function authorizeSessionCatalogThread(params: {
   request: SessionCatalogLocator;
   respond: RespondFn;
 }): Promise<{ allowProcessHomeFallback: boolean } | null> {
-  const allowHomeFallback = allowProcessHomeFallback(params.context.logGateway);
+  const allowHomeFallback = allowProcessHomeFallback(params.context.logGateway, {
+    access: params.access,
+    client: params.client,
+    provider: params.provider,
+  });
   const visible = await isSessionCatalogThreadVisible({
     access: params.access,
     allowProcessHomeFallback: allowHomeFallback,
