@@ -63,6 +63,11 @@ function registerGeneration(register: (api: OpenClawPluginApi) => void = plugin.
       await lifecycle.cleanup?.(context);
     }
   };
+  const dispose = async () => {
+    for (const lifecycle of captured.runtimeLifecycles) {
+      await lifecycle.dispose?.();
+    }
+  };
   const run = async (...args: string[]): Promise<unknown> => {
     const program = new Command().exitOverride();
     for (const registration of captured.cliRegistrars) {
@@ -95,17 +100,49 @@ function registerGeneration(register: (api: OpenClawPluginApi) => void = plugin.
     const [ok, payload, error] = respond.mock.calls[0] ?? [];
     return { ok, payload, error };
   };
-  return { cleanup, run, start, stop, warn, emit, call };
+  return { cleanup, dispose, run, start, stop, warn, emit, call };
 }
 
 describe("Workboard registration cleanup", () => {
-  it.each(["disable", "restart"] as const)(
+  it("registers store disposal before a later runtime dependency throws", async () => {
+    await withStateDirEnv("workboard-registration-failure-", async () => {
+      const store = WorkboardStore.openSqlite();
+      const opened = vi.spyOn(WorkboardStore, "openSqlite").mockReturnValueOnce(store);
+      const failure = new Error("synthetic Gateway runtime unavailable");
+      try {
+        const captured = capturePluginRegistration({
+          ...plugin,
+          register(api) {
+            const runtime = new Proxy(api.runtime, {
+              get(target, property) {
+                if (property === "gateway") {
+                  throw failure;
+                }
+                return Reflect.get(target, property, target);
+              },
+            });
+            expect(() => plugin.register({ ...api, runtime })).toThrow(failure);
+          },
+        });
+        expect(captured.runtimeLifecycles).toHaveLength(1);
+        await captured.runtimeLifecycles[0]!.dispose?.();
+        await expect(store.list()).rejects.toThrow("workboard store is closed.");
+      } finally {
+        opened.mockRestore();
+        await store.close();
+      }
+    });
+  });
+
+  it.each(["disable", "restart", "dispose"] as const)(
     "closes only the retired generation on %s",
-    async (reason) => {
+    async (action) => {
+      const reason = action === "dispose" ? "disable" : action;
       await withStateDirEnv("workboard-registration-lifecycle-", async () => {
         vi.useFakeTimers();
         const first = registerGeneration();
         const second = registerGeneration();
+        const retire = () => (action === "dispose" ? first.dispose() : first.cleanup({ reason }));
         try {
           await first.start();
           await first.run("create", "Retained card");
@@ -122,7 +159,7 @@ describe("Workboard registration cleanup", () => {
           }
 
           expect(vi.getTimerCount()).toBeGreaterThan(0);
-          await first.cleanup({ reason });
+          await retire();
           await expect(first.run("list")).rejects.toThrow("workboard store is closed.");
           await vi.advanceTimersByTimeAsync(60_000);
           expect(first.warn).not.toHaveBeenCalled();
@@ -137,7 +174,7 @@ describe("Workboard registration cleanup", () => {
               expect.objectContaining({ title: "Fresh card" }),
             ]),
           });
-          await first.cleanup({ reason });
+          await retire();
           second.emit.mockClear();
           await second.run("create", "After repeated retirement");
           expect(second.emit).toHaveBeenCalled();
