@@ -520,7 +520,7 @@ export async function prepareModelsListResult(
       ...(capableProviders ? { apiKeyCapabilities: capableProviders } : {}),
     });
     return {
-      isCurrent,
+      isCurrent: () => isCurrent() && inventoryProjector.isCurrent(),
       read: () => ({
         models: entries.map(({ entry, host }) => projectPublic(entry, evaluateNative(entry, host))),
         ...outcomeProjection,
@@ -578,7 +578,7 @@ export async function prepareModelsListResult(
     ...(capableProviders ? { apiKeyCapabilities: capableProviders } : {}),
   });
   return {
-    isCurrent,
+    isCurrent: () => isCurrent() && projector.isCurrent(),
     read: () => ({
       models: readCatalog().map((entry) => {
         const evaluation = evaluations.get(evaluationKey(entry));

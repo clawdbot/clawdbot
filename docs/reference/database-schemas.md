@@ -795,7 +795,19 @@ Background verification errors retain the original name and message and append b
 
 Agent database maintenance fences other writers with a 60-second lease in the shared state database. A dedicated worker renews that lease during synchronous integrity scans and migration phases. Maintenance still checks the exact persisted owner before mutations and commit, and stops if the heartbeat fails or ownership expires or changes. Finishing or cancelling maintenance stops renewal before releasing the lease; process death leaves at most the remaining lease duration.
 
-Maintenance schema admission runs its initial full-file integrity check in a read-only child process when that check is outside a write transaction. The scan has a 30-second execution limit; the connection and maintenance lease remain held until the child process closes, including on cancellation or timeout. Schema changes, index repairs, and compaction retain their synchronous phases.
+Asynchronous agent-database admission and maintenance run their initial full-file integrity check in a read-only child process when that check is outside a write transaction. The child has a 30-second lifetime limit, including startup and shutdown. The connection and owning scope remain held until the child closes, including on cancellation or timeout. Schema changes, index repairs, and compaction retain their synchronous phases.
+
+Integrity-child timeout and incomplete-exit errors include `lastObservedPhase`:
+
+| Value             | Last observation                                                                          |
+| ----------------- | ----------------------------------------------------------------------------------------- |
+| `starting`        | The parent has not received a child phase.                                                |
+| `opening`         | The child announced file-identity checks and opening a read-only connection.              |
+| `checking`        | The connection opened, and the child announced the full integrity and foreign-key checks. |
+| `closing`         | The child announced connection cleanup after checking or an error.                        |
+| `result-received` | The parent received a final result and is waiting for child closure.                      |
+
+These phases describe messages the parent received, not the child's exact current location or native CPU time. `checking` does not distinguish the integrity check from the foreign-key check. A final result can report failure; phase messages never establish successful validation or release ownership.
 
 Startup errors containing `state lease heartbeat did not become ready` include `phase=startup`, the settlement trigger (`timeout` or `message`), and the status observed before the parent marks failure. `status=starting` distinguishes readiness still pending from `status=lost`, where loss was already recorded. `elapsedMs` measures monotonic time since heartbeat startup began; `timeoutMs` is the startup wait budget, capped at five seconds or the remaining initial lease lifetime. These fields do not establish why startup stalled or ownership was lost.
 

@@ -114,12 +114,14 @@ vi.mock("./update-command-config.js", async (importOriginal) => ({
     sourceConfig: {},
     authoredConfig: {},
   })),
-  restoreDroppedPreUpdateChannels: vi.fn((snapshot: unknown) => {
-    record("restore-channels");
+  preparePostCorePluginConfig: vi.fn(async () => {
+    const configSnapshot = await mocks.readConfig();
+    record("prepare-config");
     return {
-      snapshot,
-      changed: false,
-      authoredChannels: [],
+      configSnapshot,
+      configWriteOptions: {},
+      configChanged: false,
+      restoredAuthoredChannels: [],
     };
   }),
 }));
@@ -167,12 +169,7 @@ function expectLifecycleBoundary(preLeaseEvent: string): void {
     (event, index) => index > preLeaseIndex && event === "read-config:true",
   );
   expect(authoritativeReadIndex).toBeGreaterThan(preLeaseIndex);
-  for (const event of [
-    "persist-channel:true",
-    "restore-channels:true",
-    "installed-records:true",
-    "plugin-update:true",
-  ]) {
+  for (const event of ["prepare-config:true", "installed-records:true", "plugin-update:true"]) {
     expect(mocks.events).toContain(event);
   }
   expect(mocks.events.indexOf("plugin-update:true")).toBeGreaterThan(authoritativeReadIndex);

@@ -245,7 +245,7 @@ describe("SQLite integrity child", () => {
     const worker = path.join(root, "blocked.mjs");
     fs.writeFileSync(
       worker,
-      `process.on('message', () => {}); process.on('SIGTERM', () => {}); setTimeout(() => process.exit(0), 35000);`,
+      `process.on('message', () => process.send({ type: 'phase', phase: 'checking' })); process.on('SIGTERM', () => {}); setTimeout(() => process.exit(0), 35000);`,
     );
     vi.spyOn(processUrls, "resolveRuntimeProcessEntrypointUrl").mockReturnValue(
       pathToFileURL(worker),
@@ -253,23 +253,101 @@ describe("SQLite integrity child", () => {
     const started = performance.now();
     await expect(
       assertSqliteIntegrityInWorker(source, 250, new AbortController().signal),
-    ).rejects.toThrow(/integrity check timed out after 30 seconds.*Stop the Gateway service/);
+    ).rejects.toThrow(
+      /integrity check timed out after 30 seconds.*Stop the Gateway service.*lastObservedPhase=checking/,
+    );
     expect(performance.now() - started).toBeLessThan(33_000);
     expect(fs.readFileSync(source, "utf8")).toBe("retained source");
   }, 40_000);
 
-  it("preserves native integrity errors across the process boundary", async () => {
-    const source = path.join(tempDirs.make("openclaw-integrity-native-"), "source.sqlite");
-    const db = new (requireNodeSqlite().DatabaseSync)(source);
-    db.exec(
-      "PRAGMA foreign_keys = OFF; CREATE TABLE parent(id INTEGER PRIMARY KEY); CREATE TABLE child(parent_id INTEGER REFERENCES parent(id)); INSERT INTO child VALUES (42);",
-    );
-    db.close();
-    await expect(
-      assertSqliteIntegrityInWorker(source, 250, new AbortController().signal),
-    ).rejects.toMatchObject({
-      name: "SqliteIntegrityError",
-      message: expect.stringContaining("foreign_key_check failed"),
-    });
-  });
+  it.each([
+    { messages: [{ type: "phase", phase: "checking" }], completes: false },
+    { messages: [{ type: "phase", phase: "checking" }, { ok: true }], completes: true },
+    { messages: [{ ok: true }, { type: "phase", phase: "closing" }], completes: true },
+  ])(
+    "requires a final result independently of progress: $messages",
+    async ({ messages, completes }) => {
+      const root = tempDirs.make("openclaw-integrity-protocol-");
+      const source = path.join(root, "source.sqlite");
+      fs.writeFileSync(source, "retained source");
+      const worker = path.join(root, "messages.mjs");
+      fs.writeFileSync(
+        worker,
+        `process.once('message', async () => {
+        for (const message of ${JSON.stringify(messages)}) {
+          await new Promise((resolve, reject) => process.send(message, error => error ? reject(error) : resolve()));
+        }
+        process.disconnect();
+      });`,
+      );
+      vi.spyOn(processUrls, "resolveRuntimeProcessEntrypointUrl").mockReturnValue(
+        pathToFileURL(worker),
+      );
+      const check = assertSqliteIntegrityInWorker(source, 250, new AbortController().signal);
+      if (completes) {
+        await expect(check).resolves.toBeUndefined();
+      } else {
+        await expect(check).rejects.toThrow(
+          /without a completed check.*lastObservedPhase=checking/,
+        );
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "preserves native errors and closes the database when closing diagnostics fail=%s",
+    async (failClosingPhase) => {
+      const root = tempDirs.make("openclaw-integrity-native-");
+      const source = path.join(root, "source.sqlite");
+      const db = new (requireNodeSqlite().DatabaseSync)(source);
+      db.exec(
+        "PRAGMA foreign_keys = OFF; CREATE TABLE parent(id INTEGER PRIMARY KEY); CREATE TABLE child(parent_id INTEGER REFERENCES parent(id)); INSERT INTO child VALUES (42);",
+      );
+      db.close();
+      const entry = processUrls.resolveRuntimeProcessEntrypointUrl("sqliteIntegrity");
+      const phases = path.join(root, "phases.jsonl");
+      const closed = path.join(root, "closed.json");
+      const worker = path.join(root, "observed-worker.mts");
+      fs.writeFileSync(
+        worker,
+        `import fs from 'node:fs';
+        import { createRequire } from 'node:module';
+        const sqlite = createRequire(import.meta.url)('node:sqlite');
+        const close = sqlite.DatabaseSync.prototype.close;
+        sqlite.DatabaseSync.prototype.close = function (...args) {
+          const location = this.prepare('PRAGMA database_list').all().find(row => row.name === 'main').file;
+          const result = Reflect.apply(close, this, args);
+          if (location === ${JSON.stringify(source)}) fs.writeFileSync(${JSON.stringify(closed)}, JSON.stringify({ isOpen: this.isOpen }));
+          return result;
+        };
+        const send = process.send.bind(process);
+        process.send = (message, ...args) => {
+          if (message.type === 'phase') {
+            fs.appendFileSync(${JSON.stringify(phases)}, JSON.stringify(message.phase) + '\\n');
+            if (${failClosingPhase} && message.phase === 'closing') throw new Error('synthetic diagnostic send failure');
+          }
+          return send(message, ...args);
+        };
+        await import(${JSON.stringify(entry.href)});`,
+      );
+      vi.spyOn(processUrls, "resolveRuntimeProcessEntrypointUrl").mockReturnValue(
+        pathToFileURL(worker),
+      );
+      await expect(
+        assertSqliteIntegrityInWorker(source, 250, new AbortController().signal),
+      ).rejects.toMatchObject({
+        name: "SqliteIntegrityError",
+        message: expect.stringContaining("foreign_key_check failed"),
+      });
+      expect(fs.existsSync(phases)).toBe(true);
+      expect(
+        fs
+          .readFileSync(phases, "utf8")
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line)),
+      ).toEqual(["opening", "checking", "closing"]);
+      expect(JSON.parse(fs.readFileSync(closed, "utf8"))).toEqual({ isOpen: false });
+    },
+  );
 });

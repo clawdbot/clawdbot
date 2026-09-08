@@ -18,7 +18,7 @@ import { runUtf8CommandWithTimeout } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
-import { resolveCliName } from "../cli-name.js";
+import { CLI_NAME } from "../cli-name.js";
 import { resolveNodeRunner } from "./shared.js";
 import type { FinishUpdateParams } from "./update-command-post-update.js";
 import { UpdateCommandFailure } from "./update-command-result.js";
@@ -27,8 +27,6 @@ import {
   stripGatewayServiceMarkerEnv,
 } from "./update-command-service-env.js";
 import { createWindowsTaskAutoStartGuard } from "./update-command-service-maintenance.js";
-
-const CLI_NAME = resolveCliName();
 
 /** Inspect private state copies without reopening migrated state through the previous runtime. */
 export async function inspectActivatedUpdateState(

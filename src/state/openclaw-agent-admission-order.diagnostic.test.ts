@@ -257,7 +257,7 @@ describe("asynchronous canonical admission", () => {
           "message",
           (message: integrityWorker.SqliteIntegrityWorkerResult | { phase: string }) => {
             if ("phase" in message) {
-              committed = message.phase === "external-commit";
+              committed ||= message.phase === "external-commit";
             } else {
               result = message;
             }

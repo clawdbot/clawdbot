@@ -110,6 +110,8 @@ completion in a new shell profile remains an interactive choice.
 govern later foreground and automatic updates, even after a one-off beta
 install. Use `--channel` to change that policy.
 
+For explicit package artifacts, configured plugin availability is checked against the privately staged package version before rehearsal or activation. `--dry-run` does not stage the artifact and reports that this check remains pending.
+
 For source checkouts, `--dry-run` previews the update flow without fetching Git
 refs or checking working-tree changes. The real update checks for uncommitted
 changes before modifying the checkout. Use `openclaw update status` to inspect

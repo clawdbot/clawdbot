@@ -40,6 +40,12 @@ Options: `--json`, `--bindings` (include full routing rules, not only per-agent 
 Provider-status labels include optional account display names beside account IDs.
 Routing rules continue to identify accounts by channel and account ID.
 
+Provider rows summarize local account status for the displayed binding scopes.
+A wildcard includes each locally known account once; message routing still applies
+peer and account precedence. Stored bindings with an omitted or blank account id
+refer to the literal `default` account key, independently of a channel's preferred
+account for commands. Use `--json --bindings` to include provider rows in JSON.
+
 Identity fields saved in config take precedence. Fields that are not configured
 fall back to `IDENTITY.md` in the agent's workspace. Unsupported avatar values
 and unreadable local images also fall back to the workspace avatar.
@@ -120,7 +126,7 @@ If you omit `--agent` for `bind` or `unbind`, OpenClaw targets the current defau
 
 ### Binding scope behavior
 
-- A stored binding without `accountId` matches the channel default account only.
+- A stored binding without `accountId` matches the literal `default` account key only.
 - `accountId: "*"` is the channel-wide fallback (all accounts) and is less specific than an explicit account binding.
 - If the same agent already has a matching channel binding without `accountId`, and you later bind with an explicit or resolved `accountId`, OpenClaw upgrades that existing binding in place instead of adding a duplicate.
 

@@ -34,15 +34,23 @@ const mockReadSourceConfigSnapshot = vi.hoisted(() => async () => {
   }
 });
 
-const mockReplaceConfigFile = vi.hoisted(() => async ({ nextConfig }: { nextConfig: unknown }) => {
-  const fsLocal = await import("node:fs/promises");
-  const pathLocal = await import("node:path");
-  const configPath = pathLocal.join(process.env.OPENCLAW_STATE_DIR ?? "", "openclaw.json");
-  await fsLocal.writeFile(configPath, JSON.stringify(nextConfig, null, 2), "utf-8");
-});
+const mockReplaceConfigFile = vi.hoisted(
+  () =>
+    async ({ sourceConfig }: { sourceConfig: unknown }) => {
+      const fsLocal = await import("node:fs/promises");
+      const pathLocal = await import("node:path");
+      const configPath = pathLocal.join(process.env.OPENCLAW_STATE_DIR ?? "", "openclaw.json");
+      await fsLocal.writeFile(configPath, JSON.stringify(sourceConfig, null, 2), "utf-8");
+      return { nextConfig: sourceConfig };
+    },
+);
 
 vi.mock("./io.js", () => ({
   readSourceConfigSnapshot: mockReadSourceConfigSnapshot,
+  readSourceConfigSnapshotForWrite: async () => ({
+    snapshot: await mockReadSourceConfigSnapshot(),
+    writeOptions: {},
+  }),
 }));
 
 vi.mock("./mutate.js", () => ({

@@ -302,8 +302,8 @@ describe("pairing cli", () => {
       const replaceCall = expectDefined<unknown[]>(
         replaceConfigFile.mock.calls.at(0),
         "config replace",
-      )[0] as { nextConfig?: { commands?: { ownerAllowFrom?: string[] } } } | undefined;
-      expect(replaceCall?.nextConfig?.commands?.ownerAllowFrom).toEqual(["telegram:123"]);
+      )[0] as { sourceConfig?: { commands?: { ownerAllowFrom?: string[] } } } | undefined;
+      expect(replaceCall?.sourceConfig?.commands?.ownerAllowFrom).toEqual(["telegram:123"]);
       expect(log.mock.calls).toEqual([
         [`${theme.success("Approved")} ${theme.muted("telegram")} sender ${theme.command("123")}.`],
         [

@@ -1693,6 +1693,7 @@
     "native.apple.05f711cec069ec47": "Abbinamento richiesto. In un client OpenClaw già abbinato, esegui /pair approve, quindi verifica di nuovo la connessione.",
     "native.apple.0603402116243f9e": "Nuova chat nel worktree",
     "native.apple.060e3947436fa930": "Impossibile elaborare %1$@: %2$@",
+    "native.apple.0644a7702bb80de1": "L'accesso tramite browser è scaduto. Riconnetti questo Gateway.",
     "native.apple.067bbf8e4b7d1837": "Rilevato: %@",
     "native.apple.06aa02b192d6a1b3": "Revisione in corso",
     "native.apple.06ced75261e8a242": "PID dell'app",

@@ -41,6 +41,57 @@ afterEach(() => {
 });
 
 describe("login gate failure recovery", () => {
+  const setupCode = btoa(
+    JSON.stringify({
+      url: "wss://gateway.example",
+      bootstrapToken: "synthetic-bootstrap-token",
+    }),
+  ).replace(/=+$/g, "");
+
+  it("explains a pasted setup code before connecting and clears the hint when replaced", async () => {
+    const element = await mountFailure("", null, setupCode);
+    const hint = element.querySelector("#login-gate-secret-hint");
+    expect(hint?.textContent).toContain("device setup code for the OpenClaw mobile app");
+    expect(hint?.textContent).toContain("openclaw gateway auth-token --show");
+    expect(element.querySelector("#login-gate-credential")?.getAttribute("aria-describedby")).toBe(
+      hint?.id,
+    );
+    expect(element.props.onConnect).not.toHaveBeenCalled();
+    element.props = { ...element.props, secret: "ordinary-secret" };
+    await element.updateComplete;
+    expect(element.querySelector("#login-gate-secret-hint")).toBeNull();
+    expect(element.querySelector("#login-gate-credential")?.hasAttribute("aria-describedby")).toBe(
+      false,
+    );
+  });
+
+  it.each([
+    ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH,
+    ConnectErrorDetailCodes.AUTH_PASSWORD_MISMATCH,
+  ])("explains setup codes instead of generic mismatch copy for %s", async (code) => {
+    const element = await mountFailure("unauthorized", code, setupCode);
+    expect(element.querySelector(".login-gate__failure-summary")?.textContent?.trim()).toBe(
+      element.querySelector("#login-gate-secret-hint")?.textContent?.trim(),
+    );
+    expect(element.querySelector(".login-gate__failure-summary")?.textContent).toContain(
+      "Paste it in the app's Gateway settings instead",
+    );
+  });
+
+  it("preserves unrelated failure summaries with a setup code entered", async () => {
+    const element = await mountFailure(
+      "rate limit",
+      ConnectErrorDetailCodes.AUTH_RATE_LIMITED,
+      setupCode,
+    );
+    expect(element.querySelector(".login-gate__failure")?.getAttribute("data-kind")).toBe(
+      "auth-rate-limited",
+    );
+    expect(element.querySelector(".login-gate__failure-summary")?.textContent).not.toContain(
+      "device setup code",
+    );
+  });
+
   it("explains how to reconnect with a verified user identity", async () => {
     const element = await mountFailure(
       "operator role policies require a verified user identity for this authentication method",

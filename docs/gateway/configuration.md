@@ -809,6 +809,9 @@ openclaw gateway call config.patch --params '{
 }'
 ```
 
+`config.patch` records explicitly supplied values in the config file even when
+they equal the current runtime defaults. Unchanged runtime defaults stay omitted.
+
 Both `config.apply` and `config.patch` accept `raw`, `baseHash`, `sessionKey`,
 `note`, and `restartDelayMs`. `baseHash` is required for both methods once a
 config file already exists (a first write with no existing config skips the check).

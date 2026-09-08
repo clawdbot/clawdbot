@@ -1,5 +1,6 @@
 import { createServer, type Server } from "node:http";
 import type { AddressInfo, Socket } from "node:net";
+import { Api } from "grammy";
 import { buildHistoryContext } from "openclaw/plugin-sdk/reply-history";
 import {
   createReplyDispatcher,
@@ -7,6 +8,8 @@ import {
   type ReplyPayload,
 } from "openclaw/plugin-sdk/reply-runtime";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { createTelegramDraftStream } from "./draft-stream.js";
+import { splitTelegramReasoningText } from "./reasoning-lane-coordinator.js";
 import { sendMessageTelegram } from "./send.js";
 
 describe("reply scaffolding through final preparation and Telegram HTTP", () => {
@@ -26,7 +29,7 @@ describe("reply scaffolding through final preparation and Telegram HTTP", () => 
         const fields = request.headers["content-type"]?.includes("application/json")
           ? (JSON.parse(body) as Record<string, unknown>)
           : Object.fromEntries(new URLSearchParams(body));
-        if (request.url?.endsWith("/sendMessage")) {
+        if (request.url?.endsWith("/sendMessage") || request.url?.endsWith("/editMessageText")) {
           const text = typeof fields.text === "string" ? fields.text : "";
           delivered.push(text);
           response.setHeader("content-type", "application/json");
@@ -34,7 +37,8 @@ describe("reply scaffolding through final preparation and Telegram HTTP", () => 
             JSON.stringify({
               ok: true,
               result: {
-                message_id: delivered.length,
+                message_id:
+                  typeof fields.message_id === "number" ? fields.message_id : delivered.length,
                 date: 1_700_000_000,
                 chat: { id: 123, type: "private" },
                 text,
@@ -70,7 +74,11 @@ describe("reply scaffolding through final preparation and Telegram HTTP", () => 
     });
   });
 
-  async function prepareAndDispatch(payload: ReplyPayload, conversationContext?: string) {
+  async function prepareAndDispatch(
+    payload: ReplyPayload,
+    conversationContext?: string,
+    reasoningSnapshots: readonly string[] = [],
+  ) {
     const errors: unknown[] = [];
     const cfg = {
       channels: {
@@ -85,32 +93,84 @@ describe("reply scaffolding through final preparation and Telegram HTTP", () => 
         errors.push(error);
       },
     });
-    if (conversationContext) {
-      const messageId = `reply-scaffolding-${++messageSequence}`;
-      await dispatchInboundMessage({
-        cfg,
-        ctx: {
-          Body: conversationContext,
-          BodyForAgent: conversationContext,
-          ChatType: "direct",
-          From: "123",
-          MessageSid: messageId,
-          Provider: "telegram",
-          SessionKey: `agent:test:${messageId}`,
-          Surface: "telegram",
-          To: "456",
-        },
-        dispatcher,
-        outboundHooks: "disabled",
-        replyResolver: async () => payload,
-      });
-    } else {
-      dispatcher.sendFinalReply(payload);
-      dispatcher.markComplete();
-      await dispatcher.waitForIdle();
+    const preview = reasoningSnapshots.length
+      ? createTelegramDraftStream({
+          api: new Api(cfg.channels.telegram.botToken, { apiRoot }),
+          chatId: 123,
+          renderText: (text) => ({ text, markdownSource: { text } }),
+        })
+      : undefined;
+    try {
+      if (conversationContext || preview) {
+        const messageId = `reply-scaffolding-${++messageSequence}`;
+        await dispatchInboundMessage({
+          cfg,
+          ctx: {
+            Body: conversationContext,
+            BodyForAgent: conversationContext,
+            ChatType: "direct",
+            From: "123",
+            MessageSid: messageId,
+            Provider: "telegram",
+            SessionKey: `agent:test:${messageId}`,
+            Surface: "telegram",
+            To: "456",
+          },
+          dispatcher,
+          outboundHooks: "disabled",
+          replyOptions: preview
+            ? {
+                onReasoningStream: async ({ text }) => {
+                  const { reasoningText } = splitTelegramReasoningText(text, true);
+                  if (reasoningText) {
+                    preview.update(reasoningText);
+                    await preview.flush();
+                  }
+                },
+              }
+            : undefined,
+          replyResolver: async (_ctx, options) => {
+            for (const text of reasoningSnapshots) {
+              await options?.onReasoningStream?.({ text, isReasoningSnapshot: true });
+            }
+            return payload;
+          },
+        });
+      } else {
+        dispatcher.sendFinalReply(payload);
+        dispatcher.markComplete();
+        await dispatcher.waitForIdle();
+      }
+      expect(errors).toEqual([]);
+    } finally {
+      await preview?.discard();
     }
-    expect(errors).toEqual([]);
   }
+
+  it.each([false, true])(
+    "cleans reasoning previews before Telegram HTTP (visible=%s)",
+    async (visible) => {
+      const opening = "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>";
+      const internal = `${opening}\nprivate runtime metadata\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>`;
+      const snapshots = [opening.slice(0, 20), `${opening}\nprivate runtime metadata`, internal];
+      if (visible) {
+        snapshots.push(
+          `${internal}\n\nChecking files.`,
+          `${internal}\n\nReading config.\n\nChecking files.`,
+        );
+      }
+      await prepareAndDispatch({ text: "Visible answer." }, "Show status.", snapshots);
+      expect(delivered).toEqual(
+        visible
+          ? [
+              "🧠 <i>Checking files.</i>",
+              "🧠 <i>Reading config.</i>\n\n<i>Checking files.</i>",
+              "Visible answer.",
+            ]
+          : ["Visible answer."],
+      );
+    },
+  );
 
   it("removes the full copied prompt before XML and metadata cleanup changes it", async () => {
     const conversationContext = buildHistoryContext({

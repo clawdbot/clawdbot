@@ -2,7 +2,7 @@
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { note } from "../../packages/terminal-core/src/note.js";
-import { resolveCliName } from "../cli/cli-name.js";
+import { CLI_NAME } from "../cli/cli-name.js";
 import {
   completionCacheExists,
   COMPLETION_SKIP_PLUGIN_COMMANDS_ENV,
@@ -200,8 +200,7 @@ export async function doctorShellCompletion(
   prompter: DoctorPrompter,
   options: DoctorCompletionOptions = {},
 ): Promise<void> {
-  const cliName = resolveCliName();
-  const status = await checkShellCompletionStatus(cliName);
+  const status = await checkShellCompletionStatus(CLI_NAME);
 
   // Slow dynamic completion runs the CLI during shell startup; cache it to keep login shells fast.
   if (status.usesSlowPattern) {
@@ -214,14 +213,14 @@ export async function doctorShellCompletion(
       const generated = await generateCompletionCache({ generationMode: "core-only" });
       if (!generated) {
         note(
-          `Failed to generate completion cache. Run \`${cliName} completion --write-state\` manually.`,
+          `Failed to generate completion cache. Run \`${CLI_NAME} completion --write-state\` manually.`,
           "Shell completion",
         );
         return;
       }
     }
 
-    await installCompletionForDoctor(status, cliName, "upgraded");
+    await installCompletionForDoctor(status, CLI_NAME, "upgraded");
     return;
   }
 
@@ -235,7 +234,7 @@ export async function doctorShellCompletion(
       note(`Completion cache regenerated at ${status.cachePath}`, "Shell completion");
     } else {
       note(
-        `Failed to regenerate completion cache. Run \`${cliName} completion --write-state\` manually.`,
+        `Failed to regenerate completion cache. Run \`${CLI_NAME} completion --write-state\` manually.`,
         "Shell completion",
       );
     }
@@ -248,7 +247,7 @@ export async function doctorShellCompletion(
     }
 
     const shouldInstall = await prompter.confirm({
-      message: `Enable ${status.shell} shell completion for ${cliName}?`,
+      message: `Enable ${status.shell} shell completion for ${CLI_NAME}?`,
       initialValue: true,
     });
 
@@ -256,13 +255,13 @@ export async function doctorShellCompletion(
       const generated = await generateCompletionCache({ generationMode: "core-only" });
       if (!generated) {
         note(
-          `Failed to generate completion cache. Run \`${cliName} completion --write-state\` manually.`,
+          `Failed to generate completion cache. Run \`${CLI_NAME} completion --write-state\` manually.`,
           "Shell completion",
         );
         return;
       }
 
-      await installCompletionForDoctor(status, cliName, "installed");
+      await installCompletionForDoctor(status, CLI_NAME, "installed");
     }
   }
 }

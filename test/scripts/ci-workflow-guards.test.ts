@@ -15224,6 +15224,13 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(fullReleaseDispatch.env.CHILD_WORKFLOW_KIND).toBe("ci");
     expect(fullReleaseDispatch.run).toContain('dispatch_child ci.yml "$dispatch_run_name"');
     expect(fullReleaseDispatch.run).toContain('-f target_ref="$TARGET_SHA"');
+    expect(compatibilityJob.steps.at(-1)?.run).toContain(
+      "src/config/sessions/session-accessor.test.ts",
+    );
+    expect(compatibilityJob.steps.at(-1)?.run).toContain(
+      "src/config/sessions/store-writer.test.ts",
+    );
+    expect(compatibilityJob.steps.at(-1)?.run).toContain("src/config/sessions/sessions.test.ts");
   });
 
   it.skipIf(process.platform === "win32")("ci-gate rejects an unexpected selected skip", () => {

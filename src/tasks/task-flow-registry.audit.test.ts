@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { captureEnv } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { createInMemoryTaskFlowRegistryStore } from "../test-utils/task-registry-store.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "./detached-task-runtime-contract.js";
 import {
   createRunningTaskRunCore as createRunningTaskRunOrNull,
@@ -95,8 +96,8 @@ describe("task-flow-registry audit", () => {
     });
     configureTaskFlowRegistryRuntime({
       store: {
+        ...createInMemoryTaskFlowRegistryStore(),
         loadSnapshot,
-        saveSnapshot: () => {},
       },
     });
 
@@ -113,10 +114,10 @@ describe("task-flow-registry audit", () => {
   it("clears restore-failed findings after a clean reset and restore", () => {
     configureTaskFlowRegistryRuntime({
       store: {
+        ...createInMemoryTaskFlowRegistryStore(),
         loadSnapshot: () => {
           throw new Error("boom");
         },
-        saveSnapshot: () => {},
       },
     });
 
@@ -127,10 +128,10 @@ describe("task-flow-registry audit", () => {
     resetTaskFlowRegistryForTests({ persist: false });
     configureTaskFlowRegistryRuntime({
       store: {
+        ...createInMemoryTaskFlowRegistryStore(),
         loadSnapshot: () => ({
           flows: new Map(),
         }),
-        saveSnapshot: () => {},
       },
     });
 

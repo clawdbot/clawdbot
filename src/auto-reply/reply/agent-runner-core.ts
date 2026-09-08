@@ -36,7 +36,7 @@ import type { BlockReplyPipeline } from "./block-reply-pipeline.js";
 import { resolveEffectiveReplyRoute } from "./effective-reply-route.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import { normalizeReplyPayload } from "./normalize-reply.js";
-import { sanitizePendingFinalDeliveryText } from "./pending-final-delivery.js";
+import { sanitizePendingFinalDeliveryText } from "./pending-final-delivery-state.js";
 import { type FollowupRun, type QueueSettings, scheduleFollowupDrain } from "./queue.js";
 import { normalizeReplyPayloadDirectives } from "./reply-delivery.js";
 import { isReplyOperationSuperseded } from "./reply-operation-abort.js";
