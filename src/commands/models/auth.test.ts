@@ -1650,6 +1650,40 @@ describe("modelsAuthLoginCommand", () => {
     },
   );
 
+  it.each([
+    { order: [], warns: true },
+    { order: ["openai:manual"], warns: false },
+  ])("reports whether explicit order $order excludes a pasted key", async ({ order, warns }) => {
+    const runtime = createRuntime();
+    useCoderAgentConfig();
+    currentConfig.auth = { order: { openai: order } };
+    mocks.clackPassword.mockResolvedValue("sk-openai-chatgpt-api-key-value");
+
+    await modelsAuthPasteApiKeyCommand({ provider: "openai", agent: "coder" }, runtime);
+
+    const warning = expect.stringContaining("saved but excluded by the explicit auth order");
+    if (warns) {
+      expect(runtime.log).toHaveBeenCalledWith(warning);
+    } else {
+      expect(runtime.log).not.toHaveBeenCalledWith(warning);
+    }
+  });
+
+  it("does not claim paste is ready when updating the stored order fails", async () => {
+    const runtime = createRuntime();
+    useCoderAgentConfig();
+    mocks.clackPassword.mockResolvedValue("sk-openai-chatgpt-api-key-value");
+    mocks.promoteAuthProfileInOrder.mockResolvedValue({ ok: false, error: "lock-contention" });
+
+    await expect(
+      modelsAuthPasteApiKeyCommand({ provider: "openai", agent: "coder" }, runtime),
+    ).rejects.toThrow(
+      "The auth profile was saved, but its order could not be updated because the auth store is busy. Wait a moment, then run openclaw models auth order set --provider openai --agent coder openai:manual.",
+    );
+    expect(mocks.upsertAuthProfileWithLock).toHaveBeenCalledOnce();
+    expect(runtime.log).not.toHaveBeenCalled();
+  });
+
   it("writes piped OpenAI Codex API keys to API-key profiles", async () => {
     const runtime = createRuntime();
     restoreStdin?.();

@@ -8,7 +8,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveExplicitAuthOrderSelection } from "../../agents/auth-profiles/order.js";
-import { loadAuthProfileStoreForRuntime } from "../../agents/auth-profiles/store.js";
+import { loadAuthProfileStoreForRuntime } from "../../agents/auth-profiles/store-runtime.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
@@ -136,7 +136,16 @@ describe("paste auth order ownership", () => {
 
       try {
         await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir, HOME: stateDir }, async () => {
-          await run(createRuntime());
+          const runtime = createRuntime();
+          await run(runtime);
+          expect(runtime.log).toHaveBeenCalledWith(
+            expect.stringContaining("saved but excluded by the explicit auth order"),
+          );
+          expect(runtime.log).toHaveBeenCalledWith(
+            expect.stringContaining(
+              "openclaw models auth order set --provider openai --agent coder openai:manual",
+            ),
+          );
 
           const store = loadAuthProfileStoreForRuntime(coderAgentDir);
           expect(store.profiles["openai:manual"]).toBeDefined();
