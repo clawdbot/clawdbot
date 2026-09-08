@@ -247,7 +247,8 @@ struct IOSGatewayChatTransport: OpenClawChatGatewayTransport {
             limit: limit,
             search: search,
             archived: archived,
-            agentID: self.globalAgentId)
+            agentID: self.globalAgentId,
+            includeDerivedTitles: true)
         let res = try await gateway.request(request)
         return try JSONDecoder().decode(OpenClawChatSessionsListResponse.self, from: res)
     }
@@ -266,6 +267,7 @@ struct IOSGatewayChatTransport: OpenClawChatGatewayTransport {
                 search: nil,
                 archived: false,
                 includeGlobal: false,
+                includeDerivedTitles: true,
                 spawnedBy: parentKey,
                 offset: offset,
                 configuredAgentsOnly: true)

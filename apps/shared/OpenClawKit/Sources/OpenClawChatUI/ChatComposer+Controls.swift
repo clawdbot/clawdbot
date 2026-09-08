@@ -160,7 +160,7 @@ extension OpenClawChatComposer {
             set: { next in self.viewModel.switchSession(to: next) }))
         {
             ForEach(self.viewModel.sessionChoices, id: \.key) { session in
-                Text(session.displayName ?? session.key)
+                Text(ChatSessionSidebarModel.displayName(for: session))
                     .font(OpenClawChatTypography.mono(size: 12, relativeTo: .caption))
                     .tag(session.key)
             }

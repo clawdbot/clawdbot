@@ -180,9 +180,10 @@ public enum ChatSessionSidebarModel {
     }
 
     public static func displayName(for session: OpenClawChatSessionEntry) -> String {
-        for candidate in [session.displayName, session.label] {
+        for candidate in [session.label, session.displayName, session.derivedTitle] {
             if let trimmed = candidate?.trimmingCharacters(in: .whitespacesAndNewlines),
-               !trimmed.isEmpty
+               !trimmed.isEmpty,
+               trimmed != session.key
             {
                 return trimmed
             }

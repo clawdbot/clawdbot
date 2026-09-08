@@ -128,6 +128,7 @@ extension NodeAppModel {
                         search: nil,
                         archived: archived,
                         agentID: sourceAgentID,
+                        includeDerivedTitles: true,
                         offset: offset)
                     let data = try await self.operatorSession.request(request, ifCurrentRoute: route)
                     return try JSONDecoder().decode(OpenClawChatSessionsListResponse.self, from: data)

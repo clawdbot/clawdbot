@@ -49,6 +49,14 @@ struct RootTabsSourceGuardTests {
         #expect(lifecycle.contains("self.stopScannerCapture()"))
     }
 
+    @Test func `iOS session rosters request gateway derived titles`() throws {
+        let transport = try Self.source("Sources/Chat/IOSGatewayChatTransport.swift")
+        let sidebar = try Self.source("Sources/RootSidebarModel.swift")
+
+        #expect(transport.components(separatedBy: "includeDerivedTitles: true").count - 1 == 2)
+        #expect(sidebar.contains("includeDerivedTitles: true"))
+    }
+
     @Test func `credential fields stay scoped to exact gateway owners`() throws {
         let onboarding = try Self.sources([
             "Sources/Onboarding/OnboardingWizardView.swift",
