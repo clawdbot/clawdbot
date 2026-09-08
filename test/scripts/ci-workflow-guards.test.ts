@@ -4385,7 +4385,25 @@ NODE
       "CodeQL macOS Xcode selection",
     );
 
-    expect(codeqlJob["runs-on"]).toBe("macos-26");
+    const codeqlInitializeIndex = codeqlJob.steps.findIndex(
+      (step: WorkflowStep) => step.name === "Initialize CodeQL",
+    );
+    const codeqlBuildIndex = codeqlJob.steps.findIndex(
+      (step: WorkflowStep) => step.name === "Build macOS for CodeQL",
+    );
+    const codeqlAnalyzeIndex = codeqlJob.steps.findIndex(
+      (step: WorkflowStep) => step.name === "Analyze",
+    );
+    const codeqlBuild = expectDefined(codeqlJob.steps[codeqlBuildIndex], "CodeQL macOS build");
+
+    expect(codeqlJob["runs-on"]).toBe("macos-26-intel");
+    expect(codeqlJob["timeout-minutes"]).toBe(45);
+    expect(codeqlInitializeIndex).toBeGreaterThanOrEqual(0);
+    expect(codeqlInitializeIndex).toBeLessThan(codeqlBuildIndex);
+    expect(codeqlBuildIndex).toBeLessThan(codeqlAnalyzeIndex);
+    expect(codeqlBuild.run).toBe(
+      "swift build --package-path apps/macos --product OpenClaw --arch arm64",
+    );
     expect(codeqlSelect.run).toContain("/Applications/Xcode_26.6.app/Contents/Developer");
     expect(codeqlSelect.run).toContain('if [[ "$xcode_version" != 26.6* ]]; then');
 

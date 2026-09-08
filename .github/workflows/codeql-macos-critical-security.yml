@@ -20,7 +20,7 @@ permissions:
 jobs:
   macos:
     name: Critical Security (macOS)
-    runs-on: macos-26
+    runs-on: macos-26-intel
     timeout-minutes: 45
     steps:
       - name: Checkout
@@ -57,7 +57,8 @@ jobs:
           config-file: ./.github/codeql/codeql-macos-critical-security.yml
 
       - name: Build macOS for CodeQL
-        run: swift build --package-path apps/macos --product OpenClaw
+        # Preserve ARM-only application paths in CodeQL coverage on the Intel host.
+        run: swift build --package-path apps/macos --product OpenClaw --arch arm64
 
       - name: Analyze
         id: analyze
