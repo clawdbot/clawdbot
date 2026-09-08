@@ -175,7 +175,7 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
 
     Fast mode is premium-priced and model-specific. GPT-5.6 Sol API Fast mode
     currently costs 2× Standard token pricing, with long-context multipliers
-    stacking as described above. ChatGPT/Codex-credit Fast mode is a separate
+    stacking as described in [context window defaults and long-context opt-in](/providers/openai/setup#context-window-defaults-and-long-context-opt-in). ChatGPT/Codex-credit Fast mode is a separate
     billing system: GPT-5.6 and GPT-5.5 currently consume 2.5× Standard credits,
     while API-key Codex runs use API token pricing. See
     [Fast mode](https://openai.com/api-priority-processing/),
