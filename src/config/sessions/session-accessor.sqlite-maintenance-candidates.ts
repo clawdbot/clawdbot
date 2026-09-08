@@ -1,10 +1,10 @@
 import { toUSVString } from "node:util";
 import { iterateSqliteQuerySync, sqliteStringSet } from "../../infra/kysely-sync.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
-import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import {
+  decodeLosslessSessionEntryRow,
   parseSessionEntryJson,
-  sessionEntryMetadataJson,
+  selectLosslessSessionEntryRows,
 } from "./session-accessor.sqlite-status.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
 import type { SessionEntry } from "./types.js";
@@ -29,16 +29,15 @@ export function collectSqliteSessionMaintenanceBaseKeys(
 export function readSessionMaintenanceKeyProjection(
   database: OpenClawAgentDatabase,
 ): Record<string, SessionEntry> {
-  const db = getSessionKysely(database.db);
   const store: Record<string, SessionEntry> = {};
-  for (const row of iterateSqliteQuerySync(
+  for (const rawRow of iterateSqliteQuerySync(
     database.db,
-    db
-      .selectFrom("session_nodes")
-      .select(["current_session_id", "parent_session_key", "session_key", "updated_at"])
+    selectLosslessSessionEntryRows(database, "list")
+      .select(["parent_session_key", "updated_at"])
       .where("archived_at", "is", null)
       .orderBy("session_key", "asc"),
   )) {
+    const row = decodeLosslessSessionEntryRow(database, rawRow);
     store[row.session_key] = {
       sessionId: row.current_session_id,
       updatedAt: row.updated_at,
@@ -55,17 +54,16 @@ export function readSessionMaintenanceAgeCandidates(params: {
   if (params.minimumAgeMs == null || params.minimumAgeMs <= 0) {
     return {};
   }
-  const db = getSessionKysely(params.database.db);
   const store: Record<string, SessionEntry> = {};
-  for (const row of iterateSqliteQuerySync(
+  for (const rawRow of iterateSqliteQuerySync(
     params.database.db,
-    db
-      .selectFrom("session_nodes")
-      .select([sessionEntryMetadataJson, "current_session_id", "session_key", "updated_at"])
+    selectLosslessSessionEntryRows(params.database, "list")
+      .select("updated_at")
       .where("updated_at", "<", Date.now() - params.minimumAgeMs)
       .where("archived_at", "is", null)
       .orderBy("updated_at", "asc"),
   )) {
+    const row = decodeLosslessSessionEntryRow(params.database, rawRow);
     const entry = parseSessionEntryJson(row);
     if (entry) {
       store[row.session_key] = entry;
@@ -78,17 +76,15 @@ export function readSessionMaintenanceCapCandidates(params: {
   database: OpenClawAgentDatabase;
   excludedKeys: ReadonlySet<string>;
 }): Record<string, SessionEntry> {
-  const db = getSessionKysely(params.database.db);
   // Only push down keys unchanged by Node/SQLite text conversion; retain exact membership below.
   const excludedKeys = [...params.excludedKeys].filter(
     (key) => toUSVString(key) === key && !key.includes("\0") && !/[\uFFFE\uFFFF]/u.test(key),
   );
   const store: Record<string, SessionEntry> = {};
-  for (const row of iterateSqliteQuerySync(
+  for (const rawRow of iterateSqliteQuerySync(
     params.database.db,
-    db
-      .selectFrom("session_nodes")
-      .select([sessionEntryMetadataJson, "current_session_id", "session_key", "updated_at"])
+    selectLosslessSessionEntryRows(params.database, "list")
+      .select("updated_at")
       .where("archived_at", "is", null)
       .$if(excludedKeys.length > 0, (query) =>
         query.where("session_key", "not in", sqliteStringSet(excludedKeys)),
@@ -96,6 +92,7 @@ export function readSessionMaintenanceCapCandidates(params: {
       // Stable cap ties previously inherited full-store session-key order.
       .orderBy("session_key", "asc"),
   )) {
+    const row = decodeLosslessSessionEntryRow(params.database, rawRow);
     if (params.excludedKeys.has(row.session_key)) {
       continue;
     }

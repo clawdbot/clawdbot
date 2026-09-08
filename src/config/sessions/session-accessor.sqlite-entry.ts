@@ -70,8 +70,10 @@ import {
   type ResolvedSqliteScope,
 } from "./session-accessor.sqlite-scope.js";
 import {
+  decodeLosslessSessionEntryRow,
   readSessionEntriesByStatus,
-  selectSessionEntryRows,
+  selectLosslessFullSessionEntryRows,
+  selectLosslessSessionEntryRows,
 } from "./session-accessor.sqlite-status.js";
 import type { SessionEntryListScope, SessionEntryReadScope } from "./session-accessor.types.js";
 import {
@@ -192,27 +194,35 @@ export function listSessionChildEntriesReadOnly(
   const resolved = resolveSqliteScope(scope);
   const result = withOpenClawAgentDatabaseReadOnly((database) => {
     assertCanonicalSqliteSessionKeysCurrent(database);
-    const db = getSessionKysely(database.db);
-    const query =
+    const childRows =
       scope.projection === "list"
-        ? selectSessionEntryRows(database, scope.projection).select([
-            "current_session_id",
-            "updated_at",
-          ])
-        : db.selectFrom("session_nodes").selectAll();
-    const childRows = executeSqliteQuerySync(
-      database.db,
-      query
-        .where((expression) =>
-          expression.or([
-            expression("parent_session_key", "=", resolved.sessionKey),
-            expression("spawned_by", "=", resolved.sessionKey),
-          ]),
-        )
-        .where("session_key", "!=", resolved.sessionKey)
-        .orderBy("session_key", "asc"),
-    ).rows;
-    return childRows.flatMap((row) => {
+        ? executeSqliteQuerySync(
+            database.db,
+            selectLosslessSessionEntryRows(database, scope.projection)
+              .select("updated_at")
+              .where((expression) =>
+                expression.or([
+                  expression("parent_session_key", "=", resolved.sessionKey),
+                  expression("spawned_by", "=", resolved.sessionKey),
+                ]),
+              )
+              .where("session_key", "!=", resolved.sessionKey)
+              .orderBy("session_key", "asc"),
+          ).rows
+        : executeSqliteQuerySync(
+            database.db,
+            selectLosslessFullSessionEntryRows(database)
+              .where((expression) =>
+                expression.or([
+                  expression("parent_session_key", "=", resolved.sessionKey),
+                  expression("spawned_by", "=", resolved.sessionKey),
+                ]),
+              )
+              .where("session_key", "!=", resolved.sessionKey)
+              .orderBy("session_key", "asc"),
+          ).rows;
+    return childRows.flatMap((rawRow) => {
+      const row = decodeLosslessSessionEntryRow(database, rawRow);
       if (isInternalSessionEffectsKey(row.session_key)) {
         return [];
       }

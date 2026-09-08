@@ -46,8 +46,9 @@ import {
 } from "./session-accessor.sqlite-references.js";
 import { cloneSessionEntry, getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import {
+  decodeLosslessSessionEntryRow,
   parseSessionEntryJson as parseSessionEntryRow,
-  sessionEntryMetadataJson,
+  selectLosslessSessionEntryRows,
 } from "./session-accessor.sqlite-status.js";
 import { deleteSessionTranscriptIndexInTransaction } from "./session-transcript-index.js";
 import type { SessionEntry } from "./types.js";
@@ -175,22 +176,19 @@ export function readReferencedSessionIds(
   candidateSessionIds?: readonly string[],
   diskBudget?: { preserveRecentMs?: number | null },
 ): Set<string> {
-  const db = getSessionKysely(database.db);
   // Only push down keys unchanged by Node/SQLite text conversion; retain exact membership below.
   const excludedKeys = [...excludedSessionKeys].filter(
     (key) => toUSVString(key) === key && !key.includes("\0") && !/[\uFFFE\uFFFF]/u.test(key),
   );
   const rows = iterateSqliteQuerySync(
     database.db,
-    db
-      .selectFrom("session_nodes")
-      .select([sessionEntryMetadataJson, "current_session_id", "session_key"])
-      .$if(excludedKeys.length > 0, (query) =>
-        query.where("session_key", "not in", sqliteStringSet(excludedKeys)),
-      ),
+    selectLosslessSessionEntryRows(database, "list").$if(excludedKeys.length > 0, (query) =>
+      query.where("session_key", "not in", sqliteStringSet(excludedKeys)),
+    ),
   );
   const sessionIds = new Set<string>();
-  for (const row of rows) {
+  for (const rawRow of rows) {
+    const row = decodeLosslessSessionEntryRow(database, rawRow);
     if (excludedSessionKeys.has(row.session_key)) {
       continue;
     }
@@ -618,11 +616,10 @@ export function planSessionLifecycleArtifactCleanup(
   const db = getSessionKysely(database.db);
   const rows = executeSqliteQuerySync(
     database.db,
-    db
-      .selectFrom("session_nodes")
-      .select(["entry_json", "session_key", "current_session_id", "updated_at"])
+    selectLosslessSessionEntryRows(database, "full")
+      .select("updated_at")
       .orderBy("session_key", "asc"),
-  ).rows;
+  ).rows.map((row) => decodeLosslessSessionEntryRow(database, row));
 
   const removedSessionIds = new Set<string>();
   const entries: LifecycleArtifactCleanupPlan["entries"] = [];

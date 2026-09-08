@@ -1,5 +1,6 @@
 import { sql } from "kysely";
 import {
+  decodeSqliteTextBytes,
   executeSqliteQuerySync,
   getNodeSqliteKysely,
   sqliteStringSet,
@@ -35,29 +36,73 @@ export const sessionEntryMetadataJson =
     ELSE entry_json END
   ELSE entry_json END`.as("entry_json");
 
-export function selectSessionEntryRows(
+export function selectLosslessSessionEntryRows(
   database: Pick<OpenClawAgentDatabase, "db">,
   projection: "full" | "list",
   fullEntryKeys: readonly string[] = [],
 ) {
   const metadata = fullEntryKeys.length
-    ? /* kysely-allow-raw: one row snapshot preserves complete selected entries beside sibling metadata. */ sql<string>`CASE WHEN session_key IN ${sqliteStringSet(fullEntryKeys)} THEN entry_json ELSE ${sessionEntryMetadataJson.expression} END`.as(
-        "entry_json",
+    ? /* kysely-allow-raw: one row snapshot preserves complete selected entries beside sibling metadata. */ sql<string>`CASE WHEN session_key IN ${sqliteStringSet(fullEntryKeys)} THEN entry_json ELSE ${sessionEntryMetadataJson.expression} END`
+    : /* kysely-allow-raw: reuse the bounded metadata projection without changing parser semantics. */ sql<string>`${sessionEntryMetadataJson.expression}`;
+  const projectedEntryJson =
+    projection === "full"
+      ? /* kysely-allow-raw: select the trusted session JSON column for a full snapshot. */ sql<string>`entry_json`
+      : metadata;
+  return (
+    getNodeSqliteKysely<SessionStatusDatabase>(database.db)
+      .selectFrom("session_nodes")
+      .select("session_key")
+      // Preserve the exact parser input on node:sqlite builds that truncate TEXT at NUL.
+      .select(
+        /* kysely-allow-raw: preserve exact projected session JSON bytes on affected node:sqlite builds. */ sql<Uint8Array>`CAST(${projectedEntryJson} AS BLOB)`.as(
+          "entry_json_bytes",
+        ),
       )
-    : sessionEntryMetadataJson;
+      .select(
+        /* kysely-allow-raw: preserve exact session identity bytes on affected node:sqlite builds. */ sql<Uint8Array>`CAST(current_session_id AS BLOB)`.as(
+          "current_session_id_bytes",
+        ),
+      )
+      .$if(hasSqliteSessionOwnerColumns(database.db), (query) =>
+        query.select([
+          "owner_actor_type",
+          "owner_actor_id",
+          "owner_assigned_by_type",
+          "owner_assigned_by_id",
+          "owner_assigned_at",
+        ]),
+      )
+  );
+}
+
+export function selectLosslessFullSessionEntryRows(database: Pick<OpenClawAgentDatabase, "db">) {
   return getNodeSqliteKysely<SessionStatusDatabase>(database.db)
     .selectFrom("session_nodes")
-    .select("session_key")
-    .select(projection === "full" ? "entry_json" : metadata)
-    .$if(hasSqliteSessionOwnerColumns(database.db), (query) =>
-      query.select([
-        "owner_actor_type",
-        "owner_actor_id",
-        "owner_assigned_by_type",
-        "owner_assigned_by_id",
-        "owner_assigned_at",
-      ]),
-    );
+    .selectAll()
+    .select([
+      /* kysely-allow-raw: preserve exact session JSON bytes on affected node:sqlite builds. */ sql<Uint8Array>`CAST(entry_json AS BLOB)`.as(
+        "entry_json_bytes",
+      ),
+      /* kysely-allow-raw: preserve exact session identity bytes on affected node:sqlite builds. */ sql<Uint8Array>`CAST(current_session_id AS BLOB)`.as(
+        "current_session_id_bytes",
+      ),
+    ]);
+}
+
+export function decodeLosslessSessionEntryRow<
+  Row extends { current_session_id_bytes: Uint8Array; entry_json_bytes: Uint8Array },
+>(
+  database: Pick<OpenClawAgentDatabase, "db">,
+  row: Row,
+): Row & {
+  current_session_id: string;
+  entry_json: string;
+} {
+  return {
+    ...row,
+    current_session_id: decodeSqliteTextBytes(database.db, row.current_session_id_bytes),
+    entry_json: decodeSqliteTextBytes(database.db, row.entry_json_bytes),
+  };
 }
 
 // Canonical writers settle entry_valid; raw writes clear it. Inventory readers need

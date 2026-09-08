@@ -11,7 +11,11 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import { readExactSessionEntryRowValidated } from "./session-accessor.sqlite-entry-store.js";
+import {
+  readExactSessionEntryRow,
+  readExactSessionEntryRowValidated,
+  readSessionEntryRow,
+} from "./session-accessor.sqlite-entry-store.js";
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
@@ -22,6 +26,25 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
     cleanup();
   }),
 );
+
+it("preserves embedded NUL identities in ordinary and exact session reads", () => {
+  const directory = tempDirs.make("session-identity-nul-read-");
+  vi.stubEnv("OPENCLAW_STATE_DIR", directory);
+  const sessionKey = "agent:main:main";
+  const sessionId = "opaque\0identity";
+  const scope = { agentId: "main", sessionKey, storePath: path.join(directory, "agent.sqlite") };
+  replaceSessionEntrySync(scope, { sessionId, updatedAt: 1 });
+  const database = openOpenClawAgentDatabase({ agentId: scope.agentId, path: scope.storePath });
+
+  for (const selected of [
+    readSessionEntryRow(database, sessionKey),
+    readExactSessionEntryRow(database, sessionKey, "full"),
+    readExactSessionEntryRow(database, sessionKey, "list"),
+  ]) {
+    expect(selected?.entry.sessionId).toBe(sessionId);
+    expect(selected?.row.current_session_id).toBe(sessionId);
+  }
+});
 
 it.each([false, true])("publishes identity only on outer commit (rollback: %s)", (rollback) => {
   const directory = tempDirs.make("session-identity-publication-");

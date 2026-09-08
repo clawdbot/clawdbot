@@ -1,5 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
+import { sql } from "kysely";
 import {
+  decodeSqliteTextBytes,
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
@@ -148,6 +150,9 @@ export function scanCanonicalSqliteSessionEntries(
     db.selectFrom("session_key_contract").select("main_key").where("id", "=", 1),
   )?.main_key;
   const canonicalMainKey = normalizeMainKey(mainKey ?? storedMainKey);
+  const projectedEntryJson = visit
+    ? /* kysely-allow-raw: select the trusted session JSON column for a full visitor snapshot. */ sql<string>`session_nodes.entry_json`
+    : sessionEntryMetadataJson.expression;
   let count = 0;
   for (const row of iterateSqliteQuerySync(
     database.db,
@@ -169,6 +174,15 @@ export function scanCanonicalSqliteSessionEntries(
       ])
       // Key validation needs metadata; Doctor visitors still own complete saved entries.
       .select(visit ? "session_nodes.entry_json" : sessionEntryMetadataJson)
+      // These two values form one identity check; read both without native NUL truncation.
+      .select([
+        /* kysely-allow-raw: preserve exact session identity bytes on affected node:sqlite builds. */ sql<Uint8Array>`CAST(session_nodes.current_session_id AS BLOB)`.as(
+          "current_session_id_bytes",
+        ),
+        /* kysely-allow-raw: preserve exact projected session JSON bytes on affected node:sqlite builds. */ sql<Uint8Array>`CAST(${projectedEntryJson} AS BLOB)`.as(
+          "entry_json_bytes",
+        ),
+      ])
       .$if(Boolean(metadata), (query) => query.select("session_nodes.updated_at"))
       .$if(Boolean(metadata) && hasSqliteSessionOwnerColumns(database.db), (query) =>
         query.select([
@@ -181,20 +195,22 @@ export function scanCanonicalSqliteSessionEntries(
       )
       .orderBy("session_nodes.session_key"),
   )) {
+    const currentSessionId = decodeSqliteTextBytes(database.db, row.current_session_id_bytes);
+    const entryJson = decodeSqliteTextBytes(database.db, row.entry_json_bytes);
     // Retained windows have no entry, but their keys remain part of a listing snapshot.
     metadata?.keys.push(row.session_key);
     if (
-      row.entry_json === "{}" &&
+      entryJson === "{}" &&
       row.entry_valid === -1 &&
-      row.retained_window_id === row.current_session_id
+      row.retained_window_id === currentSessionId
     ) {
       continue;
     }
     const record =
       row.entry_valid === 1
         ? parseSqliteSessionEntryRecord({
-            entry_json: row.entry_json,
-            current_session_id: row.current_session_id,
+            entry_json: entryJson,
+            current_session_id: currentSessionId,
           })
         : null;
     if (!record) {

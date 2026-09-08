@@ -1,5 +1,7 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { sql } from "kysely";
 import {
+  decodeSqliteTextBytes,
   executeSqliteQuerySync,
   iterateSqliteQuerySync,
   sqliteStringSet,
@@ -55,11 +57,16 @@ export function addRetainedWindowSessionReferences(
     .select([
       "session_windows.session_id",
       "session_nodes.session_key",
-      "session_nodes.current_session_id",
       "session_nodes.updated_at",
       "session_nodes.pinned_at",
     ])
-    .$if(diskBudget !== undefined, (projection) => projection.select(sessionEntryMetadataJson))
+    .$if(diskBudget !== undefined, (projection) =>
+      projection.select(
+        /* kysely-allow-raw: preserve exact projected session JSON bytes on affected node:sqlite builds. */ sql<Uint8Array>`CAST(${sessionEntryMetadataJson.expression} AS BLOB)`.as(
+          "entry_json_bytes",
+        ),
+      ),
+    )
     .where((eb) =>
       eb.or([
         eb("session_nodes.archived_at", "is not", null),
@@ -78,10 +85,14 @@ export function addRetainedWindowSessionReferences(
     if (
       diskBudget &&
       row.pinned_at === null &&
-      row.entry_json !== undefined &&
+      row.entry_json_bytes !== undefined &&
       isSessionEntryDiskBudgetEvictable({
         key: row.session_key,
-        entry: parseSessionEntryJson({ ...row, entry_json: row.entry_json }) ?? undefined,
+        entry:
+          parseSessionEntryJson({
+            ...row,
+            entry_json: decodeSqliteTextBytes(database.db, row.entry_json_bytes),
+          }) ?? undefined,
         preserveRecentMs: diskBudget.preserveRecentMs,
       })
     ) {
@@ -105,18 +116,25 @@ export function isRecentHistoricalSessionId(params: {
     db
       .selectFrom("session_windows")
       .innerJoin("session_nodes", "session_nodes.session_key", "session_windows.session_key")
+      .select(["session_nodes.session_key", "session_nodes.updated_at"])
       .select([
-        "session_nodes.current_session_id",
-        "session_nodes.entry_json",
-        "session_nodes.session_key",
-        "session_nodes.updated_at",
+        /* kysely-allow-raw: preserve exact session identity bytes on affected node:sqlite builds. */ sql<Uint8Array>`CAST(session_nodes.current_session_id AS BLOB)`.as(
+          "current_session_id_bytes",
+        ),
+        /* kysely-allow-raw: preserve exact session JSON bytes on affected node:sqlite builds. */ sql<Uint8Array>`CAST(session_nodes.entry_json AS BLOB)`.as(
+          "entry_json_bytes",
+        ),
       ])
       .where("session_windows.session_id", "=", params.sessionId),
   ).rows[0];
   if (!row) {
     return false;
   }
-  const entry = parseSessionEntryJson(row);
+  const entry = parseSessionEntryJson({
+    ...row,
+    current_session_id: decodeSqliteTextBytes(params.database.db, row.current_session_id_bytes),
+    entry_json: decodeSqliteTextBytes(params.database.db, row.entry_json_bytes),
+  });
   return Boolean(
     entry &&
     isRecentSessionMaintenanceEntry({

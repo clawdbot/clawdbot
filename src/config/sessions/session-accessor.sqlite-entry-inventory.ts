@@ -1,8 +1,15 @@
-import { iterateSqliteQuerySync, sqliteStringSet } from "../../infra/kysely-sync.js";
+import { sql } from "kysely";
+import {
+  decodeSqliteTextBytes,
+  iterateSqliteQuerySync,
+  sqliteStringSet,
+} from "../../infra/kysely-sync.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import {
+  decodeLosslessSessionEntryRow,
   parseSessionEntryJson,
+  selectLosslessFullSessionEntryRows,
   sessionEntryInventoryJson,
 } from "./session-accessor.sqlite-status.js";
 import { assertCanonicalSqliteSessionKeysCurrent } from "./session-canonical-key.js";
@@ -21,8 +28,7 @@ export function readSessionEntryStore(
   if (options.allowCanonicalRepair !== true) {
     assertCanonicalSqliteSessionKeysCurrent(database);
   }
-  const db = getSessionKysely(database.db);
-  let query = db.selectFrom("session_nodes").selectAll();
+  let query = selectLosslessFullSessionEntryRows(database);
   if (options.includeArchived === false) {
     query = query.where("archived_at", "is", null);
   }
@@ -34,7 +40,8 @@ export function readSessionEntryStore(
     ).orderBy("session_key"),
   );
   const store: Record<string, SessionEntry> = {};
-  for (const row of rows) {
+  for (const rawRow of rows) {
+    const row = decodeLosslessSessionEntryRow(database, rawRow);
     // Doctor lifecycle projection supplies its separately hydrated expected entry for rejected
     // raw rows; ordinary exact reads still fail loud before a write can replace one.
     const entry = parseSessionEntryJson(row);
@@ -50,15 +57,24 @@ export function readSessionEntryCount(
   options: { includeArchived?: boolean } = {},
 ): number {
   const db = getSessionKysely(database.db);
-  let query = db.selectFrom("session_nodes").select(sessionEntryInventoryJson);
+  let query = db
+    .selectFrom("session_nodes")
+    .select(
+      /* kysely-allow-raw: preserve exact inventory JSON bytes on affected node:sqlite builds. */ sql<Uint8Array | null>`CAST(${sessionEntryInventoryJson.expression} AS BLOB)`.as(
+        "entry_json_bytes",
+      ),
+    );
   if (options.includeArchived === false) {
     query = query.where("archived_at", "is", null);
   }
   const rows = iterateSqliteQuerySync(database.db, query);
   let count = 0;
   for (const row of rows) {
-    count +=
-      row.entry_json === null || parseSessionEntryJson({ entry_json: row.entry_json }) ? 1 : 0;
+    const entryJson =
+      row.entry_json_bytes === null
+        ? null
+        : decodeSqliteTextBytes(database.db, row.entry_json_bytes);
+    count += entryJson === null || parseSessionEntryJson({ entry_json: entryJson }) ? 1 : 0;
   }
   return count;
 }
@@ -71,10 +87,19 @@ export function* iterateSessionEntryKeys(
     database.db,
     db
       .selectFrom("session_nodes")
-      .select([sessionEntryInventoryJson, "session_key"])
+      .select([
+        /* kysely-allow-raw: preserve exact inventory JSON bytes on affected node:sqlite builds. */ sql<Uint8Array | null>`CAST(${sessionEntryInventoryJson.expression} AS BLOB)`.as(
+          "entry_json_bytes",
+        ),
+        "session_key",
+      ])
       .orderBy("session_key", "asc"),
   )) {
-    if (row.entry_json === null || parseSessionEntryJson({ entry_json: row.entry_json })) {
+    const entryJson =
+      row.entry_json_bytes === null
+        ? null
+        : decodeSqliteTextBytes(database.db, row.entry_json_bytes);
+    if (entryJson === null || parseSessionEntryJson({ entry_json: entryJson })) {
       yield row.session_key;
     }
   }

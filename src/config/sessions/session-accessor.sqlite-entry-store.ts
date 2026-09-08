@@ -41,9 +41,10 @@ import {
   normalizeSessionEntryTimestamp,
 } from "./session-accessor.sqlite-session-row.js";
 import {
+  decodeLosslessSessionEntryRow,
   hasValidSessionEntryIdentity,
   parseSessionEntryJson as parseSessionEntryRow,
-  sessionEntryMetadataJson,
+  selectLosslessSessionEntryRows,
 } from "./session-accessor.sqlite-status.js";
 import { readTranscriptMutationStateInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import {
@@ -171,12 +172,10 @@ export function deleteSessionEntryRows(
     windows.length > 0
       ? executeSqliteQuerySync(
           database.db,
-          db
-            .selectFrom("session_nodes")
-            .select(["current_session_id", sessionEntryMetadataJson, "session_key"])
+          selectLosslessSessionEntryRows(database, "list")
             .where("session_key", "!=", sessionKey)
             .orderBy("session_key", "asc"),
-        ).rows
+        ).rows.map((row) => decodeLosslessSessionEntryRow(database, row))
       : [];
   for (const window of windows) {
     const survivingNode = survivingNodes.find((node) => {
