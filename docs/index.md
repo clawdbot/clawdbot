@@ -147,7 +147,7 @@ The Gateway is the single source of truth for sessions, routing, and channel con
     <Tabs>
       <Tab title="macOS / Linux / WSL2">
         ```bash
-        curl -fsSL https://openclaw.ai/install.sh | bash
+        curl -fsSL https://openclaw.ai/install.sh | /bin/bash
         ```
       </Tab>
       <Tab title="Windows (PowerShell)">

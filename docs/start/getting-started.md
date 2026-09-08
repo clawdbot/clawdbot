@@ -49,7 +49,7 @@ run `openclaw gateway install`. Run `openclaw` for the TUI or
     <Tabs>
       <Tab title="macOS / Linux">
         ```bash
-        curl -fsSL https://openclaw.ai/install.sh | bash
+        curl -fsSL https://openclaw.ai/install.sh | /bin/bash
         ```
         <img
   src="/assets/install-script.svg"

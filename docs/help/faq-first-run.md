@@ -16,7 +16,7 @@ and troubleshooting see the main [FAQ](/help/faq).
 <AccordionGroup>
   <Accordion title="Recommended way to install and set up OpenClaw">
     ```bash
-    curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash
+    curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | /bin/bash
     ```
 
     The installer starts guided onboarding for you, so there is no separate
@@ -62,7 +62,7 @@ and troubleshooting see the main [FAQ](/help/faq).
     code + docs and reason about the exact version you run:
 
     ```bash
-    curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash -s -- --install-method git
+    curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | /bin/bash -s -- --install-method git
     ```
 
     Ask the agent to plan and supervise the fix step-by-step, then execute only the
@@ -290,11 +290,11 @@ and troubleshooting see the main [FAQ](/help/faq).
     One-liners (macOS/Linux):
 
     ```bash
-    curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash -s -- --beta
+    curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | /bin/bash -s -- --beta
     ```
 
     ```bash
-    curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash -s -- --install-method git
+    curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | /bin/bash -s -- --install-method git
     ```
 
     Windows installer (PowerShell): `iwr -useb https://openclaw.ai/install.ps1 | iex`
@@ -318,7 +318,7 @@ and troubleshooting see the main [FAQ](/help/faq).
     2. **Hackable (git) install (fresh machine):**
 
     ```bash
-    curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash -s -- --install-method git
+    curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | /bin/bash -s -- --install-method git
     ```
 
     Prefer a manual clone:
@@ -352,9 +352,9 @@ and troubleshooting see the main [FAQ](/help/faq).
     Re-run with `--verbose`:
 
     ```bash
-    curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash -s -- --verbose
-    curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash -s -- --beta --verbose
-    curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash -s -- --install-method git --verbose
+    curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | /bin/bash -s -- --verbose
+    curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | /bin/bash -s -- --beta --verbose
+    curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | /bin/bash -s -- --install-method git --verbose
     ```
 
     `install.ps1` has no dedicated verbose switch; wrap it in `Set-PSDebug -Trace 1` /
@@ -412,7 +412,7 @@ and troubleshooting see the main [FAQ](/help/faq).
     your bot (or Claude/Codex) **from that folder** so it can read the repo and answer precisely.
 
     ```bash
-    curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash -s -- --install-method git
+    curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | /bin/bash -s -- --install-method git
     ```
 
     More detail: [Install](/install) and [Installer flags](/install/installer).
@@ -784,8 +784,8 @@ and troubleshooting see the main [FAQ](/help/faq).
     The installer can force either mode too:
 
     ```bash
-    curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash -s -- --install-method git
-    curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash -s -- --install-method npm
+    curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | /bin/bash -s -- --install-method git
+    curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | /bin/bash -s -- --install-method npm
     ```
 
     Backup tips: [Where things live on disk](/help/faq#where-things-live-on-disk).

@@ -37,7 +37,7 @@ Windows desktop users can also install the native [Windows Hub](/platforms/windo
 <Tabs>
   <Tab title="macOS / Linux / WSL2">
     ```bash
-    curl -fsSL https://openclaw.ai/install.sh | bash
+    curl -fsSL https://openclaw.ai/install.sh | /bin/bash
     ```
   </Tab>
   <Tab title="Windows (PowerShell)">
@@ -52,7 +52,7 @@ To install without running onboarding:
 <Tabs>
   <Tab title="macOS / Linux / WSL2">
     ```bash
-    curl -fsSL https://openclaw.ai/install.sh | bash -s -- --no-onboard
+    curl -fsSL https://openclaw.ai/install.sh | /bin/bash -s -- --no-onboard
     ```
   </Tab>
   <Tab title="Windows (PowerShell)">
@@ -72,7 +72,7 @@ Use this when you want OpenClaw and Node kept under a local prefix such as
 `~/.openclaw`, without depending on a system-wide Node install:
 
 ```bash
-curl -fsSL https://openclaw.ai/install-cli.sh | bash
+curl -fsSL https://openclaw.ai/install-cli.sh | /bin/bash
 ```
 
 It supports npm installs by default, plus git-checkout installs under the same
@@ -172,7 +172,7 @@ Or skip the global install and use `pnpm openclaw ...` from inside the repo. See
 ### Install from the GitHub main checkout
 
 ```bash
-curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash -s -- --install-method git --version main
+curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | /bin/bash -s -- --install-method git --version main
 ```
 
 ### Containers and package managers

@@ -17,7 +17,7 @@ fi
 set -euo pipefail
 
 # OpenClaw Installer for macOS and Linux
-# Usage: curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash
+# Usage: curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | /bin/bash
 
 BOLD='\033[1m'
 ACCENT='\033[38;2;255;77;77m'       # coral-bright  #ff4d4d
@@ -1440,7 +1440,7 @@ print_usage() {
 OpenClaw installer (macOS + Linux)
 
 Usage:
-  curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash -s -- [options]
+  curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | /bin/bash -s -- [options]
 
 Options:
   --install-method, --method npm|git   Install via npm (default) or from a git checkout
@@ -1470,11 +1470,11 @@ Environment variables:
   OPENCLAW_VERBOSE=1
   OPENCLAW_NPM_LOGLEVEL=error|warn|notice  Default: error (hide npm deprecation noise)
 Examples:
-  curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash
-  curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash -s -- --no-onboard
-  curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash -s -- --no-onboard --verify
-  curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash -s -- --install-method git --version main
-  curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash -s -- --install-method git --no-onboard
+  curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | /bin/bash
+  curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | /bin/bash -s -- --no-onboard
+  curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | /bin/bash -s -- --no-onboard --verify
+  curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | /bin/bash -s -- --install-method git --version main
+  curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | /bin/bash -s -- --install-method git --no-onboard
 EOF
 }
 
@@ -1679,7 +1679,7 @@ print_homebrew_admin_fix() {
     echo "  2) Ask an Administrator to grant admin rights, then sign out/in:"
     echo "     sudo dseditgroup -o edit -a ${current_user} -t user admin"
     echo "Then retry:"
-    echo "  curl -fsSL https://openclaw.ai/install.sh | bash"
+    echo "  curl -fsSL https://openclaw.ai/install.sh | /bin/bash"
 }
 
 install_homebrew() {
@@ -2166,7 +2166,7 @@ ensure_default_node_active_shell() {
         echo "  nvm use ${NODE_DEFAULT_MAJOR}"
         echo "  nvm alias default ${NODE_DEFAULT_MAJOR}"
         echo "Then open a new shell and rerun:"
-        echo "  curl -fsSL https://openclaw.ai/install.sh | bash"
+        echo "  curl -fsSL https://openclaw.ai/install.sh | /bin/bash"
     else
         echo "Install/select Node.js ${NODE_DEFAULT_MAJOR} and ensure it is first on PATH, then rerun installer."
     fi
@@ -4055,7 +4055,7 @@ main() {
         ui_kv "Checkout" "$final_git_dir"
         ui_kv "Wrapper" "$HOME/.local/bin/openclaw"
         ui_kv "Update command" "${user_claw} update"
-        ui_kv "Switch to npm" "curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash -s -- --install-method npm"
+        ui_kv "Switch to npm" "curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | /bin/bash -s -- --install-method npm"
     fi
 
     if [[ "$config_present" != "true" ]]; then
