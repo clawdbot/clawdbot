@@ -1,9 +1,17 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { isMemorySearchDeadlineError, runMemorySearchWithDeadline } from "./search-deadline.js";
+import {
+  DEFAULT_MEMORY_SEARCH_TIMEOUT_MS,
+  isMemorySearchDeadlineError,
+  runMemorySearchWithDeadline,
+} from "./search-deadline.js";
 
 describe("runMemorySearchWithDeadline", () => {
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it("allows the default memory_search envelope thirty seconds", () => {
+    expect(DEFAULT_MEMORY_SEARCH_TIMEOUT_MS).toBe(30_000);
   });
 
   it("clears its timer and parent abort listener after success", async () => {
