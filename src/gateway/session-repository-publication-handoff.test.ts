@@ -69,8 +69,8 @@ it.each([
       await fs.mkdir(source);
       const env = {
         ...process.env,
-        GIT_CONFIG_GLOBAL: os.devNull,
-        GIT_CONFIG_SYSTEM: os.devNull,
+        GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : os.devNull,
+        GIT_CONFIG_SYSTEM: process.platform === "win32" ? "NUL" : os.devNull,
         GIT_AUTHOR_NAME: "Handoff Proof",
         GIT_AUTHOR_EMAIL: "handoff@example.test",
         GIT_COMMITTER_NAME: "Handoff Proof",

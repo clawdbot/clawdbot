@@ -176,7 +176,7 @@ function startGitProvisioning(directories: string[], retryAfterFailure = false) 
     TEMP: testState!.root,
     TMP: testState!.root,
     GIT_CONFIG_NOSYSTEM: "1",
-    GIT_CONFIG_GLOBAL: devNull,
+    GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : devNull,
     GIT_TERMINAL_PROMPT: "0",
   };
   const realRun = commandExec.runCommandWithTimeout;

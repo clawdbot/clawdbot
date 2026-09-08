@@ -81,7 +81,7 @@ it.each([
         baseEnv: {
           PATH: process.env.PATH,
           HOME: root,
-          GIT_CONFIG_GLOBAL: os.devNull,
+          GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : os.devNull,
           GIT_CONFIG_NOSYSTEM: "1",
         },
       });

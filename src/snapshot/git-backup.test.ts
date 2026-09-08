@@ -531,7 +531,7 @@ describe("Git-backed SQLite snapshots", () => {
     const isolatedHome = path.join(root, "git-home");
     await fs.mkdir(isolatedHome, { recursive: true });
     const gitEnv = createPathResolutionEnv(isolatedHome, {
-      GIT_CONFIG_GLOBAL: os.devNull,
+      GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : os.devNull,
       GIT_CONFIG_NOSYSTEM: "1",
       GIT_TERMINAL_PROMPT: "0",
     });

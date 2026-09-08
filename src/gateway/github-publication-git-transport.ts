@@ -68,7 +68,10 @@ export async function assertSafeGitPublicationWorkspace(
   cwd: string,
   run: (argv: string[], options?: GitCommandOptions) => Promise<GitCommandResult>,
 ): Promise<void> {
-  const isolatedConfig = { GIT_CONFIG_GLOBAL: os.devNull, GIT_CONFIG_SYSTEM: os.devNull };
+  const isolatedConfig = {
+    GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : os.devNull,
+    GIT_CONFIG_SYSTEM: process.platform === "win32" ? "NUL" : os.devNull,
+  };
   const [localUnsafe, worktreeConfig] = await Promise.all([
     run(githubPublicationUnsafeConfigArgs("--local"), { cwd, env: isolatedConfig }),
     run(
@@ -228,8 +231,8 @@ export async function captureGitHubPublicationWorkspaceSnapshot(params: {
   try {
     const env = {
       GIT_ATTR_NOSYSTEM: "1",
-      GIT_CONFIG_GLOBAL: os.devNull,
-      GIT_CONFIG_SYSTEM: os.devNull,
+      GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : os.devNull,
+      GIT_CONFIG_SYSTEM: process.platform === "win32" ? "NUL" : os.devNull,
       GIT_INDEX_FILE: path.join(tempDir, "index"),
     };
     // Preserve staged path inventory, and keep write-tree cache updates off the real index.

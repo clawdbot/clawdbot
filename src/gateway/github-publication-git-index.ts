@@ -206,8 +206,8 @@ export async function updateGitHubPublicationBranchAndIndex(params: {
     recoveryPath = publicationRecoveryPath(indexPath, params.requestId);
     const gitEnv = {
       ...params.env,
-      GIT_CONFIG_GLOBAL: os.devNull,
-      GIT_CONFIG_SYSTEM: os.devNull,
+      GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : os.devNull,
+      GIT_CONFIG_SYSTEM: process.platform === "win32" ? "NUL" : os.devNull,
     };
     await params.run([...HARDENED_GIT, "read-tree", params.headCommit], {
       cwd: params.cwd,
