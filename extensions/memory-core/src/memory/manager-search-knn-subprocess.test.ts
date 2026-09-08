@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import { ensureSqliteLibrarySelected } from "openclaw/plugin-sdk/memory-core-host-engine-knn";
 import { loadSqliteVecExtension } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, type MockInstance, vi } from "vitest";
 import { runVectorKnnInSubprocess } from "./manager-search-knn-subprocess.js";
 import type { VectorKnnRequest } from "./manager-search-knn.js";
 import { searchVector } from "./manager-search.js";
@@ -23,7 +23,8 @@ vi.mock("node:child_process", async (importOriginal) => {
 });
 
 vi.mock("openclaw/plugin-sdk/memory-core-host-engine-knn", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/memory-core-host-engine-knn")>();
+  const actual =
+    await importOriginal<typeof import("openclaw/plugin-sdk/memory-core-host-engine-knn")>();
   return { ...actual, ensureSqliteLibrarySelected: vi.fn(actual.ensureSqliteLibrarySelected) };
 });
 
@@ -34,6 +35,8 @@ beforeEach(() => {
 
 function useFixtureChild() {
   const children: childProcess.ChildProcessWithoutNullStreams[] = [];
+  const stdinEndSpies: MockInstance<childProcess.ChildProcessWithoutNullStreams["stdin"]["end"]>[] =
+    [];
   const ready: Promise<unknown[]>[] = [];
   vi.mocked(childProcess.spawn).mockImplementation((_command, _args, options) => {
     const child = spawn(process.execPath, [fileURLToPath(fixtureChildUrl)], {
@@ -41,11 +44,11 @@ function useFixtureChild() {
       stdio: ["pipe", "pipe", "pipe"],
     });
     children.push(child);
-    vi.spyOn(child.stdin, "end");
+    stdinEndSpies.push(vi.spyOn(child.stdin, "end"));
     ready.push(once(child.stderr, "data"));
     return child;
   });
-  return { children, ready };
+  return { children, ready, stdinEndSpies };
 }
 
 function request(limit: number): VectorKnnRequest {
@@ -146,7 +149,7 @@ describe("memory vector KNN subprocess boundary", () => {
       );
       const fixture = useFixtureChild();
       await runVectorKnnInSubprocess({ databasePath: "fixture:ok", request: request(1) });
-      const input = JSON.parse(String(vi.mocked(fixture.children[0]!.stdin.end).mock.calls[0]![0]));
+      const input = JSON.parse(String(fixture.stdinEndSpies[0]!.mock.calls[0]![0]));
       if (source === "runtime") {
         expect(input).not.toHaveProperty("sqliteLibraryPath");
       } else {
