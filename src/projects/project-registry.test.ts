@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
 import { promisify } from "node:util";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -16,8 +16,13 @@ import {
   cloneProjectCheckout,
   ensureProjectCheckoutCommit,
   ProjectCloneError,
+  refreshProjectCheckout,
 } from "./project-clone-runtime.js";
-import { materializeProjectClone, removeClonedProjectCheckout } from "./project-clone.js";
+import {
+  materializeProjectClone,
+  refreshProjectClone,
+  removeClonedProjectCheckout,
+} from "./project-clone.js";
 import { parseProjectGitUrl } from "./project-git-url.js";
 import {
   listProjectRegistry,
@@ -144,8 +149,8 @@ describe("project registry", () => {
       "workspace:main",
       "workspace:work",
     ]);
-    expect(removeProjectRegistry(first.id, options)).toBe(true);
-    expect(removeProjectRegistry(first.id, options)).toBe(false);
+    expect(await removeProjectRegistry(first, options)).toBe(true);
+    expect(await removeProjectRegistry(first, options)).toBe(false);
     expect(listProjectRegistry(cfg, options).map((project) => project.id)).not.toContain(first.id);
   });
 
@@ -198,6 +203,35 @@ describe("project registry", () => {
       originUrl: "https://github.com/acme/fixture.git",
     });
   });
+
+  it.runIf(process.platform !== "win32")(
+    "does not run checkout hooks while refreshing managed refs",
+    async () => {
+      const root = tempDirs.make("openclaw-project-refresh-hooks-");
+      const source = await initializeRepository(root, "source");
+      const target = path.join(root, "managed", "fixture");
+      await cloneProjectCheckout({ url: source, target });
+      const marker = path.join(root, "hook-ran");
+      const hooks = path.join(target, "git-hooks");
+      await fs.mkdir(hooks);
+      const hook = path.join(hooks, "reference-transaction");
+      await fs.writeFile(hook, `#!/bin/sh\ntouch '${marker}'\n`);
+      await fs.chmod(hook, 0o755);
+      await execFileAsync("git", ["-C", target, "config", "core.hooksPath", hooks]);
+      await fs.writeFile(path.join(source, "later.txt"), "later\n");
+      await execFileAsync("git", ["-C", source, "add", "later.txt"]);
+      await execFileAsync("git", ["-C", source, "commit", "-m", "later"]);
+      const sourceHead = (
+        await execFileAsync("git", ["-C", source, "rev-parse", "HEAD"])
+      ).stdout.trim();
+      await refreshProjectCheckout({ url: source, target });
+
+      await expect(fs.stat(marker)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(
+        (await execFileAsync("git", ["-C", target, "rev-parse", "origin/main"])).stdout.trim(),
+      ).toBe(sourceHead);
+    },
+  );
 
   it("returns an existing registration for the same canonical remote without cloning", async () => {
     const root = tempDirs.make("openclaw-project-idempotent-");
@@ -322,6 +356,169 @@ describe("project registry", () => {
     ]);
     await expect(fs.stat(checkout)).rejects.toMatchObject({ code: "ENOENT" });
   });
+
+  it("ignores checkout URL rewrites while refreshing the recorded project", async () => {
+    const root = tempDirs.make("openclaw-project-refresh-rewrite-");
+    const source = await initializeRepository(root, "source");
+    const checkout = path.join(root, "checkout");
+    await execFileAsync("git", ["clone", source, checkout]);
+    await execFileAsync("git", ["-C", source, "branch", "expected-base"]);
+    const unrelated = await initializeRepository(root, "unrelated");
+    await execFileAsync("git", ["-C", unrelated, "branch", "injected-base"]);
+    const options = { path: path.join(root, "state.sqlite") };
+    const project = await registerClonedProjectRegistry(
+      { path: checkout, name: "Recorded", originUrl: source },
+      options,
+    );
+    await execFileAsync("git", ["-C", checkout, "config", `url.${unrelated}.insteadOf`, source]);
+
+    await expect(refreshProjectClone(project, options)).resolves.toBeUndefined();
+    await expect(
+      execFileAsync("git", [
+        "-C",
+        checkout,
+        "rev-parse",
+        "--verify",
+        "refs/remotes/origin/expected-base",
+      ]),
+    ).resolves.toBeDefined();
+    await expect(
+      execFileAsync("git", [
+        "-C",
+        checkout,
+        "rev-parse",
+        "--verify",
+        "refs/remotes/origin/injected-base",
+      ]),
+    ).rejects.toBeDefined();
+  });
+
+  it("revokes stale refresh after removal and operator re-registration", async () => {
+    const root = tempDirs.make("openclaw-project-refresh-revocation-");
+    const source = await initializeRepository(root, "source");
+    const checkout = path.join(root, "checkout");
+    await execFileAsync("git", ["clone", "--no-local", source, checkout]);
+    await fs.writeFile(path.join(source, "revoked.txt"), "must not fetch\n");
+    await execFileAsync("git", ["-C", source, "add", "revoked.txt"]);
+    await execFileAsync("git", ["-C", source, "commit", "-m", "revoked"]);
+    await execFileAsync("git", ["-C", source, "branch", "revoked-base"]);
+    const revokedCommit = (
+      await execFileAsync("git", ["-C", source, "rev-parse", "revoked-base"])
+    ).stdout.trim();
+    const options = { path: path.join(root, "state.sqlite") };
+    const project = await registerClonedProjectRegistry(
+      { path: checkout, name: "Revoked", originUrl: source },
+      options,
+    );
+    await expect(removeProjectRegistry(project, options)).resolves.toBe(true);
+    await expect(
+      registerProjectRegistry({ path: checkout, name: "Operator" }, options),
+    ).resolves.toMatchObject({ source: "registered" });
+
+    await expect(
+      refreshProjectClone(project, options).then(
+        () => undefined,
+        (error: unknown) => error,
+      ),
+    ).resolves.toMatchObject({ failure: "clone_failed" });
+    await expect(
+      execFileAsync("git", ["-C", checkout, "cat-file", "-e", `${revokedCommit}^{commit}`]),
+    ).rejects.toBeDefined();
+    await expect(
+      execFileAsync("git", [
+        "-C",
+        checkout,
+        "rev-parse",
+        "--verify",
+        "refs/remotes/origin/revoked-base",
+      ]),
+    ).rejects.toBeDefined();
+  });
+
+  it.each(["refresh", "pinned commit"] as const)(
+    "stops %s fetching when its persisted checkout lease is lost",
+    async (operation) => {
+      const root = tempDirs.make("openclaw-project-refresh-lease-loss-");
+      const checkout = await initializeRepository(root, "checkout");
+      const options = { path: path.join(root, "state.sqlite") };
+      const requested = createDeferred();
+      let connectionClosed = false;
+      const server = http.createServer((_request, response) => {
+        response.on("close", () => {
+          connectionClosed = true;
+        });
+        requested.resolve();
+        // Hold the transport open: only cancellation, not a successful fetch, can finish.
+      });
+      await new Promise<void>((resolve) => {
+        server.listen(0, "127.0.0.1", resolve);
+      });
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("missing HTTP address");
+      }
+      await execFileAsync("git", [
+        "-C",
+        checkout,
+        "remote",
+        "add",
+        "origin",
+        `http://127.0.0.1:${address.port}/fixture.git`,
+      ]);
+      const originUrl =
+        operation === "refresh"
+          ? `http://127.0.0.1:${address.port}/fixture.git`
+          : "https://github.com/acme/refresh.git";
+      const project = await registerClonedProjectRegistry(
+        { path: checkout, name: "Refresh", originUrl },
+        options,
+      );
+      if (operation === "pinned commit") {
+        await execFileAsync("git", [
+          "-C",
+          checkout,
+          "config",
+          `url.http://127.0.0.1:${address.port}/fixture.git.insteadOf`,
+          "https://github.com/acme/refresh.git",
+        ]);
+      }
+      const controller = new AbortController();
+      vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+      const fetchOptions = { ...options, signal: controller.signal, timeoutMs: 5000 };
+      const refresh = (
+        operation === "refresh"
+          ? refreshProjectClone(project, fetchOptions)
+          : materializeProjectClone(
+              {
+                cfg: {} as OpenClawConfig,
+                gitUrl: "https://github.com/acme/refresh.git",
+                requiredCommit: "f".repeat(40),
+              },
+              fetchOptions,
+            )
+      ).catch((error: unknown) => error);
+      try {
+        await requested.promise;
+        const { db } = openOpenClawStateDatabase(options);
+        expect(
+          db
+            .prepare("DELETE FROM state_leases WHERE scope = ? AND lease_key = ?")
+            .run("projects.checkout", checkout).changes,
+        ).toBe(1);
+        await vi.advanceTimersByTimeAsync(10_000);
+        await expect.poll(() => connectionClosed, { timeout: 1000 }).toBe(true);
+        expect(await refresh).toMatchObject({ code: "OPENCLAW_STATE_LEASE_LOST" });
+      } finally {
+        controller.abort();
+        await refresh;
+        vi.useRealTimers();
+        server.closeAllConnections();
+        await new Promise<void>((resolve, reject) => {
+          server.close((error) => (error ? reject(error) : resolve()));
+        });
+      }
+    },
+  );
 
   it("classifies authentication failures without returning credential material", async () => {
     const token = "github_pat_secret-fixture-value";

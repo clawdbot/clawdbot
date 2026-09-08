@@ -637,6 +637,8 @@ export type InternalSessionEntryCore = SessionEntryCore & {
     workspace?: string;
     name?: string;
     baseRef?: string;
+    /** Verified commit used for checkout while baseRef remains user-facing metadata. */
+    baseCommit?: string;
     titleSource: string;
   };
   /** Suppresses repeated byte-triggered compaction after an oversized successor was observed. */

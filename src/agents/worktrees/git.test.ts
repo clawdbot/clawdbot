@@ -189,6 +189,7 @@ describe("Git ref mutation ownership", () => {
     "does not select a remote base after an interrupted %s result",
     async (interrupted) => {
       const root = await repository();
+      const localHead = await requireGit(root, ["rev-parse", "HEAD"]);
       const run = processExec.runCommandWithTimeout;
       vi.spyOn(processExec, "runCommandWithTimeout").mockImplementation((argv, options) => {
         const command = argv[argv.indexOf("-C") + 2];
@@ -205,6 +206,7 @@ describe("Git ref mutation ownership", () => {
         });
       });
       await expect(resolveWorktreeBase(root)).resolves.toEqual({
+        commit: localHead,
         gitOperand: "HEAD",
         recordRef: "HEAD",
         remote: false,
@@ -228,6 +230,7 @@ describe("Git ref mutation ownership", () => {
     await requireGit(root, ["pack-refs", "--all"]);
     expect(await fs.readFile(path.join(root, ".git", "packed-refs"), "utf8")).toContain(staleRef);
     await requireGit(origin, ["branch", "-D", "retired"]);
+    const originHead = await requireGit(origin, ["rev-parse", "HEAD"]);
 
     const controller = new AbortController();
     const held = holdSnapshotDeletion(undefined, controller.signal);
@@ -255,6 +258,7 @@ describe("Git ref mutation ownership", () => {
     }
     await Promise.all(pending);
     await expect(resolved).resolves.toEqual({
+      commit: originHead,
       gitOperand: "origin/main",
       recordRef: "origin/main",
       remote: true,

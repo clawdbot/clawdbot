@@ -17,6 +17,7 @@ import {
 } from "vitest";
 import * as commandRunner from "../../process/exec-runner.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { InvalidWorktreeBaseRefError } from "./base-ref.js";
 import {
   deleteRegistryWorktree,
   finalizeWorktreeRemovalRows,
@@ -290,6 +291,21 @@ describe("ManagedWorktreeService", () => {
     expect(await git(created.path, "rev-parse", "HEAD")).toBe(baseCommit);
   });
 
+  it("rejects explicit bases that do not resolve to commits", async () => {
+    const blob = await gitWithInput(repo, ["hash-object", "-w", "--stdin"], "not a commit\n");
+
+    for (const [name, baseRef] of [
+      ["missing-base", "126887"],
+      ["blob-base", blob],
+    ] as const) {
+      await expect(service.create({ repoRoot: repo, name, baseRef })).rejects.toThrow(
+        InvalidWorktreeBaseRefError,
+      );
+    }
+
+    expect(await service.list()).toEqual([]);
+  });
+
   it("normalizes dashed refs and revision expressions before creating branches", async () => {
     const initialCommit = await git(repo, "rev-parse", "HEAD");
     await fs.writeFile(path.join(repo, "history.txt"), "second\n");
@@ -359,7 +375,7 @@ describe("ManagedWorktreeService", () => {
         name: "ambiguous-ref",
         baseRef: "--ambiguous",
       }),
-    ).rejects.toThrow(/git rev-parse --symbolic-full-name --verify failed/);
+    ).rejects.toThrow(InvalidWorktreeBaseRefError);
 
     expect(await git(repo, "branch", "--list", "openclaw/ambiguous-ref")).toBe("");
     expect(await service.list()).toEqual([]);
@@ -372,7 +388,7 @@ describe("ManagedWorktreeService", () => {
       const name = baseRef.slice(2);
 
       await expect(service.create({ repoRoot: repo, name, baseRef })).rejects.toThrow(
-        /git rev-parse --symbolic-full-name --verify failed/,
+        InvalidWorktreeBaseRefError,
       );
 
       expect(await git(repo, "worktree", "list", "--porcelain")).toBe(before);

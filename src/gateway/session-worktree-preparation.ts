@@ -1,8 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
-import { err, ok } from "@openclaw/normalization-core/result";
+import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
+import {
+  ErrorCodes,
+  errorShape,
+  type ErrorShape,
+} from "../../packages/gateway-protocol/src/index.js";
+import { InvalidWorktreeBaseRefError, resolveWorktreeBase } from "../agents/worktrees/base-ref.js";
 import { slugifyWorktreeTitle } from "../agents/worktrees/name.js";
 import { managedWorktrees, WorktreeRepositoryError } from "../agents/worktrees/service.js";
 import type { CreateManagedWorktreeParams } from "../agents/worktrees/types.js";
@@ -46,6 +51,26 @@ export function resolveSpawnParentWorktreeSource(
     }
   };
   return { workspace: worktree.repoRoot, assertCurrent };
+}
+
+/** Resolve explicit session selections through the same typed error boundary. */
+export async function resolveSessionWorktreeBase(
+  workspace: string,
+  baseRef: string,
+  signal?: AbortSignal,
+): Promise<Result<string, ErrorShape>> {
+  try {
+    return ok((await resolveWorktreeBase(workspace, baseRef, signal)).commit);
+  } catch (error) {
+    return err(
+      errorShape(
+        error instanceof InvalidWorktreeBaseRefError
+          ? ErrorCodes.INVALID_REQUEST
+          : ErrorCodes.UNAVAILABLE,
+        formatErrorMessage(error),
+      ),
+    );
+  }
 }
 
 /** One worktree preparation owner for synchronous creation and admitted first turns. */
@@ -153,11 +178,11 @@ export async function prepareSessionWorktree(params: {
   } catch (error) {
     // Closed delegated authority remains an exception for its admission owner.
     commitGuard?.();
+    const invalidRequest =
+      error instanceof WorktreeRepositoryError || error instanceof InvalidWorktreeBaseRefError;
     return err(
       errorShape(
-        error instanceof WorktreeRepositoryError
-          ? ErrorCodes.INVALID_REQUEST
-          : ErrorCodes.UNAVAILABLE,
+        invalidRequest ? ErrorCodes.INVALID_REQUEST : ErrorCodes.UNAVAILABLE,
         formatErrorMessage(error),
       ),
     );

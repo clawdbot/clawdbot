@@ -1,11 +1,22 @@
 import { requireGitCommandOutput } from "../../infra/git-exec.js";
-import { commandError, requireGit, runGit } from "./git.js";
+import { commandError, runGit } from "./git.js";
 
 type ResolvedWorktreeBase = {
+  commit: string;
   gitOperand: string;
   recordRef: string;
   remote: boolean;
 };
+
+export class InvalidWorktreeBaseRefError extends Error {
+  constructor(options?: ErrorOptions) {
+    super(
+      "Worktree base ref does not resolve to a commit. Choose a local or remote branch and retry.",
+      options,
+    );
+    this.name = "InvalidWorktreeBaseRefError";
+  }
+}
 
 export async function resolveWorktreeBase(
   repoRoot: string,
@@ -13,42 +24,38 @@ export async function resolveWorktreeBase(
   signal?: AbortSignal,
 ): Promise<ResolvedWorktreeBase> {
   if (baseRef) {
-    let gitOperand = baseRef;
-    if (baseRef !== "-" && baseRef.startsWith("-")) {
-      // `worktree add -b` forwards its start point to `git branch`, which parses
-      // options again without another `--`; normalize dashed refs before that hop.
-      // Force strict lookup so repository config cannot hide ambiguous ref names.
-      const symbolic = await runGit(repoRoot, [
+    const verified = await runGit(
+      repoRoot,
+      [
         "-c",
         "core.warnAmbiguousRefs=true",
         "rev-parse",
-        "--symbolic-full-name",
         "--verify",
         "--end-of-options",
-        baseRef,
-      ]);
-      const fullRef = requireGitCommandOutput(
-        "git rev-parse --symbolic-full-name --verify",
-        symbolic,
-      ).trim();
-      if (fullRef) {
-        if (!fullRef.startsWith("refs/") || fullRef.includes("\n")) {
-          throw commandError("git rev-parse --symbolic-full-name --verify", symbolic);
-        }
-        gitOperand = fullRef;
-      } else {
-        if (symbolic.stderr.trim()) {
-          throw commandError("git rev-parse --symbolic-full-name --verify", symbolic);
-        }
-        gitOperand = await requireGit(repoRoot, [
-          "rev-parse",
-          "--verify",
-          "--end-of-options",
-          `${baseRef}^{commit}`,
-        ]);
-      }
+        `${baseRef === "-" ? "@{-1}" : baseRef}^{commit}`,
+      ],
+      { signal },
+    );
+    signal?.throwIfAborted();
+    if (
+      verified.termination === "exit" &&
+      typeof verified.code === "number" &&
+      verified.code !== 0
+    ) {
+      throw new InvalidWorktreeBaseRefError({
+        cause: commandError("git rev-parse --verify", verified),
+      });
     }
-    return { gitOperand, recordRef: baseRef, remote: false };
+    const commit = requireGitCommandOutput("git rev-parse --verify", verified).trim();
+    if (!commit || commit.includes("\n") || verified.stderr.trim()) {
+      throw new InvalidWorktreeBaseRefError({
+        cause: commandError("git rev-parse --verify", verified),
+      });
+    }
+    // `worktree add -b` forwards its start point to `git branch`, which parses
+    // options again without another `--`; pass the verified commit for dashed refs.
+    const gitOperand = baseRef !== "-" && baseRef.startsWith("-") ? commit : baseRef;
+    return { commit, gitOperand, recordRef: baseRef, remote: false };
   }
   const fetched = await runGit(repoRoot, ["fetch", "origin"], { signal });
   signal?.throwIfAborted();
@@ -61,8 +68,9 @@ export async function resolveWorktreeBase(
     ]);
     if (remoteHead.termination === "exit" && remoteHead.code === 0 && remoteHead.stdout.trim()) {
       const remoteRef = remoteHead.stdout.trim();
-      return { gitOperand: remoteRef, recordRef: remoteRef, remote: true };
+      const resolved = await resolveWorktreeBase(repoRoot, remoteRef, signal);
+      return { ...resolved, remote: true };
     }
   }
-  return { gitOperand: "HEAD", recordRef: "HEAD", remote: false };
+  return await resolveWorktreeBase(repoRoot, "HEAD", signal);
 }

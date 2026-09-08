@@ -7,10 +7,12 @@ import { runCommandWithTimeout } from "../process/exec.js";
 const PROJECT_CLONE_TIMEOUT_MS = 10 * 60_000;
 type ProjectCloneOptions = {
   env?: NodeJS.ProcessEnv;
+  objectDirectory?: string;
   signal?: AbortSignal;
   timeoutMs?: number;
   token?: string;
 };
+const PROJECT_FETCH_TIMEOUT_MS = 60_000;
 
 export class ProjectCloneError extends Error {
   constructor(
@@ -54,8 +56,9 @@ function cloneCommandEnv(token: string | undefined, env: NodeJS.ProcessEnv): Nod
   return gitEnv;
 }
 
-function classifyCloneFailure(params: {
+function classifyProjectGitFailure(params: {
   output: string;
+  operation: "clone" | "fetch";
   tokenConfigured: boolean;
   timedOut?: boolean;
 }): ProjectCloneError {
@@ -66,7 +69,7 @@ function classifyCloneFailure(params: {
   ) {
     return new ProjectCloneError(
       "network",
-      "Git clone could not reach GitHub. Check the Gateway network connection and retry.",
+      `Git ${params.operation} could not reach GitHub. Check the Gateway network connection and retry.`,
     );
   }
   if (
@@ -92,7 +95,7 @@ function classifyCloneFailure(params: {
   }
   return new ProjectCloneError(
     "clone_failed",
-    "Git could not clone that repository. Check the URL and Gateway Git configuration, then retry.",
+    `Git could not ${params.operation === "clone" ? "clone" : "refresh"} that repository. Check the URL and Gateway Git configuration, then retry.`,
   );
 }
 
@@ -135,17 +138,132 @@ export async function cloneProjectCheckout(
     return;
   }
   await fs.rm(input.target, { recursive: true, force: true }).catch(() => {});
-  throw classifyCloneFailure({
+  throw classifyProjectGitFailure({
     output: `${result.stderr}\n${result.stdout}`,
+    operation: "clone",
     tokenConfigured: Boolean(options.token),
     timedOut: result.termination === "timeout" || result.termination === "no-output-timeout",
   });
 }
 
+/** Refreshes refs in an existing Gateway-managed project checkout. */
+export async function refreshProjectCheckout(
+  input: { target: string; url: string },
+  options: ProjectCloneOptions = {},
+): Promise<void> {
+  const objectPath = await runProjectCheckoutGit(input, options, [
+    "rev-parse",
+    "--path-format=absolute",
+    "--git-path",
+    "objects",
+  ]);
+  if (objectPath.code !== 0 || objectPath.termination !== "exit") {
+    throw new ProjectCloneError(
+      "clone_failed",
+      "The managed repository object store could not be verified. Remove the repository and retry.",
+    );
+  }
+  const objects = await fs.realpath(objectPath.stdout.trim());
+  const staging = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-project-fetch-"));
+  try {
+    const initialized = await runProjectCheckoutGit({ target: staging }, options, [
+      "init",
+      "--bare",
+    ]);
+    if (initialized.code !== 0 || initialized.termination !== "exit") {
+      throw new ProjectCloneError(
+        "clone_failed",
+        "Git could not prepare a safe repository refresh. Retry the session.",
+      );
+    }
+    // The isolated repository owns all transport configuration. Only content-addressed
+    // objects cross into the managed checkout before its refs are updated locally.
+    const result = await runProjectCheckoutGit(
+      { target: staging },
+      {
+        ...options,
+        objectDirectory: objects,
+        timeoutMs: options.timeoutMs ?? PROJECT_FETCH_TIMEOUT_MS,
+      },
+      ["fetch", "--no-recurse-submodules", "--", input.url, "+refs/heads/*:refs/remotes/origin/*"],
+    );
+    if (result.code !== 0 || result.termination !== "exit") {
+      throw classifyProjectGitFailure({
+        output: `${result.stderr}\n${result.stdout}`,
+        operation: "fetch",
+        tokenConfigured: Boolean(options.token),
+        timedOut: result.termination === "timeout" || result.termination === "no-output-timeout",
+      });
+    }
+    const [fetchedRefs, currentRefs] = await Promise.all([
+      readProjectRemoteRefs({ target: staging }, options),
+      readProjectRemoteRefs(input, options),
+    ]);
+    const updates = [
+      ...Array.from(fetchedRefs, ([ref, commit]) => `update ${ref} ${commit}`),
+      ...Array.from(currentRefs.keys())
+        .filter((ref) => !fetchedRefs.has(ref))
+        .map((ref) => `delete ${ref}`),
+    ];
+    if (updates.length > 0) {
+      const updated = await runProjectCheckoutGit(input, options, ["update-ref", "--stdin"], {
+        input: `${updates.join("\n")}\n`,
+      });
+      if (updated.code !== 0 || updated.termination !== "exit") {
+        throw new ProjectCloneError(
+          "clone_failed",
+          "The managed repository changed while its branches were refreshed. Retry the session.",
+        );
+      }
+    }
+  } finally {
+    await fs.rm(staging, { recursive: true, force: true });
+  }
+}
+
+async function readProjectRemoteRefs(
+  input: { target: string },
+  options: ProjectCloneOptions,
+): Promise<Map<string, string>> {
+  const result = await runProjectCheckoutGit(input, options, [
+    "for-each-ref",
+    "--format=%(refname) %(objectname) %(symref)",
+    "refs/remotes/origin",
+  ]);
+  if (result.code !== 0 || result.termination !== "exit") {
+    throw new ProjectCloneError("clone_failed", "Git could not read the managed repository refs.");
+  }
+  const refs = new Map<string, string>();
+  for (const line of result.stdout.trim().split("\n").filter(Boolean)) {
+    const match = /^(refs\/remotes\/origin\/\S+) ([a-f0-9]{40}|[a-f0-9]{64})(?: (\S+))?$/u.exec(
+      line.trimEnd(),
+    );
+    if (!match) {
+      throw new ProjectCloneError(
+        "clone_failed",
+        "Git returned an invalid managed repository ref.",
+      );
+    }
+    const [, ref, commit, symbolicTarget] = match;
+    if (!ref || !commit) {
+      throw new ProjectCloneError(
+        "clone_failed",
+        "Git returned an incomplete managed repository ref.",
+      );
+    }
+    if (symbolicTarget) {
+      continue;
+    }
+    refs.set(ref, commit);
+  }
+  return refs;
+}
+
 function runProjectCheckoutGit(
-  input: { url: string; target: string },
+  input: { target: string },
   options: ProjectCloneOptions,
   args: string[],
+  commandOptions: { input?: string } = {},
 ) {
   return runCommandWithTimeout(
     [
@@ -159,11 +277,15 @@ function runProjectCheckoutGit(
       ...args,
     ],
     {
-      env: cloneCommandEnv(options.token, options.env ?? process.env),
+      env: {
+        ...cloneCommandEnv(options.token, options.env ?? process.env),
+        ...(options.objectDirectory ? { GIT_OBJECT_DIRECTORY: options.objectDirectory } : {}),
+      },
       timeoutMs: options.timeoutMs ?? PROJECT_CLONE_TIMEOUT_MS,
       signal: options.signal,
       killProcessTree: true,
       maxOutputBytes: 256 * 1024,
+      ...commandOptions,
     },
   );
 }
@@ -190,7 +312,8 @@ export async function ensureProjectCheckoutCommit(
     input.commit,
   ]);
   if (fetched.code !== 0 || fetched.termination !== "exit") {
-    throw classifyCloneFailure({
+    throw classifyProjectGitFailure({
+      operation: "fetch",
       output: `${fetched.stderr}\n${fetched.stdout}`,
       tokenConfigured: Boolean(options.token),
       timedOut: fetched.termination === "timeout" || fetched.termination === "no-output-timeout",
