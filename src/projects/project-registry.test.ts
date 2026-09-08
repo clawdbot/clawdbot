@@ -16,6 +16,7 @@ import {
   cloneProjectCheckout,
   ensureProjectCheckoutCommit,
   ProjectCloneError,
+  refreshProjectCheckout,
 } from "./project-clone-runtime.js";
 import {
   materializeProjectClone,
@@ -202,6 +203,36 @@ describe("project registry", () => {
       originUrl: "https://github.com/acme/fixture.git",
     });
   });
+
+  it.runIf(process.platform !== "win32")(
+    "does not run checkout hooks while refreshing managed refs",
+    async () => {
+      const root = tempDirs.make("openclaw-project-refresh-hooks-");
+      const source = await initializeRepository(root, "source");
+      const target = path.join(root, "managed", "fixture");
+      await cloneProjectCheckout({ url: source, target });
+      const marker = path.join(root, "hook-ran");
+      const hooks = path.join(target, "git-hooks");
+      await fs.mkdir(hooks);
+      const hook = path.join(hooks, "reference-transaction");
+      await fs.writeFile(hook, `#!/bin/sh\ntouch '${marker}'\n`);
+      await fs.chmod(hook, 0o755);
+      await execFileAsync("git", ["-C", target, "config", "core.hooksPath", hooks]);
+      await fs.writeFile(path.join(source, "later.txt"), "later\n");
+      await execFileAsync("git", ["-C", source, "add", "later.txt"]);
+      await execFileAsync("git", ["-C", source, "commit", "-m", "later"]);
+      const sourceHead = (
+        await execFileAsync("git", ["-C", source, "rev-parse", "HEAD"])
+      ).stdout.trim();
+
+      await refreshProjectCheckout({ url: source, target });
+
+      await expect(fs.stat(marker)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(
+        (await execFileAsync("git", ["-C", target, "rev-parse", "origin/main"])).stdout.trim(),
+      ).toBe(sourceHead);
+    },
+  );
 
   it("returns an existing registration for the same canonical remote without cloning", async () => {
     const root = tempDirs.make("openclaw-project-idempotent-");
