@@ -788,12 +788,15 @@ export async function processGatewayAllowlist(
     };
   }
   let mutableFileBinding: SystemRunMutableFileBinding | undefined;
+  // Exact-command durable trust grants immediate execution unless the plan is
+  // unavailable (e.g., unenforceable shell expansion). Other durable approvals
+  // require binding when allowlist/analysis fails.
   const durableApprovalRequiresBinding =
     hostSecurity === "allowlist" &&
     durableApprovalSatisfied &&
-    (!analysisOk ||
-      !allowlistSatisfied ||
-      (exactCommandDurableApprovalSatisfied && allowlistPlanUnavailableReason !== null));
+    (exactCommandDurableApprovalSatisfied
+      ? allowlistPlanUnavailableReason !== null
+      : !analysisOk || !allowlistSatisfied);
   if (policyRequiresAsk || durableApprovalRequiresBinding) {
     // Durable text grants cannot authorize future bytes. Prepare before they
     // suppress prompting so mutable operands always return to one-shot review.
@@ -1125,6 +1128,7 @@ export async function processGatewayAllowlist(
         autoReviewRequiresHumanApproval ||
         requiresHeredocApproval ||
         timedOutFallbackRequiresHeredocApproval,
+      hasExactCommandDurableTrust: exactCommandDurableApprovalSatisfied,
     });
     const {
       approvalId,

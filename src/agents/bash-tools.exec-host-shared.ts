@@ -456,7 +456,7 @@ async function resolveExecApprovalDecisionState<TTimeoutContext = undefined>(
 type ExecApprovalRequestRoute<TTimeoutContext> =
   | (Omit<RegisteredExecApprovalRequestContext, "preResolvedDecision"> & {
       kind: "inline";
-      preResolvedDecision: null;
+      preResolvedDecision: null | "deny";
       state: ExecApprovalDecisionState<TTimeoutContext>;
     })
   | (RegisteredExecApprovalRequestContext & { kind: "wait" });
@@ -464,13 +464,52 @@ type ExecApprovalRequestRoute<TTimeoutContext> =
 /** Registers an approval and resolves terminal no-route fallback through the shared policy owner. */
 export async function createExecApprovalRequestRoute<TTimeoutContext = undefined>(
   params: DefaultExecApprovalRequestParams &
-    Omit<ExecApprovalDecisionParams<TTimeoutContext>, "decision">,
+    Omit<ExecApprovalDecisionParams<TTimeoutContext>, "decision" | "requiresExplicitApproval"> & {
+      /** When true, fail closed if no approval delivery route is available. */
+      requiresExplicitApproval?: boolean | ((context: TTimeoutContext | undefined) => boolean);
+      /** When true, allow execution even without approval delivery (durable exact-command trust). */
+      hasExactCommandDurableTrust?: boolean;
+    },
 ): Promise<ExecApprovalRequestRoute<TTimeoutContext>> {
   const request = await createAndRegisterDefaultExecApprovalRequest(params);
   if (request.unavailableReason !== "no-approval-route" || request.preResolvedDecision !== null) {
     return { ...request, kind: "wait" };
   }
-  const state = await resolveExecApprovalDecisionState({ ...params, decision: null });
+  // When the approval request is registered but no delivery route is available,
+  // we must fail closed: the approval cannot be delivered to the user, so
+  // execution must be denied rather than proceeding without approval.
+  // This is critical in containerized gateway environments where approval
+  // channels may be misconfigured or unavailable.
+  // Exceptions:
+  // - exact-command durable trust already grants permission, so allow execution.
+  // - askFallback="full" with no explicit approval requirement means the host
+  //   permits execution via fallback, so resolve through the normal fallback
+  //   path instead of hard-denying.
+  // - requiresExplicitApproval===true overrides askFallback: even with full
+  //   fallback, explicit approval was demanded and no route exists, so deny.
+  if (
+    request.unavailableReason !== null &&
+    !params.hasExactCommandDurableTrust &&
+    (params.requiresExplicitApproval === true || params.askFallback !== "full")
+  ) {
+    // Create a failed state that will deny execution
+    const state = await resolveExecApprovalDecisionState<TTimeoutContext>({
+      ...params,
+      requiresExplicitApproval: params.requiresExplicitApproval ?? false,
+      decision: "deny",
+    });
+    return {
+      ...request,
+      kind: "inline",
+      preResolvedDecision: "deny" as const,
+      state,
+    };
+  }
+  const state = await resolveExecApprovalDecisionState({
+    ...params,
+    requiresExplicitApproval: params.requiresExplicitApproval ?? false,
+    decision: null,
+  });
   return { ...request, kind: "inline", preResolvedDecision: null, state };
 }
 
