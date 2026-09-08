@@ -10,6 +10,7 @@ import {
   getActivePluginRegistryKey,
   getActivePluginRegistryWorkspaceDir,
 } from "./runtime.js";
+import { getPluginRuntimeLoadContextState } from "./runtime/load-context-state.js";
 
 export function getActiveRuntimePluginRegistry(): PluginRegistry | null {
   return getActivePluginRegistry();
@@ -27,7 +28,12 @@ export function resolveCompatibleRuntimePluginRegistry(
   if (!activeCacheKey) {
     return undefined;
   }
-  return resolvePluginLoadCacheContext(options).cacheKey === activeCacheKey
+  const requestedKey = resolvePluginLoadCacheContext(options).cacheKey;
+  if (requestedKey === activeCacheKey) {
+    return activeRegistry;
+  }
+  const identity = getPluginRuntimeLoadContextState(activeRegistry)?.loaderCacheIdentity;
+  return identity?.requestKey === activeCacheKey && identity.resolvedKey === requestedKey
     ? activeRegistry
     : undefined;
 }

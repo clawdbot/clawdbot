@@ -37,10 +37,13 @@ export function setPluginRuntimeLoadContext(
   registry: PluginRegistry,
   context: PluginRuntimeLoadContext,
   registrationConfigKey?: string,
+  loaderCacheIdentity?: PluginRuntimeLoadContextState["loaderCacheIdentity"],
 ): void {
   const previous = getPluginRuntimeLoadContextState(registry);
+  const capturedIdentity = previous?.loaderCacheIdentity ?? loaderCacheIdentity;
   const bound = {
     ...context,
+    ...(capturedIdentity ? { loaderCacheIdentity: capturedIdentity } : {}),
     // Host preparation may rebind metadata, but it cannot change already-registered closures.
     registrationConfigKey:
       previous?.registrationConfigKey ??

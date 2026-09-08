@@ -173,7 +173,7 @@ function buildActivationMetadataHash(params: {
     .digest("hex");
 }
 
-function buildCacheKey(params: {
+function buildCacheKeys(params: {
   workspaceDir?: string;
   plugins: NormalizedPluginsConfig;
   registrationConfigKey: string;
@@ -198,7 +198,7 @@ function buildCacheKey(params: {
   coreGatewayMethodNames?: string[];
   allowProcessHomeSessionCatalogs?: boolean;
   activate?: boolean;
-}): string {
+}) {
   const discoveryContext = resolvePluginDiscoveryContext({
     workspaceDir: params.workspaceDir,
     loadPaths: params.plugins.loadPaths,
@@ -230,7 +230,8 @@ function buildCacheKey(params: {
   const moduleLoadMode = params.loadModules === false ? "manifest-only" : "load-modules";
   const discoveryMode = params.toolDiscovery === true ? "tool-discovery" : "default-discovery";
   const activationMode = params.activate === false ? "snapshot" : "active";
-  const cacheIdentity = `${roots.workspace ?? ""}::${roots.global ?? ""}::${roots.stock ?? ""}::${JSON.stringify(
+  // Freeze request facts before discovery or plugin registration can mutate caller inputs.
+  const prefix = `${roots.workspace ?? ""}::${roots.global ?? ""}::${roots.stock ?? ""}::${JSON.stringify(
     {
       bundledPackage,
       devSourceRoot: params.devSourceRoot ?? "",
@@ -240,9 +241,30 @@ function buildCacheKey(params: {
       registrationConfigKey: params.registrationConfigKey,
       installs,
       loadPaths,
-      // Supplied candidates own physical source selection even when ids/config match.
-      // Keep the selection facts in the loader key instead of a second hook cache.
-      manifestSources: params.manifestRegistry?.plugins.map((plugin) => [
+    },
+  ).slice(0, -1)}`;
+  const suffix = `${JSON.stringify({
+    activationMetadataKey: params.activationMetadataKey ?? "",
+    capabilityCatalogIdentity: params.capabilityCatalogIdentity,
+    allowProcessHomeSessionCatalogs: params.allowProcessHomeSessionCatalogs !== false,
+  }).slice(
+    1,
+  )}::${serializePluginIdScope(params.onlyPluginIds)}::${setupOnlyKey}::${setupOnlyModeKey}::${params.channelPluginLoadIntent}::${params.artifactPreference}::${rawConfigEnvMode}::${moduleLoadMode}::${discoveryMode}::${params.runtimeSubagentMode ?? "default"}::${params.runtimeBindingIdentity ?? "{}"}::${params.pluginSdkResolution ?? "auto"}::${JSON.stringify(params.coreGatewayMethodNames ?? [])}::${activationMode}`;
+  const discoveryFields = JSON.stringify({
+    discoverySources: params.discovery?.candidates.map((candidate) => [
+      candidate.effectivePluginId ?? candidate.idHint,
+      candidate.origin,
+      candidate.rootDir,
+      candidate.source,
+      candidate.setupSource,
+      candidate.sourcePreferred,
+      candidate.configSelected,
+      candidate.packageManifest?.build?.bundledDist,
+    ]),
+  }).slice(1, -1);
+  const resolveManifestCacheKey = (manifestRegistry: PluginLoadOptions["manifestRegistry"]) => {
+    const manifestFields = JSON.stringify({
+      manifestSources: manifestRegistry?.plugins.map((plugin) => [
         plugin.id,
         plugin.origin,
         plugin.rootDir,
@@ -253,22 +275,13 @@ function buildCacheKey(params: {
         plugin.sourcePreferred,
         plugin.packageManifest?.build?.bundledDist,
       ]),
-      discoverySources: params.discovery?.candidates.map((candidate) => [
-        candidate.effectivePluginId ?? candidate.idHint,
-        candidate.origin,
-        candidate.rootDir,
-        candidate.source,
-        candidate.setupSource,
-        candidate.sourcePreferred,
-        candidate.configSelected,
-        candidate.packageManifest?.build?.bundledDist,
-      ]),
-      activationMetadataKey: params.activationMetadataKey ?? "",
-      capabilityCatalogIdentity: params.capabilityCatalogIdentity,
-      allowProcessHomeSessionCatalogs: params.allowProcessHomeSessionCatalogs !== false,
-    },
-  )}::${serializePluginIdScope(params.onlyPluginIds)}::${setupOnlyKey}::${setupOnlyModeKey}::${params.channelPluginLoadIntent}::${params.artifactPreference}::${rawConfigEnvMode}::${moduleLoadMode}::${discoveryMode}::${params.runtimeSubagentMode ?? "default"}::${params.runtimeBindingIdentity ?? "{}"}::${params.pluginSdkResolution ?? "auto"}::${JSON.stringify(params.coreGatewayMethodNames ?? [])}::${activationMode}`;
-  return createHash("sha256").update(cacheIdentity).digest("hex");
+    }).slice(1, -1);
+    const sourceFields = [manifestFields, discoveryFields].filter(Boolean).join(",");
+    // Keep the existing key encoding; only the discovered manifest projection can differ.
+    const identity = `${prefix},${sourceFields ? `${sourceFields},` : ""}${suffix}`;
+    return createHash("sha256").update(identity).digest("hex");
+  };
+  return { cacheKey: resolveManifestCacheKey(params.manifestRegistry), resolveManifestCacheKey };
 }
 
 export function resolveRuntimeSubagentMode(
@@ -402,7 +415,7 @@ export function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
     config: cfg,
     activationSourceConfig,
   });
-  const cacheKey = buildCacheKey({
+  const { cacheKey, resolveManifestCacheKey } = buildCacheKeys({
     workspaceDir: options.workspaceDir,
     plugins: trustNormalized,
     registrationConfigKey,
@@ -460,6 +473,7 @@ export function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
     installRecords,
     devSourceRoot,
     cacheKey,
+    resolveManifestCacheKey,
   };
 }
 
