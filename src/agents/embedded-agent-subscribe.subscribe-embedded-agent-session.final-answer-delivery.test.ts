@@ -478,6 +478,28 @@ describe("subscribeEmbeddedAgentSession", () => {
     expect(subscription.assistantTexts).toEqual(["Final visible reply."]);
   });
 
+  it("retains a silent message_end block reply for terminal classification", async () => {
+    const onBlockReply = vi.fn();
+    const { emit, subscription } = createTextEndBlockReplyHarness({
+      onBlockReply,
+      blockReplyChunking: { minChars: 64, maxChars: 128, breakPreference: "paragraph" },
+    });
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextDelta({ emit, delta: "NO_REPLY" });
+    emit({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "NO_REPLY" }],
+      } as AssistantMessage,
+    });
+    await subscription.waitForPendingEvents();
+
+    expect(onBlockReply).not.toHaveBeenCalled();
+    expect(subscription.assistantTexts).toEqual(["NO_REPLY"]);
+  });
+
   it("does not duplicate when message_end flushes and a late text_end arrives", async () => {
     const onBlockReply = vi.fn();
     const { emit, subscription } = createTextEndBlockReplyHarness({ onBlockReply });
