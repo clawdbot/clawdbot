@@ -54,12 +54,6 @@ function resolveGatewayRunFutureConfigBlock(params: GatewayRunFutureConfigGuardP
   return block ? { block, exitCode: futureAction.exitCode, serviceMode } : null;
 }
 
-export function isGatewayRunFutureConfigAllowed(
-  params: GatewayRunFutureConfigGuardParams,
-): boolean {
-  return resolveGatewayRunFutureConfigBlock(params) === null;
-}
-
 export function enforceGatewayRunFutureConfigGuard(
   params: GatewayRunFutureConfigGuardParams & { runtime: RuntimeEnv },
 ): boolean {

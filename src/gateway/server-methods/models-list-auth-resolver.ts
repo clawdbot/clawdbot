@@ -227,6 +227,21 @@ export function createModelsListAuthProjection(params: ModelsListAuthProjectionP
     preferredProfilesByProvider.has(normalizeProviderId(entry.provider))
       ? host
       : nativeEvaluator(entry, host);
+  // Store revisions do not advance when a token or failure window expires.
+  // Retire the captured host evaluation so its caller prepares fresh facts.
+  const preparedAt = Date.now();
+  const authValidUntil = Math.min(
+    ...[
+      ...Object.values(authStore.profiles).map((profile) =>
+        profile.type === "token" ? profile.expires : undefined,
+      ),
+      ...Object.values(authStore.usageStats ?? {}).flatMap((stats) => [
+        stats.blockedUntil,
+        stats.cooldownUntil,
+        stats.disabledUntil,
+      ]),
+    ].filter((deadline): deadline is number => deadline !== undefined && deadline > preparedAt),
+  );
   const authResolver = createModelsListAuthResolver({
     cfg: params.cfg,
     agentId: params.agentId,
@@ -267,7 +282,9 @@ export function createModelsListAuthProjection(params: ModelsListAuthProjectionP
     authModes: params.preparedRuntimeAuthModes,
     authMaterializations: params.preparedRuntimeAuthMaterializations,
     pluginRegistry: params.pluginRegistry,
-    isCurrent: params.isCurrent ?? (() => params.observationConfig === undefined),
+    isCurrent: () =>
+      Date.now() < authValidUntil &&
+      (params.isCurrent?.() ?? params.observationConfig === undefined),
     observationConfig: params.observationConfig,
   };
 }

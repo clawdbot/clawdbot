@@ -142,7 +142,14 @@ describe("createApplicationGateway connection phase", () => {
       vi.stubGlobal("fetch", fetchMock);
       const replace = vi.fn();
       const location = Object.assign(new URL("http://127.0.0.1:18789/chat/main"), { replace });
-      vi.stubGlobal("window", { location });
+      vi.stubGlobal("window", Object.assign(new EventTarget(), { location }));
+      vi.stubGlobal(
+        "document",
+        Object.assign(new EventTarget(), {
+          documentElement: { getAttribute: () => null },
+          querySelector: () => null,
+        }),
+      );
       const { gateway, current } = createStore({
         clientOptions: { clientName: "openclaw-ios", mode: "ui" },
       });

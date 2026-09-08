@@ -37,7 +37,8 @@ const OPENCLAW_DEVICE_PLACEMENT: NonNullable<GatewayAgentRuntime["devicePlacemen
   consumesWorkerSlot: true,
 };
 
-const modelPluginMetadataSnapshot = vi.hoisted(() => {
+const modelPluginMetadataSnapshot = await vi.hoisted(async () => {
+  const { buildDeclaredProviderOwnerIndex } = await import("../../plugins/provider-owner-index.js");
   const plugins = [
     {
       id: "anthropic",
@@ -126,6 +127,7 @@ const modelPluginMetadataSnapshot = vi.hoisted(() => {
     diagnostics: [],
     byPluginId: new Map(plugins.map((plugin) => [plugin.id, plugin])),
     normalizePluginId: (pluginId: string) => pluginId,
+    declaredProviderOwners: buildDeclaredProviderOwnerIndex(plugins),
     owners: {
       channels: new Map(),
       channelConfigs: new Map(),

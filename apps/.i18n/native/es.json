@@ -1693,6 +1693,7 @@
     "native.apple.05f711cec069ec47": "Se requiere vinculación. En un cliente de OpenClaw ya vinculado, ejecuta /pair approve y vuelve a comprobar la conexión.",
     "native.apple.0603402116243f9e": "Nuevo chat en árbol de trabajo",
     "native.apple.060e3947436fa930": "No se pudo procesar %1$@: %2$@",
+    "native.apple.0644a7702bb80de1": "La sesión del navegador ha caducado. Vuelve a conectar este Gateway.",
     "native.apple.067bbf8e4b7d1837": "Escuchado: %@",
     "native.apple.06aa02b192d6a1b3": "Revisando",
     "native.apple.06ced75261e8a242": "PID de la aplicación",

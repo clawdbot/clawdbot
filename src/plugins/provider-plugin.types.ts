@@ -652,3 +652,12 @@ export type ProviderPlugin = {
   ) => boolean | undefined;
   onModelSelected?: (ctx: ProviderModelSelectedContext) => Promise<void>;
 };
+
+/** Provider runtime registered with its owning plugin and source. */
+export type PluginProviderRegistration = {
+  pluginId: string;
+  pluginName?: string;
+  provider: ProviderPlugin;
+  source: string;
+  rootDir?: string;
+};

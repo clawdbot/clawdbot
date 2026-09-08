@@ -41,6 +41,7 @@ import {
   getAgentDeletionDatabaseCleanup,
   registerAgentDeletionDatabaseCleanup,
 } from "./agent-deletion-cleanup.js";
+import { readAgentDeletionJournal } from "./agent-deletion-journal.js";
 import { createOpenClawAgentDatabaseAdmissionOwner } from "./openclaw-agent-db-admission.js";
 import type {
   OpenClawAgentDatabase,
@@ -505,6 +506,7 @@ export function runOpenClawAgentWriteTransaction<T>(
         databaseLabel: database.path,
         ...transactionOptions,
         operationLabel: transactionOptions.operationLabel ?? "agent.write",
+        withCommit: getAgentDeletionDatabaseCleanup(options)?.withCommit,
       },
     ),
   );
@@ -530,6 +532,13 @@ export function getOpenClawAgentDatabaseIfOpen(
 ): OpenClawAgentDatabase | undefined {
   const agentId = normalizeAgentId(options.agentId);
   const pathname = resolveOpenClawAgentSqlitePath({ ...options, agentId });
+  // Incognito skips durable database leases, but still follows the agent deletion fence.
+  if (
+    isIncognitoOpenClawAgentSqlitePath(pathname, options) &&
+    readAgentDeletionJournal(agentId, { env: options.env })
+  ) {
+    throw new Error(`OpenClaw agent database is unavailable while agent ${agentId} is deleted.`);
+  }
   const database = cache.databases.get(pathname);
   if (!database?.db.isOpen) {
     assertAgentDeletionCleanupAliases(options, isSameOpenClawAgentDatabasePath);

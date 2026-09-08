@@ -338,6 +338,8 @@ process.stdin.on("end", () => process.exit(0));
       let inspection = 0;
       let descendantSignalled = false;
       const actualSnapshot = processSnapshot.readCodexAppServerProcessSnapshot;
+      const actualProcess = processSnapshot.readCodexAppServerProcess;
+      let rootStopObserved = false;
       const actualKill = process.kill.bind(process);
       const killSpy = vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
         const signalled = actualKill(pid, signal);
@@ -346,11 +348,14 @@ process.stdin.on("end", () => process.exit(0));
         }
         return signalled;
       });
-      const readSnapshot = async (inspectionDeadline: number): Promise<PosixProcess[]> => {
+      const readSnapshot = async (
+        inspectionDeadline: number,
+        pids?: readonly number[],
+      ): Promise<PosixProcess[]> => {
         // Identity faults exercise signalling; cleanup needs a separate OS
         // observation. A queued kill alone must not certify an uninterruptible child.
         if (descendantSignalled && mode !== "unconfirmed-termination") {
-          return await actualSnapshot(inspectionDeadline);
+          return await actualSnapshot(inspectionDeadline, pids);
         }
         const rows = snapshots[Math.min(inspection++, snapshots.length - 1)];
         if (rows === "deadline") {
@@ -360,17 +365,29 @@ process.stdin.on("end", () => process.exit(0));
         if (!rows) {
           throw new processSnapshot.ProcessInspectionError("unavailable");
         }
+        if (
+          !rootStopObserved &&
+          rows.some((row) => row.pid === rootIdentity.pid && row.state === "T")
+        ) {
+          // Do not let synthetic stopped rows outrun delivery of the real SIGSTOP.
+          while (
+            !(await actualProcess(rootIdentity.pid, inspectionDeadline))?.state.startsWith("T")
+          ) {
+            await delay(1);
+          }
+          rootStopObserved = true;
+        }
         return rows;
       };
       const snapshotSpy = vi
         .spyOn(processSnapshot, "readCodexAppServerProcessSnapshot")
-        .mockImplementation((inspectionDeadline = Date.now() + 2_000) =>
-          readSnapshot(inspectionDeadline),
+        .mockImplementation((inspectionDeadline, pids) =>
+          readSnapshot(inspectionDeadline ?? Date.now() + 2_000, pids),
         );
       const processSpy = vi
         .spyOn(processSnapshot, "readCodexAppServerProcess")
         .mockImplementation(async (pid, inspectionDeadline) =>
-          (await readSnapshot(inspectionDeadline))?.find((row) => row.pid === pid),
+          (await readSnapshot(inspectionDeadline, [pid]))?.find((row) => row.pid === pid),
         );
       restoreInspection = () => {
         snapshotSpy.mockRestore();

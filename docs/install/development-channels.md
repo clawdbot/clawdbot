@@ -49,6 +49,18 @@ previous channel. The selected channel drives both install paths:
 An explicit `--channel stable` or `--channel beta` switches a Git installation
 to a package installation. A bare `openclaw update` in a Git checkout with a
 previously stored stable or beta channel instead selects the corresponding Git tag.
+For these Git tag updates, OpenClaw refreshes branches without adding force to
+their configured refspecs, then force-refreshes tags only from the release remote.
+The retained `branch.main.remote` setting takes precedence, followed by `origin`
+or the only configured remote. With multiple remotes and neither choice, set
+`branch.main.remote` to the remote that publishes releases before retrying.
+Recreated release tags replace their old copies; local-only tags are preserved.
+Tag pruning is disabled even when Git's `fetch.pruneTags` setting is enabled.
+These guarantees assume standard branch fetch mappings; custom `remote.*.fetch`
+mappings that explicitly include tags still follow Git's configured behavior.
+The normal CLI inspects these refs in a private repository before admitting an
+update, so a refused update leaves the installed checkout's refs unchanged.
+
 For managed Gateways, successful switches refresh the service to the verified
 installation before checking readiness. A refused switch or verified rollback
 recovers the previous service; unverified recovery leaves it stopped for inspection.
@@ -149,6 +161,9 @@ openclaw update status
 Shows the active channel (with the source that decided it: config, git tag,
 git branch, installed version, or default), install kind (git or package),
 current version, and update availability.
+It also shows the last recorded update run, including a failed fetch. Plain
+`openclaw status` uses cached Git refs; use `openclaw update status` or
+`openclaw status --deep` to request a fresh availability check.
 
 ## Tagging best practices
 

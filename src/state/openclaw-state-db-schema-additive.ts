@@ -2,6 +2,7 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
+  ORDERED_STARTUP_ADDITIVE_STATE_COLUMNS as columns,
   CLAW_FIRST_USE_ADDITIVE_STATE_COLUMN_DEFINITIONS,
   CLAW_STARTUP_ADDITIVE_STATE_COLUMN_DEFINITIONS,
 } from "./openclaw-state-db-additive-columns.js";
@@ -409,6 +410,15 @@ export function ensureFirstUseAdditiveStateColumnsForStrictMigration(db: Databas
   }
 }
 
+function ensureColumns(
+  db: DatabaseSync,
+  definitions: readonly (readonly [string, string])[],
+): void {
+  for (const definition of definitions) {
+    ensureColumn(db, ...definition);
+  }
+}
+
 export function ensureAdditiveStateColumns(db: DatabaseSync): void {
   ensureWorkerSessionToolStateSchema(db);
   for (const {
@@ -418,19 +428,11 @@ export function ensureAdditiveStateColumns(db: DatabaseSync): void {
   } of CLAW_STARTUP_ADDITIVE_STATE_COLUMN_DEFINITIONS) {
     ensureColumn(db, tableName, `${columnName} ${dataType}`);
   }
-  if (ensureColumn(db, "claw_package_refs", "updated_at_ms INTEGER NOT NULL DEFAULT 0")) {
+  if (ensureColumn(db, ...columns.packageUpdatedAt[0])) {
     db.exec("UPDATE claw_package_refs SET updated_at_ms = installed_at_ms;");
   }
-  ensureColumn(
-    db,
-    "claw_package_refs",
-    "package_integrity TEXT NOT NULL DEFAULT 'sha256:0000000000000000000000000000000000000000000000000000000000000000'",
-  );
-  const addedDiagnosticEventSequence = ensureColumn(
-    db,
-    "diagnostic_events",
-    "sequence INTEGER NOT NULL DEFAULT 0",
-  );
+  ensureColumns(db, columns.packageIntegrity);
+  const addedDiagnosticEventSequence = ensureColumn(db, ...columns.diagnosticSequence[0]);
   if (addedDiagnosticEventSequence) {
     // Preserve the legacy (created_at, rowid) order before the new sequence
     // index becomes authoritative, including stable ties within each scope.
@@ -453,136 +455,32 @@ export function ensureAdditiveStateColumns(db: DatabaseSync): void {
     `);
   }
   db.exec("DROP INDEX IF EXISTS idx_diagnostic_events_scope_created;");
-  ensureColumn(db, "worktrees", "provisioned_paths_json TEXT");
-  ensureColumn(db, "apns_registrations", "relay_origin TEXT");
-  ensureColumn(db, "device_pairing_pending", "refreshed_at_ms INTEGER");
-  ensureColumn(db, "device_pairing_pending", "browser_origin TEXT");
-  ensureColumn(db, "device_pairing_paired", "approved_via TEXT");
-  ensureColumn(db, "device_pairing_paired", "browser_origin TEXT");
-  ensureColumn(db, "device_pairing_paired", "operator_label TEXT");
-  ensureColumn(db, "device_pairing_paired", "node_surface_json TEXT");
-  ensureColumn(db, "device_pairing_paired", "pending_node_surface_json TEXT");
-  ensureColumn(db, "cron_run_logs", "status TEXT");
-  ensureColumn(db, "cron_run_logs", "error TEXT");
-  ensureColumn(db, "cron_run_logs", "summary TEXT");
-  ensureColumn(db, "cron_run_logs", "diagnostics_summary TEXT");
-  ensureColumn(db, "cron_run_logs", "delivery_status TEXT");
-  ensureColumn(db, "cron_run_logs", "delivery_error TEXT");
-  ensureColumn(db, "cron_run_logs", "delivered INTEGER");
-  ensureColumn(db, "cron_run_logs", "session_id TEXT");
-  ensureColumn(db, "cron_run_logs", "session_key TEXT");
-  ensureColumn(db, "cron_run_logs", "run_id TEXT");
-  ensureColumn(db, "cron_run_logs", "run_at_ms INTEGER");
-  ensureColumn(db, "cron_run_logs", "duration_ms INTEGER");
-  ensureColumn(db, "cron_run_logs", "next_run_at_ms INTEGER");
-  ensureColumn(db, "cron_run_logs", "model TEXT");
-  ensureColumn(db, "cron_run_logs", "provider TEXT");
-  ensureColumn(db, "cron_run_logs", "total_tokens INTEGER");
-  ensureColumn(db, "cron_run_logs", "entry_json TEXT NOT NULL DEFAULT '{}'");
-  ensureColumn(db, "cron_run_logs", "created_at INTEGER NOT NULL DEFAULT 0");
+  ensureColumns(db, columns.cronRunLogs);
   backfillCronRunLogEntryJson(db);
-  ensureColumn(db, "acp_replay_events", "estimated_bytes INTEGER NOT NULL DEFAULT 0");
-  ensureColumn(db, "acp_replay_sessions", "estimated_bytes INTEGER NOT NULL DEFAULT 0");
+  ensureColumns(db, columns.acpReplay);
   backfillAcpReplayEstimatedBytes(db);
-  ensureColumn(db, "cron_jobs", "description TEXT");
-  ensureColumn(db, "cron_jobs", "declaration_key TEXT");
-  ensureColumn(db, "cron_jobs", "owner_agent_id TEXT");
-  ensureColumn(db, "cron_jobs", "name TEXT NOT NULL DEFAULT ''");
-  ensureColumn(db, "cron_jobs", "enabled INTEGER NOT NULL DEFAULT 1");
-  ensureColumn(db, "cron_jobs", "agent_id TEXT");
-  ensureColumn(db, "cron_jobs", "payload_kind TEXT NOT NULL DEFAULT 'message'");
-  ensureColumn(db, "cron_jobs", "state_json TEXT NOT NULL DEFAULT '{}'");
-  ensureColumn(db, "cron_jobs", "runtime_updated_at_ms INTEGER");
-  ensureColumn(db, "cron_jobs", "schedule_identity TEXT");
-  ensureColumn(db, "cron_jobs", "sort_order INTEGER NOT NULL DEFAULT 0");
+  ensureColumns(db, columns.cronJobs);
   backfillCronJobsFromJobJson(db);
-  ensureColumn(db, "sandbox_registry_entries", "session_key TEXT");
-  ensureColumn(db, "sandbox_registry_entries", "backend_id TEXT");
-  ensureColumn(db, "sandbox_registry_entries", "runtime_label TEXT");
-  ensureColumn(db, "sandbox_registry_entries", "image TEXT");
-  ensureColumn(db, "sandbox_registry_entries", "created_at_ms INTEGER");
-  ensureColumn(db, "sandbox_registry_entries", "last_used_at_ms INTEGER");
-  ensureColumn(db, "sandbox_registry_entries", "config_label_kind TEXT");
-  ensureColumn(db, "sandbox_registry_entries", "config_hash TEXT");
-  ensureColumn(db, "sandbox_registry_entries", "cdp_port INTEGER");
-  ensureColumn(db, "sandbox_registry_entries", "no_vnc_port INTEGER");
-  ensureColumn(db, "delivery_queue_entries", "entry_kind TEXT");
-  ensureColumn(db, "delivery_queue_entries", "session_key TEXT");
-  ensureColumn(db, "delivery_queue_entries", "channel TEXT");
-  ensureColumn(db, "delivery_queue_entries", "target TEXT");
-  ensureColumn(db, "delivery_queue_entries", "account_id TEXT");
-  ensureColumn(db, "delivery_queue_entries", "retry_count INTEGER NOT NULL DEFAULT 0");
-  ensureColumn(db, "delivery_queue_entries", "last_attempt_at INTEGER");
-  ensureColumn(db, "delivery_queue_entries", "last_error TEXT");
-  ensureColumn(db, "delivery_queue_entries", "recovery_state TEXT");
-  ensureColumn(db, "delivery_queue_entries", "platform_send_started_at INTEGER");
+  ensureColumns(db, columns.deliveryQueue);
   backfillDeliveryQueueEntriesFromEntryJson(db);
   // The shipped JSON runtime predeclared this table but never populated it.
   // The transitional default makes ADD COLUMN portable; schema-v2 tables are
   // rebuilt from canonical STRICT SQL immediately afterward, removing it.
-  const addedOriginalMediaRoot = ensureColumn(
-    db,
-    "managed_outgoing_image_records",
-    "original_media_root TEXT NOT NULL DEFAULT ''",
-  );
+  const addedOriginalMediaRoot = ensureColumn(db, ...columns.originalMediaRoot[0]);
   if (addedOriginalMediaRoot) {
     backfillLegacyManagedImageRoots(db);
   }
-  ensureColumn(db, "managed_outgoing_image_records", "agent_id TEXT");
-  ensureColumn(
-    db,
-    "managed_outgoing_image_records",
-    "cleanup_pending INTEGER NOT NULL DEFAULT 0 CHECK (cleanup_pending IN (0, 1))",
-  );
-  ensureColumn(
-    db,
-    "current_conversation_bindings",
-    "conversation_kind TEXT NOT NULL DEFAULT 'channel'",
-  );
-  ensureColumn(db, "device_bootstrap_tokens", "pending_profile_json TEXT");
-  ensureColumn(db, "gateway_restart_handoff", "restart_trace_started_at INTEGER");
-  ensureColumn(db, "gateway_restart_handoff", "restart_trace_last_at INTEGER");
-  ensureColumn(db, "gateway_restart_intent", "reason TEXT");
-  ensureColumn(db, "gateway_restart_sentinel", "delivery_channel TEXT");
-  ensureColumn(db, "gateway_restart_sentinel", "delivery_to TEXT");
-  ensureColumn(db, "gateway_restart_sentinel", "delivery_account_id TEXT");
-  ensureColumn(db, "gateway_restart_sentinel", "message TEXT");
-  ensureColumn(db, "gateway_restart_sentinel", "continuation_json TEXT");
-  ensureColumn(db, "gateway_restart_sentinel", "doctor_hint TEXT");
-  ensureColumn(db, "gateway_restart_sentinel", "stats_json TEXT");
-  ensureColumn(db, "gateway_boot_lifecycle", "startup_reason TEXT");
-  ensureColumn(db, "official_external_plugin_catalog_snapshots", "trust_mode TEXT");
-  ensureColumn(db, "official_external_plugin_catalog_snapshots", "trust_key_id TEXT");
-  ensureColumn(db, "official_external_plugin_catalog_snapshots", "trust_signature_count INTEGER");
-  ensureColumn(db, "official_external_plugin_catalog_snapshots", "trust_threshold INTEGER");
-  ensureColumn(db, "official_external_plugin_catalog_snapshots", "trust_verified_at TEXT");
-  const addedTaskRequesterAgentId = ensureColumn(db, "task_runs", "requester_agent_id TEXT");
+  ensureColumns(db, columns.beforeTaskAttribution);
+  const addedTaskRequesterAgentId = ensureColumn(db, ...columns.taskRequester[0]);
   if (addedTaskRequesterAgentId) {
     repairLegacyTaskAgentAttribution(db);
   }
   repairLegacyTaskDeliveryStatuses(db);
-  ensureColumn(db, "task_runs", "tool_use_count INTEGER");
-  ensureColumn(db, "task_runs", "last_tool_name TEXT");
-  ensureColumn(db, "task_runs", "detail_json TEXT");
+  ensureColumns(db, columns.taskRunDetails);
   repairLegacySubagentSuspensionReasons(db);
   repairLegacySubagentExecutionPayloads(db);
   repairLegacySubagentTaskBindings(db);
   repairLegacySubagentRetainedResults(db);
-  ensureColumn(db, "worker_environments", "bootstrap_bundle_hash TEXT");
-  ensureColumn(db, "worker_environments", "bootstrap_openclaw_version TEXT");
-  ensureColumn(db, "worker_environments", "bootstrap_protocol_features_json TEXT");
-  ensureColumn(db, "worker_environments", "bootstrap_install_kind TEXT");
-  ensureColumn(
-    db,
-    "worker_environments",
-    "owner_epoch INTEGER NOT NULL DEFAULT 0 CHECK (owner_epoch >= 0)",
-  );
-  ensureColumn(db, "worker_environments", "ssh_host_key TEXT");
-  ensureColumn(db, "worker_workspace_pending_results", "staged_result_ref TEXT");
-  ensureColumn(
-    db,
-    "worker_environments",
-    "teardown_terminal_state TEXT CHECK (teardown_terminal_state IN ('destroyed', 'failed'))",
-  );
+  ensureColumns(db, columns.workerEnvironments);
   ensureOperatorApprovalResolutionRefs(db);
 }

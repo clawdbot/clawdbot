@@ -1,4 +1,4 @@
-import { gatewayOriginScope } from "@openclaw/gateway-client/browser";
+import { gatewayCredentialScope, gatewayOriginScope } from "@openclaw/gateway-client/browser";
 import {
   parseControlUiFocusLocation,
   type ControlUiFocusLocation,
@@ -25,11 +25,14 @@ import { createAgentIdentityCapability } from "../lib/agents/identity.ts";
 import { createAgentCapability } from "../lib/agents/index.ts";
 import { createChannelCapability } from "../lib/channels/index.ts";
 import { createRuntimeConfigCapability } from "../lib/config/runtime-config-capability.ts";
+import { loadCurrentDeviceAuthToken } from "../lib/nodes/index.ts";
 import { createSessionCapability } from "../lib/sessions/index.ts";
 import { parseAgentSessionKey } from "../lib/sessions/session-key.ts";
 import { createLiveActivity } from "../pages/activity/live-activity.ts";
 import { loadChatObserverDisplayPreference } from "../pages/chat/chat-observer-display.ts";
 import { sendSessionObserverVisibility } from "../pages/chat/chat-observer.ts";
+import { resolveChatSnapshotKey } from "../pages/chat/session-snapshot-key.ts";
+import { prewarmChatSnapshot } from "../pages/chat/session-snapshot-prewarm.ts";
 import {
   isDefaultChatLanding,
   startModelSetupFirstRunRedirectAfterLocation,
@@ -38,8 +41,13 @@ import { ControlUiPluginRuntime } from "../plugins/control-ui-runtime.ts";
 import { createAgentSelectionCapability } from "./agent-selection.ts";
 import type { ShellRouteState } from "./app-host-route-state.ts";
 import { resolveControlUiDocumentMode, type ControlUiDocumentMode } from "./approval-deep-link.ts";
+import { readBootRecord } from "./boot-record.ts";
 import { resolveInitialApplicationLocation } from "./bootstrap-location.ts";
 import { createApplicationTheme } from "./bootstrap-theme.ts";
+import {
+  subscribeBootRecordPersistence,
+  subscribeWarmBootConnection,
+} from "./bootstrap-warm-boot.ts";
 import { createBrowserHistory, resolveControlUiPaths } from "./browser.ts";
 import { createChatAttachmentHandoff } from "./chat-attachment-handoff.ts";
 import { createChatSubmissions } from "./chat-submissions.ts";
@@ -125,6 +133,7 @@ export type ApplicationRuntime = {
   readonly context: ApplicationContext<RouteId>;
   readonly router: ApplicationRouter;
   readonly documentMode: ControlUiDocumentMode | null;
+  readonly warmBoot: boolean;
   readonly focusLocation: ControlUiFocusLocation | null;
   readonly pendingGatewayConnection: {
     readonly gatewayUrl: string;
@@ -214,7 +223,34 @@ export function bootstrapApplication(): ApplicationRuntime {
   );
   const liveActivity = createLiveActivity(gateway);
   const connectionBootstrap = createConnectionBootstrapCoordinator();
-  const agents = createAgentCapability(gateway);
+  const bootRecord = readBootRecord(gatewayCredentialScope(settings.gatewayUrl), (method) => {
+    if (startup.pendingBootstrapToken || startup.password) {
+      return null;
+    }
+    // An explicit token takes precedence over paired-device auth on the next connect.
+    return method === "token"
+      ? settings.token
+      : settings.token.trim()
+        ? null
+        : loadCurrentDeviceAuthToken(settings.gatewayUrl);
+  });
+  const warmBoot = bootRecord !== null && startsApplicationRouter && !hasPendingGateway;
+  if (warmBoot && parseAgentSessionKey(settings.sessionKey)) {
+    prewarmChatSnapshot(
+      resolveChatSnapshotKey(
+        { agentsList: bootRecord.agents, hello: null, assistantAgentId: null },
+        { sessionKey: settings.sessionKey },
+      ),
+    );
+  }
+  const stopWarmBootConnection = subscribeWarmBootConnection(
+    gateway,
+    startsApplicationRouter && !hasPendingGateway ? bootRecord?.profileId : undefined,
+  );
+  const agents = createAgentCapability(gateway, {
+    cachedList: bootRecord?.agents ?? null,
+    cachedProfileId: bootRecord?.profileId ?? null,
+  });
   const startupLifecycle = createStartupLifecycle();
   const deferInitialLocationUntilGateway =
     firstRunDefaultLanding && !parseAgentSessionKey(settings.sessionKey);
@@ -269,7 +305,8 @@ export function bootstrapApplication(): ApplicationRuntime {
       password: gateway.connection.password,
     }),
   });
-  const sessions = createSessionCapability(gateway, agentSelection);
+  const sessions = createSessionCapability(gateway, agentSelection, { bootRecord });
+  const stopBootRecordPersistence = subscribeBootRecordPersistence({ gateway, agents, sessions });
   const runtimeConfig = createRuntimeConfigCapability(gateway);
   const overlays = createApplicationOverlays(gateway, {
     connectionBootstrap,
@@ -517,6 +554,7 @@ export function bootstrapApplication(): ApplicationRuntime {
     context,
     router,
     documentMode,
+    warmBoot,
     focusLocation,
     get pendingGatewayConnection() {
       return pendingGatewayConnection;
@@ -653,6 +691,8 @@ export function bootstrapApplication(): ApplicationRuntime {
     },
     stop: () => {
       startupLifecycle.stop();
+      stopWarmBootConnection();
+      stopBootRecordPersistence();
       stopPostConnect();
       connectionBootstrap.reset();
       agents.dispose();

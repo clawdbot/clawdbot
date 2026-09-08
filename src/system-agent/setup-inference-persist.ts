@@ -134,21 +134,14 @@ async function clearUnownedCodexInstallCaches(deps: ActivateSetupInferenceDeps):
 }
 
 export async function restoreSetupPluginMetadata(params: {
-  readSnapshot: () => Promise<
-    Awaited<ReturnType<typeof import("../config/config.js").readConfigFileSnapshot>>
-  >;
   workspaceDir: string;
   deps: ActivateSetupInferenceDeps;
 }): Promise<void> {
   try {
-    const snapshot = await params.readSnapshot();
-    const sourceConfig =
-      snapshot.exists && snapshot.valid ? (snapshot.sourceConfig ?? snapshot.config) : {};
     const refreshPluginRegistry =
       params.deps.refreshPluginRegistryAfterConfigMutation ??
       (await import("../plugins/registry-refresh.js")).refreshPluginRegistryAfterConfigMutation;
     await refreshPluginRegistry({
-      config: sourceConfig,
       reason: "source-changed",
       workspaceDir: params.workspaceDir,
       logger: setupInferenceLog,

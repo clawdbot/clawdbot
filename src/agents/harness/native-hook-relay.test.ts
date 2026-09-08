@@ -1,19 +1,23 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
-import { createServer, request as httpRequest } from "node:http";
+import { createServer, request as httpRequest, Server } from "node:http";
+import { Socket } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { PassThrough, Readable } from "node:stream";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 // Covers native hook relay registration, bridge invocation, and approval state.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { runNativeHookRelayCliFromArgv } from "../../cli/native-hook-relay-cli.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import {
   createAgentRuntimeApprovalAuthorityValidator,
   mintAgentRuntimeIdentityToken,
 } from "../../gateway/agent-runtime-identity-token.js";
+import { nativeHookRelayHandlers } from "../../gateway/server-methods/native-hook-relay.js";
 import { validateAgentRunDelegatedAuthority } from "../../infra/agent-run-registry.js";
 import {
   initializeGlobalHookRunner,
@@ -24,6 +28,7 @@ import { patchPluginSessionExtension } from "../../plugins/host-hook-state.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { splitShellArgs } from "../../utils/shell-argv.js";
 import {
   closeAdmittedRunDelegatedAuthority,
   getAdmittedRunDelegatedAuthority,
@@ -1208,6 +1213,145 @@ describe("native hook relay registry", () => {
     ).resolves.toEqual({ stdout: "", stderr: "", exitCode: 0 });
     replacement.unregister();
   });
+
+  it("invokes the successor when retirement expires before its listener publishes", async () => {
+    const first = registerNativeHookRelay({
+      provider: "codex",
+      relayId: uniqueNativeHookRelayIdForTests("replacement-publication"),
+      sessionId: "session-1",
+      runId: "run-first",
+      allowedEvents: ["post_tool_use"],
+    });
+    await waitForNativeHookRelayBridgeRecord(first.relayId);
+    const connectionErrors: unknown[] = [];
+    // oxlint-disable-next-line typescript/unbound-method -- called below with the intercepted socket receiver.
+    const originalEmit = Socket.prototype.emit;
+    vi.spyOn(Socket.prototype, "emit").mockImplementation(function (this: Socket, event, ...args) {
+      if (event === "error") {
+        connectionErrors.push(args[0]);
+      }
+      return originalEmit.call(this, event, ...args);
+    });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const successor = registerNativeHookRelay({
+        provider: "codex",
+        relayId: first.relayId,
+        sessionId: "session-1",
+        runId: "run-successor",
+        allowedEvents: ["post_tool_use"],
+      });
+      const result = expect(
+        invokeNativeHookRelayBridge({
+          provider: "codex",
+          relayId: successor.relayId,
+          generation: successor.generation,
+          event: "post_tool_use",
+          timeoutMs: 2_000,
+          rawPayload: { hook_event_name: "PostToolUse", tool_name: "Bash", tool_response: {} },
+        }),
+      ).resolves.toMatchObject({ exitCode: 0 });
+      // Let retirement win before Node delivers listening/connect callbacks.
+      vi.advanceTimersByTime(250);
+      await vi.advanceTimersByTimeAsync(25);
+      await result;
+      expect(connectionErrors).toEqual([]);
+      expect(getOnlyNativeHookRelayInvocation()).toMatchObject({ runId: "run-successor" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
+    { event: "pre_tool_use", noop: false },
+    { event: "pre_tool_use", noop: true },
+    { event: "permission_request", noop: false },
+    { event: "post_tool_use", noop: false },
+  ] as const)(
+    "keeps stale CLI authority closed during delayed publication ($event, noop=$noop)",
+    async ({ event, noop }) => {
+      const first = registerNativeHookRelay({
+        provider: "codex",
+        relayId: uniqueNativeHookRelayIdForTests("replacement-cli"),
+        sessionId: "session-1",
+        runId: "run-first",
+        allowedEvents: [event],
+      });
+      await waitForNativeHookRelayBridgeRecord(first.relayId);
+      const command = buildNativeHookRelayCommand({
+        provider: "codex",
+        relayId: first.relayId,
+        generation: first.generation,
+        event,
+        ...(noop ? { preToolUseUnavailable: "noop" } : {}),
+        timeoutMs: 2_000,
+      });
+      const argv = splitShellArgs(command);
+      if (!argv) {
+        throw new Error("Expected generated relay command to parse");
+      }
+      // Hold successor startup, while keeping the retired listener and real
+      // read-only locator lookup intact across the CLI registration deadline.
+      const listen = vi
+        .spyOn(Server.prototype, "listen")
+        .mockImplementation(function (this: Server) {
+          return this;
+        });
+      try {
+        registerNativeHookRelay({
+          provider: "codex",
+          relayId: first.relayId,
+          sessionId: "session-1",
+          runId: "run-successor",
+          allowedEvents: [event],
+        });
+        const callGateway = vi.fn(async (opts: { params?: unknown }): Promise<never> => {
+          let failure = "Gateway unexpectedly accepted the retired generation";
+          await nativeHookRelayHandlers["nativeHook.invoke"]!({
+            req: { type: "req", id: "replacement-cli", method: "nativeHook.invoke" },
+            params: requireRecord(opts.params, "gateway relay parameters"),
+            client: null,
+            isWebchatConnect: () => false,
+            respond: (ok, _result, error) => {
+              expect(ok).toBe(false);
+              failure = error?.message ?? failure;
+            },
+            context: {} as never,
+          });
+          throw new Error(failure);
+        });
+        const stdout = new PassThrough();
+        const stderr = new PassThrough();
+        await expect(
+          runNativeHookRelayCliFromArgv(argv, {
+            stdin: Readable.from([
+              JSON.stringify({
+                hook_event_name: "PreToolUse",
+                tool_name: "Bash",
+                tool_input: { command: "echo fixture" },
+              }),
+            ]),
+            stdout,
+            stderr,
+            callGateway,
+          }),
+        ).resolves.toBe(0);
+        expect(callGateway).toHaveBeenCalledOnce();
+        expect(String(stderr.read())).toContain("native hook relay bridge stale registration");
+        const output = String(stdout.read() ?? "");
+        if (event === "pre_tool_use" && !noop) {
+          expect(JSON.parse(output).hookSpecificOutput.permissionDecision).toBe("deny");
+        } else if (event === "permission_request") {
+          expect(JSON.parse(output).hookSpecificOutput.decision.behavior).toBe("deny");
+        } else {
+          expect(output).toBe("");
+        }
+        expect(testing.getNativeHookRelayInvocationsForTests()).toEqual([]);
+      } finally {
+        listen.mockRestore();
+      }
+    },
+  );
 
   it("ignores stale exact-owner teardown after same-id replacement", async () => {
     const relayId = uniqueNativeHookRelayIdForTests("stale-owner-successor");

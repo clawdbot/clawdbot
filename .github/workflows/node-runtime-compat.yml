@@ -108,7 +108,7 @@ jobs:
           node openclaw.mjs --help
           node openclaw.mjs status --json --timeout 1
           pnpm test:build:singleton
-          pnpm test src/config/sessions/session-suggestion-store.test.ts src/config/sessions/session-sharing-store.test.ts src/config/sessions/session-accessor.creation-snapshot.test.ts
+          pnpm test src/config/sessions/session-accessor.test.ts src/config/sessions/store-writer.test.ts src/config/sessions/sessions.test.ts
 
       - name: Publish trusted declaration cache artifact
         if: success() && github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main'

@@ -1,4 +1,7 @@
 import path from "node:path";
+import { resolveSessionStoreCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
+import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
@@ -7,7 +10,9 @@ import { assertNoOpenClawAgentDatabaseLeases } from "../state/openclaw-agent-db-
 import { invalidateRegisteredAgentDatabasesMemo } from "../state/openclaw-agent-db-registry-listing.js";
 import {
   closeOpenClawAgentDatabaseByPath,
+  inspectOpenClawAgentDatabaseOwner,
   listOpenClawRegisteredAgentDatabases,
+  resolveIncognitoOpenClawAgentSqlitePath,
   resolveOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db-contract.js";
@@ -16,6 +21,7 @@ import {
   isPathOwnedByAnotherRegisteredAgent,
   normalizeAgentDirRegistryPath,
 } from "./agent-dir-registry.js";
+import { listAgentIds } from "./agent-scope.js";
 
 export type AgentDeleteDatabasePlan = {
   registrationPaths: string[];
@@ -30,6 +36,43 @@ export function readAgentDeleteDatabaseRegistry(options: OpenClawStateDatabaseOp
     ...options,
     includeIncompatibleSchemaVersions: true,
   });
+}
+
+export class AgentSharedStoreOwnerError extends Error {}
+
+/** Check before journaling: retaining the file alone would still fence its shared owner. */
+export function assertAgentSessionStoreDeletionSafe(
+  cfg: OpenClawConfig,
+  agentId: string,
+  options: OpenClawStateDatabaseOptions = {},
+): void {
+  if (!cfg.session?.store?.trim()) {
+    return;
+  }
+  const id = normalizeAgentId(agentId);
+  const defaultAgentId = resolveSessionStoreCompatibilityAgentId(cfg);
+  const registeredDatabases = readAgentDeleteDatabaseRegistry(options);
+  for (const survivorId of listAgentIds(cfg)) {
+    if (normalizeAgentId(survivorId) === id) {
+      continue;
+    }
+    const storePath = resolveSessionStorePathCore(cfg.session.store, {
+      agentId: survivorId,
+      env: options.env,
+    });
+    const target = resolveSqliteTargetFromSessionStorePath(storePath, {
+      agentId: survivorId,
+      defaultAgentId,
+      env: options.env,
+      registeredDatabases,
+    });
+    const owner = inspectOpenClawAgentDatabaseOwner(target.path);
+    if (owner.status === "owned" && owner.agentId === id) {
+      throw new AgentSharedStoreOwnerError(
+        `Agent "${id}" owns the session database still used by agent "${survivorId}" and cannot be deleted. Keep this owner configured until shared history can be moved with a supported migration; no such migration is currently available.`,
+      );
+    }
+  }
 }
 
 export function resolveSurvivingDatabaseFilePaths(
@@ -94,6 +137,11 @@ export function prepareAgentDeleteDatabases(
   for (const databasePath of registeredDatabasePaths) {
     closeOpenClawAgentDatabaseByPath(databasePath, agentId);
   }
+  // Incognito has no registry row or files, but retained statements must also be retired.
+  closeOpenClawAgentDatabaseByPath(
+    resolveIncognitoOpenClawAgentSqlitePath({ agentId, env: options.env }),
+    agentId,
+  );
   const databasePaths = [...registeredDatabasePaths].filter((pathname) =>
     resolveSqliteDatabaseFilePaths(pathname).every(
       (filePath) =>

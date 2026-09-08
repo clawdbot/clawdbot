@@ -649,6 +649,13 @@ forcing one model tool call per await.
 `exec` returns `completed` only when the guest VM has no pending work and the
 final value is JSON-compatible after OpenClaw's output adapter runs.
 
+New `exec` and `wait` result text uses compact JSON to leave more of the context
+budget for tool data. Status, continuation, replay safety, telemetry, and
+structured `details` fields are preserved. Text inside JSON strings keeps its
+original whitespace. The TUI displays these results as literal text so Markdown
+syntax and long-token formatting cannot change their values. URLs remain visible
+as text rather than becoming Markdown links.
+
 ### Source in session history
 
 In the built-in OpenClaw runtime, the JSON Code Mode tool executes the original
@@ -1194,7 +1201,8 @@ summary of that same original output.
 Model-facing `exec` and `wait` results also fit the effective model's per-result
 context and persistence limits. OpenClaw reserves the complete result envelope,
 including status, continuation, diagnostics, telemetry, and JSON formatting,
-before projecting output from its retained original source. Network-derived
+using the same compact representation for budget fitting and delivery before
+projecting output from its retained original source. Network-derived
 results retain the untrusted-content wrapper and its smaller content limit.
 These limits do not reduce the nested tool's byte allowance. Headless execution
 and low-level controls without model context retain their byte-only allowance

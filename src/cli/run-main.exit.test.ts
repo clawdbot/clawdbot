@@ -6,6 +6,7 @@ import process from "node:process";
 import { expectDefined } from "@openclaw/normalization-core";
 import { CommanderError } from "commander";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ConfigSnapshotReadOptions } from "../config/io.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { GATEWAY_SERVICE_RUNTIME_PID_ENV } from "../daemon/constants.js";
 import { flushDiagnosticsTimeline } from "../infra/diagnostics-timeline.js";
@@ -39,16 +40,6 @@ type ConfigSnapshotStub = {
   raw?: string | null;
   valid: boolean;
   sourceConfig: Record<string, unknown>;
-};
-
-type ConfigSnapshotReadOptionsStub = {
-  isolateEnv?: boolean;
-  observe?: boolean;
-  recoverSuspicious?: boolean;
-  allowSuspiciousRecovery?: (
-    candidate: Record<string, unknown>,
-    current: Record<string, unknown>,
-  ) => boolean | Promise<boolean>;
 };
 
 const tryRouteCliMock = vi.hoisted(() => vi.fn());
@@ -123,7 +114,7 @@ const restoreRuntimeTerminalStateMock = vi.hoisted(() => vi.fn());
 const hasEnvHttpProxyAgentConfiguredMock = vi.hoisted(() => vi.fn(() => false));
 const ensureGlobalUndiciEnvProxyDispatcherMock = vi.hoisted(() => vi.fn());
 const readConfigFileSnapshotMock = vi.hoisted(() =>
-  vi.fn<(options?: ConfigSnapshotReadOptionsStub) => Promise<ConfigSnapshotStub>>(async () => ({
+  vi.fn<(options?: ConfigSnapshotReadOptions) => Promise<ConfigSnapshotStub>>(async () => ({
     exists: true,
     valid: true,
     sourceConfig: { gateway: { mode: "local" } },
@@ -1016,7 +1007,9 @@ describe("runCli exit behavior", () => {
   it("configures the gateway foreground fast path with the standard CLI bootstrap", async () => {
     await runCli(["node", "openclaw", "gateway", "--force"]);
 
-    expect(readConfigFileSnapshotMock.mock.calls).toEqual([[{ isolateEnv: true, observe: false }]]);
+    expect(readConfigFileSnapshotMock.mock.calls).toEqual([
+      [{ isolateEnv: true, observe: false, pluginValidation: "core-only" }],
+    ]);
     const hooks = addGatewayRunCommandMock.mock.calls[0]?.[1] as
       | { beforeRun?: (opts: { reset?: boolean }) => Promise<void> }
       | undefined;
@@ -1029,15 +1022,14 @@ describe("runCli exit behavior", () => {
         loadPlugins: false,
       }),
     );
-    expect(readConfigFileSnapshotMock).toHaveBeenCalledWith({
-      isolateEnv: true,
-      recoverSuspicious: true,
-      allowSuspiciousRecovery: expect.any(Function),
-    });
-    const recoveryOrder = readConfigFileSnapshotMock.mock.invocationCallOrder[2] ?? 0;
+    expect(readConfigFileSnapshotMock.mock.calls).toEqual([
+      [{ isolateEnv: true, observe: false, pluginValidation: "core-only" }],
+      [{ isolateEnv: true, observe: false, pluginValidation: "core-only" }],
+    ]);
+    const admissionOrder = readConfigFileSnapshotMock.mock.invocationCallOrder[1] ?? 0;
     const bootstrapOrder = ensureCliExecutionBootstrapMock.mock.invocationCallOrder[0] ?? 0;
-    expect(recoveryOrder).toBeGreaterThan(0);
-    expect(bootstrapOrder).toBeGreaterThan(recoveryOrder);
+    expect(admissionOrder).toBeGreaterThan(0);
+    expect(bootstrapOrder).toBeGreaterThan(admissionOrder);
   });
 
   it("defers config-drift exit to the migration owner before startup migrations", async () => {
@@ -1213,7 +1205,7 @@ describe("runCli exit behavior", () => {
       expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining(params.expectedAction));
       expect(ensureCliExecutionBootstrapMock).not.toHaveBeenCalled();
       expect(readConfigFileSnapshotMock.mock.calls).toEqual([
-        [{ isolateEnv: true, observe: false }],
+        [{ isolateEnv: true, observe: false, pluginValidation: "core-only" }],
       ]);
       if (params.marker) {
         expect(process.env.OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS).toBeUndefined();
@@ -1414,127 +1406,6 @@ describe("runCli exit behavior", () => {
       );
     } finally {
       await fs.rm(homeDir, { recursive: true, force: true });
-    }
-  });
-
-  it("blocks a future-config recovery candidate before destructive gateway reset", async () => {
-    const currentSnapshot = {
-      exists: true,
-      valid: true,
-      sourceConfig: { gateway: { mode: "local" } },
-    };
-    readConfigFileSnapshotMock.mockImplementation(async (options) => {
-      if (options?.recoverSuspicious) {
-        await options?.allowSuspiciousRecovery?.(
-          {
-            meta: { lastTouchedVersion: "9999.1.1" },
-            gateway: { mode: "local" },
-          },
-          currentSnapshot.sourceConfig,
-        );
-      }
-      return currentSnapshot;
-    });
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    const exitSpy = vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
-      throw new Error(`exit:${String(code)}`);
-    }) as typeof process.exit);
-    try {
-      await runCli(["node", "openclaw", "gateway", "--dev", "--reset"]);
-      const hooks = addGatewayRunCommandMock.mock.calls[0]?.[1] as
-        | { beforeRun?: (opts: { reset?: boolean }) => Promise<void> }
-        | undefined;
-      await expect(hooks?.beforeRun?.({ reset: true })).rejects.toThrow("exit:1");
-      expect(errorSpy).toHaveBeenCalledWith(
-        expect.stringContaining("Refusing to reset the dev gateway state"),
-      );
-      expect(ensureCliExecutionBootstrapMock).not.toHaveBeenCalled();
-    } finally {
-      exitSpy.mockRestore();
-      errorSpy.mockRestore();
-    }
-  });
-
-  it("blocks a future current config before pre-bootstrap suspicious recovery", async () => {
-    const currentSnapshot = {
-      exists: true,
-      valid: true,
-      sourceConfig: { gateway: { mode: "local" } },
-    };
-    readConfigFileSnapshotMock.mockImplementation(async (options) => {
-      if (options?.recoverSuspicious) {
-        await options.allowSuspiciousRecovery?.(
-          { gateway: { mode: "local" } },
-          {
-            meta: { lastTouchedVersion: "9999.1.1" },
-            gateway: { mode: "local" },
-          },
-        );
-      }
-      return currentSnapshot;
-    });
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    const exitSpy = vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
-      throw new Error(`exit:${String(code)}`);
-    }) as typeof process.exit);
-    try {
-      await runCli(["node", "openclaw", "gateway"]);
-      const hooks = addGatewayRunCommandMock.mock.calls[0]?.[1] as
-        | { beforeRun?: (opts: { force?: boolean }) => Promise<void> }
-        | undefined;
-      await expect(hooks?.beforeRun?.({})).rejects.toThrow("exit:1");
-      expect(errorSpy).toHaveBeenCalledWith(
-        expect.stringContaining("run automatic gateway startup migrations"),
-      );
-      expect(ensureCliExecutionBootstrapMock).not.toHaveBeenCalled();
-    } finally {
-      exitSpy.mockRestore();
-      errorSpy.mockRestore();
-    }
-  });
-
-  it("blocks a future service-mode candidate before pre-bootstrap suspicious recovery", async () => {
-    const currentSnapshot = {
-      exists: true,
-      valid: true,
-      sourceConfig: { gateway: { mode: "local" } },
-    };
-    readConfigFileSnapshotMock.mockImplementation(async (options) => {
-      if (options?.recoverSuspicious) {
-        await options.allowSuspiciousRecovery?.(
-          {
-            env: { vars: { OPENCLAW_SERVICE_MARKER: "gateway" } },
-            gateway: { mode: "local" },
-            meta: { lastTouchedVersion: "9999.1.1" },
-          },
-          { gateway: { mode: "local" } },
-        );
-      }
-      return currentSnapshot;
-    });
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    const exitSpy = vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
-      throw new Error(`exit:${String(code)}`);
-    }) as typeof process.exit);
-    try {
-      await withEnvAsync(
-        {
-          OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS: "1",
-          OPENCLAW_SERVICE_MARKER: undefined,
-        },
-        async () => {
-          await runCli(["node", "openclaw", "gateway"]);
-          const hooks = addGatewayRunCommandMock.mock.calls[0]?.[1] as
-            | { beforeRun?: (opts: { force?: boolean }) => Promise<void> }
-            | undefined;
-          await expect(hooks?.beforeRun?.({})).rejects.toThrow("exit:78");
-        },
-      );
-      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("start the gateway service"));
-      expect(ensureCliExecutionBootstrapMock).not.toHaveBeenCalled();
-    } finally {
-      exitSpy.mockRestore();
-      errorSpy.mockRestore();
     }
   });
 
@@ -1745,123 +1616,6 @@ describe("runCli exit behavior", () => {
     }
   });
 
-  it("re-inspects recovery after recovery changes config selection", async () => {
-    await withEnvAsync({ OPENCLAW_CONFIG_PATH: undefined }, async () => {
-      const selectedConfigPath = "/tmp/openclaw-recovered-selection.json";
-      const currentSnapshot = {
-        exists: true,
-        valid: true,
-        sourceConfig: { gateway: { mode: "local" } },
-      };
-      let recoveryReads = 0;
-      readConfigFileSnapshotMock.mockImplementation(async (options) => {
-        if (!options?.recoverSuspicious) {
-          return currentSnapshot;
-        }
-        recoveryReads += 1;
-        if (recoveryReads === 1) {
-          const recoveredSnapshot = {
-            exists: true,
-            valid: true,
-            sourceConfig: {
-              env: { vars: { OPENCLAW_CONFIG_PATH: selectedConfigPath } },
-              gateway: { mode: "local" },
-            },
-          };
-          await options.allowSuspiciousRecovery?.(
-            recoveredSnapshot.sourceConfig,
-            currentSnapshot.sourceConfig,
-          );
-          return recoveredSnapshot;
-        }
-        await options.allowSuspiciousRecovery?.(
-          {
-            meta: { lastTouchedVersion: "9999.1.1" },
-            gateway: { mode: "local" },
-          },
-          currentSnapshot.sourceConfig,
-        );
-        return currentSnapshot;
-      });
-      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-      const exitSpy = vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
-        throw new Error(`exit:${String(code)}`);
-      }) as typeof process.exit);
-      try {
-        await runCli(["node", "openclaw", "gateway"]);
-        const hooks = addGatewayRunCommandMock.mock.calls[0]?.[1] as
-          | { beforeRun?: (opts: { force?: boolean }) => Promise<void> }
-          | undefined;
-        await expect(hooks?.beforeRun?.({})).rejects.toThrow("exit:1");
-        expect(errorSpy).toHaveBeenCalledWith(
-          expect.stringContaining("run automatic gateway startup migrations"),
-        );
-        expect(ensureCliExecutionBootstrapMock).not.toHaveBeenCalled();
-        expect(recoveryReads).toBe(2);
-      } finally {
-        exitSpy.mockRestore();
-        errorSpy.mockRestore();
-      }
-    });
-  });
-
-  it("discards env from a config replaced by suspicious recovery", async () => {
-    await withEnvAsync(
-      { OPENCLAW_GATEWAY_TOKEN: undefined, OPENCLAW_PROXY_ACTIVE: undefined },
-      async () => {
-        const clobberedSnapshot = {
-          exists: true,
-          valid: true,
-          sourceConfig: {
-            env: { vars: { OPENCLAW_GATEWAY_TOKEN: "discarded-token" } },
-            gateway: { mode: "local" },
-          },
-          hash: "clobbered",
-          path: "/tmp/openclaw.json",
-        };
-        const recoveredSnapshot = {
-          exists: true,
-          valid: true,
-          sourceConfig: { gateway: { mode: "local" } },
-          hash: "recovered",
-          path: "/tmp/openclaw.json",
-        };
-        const initialSnapshot = {
-          exists: true,
-          valid: true,
-          sourceConfig: { gateway: { mode: "local" } },
-          hash: "initial",
-          path: "/tmp/openclaw.json",
-        };
-        let currentSnapshot = initialSnapshot;
-        let recovered = false;
-        readConfigFileSnapshotMock.mockImplementation(async (options) => {
-          if (!options?.recoverSuspicious) {
-            return recovered ? recoveredSnapshot : currentSnapshot;
-          }
-          recovered = true;
-          await options.allowSuspiciousRecovery?.(
-            recoveredSnapshot.sourceConfig,
-            currentSnapshot.sourceConfig,
-          );
-          return recoveredSnapshot;
-        });
-        await runCli(["node", "openclaw", "gateway"]);
-
-        currentSnapshot = clobberedSnapshot;
-        process.env.OPENCLAW_PROXY_ACTIVE = "1";
-        const hooks = addGatewayRunCommandMock.mock.calls[0]?.[1] as
-          | { beforeRun?: (opts: { force?: boolean }) => Promise<void> }
-          | undefined;
-        await hooks?.beforeRun?.({});
-
-        expect(process.env.OPENCLAW_GATEWAY_TOKEN).toBeUndefined();
-        expect(process.env.OPENCLAW_PROXY_ACTIVE).toBe("1");
-        expect(ensureCliExecutionBootstrapMock).toHaveBeenCalledOnce();
-      },
-    );
-  });
-
   it("does not apply environment variables from invalid config snapshots", async () => {
     await withEnvAsync({ OPENCLAW_INCLUDE_ROOTS: undefined }, async () => {
       readConfigFileSnapshotMock.mockResolvedValue({
@@ -1883,8 +1637,8 @@ describe("runCli exit behavior", () => {
 
       expect(process.env.OPENCLAW_INCLUDE_ROOTS).toBeUndefined();
       expect(readConfigFileSnapshotMock.mock.calls).toEqual([
-        [{ isolateEnv: true, observe: false }],
-        [{ isolateEnv: true, observe: false }],
+        [{ isolateEnv: true, observe: false, pluginValidation: "core-only" }],
+        [{ isolateEnv: true, observe: false, pluginValidation: "core-only" }],
       ]);
       expect(ensureCliExecutionBootstrapMock).not.toHaveBeenCalled();
     });
@@ -2277,7 +2031,11 @@ describe("runCli exit behavior", () => {
       | undefined;
     await hooks?.beforeRun?.({ reset: true });
 
-    expect(readConfigFileSnapshotMock).toHaveBeenCalledWith({ isolateEnv: true, observe: false });
+    expect(readConfigFileSnapshotMock).toHaveBeenCalledWith({
+      isolateEnv: true,
+      observe: false,
+      pluginValidation: "core-only",
+    });
     expect(ensureCliExecutionBootstrapMock).not.toHaveBeenCalled();
   });
 

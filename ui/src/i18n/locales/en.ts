@@ -3895,6 +3895,7 @@ export const en: TranslationMap & {
   },
   connection: {
     disconnectedTitle: "Disconnected",
+    connecting: "Connecting…",
     queuedCount: "{count} queued",
     reconnecting: "Reconnecting…",
     restarting: "Restarting…",

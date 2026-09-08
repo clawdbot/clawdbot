@@ -3,7 +3,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SkillStatusReport } from "../../api/types.ts";
 import type { RuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { loadSkillStatusReport } from "../../lib/skills/index.ts";
+import { loadSkillStatusReport } from "../../lib/skills/status-report.ts";
 
 type AgentSkillsState = {
   client: GatewayBrowserClient | null;

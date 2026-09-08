@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { digestClawHubSkillTree } from "../skills/lifecycle/skill-tree-digest.js";
 import { applyClawPackageRemovals, planClawPackageRemovals } from "./package-remove.js";
@@ -228,6 +229,78 @@ describe("Claw package removal", () => {
       expect.anything(),
     );
   });
+
+  it.each(["discovery", "uninstall"])(
+    "refuses package mutations when parent deletion ends during %s",
+    async (stage) => {
+      const ref = packageRef();
+      const store = packageRefStore(ref);
+      const started = createDeferred();
+      const resume = createDeferred();
+      let active = true;
+      const uninstall = vi.fn();
+      const options = {
+        assertCurrent: () => {
+          if (!active) {
+            throw new Error("Parent deletion ended.");
+          }
+        },
+        deps: {
+          ...store,
+          resolvePlugin: vi.fn(async () => {
+            if (stage === "discovery") {
+              started.resolve();
+              await resume.promise;
+            }
+            return {
+              status: "found" as const,
+              pluginId: "audit",
+              record: {
+                source: "clawhub" as const,
+                integrity: "sha256:audit",
+                installedAt: "1970-01-01T00:00:00.001Z",
+              },
+              installedVersion: "1.0.0",
+            };
+          }),
+          uninstallPlugin: vi.fn(
+            async (_id: string, apply?: { beforePersistentApply?: () => void }) => {
+              if (stage === "uninstall") {
+                started.resolve();
+                await resume.promise;
+              }
+              apply?.beforePersistentApply?.();
+              uninstall();
+            },
+          ),
+        },
+      };
+      const removing = applyClawPackageRemovals(
+        [
+          {
+            packageRef: ref,
+            workspace: install.workspace,
+            action: "uninstall",
+            affectedClawAgentIds: [],
+            pluginId: "audit",
+          },
+        ],
+        options,
+      );
+      try {
+        await started.promise;
+        active = false;
+      } finally {
+        resume.resolve();
+      }
+
+      await expect(removing).resolves.toMatchObject([
+        { action: "error", reason: "Parent deletion ended." },
+      ]);
+      expect(uninstall).not.toHaveBeenCalled();
+      expect(store.readPackageRefs()).toEqual([{ ...ref, status: "pending" }]);
+    },
+  );
 
   it("leaves failed provenance when an error occurs after uninstall starts", async () => {
     const ref = packageRef();

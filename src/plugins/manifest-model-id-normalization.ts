@@ -1,7 +1,6 @@
 /** Applies manifest-declared model-id normalization policies to provider model refs. */
 import {
   collectManifestModelIdNormalizationPolicies,
-  normalizeProviderModelIdWithPolicies,
   type ManifestModelIdNormalizationProvider,
 } from "@openclaw/model-catalog-core/provider-model-id-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -57,23 +56,4 @@ export function resolveManifestModelIdNormalizationPolicies(
     allowWorkspaceScopedCurrent: true,
   });
   return snapshot ? snapshot.owners.modelIdNormalizationPolicies : new Map();
-}
-
-/** Normalizes a provider model id using plugin manifest-declared model-id policies. */
-export function normalizeProviderModelIdWithManifest(params: {
-  provider: string;
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  plugins?: ManifestModelIdNormalizationSource;
-  context: {
-    provider: string;
-    modelId: string;
-  };
-}): string | undefined {
-  return normalizeProviderModelIdWithPolicies({
-    provider: params.provider,
-    policies: resolveManifestModelIdNormalizationPolicies(params),
-    context: params.context,
-  });
 }

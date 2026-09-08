@@ -1,5 +1,6 @@
 const UPGRADE_SURVIVOR_SCENARIOS = Object.freeze([
   "base",
+  "abandoned-update",
   "legacy-operator-state",
   "mobile-pairing-reconnect",
   "acpx-openclaw-tools-bridge",
@@ -25,7 +26,7 @@ export const OLDEST_SUPPORTED_UPGRADE_SURVIVOR_BASELINE = "2026.6.34";
 
 // These black-box scenarios are implemented entirely by the current trusted
 // release harness and treat the selected tree only as the package under test.
-const TRUSTED_HARNESS_OWNED_SCENARIOS = new Set(["mobile-pairing-reconnect"]);
+const TRUSTED_HARNESS_OWNED_SCENARIOS = new Set(["mobile-pairing-reconnect", "abandoned-update"]);
 
 export function isTrustedHarnessOwnedUpgradeSurvivorScenario(scenario) {
   return TRUSTED_HARNESS_OWNED_SCENARIOS.has(scenario);
@@ -37,6 +38,7 @@ export function isTrustedHarnessOwnedUpgradeSurvivorScenario(scenario) {
 // qualification until their runtime cost justifies aggregate release coverage.
 const aggregateScenarios = UPGRADE_SURVIVOR_SCENARIOS.filter(
   (scenario) =>
+    scenario !== "abandoned-update" &&
     scenario !== "mobile-pairing-reconnect" &&
     scenario !== "watchos-direct-node" &&
     scenario !== "prerelease-plugin-registry" &&
@@ -184,6 +186,7 @@ function supportsUpgradeSurvivorLegacyOperatorState(baselineSpec) {
 
 export function supportsUpgradeSurvivorScenarioAtBaseline(scenario, baselineSpec) {
   return (
+    (scenario !== "abandoned-update" || baselineSpec === "openclaw@2026.9.2") &&
     (scenario !== "legacy-operator-state" ||
       supportsUpgradeSurvivorLegacyOperatorState(baselineSpec)) &&
     (scenario !== "plugin-deps-cleanup" ||

@@ -120,7 +120,7 @@ export function stripSessionsYieldArtifacts(activeSession: {
   messages: AgentMessage[];
   agent: { state: { messages: AgentMessage[] } };
   sessionManager: Pick<SessionManager, "removeTrailingEntries">;
-}) {
+}): boolean {
   const strippedMessages = activeSession.messages.slice();
 
   // The tool-calling assistant turn and synthetic abort artifacts form one
@@ -138,7 +138,7 @@ export function stripSessionsYieldArtifacts(activeSession: {
 
   const removedMessages = activeSession.messages.slice(strippedMessages.length);
   if (removedMessages.length === 0) {
-    return;
+    return false;
   }
 
   // The interrupt marker can settle independently in live and persisted state.
@@ -146,7 +146,7 @@ export function stripSessionsYieldArtifacts(activeSession: {
   let remainingAssistantCount = removedMessages.filter(
     (message) => message.role === "assistant",
   ).length;
-  activeSession.sessionManager.removeTrailingEntries(
+  const removedEntries = activeSession.sessionManager.removeTrailingEntries(
     (entry) => {
       if (
         entry.type === "custom_message" &&
@@ -177,4 +177,5 @@ export function stripSessionsYieldArtifacts(activeSession: {
   // only after it succeeds so both histories keep the same suffix on conflict.
 
   activeSession.agent.state.messages = strippedMessages;
+  return removedEntries > 0;
 }

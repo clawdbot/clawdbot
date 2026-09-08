@@ -6,7 +6,6 @@ import { HEARTBEAT_PROMPT } from "../../../auto-reply/heartbeat.js";
 import type { BootstrapContextRunKind } from "../../bootstrap-mode.js";
 import { assembleHarnessContextEngine } from "../../harness/context-engine-lifecycle.js";
 import { limitHistoryTurns } from "../history.js";
-import { buildEmbeddedMessageActionDiscoveryInput } from "../message-action-discovery-input.js";
 import {
   type AttemptContextEngine,
   resolveAttemptBootstrapContext,
@@ -116,31 +115,6 @@ describe("embedded attempt context injection", () => {
     expect(result.contextFiles).toEqual([{ path: "BOOTSTRAP.md" }]);
     expect(hasCompletedBootstrapTurn).not.toHaveBeenCalled();
     expect(resolver).toHaveBeenCalledTimes(1);
-  });
-
-  it("builds embedded message-action discovery routing context", () => {
-    const input = buildEmbeddedMessageActionDiscoveryInput({
-      cfg: {},
-      channel: "matrix",
-      currentChannelId: "room",
-      currentThreadTs: "thread",
-      currentMessageId: 123,
-      accountId: "work",
-      sessionKey: "agent:main",
-      sessionId: "session",
-      agentId: "main",
-      senderId: "@alice:example.org",
-    });
-
-    expect(input.channel).toBe("matrix");
-    expect(input.currentChannelId).toBe("room");
-    expect(input.currentThreadTs).toBe("thread");
-    expect(input.currentMessageId).toBe(123);
-    expect(input.accountId).toBe("work");
-    expect(input.sessionKey).toBe("agent:main");
-    expect(input.sessionId).toBe("session");
-    expect(input.agentId).toBe("main");
-    expect(input.requesterSenderId).toBe("@alice:example.org");
   });
 
   it.each(["heartbeat"] as const)(

@@ -114,13 +114,21 @@ const stubs = new Map<string, string>([
   ],
   [
     sourceUrl("./update-cli/update-command-config.ts"),
-    `export const readPostCorePreUpdateSourceConfig = async () => {
-      ${scenario === "phase-hang" ? "await new Promise(resolve => setTimeout(resolve, 1_200));" : ""}
-      return undefined;
-    };
-    export const persistRequestedUpdateChannel = async ({configSnapshot}) => configSnapshot;
-    export const persistValidatedDowngradeConfig = async () => {};
-    export const restoreDroppedPreUpdateChannels = snapshot => ({snapshot, changed: false});`,
+    `
+import { readConfigFileSnapshot } from ${JSON.stringify(sourceUrl("../config/config.ts"))};
+export const readPostCorePreUpdateSourceConfig = async () => {
+  ${scenario === "phase-hang" ? "await new Promise(resolve => setTimeout(resolve, 1_200));" : ""}
+  return undefined;
+};
+export const persistRequestedUpdateChannel = async ({configSnapshot}) => configSnapshot;
+export const persistValidatedDowngradeConfig = async () => {};
+export const preparePostCorePluginConfig = async () => ({
+  configSnapshot: await readConfigFileSnapshot(),
+  configWriteOptions: {},
+  configChanged: false,
+  restoredAuthoredChannels: undefined,
+});
+`,
   ],
   [
     sourceUrl("./update-cli/update-command-plugins.ts"),
