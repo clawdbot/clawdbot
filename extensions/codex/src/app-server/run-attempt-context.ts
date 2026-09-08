@@ -173,9 +173,12 @@ export async function prepareCodexAttemptContext(
       isHostScopedAgentToolActive("openclaw") &&
       isSystemAgentOnlyCodexDynamicToolAllowlist(runtimeParams.toolsAllow),
     sandboxed: sandbox?.enabled === true,
-    retainedThreadContext: startupBinding?.threadId
-      ? { instructions: startupBinding.agentWorkspaceDeveloperInstructions }
-      : undefined,
+    // A pending supervision binding identifies the source, not a captured
+    // OpenClaw workspace snapshot. Its new canonical thread needs fresh context.
+    retainedThreadContext:
+      startupBinding?.threadId && !startupBinding.pendingSupervisionBranch
+        ? { instructions: startupBinding.agentWorkspaceDeveloperInstructions }
+        : undefined,
   });
   // A thread keeps the bounded agent-workspace snapshot captured at creation.
   // Missing files are part of that snapshot too: later creation or deletion must

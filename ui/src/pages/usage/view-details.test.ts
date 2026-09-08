@@ -412,6 +412,15 @@ describe("renderSessionDetailPanel filtered usage", () => {
           injectedChars: null,
           truncated: null,
         },
+        {
+          name: "TOOLS.md",
+          path: "/TOOLS.md",
+          missing: true,
+          rawChars: 0,
+          injectionStatus: "retained_unverified",
+          injectedChars: null,
+          truncated: null,
+        },
       ],
     };
     const onToggleContextExpanded = vi.fn();
@@ -433,7 +442,7 @@ describe("renderSessionDetailPanel filtered usage", () => {
     const cards = [...container.querySelectorAll(".context-breakdown-card")];
     expect(
       cards.map((card) => card.querySelector(".context-breakdown-title")?.textContent?.trim()),
-    ).toEqual(["Skills (5)", "Tools (2)", "Files (3)"]);
+    ).toEqual(["Skills (5)", "Tools (2)", "Files (4)"]);
     expect(
       [...(cards[0]?.querySelectorAll(".context-breakdown-item .mono") ?? [])].map(
         (entry) => entry.textContent,
@@ -447,8 +456,10 @@ describe("renderSessionDetailPanel filtered usage", () => {
       "large.md",
       "small.md",
       "AGENTS.md",
+      "TOOLS.md",
     ]);
     expect(fileEntries[2]?.querySelector(".muted")?.textContent).toBe("unknown");
+    expect(fileEntries[3]?.querySelector(".muted")?.textContent).toBe("unknown");
     expect(cards[0]?.querySelector(".context-breakdown-more")?.textContent).toContain("1 more");
     container.querySelector<HTMLButtonElement>(".context-breakdown-header button")?.click();
     expect(onToggleContextExpanded).toHaveBeenCalledOnce();

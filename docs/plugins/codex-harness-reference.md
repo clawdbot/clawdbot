@@ -1062,8 +1062,13 @@ carried by native project-doc discovery, or in an optional workspace-root
   edits, and removal take effect in the next session, not halfway through an
   existing thread. Ring-zero, lightweight, message-only, policy-restricted
   tool-disabled, and `contextInjection: "never"` turns suppress this carrier.
-  Per-file diagnostics describe freshly loaded workspace files, which can differ
-  from the retained thread snapshot after an edit. See the [sandbox and Policy
+  On resumed threads, per-file diagnostics use `retained_unverified`: local sizes
+  and missing-file status describe disk state now, while injected sizes and
+  truncation are unknown. A listed file is only a possible snapshot source, not
+  proof it was retained. This also applies after a process restart or file removal;
+  the unchanged snapshot still counts in the system prompt total. An initially
+  empty or disabled snapshot is omitted without a false truncation warning.
+  See the [sandbox and Policy
   limitations](/concepts/agent-workspace#optional-toolsmd-limitations).
 
 - `SOUL.md`, `IDENTITY.md`, and `USER.md` are forwarded as **turn-scoped**

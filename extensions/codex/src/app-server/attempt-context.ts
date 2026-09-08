@@ -70,11 +70,16 @@ type CodexBootstrapContext = {
 /** System prompt accounting report attached to Codex attempt results. */
 export type CodexSystemPromptReport = NonNullable<EmbeddedRunAttemptResult["systemPromptReport"]>;
 type CodexToolReportEntry = CodexSystemPromptReport["tools"]["entries"][number];
+type CodexThreadWorkspaceFileReportState = {
+  paths: string[];
+  status: "retained_unverified" | "omitted";
+};
 type CodexWorkspaceBootstrapContext = CodexBootstrapContext & {
   inheritsAgentWorkspace: boolean;
   promptContextFiles?: EmbeddedContextFile[];
   threadDeveloperContextEnabled?: boolean;
   threadDeveloperInstructionFiles?: EmbeddedContextFile[];
+  threadWorkspaceFileReportState?: CodexThreadWorkspaceFileReportState;
   turnScopedDeveloperInstructionFiles?: EmbeddedContextFile[];
   memoryReferenceFiles?: EmbeddedContextFile[];
   memoryToolRoutedBootstrapFiles?: CodexBootstrapFile[];
@@ -277,6 +282,19 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
       inheritsAgentWorkspace || restrictedProjectDocNeedsOpenClawCarrier;
     const rootToolsPath = path.join(path.resolve(params.resolvedWorkspace), "TOOLS.md");
     const rootAgentsPath = path.join(path.resolve(params.resolvedWorkspace), "AGENTS.md");
+    // A bound snapshot stores rendered instructions, not per-file provenance.
+    // Report its possible source files as unknown rather than measuring fresh
+    // bytes as if they were the frozen context. This state never changes prompts.
+    const threadWorkspaceFileReportState: CodexThreadWorkspaceFileReportState | undefined =
+      params.retainedThreadContext || !threadDeveloperContextEnabled
+        ? {
+            paths: [rootToolsPath, ...(includeAgentProjectInstructions ? [rootAgentsPath] : [])],
+            status:
+              threadDeveloperContextEnabled && params.retainedThreadContext?.instructions
+                ? "retained_unverified"
+                : "omitted",
+          }
+        : undefined;
     const isThreadFile = (file: CodexBootstrapFile) =>
       path.resolve(file.path) === rootToolsPath ||
       (includeAgentProjectInstructions && path.resolve(file.path) === rootAgentsPath);
@@ -351,6 +369,7 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
       promptContextFiles,
       threadDeveloperContextEnabled,
       threadDeveloperInstructionFiles,
+      threadWorkspaceFileReportState,
       turnScopedDeveloperInstructionFiles,
       memoryReferenceFiles,
       memoryToolRoutedBootstrapFiles,
@@ -429,6 +448,8 @@ export function buildCodexSystemPromptReport(params: {
       memoryToolRoutedBootstrapFiles:
         params.workspaceBootstrapContext.memoryToolRoutedBootstrapFiles ?? [],
       memoryToolRouted: params.workspaceBootstrapContext.memoryToolRouted === true,
+      threadWorkspaceFileReportState:
+        params.workspaceBootstrapContext.threadWorkspaceFileReportState,
     }),
     skills: {
       promptChars: skillsPrompt.length,
@@ -527,6 +548,7 @@ function buildCodexBootstrapInjectionStats(params: {
   developerInstructionFiles?: EmbeddedContextFile[];
   memoryToolRoutedBootstrapFiles?: CodexBootstrapFile[];
   memoryToolRouted?: boolean;
+  threadWorkspaceFileReportState?: CodexThreadWorkspaceFileReportState;
 }): CodexSystemPromptReport["injectedWorkspaceFiles"] {
   const injectedIndex = indexCodexContextFileContent(params.injectedFiles);
   const developerInstructionIndex = indexCodexContextFileContent(
@@ -538,50 +560,89 @@ function buildCodexBootstrapInjectionStats(params: {
       .filter(isNonEmptyString)
       .map(normalizeCodexContextFilePath),
   );
-  return params.bootstrapFiles.map((file) => {
-    const fileName = readNonEmptyString(file.name);
-    const pathValue = readNonEmptyString(file.path) ?? fileName ?? "";
-    const displayName = (fileName ?? getCodexContextFileDisplayBasename(pathValue)) || pathValue;
-    const baseName = getCodexContextFileBasename(pathValue || fileName || "");
-    const rawChars = file.missing ? 0 : (file.content ?? "").trimEnd().length;
-    const memoryToolRoutedFile =
-      baseName === CODEX_MEMORY_CONTEXT_BASENAME &&
-      params.memoryToolRouted === true &&
-      memoryToolRoutedPaths.has(normalizeCodexContextFilePath(pathValue));
-    const injected = memoryToolRoutedFile
-      ? undefined
-      : (readCodexIndexedContextFileContent(injectedIndex, pathValue, fileName) ??
-        readCodexIndexedContextFileContent(developerInstructionIndex, pathValue, fileName));
-    if (
-      !file.missing &&
-      injected === undefined &&
-      CODEX_NATIVE_PROJECT_DOC_BASENAMES.has(baseName)
-    ) {
+  const threadFilePaths = new Set(
+    params.threadWorkspaceFileReportState?.paths.map(normalizeCodexContextFilePath),
+  );
+  const reports: CodexSystemPromptReport["injectedWorkspaceFiles"] = params.bootstrapFiles.map(
+    (file) => {
+      const fileName = readNonEmptyString(file.name);
+      const pathValue = readNonEmptyString(file.path) ?? fileName ?? "";
+      const displayName = (fileName ?? getCodexContextFileDisplayBasename(pathValue)) || pathValue;
+      const baseName = getCodexContextFileBasename(pathValue || fileName || "");
+      const rawChars = file.missing ? 0 : (file.content ?? "").trimEnd().length;
+      const threadFileStatus = threadFilePaths.has(normalizeCodexContextFilePath(pathValue))
+        ? params.threadWorkspaceFileReportState?.status
+        : undefined;
+      if (threadFileStatus) {
+        const localFile = { name: displayName, path: pathValue, missing: file.missing, rawChars };
+        return threadFileStatus === "retained_unverified"
+          ? {
+              ...localFile,
+              injectionStatus: "retained_unverified",
+              injectedChars: null,
+              truncated: null,
+            }
+          : { ...localFile, injectedChars: 0, truncated: false };
+      }
+      const memoryToolRoutedFile =
+        baseName === CODEX_MEMORY_CONTEXT_BASENAME &&
+        params.memoryToolRouted === true &&
+        memoryToolRoutedPaths.has(normalizeCodexContextFilePath(pathValue));
+      const injected = memoryToolRoutedFile
+        ? undefined
+        : (readCodexIndexedContextFileContent(injectedIndex, pathValue, fileName) ??
+          readCodexIndexedContextFileContent(developerInstructionIndex, pathValue, fileName));
+      if (
+        !file.missing &&
+        injected === undefined &&
+        CODEX_NATIVE_PROJECT_DOC_BASENAMES.has(baseName)
+      ) {
+        return {
+          name: displayName,
+          path: pathValue,
+          missing: false,
+          rawChars,
+          injectionStatus: "native_unverified",
+          injectedChars: null,
+          truncated: null,
+        };
+      }
+      const omitted =
+        memoryToolRoutedFile ||
+        (params.omitReferenceFiles &&
+          readCodexIndexedContextFileContent(injectedIndex, pathValue, fileName) !== undefined);
+      const injectedChars = omitted ? 0 : (injected?.length ?? 0);
+      const truncated = omitted ? false : !file.missing && injectedChars < rawChars;
       return {
         name: displayName,
         path: pathValue,
-        missing: false,
+        missing: file.missing,
         rawChars,
-        injectionStatus: "native_unverified",
+        injectedChars,
+        truncated,
+      };
+    },
+  );
+  if (params.threadWorkspaceFileReportState?.status === "retained_unverified") {
+    const reportedPaths = new Set(reports.map((file) => normalizeCodexContextFilePath(file.path)));
+    for (const filePath of params.threadWorkspaceFileReportState.paths) {
+      if (reportedPaths.has(normalizeCodexContextFilePath(filePath))) {
+        continue;
+      }
+      // Absence on disk does not establish absence from the active snapshot.
+      // This is a diagnostic candidate, never a missing bootstrap prompt marker.
+      reports.push({
+        name: getCodexContextFileDisplayBasename(filePath),
+        path: filePath,
+        missing: true,
+        rawChars: 0,
+        injectionStatus: "retained_unverified",
         injectedChars: null,
         truncated: null,
-      };
+      });
     }
-    const omitted =
-      memoryToolRoutedFile ||
-      (params.omitReferenceFiles &&
-        readCodexIndexedContextFileContent(injectedIndex, pathValue, fileName) !== undefined);
-    const injectedChars = omitted ? 0 : (injected?.length ?? 0);
-    const truncated = omitted ? false : !file.missing && injectedChars < rawChars;
-    return {
-      name: displayName,
-      path: pathValue,
-      missing: file.missing,
-      rawChars,
-      injectedChars,
-      truncated,
-    };
-  });
+  }
+  return reports;
 }
 
 function indexCodexContextFileContent(files: EmbeddedContextFile[]): {
