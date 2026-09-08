@@ -1,5 +1,3 @@
-import { findCodeRegions, isInsideCode, type CodeRegion } from "./text/code-regions.js";
-
 const ENVELOPE_PREFIX = /^\[([^\]]+)\]\s*/;
 const ENVELOPE_CHANNELS = [
   "WebChat",
@@ -16,7 +14,6 @@ const ENVELOPE_CHANNELS = [
   "Zalo Personal",
 ];
 
-const MESSAGE_ID_LINE = /^\s*\[message_id:\s*[^\]]+\]\s*$/i;
 function looksLikeEnvelopeHeader(header: string): boolean {
   if (/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}Z\b/.test(header)) {
     return true;
@@ -39,27 +36,4 @@ export function stripEnvelope(text: string): string {
     return text;
   }
   return text.slice(match[0].length);
-}
-
-/** Removes standalone message-id hint lines without touching inline user mentions. */
-export function stripMessageIdHints(text: string): string {
-  if (!/\[message_id:/i.test(text)) {
-    return text;
-  }
-  // Match parser offsets against the same LF-normalized lines used for removal.
-  // Return the original bytes when no generated hint is removed.
-  const normalized = text.replace(/\r\n/g, "\n");
-  const lines = normalized.split("\n");
-  let offset = 0;
-  let regions: CodeRegion[] | undefined;
-  const filtered = lines.filter((line) => {
-    const markerOffset = line.search(/\[message_id:/i);
-    const shouldRemove =
-      markerOffset >= 0 &&
-      MESSAGE_ID_LINE.test(line) &&
-      !isInsideCode(offset + markerOffset, (regions ??= findCodeRegions(normalized)));
-    offset += line.length + 1;
-    return !shouldRemove;
-  });
-  return filtered.length === lines.length ? text : filtered.join("\n");
 }

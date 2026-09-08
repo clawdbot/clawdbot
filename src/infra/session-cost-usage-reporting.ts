@@ -7,7 +7,8 @@ import { isPrimarySessionTranscriptFileName } from "../config/sessions/artifacts
 import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { stripEnvelope, stripMessageIdHints } from "../shared/chat-envelope.js";
+import { stripEnvelope } from "../shared/chat-envelope.js";
+import { stripMessageIdHints } from "../shared/text/message-id-hints.js";
 import {
   isUsageCostRollupFresh,
   readUsageCostRollups,
