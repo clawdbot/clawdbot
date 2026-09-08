@@ -2,10 +2,8 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import MarkdownIt from "markdown-it";
 import { isHeartbeatOkResponse, isHeartbeatUserMessage } from "../auto-reply/heartbeat-filter.js";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
-import {
-  stripInternalMetadataForDisplay,
-  stripUserEnvelopeForDisplay,
-} from "../auto-reply/reply/display-text-sanitize.js";
+import { stripInternalMetadataForDisplay } from "../auto-reply/reply/display-text-sanitize.js";
+import { stripUserEnvelopeForDisplay } from "../auto-reply/reply/user-envelope-display.js";
 import { redactToolPayloadText } from "../logging/redact.js";
 import { splitMediaFromOutput } from "../media/parse.js";
 import { INTER_SESSION_PROMPT_PREFIX_BASE } from "../sessions/input-provenance.js";

@@ -164,6 +164,8 @@ describe("minimal npm extended-stable workflow", () => {
     expect(sourceAncestry).toMatchObject({
       env: {
         RELEASE_ANCESTRY_MODE: "merge-base",
+        RELEASE_ANCESTRY_SOURCE_REF:
+          "${{ inputs.release_candidate_branch != '' && format('refs/heads/{0}', inputs.release_candidate_branch) || '' }}",
         RELEASE_ANCESTRY_TARGET_REF: "refs/heads/main",
       },
     });

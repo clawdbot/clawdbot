@@ -2743,6 +2743,42 @@ describe("session cost usage", () => {
     expect(logs?.[0]?.content).toBe("hello there");
   });
 
+  it.each([
+    {
+      name: "indented message-ID code",
+      content: "    [message_id: literal]",
+      expected: "[message_id: literal]",
+    },
+    {
+      name: "fenced code after a generated hint",
+      content: "[message_id: generated]\n```text\n[message_id: literal]\n```",
+      expected: "```text\n[message_id: literal]\n```",
+    },
+    {
+      name: "visible text after internal context",
+      content:
+        "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nprivate runtime context\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>\nvisible user text",
+      expected: "visible user text",
+    },
+  ])("preserves $name in user usage logs", async ({ content, expected }) => {
+    const root = await makeSessionCostRoot("logs-user-display");
+    const sessionFile = path.join(root, "session.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      JSON.stringify({
+        type: "message",
+        timestamp: "2026-02-21T17:47:00.000Z",
+        message: { role: "user", content },
+      }),
+      "utf-8",
+    );
+    await withStateDir(root, async () => {
+      const logs = await loadSessionLogs({ sessionFile });
+      expect(logs).toHaveLength(1);
+      expect(logs?.[0]?.content).toBe(expected);
+    });
+  });
+
   it("does not split surrogate pairs when truncating session log content", async () => {
     const root = await makeSessionCostRoot("logs-utf16");
     const sessionFile = path.join(root, "session.jsonl");

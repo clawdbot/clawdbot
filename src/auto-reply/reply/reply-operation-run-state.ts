@@ -1,4 +1,8 @@
+import type { MessagingToolSend } from "../../agents/embedded-agent-messaging.types.js";
+import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
+import type { ReplyPayload } from "../../shared/reply-payload.types.js";
 import { resolveAgentTurnExecutionStatus } from "./agent-runner-execution-status.js";
+import type { ReplyDispatchDeliveryOutcome } from "./reply-dispatch-outcome.js";
 import { isReplyOperationSuperseded } from "./reply-operation-abort.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 
@@ -27,10 +31,21 @@ export type ReplyPreRunRejectionCode =
   | "session-directive-rejected";
 
 export type ReplyOperationRunState = {
+  heartbeat?: {
+    prepareReply: (
+      replyResult: ReplyPayload | ReplyPayload[] | undefined,
+      runState: ReplyOperationRunState,
+    ) => Promise<{
+      reply?: ReplyPayload;
+      settle?: (outcome: ReplyDispatchDeliveryOutcome) => Promise<void>;
+    }>;
+  };
   admission?: ReplyOperationAdmissionSnapshot;
   messageInjectionAborted?: true;
   agentTurn?: ReturnType<typeof resolveAgentTurnExecutionStatus>;
   agentTurnOwner?: ReplyOperation;
+  messagingToolSentTargets?: MessagingToolSend[];
+  backgroundWorkStarted?: boolean;
   preRunRejection?: ReplyPreRunRejectionCode;
 };
 
@@ -51,12 +66,30 @@ export function resolveReplyOperationRunState(
 export function recordReplyOperationAgentTurn(
   states: readonly ReplyOperationRunState[] | undefined,
   owner: ReplyOperation | undefined,
-  outcome?: Parameters<typeof resolveAgentTurnExecutionStatus>[0],
+  outcome?:
+    | { kind: "aborted" | "rejected" }
+    | {
+        kind: "settled";
+        status: "ok" | "failed";
+        result: Pick<
+          EmbeddedAgentRunResult,
+          "messagingToolSentTargets" | "asyncWorkStarted" | "acceptedSessionSpawns"
+        >;
+      },
 ): void {
   for (const state of states ?? []) {
     state.agentTurn = resolveAgentTurnExecutionStatus(
       outcome ?? (owner?.result?.kind === "aborted" ? owner.result : undefined),
     );
+    if (outcome?.kind === "settled") {
+      state.messagingToolSentTargets = outcome.result.messagingToolSentTargets?.slice();
+      state.backgroundWorkStarted = Boolean(
+        outcome.result.asyncWorkStarted || outcome.result.acceptedSessionSpawns?.length,
+      );
+    } else if (!owner || state.agentTurnOwner !== owner) {
+      state.messagingToolSentTargets = undefined;
+      state.backgroundWorkStarted = false;
+    }
     state.agentTurnOwner = owner;
   }
 }

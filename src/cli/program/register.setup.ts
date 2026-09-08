@@ -6,7 +6,7 @@ import { theme } from "../../../packages/terminal-core/src/theme.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { hasExplicitOptions, listExplicitOptionFlagsExcept } from "../command-options.js";
-import { isUnconfiguredConfigSource } from "../fresh-install-config.js";
+import { shouldStartLocalOnboarding } from "../fresh-install-config.js";
 import {
   registerOnboardAuthOptions,
   registerOnboardGatewayOptions,
@@ -44,27 +44,6 @@ function hasExplicitOnboardingOption(command: Command): boolean {
     const name = option.attributeName();
     return !SYSTEM_AGENT_OPTION_NAMES.has(name) && command.getOptionValueSource(name) === "cli";
   });
-}
-
-async function isConfiguredInstance(): Promise<boolean> {
-  const { readConfigFileSnapshot } = await import("../../config/config.js");
-  const snapshot = await readConfigFileSnapshot();
-  if (!snapshot.exists) {
-    return false;
-  }
-  if (!snapshot.valid || snapshot.sourceConfig.gateway?.mode === "remote") {
-    return true;
-  }
-  if (isUnconfiguredConfigSource(snapshot.sourceConfig)) {
-    return false;
-  }
-  // Inference commits before installation finishes; pending local setup must
-  // resume onboarding instead of opening a chat against an unfinished Gateway.
-  const { readLocalOnboardingStateForConfig } =
-    await import("../../state/local-onboarding-state.js");
-  return (
-    readLocalOnboardingStateForConfig(snapshot.path, snapshot.sourceConfig)?.status !== "pending"
-  );
 }
 
 async function runSystemAgentEntry(
@@ -173,8 +152,11 @@ export function registerSetupCommand(program: Command): void {
       const options = rawOptions as Record<string, unknown>;
       const hasOnboardingFlag = hasExplicitOnboardingOption(commandRuntime);
       const hasSystemAgentRequest = hasExplicitOptions(commandRuntime, ["message", "yes"]);
-      const configured =
-        hasOnboardingFlag || hasSystemAgentRequest ? false : await isConfiguredInstance();
+      let configured = false;
+      if (!hasOnboardingFlag && !hasSystemAgentRequest) {
+        const { readConfigFileSnapshot } = await import("../../config/config.js");
+        configured = !(await shouldStartLocalOnboarding(await readConfigFileSnapshot()));
+      }
       const route = resolveSetupCommandRoute({
         hasOnboardingFlag,
         hasSystemAgentRequest,

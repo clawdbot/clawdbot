@@ -74,6 +74,7 @@ function createDispatchFixture(
     targetAlreadyRemote?: boolean;
     includeTargetRef?: boolean;
     workflowSource?: string;
+    targetSource?: Record<string, string>;
   } = {},
 ) {
   const root = mkdtempSync(join(tmpdir(), "openclaw-release-dispatch-"));
@@ -120,6 +121,10 @@ Atomics.wait = (array, index, value, timeout) => {
   mkdirSync(join(checkout, "scripts"), { recursive: true });
   writeFileSync(join(checkout, "package.json"), '{"version":"2026.7.9"}\n');
   writeFileSync(
+    join(checkout, "CHANGELOG.md"),
+    "## 2026.8.1\n\nRelease notes for the complete selected candidate and its user-facing fixes.\n",
+  );
+  writeFileSync(
     join(checkout, ".github", "workflows", "full-release-validation.yml"),
     LEGACY_WORKFLOW_SOURCE,
   );
@@ -165,7 +170,11 @@ console.log(JSON.stringify({ valid: true, current: { runId: "123" }, root: { run
   runGit(checkout, ["push", "origin", `refs/tags/${trustedWorkflowTag}`]);
   runGit(checkout, ["checkout", "-b", releaseRef]);
   writeFileSync(join(checkout, "target.txt"), "release target\n");
-  runGit(checkout, ["add", "target.txt"]);
+  for (const [relativePath, content] of Object.entries(options.targetSource ?? {})) {
+    mkdirSync(join(checkout, relativePath, ".."), { recursive: true });
+    writeFileSync(join(checkout, relativePath), content);
+  }
+  runGit(checkout, ["add", "."]);
   runGit(checkout, ["commit", "-m", "test: release target"]);
   const targetSha = runGit(checkout, ["rev-parse", "HEAD"]);
   if (options.targetAlreadyRemote !== false) {
@@ -1067,6 +1076,70 @@ describe("full-release-validation-at-sha", () => {
         parentConclusion: "success",
       }),
     ).toBe(false);
+  });
+
+  it.each<{ name: string; source: Record<string, string>; error: string }>([
+    {
+      name: "missing version notes",
+      source: { "CHANGELOG.md": "## 2026.7.9\n\nAn older release with substantive notes.\n" },
+      error: "does not contain a release section for 2026.8.1",
+    },
+    {
+      name: "empty version notes",
+      source: { "CHANGELOG.md": "## 2026.8.1\n" },
+      error: "below the 32 byte safety minimum",
+    },
+    {
+      name: "misaligned core package",
+      source: {
+        "package.json": JSON.stringify({
+          version: "2026.8.1",
+          dependencies: { "@openclaw/ai": "workspace:*" },
+        }),
+        "packages/ai/package.json": '{"version":"2026.7.9"}',
+      },
+      error: "packages/ai/package.json version must match package.json",
+    },
+  ])("rejects $name before creating remote refs or dispatching", ({ source, error }) => {
+    const fixture = createDispatchFixture({ targetSource: source });
+    try {
+      const result = fixture.run(["--workflow-sha", fixture.workflowSha]);
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain(error);
+      expect(fixture.readCalls(fixture.gitCallsPath).filter((call) => call[0] === "push")).toEqual(
+        [],
+      );
+      const ghCalls = fixture.readCalls(fixture.ghCallsPath);
+      expect(ghCalls.filter((call) => call[0] === "api" && ghApiMethod(call) !== "GET")).toEqual(
+        [],
+      );
+      expect(ghCalls.filter((call) => call[0] === "workflow")).toEqual([]);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it("preserves explicitly allowed substantive draft notes during source admission", () => {
+    const fixture = createDispatchFixture({
+      targetSource: {
+        "CHANGELOG.md":
+          "## Unreleased\n\nSubstantive draft notes for the complete selected release candidate.\n",
+      },
+    });
+    try {
+      const result = fixture.run([
+        "--workflow-sha",
+        fixture.workflowSha,
+        "-f",
+        "allow_unreleased_changelog=true",
+      ]);
+      expect(result.status, result.stderr).toBe(0);
+      expect(fixture.readCalls(fixture.ghCallsPath).some((call) => call[0] === "workflow")).toBe(
+        true,
+      );
+    } finally {
+      fixture.cleanup();
+    }
   });
 
   it.each([false, true])(

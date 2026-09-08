@@ -129,7 +129,8 @@ async function fetchEndpoint(params: {
   try {
     const { response } = guardedResponse;
     if (!response.ok) {
-      await response.body?.cancel().catch(() => undefined);
+      // release() aborts transport before cancelling unread capture-tee bodies.
+      // Awaiting one branch here can hold the error result until the other ends.
       return { ok: false, status: response.status };
     }
     try {

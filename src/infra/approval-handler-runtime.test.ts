@@ -1,6 +1,7 @@
 // Covers approval handler runtime adapter creation and lazy wiring.
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, expectTypeOf, it, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
+import type { ChannelApprovalNativeRuntimeAdapter } from "./approval-handler-runtime-types.js";
 import {
   createChannelApprovalNativeRuntimeAdapter,
   createChannelApprovalHandlerFromCapability,
@@ -390,22 +391,24 @@ describe("createLazyChannelApprovalNativeRuntimeAdapter", () => {
     const explicitIsConfigured = vi.fn().mockReturnValue(true);
     const explicitShouldHandle = vi.fn().mockReturnValue(false);
     const resolveApprovalKind = vi.fn().mockReturnValue("exec");
-    const buildPendingPayload = vi.fn().mockResolvedValue({ text: "pending" });
-    const load = vi.fn().mockResolvedValue({
-      availability: {
-        isConfigured: vi.fn(),
-        shouldHandle: vi.fn(),
-      },
-      presentation: {
-        buildPendingPayload,
-        buildResolvedResult: vi.fn(),
-        buildExpiredResult: vi.fn(),
-      },
-      transport: {
-        prepareTarget: vi.fn(),
-        deliverPending: vi.fn(),
-      },
-    });
+    const buildPendingPayload = vi.fn(async () => ({ text: "pending" }));
+    const load = vi.fn(
+      async (): Promise<ChannelApprovalNativeRuntimeAdapter<{ text: string }>> => ({
+        availability: {
+          isConfigured: vi.fn(),
+          shouldHandle: vi.fn(),
+        },
+        presentation: {
+          buildPendingPayload,
+          buildResolvedResult: vi.fn(),
+          buildExpiredResult: vi.fn(),
+        },
+        transport: {
+          prepareTarget: vi.fn(),
+          deliverPending: vi.fn(),
+        },
+      }),
+    );
     const adapter = createLazyChannelApprovalNativeRuntimeAdapter({
       eventKinds: ["exec"],
       resolveApprovalKind,
@@ -417,6 +420,9 @@ describe("createLazyChannelApprovalNativeRuntimeAdapter", () => {
     const request = { id: "exec:1" } as never;
     const view = {} as never;
 
+    expectTypeOf<
+      Awaited<ReturnType<typeof adapter.presentation.buildPendingPayload>>
+    >().toEqualTypeOf<{ text: string }>();
     expect(adapter.eventKinds).toEqual(["exec"]);
     expect(adapter.resolveApprovalKind?.(request)).toBe("exec");
     expect(resolveApprovalKind).toHaveBeenCalledWith(request);

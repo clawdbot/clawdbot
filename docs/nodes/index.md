@@ -617,7 +617,7 @@ worker inside its own container instead:
       enabled: true,
       isolation: "container",
       // Optional: use a digest-pinned, private-registry, or preloaded image.
-      // containerImage: "registry.example.com/openclaw/node:22-slim",
+      // containerImage: "registry.example.com/openclaw/node:24.19.0-slim",
     },
   },
 }
@@ -639,15 +639,17 @@ session hosting or the affected launch fails visibly instead of falling back to
 an unisolated worker. Install or start the engine, verify `docker version` or
 `podman version`, and restart the node host.
 
-The default image is `node:22-slim`; the engine pulls it on first use when it
+The default image is `node:24.19.0-slim`; the engine pulls it on first use when it
 is not already present. Set `nodeHost.workerRuns.containerImage` to choose a
 digest-pinned image, a private-registry image, or an image already available
-to the engine. The image must provide a working Node.js 22 or newer runtime on
+to the engine. The image must provide a supported Node.js 24.16+ or 26.1+ runtime on
 its standard executable search path. If the image cannot be pulled, is
 inaccessible, or does not provide a suitable Node.js runtime, that session
 launch fails visibly; it never retries as a bare host process. Preload the
 image or configure registry access before hosting sessions on an offline or
-restricted node.
+restricted node. Existing explicit image settings are preserved; replace older Node
+images with a supported release before upgrading OpenClaw. Worker startup requires
+a supported runtime; older releases may fail before the runtime diagnostic can run.
 
 Each worker container receives only two host bind mounts: its verified worker
 bundle root is read-only, and its assigned session workspace is read-write.
@@ -738,6 +740,18 @@ remain in structured details. If a path exceeds the text budget or would be
 rewritten by security sanitization, the text reports the omission rather than
 showing a partial or altered path. A listing that cannot display its first entry
 explicitly reports that pagination cannot advance.
+
+Directory fetch policy checks the source-tree descendants and then the archive
+member identities admitted by the same bounded parser and policy planner used
+for extraction. It does not use human-readable `tar` listings: admitted Unicode
+and newline names retain their exact spelling, and producer-added AppleDouble
+files are checked rather than hidden. Parent paths are checked even when the
+archive omits directory headers. The 5000-descendant cap includes those implicit
+directories, counting shared parents only once. A denied path rejects the whole transfer.
+Canonical source path/device/inode binding, byte-count and SHA-256 verification,
+link/traversal/collision checks, and extraction limits still apply. Malformed
+archive headers and destination-platform filename restrictions still reject;
+filenames are not truncated or repaired to make an archive pass.
 
 ## Invoking commands
 

@@ -321,7 +321,15 @@ function withTimeoutConfig(config: OpenClawConfig): OpenClawConfig {
     agents: {
       ...config.agents,
       // The alternate model identifies the child, not a parent fallback.
-      defaults: { ...config.agents?.defaults, model: { primary: MODEL } },
+      defaults: {
+        ...config.agents?.defaults,
+        model: { primary: MODEL },
+        compaction: {
+          ...config.agents?.defaults?.compaction,
+          // Leave an older prefix to compact in this tiny synthetic transcript.
+          keepRecentTokens: 1,
+        },
+      },
       entries: {
         ...config.agents?.entries,
         qa: { ...config.agents?.entries?.qa, model: { primary: MODEL } },

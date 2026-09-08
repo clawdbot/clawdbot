@@ -254,22 +254,36 @@ export default Object.assign(defineToolPlugin({ id: ${JSON.stringify(id)}, name:
         tools: [{ name: "artifact_echo", optional: true }],
       });
       if (setup) {
-        const setupPath = resolvePackageSetupSource(resolution);
+        // Keep native module caches out of the independent source-loader graph.
+        const sourceExtracted = path.join(parent, "source-extracted");
+        await fs.mkdir(sourceExtracted);
+        await extract({ file: archive, cwd: sourceExtracted, strict: true });
+        const sourcePackageDir = path.join(sourceExtracted, "package");
+        const sourceResolution = {
+          ...resolution,
+          packageDir: sourcePackageDir,
+          sourceLabel: sourcePackageDir,
+        };
+        const [sourceEntryPath] = resolvePackageRuntimeExtensionSources({
+          ...sourceResolution,
+          extensions: manifest.openclaw.extensions,
+        });
+        const setupPath = resolvePackageSetupSource(sourceResolution);
         expect(setupPath).toBeTruthy();
         withPluginCache(createPluginCache(), () => {
           const load = getCachedPluginSourceModuleLoader({
-            modulePath: entryPath!,
-            rootDir: packageDir,
+            modulePath: sourceEntryPath!,
+            rootDir: sourcePackageDir,
             importerUrl: import.meta.url,
             aliasMap: buildPluginLoaderAliasMap(
-              entryPath!,
+              sourceEntryPath!,
               process.argv[1],
               import.meta.url,
               "src",
             ),
             transformOpenClawDependencies: true,
           });
-          expect(load(entryPath!)).toMatchObject({ default: { shared: { ready: true } } });
+          expect(load(sourceEntryPath!)).toMatchObject({ default: { shared: { ready: true } } });
           expect(load(setupPath!)).toMatchObject({
             default: {
               artifactMarker: runtime ? "setup-runtime" : "setup-source",

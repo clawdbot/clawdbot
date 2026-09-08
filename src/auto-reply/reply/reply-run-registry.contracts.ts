@@ -243,6 +243,8 @@ type ReplyOperationResult =
 export type ReplyOperation = {
   readonly key: ReplyRunKey;
   readonly sessionId: string;
+  /** Captured logical owner for session activity, including raw global keys. */
+  readonly agentId?: string;
   readonly turnKind: ReplyTurnKind;
   /** Gateway lifecycle that admitted this process-local owner. */
   readonly lifecycleGeneration?: string;
@@ -275,6 +277,8 @@ export type ReplyOperation = {
   readonly lastActivityAtMs: number;
   /** True when this operation has owned the supplied session ID. */
   hasOwnedSessionId(sessionId: string): boolean;
+  /** Capture lineage before a pending barrier outlives this operation's lane. */
+  captureOwnedSessionIds(): Set<string>;
   recordActivity(): void;
   setPhase(
     next:
@@ -308,9 +312,9 @@ export type ReplyOperation = {
    * turns admit under the slash SOURCE key; when the command continues into a full
    * agent turn it must own the TARGET session's slot so concurrent target inbounds
    * queue/steer instead of double-admitting. Throws ReplyRunAlreadyActiveError when
-   * the target slot is owned.
+   * the target slot is owned. Capture the selected agent even when a raw key stays unchanged.
    */
-  updateSessionKey(nextSessionKey: string): void;
+  updateSessionKey(nextSessionKey: string, agentId?: string): void;
   attachBackend(handle: ReplyBackendHandle): void;
   detachBackend(handle: ReplyBackendHandle): void;
   /** Reject later aborts after the backend has committed its terminal outcome. */

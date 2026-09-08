@@ -37,7 +37,7 @@ import type { CronJob } from "../cron/types.js";
 import { hasAmbiguousGatewayAuthModeConfig } from "../gateway/auth-mode-policy.js";
 import { resolveGatewayAuthToken } from "../gateway/auth-token-resolution.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
-import { isInvalidGatewayToken } from "../gateway/known-weak-gateway-secrets.js";
+import { isInvalidGatewaySecret } from "../gateway/known-weak-gateway-secrets.js";
 import type { PluginMetadataSnapshotScopeRunner } from "../plugins/current-plugin-metadata-snapshot.js";
 import { getSkippedExecRefStaticError } from "../secrets/exec-resolution-policy.js";
 import type { SecurityAuditFinding } from "../security/audit.types.js";
@@ -461,7 +461,7 @@ export async function detectGatewayAuthHealth(
         unresolvedReasonStyle: "detailed",
         ...(gatewayTokenRef ? { envFallback: "never" as const } : {}),
       });
-  if (resolved.token && !isInvalidGatewayToken(resolved.token)) {
+  if (resolved.token && !isInvalidGatewaySecret(resolved.token)) {
     return [];
   }
   if (gatewayTokenRef) {
@@ -472,7 +472,7 @@ export async function detectGatewayAuthHealth(
         message: buildGatewayTokenSecretRefUnavailableMessage({
           cfg: ctx.cfg,
           ref: gatewayTokenRef,
-          unresolvedRefReason: isInvalidGatewayToken(resolved.token)
+          unresolvedRefReason: isInvalidGatewaySecret(resolved.token)
             ? "the resolved token is blank or the literal string undefined/null"
             : resolved.unresolvedRefReason,
         }),
@@ -482,7 +482,7 @@ export async function detectGatewayAuthHealth(
     ];
   }
   const invalid =
-    isInvalidGatewayToken(resolved.token) || isInvalidGatewayToken(ctx.cfg.gateway?.auth?.token);
+    isInvalidGatewaySecret(resolved.token) || isInvalidGatewaySecret(ctx.cfg.gateway?.auth?.token);
   return [
     {
       checkId: "core/doctor/gateway-auth",

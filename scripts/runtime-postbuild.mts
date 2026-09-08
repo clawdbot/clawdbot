@@ -1,5 +1,6 @@
 // Generates postbuild runtime artifacts: plugin metadata, SDK aliases, stable
 // runtime aliases, static assets, and compatibility chunks for live upgrades.
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
@@ -12,6 +13,11 @@ import { copyHookMetadata, listHookMetadataOutputs } from "./copy-hook-metadata.
 import { assertRealOutputRoot } from "./lib/output-root-guard.mjs";
 import { escapeRegExp } from "./lib/regexp.mjs";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
+import {
+  readRuntimeDependencyOwnership,
+  RUNTIME_DEPENDENCY_OWNERSHIP_RELATIVE_PATH,
+  type RuntimeDependencyOwnership,
+} from "./lib/runtime-dependency-ownership-contract.mts";
 import {
   copyStaticExtensionAssets,
   copyStaticExtensionAssetsToRuntimeOverlay,
@@ -460,6 +466,19 @@ function buildRuntimeAliasSource(targetFileName: string, distDir: string, fsImpl
   );
 }
 
+function writeRuntimeDependencyOwnership(
+  rootDir: string,
+  ownership: RuntimeDependencyOwnership | null,
+  fsImpl: typeof fs,
+) {
+  if (ownership) {
+    fsImpl.writeFileSync(
+      path.join(rootDir, RUNTIME_DEPENDENCY_OWNERSHIP_RELATIVE_PATH),
+      `${JSON.stringify({ chunks: Object.fromEntries(Object.entries(ownership.chunks).toSorted(([a], [b]) => a.localeCompare(b))) })}\n`,
+    );
+  }
+}
+
 /**
  * Writes stable aliases for current hashed runtime chunks.
  * @internal Directly tested script implementation detail.
@@ -473,6 +492,7 @@ export function writeStableRootRuntimeAliases(params: RuntimeFsParams = {}) {
   assertRealOutputRoot(distDir, { fs: fsImpl });
   const { candidatesByAlias } = collectStableRootRuntimeAliasCandidates(distDir, fsImpl);
 
+  const ownership = readRuntimeDependencyOwnership(rootDir, fsImpl);
   for (const [aliasFileName, candidates] of candidatesByAlias) {
     const aliasPath = path.join(distDir, aliasFileName);
     const candidate = resolveStableRootRuntimeAliasCandidate(
@@ -483,10 +503,30 @@ export function writeStableRootRuntimeAliases(params: RuntimeFsParams = {}) {
     );
     if (!candidate) {
       fsImpl.rmSync?.(aliasPath, { force: true });
+      if (ownership) {
+        delete ownership.chunks[aliasFileName];
+      }
       continue;
     }
-    writeTextFileIfChanged(aliasPath, buildRuntimeAliasSource(candidate, distDir, fsImpl));
+    const source = buildRuntimeAliasSource(candidate, distDir, fsImpl);
+    const owner = ownership?.chunks[candidate];
+    if (ownership && owner) {
+      const targetSource = fsImpl.readFileSync(path.join(distDir, candidate));
+      if (createHash("sha256").update(targetSource).digest("hex") !== owner.sha256) {
+        throw new Error(
+          `runtime dependency ownership no longer matches ${candidate}; rebuild dist`,
+        );
+      }
+      ownership.chunks[aliasFileName] = {
+        extensions: owner.extensions,
+        sha256: createHash("sha256").update(source).digest("hex"),
+      };
+    } else if (ownership) {
+      delete ownership.chunks[aliasFileName];
+    }
+    writeTextFileIfChanged(aliasPath, source);
   }
+  writeRuntimeDependencyOwnership(rootDir, ownership, fsImpl);
 }
 
 /**
@@ -517,6 +557,7 @@ export function rewriteRootRuntimeImportsToStableAliases(params: RuntimeFsParams
     return;
   }
 
+  const ownership = readRuntimeDependencyOwnership(rootDir, fsImpl);
   for (const entry of entries) {
     if (!entry.isFile() || !/\.m?js$/u.test(entry.name)) {
       continue;
@@ -539,9 +580,21 @@ export function rewriteRootRuntimeImportsToStableAliases(params: RuntimeFsParams
       },
     );
     if (rewritten !== source) {
+      const owner = ownership?.chunks[entry.name];
+      // Carry the producer's proof through this exact transformation; never
+      // rehash unknown or independently modified build outputs.
+      if (owner) {
+        if (createHash("sha256").update(source).digest("hex") !== owner.sha256) {
+          throw new Error(
+            `runtime dependency ownership no longer matches ${entry.name}; rebuild dist`,
+          );
+        }
+        owner.sha256 = createHash("sha256").update(rewritten).digest("hex");
+      }
       writeTextFileIfChanged(filePath, rewritten);
     }
   }
+  writeRuntimeDependencyOwnership(rootDir, ownership, fsImpl);
 }
 
 function resolveRootRuntimeCandidateByMarkers(

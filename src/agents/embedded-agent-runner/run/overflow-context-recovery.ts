@@ -11,6 +11,7 @@ import {
   isLikelyContextOverflowError,
   isProviderRequestSizeCeilingError,
 } from "../../embedded-agent-helpers.js";
+import type { FailoverClassification } from "../../failover/signal.js";
 import { runContextEngineMaintenance } from "../context-engine-maintenance.js";
 import { log } from "../logger.js";
 import {
@@ -63,13 +64,18 @@ export async function recoverEmbeddedRunOverflow(
     signalOwnedInterruption: boolean;
     promptError: unknown;
     assistantErrorText?: string;
-    assistantOverflowCandidate?: AssistantMessage;
+    assistantOverflowCandidate?: {
+      message: AssistantMessage;
+      classification: FailoverClassification | null;
+    };
     toolResultPromptProjectionState: ToolResultPromptProjectionState;
     attemptCompactionCount: number;
     prepareCurrentTranscriptRetry: () => void;
     markOwnedTranscriptRetry: () => void;
   },
 ): Promise<EmbeddedRunOverflowRecoveryOutcome> {
+  const assistant = input.assistantOverflowCandidate?.message;
+  const classification = input.assistantOverflowCandidate?.classification;
   const contextOverflowError =
     !input.aborted && !input.signalOwnedInterruption
       ? (() => {
@@ -83,19 +89,26 @@ export async function recoverEmbeddedRunOverflow(
             return null;
           }
           // Preserve the structured terminal outcome before the text-only fallback below.
-          if (isProviderRefusalAssistantError(input.assistantOverflowCandidate)) {
+          if (isProviderRefusalAssistantError(assistant)) {
+            return null;
+          }
+          // This decision belongs to the selected response, not a text-only guess.
+          if (assistant?.stopReason === "error" && classification?.kind === "reason") {
             return null;
           }
           if (
-            input.assistantOverflowCandidate &&
-            input.contextTokenBudget !== undefined &&
-            isContextOverflow(input.assistantOverflowCandidate, input.contextTokenBudget)
+            assistant &&
+            (classification?.kind === "context_overflow" ||
+              (input.contextTokenBudget !== undefined &&
+                isContextOverflow(assistant, input.contextTokenBudget)))
           ) {
             return {
-              text:
-                input.assistantOverflowCandidate.errorMessage?.trim() || "Context window exceeded",
+              text: assistant.errorMessage?.trim() || "Context window exceeded",
               source: "assistantError" as const,
             };
+          }
+          if (assistant?.stopReason === "length") {
+            return null;
           }
           if (input.assistantErrorText && isLikelyContextOverflowError(input.assistantErrorText)) {
             return { text: input.assistantErrorText, source: "assistantError" as const };

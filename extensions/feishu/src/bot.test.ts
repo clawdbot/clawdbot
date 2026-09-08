@@ -347,9 +347,12 @@ const {
   mockGetMessageFeishu: vi.fn().mockResolvedValue(null),
   mockListFeishuThreadMessages: vi.fn().mockResolvedValue([]),
   mockDownloadMessageResourceFeishu: vi.fn().mockResolvedValue({
-    buffer: Buffer.from("video"),
-    contentType: "video/mp4",
-    fileName: "clip.mp4",
+    saved: {
+      id: "inbound-clip.mp4",
+      path: "/tmp/inbound-clip.mp4",
+      size: Buffer.byteLength("video"),
+      contentType: "video/mp4",
+    },
   }),
   mockCreateFeishuClient: vi.fn(),
   mockResolveAgentRoute: vi.fn((_params?: unknown) => createFeishuTestRoute()),
@@ -1062,13 +1065,6 @@ describe("handleFeishuMessage command authorization", () => {
   const mockUpsertPairingRequest = vi.fn().mockResolvedValue({ code: "ABCDEFGH", created: false });
   const mockBuildPairingReply = vi.fn(() => "Pairing response");
   const mockEnqueueSystemEvent = vi.fn();
-  const mockSaveMediaBuffer = vi.fn().mockResolvedValue({
-    id: "inbound-clip.mp4",
-    path: "/tmp/inbound-clip.mp4",
-    size: Buffer.byteLength("video"),
-    contentType: "video/mp4",
-  });
-
   beforeEach(() => {
     vi.clearAllMocks();
     mockDispatchReplyFromConfig.mockReset().mockResolvedValue({
@@ -1132,12 +1128,6 @@ describe("handleFeishuMessage command authorization", () => {
             upsertPairingRequest: mockUpsertPairingRequest,
             buildPairingReply: mockBuildPairingReply,
           },
-          media: {
-            saveMediaBuffer: mockSaveMediaBuffer,
-          },
-        },
-        media: {
-          detectMime: vi.fn(async () => "application/octet-stream"),
         },
       }),
     );
@@ -2338,15 +2328,12 @@ describe("handleFeishuMessage command authorization", () => {
   it("transcribes inbound audio before building the agent turn", async () => {
     mockShouldComputeCommandAuthorized.mockReturnValue(false);
     mockDownloadMessageResourceFeishu.mockResolvedValueOnce({
-      buffer: Buffer.from("voice"),
-      contentType: "audio/ogg",
-      fileName: "voice.ogg",
-    });
-    mockSaveMediaBuffer.mockResolvedValueOnce({
-      id: "inbound-voice.ogg",
-      path: "/tmp/inbound-voice.ogg",
-      size: Buffer.byteLength("voice"),
-      contentType: "audio/ogg",
+      saved: {
+        id: "inbound-voice.ogg",
+        path: "/tmp/inbound-voice.ogg",
+        size: Buffer.byteLength("voice"),
+        contentType: "audio/ogg",
+      },
     });
     mockTranscribeFirstAudio.mockResolvedValueOnce("voice transcript");
 
@@ -2409,7 +2396,6 @@ describe("handleFeishuMessage command authorization", () => {
       fileKey: "file_video_payload",
       imageKey: "img_thumb_payload",
       fileName: "clip.mp4",
-      savedFileName: "clip.mp4",
     },
     {
       name: "uses media message_type file_key (not thumbnail image_key) for inbound mobile video download",
@@ -2418,9 +2404,8 @@ describe("handleFeishuMessage command authorization", () => {
       fileKey: "file_media_payload",
       imageKey: "img_media_thumb",
       fileName: "mobile.mp4",
-      savedFileName: "clip.mp4",
     },
-  ])("$name", async ({ messageId, messageType, fileKey, imageKey, fileName, savedFileName }) => {
+  ])("$name", async ({ messageId, messageType, fileKey, imageKey, fileName }) => {
     mockShouldComputeCommandAuthorized.mockReturnValue(false);
     await dispatchMessage({
       cfg: createFeishuTestConfig({ dmPolicy: "open" }),
@@ -2440,20 +2425,27 @@ describe("handleFeishuMessage command authorization", () => {
     expect(downloadRequest.messageId).toBe(messageId);
     expect(downloadRequest.fileKey).toBe(fileKey);
     expect(downloadRequest.type).toBe("file");
-    const mediaBuffer = mockCallArg<Buffer>(mockSaveMediaBuffer, 0, 0);
-    expect(Buffer.isBuffer(mediaBuffer)).toBe(true);
-    expect(mediaBuffer.toString()).toBe("video");
-    expect(mockCallArg(mockSaveMediaBuffer, 0, 1)).toBe("video/mp4");
-    expect(mockCallArg(mockSaveMediaBuffer, 0, 2)).toBe("inbound");
-    expect(typeof mockCallArg(mockSaveMediaBuffer, 0, 3)).toBe("number");
-    expect(mockCallArg(mockSaveMediaBuffer, 0, 4)).toBe(savedFileName);
+    expect(downloadRequest).toMatchObject({
+      originalFilename: fileName,
+      maxBytes: expect.any(Number),
+    });
+    expect(mockFinalizeInboundContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        MediaPaths: ["/tmp/inbound-clip.mp4"],
+        MediaTypes: ["video/mp4"],
+      }),
+    );
   });
 
-  it("falls back to the message payload filename when download metadata omits it", async () => {
+  it("forwards the message payload filename to the resource-saving owner", async () => {
     mockShouldComputeCommandAuthorized.mockReturnValue(false);
     mockDownloadMessageResourceFeishu.mockResolvedValueOnce({
-      buffer: Buffer.from("video"),
-      contentType: "video/mp4",
+      saved: {
+        id: "payload-name.mp4",
+        path: "/tmp/payload-name.mp4",
+        size: Buffer.byteLength("video"),
+        contentType: "video/mp4",
+      },
     });
 
     const cfg = createFeishuTestConfig({ dmPolicy: "open" });
@@ -2470,13 +2462,15 @@ describe("handleFeishuMessage command authorization", () => {
 
     await dispatchMessage({ cfg, event });
 
-    const mediaBuffer = mockCallArg<Buffer>(mockSaveMediaBuffer, 0, 0);
-    expect(Buffer.isBuffer(mediaBuffer)).toBe(true);
-    expect(mediaBuffer.toString()).toBe("video");
-    expect(mockCallArg(mockSaveMediaBuffer, 0, 1)).toBe("video/mp4");
-    expect(mockCallArg(mockSaveMediaBuffer, 0, 2)).toBe("inbound");
-    expect(typeof mockCallArg(mockSaveMediaBuffer, 0, 3)).toBe("number");
-    expect(mockCallArg(mockSaveMediaBuffer, 0, 4)).toBe("payload-name.mp4");
+    expect(mockDownloadMessageResourceFeishu).toHaveBeenCalledWith(
+      expect.objectContaining({ originalFilename: "payload-name.mp4" }),
+    );
+    expect(mockFinalizeInboundContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        MediaPaths: ["/tmp/payload-name.mp4"],
+        MediaTypes: ["video/mp4"],
+      }),
+    );
   });
 
   it("downloads embedded media tags from post messages as files", async () => {
@@ -2505,35 +2499,28 @@ describe("handleFeishuMessage command authorization", () => {
     expect(downloadRequest.messageId).toBe("msg-post-media");
     expect(downloadRequest.fileKey).toBe("file_post_media_payload");
     expect(downloadRequest.type).toBe("file");
-    const postMediaBuffer = mockCallArg<Buffer>(mockSaveMediaBuffer, 0, 0);
-    expect(Buffer.isBuffer(postMediaBuffer)).toBe(true);
-    expect(postMediaBuffer.toString()).toBe("video");
-    expect(mockCallArg(mockSaveMediaBuffer, 0, 1)).toBe("video/mp4");
-    expect(mockCallArg(mockSaveMediaBuffer, 0, 2)).toBe("inbound");
-    expect(typeof mockCallArg(mockSaveMediaBuffer, 0, 3)).toBe("number");
+    expect(downloadRequest).toMatchObject({
+      originalFilename: "embedded.mov",
+      maxBytes: expect.any(Number),
+    });
+    expect(mockFinalizeInboundContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        MediaPaths: ["/tmp/inbound-clip.mp4"],
+        MediaTypes: ["video/mp4"],
+      }),
+    );
   });
 
   it("delivers unique rich-post attachments in their original mixed-media order", async () => {
     mockShouldComputeCommandAuthorized.mockReturnValue(false);
     mockDownloadMessageResourceFeishu.mockImplementation(
       async (params: { fileKey: string; originalFilename?: string; type: "file" | "image" }) => ({
-        buffer: Buffer.from(params.fileKey),
-        contentType: params.type === "image" ? "image/png" : "video/mp4",
-        fileName: params.originalFilename ?? `${params.fileKey}.png`,
-      }),
-    );
-    mockSaveMediaBuffer.mockImplementation(
-      async (
-        buffer: Buffer,
-        contentType: string,
-        _direction: string,
-        _limit: number,
-        name: string,
-      ) => ({
-        id: name,
-        path: `/tmp/${name}`,
-        size: buffer.length,
-        contentType,
+        saved: {
+          id: params.originalFilename ?? `${params.fileKey}.png`,
+          path: `/tmp/${params.originalFilename ?? `${params.fileKey}.png`}`,
+          size: Buffer.byteLength(params.fileKey),
+          contentType: params.type === "image" ? "image/png" : "video/mp4",
+        },
       }),
     );
 

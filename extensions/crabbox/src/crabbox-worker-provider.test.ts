@@ -137,6 +137,10 @@ function providerWithRawRunner(
     ...provider,
     provision: (profile, operationId, options) =>
       provider.provision(profile, operationId, {
+        nodeRuntimeIdentity: {
+          nodeBootstrapSha256: createNodeBootstrapFixture().sha256,
+          executionMode: options?.executionMode ?? "worker-turn",
+        },
         ...options,
         beginNodeEnrollment:
           options?.beginNodeEnrollment ??
@@ -1759,10 +1763,10 @@ describe("Crabbox worker provider", () => {
     const provider = providerWithRunner(runCommand);
 
     await expect(
-      provider.provision({ ...PROFILE, provider: "azure", desktop: true }, OPERATION_ID),
+      provider.provision({ ...PROFILE, provider: "gcp", desktop: true }, OPERATION_ID),
     ).rejects.toMatchObject({
       code: "invalid_profile",
-      message: "Crabbox desktop profiles support only AWS and coordinator-backed Hetzner",
+      message: "Crabbox desktop profiles support only AWS, Azure, and coordinator-backed Hetzner",
     });
     expect(runCommand).not.toHaveBeenCalled();
   });
@@ -1832,6 +1836,19 @@ describe("Crabbox worker provider", () => {
       providerId: "aws",
       config: {
         aws: { instanceProfile: "" },
+        coordinator: "https://coordinator.example.test",
+        brokerMode: "managed",
+      },
+    },
+    {
+      name: "direct Azure",
+      providerId: "azure",
+      config: { coordinator: "", brokerMode: "managed" },
+    },
+    {
+      name: "coordinator-backed Azure",
+      providerId: "azure",
+      config: {
         coordinator: "https://coordinator.example.test",
         brokerMode: "managed",
       },

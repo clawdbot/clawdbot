@@ -12,6 +12,7 @@ import {
   transformConfigFileWithRetry,
   withConfigMutationExclusive,
 } from "../config/config.js";
+import type { ReadConfigFileSnapshotForWriteResult } from "../config/io.js";
 import type { LegacyMainSessionMigrationOutcome } from "../config/sessions/legacy-main-session-migration.contract.js";
 import { migrateLegacyMainSessionKeys } from "../config/sessions/legacy-main-session-migration.js";
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
@@ -63,7 +64,9 @@ type CreateError = {
   message: string;
 };
 
-type CreateAgentResult = (CreateAgentSuccess & { config: OpenClawConfig }) | CreateError;
+type CreateAgentResult =
+  | (CreateAgentSuccess & { config: OpenClawConfig; configPath: string })
+  | CreateError;
 type AgentEntryConfig = NonNullable<NonNullable<OpenClawConfig["agents"]>["entries"]>[string];
 type CreateAgentEntry = AgentEntryConfig & { id: string };
 type ConfigCommitRollback = () => void | Promise<void>;
@@ -77,8 +80,8 @@ type CreateAgentParams = {
   bootstrapFirstAgent?: boolean;
   /** Config revision that must still own first-agent creation under the write lock. */
   expectedConfigHash?: string | null;
-  /** Full guided-flow staging based on expectedConfigHash; creation still publishes it once. */
-  stagedConfig?: OpenClawConfig;
+  /** Guided staging retains the original native write receipt until creation publishes it. */
+  stagedConfig?: { config: OpenClawConfig; writeSnapshot: ReadConfigFileSnapshotForWriteResult };
   workspace?: string;
   model?: string;
   emoji?: unknown;
@@ -233,9 +236,9 @@ async function writeIdentityFile(params: {
 }
 
 export async function createAgent(params: CreateAgentParams): Promise<CreateAgentResult> {
-  if (params.stagedConfig && !Object.hasOwn(params, "expectedConfigHash")) {
-    throw new Error("staged agent creation requires an expected config hash");
-  }
+  const expectedConfigHash = params.stagedConfig
+    ? (params.stagedConfig.writeSnapshot.snapshot.hash ?? null)
+    : params.expectedConfigHash;
   const rawName = (params.entry?.name?.trim() || params.entry?.id || params.name || "").trim();
   if (!rawName) {
     return createError("invalid-name", "agent name is required");
@@ -298,17 +301,19 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
         afterWrite: { mode: "auto" },
         maxAttempts: 1,
         writeOptions: {
+          ...params.stagedConfig?.writeSnapshot.writeOptions,
           ...(params.bootstrapFirstAgent
             ? { allowedAgentRosterRemovals: [BOOTSTRAP_AGENT_ID] }
             : {}),
-          ...(params.beforePersistentApply
-            ? { assertConfigPathForWrite: params.beforePersistentApply }
-            : {}),
+          assertConfigPathForWrite: () => {
+            params.stagedConfig?.writeSnapshot.writeOptions.assertConfigPathForWrite?.();
+            params.beforePersistentApply?.();
+          },
         },
         transform: async (currentConfig, context) => {
           if (
-            Object.hasOwn(params, "expectedConfigHash") &&
-            context.previousHash !== params.expectedConfigHash
+            (params.stagedConfig || Object.hasOwn(params, "expectedConfigHash")) &&
+            context.previousHash !== expectedConfigHash
           ) {
             throw new ConfigMutationConflictError("config changed before first-agent creation", {
               retryable: false,
@@ -373,7 +378,7 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
                   list: undefined,
                 },
               }
-            : (params.stagedConfig ?? currentConfig);
+            : (params.stagedConfig?.config ?? currentConfig);
           let nextConfig =
             existingIndex < 0 || materializeInjectedMain
               ? applyAgentConfig(creationBase, {
@@ -499,6 +504,7 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
       return {
         ...result,
         config: committed.nextConfig,
+        configPath: committed.path,
         ...(typeof committed.persistedHash === "string"
           ? { configHash: committed.persistedHash }
           : {}),

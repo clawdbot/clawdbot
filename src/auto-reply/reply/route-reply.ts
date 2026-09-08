@@ -17,7 +17,10 @@ import { getLoadedChannelPlugin, normalizeChannelId } from "../../channels/plugi
 import { normalizeChatChannelId } from "../../channels/registry.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { isOutboundDeliveryError } from "../../infra/outbound/deliver-types.js";
+import {
+  isOutboundDeliveryError,
+  PlatformMessageNotDispatchedError,
+} from "../../infra/outbound/deliver-types.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
 import { normalizeAccountId } from "../../routing/account-id.js";
@@ -102,6 +105,8 @@ type RouteReplyParams = {
   requesterSenderE164?: string;
   /** Thread id for replies (Telegram topic id or Matrix thread event id). */
   threadId?: string | number;
+  /** Originating inbound message fact for the owning channel's reply resolver. */
+  currentMessageId?: string;
   /** Reply policy fallback for delivery kinds that do not carry payload metadata. */
   replyDelivery?: ReplyDeliveryContext;
   /** Config for provider-specific settings. */
@@ -148,6 +153,8 @@ type RouteReplyResult = {
   messageId?: string;
   /** Error message if the send failed. */
   error?: string;
+  /** Original failure retains the delivery owner's no-send proof. */
+  cause?: unknown;
 };
 
 function summarizeVisibleRouteReplyDelivery(
@@ -273,19 +280,20 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
     return { ok: true, delivered: false };
   }
 
+  const rejectBeforeSend = (error: string): RouteReplyResult => ({
+    ok: false,
+    delivered: false,
+    error,
+    cause: new PlatformMessageNotDispatchedError(error, { cause: undefined }),
+  });
   if (channel === INTERNAL_MESSAGE_CHANNEL) {
-    return {
-      ok: false,
-      delivered: false,
-      error: "Webchat routing not supported for queued replies",
-    };
+    return rejectBeforeSend("Webchat routing not supported for queued replies");
   }
-
   if (!channelId) {
-    return { ok: false, delivered: false, error: `Unknown channel: ${String(channel)}` };
+    return rejectBeforeSend(`Unknown channel: ${String(channel)}`);
   }
   if (abortSignal?.aborted) {
-    return { ok: false, delivered: false, error: "Reply routing aborted" };
+    return rejectBeforeSend("Reply routing aborted");
   }
 
   const payloadMetadata = getReplyPayloadMetadata(normalized);
@@ -309,6 +317,7 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
       accountId,
       threadId,
       replyToId,
+      currentMessageId: params.currentMessageId,
       replyToIsExplicit: Boolean(
         payloadMetadata?.replyToIdExplicit || normalized.replyToTag || normalized.replyToCurrent,
       ),
@@ -398,6 +407,7 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
         ok: false,
         delivered: delivery.delivered,
         error: `Failed to route reply to ${channel}: ${formatErrorMessage(send.error)}`,
+        cause: send.error,
         messageId: delivery.messageId,
         ...(!delivery.delivered && durableMessageBatchMayHaveReachedRecipient(send)
           ? { ambiguous: true }
@@ -449,6 +459,7 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
           }
         : {}),
       error: `Failed to route reply to ${channel}: ${message}`,
+      cause: err,
     };
   }
 }

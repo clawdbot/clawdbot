@@ -61,11 +61,7 @@ import {
   resolveSessionIdToSend,
   resolveSystemPromptUsage,
 } from "./helpers.js";
-import {
-  cliBackendLog,
-  CLI_BACKEND_LOG_OUTPUT_ENV,
-  LEGACY_CLAUDE_CLI_LOG_OUTPUT_ENV,
-} from "./log.js";
+import { cliBackendLog, CLI_BACKEND_LOG_OUTPUT_ENV } from "./log.js";
 import { createClaudeCliModelCallDiagnostics } from "./model-call-diagnostics.js";
 import { composeCliPromptContext } from "./prompt-context.js";
 import type { PreparedCliRunContext } from "./types.js";
@@ -415,9 +411,7 @@ export async function executePreparedCliRun(
           hasHistoryPrompt: Boolean(context.openClawHistoryPrompt),
         }),
       );
-      const logOutputText =
-        isTruthyEnvValue(process.env[CLI_BACKEND_LOG_OUTPUT_ENV]) ||
-        isTruthyEnvValue(process.env[LEGACY_CLAUDE_CLI_LOG_OUTPUT_ENV]);
+      const logOutputText = isTruthyEnvValue(process.env[CLI_BACKEND_LOG_OUTPUT_ENV]);
       const outputMode = useResume ? (backend.resumeOutput ?? backend.output) : backend.output;
       const initialGatewayCaptureKey =
         nodePlacement || !context.mcpDeliveryCapture ? undefined : crypto.randomUUID();

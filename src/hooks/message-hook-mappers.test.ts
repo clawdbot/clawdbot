@@ -120,6 +120,27 @@ describe("message hook mappers", () => {
     );
   });
 
+  it("preserves producer enrichment and minimal mapper input compatibility", () => {
+    const derived = deriveInboundMessageHookContext(makeInboundCtx());
+    derived.runId = "run-1";
+    derived.trace = {
+      traceId: "11111111111111111111111111111111",
+      spanId: "2222222222222222",
+    };
+    derived.callDepth = 2;
+    derived.mediaStagingPending = true;
+    derived.originalMedia = [];
+
+    expect(
+      toPluginMessageContext({
+        from: "sender",
+        content: "hello",
+        channelId: "demo-chat",
+        isGroup: false,
+      }),
+    ).toMatchObject({ channelId: "demo-chat" });
+  });
+
   it("derives canonical inbound context with body precedence and group metadata", () => {
     const canonical = deriveInboundMessageHookContext(makeInboundCtx());
 

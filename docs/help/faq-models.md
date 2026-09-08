@@ -399,8 +399,9 @@ troubleshooting, see the main [FAQ](/help/faq).
       `~/.openclaw/.env` or enable `env.shellEnv`.
     - Confirm you're configuring the right agent — use `--agent <agentId>`
       with `openclaw models auth login` to select its local store.
-    - Run `openclaw models status` to see configured models and provider
-      auth state.
+    - Run `openclaw models status --agent <agentId>` for that agent's model
+      routes and auth state. A stored profile alone does not prove readiness;
+      see [Read status correctly](/cli/models#read-status-correctly).
 
     **For "No credentials found for profile anthropic" (no email suffix):**
 

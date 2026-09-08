@@ -46,6 +46,10 @@ vi.mock("../../config/config.js", async (importOriginal) => ({
 // This fixture proves lease ordering; process tests cover durable ledger writes.
 vi.mock("../../infra/update-run-ledger.js", () => ({
   createUpdateRun: vi.fn(() => ({ runId: "lease-order-fixture" })),
+  adoptUpdateRun: vi.fn(() => ({
+    origin: { driver: { host: "lease-order-fixture", pid: 1, startIdentity: "1" } },
+  })),
+  heartbeatUpdateRun: vi.fn(),
   recordUpdateRunStep: vi.fn(),
   finishUpdateRun: vi.fn(),
   recordUpdateRunDiagnostic: vi.fn(),
@@ -110,12 +114,14 @@ vi.mock("./update-command-config.js", async (importOriginal) => ({
     sourceConfig: {},
     authoredConfig: {},
   })),
-  restoreDroppedPreUpdateChannels: vi.fn((snapshot: unknown) => {
-    record("restore-channels");
+  preparePostCorePluginConfig: vi.fn(async () => {
+    const configSnapshot = await mocks.readConfig();
+    record("prepare-config");
     return {
-      snapshot,
-      changed: false,
-      authoredChannels: [],
+      configSnapshot,
+      configWriteOptions: {},
+      configChanged: false,
+      restoredAuthoredChannels: [],
     };
   }),
 }));
@@ -163,12 +169,7 @@ function expectLifecycleBoundary(preLeaseEvent: string): void {
     (event, index) => index > preLeaseIndex && event === "read-config:true",
   );
   expect(authoritativeReadIndex).toBeGreaterThan(preLeaseIndex);
-  for (const event of [
-    "persist-channel:true",
-    "restore-channels:true",
-    "installed-records:true",
-    "plugin-update:true",
-  ]) {
+  for (const event of ["prepare-config:true", "installed-records:true", "plugin-update:true"]) {
     expect(mocks.events).toContain(event);
   }
   expect(mocks.events.indexOf("plugin-update:true")).toBeGreaterThan(authoritativeReadIndex);

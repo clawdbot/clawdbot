@@ -41,6 +41,7 @@ type ErrorPayload = Record<string, unknown>;
 type ApiErrorInfo = {
   httpCode?: string;
   type?: string;
+  code?: string;
   message?: string;
   requestId?: string;
 };
@@ -214,7 +215,7 @@ export function parseApiErrorInfo(raw?: string): ApiErrorInfo | null {
   let httpCode: string | undefined;
   let candidate = trimmed;
 
-  const httpPrefix = extractHttpStatusMatch(candidate.match(/^(\d{3})\s+(.+)$/s));
+  const httpPrefix = extractLeadingHttpStatus(candidate);
   if (httpPrefix) {
     httpCode = String(httpPrefix.code);
     candidate = httpPrefix.rest;
@@ -233,17 +234,22 @@ export function parseApiErrorInfo(raw?: string): ApiErrorInfo | null {
         : undefined;
 
   const topType = typeof payload.type === "string" ? payload.type : undefined;
+  const topCode = typeof payload.code === "string" ? payload.code : undefined;
   const topMessage = typeof payload.message === "string" ? payload.message : undefined;
 
   let errType: string | undefined;
+  let errCode: string | undefined;
   let errMessage: string | undefined;
   if (payload.error && typeof payload.error === "object" && !Array.isArray(payload.error)) {
     const err = payload.error as Record<string, unknown>;
     if (typeof err.type === "string") {
       errType = err.type;
     }
-    if (typeof err.code === "string" && !errType) {
-      errType = err.code;
+    if (typeof err.code === "string") {
+      errCode = err.code;
+      if (!errType) {
+        errType = err.code;
+      }
     }
     if (typeof err.message === "string") {
       errMessage = err.message;
@@ -253,9 +259,11 @@ export function parseApiErrorInfo(raw?: string): ApiErrorInfo | null {
     errType = payload.error;
   }
 
+  const code = errCode ?? topCode;
   return {
     httpCode,
     type: errType ?? topType,
+    ...(code === undefined ? {} : { code }),
     message: errMessage ?? topMessage,
     requestId,
   };

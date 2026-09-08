@@ -9,6 +9,7 @@ import type { ApplicationNavigationOptions } from "../app/context.ts";
 import type { ThemeMode } from "../app/theme.ts";
 import { t } from "../i18n/index.ts";
 import { normalizeAgentLabel } from "../lib/agents/display.ts";
+import { resolveAgentAvatarUrl } from "../lib/avatar.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
 import {
   formatKeyboardShortcutCombo,
@@ -181,6 +182,8 @@ type SidebarAgentMenuParams = {
   identities: ReadonlyMap<string, AgentIdentityResult>;
   pinnedAgentIds: readonly string[];
   connected: boolean;
+  resolveAvatarUrl: (url: string) => string | null;
+  avatarErrorHandler: (url: string) => () => void;
   openMode: "hover" | "click";
   agentUnreadCount: (agentId: string) => number;
   onPointerEnter: () => void;
@@ -235,6 +238,8 @@ function renderAgentRow(agent: AgentMenuAgent, params: SidebarAgentMenuParams) {
   const active = agentId === params.activeId;
   const unread = active ? 0 : params.agentUnreadCount(agentId);
   const option = { value: agentId, label, agent };
+  const avatarUrl = resolveAgentAvatarUrl(agent, identity);
+  const resolvedAvatarUrl = avatarUrl ? params.resolveAvatarUrl(avatarUrl) : null;
   return html`
     <wa-dropdown-item
       class="sidebar-customize-menu__item sidebar-agent-menu__agent-switch agent-select__option ${
@@ -248,7 +253,12 @@ function renderAgentRow(agent: AgentMenuAgent, params: SidebarAgentMenuParams) {
     >
       <span class="sidebar-agent-menu__agent-tile">
         <span class="sidebar-agent-menu__agent-avatar">
-          ${renderAgentSelectAvatar(option, identity)}
+          ${renderAgentSelectAvatar(
+            option,
+            identity,
+            resolvedAvatarUrl,
+            avatarUrl ? params.avatarErrorHandler(avatarUrl) : undefined,
+          )}
         </span>
         ${renderAgentSelectCopy(option)}
         <span class="sidebar-agent-menu__agent-status">

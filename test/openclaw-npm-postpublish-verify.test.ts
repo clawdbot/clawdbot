@@ -1,11 +1,24 @@
 import { spawnSync } from "node:child_process";
-import { generateKeyPairSync, sign } from "node:crypto";
+import { createHash, generateKeyPairSync, sign } from "node:crypto";
 // OpenClaw npm postpublish tests validate postpublish verification behavior.
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, truncateSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  truncateSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { build } from "tsdown";
 import { describe, expect, it, vi } from "vitest";
 import { listBundledPluginPackArtifacts } from "../scripts/lib/bundled-plugin-build-entries.mjs";
+import { createRuntimeDependencyOwnershipBuildPlugin } from "../scripts/lib/runtime-dependency-ownership-build-plugin.mts";
+import { RUNTIME_DEPENDENCY_OWNERSHIP_RELATIVE_PATH } from "../scripts/lib/runtime-dependency-ownership-contract.mts";
 import {
   buildPublishedInstallCommandArgs,
   buildPublishedInstallScenarios,
@@ -26,10 +39,15 @@ import {
   verifyNpmRegistrySignatures,
 } from "../scripts/openclaw-npm-postpublish-verify.ts";
 import {
+  rewriteRootRuntimeImportsToStableAliases,
+  writeStableRootRuntimeAliases,
+} from "../scripts/runtime-postbuild.mts";
+import {
   WORKER_BUNDLE_ENTRY_PATH,
   WORKER_BUNDLE_RSYNC_RECEIVER_PATH,
 } from "../src/shared/worker-bundle-hash.js";
 import { withEnv } from "../src/test-utils/env.js";
+import { createScriptTestHarness } from "./scripts/test-helpers.js";
 
 const INSTALLED_ROOT_DIST_JS_FILE_SCAN_LIMIT = 10_000;
 const requiredBundledPluginPackPaths = listBundledPluginPackArtifacts();
@@ -1081,6 +1099,36 @@ describe("collectInstalledRootDependencyManifestErrors", () => {
     writeFileSync(fullPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
   }
 
+  function makeCompanionImportFixture(params: {
+    source: string;
+    fileName?: string;
+    companions: Array<{ id: string; name?: string; dependencies: Record<string, string> }>;
+    ownership?: unknown;
+    version?: string;
+  }): { installRoot: string; packageRoot: string } {
+    const installRoot = makeInstalledPackageRoot();
+    const packageRoot = join(installRoot, "openclaw");
+    writePackageFile(packageRoot, "package.json", {
+      name: "openclaw",
+      version: params.version ?? "2026.7.33",
+      dependencies: {},
+    });
+    if (params.ownership !== undefined) {
+      writePackageFile(packageRoot, RUNTIME_DEPENDENCY_OWNERSHIP_RELATIVE_PATH, params.ownership);
+    }
+    for (const companion of params.companions) {
+      writePackageFile(installRoot, `@openclaw/${companion.id}/package.json`, {
+        name: companion.name ?? `@openclaw/${companion.id}`,
+        version: "2026.7.33",
+        dependencies: companion.dependencies,
+      });
+    }
+    const filePath = join(packageRoot, "dist", params.fileName ?? "companion-runtime.js");
+    mkdirSync(dirname(filePath), { recursive: true });
+    writeFileSync(filePath, params.source, "utf8");
+    return { installRoot, packageRoot };
+  }
+
   it("flags root dist imports whose declared runtime package name is missing", () => {
     const packageRoot = makeInstalledPackageRoot();
 
@@ -1124,6 +1172,181 @@ describe("collectInstalledRootDependencyManifestErrors", () => {
       expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toStrictEqual([]);
     } finally {
       rmSync(packageRoot, { recursive: true, force: true });
+    }
+  });
+
+  const companionSource = 'const voice = require("@discordjs/voice");\nexport { voice };\n';
+  const companionOwnership = {
+    chunks: {
+      "companion-runtime.js": {
+        sha256: createHash("sha256").update(companionSource).digest("hex"),
+        extensions: ["discord"],
+      },
+    },
+  };
+
+  it.each(["2026.7.33", "2026.9.8"])(
+    "accepts byte-matched companion ownership for %s",
+    (version) => {
+      const { installRoot, packageRoot } = makeCompanionImportFixture({
+        companions: [{ id: "discord", dependencies: { "@discordjs/voice": "0.19.2" } }],
+        ownership: companionOwnership,
+        source: companionSource,
+        version,
+      });
+
+      try {
+        expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toStrictEqual([]);
+      } finally {
+        rmSync(installRoot, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.each<{
+    name: string;
+    companions: Array<{ id: string; name?: string; dependencies: Record<string, string> }>;
+  }>([
+    { name: "missing companion", companions: [] },
+    {
+      name: "wrong companion identity",
+      companions: [
+        {
+          id: "discord",
+          name: "unrelated-package",
+          dependencies: { "@discordjs/voice": "0.19.2" },
+        },
+      ],
+    },
+    {
+      name: "dependency declared only by another companion",
+      companions: [
+        { id: "discord", dependencies: {} },
+        { id: "msteams", dependencies: { "@discordjs/voice": "0.19.2" } },
+      ],
+    },
+  ])("rejects chunk ownership with $name", ({ companions }) => {
+    const { installRoot, packageRoot } = makeCompanionImportFixture({
+      companions,
+      ownership: companionOwnership,
+      source: companionSource,
+    });
+
+    try {
+      expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toEqual([
+        "installed package root is missing declared runtime dependency '@discordjs/voice' for dist importers: companion-runtime.js. Add it to package.json dependencies/optionalDependencies.",
+      ]);
+    } finally {
+      rmSync(installRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("does not authorize changed chunk bytes", () => {
+    const { installRoot, packageRoot } = makeCompanionImportFixture({
+      companions: [{ id: "discord", dependencies: { "@discordjs/voice": "0.19.2" } }],
+      ownership: companionOwnership,
+      source: `${companionSource}export const changed = true;\n`,
+    });
+
+    try {
+      expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toEqual([
+        expect.stringContaining("companion-runtime.js"),
+      ]);
+    } finally {
+      rmSync(installRoot, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    {
+      name: "another build output importing the same dependency",
+      fileName: "config-doctor/runtime.js",
+      source: 'require("@discordjs/voice");\n',
+      missingImporter: "config-doctor/runtime.js",
+      companionFileName: "companion-runtime.js",
+    },
+    {
+      name: "a root require reaching the annotated chunk",
+      fileName: "root-runtime.cjs",
+      source: 'require("./companion-runtime.js");\n',
+      missingImporter: "companion-runtime.js",
+      companionFileName: "companion-runtime.js",
+    },
+    {
+      name: "an extensionless root require reaching the annotated chunk",
+      fileName: "root-runtime.cjs",
+      source: 'require("./companion-runtime");\n',
+      missingImporter: "companion-runtime.js",
+      companionFileName: "companion-runtime.js",
+    },
+    {
+      name: "a directory root require reaching the annotated chunk",
+      fileName: "root-runtime.cjs",
+      source: 'require("./nested");\n',
+      missingImporter: "nested/index.js",
+      companionFileName: "nested/index.js",
+    },
+  ])("does not exempt $name", ({ fileName, source, missingImporter, companionFileName }) => {
+    const { installRoot, packageRoot } = makeCompanionImportFixture({
+      companions: [{ id: "discord", dependencies: { "@discordjs/voice": "0.19.2" } }],
+      ownership: {
+        chunks: { [companionFileName]: companionOwnership.chunks["companion-runtime.js"] },
+      },
+      source: companionSource,
+      fileName: companionFileName,
+    });
+
+    try {
+      const filePath = join(packageRoot, "dist", fileName);
+      mkdirSync(dirname(filePath), { recursive: true });
+      writeFileSync(filePath, source, "utf8");
+      expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toEqual([
+        `installed package root is missing declared runtime dependency '@discordjs/voice' for dist importers: ${missingImporter}. Add it to package.json dependencies/optionalDependencies.`,
+      ]);
+    } finally {
+      rmSync(installRoot, { recursive: true, force: true });
+    }
+  });
+
+  it.each(["2026.7.33", "2026.9.8"])(
+    "does not authorize %s plugin imports without metadata",
+    (version) => {
+      const { installRoot, packageRoot } = makeCompanionImportFixture({
+        companions: [{ id: "discord", dependencies: { "@discordjs/voice": "0.19.2" } }],
+        source: companionSource,
+        version,
+      });
+
+      try {
+        expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toEqual([
+          "installed package root is missing declared runtime dependency '@discordjs/voice' for dist importers: companion-runtime.js. Add it to package.json dependencies/optionalDependencies.",
+        ]);
+      } finally {
+        rmSync(installRoot, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("rejects malformed emitted ownership metadata", () => {
+    const { installRoot, packageRoot } = makeCompanionImportFixture({
+      companions: [{ id: "discord", dependencies: { "@discordjs/voice": "0.19.2" } }],
+      ownership: {
+        chunks: {
+          "companion-runtime.js": {
+            sha256: createHash("sha256").update(companionSource).digest("hex"),
+            extensions: ["discord", "discord"],
+          },
+        },
+      },
+      source: companionSource,
+    });
+
+    try {
+      expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toEqual([
+        expect.stringContaining("installed package runtime dependency ownership is invalid"),
+      ]);
+    } finally {
+      rmSync(installRoot, { recursive: true, force: true });
     }
   });
 
@@ -1785,5 +2008,117 @@ describe("collectInstalledRootDependencyManifestErrors", () => {
     } finally {
       rmSync(packageRoot, { recursive: true, force: true });
     }
+  });
+});
+
+describe("runtime dependency ownership build contract", () => {
+  const { createTempDir } = createScriptTestHarness();
+
+  async function buildInstalledFixture(
+    rootSource: string,
+    pluginSources: Record<string, string> = {},
+  ) {
+    const root = realpathSync(createTempDir("runtime-dependency-ownership-"));
+    const files = {
+      "package.json": JSON.stringify({ name: "openclaw", version: "2026.7.33", type: "module" }),
+      "src/root.js": rootSource,
+      "extensions/example/index.js": `
+      export { value } from "../../src/shared.js";
+      export const load = () => import("./lazy.js");
+    `,
+      "extensions/example/observer.js": 'export { value } from "../../src/shared.js";',
+      "src/shared.js": 'export { value } from "fixture-runtime";',
+      "extensions/example/lazy.js": 'export { lazy } from "fixture-lazy";',
+      ...pluginSources,
+    };
+    for (const [name, source] of Object.entries(files)) {
+      const file = join(root, name);
+      mkdirSync(dirname(file), { recursive: true });
+      writeFileSync(file, source);
+    }
+    const bundles = await build({
+      config: false,
+      tsconfig: false,
+      cwd: root,
+      entry: {
+        root: "src/root.js",
+        "extensions/example/index": "extensions/example/index.js",
+        "extensions/example/observer": "extensions/example/observer.js",
+      },
+      outDir: "dist",
+      format: "esm",
+      platform: "node",
+      dts: false,
+      logLevel: "silent",
+      deps: { neverBundle: ["fixture-runtime", "fixture-lazy"] },
+      plugins: [createRuntimeDependencyOwnershipBuildPlugin(root)],
+    });
+    try {
+      writeFileSync(
+        join(root, "dist/extensions/example/package.json"),
+        JSON.stringify({
+          name: "@openclaw/example",
+          dependencies: { "fixture-runtime": "1.0.0", "fixture-lazy": "1.0.0" },
+        }),
+      );
+      return root;
+    } finally {
+      for (const bundle of bundles) {
+        await bundle[Symbol.asyncDispose]();
+      }
+    }
+  }
+
+  it("preserves ownership through real postbuild runtime rewrites and forwarding aliases", async () => {
+    const root = await buildInstalledFixture("export const ready = true;", {
+      "extensions/example/index.js": 'export { value, load } from "./shared.runtime.js";',
+      "extensions/example/observer.js": 'export { value, load } from "./shared.runtime.js";',
+      "extensions/example/shared.runtime.js": `
+        export { value } from "fixture-runtime";
+        export const load = () => import("./downstream.runtime.js");
+      `,
+      "extensions/example/downstream.runtime.js": 'export { lazy } from "fixture-lazy";',
+    });
+    expect(collectInstalledRootDependencyManifestErrors(root)).toEqual([]);
+
+    rewriteRootRuntimeImportsToStableAliases({ rootDir: root });
+    writeStableRootRuntimeAliases({ rootDir: root });
+
+    const dist = join(root, "dist");
+    const sharedChunk = readdirSync(dist).find((name) => /^shared\.runtime-.*\.m?js$/u.test(name));
+    expect(sharedChunk).toBeDefined();
+    expect(readFileSync(join(dist, sharedChunk!), "utf8")).toContain('"./downstream.runtime.js"');
+    expect(existsSync(join(dist, "shared.runtime.js"))).toBe(true);
+    expect(existsSync(join(dist, "downstream.runtime.js"))).toBe(true);
+    expect(collectInstalledRootDependencyManifestErrors(root)).toEqual([]);
+  });
+
+  it("verifies real static and dynamic plugin chunks against their owning manifest", async () => {
+    const root = await buildInstalledFixture("export const ready = true;");
+    expect(collectInstalledRootDependencyManifestErrors(root)).toEqual([]);
+
+    writeFileSync(
+      join(root, "dist/extensions/example/package.json"),
+      JSON.stringify({ name: "@openclaw/example", dependencies: {} }),
+    );
+    expect(collectInstalledRootDependencyManifestErrors(root)).toEqual([
+      expect.stringContaining("missing declared runtime dependency 'fixture-lazy'"),
+      expect.stringContaining("missing declared runtime dependency 'fixture-runtime'"),
+    ]);
+  });
+
+  it.each([
+    ["static import", 'export { value } from "fixture-runtime";'],
+    [
+      "createRequire import",
+      `import { createRequire } from "node:module";
+       export const value = createRequire(import.meta.url)("fixture-runtime");`,
+    ],
+    ["root-shared chunk", 'export { value } from "./shared.js";'],
+  ])("rejects a root %s even when a plugin owns the same dependency", async (_name, source) => {
+    const root = await buildInstalledFixture(source);
+    expect(collectInstalledRootDependencyManifestErrors(root)).toEqual([
+      expect.stringContaining("missing declared runtime dependency 'fixture-runtime'"),
+    ]);
   });
 });

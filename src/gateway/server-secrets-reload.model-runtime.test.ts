@@ -77,7 +77,7 @@ function requireRuntimeConfig(): OpenClawConfig {
 }
 
 beforeEach(async () => {
-  resetPreparedModelRuntimeSnapshotsForTest();
+  await resetPreparedModelRuntimeSnapshotsForTest();
   clearSecretsRuntimeSnapshot();
   state = await createOpenClawTestState({ label: "secrets-model-publication" });
   vi.stubEnv("TEST_RELOADED_MODEL_KEY", undefined);
@@ -85,7 +85,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  resetPreparedModelRuntimeSnapshotsForTest();
+  await resetPreparedModelRuntimeSnapshotsForTest();
   clearSecretsRuntimeSnapshot();
   vi.unstubAllEnvs();
   vi.restoreAllMocks();

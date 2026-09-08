@@ -1,4 +1,5 @@
 // Release check tests cover release validation script behavior.
+import { createHash } from "node:crypto";
 import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve as resolvePath, win32 } from "node:path";
@@ -9,6 +10,7 @@ import { listBundledPluginPackArtifacts } from "../scripts/lib/bundled-plugin-bu
 import { resolveNpmJsonEntries } from "../scripts/lib/npm-json-output.mts";
 import { collectPackUnpackedSizeErrors } from "../scripts/lib/npm-pack-budget.mts";
 import { PACKAGE_DIST_INVENTORY_RELATIVE_PATH } from "../scripts/lib/package-dist-inventory-contract.mts";
+import { RUNTIME_DEPENDENCY_OWNERSHIP_RELATIVE_PATH } from "../scripts/lib/runtime-dependency-ownership-contract.mts";
 import { createWorkspaceBootstrapSmokeEnv } from "../scripts/lib/workspace-bootstrap-smoke.mts";
 import {
   collectInstalledBundledRuntimeSidecarPaths,
@@ -372,14 +374,14 @@ describe("collectBundledExtensionManifestErrors", () => {
 });
 
 describe("bundled plugin package dependency checks", () => {
-  it("does not require root deps for root chunks sourced from the owning installed plugin", () => {
+  it("does not require root deps for byte-matched chunks owned by a bundled plugin", () => {
     const tempRoot = mkdtempSync(join(tmpdir(), "openclaw-root-owned-installed-"));
 
     try {
       mkdirSync(join(tempRoot, "dist", "extensions", "memory-lancedb"), { recursive: true });
       writeFileSync(
         join(tempRoot, "package.json"),
-        `{"name":"openclaw","dependencies":{}}\n`,
+        `{"name":"openclaw","version":"2026.7.33","dependencies":{}}\n`,
         "utf8",
       );
       writeFileSync(
@@ -387,9 +389,18 @@ describe("bundled plugin package dependency checks", () => {
         `{"name":"@openclaw/memory-lancedb","dependencies":{"root-owned-test-dep":"^1.0.0"}}\n`,
         "utf8",
       );
+      const source = 'import("root-owned-test-dep");\n';
+      writeFileSync(join(tempRoot, "dist", "lancedb-runtime-7TYK-Pto.js"), source, "utf8");
       writeFileSync(
-        join(tempRoot, "dist", "lancedb-runtime-7TYK-Pto.js"),
-        `//#region extensions/memory-lancedb/lancedb-runtime.ts\nimport("root-owned-test-dep");\n`,
+        join(tempRoot, RUNTIME_DEPENDENCY_OWNERSHIP_RELATIVE_PATH),
+        JSON.stringify({
+          chunks: {
+            "lancedb-runtime-7TYK-Pto.js": {
+              sha256: createHash("sha256").update(source).digest("hex"),
+              extensions: ["memory-lancedb"],
+            },
+          },
+        }),
         "utf8",
       );
 

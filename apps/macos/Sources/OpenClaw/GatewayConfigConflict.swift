@@ -88,6 +88,10 @@ extension AppState {
         var remoteUrl: String
         var remoteToken: String
         var dirtyFields: Set<GatewayConfigField>
+
+        var clearsPrimaryGateway: Bool {
+            self.connectionMode == .unconfigured && self.dirtyFields.contains(.mode)
+        }
     }
 
     struct GatewaySelectionSnapshot: Equatable {
@@ -102,28 +106,31 @@ struct GatewayConfigConflictRecoveryView: View {
     @Bindable var state: AppState
 
     var body: some View {
-        if let conflict = state.gatewayConfigConflict {
+        let conflict = self.state.gatewayConfigConflict
+        if let message = conflict?.message ?? state.gatewayConfigSyncFailure {
             HStack(alignment: .top, spacing: 10) {
                 Image(systemName: "exclamationmark.triangle.fill")
                     .foregroundStyle(.orange)
                     .accessibilityHidden(true)
 
                 VStack(alignment: .leading, spacing: 8) {
-                    Text(verbatim: conflict.message)
+                    Text(verbatim: message)
                         .fixedSize(horizontal: false, vertical: true)
 
-                    HStack(spacing: 8) {
-                        Button("Use file version") {
-                            self.state.useFileGatewayConfigConflict()
-                        }
-                        .buttonStyle(.bordered)
+                    if conflict != nil {
+                        HStack(spacing: 8) {
+                            Button("Use file version") {
+                                self.state.useFileGatewayConfigConflict()
+                            }
+                            .buttonStyle(.bordered)
 
-                        Button("Keep my edits") {
-                            self.state.keepGatewayConfigEdits()
+                            Button("Keep my edits") {
+                                self.state.keepGatewayConfigEdits()
+                            }
+                            .buttonStyle(.borderedProminent)
                         }
-                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
                     }
-                    .controlSize(.small)
                 }
             }
         }

@@ -91,7 +91,7 @@ describe("cross-OS release checks workflow", () => {
     const prepare = job(workflow, "prepare");
     const consumer = job(workflow, "cross_os_release_checks");
     const windowsPackagedFreshNodeVersion =
-      "${{ matrix.os_id == 'windows' && matrix.suite == 'packaged-fresh' && '24.15.0' || env.NODE_VERSION }}";
+      "${{ matrix.os_id == 'windows' && matrix.suite == 'packaged-fresh' && '24.16.0' || env.NODE_VERSION }}";
 
     expect(step(prepare, "Setup Node.js").with?.["node-version"]).toBe("${{ env.NODE_VERSION }}");
     expect(step(prepare, "Setup pnpm").with?.["node-version"]).toBe("${{ env.NODE_VERSION }}");

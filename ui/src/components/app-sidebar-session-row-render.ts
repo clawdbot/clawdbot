@@ -38,10 +38,7 @@ import {
 } from "./app-sidebar-session-types.ts";
 import { icons } from "./icons.ts";
 import type { SessionDataController } from "./session-data-controller.ts";
-import {
-  describeSessionTrailingState,
-  renderSessionLeadingState,
-} from "./session-leading-indicator.ts";
+import { describeSessionState, renderSessionLeadingState } from "./session-leading-indicator.ts";
 import type { SessionOrganizerController } from "./session-organizer-controller.ts";
 import { renderSessionRowBadges } from "./session-row-badges.ts";
 import { renderSidebarSessionSubtitle } from "./session-row-subtitle.ts";
@@ -225,22 +222,17 @@ export function renderRecentSession(params: {
         gateway.connection.password.trim()),
     ),
   };
-  const { running, leadingIndicator, trailingIndicator, renderedIdentities } =
-    renderSessionLeadingState(
-      session,
-      leadingOwner,
-      ownerAttribution,
-      ownerViewing,
-      channelAvatarAuth,
-    );
-  const trailingDescription = session.isChild
-    ? running && session.unread
-      ? t("sessionsView.unread")
-      : ""
-    : describeSessionTrailingState(session);
+  const { running, leadingIndicator, renderedIdentities } = renderSessionLeadingState(
+    session,
+    leadingOwner,
+    ownerAttribution,
+    ownerViewing,
+    channelAvatarAuth,
+  );
+  const stateDescription = describeSessionState(session);
   const hasTrail = session.isChild && (session.runtimeMs != null || session.startedAt != null);
   const metaId = hasTrail ? sidebarSessionMetaId(session.key) : undefined;
-  const stateId = trailingDescription ? sidebarSessionStateId(session.key) : undefined;
+  const stateId = stateDescription ? sidebarSessionStateId(session.key) : undefined;
   const openMenuFromEvent = (event: MouseEvent | KeyboardEvent) =>
     handleContextMenuEvent(
       event,
@@ -405,22 +397,11 @@ export function renderRecentSession(params: {
                 ),
               })}
               ${
-                trailingIndicator === nothing
-                  ? trailingDescription
-                    ? html`<span class="sr-only" id=${stateId} aria-hidden="true"
-                        >${trailingDescription}</span
-                      >`
-                    : nothing
-                  : html`<span class="session-row-aside">
-                      <span
-                        class="session-row-state"
-                        aria-hidden="true"
-                        id=${stateId}
-                        role="img"
-                        aria-label=${trailingDescription}
-                        >${trailingIndicator}</span
-                      >
-                    </span>`
+                stateDescription
+                  ? html`<span class="sr-only" id=${stateId} aria-hidden="true"
+                      >${stateDescription}</span
+                    >`
+                  : nothing
               }
               ${
                 hasTrail

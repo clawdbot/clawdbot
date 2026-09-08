@@ -12,9 +12,11 @@ import {
   ChannelPreviewStreamingConfigSchema,
   ChannelStreamingProgressSchema,
   ProviderCommandsSchema,
-  refineChannelDmPolicy,
+  requireAllowlistAllowFrom,
+  requireOpenAllowFrom,
   TtsConfigSchema,
 } from "openclaw/plugin-sdk/channel-config-schema";
+import * as channelConfigSchema from "openclaw/plugin-sdk/channel-config-schema";
 import { asObjectRecord } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import {
   buildSecretInputSchema,
@@ -23,6 +25,44 @@ import {
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { z } from "zod";
 import { discordChannelConfigUiHints } from "./config-ui-hints.js";
+
+// Published 2026.9.2 exposes the two dependency validators, but not this refiner.
+// Remove this fallback when the declared plugin API floor excludes that host.
+const dmPolicySdk: Partial<Pick<typeof channelConfigSchema, "refineChannelDmPolicy">> =
+  channelConfigSchema;
+
+function refineDiscordDmPolicyForHost(
+  params: Omit<Parameters<typeof channelConfigSchema.refineChannelDmPolicy>[0], "channelId">,
+): void {
+  if (dmPolicySdk.refineChannelDmPolicy) {
+    dmPolicySdk.refineChannelDmPolicy({ channelId: "discord", ...params });
+    return;
+  }
+  const { value, accountId, ctx } = params;
+  const account = accountId === undefined ? value : value.accounts?.[accountId];
+  if (!account) {
+    return;
+  }
+  const policy = account.dmPolicy ?? value.dmPolicy;
+  const allowFrom = account.allowFrom ?? value.allowFrom;
+  const owner = accountId === undefined ? "channels.discord" : "channels.discord.accounts.*";
+  const inherited = accountId === undefined ? "" : " (or channels.discord.allowFrom)";
+  const path = accountId === undefined ? ["allowFrom"] : ["accounts", accountId, "allowFrom"];
+  requireOpenAllowFrom({
+    policy,
+    allowFrom,
+    ctx,
+    path,
+    message: `${owner}.dmPolicy="${policy}" requires ${owner}.allowFrom${inherited} to include "*"`,
+  });
+  requireAllowlistAllowFrom({
+    policy,
+    allowFrom,
+    ctx,
+    path,
+    message: `${owner}.dmPolicy="${policy}" requires ${owner}.allowFrom${inherited} to contain at least one sender ID`,
+  });
+}
 
 const SecretInputSchema = buildSecretInputSchema();
 const DiscordPreviewStreamingConfigSchema = ChannelPreviewStreamingConfigSchema.extend({
@@ -406,7 +446,7 @@ const DiscordConfigSchemaBase = DiscordAccountSchemaBase.safeExtend({
   accounts: z.record(z.string(), DiscordAccountSchema.optional()).optional(),
   defaultAccount: z.string().optional(),
 }).superRefine((value, ctx) => {
-  refineChannelDmPolicy({ channelId: "discord", value, ctx });
+  refineDiscordDmPolicyForHost({ value, ctx });
 
   if (!value.accounts) {
     return;
@@ -415,7 +455,7 @@ const DiscordConfigSchemaBase = DiscordAccountSchemaBase.safeExtend({
     if (!account) {
       continue;
     }
-    refineChannelDmPolicy({ channelId: "discord", value, accountId, ctx });
+    refineDiscordDmPolicyForHost({ value, accountId, ctx });
   }
 });
 

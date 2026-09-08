@@ -26,8 +26,7 @@ describe("Vitest reporter contracts", () => {
     "reports completed agent tests and preserves overrides with GITHUB_ACTIONS=%s",
     (githubActions) => {
       // Resolve imported configs in a fresh process: shared config and std-env
-      // capture their environment on import. Native resolution needs no proxy
-      // config files or repeated bundling of the same dependency graph.
+      // capture their environment on import.
       const result = spawnNodeEvalSync(
         `
           import path from "node:path";
@@ -40,9 +39,15 @@ describe("Vitest reporter contracts", () => {
             const root = config.startsWith("ui/") ? path.resolve("ui") : process.cwd();
             const imported = (await import(pathToFileURL(path.resolve(config)).href)).default;
             const options = { root, config: false };
-            const normal = await resolveConfig(options, imported);
+            let reporterConfig = imported;
+            if (config === "vitest.config.ts") {
+              // The project-config suite owns full root graph resolution.
+              reporterConfig = { ...imported, test: { ...imported.test } };
+              delete reporterConfig.test.projects;
+            }
+            const normal = await resolveConfig(options, reporterConfig);
             const cli = parseCLI(["vitest", "--reporter=json"]).options;
-            const override = await resolveConfig({ ...cli, ...options }, imported);
+            const override = await resolveConfig({ ...cli, ...options }, reporterConfig);
             defaults.push({ config, reporters: normal.test.reporters, cli: override.test.reporters });
           }
           const customConfig = {
@@ -69,7 +74,12 @@ describe("Vitest reporter contracts", () => {
         `,
         {
           imports: ["tsx"],
-          env: { ...process.env, AI_AGENT: "vitest-reporter-test", GITHUB_ACTIONS: githubActions },
+          env: {
+            ...process.env,
+            AI_AGENT: "vitest-reporter-test",
+            GITHUB_ACTIONS: githubActions,
+            OPENCLAW_VITEST_INCLUDE_FILE: undefined,
+          },
           timeout: DEFAULT_VITEST_TEST_TIMEOUT_MS,
         },
       );

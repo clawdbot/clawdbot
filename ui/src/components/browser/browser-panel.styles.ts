@@ -131,6 +131,16 @@ export const browserPanelStyles = css`
     position: relative;
     width: 100%;
   }
+  .bp-stage--native {
+    flex: 1 1 auto;
+    min-height: 100px;
+  }
+  .bp-native-loading {
+    display: block;
+    padding: var(--space-2);
+    color: var(--muted);
+    font-size: var(--font-size-xs);
+  }
   .bp-shot {
     display: block;
     width: 100%;

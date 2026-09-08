@@ -4,9 +4,8 @@
 # ///
 """Record every observable Telegram event as the QA user, not just new messages.
 
-`user-driver.py` handles only updateNewMessage, and no bot can observe deletions
-at all. Progress drafts are built on edit-in-place plus delete-on-cleanup, so
-proving them needs the full update stream:
+`user-driver.py` serves normalized message/edit snapshots. Progress drafts also
+need raw revisions and delete-on-cleanup evidence from the full update stream:
 
   updateNewMessage      -> message
   updateMessageContent  -> edit      (carries the new body; one per revision)
@@ -17,10 +16,12 @@ proving them needs the full update stream:
 """
 
 import argparse
+import ctypes
 from collections import Counter
 import importlib.util
 import json
 import os
+import signal
 import sys
 import time
 from pathlib import Path
@@ -36,52 +37,13 @@ def formatted_text(value):
     return value.get("text", "") if isinstance(value, dict) else ""
 
 
-def rich_text(value):
-    if not isinstance(value, dict):
-        return ""
-    kind = value.get("@type", "")
-    if kind == "richTextPlain":
-        return value.get("text", "")
-    if kind == "richTextCustomEmoji":
-        return value.get("alternative_text", "")
-    if kind == "richTextMathematicalExpression":
-        return value.get("expression", "")
-    if kind == "richTexts":
-        return "".join(rich_text(item) for item in value.get("texts") or [])
-    return rich_text(value.get("text"))
-
-
-def rich_message_text(value):
-    if not isinstance(value, dict):
-        return ""
-    parts = []
-
-    def visit(node):
-        if isinstance(node, list):
-            for item in node:
-                visit(item)
-            return
-        if not isinstance(node, dict):
-            return
-        if str(node.get("@type", "")).startswith("richText"):
-            text = rich_text(node)
-            if text:
-                parts.append(text)
-            return
-        for child in node.values():
-            visit(child)
-
-    visit(value.get("blocks") or [])
-    return "\n".join(parts)
-
-
 def content_text(content):
     for key in ("text", "caption"):
         value = content.get(key)
         if isinstance(value, dict) and isinstance(value.get("text"), str):
             return value["text"]
     if content.get("@type") == "messageRichMessage":
-        return rich_message_text(content.get("message") or {})
+        return driver.rich_message_text(content.get("message") or {})
     return ""
 
 
@@ -118,8 +80,8 @@ class EventRecorder:
             "elapsedMs": int((time.time() - self.started_at) * 1000),
             "kind": kind,
             "messageId": message_id,
-            # Bot API ids are TDLib ids >> 20; keep both so bot-lane and
-            # userbot-lane recordings can be correlated by message.
+            # Historical field name: this is the observing account's server ID,
+            # not another account's Bot API receipt in DMs or basic groups.
             "botApiMessageId": (message_id >> 20) if isinstance(message_id, int) else None,
             **fields,
         }
@@ -168,17 +130,10 @@ class EventRecorder:
             self.record_handle = None
 
     def ingest(self, update):
-        if self._chat_id_of(update) != self.chat_id:
+        if driver.update_chat_id(update) != self.chat_id:
             return
         for kind, message_id, fields in self._events_for(update):
             self._append(kind, message_id, **fields)
-
-    def _chat_id_of(self, update):
-        """updateNewMessage nests chat_id under message; the rest keep it top level."""
-        message = update.get("message")
-        if isinstance(message, dict) and "chat_id" in message:
-            return message["chat_id"]
-        return update.get("chat_id")
 
     def _events_for(self, update):
         """One update yields zero or more events; a delete batch yields many."""
@@ -375,10 +330,13 @@ class EventRecorder:
         }
 
 
-def build_driver():
+def build_driver(deadline_unix_ms=None):
     """UserDriver owns its own TdClient, so recording shares that one client."""
     config, bot_config = driver.load_config()
-    user_driver = driver.UserDriver(config, bot_config)
+    user_driver = (
+        driver.UserDriver(config, bot_config) if deadline_unix_ms is None
+        else driver.UserDriver(config, bot_config, deadline_unix_ms)
+    )
     user_driver.authorize(need_ready=True)
     return config, bot_config, user_driver
 
@@ -476,7 +434,7 @@ def run_scenario(recorder, driver_obj, sut, actions, seconds, barrier_dir=""):
     return sent_ids
 
 
-def publish_recorder_ready(path, recorder):
+def publish_recorder_ready(path, recorder, require_dm_peer=False):
     if not path:
         return
     target = Path(path)
@@ -487,6 +445,13 @@ def publish_recorder_ready(path, recorder):
         "startedAtUnixMs": int(recorder.started_at * 1000),
         "chatId": recorder.chat_id,
     }
+    if require_dm_peer:
+        chat = recorder.client.request({"@type": "getChat", "chat_id": recorder.chat_id})
+        chat_type = chat.get("type") or {}
+        if chat_type.get("@type") != "chatTypePrivate" or chat_type.get("user_id") != recorder.sut_user_id:
+            raise driver.DriverError("Proof recorder requires the selected SUT private chat")
+        payload["chatType"] = "private"
+        payload["peerUserId"] = chat_type["user_id"]
     with pending.open("w") as handle:
         json.dump(payload, handle)
         handle.write("\n")
@@ -508,6 +473,9 @@ def main():
     parser.add_argument("--record", default="/tmp/tg-user-events.ndjson")
     parser.add_argument("--output", default="")
     parser.add_argument("--sut-user-id", default="")
+    parser.add_argument("--proof-dm-peer", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--proof-parent-pid", type=int, help=argparse.SUPPRESS)
+    parser.add_argument("--proof-deadline-unix-ms", type=int, help=argparse.SUPPRESS)
     args = parser.parse_args()
     if sum(bool(value) for value in (args.send, args.send_photo, args.scenario)) > 1:
         parser.error("use only one of --send, --send-photo, or --scenario")
@@ -516,7 +484,18 @@ def main():
     if args.barrier_dir and not args.scenario:
         parser.error("--barrier-dir requires --scenario")
 
-    config, bot_config, driver_obj = build_driver()
+    if (args.proof_parent_pid is None) != (args.proof_deadline_unix_ms is None):
+        parser.error("proof parent and deadline must be supplied together")
+    if args.proof_parent_pid is not None:
+        if sys.platform != "linux" or args.proof_parent_pid <= 1:
+            parser.error("trusted proof ownership requires a Linux controller")
+        # Arm before creating TDLib threads; then close the parent-death race.
+        if ctypes.CDLL(None, use_errno=True).prctl(1, signal.SIGKILL, 0, 0, 0) != 0:
+            raise RuntimeError("Unable to arm proof parent-death cleanup")
+        if os.getppid() != args.proof_parent_pid or time.time() * 1000 >= args.proof_deadline_unix_ms:
+            raise RuntimeError("Trusted proof owner is no longer active")
+    config, bot_config, driver_obj = (build_driver(args.proof_deadline_unix_ms)
+                                    if args.proof_deadline_unix_ms is not None else build_driver())
 
     # One resolution path for every chat form the driver accepts: numeric id,
     # @username (the DM lane passes the SUT's username), or an invite link.
@@ -525,7 +504,9 @@ def main():
     sut_user_id = args.sut_user_id or sut.get("id") or ""
 
     recorder = EventRecorder(driver_obj.client, chat_id, args.record, sut_user_id or None)
-    publish_recorder_ready(args.ready_file, recorder)
+    if args.proof_dm_peer and not args.ready_file:
+        parser.error("--proof-dm-peer requires --ready-file")
+    publish_recorder_ready(args.ready_file, recorder, args.proof_dm_peer)
 
     sent_ids = []
     try:

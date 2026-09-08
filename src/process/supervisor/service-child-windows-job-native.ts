@@ -35,6 +35,34 @@ export function retainWindowsProcessJobUntilExit(koffi: typeof import("koffi").d
   retainedProcessJob = job;
 }
 
+/** The caller supplies a pinned live launcher process, which becomes the last Job handle owner. */
+export function bindWindowsProcessJobToOwner(
+  bindings: ReturnType<typeof createWindowsJobBindings>,
+  owner: NativeHandle,
+): void {
+  const job = bindings.requireHandle(bindings.CreateJobObjectW(null, null), "CreateJobObjectW");
+  try {
+    if (!bindings.SetExtendedLimits(job, 9, bindings.extendedLimits, bindings.extendedLimitsSize)) {
+      throw bindings.lastError("SetInformationJobObject(KILL_ON_JOB_CLOSE)");
+    }
+    const transferred: Array<NativeHandle | null> = [null];
+    if (!bindings.DuplicateHandle(bindings.GetCurrentProcess(), job, owner, transferred, 0, 0, 2)) {
+      throw bindings.lastError("DuplicateHandle(Job to task launcher)");
+    }
+    bindings.requireHandle(transferred[0], "DuplicateHandle(task launcher Job)");
+    if (!bindings.AssignProcessToJobObject(job, bindings.GetCurrentProcess())) {
+      throw bindings.lastError("AssignProcessToJobObject(task supervisor)");
+    }
+  } catch (error) {
+    bindings.CloseHandle(job);
+    throw error;
+  }
+  // No supervisor/child copy may keep this Job alive after Task Scheduler ends its launcher.
+  if (!bindings.CloseHandle(job)) {
+    throw bindings.lastError("CloseHandle(local task Job)");
+  }
+}
+
 export function createWindowsJobBindings(koffi: typeof import("koffi").default) {
   if (process.arch !== "x64" && process.arch !== "arm64") {
     throw new Error(`Windows Job command ownership requires x64 or arm64, got ${process.arch}`);
@@ -121,6 +149,15 @@ export function createWindowsJobBindings(koffi: typeof import("koffi").default) 
     "str16",
   ]);
   const GetCurrentProcess = kernel32.func("__stdcall", "GetCurrentProcess", HANDLE, []);
+  const DuplicateHandle = kernel32.func("__stdcall", "DuplicateHandle", "int32_t", [
+    HANDLE,
+    HANDLE,
+    HANDLE,
+    koffi.out(koffi.pointer(HANDLE)),
+    "uint32_t",
+    "int32_t",
+    "uint32_t",
+  ]);
   const AssignProcessToJobObject = kernel32.func(
     "__stdcall",
     "AssignProcessToJobObject",
@@ -370,6 +407,7 @@ export function createWindowsJobBindings(koffi: typeof import("koffi").default) 
   return {
     CreateJobObjectW,
     GetCurrentProcess,
+    DuplicateHandle,
     AssignProcessToJobObject,
     SetExtendedLimits,
     CreateProcessW,

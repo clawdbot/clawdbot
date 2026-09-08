@@ -24,7 +24,7 @@ import {
   resolveCombinedPluginAndHookConfigMutationPreflight,
   resolveInstallConfigMutationPreflights,
   selectInstallMutationWriteOptions,
-} from "../plugins/install-persistence.js";
+} from "../plugins/install-config-mutation.js";
 import {
   commitPluginInstallRecordsOnly,
   commitPluginInstallRecordsWithConfig,
@@ -610,7 +610,7 @@ async function runPluginUpdateCommandUnlocked(
       );
       if (pluginResult.changed) {
         await refreshPluginRegistryAfterConfigMutation({
-          config: nextConfig,
+          configPath: sourceSnapshot?.writeOptions.ownedConfigPathForWrite,
           reason: "source-changed",
           installRecords: nextPluginInstallRecords,
           invalidateRuntimeCache: false,

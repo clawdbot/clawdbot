@@ -16,7 +16,11 @@ import {
   normalizeLegacyToolResultId,
 } from "../../packages/agent-core/src/harness/session/tool-result-pairing.js";
 import { isThinkingLikeBlock } from "./thinking-block.js";
-import { extractToolCallsFromAssistant, extractToolResultIds } from "./tool-call-id.js";
+import {
+  extractToolCallsFromAssistant,
+  extractToolResultIds,
+  hasToolCallInput,
+} from "./tool-call-id.js";
 import { isAllowedToolCallName, normalizeAllowedToolNames } from "./tool-call-shared.js";
 
 type RawToolCallBlock = {
@@ -48,13 +52,6 @@ function isRawToolCallBlock(block: unknown): block is RawToolCallBlock {
   }
   const type = (block as { type?: unknown }).type;
   return typeof type === "string" && RAW_TOOL_CALL_BLOCK_TYPES.has(type);
-}
-
-function hasToolCallInput(block: RawToolCallBlock): boolean {
-  const hasInput = "input" in block ? block.input !== undefined && block.input !== null : false;
-  const hasArguments =
-    "arguments" in block ? block.arguments !== undefined && block.arguments !== null : false;
-  return hasInput || hasArguments;
 }
 
 function hasToolCallId(block: RawToolCallBlock): boolean {

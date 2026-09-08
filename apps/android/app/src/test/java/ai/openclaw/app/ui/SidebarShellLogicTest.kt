@@ -244,7 +244,7 @@ class SidebarShellLogicTest {
   }
 
   @Test
-  fun sessionActivityUsesWebPriorityForFailureRunAndUnreadStates() {
+  fun sessionActivityUsesCurrentFailureQueueRunAndUnreadPriority() {
     assertEquals(
       SidebarSessionActivity.Failed,
       sidebarSessionActivity(
@@ -259,7 +259,7 @@ class SidebarShellLogicTest {
       sidebarSessionActivity(
         status = "queued",
         lastRunError = null,
-        hasActiveRun = false,
+        hasActiveRun = true,
         unread = true,
       ),
     )
@@ -313,6 +313,23 @@ class SidebarShellLogicTest {
       "Telegram",
       sidebarSessionSubtitle(session.copy(hasActiveRun = false), activeRunLabel = null, nowMs = 1_000),
     )
+    assertEquals(
+      "Working",
+      sidebarSessionSubtitle(session.copy(hasActiveRun = null, status = " RUNNING "), activeRunLabel = "Working", nowMs = 1_000),
+    )
+    assertEquals(
+      "Telegram",
+      sidebarSessionSubtitle(session.copy(hasActiveRun = false, status = "running"), activeRunLabel = "Working", nowMs = 1_000),
+    )
+    assertNull(sidebarSessionActivity("running", lastRunError = null, hasActiveRun = false, unread = false))
+    assertNull(sidebarSessionActivity("done", lastRunError = null, hasActiveRun = true, unread = false))
+    assertEquals(SidebarSessionActivity.Running, sidebarSessionActivity("done", null, false, false, continuing = true))
+    assertEquals(SidebarSessionActivity.Failed, sidebarSessionActivity("failed", null, false, false, continuing = true))
+    assertEquals(SidebarSessionActivity.Running, sidebarSessionActivity("queued", null, false, false, continuing = true))
+    assertEquals(SidebarSessionActivity.Queued, sidebarSessionActivity("queued", null, true, false, continuing = true))
+    assertEquals(SidebarSessionActivity.Queued, sidebarSessionActivity("queued", null, null, false))
+    assertNull(sidebarSessionActivity("queued", null, false, false))
+    assertEquals(SidebarSessionActivity.Unread, sidebarSessionActivity("queued", null, false, true))
   }
 
   private fun agent(

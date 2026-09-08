@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createConfigIO } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import * as pluginRuntime from "../plugins/runtime.js";
@@ -198,6 +199,65 @@ describe("anonymous telemetry", () => {
     expect(payload.features.plugins).toEqual(["public-channel-owner"]);
     expect(payload.features.pluginsEnabled).toBe(2);
     expect(JSON.stringify(payload)).not.toContain("acme-internal-crm");
+  });
+
+  it.each(
+    (["provider map", "auth profile", "model reference"] as const).flatMap((source) =>
+      [
+        { provider: "OpenAI", expected: ["openai"] },
+        { provider: " OpenAI ", expected: ["openai"] },
+        { provider: " Open AI ", expected: [] },
+        { provider: " Acme-Private ", expected: [] },
+      ].map(({ provider, expected }) => ({ source, provider, expected })),
+    ),
+  )(
+    "reports loaded $source provider $provider as $expected",
+    async ({ source, provider, expected }) => {
+      const input: OpenClawConfig = { plugins: { enabled: false } };
+      if (source === "provider map") {
+        input.models = {
+          providers: { [provider]: { baseUrl: "https://provider.example.invalid/v1", models: [] } },
+        };
+      } else if (source === "auth profile") {
+        input.auth = { profiles: { configured: { provider, mode: "api_key" } } };
+      } else {
+        input.agents = { defaults: { model: `${provider}/gpt-4o` } };
+      }
+      await testState.writeConfig(input);
+      const config = createConfigIO({
+        configPath: testState.configPath,
+        env: { OPENCLAW_STATE_DIR: testState.stateDir },
+        homedir: () => testState.home,
+        observe: false,
+      }).loadConfig();
+
+      // The real loader accepts these spellings without canonicalizing the provider identity.
+      if (source === "provider map") {
+        expect(Object.keys(config.models?.providers ?? {})).toEqual([provider]);
+      } else if (source === "auth profile") {
+        expect(config.auth?.profiles?.configured?.provider).toBe(provider);
+      }
+      expect(
+        buildTelemetryPayload(config, { surface: "gateway" }).features.providerFamilies,
+      ).toEqual(expected);
+    },
+  );
+
+  it("deduplicates canonical provider families across config maps, auth, and model references", () => {
+    const config: OpenClawConfig = {
+      models: {
+        providers: {
+          OpenAI: { baseUrl: "https://provider.example.invalid/v1", models: [] },
+          " openai ": { baseUrl: "https://provider.example.invalid/v1", models: [] },
+        },
+      },
+      auth: { profiles: { configured: { provider: " OPENAI ", mode: "api_key" } } },
+      agents: { defaults: { model: "OpenAI/gpt-4o" } },
+    };
+
+    expect(buildTelemetryPayload(config, { surface: "gateway" }).features.providerFamilies).toEqual(
+      ["openai"],
+    );
   });
 
   it("uses manifest-owned plugin activation when a CLI has no active runtime registry", () => {

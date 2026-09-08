@@ -9,13 +9,10 @@ import type { GatewayServer, GatewayStartupOperation } from "../../gateway/serve
 import type { GatewayActiveWorkSnapshot } from "../../infra/gateway-active-work.js";
 import type { GatewayBootLifecycleCompletion } from "../../infra/gateway-boot-lifecycle.js";
 import type { GatewayRestartIntent } from "../../infra/restart-intent.js";
+import { GATEWAY_STARTUP_MAINTENANCE_REQUIRED_REASON } from "../../infra/startup-maintenance-required.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "../../infra/supervisor-markers.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveGlobalMap } from "../../shared/global-singleton.js";
-import {
-  GATEWAY_AGENT_MEDIA_MIGRATION_REQUIRED_REASON,
-  OpenClawAgentDatabaseMediaMigrationRequiredError,
-} from "../../state/openclaw-agent-db-migration-required.js";
 import { captureEnv, deleteTestEnvValue } from "../../test-utils/env.js";
 
 const acquireGatewayLock = vi.fn(async (_opts?: { port?: number }) => ({
@@ -881,7 +878,7 @@ describe("runGatewayLoop", () => {
     },
   );
 
-  it.each(["clean", "failed"] as const)(
+  it.each(["clean", "failed", "maintenance"] as const)(
     "fences replacement after deferred startup with %s cleanup",
     async (cleanup) => {
       vi.clearAllMocks();
@@ -889,7 +886,12 @@ describe("runGatewayLoop", () => {
         const { runGatewayLoop } = await import("./run-loop.js");
         const firstStartup = createDeferredCore();
         const thirdStarted = createDeferredCore();
-        const startupError = new Error("replacement deferred startup failed");
+        const { SessionStoreMigrationRequiredError } =
+          await import("../../config/sessions/migration-required.js");
+        const startupError =
+          cleanup === "maintenance"
+            ? new SessionStoreMigrationRequiredError("legacy session store requires migration")
+            : new Error("replacement deferred startup failed");
         const cleanupError = new Error("replacement cleanup failed");
         const closeFirst = createCloseMock();
         const closeSecond = createCloseMock();
@@ -944,6 +946,10 @@ describe("runGatewayLoop", () => {
             expect(start).toHaveBeenCalledTimes(3);
             stop();
             await expect(exited).resolves.toBe(0);
+          } else if (cleanup === "maintenance") {
+            expect(onRestartStartupFailure).not.toHaveBeenCalled();
+            expect(loopRejected).toHaveBeenCalledExactlyOnceWith(startupError);
+            expect(start).toHaveBeenCalledTimes(2);
           } else {
             expect(onRestartStartupFailure).not.toHaveBeenCalled();
             expect(loopRejected).toHaveBeenCalledOnce();
@@ -1098,33 +1104,73 @@ describe("runGatewayLoop", () => {
     });
   });
 
-  it("records a typed reason for media-migration startup failures", async () => {
-    await withIsolatedSignals(async () => {
-      const failure = new OpenClawAgentDatabaseMediaMigrationRequiredError(
-        "/tmp/openclaw-agent.sqlite",
-        14,
-      );
-      const { runtime } = createRuntimeWithExitSignal();
-      const completeBoot = vi.fn();
-      const { runGatewayLoop } = await import("./run-loop.js");
+  it.each([
+    [
+      "agent media",
+      async () =>
+        new (
+          await import("../../state/openclaw-agent-db-migration-required.js")
+        ).OpenClawAgentDatabaseMediaMigrationRequiredError("/tmp/agent.sqlite", 14),
+    ],
+    [
+      "audit ledger",
+      async () =>
+        new (
+          await import("../../state/openclaw-state-db-schema-migration-required.js")
+        ).OpenClawStateDatabaseSchemaMigrationRequiredError("audit-events-v2", "/tmp/state.sqlite"),
+    ],
+    [
+      "agent registry",
+      async () =>
+        new (
+          await import("../../state/openclaw-state-db-schema-migration-required.js")
+        ).OpenClawStateDatabaseSchemaMigrationRequiredError(
+          "agent-databases-composite-primary-key",
+          "/tmp/state.sqlite",
+        ),
+    ],
+    [
+      "session store",
+      async () =>
+        new (
+          await import("../../config/sessions/migration-required.js")
+        ).SessionStoreMigrationRequiredError("legacy session store"),
+    ],
+    [
+      "newer schema",
+      async () =>
+        new (await import("../../infra/sqlite-user-version.js")).SqliteSchemaVersionError(
+          "newer schema version",
+        ),
+    ],
+  ] as const)(
+    "records a maintenance reason for %s startup failures",
+    async (_kind, createFailure) => {
+      await withIsolatedSignals(async () => {
+        // Earlier lifecycle tests reload the runtime; create the error in that same module graph.
+        const failure = await createFailure();
+        const { runtime } = createRuntimeWithExitSignal();
+        const completeBoot = vi.fn();
+        const { runGatewayLoop } = await import("./run-loop.js");
 
-      await expect(
-        runGatewayLoop({
-          start: vi.fn(async () => {
-            throw failure;
-          }) as unknown as Parameters<typeof runGatewayLoop>[0]["start"],
-          runtime: runtime as unknown as Parameters<typeof runGatewayLoop>[0]["runtime"],
-          completeBoot,
-        }),
-      ).rejects.toBe(failure);
+        await expect(
+          runGatewayLoop({
+            start: vi.fn(async () => {
+              throw failure;
+            }) as unknown as Parameters<typeof runGatewayLoop>[0]["start"],
+            runtime: runtime as unknown as Parameters<typeof runGatewayLoop>[0]["runtime"],
+            completeBoot,
+          }),
+        ).rejects.toBe(failure);
 
-      expect(completeBoot).toHaveBeenCalledWith({
-        outcome: "startup_failed",
-        reason: failure.message,
-        startupReason: GATEWAY_AGENT_MEDIA_MIGRATION_REQUIRED_REASON,
+        expect(completeBoot).toHaveBeenCalledWith({
+          outcome: "startup_failed",
+          reason: failure.message,
+          startupReason: GATEWAY_STARTUP_MAINTENANCE_REQUIRED_REASON,
+        });
       });
-    });
-  });
+    },
+  );
 
   it("exits 0 on SIGTERM after graceful close", async () => {
     vi.clearAllMocks();

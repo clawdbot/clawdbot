@@ -56,6 +56,7 @@ export function renderDesktopDocumentView(options: DesktopDocumentViewOptions) {
         spellcheck="false"
         tabindex="-1"
         aria-label=${t("desktop.keyboardInput")}
+        ?disabled=${options.state !== "connected" || !options.controlling}
         .value=${options.keyboardInputValue}
         @keydown=${options.onKeyboardEvent}
         @keyup=${options.onKeyboardEvent}
@@ -80,6 +81,7 @@ export function renderDesktopDocumentView(options: DesktopDocumentViewOptions) {
           class="desktop-touch-action"
           type="button"
           aria-label=${t("desktop.keyboard")}
+          ?disabled=${options.state !== "connected" || !options.controlling}
           @click=${options.onKeyboardFocus}
         >
           <span class="desktop-touch-action__icon" aria-hidden="true">${KEYBOARD_GLYPH}</span>

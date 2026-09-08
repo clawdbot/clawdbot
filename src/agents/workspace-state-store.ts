@@ -23,6 +23,7 @@ import {
   resolveCanonicalWorkspacePath,
   resolveWorkspaceStateAliases,
   resolveWorkspaceStateIdentity,
+  WorkspaceAliasRepointedError,
   type WorkspaceStateIdentity,
 } from "./workspace-state-identity.js";
 
@@ -151,17 +152,22 @@ function resolveWorkspaceIdentityFromDatabase(params: {
     if (rowIdentity.workspaceKey !== row.workspace_key) {
       throw new Error("workspace path alias target is invalid");
     }
+    // A repointed alias can also resolve to an already initialized workspace.
+    // Report the repairable alias failure before the two owners look like corruption.
+    if (
+      workspacePathEntryExists(params.workspaceDir) &&
+      rowIdentity.workspaceKey !== canonicalIdentity.workspaceKey
+    ) {
+      throw new WorkspaceAliasRepointedError({
+        aliasPath: aliases[0]!.workspacePath,
+        storedWorkspacePath: rowIdentity.workspacePath,
+        currentWorkspacePath: canonicalIdentity.workspacePath,
+      });
+    }
     if (storedIdentity && storedIdentity.workspaceKey !== rowIdentity.workspaceKey) {
       throw new Error("workspace path aliases resolve to conflicting state");
     }
     storedIdentity = rowIdentity;
-  }
-  if (
-    storedIdentity &&
-    workspacePathEntryExists(params.workspaceDir) &&
-    storedIdentity.workspaceKey !== canonicalIdentity.workspaceKey
-  ) {
-    throw new Error("workspace path alias points to a different current target");
   }
   const existingAliasKeys = new Set(rows.map((row) => row.alias_key));
   return {
@@ -173,7 +179,7 @@ function resolveWorkspaceIdentityFromDatabase(params: {
   };
 }
 
-function registerWorkspacePathAliases(params: {
+export function registerWorkspaceStateAliasIdentitiesInTransaction(params: {
   database: WorkspaceStateDatabaseHandle;
   identity: WorkspaceStateIdentity;
   aliases: readonly WorkspaceStateIdentity[];
@@ -224,7 +230,7 @@ export function registerWorkspaceStateAliasesInTransaction(params: {
       aliases.set(alias.workspaceKey, alias);
     }
   }
-  registerWorkspacePathAliases({
+  registerWorkspaceStateAliasIdentitiesInTransaction({
     database: params.database,
     identity: params.identity,
     aliases: [...aliases.values()],
@@ -232,7 +238,7 @@ export function registerWorkspaceStateAliasesInTransaction(params: {
   });
 }
 
-function readSnapshotFromDatabase(params: {
+export function readWorkspaceStateSnapshotFromDatabase(params: {
   identity: WorkspaceStateIdentity;
   database: WorkspaceStateDatabaseHandle;
 }): WorkspaceStateSnapshot {
@@ -322,7 +328,10 @@ export function readWorkspaceStateSnapshot(
       (database) =>
         runSqliteDeferredTransactionSync(database.db, () => {
           const resolution = resolveWorkspaceIdentityFromDatabase({ workspaceDir, database });
-          return readSnapshotFromDatabase({ identity: resolution.identity, database });
+          return readWorkspaceStateSnapshotFromDatabase({
+            identity: resolution.identity,
+            database,
+          });
         }),
       options,
     );
@@ -339,7 +348,7 @@ export function readWorkspaceStateSnapshot(
     const resolution = resolveWorkspaceIdentityFromDatabase({ workspaceDir, database });
     return {
       resolution,
-      snapshot: readSnapshotFromDatabase({ identity: resolution.identity, database }),
+      snapshot: readWorkspaceStateSnapshotFromDatabase({ identity: resolution.identity, database }),
     };
   });
   if (
@@ -357,9 +366,13 @@ export function readWorkspaceStateSnapshot(
       workspacePathEntryExists(workspaceDir) &&
       currentCanonicalIdentity.workspaceKey !== initial.resolution.identity.workspaceKey
     ) {
-      throw new Error("workspace path alias points to a different current target");
+      throw new WorkspaceAliasRepointedError({
+        aliasPath: currentAliases[0]!.workspacePath,
+        storedWorkspacePath: initial.resolution.identity.workspacePath,
+        currentWorkspacePath: currentCanonicalIdentity.workspacePath,
+      });
     }
-    const snapshot = readSnapshotFromDatabase({
+    const snapshot = readWorkspaceStateSnapshotFromDatabase({
       identity: initial.resolution.identity,
       database: writeDatabase,
     });
@@ -370,7 +383,7 @@ export function readWorkspaceStateSnapshot(
           alias,
         ]),
       );
-      registerWorkspacePathAliases({
+      registerWorkspaceStateAliasIdentitiesInTransaction({
         database: writeDatabase,
         identity: initial.resolution.identity,
         aliases: [...aliases.values()],
@@ -397,7 +410,7 @@ export function mergeWorkspaceSetupState(
   return runOpenClawStateWriteTransaction((database) => {
     const resolution = resolveWorkspaceIdentityFromDatabase({ workspaceDir, database });
     const identity = resolution.identity;
-    const snapshot = readSnapshotFromDatabase({ identity, database });
+    const snapshot = readWorkspaceStateSnapshotFromDatabase({ identity, database });
     const bootstrapSeededAt = snapshot.setup.bootstrapSeededAt ?? next.bootstrapSeededAt;
     const setupCompletedAt = snapshot.setup.setupCompletedAt ?? next.setupCompletedAt;
     const merged: WorkspaceSetupState = {
@@ -428,7 +441,7 @@ export function mergeWorkspaceSetupState(
           }),
         ),
     );
-    registerWorkspacePathAliases({
+    registerWorkspaceStateAliasIdentitiesInTransaction({
       database,
       identity,
       aliases: resolution.aliases,
@@ -466,13 +479,13 @@ export function replaceWorkspaceAttestation(params: {
       database,
     });
     const identity = resolution.identity;
-    const snapshot = readSnapshotFromDatabase({ identity, database });
+    const snapshot = readWorkspaceStateSnapshotFromDatabase({ identity, database });
     if (
       snapshot.attestation &&
       snapshot.attestation.attestedAtMs > params.attestedAtMs &&
       snapshot.attestation.attestedAtMs <= updatedAtMs
     ) {
-      registerWorkspacePathAliases({
+      registerWorkspaceStateAliasIdentitiesInTransaction({
         database,
         identity,
         aliases: resolution.aliases,
@@ -518,7 +531,7 @@ export function replaceWorkspaceAttestation(params: {
         ),
       );
     }
-    registerWorkspacePathAliases({
+    registerWorkspaceStateAliasIdentitiesInTransaction({
       database,
       identity,
       aliases: resolution.aliases,
@@ -602,7 +615,7 @@ export function retireWorkspaceRelocationAttestation(params: {
   identity: WorkspaceStateIdentity;
   attestedAtMs: number;
 }): boolean {
-  const snapshot = readSnapshotFromDatabase(params);
+  const snapshot = readWorkspaceStateSnapshotFromDatabase(params);
   if (
     snapshot.setupExists ||
     snapshot.attestation?.attestedAtMs !== params.attestedAtMs ||
@@ -629,9 +642,9 @@ export function clearExpiredWorkspaceStateForVanishedWorkspace(
   return runOpenClawStateWriteTransaction((database) => {
     const resolution = resolveWorkspaceIdentityFromDatabase({ workspaceDir, database });
     const identity = resolution.identity;
-    const snapshot = readSnapshotFromDatabase({ identity, database });
+    const snapshot = readWorkspaceStateSnapshotFromDatabase({ identity, database });
     const preserveRecentState = () => {
-      registerWorkspacePathAliases({
+      registerWorkspaceStateAliasIdentitiesInTransaction({
         database,
         identity,
         aliases: resolution.aliases,

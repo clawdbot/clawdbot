@@ -10,7 +10,10 @@ import { commitNonInteractiveOnboardConfig } from "./config-write.js";
 describe("commitNonInteractiveOnboardConfig", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    writeWizardConfigFile.mockImplementation(async (config: OpenClawConfig) => config);
+    writeWizardConfigFile.mockImplementation(async (config: OpenClawConfig) => ({
+      path: "/tmp/openclaw.json",
+      nextConfig: config,
+    }));
   });
 
   it("keeps the verified config hash on the canonical writer", async () => {
@@ -21,12 +24,14 @@ describe("commitNonInteractiveOnboardConfig", () => {
     await expect(
       commitNonInteractiveOnboardConfig({
         nextConfig,
+        baseConfig: {},
         baseHash: "verified-config-hash",
       }),
     ).resolves.toBe(nextConfig);
 
     expect(writeWizardConfigFile).toHaveBeenCalledWith(nextConfig, {
       allowConfigSizeDrop: false,
+      mergeBase: {},
       baseHash: "verified-config-hash",
     });
   });
@@ -36,11 +41,13 @@ describe("commitNonInteractiveOnboardConfig", () => {
 
     await commitNonInteractiveOnboardConfig({
       nextConfig,
+      baseConfig: {},
       reset: true,
     });
 
     expect(writeWizardConfigFile).toHaveBeenCalledWith(nextConfig, {
       allowConfigSizeDrop: true,
+      mergeBase: {},
     });
   });
 });

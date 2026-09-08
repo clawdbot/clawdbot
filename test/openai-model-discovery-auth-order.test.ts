@@ -19,6 +19,8 @@ import { createTestPluginApi } from "../src/plugin-sdk/plugin-test-api.js";
 import type { ProviderCatalogOutcome } from "../src/plugins/provider-catalog.types.js";
 import * as providerDiscovery from "../src/plugins/provider-discovery.js";
 import * as providerRuntime from "../src/plugins/provider-runtime.runtime.js";
+import { createEmptyPluginRegistry } from "../src/plugins/registry-empty.js";
+import { withPluginRuntimeRegistryScope } from "../src/plugins/runtime/gateway-request-scope.js";
 import type { ProviderPlugin } from "../src/plugins/types.js";
 import { createDeferredCore } from "../src/shared/deferred.js";
 import {
@@ -34,6 +36,17 @@ vi.mock("../src/plugins/provider-discovery.runtime.js", () => ({
   resolvePluginDiscoveryProvidersRuntime: () => discovery.providers,
 }));
 
+function withCatalogProviders<T>(run: () => T): T {
+  const registry = createEmptyPluginRegistry();
+  registry.providers = discovery.providers.map((provider) => ({
+    pluginId: provider.id,
+    provider,
+    source: "test",
+  }));
+  // Exhausted auth must consult the same providers as discovery, without loading a second runtime.
+  return withPluginRuntimeRegistryScope(registry, run);
+}
+
 describe("Provider model discovery auth preparation", () => {
   let state: OpenClawTestState;
   let agentDir: string;
@@ -42,10 +55,6 @@ describe("Provider model discovery auth preparation", () => {
     state = await createOpenClawTestState({ prefix: "catalog-auth-order-", agentEnv: "main" });
     agentDir = state.agentDir();
     discovery.providers = [buildOpenAIProvider()];
-    vi.spyOn(providerRuntime, "formatProviderAuthProfileApiKeyWithPlugin").mockImplementation(
-      async ({ provider, context }) =>
-        discovery.providers.find((candidate) => candidate.id === provider)?.formatApiKey?.(context),
-    );
   });
 
   afterEach(async () => {
@@ -66,22 +75,24 @@ describe("Provider model discovery auth preparation", () => {
       env?: NodeJS.ProcessEnv;
     } = {},
   ) {
-    return planOpenClawModelsJson({
-      context: {
-        cfg: config,
-        discoveryAuthConfig: config,
-        sourceConfigForSecrets: config,
-        agentDir,
-        env: options.env ?? {},
-        envFingerprint: {},
-        providerDiscoveryProviderIds: [options.providerId ?? "openai"],
-        providerDiscoveryTimeoutMs: options.timeoutMs,
-        onProviderCatalogOutcome: (outcome) => options.outcomes?.push(outcome),
-      },
-      authStore: store,
-      existingRaw: "",
-      existingParsed: null,
-    });
+    return withCatalogProviders(() =>
+      planOpenClawModelsJson({
+        context: {
+          cfg: config,
+          discoveryAuthConfig: config,
+          sourceConfigForSecrets: config,
+          agentDir,
+          env: options.env ?? {},
+          envFingerprint: {},
+          providerDiscoveryProviderIds: [options.providerId ?? "openai"],
+          providerDiscoveryTimeoutMs: options.timeoutMs,
+          onProviderCatalogOutcome: (outcome) => options.outcomes?.push(outcome),
+        },
+        authStore: store,
+        existingRaw: "",
+        existingParsed: null,
+      }),
+    );
   }
 
   async function createChutesCatalogFixture() {
@@ -831,14 +842,16 @@ describe("provider catalog late-result finalization", () => {
       ];
       const outcomes: ProviderCatalogOutcome[] = [];
       const discover = (timeoutMs?: number) =>
-        resolveImplicitProviders({
-          config: { auth: { order: { [providerId]: [profileId] } } },
-          agentDir: state.agentDir(),
-          authStore: store,
-          env: {},
-          providerDiscoveryTimeoutMs: timeoutMs,
-          onProviderCatalogOutcome: (outcome) => outcomes.push(outcome),
-        });
+        withCatalogProviders(() =>
+          resolveImplicitProviders({
+            config: { auth: { order: { [providerId]: [profileId] } } },
+            agentDir: state.agentDir(),
+            authStore: store,
+            env: {},
+            providerDiscoveryTimeoutMs: timeoutMs,
+            onProviderCatalogOutcome: (outcome) => outcomes.push(outcome),
+          }),
+        );
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       const pending = discover(timedOut ? 25 : undefined);
       try {

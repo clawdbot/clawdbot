@@ -3,6 +3,22 @@
  */
 import type { ModelApi } from "../config/types.models.js";
 
+/** Private selected-request facts; omission means the host cannot establish applicability. */
+export type ProviderFastModePolicyContext = {
+  provider: string;
+  modelId: string;
+  api?: string;
+  baseUrl?: string;
+  authMode?: string;
+  runtimeId?: string;
+  modelParams?: Record<string, unknown>;
+  params?: Record<string, unknown>;
+  requestCapabilities: {
+    endpointClass: string;
+    allowsAnthropicServiceTier: boolean;
+  };
+};
+
 export type {
   BedrockDiscoveryConfig,
   ModelApi,

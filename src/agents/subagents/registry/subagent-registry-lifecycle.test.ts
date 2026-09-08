@@ -5259,6 +5259,68 @@ describe("requester settle wake trigger", () => {
     expect(maybeWakeRequesterAfterAllChildrenSettled).not.toHaveBeenCalled();
   });
 
+  it("does not transfer a partial batch after a suppressed delete-mode child retires", async () => {
+    const entry = createRunEntry({
+      runId: "suppressed-child",
+      requesterTurnRunId: "requester-turn",
+      cleanup: "delete",
+      expectsCompletionMessage: true,
+    });
+    const sibling = createRunEntry({
+      runId: "remaining-child",
+      childSessionKey: "agent:main:subagent:remaining",
+      requesterTurnRunId: "requester-turn",
+      requesterTurnYielded: true,
+      expectsCompletionMessage: true,
+      endedAt: 4_000,
+      delivery: { status: "delivered" },
+    });
+    const runs = new Map([entry, sibling].map((child) => [child.runId, child]));
+    const acceptedSessionSpawns = [entry, sibling].map((child) => ({
+      runId: child.runId,
+      childSessionKey: child.childSessionKey,
+      expectsCompletionMessage: true,
+    }));
+    const persistOrThrow = vi.fn();
+    const settleWake = vi.fn(async () => false);
+    const controller = createLifecycleController({
+      entry,
+      runs,
+      persistOrThrow,
+      maybeWakeRequesterAfterAllChildrenSettled: settleWake,
+      runSubagentAnnounceFlow: async (params) => {
+        params.onDeliveryResult?.({
+          delivered: false,
+          path: "direct",
+          reason: "delivery_suppressed",
+          error: "cancelled_by_message_sending_hook",
+          terminal: true,
+          disposition: "intentional_non_delivery",
+        });
+        return "intentional_non_delivery";
+      },
+    });
+    await completeRun(controller, entry, {
+      triggerCleanup: true,
+      terminalReply: { disposition: "visible", text: "Suppressed child result" },
+    });
+    await waitForLifecycleState(() => expect(runs.has(entry.runId)).toBe(false));
+    expect(entry.delivery?.status).toBe("failed");
+    const before = structuredClone(runs);
+    persistOrThrow.mockClear();
+    expect(
+      controller.settleRequesterTurnAfterSessionSpawns({
+        requesterSessionKey: entry.requesterSessionKey,
+        requesterTurnRunId: "requester-turn",
+        requesterYielded: true,
+        acceptedSessionSpawns,
+      }),
+    ).toBe(false);
+    expect(runs).toEqual(before);
+    expect(persistOrThrow).not.toHaveBeenCalled();
+    expect(settleWake).not.toHaveBeenCalled();
+  });
+
   it("marks yielded intentional non-delivery blocked after requester-settle exhaustion", async () => {
     const entry = createRunEntry({
       endedAt: 4_000,

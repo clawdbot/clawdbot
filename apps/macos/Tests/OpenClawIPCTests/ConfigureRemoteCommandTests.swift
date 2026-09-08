@@ -1,9 +1,102 @@
+import Darwin
 import Foundation
 import Testing
 @testable import OpenClawMacCLI
 
 @Suite(.serialized)
 struct ConfigureRemoteCommandTests {
+    @Test(arguments: ["token", "password"], ["file", "stdin", "argv"])
+    @MainActor func `configure remote reads secret sources and warns only for argv`(
+        kind: String,
+        source: String) async throws
+    {
+        // Standard input belongs to the test process; keep it separate from parallel runner events.
+        let result = try await #require(processExitsWith: .success, observing: [\.standardErrorContent]) { [
+            kind = kind as String,
+            source = source as String,
+        ] in
+            try await ConfigureRemoteCommandTests.checkSecretSource(kind: kind, source: source)
+        }
+        let warningText = String(decoding: result.standardErrorContent, as: UTF8.self)
+        if source == "argv" {
+            #expect(warningText.contains("--\(kind) is deprecated; use --\(kind)-file or --\(kind)-stdin."))
+        } else {
+            #expect(!warningText.contains("deprecated"))
+        }
+        #expect(!warningText.contains("synthetic-\(kind)"))
+    }
+
+    @MainActor private static func checkSecretSource(kind: String, source: String) async throws {
+        let directory = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-configure-secret-\(UUID().uuidString)", isDirectory: true)
+        try FileManager().createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager().removeItem(at: directory) }
+        let configURL = directory.appendingPathComponent("openclaw.json")
+        let secretURL = directory.appendingPathComponent("secret.txt")
+        let secret = "synthetic-\(kind)"
+        try Data("\(secret)\r\n\n".utf8).write(to: secretURL)
+        let secretArguments = switch source {
+        case "file": ["--\(kind)-file", secretURL.path]
+        case "stdin": ["--\(kind)-stdin"]
+        default: ["--\(kind)", secret]
+        }
+        let transportArguments = kind == "token"
+            ? ["--ssh-target", "alice@gateway.example"]
+            : ["--direct-url", "wss://gateway.example"]
+
+        try await TestIsolation.withEnvValues(["OPENCLAW_CONFIG_PATH": configURL.path]) {
+            let configure: () throws -> Void = {
+                try configureRemote(
+                    ConfigureRemoteOptions.parse(transportArguments + secretArguments),
+                    defaultsSuites: [])
+            }
+            if source == "stdin" {
+                let input = try FileHandle(forReadingFrom: secretURL)
+                defer { try? input.close() }
+                try self.withStandardInput(from: input, configure)
+            } else {
+                try configure()
+            }
+        }
+
+        let root = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: configURL)) as? [String: Any])
+        let gateway = try #require(root["gateway"] as? [String: Any])
+        let remote = try #require(gateway["remote"] as? [String: Any])
+        try #require(remote[kind] as? String == secret)
+    }
+
+    @Test(arguments: ["token", "password"])
+    func `configure remote rejects conflicting secret sources before reading input`(kind: String) {
+        for arguments in [
+            ["--\(kind)", "synthetic-secret", "--\(kind)-file", "/does-not-exist"],
+            ["--\(kind)-file", "/does-not-exist", "--\(kind)", "synthetic-secret"],
+            ["--\(kind)", "synthetic-secret", "--\(kind)-stdin"],
+            ["--\(kind)-stdin", "--\(kind)", "synthetic-secret"],
+            ["--\(kind)-file", "/does-not-exist", "--\(kind)-stdin"],
+            ["--\(kind)-stdin", "--\(kind)-file", "/does-not-exist"],
+            ["--\(kind)-file"],
+            ["--\(kind)-file", "--json"],
+            ["--\(kind)", "--\(kind)-file", "/does-not-exist"],
+            ["--token-stdin", "--password-stdin"],
+        ] {
+            #expect(throws: Error.self) { try ConfigureRemoteOptions.parse(arguments) }
+        }
+    }
+
+    private static func withStandardInput(
+        from handle: FileHandle,
+        _ body: () throws -> Void) throws
+    {
+        let original = dup(STDIN_FILENO)
+        try #require(original >= 0)
+        defer {
+            dup2(original, STDIN_FILENO)
+            close(original)
+        }
+        try #require(dup2(handle.fileDescriptor, STDIN_FILENO) >= 0)
+        try body()
+    }
+
     @Test @MainActor func `configure remote writes ssh config and app defaults`() async throws {
         let configURL = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-configure-remote-\(UUID().uuidString).json")
@@ -60,6 +153,51 @@ struct ConfigureRemoteCommandTests {
                 #expect(defaults.bool(forKey: "openclaw.onboardingSeen") == true)
                 #expect(defaults.string(forKey: "openclaw.remoteCliPath") == "/opt/homebrew/bin/openclaw")
             }
+        }
+    }
+
+    @Test @MainActor func `configure remote clears host defaults only when target changes`() async throws {
+        let configURL = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-configure-retarget-\(UUID().uuidString).json")
+        let suite = "ConfigureRemoteCommandTests.retarget.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer {
+            try? FileManager().removeItem(at: configURL)
+            defaults.removePersistentDomain(forName: suite)
+        }
+
+        try await TestIsolation.withIsolatedState(env: ["OPENCLAW_CONFIG_PATH": configURL.path]) {
+            try configureRemote(
+                .init(
+                    sshTarget: "alice@first.example",
+                    identity: "/tmp/first-identity",
+                    projectRoot: "/srv/first",
+                    cliPath: "/opt/first/openclaw"),
+                defaultsSuites: [suite])
+            try configureRemote(.init(sshTarget: "alice@first.example"), defaultsSuites: [suite])
+            #expect(defaults.string(forKey: "openclaw.remoteIdentity") == "/tmp/first-identity")
+            #expect(defaults.string(forKey: "openclaw.remoteProjectRoot") == "/srv/first")
+            #expect(defaults.string(forKey: "openclaw.remoteCliPath") == "/opt/first/openclaw")
+
+            try configureRemote(
+                .init(sshTarget: "alice@second.example", cliPath: "/opt/second/openclaw"),
+                defaultsSuites: [suite])
+            #expect(defaults.string(forKey: "openclaw.remoteIdentity") == nil)
+            #expect(defaults.string(forKey: "openclaw.remoteProjectRoot") == nil)
+            #expect(defaults.string(forKey: "openclaw.remoteCliPath") == "/opt/second/openclaw")
+
+            try configureRemote(.init(directUrl: "wss://third.example"), defaultsSuites: [suite])
+            #expect(defaults.string(forKey: "openclaw.remoteTarget") == nil)
+            #expect(defaults.string(forKey: "openclaw.remoteIdentity") == nil)
+            #expect(defaults.string(forKey: "openclaw.remoteProjectRoot") == nil)
+            #expect(defaults.string(forKey: "openclaw.remoteCliPath") == nil)
+
+            try configureRemote(
+                .init(directUrl: "wss://third.example", projectRoot: "/srv/third"), defaultsSuites: [suite])
+            try configureRemote(.init(directUrl: "wss://third.example"), defaultsSuites: [suite])
+            #expect(defaults.string(forKey: "openclaw.remoteProjectRoot") == "/srv/third")
+            try configureRemote(.init(directUrl: "wss://fourth.example"), defaultsSuites: [suite])
+            #expect(defaults.string(forKey: "openclaw.remoteProjectRoot") == nil)
         }
     }
 

@@ -252,10 +252,17 @@ An explicit `--config` run through `scripts/run-vitest.mjs` keeps its stricter
 named-file policy and does not permit empty named-file runs. Plugin
 `--allow-no-tests` and `--allow-empty-after-exclude` controls are unchanged.
 
-Codex and other linked/sparse worktrees can run local tests and checks. When the
-dependency install is ready, use the normal commands above. If pnpm would
-reconcile a shared install, use the direct Node harnesses to bypass that
-package-manager preflight:
+Codex and other linked/sparse worktrees can run local tests and checks. Tooling
+requires prepared dependencies; it does not create an implicit link to the
+primary checkout. Keep any existing borrowed install unchanged while another
+task uses it. A source install's `pnpm:devPreinstall` check refuses borrowed links
+at the checkout-root module directories and their `.pnpm` directories before
+normal dependency reconciliation. It does not inspect every workspace package's
+dependencies or lock paths against concurrent replacement; `--ignore-scripts`
+skips it, and alternate pnpm directory settings are not exhaustively validated.
+When dependencies are ready, use the normal commands above. To avoid pnpm's
+package-manager preflight against an existing shared install, use these direct
+Node harnesses:
 
 - Bounded focused proof with ready dependencies:
   `node scripts/run-vitest.mjs <path-or-filter>`.
@@ -267,9 +274,8 @@ reconcile dependencies before the remote wrapper starts.
 
 ## Core commands
 
-Run the test toolchain on Node 22.22.3+, Node 24.15+, or Node 26+. Vitest 5
-excludes Node 25 from its declared engine range; packaged OpenClaw runtime
-support for Node 25.9+ is unchanged.
+Run the test toolchain on Node 24.16+ or Node 26.1+, matching the packaged
+runtime floor. Older Node bindings can truncate SQLite TEXT values at embedded NUL characters.
 
 The test toolchain pins stable Vitest `5.0.0`, including its browser and coverage
 packages. Use `describe(name, { concurrent: false }, callback)` for ordered
@@ -321,7 +327,7 @@ and runtime parents on TypeScript. Importing a declared subprocess entrypoint
 compiles the fixed test entry set and its workspace dependencies into one fresh
 invocation directory under `.artifacts/vitest-workers/`.
 
-The ten declared application entries run as plain Node JavaScript without a
+The declared application entries run as plain Node JavaScript without a
 TypeScript loader: SQLite read-only snapshots, database verification, Tailscale
 route ownership, the service relay, its POSIX and Windows anchors, the memory
 plugin's KNN child, session transcript archive and reconciliation workers, and
@@ -338,8 +344,17 @@ runtime graph while retaining the durable-write race and process-exit assertions
 Doctor process output tests with bundled plugins disabled reuse that compiled CLI
 inside one lazily created package fixture per test run, keeping real UI checks on
 fixture-owned assets and each scenario’s state separate. Standalone and watch runs
-use live source inside the same fixture. Other
-Worker-thread entries and arbitrary source CLI fixtures remain outside this declared set.
+use live source inside the same fixture.
+
+Isolated Doctor config scripts also share the prepared config-flow, health-writer,
+and install-index modules. Each case still starts a fresh process with separate
+state; standalone and watch runs resolve the original TypeScript entrypoints.
+
+The prepared model-catalog worker also uses this compiled generation. Separate
+prepared model generations still own separate worker threads, and their choice
+of source or built plugin artifacts stays independent of worker compilation.
+Other worker-thread entries and arbitrary source CLI fixtures remain outside
+this declared set.
 
 The session-title and child-link retention tests declare their title-reader,
 session-utils, and listing roots in this same generation. Each fresh
@@ -982,7 +997,7 @@ Drives the interactive wizard via a pseudo-tty, verifies config/workspace/sessio
 
 ## QR import smoke (Docker)
 
-Ensures the maintained QR runtime helper loads under the supported Docker Node runtimes (Node 24 default, Node 22 compatible):
+Ensures the maintained QR runtime helper loads under the default Docker Node 24 runtime:
 
 ```bash
 pnpm test:docker:qr

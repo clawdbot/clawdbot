@@ -1,8 +1,10 @@
+import { setTimeout as sleep } from "node:timers/promises";
 import type { SlackQaScenarioEnvironment } from "./scenario-environment.js";
 import { runSlackApprovalScenario } from "./slack-live.approvals.js";
 import { runSlackCodexApprovalScenario } from "./slack-live.codex-approval-runner.js";
 import type {
   SlackQaMessageScenarioRun,
+  SlackObservedMessage,
   SlackQaScenarioImplementation,
 } from "./slack-live.contracts.js";
 import {
@@ -15,6 +17,31 @@ import {
   collectSlackBlockText,
   sendSlackChannelMessage,
 } from "./slack-live.observations.js";
+
+async function waitForSlackPreReplyCapture(params: {
+  capture: NonNullable<SlackQaMessageScenarioRun["captureBeforeReply"]>;
+  channelId: string;
+  readMessages: () => Promise<SlackObservedMessage[]>;
+  scenarioId: string;
+  timeoutMs: number;
+}) {
+  const deadline = Date.now() + params.timeoutMs;
+  while (true) {
+    const messages = (await params.readMessages()).filter(
+      (message) => message.channelId === params.channelId,
+    );
+    if (params.capture(messages)) {
+      return;
+    }
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) {
+      throw new Error(
+        `timed out after ${params.timeoutMs}ms waiting for ${params.scenarioId} write capture`,
+      );
+    }
+    await sleep(Math.min(25, remainingMs));
+  }
+}
 
 export {
   slackQaAllowlistBlockScenario,
@@ -85,6 +112,17 @@ async function runSlackMessageScenario(params: {
       return {
         details: ["no reply", beforeRunDetails, afterNoReplyDetails].filter(Boolean).join("; "),
       };
+    }
+    if (params.run.captureBeforeReply) {
+      // Native presentation identity belongs to the successful write capture. Resolve it
+      // before shared channel history can evict the earlier message while awaiting the final reply.
+      await waitForSlackPreReplyCapture({
+        capture: params.run.captureBeforeReply,
+        channelId,
+        readMessages: () => params.environment.readMessageWrites(messageWriteCursor),
+        scenarioId: params.scenarioId,
+        timeoutMs: params.timeoutMs,
+      });
     }
     const reply = await waitForSlackScenarioReply({
       channelId,

@@ -70,7 +70,7 @@ describe("stripAssistantInternalScaffolding", () => {
       expected: "Hello\n",
     },
     {
-      name: "trims leading whitespace after stripping scaffolding",
+      name: "removes leading blank lines after stripping scaffolding",
       input: [
         "<thinking>",
         "secret",
@@ -81,7 +81,7 @@ describe("stripAssistantInternalScaffolding", () => {
         "</relevant-memories>",
         "  Visible",
       ].join("\n"),
-      expected: "Visible",
+      expected: "  Visible",
     },
     {
       name: "preserves unfinished reasoning text while still stripping memory blocks",
@@ -1075,4 +1075,11 @@ describe("stripDowngradedToolCallText", () => {
 
     expect(stripDowngradedToolCallText(input)).toBe("Visible answer");
   });
+});
+
+it("preserves indentation after removing leading assistant scaffolding", () => {
+  expect(stripAssistantInternalScaffolding("<thinking>hidden</thinking>\n\n    *literal*")).toBe(
+    "    *literal*",
+  );
+  expect(stripAssistantInternalScaffolding("    *literal*")).toBe("    *literal*");
 });

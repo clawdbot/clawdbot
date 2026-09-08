@@ -200,6 +200,52 @@ describe("runtime snapshot state", () => {
     },
   );
 
+  it("matches independently loaded config with equivalent resolution facts", () => {
+    const source = createProviderConfigFixture();
+    const freshRead = structuredClone(source);
+    const facts = () =>
+      createConfigResolutionFacts(
+        [],
+        new Map([["models.providers.openai.apiKey", "PROVIDER_KEY"]]),
+      );
+    setConfigResolutionFacts(source, facts());
+    setConfigResolutionFacts(freshRead, facts());
+    const runtime = createProviderConfigFixture("synthetic-runtime-key");
+    setRuntimeConfigSnapshot(runtime, source);
+
+    expect(getConfigResolutionFacts(freshRead)).not.toBe(getConfigResolutionFacts(source));
+    expect(createRuntimeConfigReader(freshRead)()).toBe(runtime);
+  });
+
+  it.each(["absent", "empty", "different-ref", "different-provider", "resolved", "unresolved"])(
+    "does not reuse runtime for same-byte config with %s resolution facts",
+    (kind) => {
+      const source = createProviderConfigFixture();
+      const input = structuredClone(source);
+      const refs = new Map([["models.providers.openai.apiKey", "PROVIDER_KEY"]]);
+      setConfigResolutionFacts(source, createConfigResolutionFacts([], refs));
+      if (kind !== "absent") {
+        setConfigResolutionFacts(
+          input,
+          createConfigResolutionFacts(
+            kind === "unresolved"
+              ? [{ configPath: "models.providers.openai.apiKey", varName: "PROVIDER_KEY" }]
+              : [],
+            kind === "resolved" || kind === "empty"
+              ? new Map()
+              : kind === "different-ref"
+                ? new Map([["models.providers.openai.apiKey", "OTHER_KEY"]])
+                : refs,
+            kind === "different-provider" ? "other" : "default",
+            kind === "resolved" ? refs : new Map(),
+          ),
+        );
+      }
+      setRuntimeConfigSnapshot(createProviderConfigFixture("synthetic-runtime-key"), source);
+      expect(createRuntimeConfigReader(input)()).toBe(input);
+    },
+  );
+
   it("clears runtime source snapshot when runtime snapshot is cleared", () => {
     setRuntimeConfigSnapshot({ gateway: { port: 18789 } }, { gateway: { port: 18789 } });
     resetRuntimeConfigState();

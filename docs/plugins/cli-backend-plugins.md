@@ -271,7 +271,9 @@ prompt, session, and tool availability; it yields the backend's existing structu
 stream records. Preserve the prepared command, `argv0`, and interpreter or script
 prefix in `args` when constructing the CLI invocation. `argv0` preserves
 the invocation name of a PATH shim. Optional `promptContext.prependContext` and `promptContext.appendContext`
-are private prompt-build additions, separate from the ordinary `prompt`. Transport
+are private prompt-build additions and bounded saved session notes, separate from
+the ordinary `prompt`. Saved notes are quoted reference data and may repeat on
+resumed turns; they do not assert that a native turn previously consumed them. Transport
 them through the native runtime's private context mechanism; never record them as
 operator-authored input. OpenClaw's policy and observation hooks still receive the
 complete logical prompt. Native tool actions must use the provided, run-bound
@@ -279,6 +281,14 @@ complete logical prompt. Native tool actions must use the provided, run-bound
 authority. OpenClaw retains cancellation, watchdogs, session policy, and MCP
 grant ownership. Paired-node execution and
 manual compaction continue through the existing host-managed process path.
+
+Reusable transports receive a run-bound `liveSession` capability. Before creating
+an initial or replacement process, await `liveSession.restart()` unless the
+current process is reusable. This joins the previous process exit and its
+host-owned resource cleanup; waiting for the child exit alone is insufficient.
+The host rejects restart when the caller is revoked or an exact live generation
+must be preserved. `register()` remains a synchronous admission check and refuses
+replacement while cleanup is unresolved.
 
 `runtimeArtifact` is plugin-owned. It is consulted
 only when a live inference turn mints or revalidates verified setup authority;

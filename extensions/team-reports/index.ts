@@ -1,3 +1,5 @@
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { parseTeamReportsConfig, resolveTeamReportsConfig } from "./src/config.js";
 import { registerTeamReportsGatewayMethods } from "./src/gateway-methods.js";
@@ -116,8 +118,12 @@ export default definePluginEntry({
       handler: createTeamReportsHttpHandler({
         basePath: initial.basePath,
         displayTimezone: initial.displayTimezone,
+        // Source checkouts, the flattened dist bundle, and installed packages all keep assets/ at the plugin root.
+        assetsDir: path.join(api.rootDir ?? path.dirname(fileURLToPath(import.meta.url)), "assets"),
         getStore: () => store,
         status: () => requireScheduler().status(),
+        health: () => requireScheduler().health(),
+        orgs: () => scheduler?.orgs() ?? initial.github.orgs,
         people: () => scheduler?.people() ?? initial.people ?? [],
       }),
     });

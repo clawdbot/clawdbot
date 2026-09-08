@@ -20,7 +20,11 @@ import type {
   GatewayServiceReadOptions,
   GatewayServiceRenderArgs,
 } from "./service-types.js";
-import { WINDOWS_TASK_SUPERVISOR_FLAG } from "./windows-task-supervisor-contract.js";
+import {
+  WINDOWS_TASK_LAUNCHER_ACTIVE,
+  WINDOWS_TASK_LAUNCHER_ENV,
+  WINDOWS_TASK_SUPERVISOR_FLAG,
+} from "./windows-task-supervisor-contract.js";
 
 export function resolveTaskName(env: GatewayServiceEnv): string {
   const override = env.OPENCLAW_WINDOWS_TASK_NAME?.trim();
@@ -339,7 +343,10 @@ export function buildTaskScript({
       if (
         value === undefined ||
         (!value && key.toUpperCase() !== "NODE_OPTIONS") ||
-        key.toUpperCase() === "PATH"
+        key.toUpperCase() === "PATH" ||
+        // This preference chooses the launcher at install time. Persisting it
+        // would overwrite the live WScript marker inherited by the supervisor.
+        key.toUpperCase() === WINDOWS_TASK_LAUNCHER_ENV
       ) {
         continue;
       }
@@ -391,6 +398,7 @@ function quoteVbsRunCommand(scriptPath: string): string {
 export function buildHiddenLauncherScript(params: {
   description?: string;
   scriptPath: string;
+  taskSupervisor?: boolean;
 }): string {
   const lines = [];
   const trimmedDescription = params.description?.trim();
@@ -398,9 +406,13 @@ export function buildHiddenLauncherScript(params: {
     assertNoCmdLineBreak(trimmedDescription, "Hidden launcher description");
     lines.push(`' ${trimmedDescription}`);
   }
-  lines.push(
-    `WScript.Quit CreateObject("WScript.Shell").Run(${quoteVbsRunCommand(params.scriptPath)}, 0, True)`,
-  );
+  lines.push('Set shell = CreateObject("WScript.Shell")');
+  if (params.taskSupervisor) {
+    lines.push(
+      `shell.Environment("Process")("${WINDOWS_TASK_LAUNCHER_ENV}") = "${WINDOWS_TASK_LAUNCHER_ACTIVE}"`,
+    );
+  }
+  lines.push(`WScript.Quit shell.Run(${quoteVbsRunCommand(params.scriptPath)}, 0, True)`);
   return `${lines.join("\r\n")}\r\n`;
 }
 

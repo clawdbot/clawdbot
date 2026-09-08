@@ -182,6 +182,27 @@ async function prepareAdmission(
 }
 
 describe("host-owned current admission annotation", () => {
+  it.each([undefined, "external_user", "inter_session", "internal_system"] as const)(
+    "annotates unchanged %s provenance after transcript persistence",
+    async (kind) => {
+      const provenance = kind ? { kind, sourceTool: "heartbeat" } : undefined;
+      await withAdmission(
+        async (f) => {
+          await f.annotate();
+          expect(f.recorder.getPersistedMessage?.()).toMatchObject({
+            content: "prompt",
+            ...(provenance ? { provenance } : {}),
+            __openclaw: { mirrorIdentity: "native-turn:prompt" },
+          });
+        },
+        {
+          input: { text: "prompt", ...(provenance ? { provenance } : {}) },
+          beforeMessageWrite: ({ message }) => message,
+        },
+      );
+    },
+  );
+
   it.each(["staged", "collected"] as const)(
     "refreshes only the admitted %s input while preserving source custody",
     async (kind) => {

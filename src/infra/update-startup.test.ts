@@ -5,6 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { getRemoteModelCatalogProviderOverlay } from "../model-catalog/remote-overlay.js";
+import { setRemoteModelCatalogOverlaySourcesForTest } from "../model-catalog/remote-overlay.test-support.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { readConfigMachineState } from "../state/config-machine-state.js";
 import {
@@ -3006,6 +3008,201 @@ describe("update-startup", () => {
     await vi.advanceTimersByTimeAsync(1);
     expect(refreshRemoteModelCatalogMock).toHaveBeenCalledTimes(2);
     await stop();
+  });
+
+  it.each(["updated", "fresh", "unchanged"] as const)(
+    "announces a pending catalog from another process after a %s check only once",
+    async (status) => {
+      const sourceUrl = "https://catalog.example.test/catalog.json";
+      const cfg: OpenClawConfig = {
+        update: { channel: "extended-stable", checkOnStart: false },
+        models: { catalogRefresh: { url: sourceUrl } },
+      };
+      const bundle = (generatedAt: number, id: string) => ({
+        schemaVersion: 1,
+        sourceCommit: "synthetic-catalog",
+        generatedAt,
+        providers: { anthropic: { models: [{ id }] } },
+      });
+      const stored = {
+        id: 1,
+        bundle_json: JSON.stringify(bundle(200, "startup-model")),
+        generated_at: 200,
+        min_version: null,
+        source_url: sourceUrl,
+        etag: null,
+        last_modified: null,
+        checked_at: Date.now(),
+      };
+      setRemoteModelCatalogOverlaySourcesForTest({
+        bundledGeneratedAt: () => 100,
+        readStoredCatalog: () => stored,
+      });
+      const info = vi.fn();
+      const check = createTestUpdateCheck({ cfg, log: { info }, isNixMode: false });
+      try {
+        expect(getRemoteModelCatalogProviderOverlay(cfg, "anthropic")?.models).toEqual([
+          { id: "startup-model" },
+        ]);
+        stored.bundle_json = JSON.stringify(bundle(300, "downloaded-model"));
+        stored.generated_at = 300;
+        const counts = { providers: 1, models: 1, generatedAt: 300 };
+        refreshRemoteModelCatalogMock.mockResolvedValue(
+          status === "fresh" ? { status, ...counts, nextCheckInMs: 1_000 } : { status, ...counts },
+        );
+        check.start();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(info).toHaveBeenCalledWith(
+          "remote model catalog downloaded; restart the Gateway to apply it",
+          { providers: 1, models: 1, generatedAt: 300 },
+        );
+        await vi.advanceTimersByTimeAsync(status === "fresh" ? 1_000 : 6 * 60 * 60_000);
+        expect(
+          info.mock.calls.filter(([message]) => message.includes("restart the Gateway")),
+        ).toHaveLength(1);
+        expect(getRemoteModelCatalogProviderOverlay(cfg, "anthropic")?.models).toEqual([
+          { id: "startup-model" },
+        ]);
+      } finally {
+        await check.stop();
+        refreshRemoteModelCatalogMock.mockReset().mockResolvedValue({
+          status: "unchanged",
+          providers: 1,
+          models: 1,
+          generatedAt: 1_753_500_000_000,
+        });
+        setRemoteModelCatalogOverlaySourcesForTest();
+      }
+    },
+  );
+
+  it("discards a pending notice when the selected source changes during refresh", async () => {
+    const sourceUrl = "https://catalog.example.test/catalog.json";
+    const cfg: OpenClawConfig = {
+      update: { channel: "extended-stable", checkOnStart: false },
+      models: { catalogRefresh: { url: sourceUrl } },
+    };
+    let stored: ReturnType<
+      typeof import("../model-catalog/remote-store.js").readRemoteModelCatalog
+    > = undefined;
+    setRemoteModelCatalogOverlaySourcesForTest({
+      bundledGeneratedAt: () => 100,
+      readStoredCatalog: () => stored,
+    });
+    expect(getRemoteModelCatalogProviderOverlay(cfg, "anthropic")).toBeUndefined();
+    stored = {
+      id: 1,
+      generated_at: 300,
+      min_version: null,
+      source_url: sourceUrl,
+      etag: null,
+      last_modified: null,
+      checked_at: Date.now(),
+      bundle_json: JSON.stringify({
+        schemaVersion: 1,
+        generatedAt: 300,
+        sourceCommit: "synthetic-catalog",
+        providers: { anthropic: { models: [{ id: "downloaded-model" }] } },
+      }),
+    };
+    const finished = createDeferred<Awaited<ReturnType<typeof refreshRemoteModelCatalogMock>>>();
+    refreshRemoteModelCatalogMock.mockImplementationOnce(() => finished.promise);
+    const info = vi.fn();
+    let currentConfig = cfg;
+    const check = createGatewayUpdateCheck({
+      getConfig: () => currentConfig,
+      log: { info },
+      isNixMode: false,
+    });
+    try {
+      check.start();
+      await vi.advanceTimersByTimeAsync(0);
+      currentConfig = {
+        ...cfg,
+        models: { catalogRefresh: { url: "https://mirror.example.test/catalog.json" } },
+      };
+      finished.resolve({
+        status: "fresh",
+        generatedAt: 300,
+        providers: 1,
+        models: 1,
+        nextCheckInMs: 1_000,
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(info).toHaveBeenCalledWith(
+        "remote model catalog check superseded; deferred to the next check",
+      );
+      expect(info.mock.calls.some(([message]) => message.includes("restart the Gateway"))).toBe(
+        false,
+      );
+    } finally {
+      finished.resolve({ status: "disabled", providers: 0, models: 0 });
+      await check.stop();
+      setRemoteModelCatalogOverlaySourcesForTest();
+    }
+  });
+
+  it("retries failed notice inspection at the remaining fresh-cache interval", async () => {
+    const sourceUrl = "https://catalog.example.test/catalog.json";
+    const cfg: OpenClawConfig = {
+      update: { channel: "extended-stable", checkOnStart: false },
+      models: { catalogRefresh: { url: sourceUrl } },
+    };
+    let stored: ReturnType<
+      typeof import("../model-catalog/remote-store.js").readRemoteModelCatalog
+    > = undefined;
+    setRemoteModelCatalogOverlaySourcesForTest({
+      bundledGeneratedAt: () => 100,
+      readStoredCatalog: () => stored,
+    });
+    expect(getRemoteModelCatalogProviderOverlay(cfg, "anthropic")).toBeUndefined();
+    stored = {
+      id: 1,
+      bundle_json: "{",
+      generated_at: 300,
+      min_version: null,
+      source_url: sourceUrl,
+      etag: null,
+      last_modified: null,
+      checked_at: Date.now(),
+    };
+    refreshRemoteModelCatalogMock.mockResolvedValue({
+      status: "fresh",
+      generatedAt: 300,
+      providers: 1,
+      models: 1,
+      nextCheckInMs: 1_000,
+    });
+    const info = vi.fn();
+    const check = createTestUpdateCheck({ cfg, log: { info }, isNixMode: false });
+    try {
+      check.start();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(info).toHaveBeenCalledWith("remote model catalog check failed", {
+        error: expect.stringContaining("SyntaxError"),
+      });
+      stored.bundle_json = JSON.stringify({
+        schemaVersion: 1,
+        generatedAt: 300,
+        sourceCommit: "synthetic-catalog",
+        providers: { anthropic: { models: [{ id: "downloaded-model" }] } },
+      });
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(info).toHaveBeenCalledWith(
+        "remote model catalog downloaded; restart the Gateway to apply it",
+        { providers: 1, models: 1, generatedAt: 300 },
+      );
+      expect(getRemoteModelCatalogProviderOverlay(cfg, "anthropic")).toBeUndefined();
+    } finally {
+      await check.stop();
+      refreshRemoteModelCatalogMock.mockReset().mockResolvedValue({
+        status: "unchanged",
+        providers: 1,
+        models: 1,
+        generatedAt: 1_753_500_000_000,
+      });
+      setRemoteModelCatalogOverlaySourcesForTest();
+    }
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

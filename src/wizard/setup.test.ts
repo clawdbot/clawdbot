@@ -12,6 +12,7 @@ import {
 } from "../agents/auth-profiles/oauth-test-utils.js";
 import { upsertAuthProfileWithLock } from "../agents/auth-profiles/profiles.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../agents/workspace.js";
+import { committedConfigFiles } from "../commands/committed-config.test-support.js";
 import { ConfigMutationConflictError } from "../config/config.js";
 import { createConfigIO as createRealConfigIO } from "../config/io.factory.js";
 import { coerceConfig } from "../config/io.read-helpers.js";
@@ -171,8 +172,9 @@ function providerPluginStub(
 const healthCommand = vi.hoisted(() => vi.fn(async () => {}));
 const ensureWorkspaceAndSessions = vi.hoisted(() => vi.fn(async () => {}));
 const ensureOnboardingConfig = vi.hoisted(() =>
-  vi.fn(async ({ config }: { config: OpenClawConfig }) => ({
+  vi.fn(async ({ config, baseConfig }: { config: OpenClawConfig; baseConfig: OpenClawConfig }) => ({
     config,
+    configBase: baseConfig,
     agentId: "main",
     bootstrapPending: true,
   })),
@@ -447,7 +449,7 @@ vi.mock("../config/config.js", async (importActual) => {
             writeOptions: params.writeOptions,
             afterWrite: { mode: "auto" },
           });
-          return { nextConfig: committed.config };
+          return committedConfigFiles.write(committed.config, snapshot.path);
         } catch (error) {
           if (
             !(error instanceof actual.ConfigMutationConflictError) ||
@@ -613,6 +615,7 @@ describe("runSetupWizard", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    committedConfigFiles.clear();
     promptAuthChoiceGrouped.mockReset();
     promptAuthChoiceGrouped.mockResolvedValue("skip");
     applyAuthChoice.mockReset();
@@ -692,8 +695,9 @@ describe("runSetupWizard", () => {
 
   it("prompts for and stages the named first agent on a fresh install", async () => {
     const prompter = buildWizardPrompter({ text: vi.fn(async () => "robby") });
-    ensureOnboardingConfig.mockImplementationOnce(async ({ config }) => ({
+    ensureOnboardingConfig.mockImplementationOnce(async ({ config, baseConfig }) => ({
       config,
+      configBase: baseConfig,
       agentId: "robby",
       bootstrapPending: true,
       createdAgent: true,

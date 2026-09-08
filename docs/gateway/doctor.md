@@ -60,6 +60,11 @@ openclaw doctor
     Run without prompts, applying only safe migrations (config normalization +
     on-disk state moves). Skips restart/service/sandbox actions that need human
     confirmation. Legacy state migrations still run automatically when detected.
+    Add `--fix` for all supported startup-blocking repairs without prompts,
+    including workspace setup, session stores, exec approvals, and audit schema
+    migrations. Explicit repair checks ownership before database snapshots;
+    another live owner must stop before repair can proceed. Malformed or
+    conflicting retained files require the manual recovery named in the error.
 
   </Tab>
   <Tab title="--deep">
@@ -77,6 +82,29 @@ To review changes before writing, open the config file first:
 ```bash
 cat ~/.openclaw/openclaw.json
 ```
+
+## Schema publication during a 2026.9.2 update
+
+When OpenClaw 2026.9.2 drives an update that needs a newer shared-state schema,
+Doctor applies the migration content and reports
+`schema content applied; version publication deferred until update run <id> finishes`.
+The old updater can finish its ledger access, while the new Gateway uses the
+migrated content. Publication waits until all affected terminal runs are at least
+five minutes old; a running row unchanged for more than 30 minutes counts as
+abandoned. Every writable database open follows this rule, and the Gateway
+watcher schedules publication after the deadline.
+
+Ordinary CLI commands, including Doctor, remain usable while that Gateway runs.
+Applied content counts as ready; only the owning Gateway, or a writable opener
+when no Gateway owns the state directory, publishes the version after the grace.
+
+Deferral does not cover agent-database migrations. Doctor reports
+`update-schema-bump-unfenced` if one is pending, if the required shared-state
+metadata table is missing, or if the content migration fails. Follow the
+[manual update sequence](/install/updating#updating-from-2026.9.2-across-a-schema-bump)
+from the refusal. See [Database schemas](/reference/database-schemas#schema-bumps-and-older-updaters)
+for the publication contract and the remaining risk for an old CLI stalled
+beyond the grace period.
 
 ## Read-only lint mode
 
@@ -606,9 +634,9 @@ That stages grounded durable candidates into the short-term dreaming store while
 
   </Accordion>
   <Accordion title="11b. Bootstrap file size">
-    Doctor checks whether workspace bootstrap files (for example `AGENTS.md`, `CLAUDE.md`, or other injected context files) are near or over the configured character budget. It reports per-file raw vs. injected character counts, truncation percentage, truncation cause (`max/file` or `max/total`), and total injected characters as a fraction of the total budget. When files are truncated or near the limit, doctor prints tips for tuning `agents.defaults.bootstrapMaxChars` and `agents.defaults.bootstrapTotalMaxChars`.
+    Doctor checks workspace bootstrap candidates (`AGENTS.md`, `SOUL.md`, `IDENTITY.md`, `USER.md`, `BOOTSTRAP.md`, and `MEMORY.md`) against the configured character budget after runtime filtering. Root `BOOTSTRAP.md` is excluded after workspace setup completes. It reports per-file raw vs. injected character counts, truncation percentage, truncation cause (`max/file` or `max/total`), and total injected characters as a fraction of the total budget. When files are truncated or near the limit, doctor prints tips for tuning `agents.defaults.bootstrapMaxChars` and `agents.defaults.bootstrapTotalMaxChars`.
 
-    This includes files declared by the bundled `bootstrap-extra-files` hook when a fresh Gateway startup would select it. Doctor uses each agent's workspace and limits without importing or running custom hook handlers. It predicts fresh-start selection, not the previous handler generation that a running Gateway can retain after a failed hook reload.
+    This includes files declared by the bundled `bootstrap-extra-files` hook when a fresh Gateway startup would select it, provided each matched basename is one of those six (for example, `packages/core/AGENTS.md`). Other basenames are ignored. Doctor uses each agent's workspace and limits without importing or running custom hook handlers. It predicts fresh-start selection, not the previous handler generation that a running Gateway can retain after a failed hook reload.
 
   </Accordion>
   <Accordion title="11c. Shell completion">
@@ -701,6 +729,18 @@ That stages grounded durable candidates into the short-term dreaming store while
     Doctor suggests a workspace memory system when missing and prints a backup tip if the workspace is not already under git.
 
     See [/concepts/agent-workspace](/concepts/agent-workspace) for a full guide to workspace structure and git backup (recommended private GitHub or GitLab).
+
+  </Accordion>
+  <Accordion title="20. Repointed workspace aliases">
+    If you move a workspace folder and update its symlink, OpenClaw refuses to use the new target until you confirm the move. Incoming messages receive a repair notice instead of remaining stuck in retries.
+
+    Run `openclaw doctor --fix` and confirm only if the destination contains the same workspace. Doctor coordinates an owned managed Gateway; stop a foreground or externally managed Gateway through its owner first. For unattended recovery, `openclaw doctor --fix --force --non-interactive` supplies that confirmation; ordinary non-interactive `--fix` does not. Plain `openclaw doctor` reports the problem without transferring records. Keep the workspace paths and configuration unchanged until Doctor finishes.
+
+    The repair preserves setup completion, file-verification history, and migration records without changing workspace files. It removes stale path associations so later cleanup of the old location cannot delete the moved workspace's records. Start any Gateway you stopped manually, then send a message to check recovery.
+
+    Doctor leaves records untouched if the original folder still exists, the destination is missing or already owns records, another configured workspace still uses the old location, or inspection facts change. Pending or conflicting migration history must be resolved before the move can proceed. Follow the reported recovery instructions; do not delete workspace records to force a merge.
+
+    If you intended to switch to a different workspace, restore the original link or configure the intended destination directly. Do not confirm a transfer of the old workspace's history.
 
   </Accordion>
 </AccordionGroup>

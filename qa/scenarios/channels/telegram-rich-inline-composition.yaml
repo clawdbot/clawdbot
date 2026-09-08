@@ -1,0 +1,277 @@
+title: Telegram rich inline composition
+
+scenario:
+  id: telegram-rich-inline-composition
+  surface: channels
+  coverage:
+    primary:
+      - telegram.conversation-routing-and-delivery
+  objective: Preserve HTML and Markdown formatting around atomic rich text through native Telegram sends and edits.
+  successCriteria:
+    - Full TDLib rich-message trees retain styled HTML links in details, lists, and quotes.
+    - Markdown links and spoilers retain mathematical expressions and custom emoji as wrapped atoms.
+    - Transcript headers remain standalone fixed-width text outside HTML link and bold wrappers.
+    - Escaped tags and image alternatives stay literal; tag-shaped Markdown links do not activate HTML.
+    - Unsupported HTML ancestors stay literal across Markdown block boundaries.
+    - An edit replaces the same native message and preserves the same rich composition.
+  docsRefs:
+    - docs/channels/telegram.md
+    - docs/concepts/markdown-formatting.md
+  codeRefs:
+    - extensions/telegram/src/rich-blocks.ts
+    - extensions/telegram/src/rich-blocks-html.ts
+    - extensions/qa-lab/src/live-transports/telegram/userbot-driver.runtime.ts
+  gatewayConfigPatch:
+    channels:
+      telegram:
+        accounts:
+          $selectedAccount:
+            richMessages: true
+            linkPreview: false
+  execution:
+    kind: flow
+    channel: telegram
+    retryCount: 0
+    timeoutMs: 240000
+    suiteIsolation: isolated
+    isolationReason: Rich-message account configuration and native message revisions belong to this leased DM.
+    transportPolicy:
+      directMessageOnly: true
+    summary: Send eleven synthetic formatting cases through the Gateway and edit one through the normal CLI; inspect full TDLib trees from the leased Test Server DM. This proves direct operator delivery, not model generation. The CLI harness and package candidate must contain the same reviewed renderer.
+    config:
+      requiredProviderMode: mock-openai
+      requiredChannelDriver: live
+
+flow:
+  steps:
+    - name: preserves typed formatting through native sends and an edit
+      actions:
+        - assert:
+            expr: "transport.id === 'telegram' && env.providerMode === config.requiredProviderMode && typeof readTelegramMessages === 'function'"
+            message: this proof requires the leased Telegram Test Server observer
+        - assert:
+            expr: "env.cfg.channels.telegram.accounts[transport.accountId].richMessages === true"
+            message: this proof requires rich messages on the selected SUT account
+        - call: waitForGatewayHealthy
+          args: [{ ref: env }, 60000]
+        - call: waitForTransportReady
+          args: [{ ref: env }, 60000]
+        - resetTransport: true
+        - set: delivery
+          value:
+            expr: "transport.buildAgentDelivery({ target: 'direct' })"
+        - call: randomUUID
+          saveAs: runId
+        - set: fixtures
+          value:
+            expr: |
+              (() => {
+                const plain = text => ({ '@type': 'richTextPlain', text });
+                const wrap = (kind, text) => ({ '@type': kind, text });
+                const url = text => ({ ...wrap('richTextUrl', text), url: 'https://example.com/qa' });
+                const link = '<a href=https://example.com/qa?x&#61;1>**Download**</a>';
+                const linkBlock = { '@type': 'pageBlockParagraph', text: { ...url(wrap('richTextBold', plain('Download'))), url: 'https://example.com/qa?x=1' } };
+                const fixtures = [
+                  { id: 'details', markdown: `<details><summary>More</summary><p>${link}</p></details>`, pattern: { '@type': 'pageBlockDetails', blocks: [linkBlock] } },
+                  { id: 'list', markdown: `<ul><li>${link}</li></ul>`, pattern: { '@type': 'pageBlockList', items: [{ blocks: [linkBlock] }] } },
+                  { id: 'quote', markdown: `<blockquote>${link}</blockquote>`, pattern: { '@type': 'pageBlockBlockQuote', blocks: [linkBlock] } }
+                ];
+                for (const [id, html, atom] of [
+                  ['math', '<tg-math>x</tg-math>', { '@type': 'richTextMathematicalExpression', expression: 'x' }],
+                  ['emoji', '<tg-emoji emoji-id="4929292553544531969">👋</tg-emoji>', { '@type': 'richTextCustomEmoji', custom_emoji_id: '4929292553544531969', alternative_text: '👋' }]
+                ]) {
+                  fixtures.push({ id: `${id}-link`, markdown: `[${html}](https://example.com/qa)`, pattern: url(atom) });
+                  fixtures.push({ id: `${id}-spoiler`, markdown: `||${html}||`, pattern: wrap('richTextSpoiler', atom) });
+                }
+                for (const [id, open, close, trailing] of [
+                  ['annotation-link', '<a href="https://example.com/qa">', '</a>', url(plain(' trailing'))],
+                  ['annotation-bold', '<b>', '</b>', wrap('richTextBold', plain(' trailing'))]
+                ]) {
+                  fixtures.push({ id, markdown: `${open}\nuser[Thu] trailing${close}`, pattern: {
+                    '@type': 'pageBlockParagraph', text: {
+                      '@type': 'richTexts', texts: [{ ...trailing, text: plain('\n') }, wrap('richTextFixed', plain('user[Thu]')), trailing]
+                    }
+                  }});
+                }
+                fixtures.push({ id: 'literal-tags', markdown: '[<custom><sup>**marked**</sup></custom>](https://example.com/qa) &lt;b&gt;**literal**&lt;/b&gt; ![<i>alt</i>]() <b[r](https://example.com/qa)>tail <!&#65; <b>declared</b>>', pattern: {
+                  '@type': 'pageBlockParagraph', text: {
+                    '@type': 'richTexts', texts: [url({ '@type': 'richTexts', texts: [plain('<custom><sup>'), wrap('richTextBold', plain('marked')), plain('</sup></custom>')] }), plain(' <b>'), wrap('richTextBold', plain('literal')), plain('</b> <i>alt</i> <b'), url(plain('r')), plain('>tail <!A '), wrap('richTextBold', plain('declared')), plain('>')]
+                  }
+                }});
+                fixtures.push({ id: 'literal-block-ancestor', markdown: '<details><summary>Scope</summary><custom>\n\n> <sup>**x**</sup>\n\n</custom></details>', pattern: {
+                  '@type': 'pageBlockDetails', header: plain('Scope'), blocks: [
+                    { '@type': 'pageBlockParagraph', text: plain('<custom>') },
+                    { '@type': 'pageBlockBlockQuote', blocks: [{ '@type': 'pageBlockParagraph', text: {
+                      '@type': 'richTexts', texts: [plain('<sup>'), wrap('richTextBold', plain('x')), plain('</sup>')]
+                    } }] },
+                    { '@type': 'pageBlockParagraph', text: plain('</custom>') }
+                  ]
+                }});
+                return fixtures;
+              })()
+        - set: containsPattern
+          value:
+            lambda:
+              params: [tree, pattern]
+              expr: |
+                (() => {
+                  const matches = (value, expected) => {
+                    if (Array.isArray(expected)) return Array.isArray(value) && value.length === expected.length && expected.every((item, index) => matches(value[index], item));
+                    if (expected && typeof expected === 'object') return value && typeof value === 'object' && Object.entries(expected).every(([key, item]) => matches(value[key], item));
+                    return value === expected;
+                  };
+                  const visit = value => matches(value, pattern) || (value && typeof value === 'object' && Object.values(value).some(visit));
+                  return Boolean(visit(tree));
+                })()
+        - set: proofs
+          value: []
+        - set: receipts
+          value: []
+        - set: failures
+          value: []
+        - set: editCliCompleted
+          value: false
+        - set: editVerified
+          value: false
+        - set: captureEvidence
+          value:
+            lambda:
+              params: []
+              async: true
+              expr: |
+                (async () => {
+                  const { publishQaSuiteArtifactFiles } = await qaImport('./suite-artifacts.js');
+                  const { redactQaGatewayDebugText } = await qaImport('./gateway-log-redaction.js');
+                  // Export only this run's synthetic formatting, never observer/account metadata.
+                  const fields = new Set(['@type', 'blocks', 'is_full', 'is_rtl', 'text', 'texts', 'header', 'items', 'label', 'caption', 'credit', 'url', 'is_cached', 'expression', 'custom_emoji_id', 'alternative_text', 'is_open']);
+                  // Diagnostic limits never affect the complete trees used by assertions.
+                  const tree = value => {
+                    const json = JSON.stringify(value, function (key, child) { return key === '' || Array.isArray(this) || fields.has(key) ? child : undefined; });
+                    return json === undefined ? null : json.length > 16384 ? { truncated: true, serializedCharacters: json.length } : JSON.parse(json);
+                  };
+                  const observed = readTelegramMessages();
+                  const candidates = [];
+                  const unmatchedTypes = new Set();
+                  let unmatchedCount = 0;
+                  for (const message of observed) {
+                    const contentType = message.contentType?.slice(0, 64) ?? 'unknown';
+                    const lines = message.text.split('\n');
+                    const index = vars.receipts.findIndex(receipt => lines.includes(receipt.marker));
+                    const isEdit = Boolean(vars.editMarker && lines.includes(vars.editMarker));
+                    if (index < 0 && !isEdit) {
+                      unmatchedCount++;
+                      if (unmatchedTypes.size < 8) unmatchedTypes.add(contentType);
+                      continue;
+                    }
+                    if (candidates.length < 12) candidates.push({
+                      label: isEdit ? 'message-1' : `message-${index + 1}`,
+                      phase: isEdit ? 'edit' : 'send', kind: message.kind,
+                      contentType,
+                      ...(isEdit ? { observerIdStayedEqual: message.messageId === vars.editTarget?.observerMessageId } : { accountMessageIdsDiffer: message.botApiMessageId === undefined ? null : String(vars.receipts[index].botMessageId) !== String(message.botApiMessageId) }),
+                      richMessage: tree(message.richMessage)
+                    });
+                  }
+                  const artifact = {
+                    transport: 'Telegram Test Server', topology: 'leased DM', scenarioInvokesModel: false,
+                    receipts: vars.receipts.slice(0, 11).map((receipt, index) => ({ case: receipt.case, label: `message-${index + 1}` })),
+                    cases: vars.proofs.slice(0, 11).map(proof => ({ case: proof.case, label: proof.label, accountMessageIdsDiffer: proof.accountMessageIdsDiffer, richMessage: tree(proof.richMessage) })),
+                    failures: vars.failures.map(failure => ({ case: failure.case, label: failure.label, contentType: failure.contentType, full: failure.full, matchesPattern: failure.matchesPattern, richMessage: tree(failure.richMessage) })),
+                    edit: { completedWithBotReceipt: vars.editCliCompleted, verified: vars.editVerified },
+                    candidates, unmatched: { count: unmatchedCount, contentTypes: [...unmatchedTypes] }
+                  };
+                  const content = redactQaGatewayDebugText(JSON.stringify(artifact).replaceAll(runId, 'run'));
+                  await publishQaSuiteArtifactFiles({ outputDir: env.outputDir, files: [{ filePath: path.join(env.outputDir, 'telegram-rich-inline-composition.json'), content }] });
+                  return { artifact: 'telegram-rich-inline-composition.json', completedCases: vars.proofs.length, editVerified: vars.editVerified, observedCount: observed.length };
+                })()
+        - try:
+            actions:
+              - forEach:
+                  items: { ref: fixtures }
+                  item: fixture
+                  index: fixtureIndex
+                  actions:
+                    - set: marker
+                      value:
+                        expr: "`QA-RICH-${runId}-${fixture.id}-END`"
+                    - call: env.gateway.call
+                      saveAs: receipt
+                      args:
+                        - send
+                        - channel: telegram
+                          accountId: { ref: transport.accountId }
+                          to: { ref: delivery.to }
+                          message:
+                            expr: "`${fixture.markdown}\n\n${marker}`"
+                          idempotencyKey:
+                            expr: "`${runId}:${fixture.id}`"
+                        - timeoutMs: 30000
+                    - set: receipts
+                      value:
+                        expr: "receipts.concat([{ case: fixture.id, marker, botMessageId: receipt.messageId }])"
+                    - assert:
+                        expr: "Number.isSafeInteger(Number(receipt.messageId)) && Number(receipt.messageId) > 0"
+                        message: Gateway send must return an accepted native message ID
+                    - call: waitForCondition
+                      saveAs: received
+                      args:
+                        - lambda:
+                            params: []
+                            expr: |
+                              readTelegramMessages().find(message => message.kind === 'message' && message.text.split('\n').includes(marker))
+                        - 30000
+                    - set: observation
+                      value:
+                        expr: "({ case: fixture.id, label: `message-${fixtureIndex + 1}`, botMessageId: receipt.messageId, observerMessageId: received.messageId, marker, accountMessageIdsDiffer: received.botApiMessageId === undefined ? null : String(receipt.messageId) !== String(received.botApiMessageId), richMessage: received.richMessage })"
+                    - if:
+                        expr: "fixtureIndex === 0"
+                        then:
+                          - set: editTarget
+                            value: { ref: observation }
+                    - set: verdict
+                      value:
+                        expr: "({ contentType: received.contentType?.slice(0, 64) ?? 'unknown', full: received.richMessage?.is_full === true, matchesPattern: containsPattern(received.richMessage?.blocks, fixture.pattern) })"
+                    - if:
+                        expr: "verdict.contentType === 'messageRichMessage' && verdict.full && verdict.matchesPattern"
+                        then:
+                          - set: proofs
+                            value:
+                              expr: "proofs.concat([observation])"
+                        else:
+                          - set: failures
+                            value:
+                              expr: "failures.concat([{ ...observation, ...verdict }])"
+              - set: editMarker
+                value:
+                  expr: "`QA-RICH-${runId}-edit-END`"
+              - call: runQaCli
+                args:
+                  - ref: env
+                  - expr: "['message', 'edit', '--channel', 'telegram', '--account', transport.accountId, '--target', delivery.to, '--message-id', String(editTarget.botMessageId), '--message', `${fixtures[1].markdown}\n\n${editMarker}`, '--json']"
+                  - timeoutMs: 60000
+                    json: true
+              - set: editCliCompleted
+                value: true
+              - call: waitForCondition
+                saveAs: edited
+                args:
+                  - lambda:
+                      params: []
+                      expr: |
+                        readTelegramMessages().find(message => message.kind === 'edit' && message.messageId === editTarget.observerMessageId && message.text.split('\n').includes(editMarker))
+                  - 30000
+              - set: editVerified
+                value:
+                  expr: |
+                    edited.kind === 'edit' && edited.contentType === 'messageRichMessage' && edited.richMessage?.is_full === true &&
+                    containsPattern(edited.richMessage.blocks, { '@type': 'pageBlockList' }) && containsPattern(edited.richMessage.blocks, fixtures[1].pattern) &&
+                    readTelegramMessages().filter(message => message.text.split('\n').some(line =>
+                      line === editMarker || receipts.some(receipt => receipt.marker === line)
+                    )).length === fixtures.length
+              - assert:
+                  expr: "failures.length === 0 && proofs.length === fixtures.length && editVerified"
+                  message:
+                    expr: "`Native rich composition failed: ${failures.map(failure => failure.case).join(', ') || 'edit'}; editing must preserve the styled link on the same native message without a replacement bubble`"
+            finally:
+              - call: captureEvidence
+                saveAs: evidenceSummary
+      detailsExpr: "JSON.stringify(evidenceSummary)"

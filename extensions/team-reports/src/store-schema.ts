@@ -1,6 +1,5 @@
 import { z } from "zod";
 import { periodSchema } from "./periods.js";
-import type { ReportDocument, SummaryDocument } from "./types.js";
 
 export const TEAM_REPORTS_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS team_reports_schema_migrations (
@@ -62,21 +61,25 @@ const countsSchema = z.object({
   issueComments: z.number(),
   reviewComments: z.number(),
   securityAdvisories: z.number(),
+  /** "owner/name" -> count */
   repos: z.record(z.string(), z.number()),
 });
 const sourceStatusSchema = z.object({
   ok: z.boolean(),
   warnings: z.array(z.string()),
+  /** True when the source could not cover the whole window (e.g. archive/API stops early). */
   stale: z.boolean().optional(),
+  /** Diagnostic counters, e.g. apiCalls, rateLimitRemaining, reposScanned, searchSplits. */
   stats: z.record(z.string(), z.union([z.number(), z.string()])),
 });
 const summarySourceSchema = z.enum(["model", "fallback"]);
 
 // Stored JSON is an external data boundary, including after restores and upgrades.
-export const reportDocumentSchema: z.ZodType<ReportDocument> = z.object({
+export const reportDocumentSchema = z.object({
   version: z.literal(1),
   period: z.object({
     period: periodSchema,
+    /** "2026-08-20" | "2026-W34" | "2026-08" */
     key: z.string(),
     sinceMs: z.number(),
     untilMs: z.number(),
@@ -91,6 +94,7 @@ export const reportDocumentSchema: z.ZodType<ReportDocument> = z.object({
     github: countsSchema,
     discord: z.object({ messages: z.number(), channels: z.record(z.string(), z.number()) }),
   }),
+  /** Sorted by activity descending; quiet members last. */
   members: z.array(
     z.object({
       login: z.string(),
@@ -100,6 +104,7 @@ export const reportDocumentSchema: z.ZodType<ReportDocument> = z.object({
       roleLabel: z.string().optional(),
       access: z.array(z.string()),
       areas: z.array(z.string()),
+      /** Other GitHub logins mapped to this person. */
       aliases: z.array(z.string()),
       github: countsSchema.extend({
         items: z.array(
@@ -115,19 +120,24 @@ export const reportDocumentSchema: z.ZodType<ReportDocument> = z.object({
               "review_comment",
               "security_advisory",
             ]),
+            /** "owner/name" */
             repo: z.string(),
             number: z.number().optional(),
             title: z.string(),
             url: z.string(),
             atMs: z.number(),
+            /** GitHub login credited for this item (merged_by for pr_merged, comment author for comments, commit author for commits). */
             actor: z.string(),
+            /** Logins from Co-authored-by trailers (commits only). */
             coauthors: z.array(z.string()).optional(),
+            /** Raw comment body, used only for duplicate collapsing and ignore patterns; never rendered. */
             body: z.string().optional(),
           }),
         ),
       }),
       discord: z.object({
         total: z.number(),
+        /** channel name -> count */
         channels: z.record(z.string(), z.number()),
         excerpts: z.array(z.object({ channel: z.string(), atMs: z.number(), excerpt: z.string() })),
       }),
@@ -141,18 +151,22 @@ export const reportDocumentSchema: z.ZodType<ReportDocument> = z.object({
     }),
   ),
   otherActors: z.array(z.object({ login: z.string(), github: countsSchema })),
+  /** Discord authors that produced messages but map to no member (id + count only). */
   unmatchedDiscord: z.array(z.object({ authorId: z.string(), messages: z.number() })),
   sources: z.object({ github: sourceStatusSchema, discord: sourceStatusSchema.optional() }),
   truncated: z.boolean().optional(),
 });
 
-export const summaryDocumentSchema: z.ZodType<SummaryDocument> = z.object({
+export const summaryDocumentSchema = z.object({
   source: summarySourceSchema,
   warnings: z.array(z.string().max(300)).max(3).optional(),
   model: z.string().optional(),
   generatedAtMs: z.number(),
+  /** Markdown: 2-3 sentence overview followed by 4-6 "- **Workstream:** ..." bullets. */
   globalSummary: z.string(),
+  /** 4-7 one-line bullets naming concrete work streams. */
   highlights: z.array(z.string()),
+  /** sha256 of the evidence digest; regeneration is skipped while unchanged. */
   fingerprint: z.string(),
 });
 export const runPeriodsSchema = z.array(z.object({ period: periodSchema, key: z.string() }));

@@ -17,6 +17,7 @@ import type { BrowserRoute } from "./browser-target.ts";
 export interface BrowserPanelControllerHost extends ReactiveControllerHost {
   readonly client: GatewayBrowserClient | null;
   readonly available: boolean;
+  readonly remoteAvailable?: boolean;
   readonly resourceBasePath: string;
   readonly authToken: string | null;
   readonly isConnected: boolean;
@@ -65,7 +66,7 @@ export class BrowserPanelOperationOwnership {
   captureClient(): BrowserRequestClient | null {
     const gateway = this.host.client;
     if (
-      !this.host.available ||
+      !(this.host.remoteAvailable ?? this.host.available) ||
       !gateway ||
       !this.host.isConnected ||
       !this.host.browserPanelIsOpen()
@@ -79,7 +80,7 @@ export class BrowserPanelOperationOwnership {
         () =>
           this.scope?.client === client &&
           this.scope.gateway === this.host.client &&
-          this.host.available &&
+          (this.host.remoteAvailable ?? this.host.available) &&
           this.host.isConnected &&
           this.host.browserPanelIsOpen(),
       );

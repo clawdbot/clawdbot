@@ -16,14 +16,13 @@ import { readConfigFileSnapshotForWrite, resolveGatewayPort } from "../config/co
 import { inheritLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import { logConfigUpdated } from "../config/logging.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { createChannelSetupTransaction } from "../flows/channel-setup.js";
+import { createChannelSetupHooks } from "../flows/channel-setup.js";
 import { resolveGatewayProbeAuthSafeWithSecretInputs } from "../gateway/probe-auth.js";
 import { formatWindowsGatewayFirewallGuidance } from "../infra/windows-gateway-firewall-diagnostics.js";
-import { commitConfigWithPendingPluginInstalls } from "../plugins/install-record-commit.js";
 import { resolvePluginContributionOwners } from "../plugins/plugin-registry.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime, ExitError } from "../runtime.js";
-import { createLazyImportLoader } from "../shared/lazy-promise.js";
+import { createLazyPromise } from "../shared/lazy-promise.js";
 import { resolveUserPath } from "../utils.js";
 import { createClackPrompter } from "../wizard/clack-prompter.js";
 import { WizardCancelledError } from "../wizard/prompts.js";
@@ -69,12 +68,11 @@ import { setupSkills } from "./onboard-skills.js";
 import type { OnboardMode } from "./onboard-types.js";
 
 type ConfigureSectionChoice = WizardSection | "__continue";
-type SetupPluginConfigModule = typeof import("../wizard/setup.plugin-config.js");
 type GatewayHealthCheckOutcome = "succeeded" | "failed" | "skipped";
 
 const GATEWAY_HINT_PROBE_TIMEOUT_MS = 300;
 
-const setupPluginConfigModuleLoader = createLazyImportLoader<SetupPluginConfigModule>(
+const loadSetupPluginConfigModule = createLazyPromise(
   () => import("../wizard/setup.plugin-config.js"),
 );
 
@@ -83,10 +81,6 @@ function validateGatewayPortInput(value: unknown): string | undefined {
     return formatPortRangeHint();
   }
   return undefined;
-}
-
-function loadSetupPluginConfigModule(): Promise<SetupPluginConfigModule> {
-  return setupPluginConfigModuleLoader.load();
 }
 
 async function runGatewayHealthCheck(params: {
@@ -572,12 +566,12 @@ export async function runConfigureWizard(
         command: opts.command,
         mode: metadataMode,
       });
-      const committed = await commitConfigWithPendingPluginInstalls({
-        nextConfig: remoteConfig,
+      const committed = await writeWizardConfigFile(remoteConfig, {
+        mergeBase: baseConfig,
         ...(currentBaseHash !== undefined ? { baseHash: currentBaseHash } : {}),
         writeOptions: configWriteOwnership,
       });
-      remoteConfig = committed.config;
+      remoteConfig = committed.nextConfig;
       logConfigUpdated(runtime);
       if (selectedSections?.includes("health")) {
         const healthCheckOutcome = await runGatewayHealthCheck({
@@ -637,7 +631,7 @@ export async function runConfigureWizard(
     let didPersistConfig = false;
     let daemonSetupOutcome: DaemonSetupOutcome | undefined;
     let healthCheckOutcome: GatewayHealthCheckOutcome | undefined;
-    const channelSetup = createChannelSetupTransaction({ runtime });
+    const channelSetup = createChannelSetupHooks({ runtime });
 
     const persistPendingConfig = async () => {
       if (!hasPendingConfig) {
@@ -648,14 +642,13 @@ export async function runConfigureWizard(
         mode: metadataMode,
       });
 
-      nextConfig = await channelSetup.commit(nextConfig, async (configToCommit) => {
-        const committedConfig = await writeWizardConfigFile(configToCommit, {
-          mergeBase: mergeBaseConfig,
-          writeOptions: configWriteOwnership,
-        });
-        mergeBaseConfig = structuredClone(committedConfig);
-        return committedConfig;
+      const committed = await writeWizardConfigFile(nextConfig, {
+        mergeBase: mergeBaseConfig,
+        writeOptions: configWriteOwnership,
       });
+      mergeBaseConfig = structuredClone(committed.nextConfig);
+      await channelSetup.runPostWriteHooks(committed.path);
+      nextConfig = committed.nextConfig;
       hasPendingConfig = false;
       didPersistConfig = true;
       logConfigUpdated(runtime);

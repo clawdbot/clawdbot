@@ -99,7 +99,7 @@ function union(...values: Origin[][]): Origin[] {
 }
 
 /** Read dependency ownership without resolving or executing the inspected package. */
-export function collectPackageRootImports(source: string): Set<string> {
+export function collectPackageRootImports(source: string): string[] {
   const ts = require("typescript") as typeof import("typescript");
   const file = ts.createSourceFile(
     "dist.js",
@@ -108,7 +108,10 @@ export function collectPackageRootImports(source: string): Set<string> {
     true,
     ts.ScriptKind.JS,
   );
-  const imports = new Set<string>();
+  const imports: string[] = [];
+  const recordImport = (specifier: string) => {
+    imports.push(specifier);
+  };
   const calls: ts.CallExpression[] = [];
   const scopes: Array<ts.SourceFile | ts.FunctionLikeDeclaration> = [file];
   const assignments: Array<[ts.Identifier, ts.Expression | undefined]> = [];
@@ -189,13 +192,13 @@ export function collectPackageRootImports(source: string): Set<string> {
     if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) {
       const specifier = literal(node.moduleSpecifier);
       if (specifier !== undefined) {
-        imports.add(specifier);
+        recordImport(specifier);
       }
     }
     if (ts.isCallExpression(node)) {
       const specifier = literal(node.arguments[0]);
       if (node.expression.kind === ts.SyntaxKind.ImportKeyword && specifier !== undefined) {
-        imports.add(specifier);
+        recordImport(specifier);
       } else {
         calls.push(node);
       }
@@ -654,7 +657,7 @@ export function collectPackageRootImports(source: string): Set<string> {
         callee.text === "require" &&
         !values.every((value) => value === "caller"))
     ) {
-      imports.add(specifier);
+      recordImport(specifier);
     }
   }
   return imports;

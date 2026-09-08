@@ -54,7 +54,7 @@ type CrabboxProfile = {
 
 const MAX_CRABBOX_MACHINE_CLASS_LENGTH = 128;
 const MAX_CRABBOX_MACHINE_OPTIONS = 32;
-const CRABBOX_DESKTOP_PROVIDERS = new Set(["aws", "hetzner"]);
+const CRABBOX_DESKTOP_PROVIDERS = new Set(["aws", "azure", "hetzner"]);
 
 export type CrabboxMachineShape = Readonly<{
   class: string;
@@ -180,7 +180,7 @@ export function parseCrabboxProfile(profile: WorkerProfile): CrabboxProfile {
   }
   if (desktop && !CRABBOX_DESKTOP_PROVIDERS.has(provider)) {
     throw new WorkerProviderError(
-      "Crabbox desktop profiles support only AWS and coordinator-backed Hetzner",
+      "Crabbox desktop profiles support only AWS, Azure, and coordinator-backed Hetzner",
     );
   }
   const warmImage = profile.warmImage;
@@ -233,6 +233,25 @@ export function resolveCrabboxWarmImageProfile(
     class: machineClass,
     warmImage: profile.warmImage ?? (machineClass !== undefined && !profile.setupEnv?.length),
   };
+}
+
+export function resolveCrabboxWarmImageProfileKey(
+  profile: CrabboxProfile,
+  projectKey?: string,
+): string {
+  return createHash("sha256")
+    .update(
+      JSON.stringify({
+        backendProvider: profile.provider,
+        setup: profile.setup ?? "",
+        setupEnvKeys: [...(profile.setupEnv ?? [])].toSorted(),
+        desktop: profile.desktop ?? false,
+        // Exact class is intentionally conservative; cross-class reuse comes later.
+        machineClass: profile.class,
+        ...(projectKey ? { projectKey } : {}),
+      }),
+    )
+    .digest("hex");
 }
 
 type CrabboxProvisionProfile = CrabboxProfile &

@@ -1,12 +1,19 @@
 /* @vitest-environment jsdom */
 
+import type { BoardGetParams, BoardSnapshot } from "@openclaw/gateway-protocol";
+import type { LitElement } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../../src/shared/session-list-limits.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
+import {
+  DASHBOARD_DOCUMENT_ELEMENT,
+  ensureCustomElementDefined,
+} from "../../app/lazy-custom-element.ts";
 import { i18n } from "../../i18n/index.ts";
 import type { SessionListOptions, SessionListSnapshot } from "../../lib/sessions/index.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { settleLitElement } from "../../test-helpers/lit-settle.ts";
 import type { DashboardsRouteData } from "./view.ts";
 import "./dashboards-page.ts";
@@ -56,9 +63,61 @@ function routeData(sessionRow: GatewaySessionRow): DashboardsRouteData {
   };
 }
 
+function createDashboardClient() {
+  return createTestGatewayClient(async (method, params) => {
+    if (method !== "board.get") {
+      throw new Error(`Unexpected Gateway method: ${method}`);
+    }
+    const { sessionKey } = params as BoardGetParams;
+    return { sessionKey, revision: 1, tabs: [], widgets: [] } satisfies BoardSnapshot;
+  });
+}
+
+function controlPreviewFrames(): () => void {
+  const frames = new Map<number, FrameRequestCallback>();
+  let nextFrameId = 0;
+  vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+    const id = ++nextFrameId;
+    frames.set(id, callback);
+    return id;
+  });
+  vi.spyOn(window, "cancelAnimationFrame").mockImplementation((id) => {
+    frames.delete(id);
+  });
+  return () => {
+    const pendingFrameIds = [...frames.keys()];
+    for (const id of pendingFrameIds) {
+      const callback = frames.get(id);
+      frames.delete(id);
+      callback?.(0);
+    }
+  };
+}
+
+async function settleDashboardPreviews(element: DashboardsPageElement, runFrame: () => void) {
+  await settleLitElement(element);
+  runFrame();
+  const previews = element.querySelectorAll<LitElement>("openclaw-dashboard-preview");
+  expect(previews.length).toBeGreaterThan(0);
+  for (const preview of previews) {
+    await settleLitElement(preview);
+    const board = preview.querySelector<LitElement>("openclaw-board-document")!;
+    expect(board).not.toBeNull();
+    await settleLitElement(board);
+    const view = board.querySelector<LitElement>("openclaw-board-view")!;
+    expect(view, board.textContent ?? "").not.toBeNull();
+    await settleLitElement(view);
+    expect(view.querySelector('[data-test-id="board-empty"]')).not.toBeNull();
+  }
+}
+
 describe("DashboardsPage", () => {
   beforeEach(async () => {
     await i18n.setLocale("en");
+    await ensureCustomElementDefined(
+      DASHBOARD_DOCUMENT_ELEMENT.tagName,
+      DASHBOARD_DOCUMENT_ELEMENT.loadModule,
+    );
   });
 
   afterEach(() => {
@@ -67,6 +126,7 @@ describe("DashboardsPage", () => {
   });
 
   it("subscribes to the exact query and preserves rows while a new agent scope loads", async () => {
+    const runFrame = controlPreviewFrames();
     const selectionListeners = new Set<() => void>();
     const listListeners = new Map<string, (snapshot: SessionListSnapshot) => void>();
     const snapshots = new Map<string, SessionListSnapshot>();
@@ -86,7 +146,7 @@ describe("DashboardsPage", () => {
     const context = {
       basePath: "",
       gateway: {
-        snapshot: { client: {}, phase: "connected", hello: null },
+        snapshot: { client: createDashboardClient(), phase: "connected", hello: null },
         subscribe: () => () => undefined,
       },
       sessions: {
@@ -138,6 +198,7 @@ describe("DashboardsPage", () => {
       error: null,
     });
     await vi.waitFor(() => expect(element.textContent).toContain("Writer dashboard"));
+    await settleDashboardPreviews(element, runFrame);
     retiredListener({
       result: result(row("agent:main:retired", "Retired")),
       agentId: null,
@@ -165,6 +226,7 @@ describe("DashboardsPage", () => {
       error: null,
     });
     await element.updateComplete;
+    await settleDashboardPreviews(element, runFrame);
     expect(element.textContent).toContain("Recovered dashboard");
     expect(element.querySelector('[role="alert"]')).toBeNull();
 
@@ -182,6 +244,7 @@ describe("DashboardsPage", () => {
   it.each([false, true])(
     "loads every dashboard page unless its connection is retired (retired: %s)",
     async (retired) => {
+      const runFrame = controlPreviewFrames();
       const first = {
         ...results([row("agent:main:new", "New dashboard")]),
         totalCount: 2,
@@ -206,7 +269,7 @@ describe("DashboardsPage", () => {
       const context = {
         basePath: "",
         gateway: {
-          snapshot: { client: {}, phase: "connected", hello: null },
+          snapshot: { client: createDashboardClient(), phase: "connected", hello: null },
           subscribe: (listener: (snapshot: ApplicationGatewaySnapshot) => void) => {
             publishGateway = () => listener(context.gateway.snapshot);
             return () => undefined;
@@ -244,6 +307,7 @@ describe("DashboardsPage", () => {
         }
         resolvePage(null);
         await settleLitElement(element);
+        await settleDashboardPreviews(element, runFrame);
         expect(element.textContent).toContain("New dashboard");
         expect(element.textContent).not.toContain("dashboard enumeration returned no result");
         expect(element.querySelector('[role="alert"]')).toBeNull();
@@ -253,6 +317,7 @@ describe("DashboardsPage", () => {
       await vi.waitFor(() =>
         expect(element.querySelectorAll("[data-dashboard-session]")).toHaveLength(2),
       );
+      await settleDashboardPreviews(element, runFrame);
       expect(list).toHaveBeenCalledWith({
         limit: SIDEBAR_SESSION_ROSTER_LIMIT,
         hasBoard: true,

@@ -8,6 +8,7 @@ import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plug
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import { buildDeclaredProviderOwnerIndex } from "../plugins/provider-owner-index.js";
 import { listKnownProviderAuthEnvVarNames } from "../secrets/provider-env-vars.js";
 import { captureFullEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { loadDotEnv, loadWorkspaceDotEnvFile } from "./dotenv.js";
@@ -88,6 +89,7 @@ function createManifestBackedProviderSnapshot(
     diagnostics: [],
     byPluginId: new Map([[plugin.id, plugin]]),
     normalizePluginId: (pluginId: string) => pluginId,
+    declaredProviderOwners: buildDeclaredProviderOwnerIndex([plugin]),
     owners: emptyOwnerMaps(),
     metrics: {
       registrySnapshotMs: 0,

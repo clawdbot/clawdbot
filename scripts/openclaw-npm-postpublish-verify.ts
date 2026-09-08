@@ -1,7 +1,7 @@
 #!/usr/bin/env -S node --import tsx
 // Openclaw Npm Postpublish Verify script supports OpenClaw repository automation.
 
-import { createPublicKey, verify as verifySignature } from "node:crypto";
+import { createHash, createPublicKey, verify as verifySignature } from "node:crypto";
 import {
   existsSync,
   lstatSync,
@@ -37,11 +37,17 @@ import {
   packageNameFromSpecifier,
 } from "./lib/plugin-package-dependencies.mts";
 import { classifyReleaseTrain } from "./lib/release-version.mjs";
+import {
+  readRuntimeDependencyOwnership,
+  RUNTIME_DEPENDENCY_OWNERSHIP_RELATIVE_PATH,
+  type RuntimeDependencyOwnership,
+} from "./lib/runtime-dependency-ownership-contract.mts";
 import { runInstalledWorkspaceBootstrapSmoke } from "./lib/workspace-bootstrap-smoke.mts";
 import { parseReleaseVersion, resolveNpmCommandInvocation } from "./openclaw-npm-release-check.ts";
 import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "./windows-cmd-helpers.mjs";
 
 type InstalledPackageJson = {
+  name?: string;
   version?: string;
   dependencies?: Record<string, string>;
   optionalDependencies?: Record<string, string>;
@@ -664,14 +670,21 @@ function collectInstalledPluginSdkDeclarationErrors(packageRoot: string): string
 }
 
 type ParsedImportSpecifiersResult =
-  | { ok: true; specifiers: Set<string> }
+  | {
+      ok: true;
+      imports: string[];
+    }
   | { ok: false; error: string };
 
 function extractJavaScriptImportSpecifiers(source: string): ParsedImportSpecifiersResult {
   try {
     // Keep strict JavaScript validation: TypeScript accepts some invalid JS bindings/contexts.
-    acorn.parse(source, { allowHashBang: true, ecmaVersion: "latest", sourceType: "module" });
-    return { ok: true, specifiers: collectPackageRootImports(source) };
+    acorn.parse(source, {
+      allowHashBang: true,
+      ecmaVersion: "latest",
+      sourceType: "module",
+    });
+    return { ok: true, imports: collectPackageRootImports(source) };
   } catch (error) {
     return { ok: false, error: formatErrorMessage(error) };
   }
@@ -705,6 +718,17 @@ export function collectInstalledRootDependencyManifestErrors(packageRoot: string
   const missingImporters = new Map<string, Set<string>>();
   const bundledExtensionRuntimeDependencyOwners =
     collectBundledExtensionRuntimeDependencyOwners(packageRoot);
+  const companionManifestCache = new Map<string, InstalledPackageJson | null>();
+  let runtimeDependencyOwnership: RuntimeDependencyOwnership | null;
+  try {
+    runtimeDependencyOwnership = readRuntimeDependencyOwnership(packageRoot);
+  } catch (error) {
+    return [
+      `installed package runtime dependency ownership is invalid: ${RUNTIME_DEPENDENCY_OWNERSHIP_RELATIVE_PATH}: ${formatErrorMessage(error)}.`,
+    ];
+  }
+  const importsByFile = new Map<string, string[]>();
+  const extensionsByFile = new Map<string, string[]>();
 
   for (const filePath of distFiles.files) {
     const file = readInstalledRootDistJavaScriptFile(packageRoot, filePath);
@@ -717,23 +741,71 @@ export function collectInstalledRootDependencyManifestErrors(packageRoot: string
         `installed package root dist file '${file.relativePath}' could not be parsed for runtime dependency verification: ${parsedSpecifiers.error}.`,
       ];
     }
-    for (const specifier of parsedSpecifiers.specifiers) {
+    importsByFile.set(file.relativePath, parsedSpecifiers.imports);
+    const owners = runtimeDependencyOwnership?.chunks[file.relativePath];
+    if (owners) {
+      if (owners.sha256 !== createHash("sha256").update(file.source).digest("hex")) {
+        return [
+          `installed package runtime dependency ownership does not match '${file.relativePath}'; rebuild the package.`,
+        ];
+      }
+      extensionsByFile.set(file.relativePath, owners.extensions);
+    }
+  }
+
+  // Root imports from any build output override plugin evidence, including
+  // relative createRequire calls that are absent from the bundler's graph.
+  const pending = [...importsByFile.keys()].filter((file) => !extensionsByFile.has(file));
+  const visited = new Set<string>();
+  const distDir = importsByFile.size ? realpathSync(join(packageRoot, "dist")) : "";
+  while (pending.length > 0) {
+    const file = pending.pop()!;
+    if (visited.has(file)) {
+      continue;
+    }
+    visited.add(file);
+    extensionsByFile.delete(file);
+    const resolveImport = createRequire(pathToFileURL(join(distDir, file))).resolve;
+    for (const specifier of importsByFile.get(file) ?? []) {
+      if (specifier.startsWith(".")) {
+        try {
+          const importedPath = resolveImport(specifier.replace(/[?#].*$/u, ""));
+          const importedFile = relative(distDir, importedPath).replaceAll("\\", "/");
+          if (importsByFile.has(importedFile)) {
+            pending.push(importedFile);
+          }
+        } catch {
+          // Missing relative modules are reported by package closure checks.
+        }
+      }
+    }
+  }
+
+  for (const [file, imports] of importsByFile) {
+    const extensions = extensionsByFile.get(file);
+    for (const specifier of imports) {
       const dependencyName = packageNameFromSpecifier(specifier);
       if (
         !dependencyName ||
         NODE_BUILTIN_MODULES.has(dependencyName) ||
         OPTIONAL_OR_EXTERNALIZED_RUNTIME_IMPORTS.has(dependencyName) ||
         declaredRuntimeDeps.has(dependencyName) ||
-        isBundledExtensionOwnedRuntimeImport({
-          dependencyName,
-          ownersByDependency: bundledExtensionRuntimeDependencyOwners,
-          source: file.source,
-        })
+        (extensions?.length &&
+          extensions.every(
+            (extensionId) =>
+              bundledExtensionRuntimeDependencyOwners.get(dependencyName)?.has(extensionId) ||
+              isInstalledCompanionExtensionOwnedRuntimeImport({
+                dependencyName,
+                extensionId,
+                packageRoot,
+                manifestCache: companionManifestCache,
+              }),
+          ))
       ) {
         continue;
       }
       const importers = missingImporters.get(dependencyName) ?? new Set<string>();
-      importers.add(file.relativePath);
+      importers.add(file);
       missingImporters.set(dependencyName, importers);
     }
   }
@@ -744,6 +816,39 @@ export function collectInstalledRootDependencyManifestErrors(packageRoot: string
       return `installed package root is missing declared runtime dependency '${dependencyName}' for dist importers: ${importerList.join(", ")}. Add it to package.json dependencies/optionalDependencies.`;
     })
     .toSorted((left, right) => left.localeCompare(right));
+}
+
+function isInstalledCompanionExtensionOwnedRuntimeImport(params: {
+  dependencyName: string;
+  extensionId: string;
+  packageRoot: string;
+  manifestCache: Map<string, InstalledPackageJson | null>;
+}): boolean {
+  const extensionId = params.extensionId;
+  let manifest = params.manifestCache.get(extensionId);
+  if (manifest === undefined) {
+    const manifestPath = join(params.packageRoot, "..", "@openclaw", extensionId, "package.json");
+    manifest = null;
+    if (existsSync(manifestPath)) {
+      const stat = lstatSync(manifestPath);
+      if (stat.isFile() && stat.size <= MAX_INSTALLED_ROOT_PACKAGE_JSON_BYTES) {
+        try {
+          const parsed = JSON.parse(readFileSync(manifestPath, "utf8")) as InstalledPackageJson;
+          if (parsed.name === `@openclaw/${extensionId}`) {
+            manifest = parsed;
+          }
+        } catch {
+          // Invalid companion manifests cannot authorize root runtime imports.
+        }
+      }
+    }
+    params.manifestCache.set(extensionId, manifest);
+  }
+  return Boolean(
+    manifest &&
+    (Object.hasOwn(manifest.dependencies ?? {}, params.dependencyName) ||
+      Object.hasOwn(manifest.optionalDependencies ?? {}, params.dependencyName)),
+  );
 }
 
 function collectBundledExtensionRuntimeDependencyOwners(
@@ -759,20 +864,6 @@ function collectBundledExtensionRuntimeDependencyOwners(
     }
   }
   return ownersByDependency;
-}
-
-function isBundledExtensionOwnedRuntimeImport(params: {
-  dependencyName: string;
-  ownersByDependency: Map<string, Set<string>>;
-  source: string;
-}): boolean {
-  const owners = params.ownersByDependency.get(params.dependencyName);
-  if (!owners) {
-    return false;
-  }
-  return [...owners].some((pluginId) =>
-    params.source.includes(`//#region extensions/${pluginId}/`),
-  );
 }
 
 export function resolveInstalledBinaryPath(prefixDir: string, platform = process.platform): string {

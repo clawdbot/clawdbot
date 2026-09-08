@@ -115,7 +115,9 @@ export async function fetchClawRouterUsage(params: {
   );
   try {
     if (!response.ok) {
-      await response.body?.cancel().catch(() => undefined);
+      // A capture clone can keep cancellation pending. Let finally release the
+      // owned request before waiting on that diagnostic reader.
+      void response.body?.cancel().catch(() => undefined);
       throw new Error(`ClawRouter usage request failed (HTTP ${response.status})`);
     }
     const payload = await readClawRouterUsagePayload(response, params.timeoutMs);

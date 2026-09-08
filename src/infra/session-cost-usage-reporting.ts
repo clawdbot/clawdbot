@@ -3,11 +3,11 @@ import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
+import { stripUserEnvelopeForDisplay } from "../auto-reply/reply/user-envelope-display.js";
 import { isPrimarySessionTranscriptFileName } from "../config/sessions/artifacts.js";
 import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { stripEnvelope, stripMessageIdHints } from "../shared/chat-envelope.js";
 import {
   isUsageCostRollupFresh,
   readUsageCostRollups,
@@ -388,14 +388,11 @@ export async function loadSessionLogs(params: {
         }
       }
 
-      let content = contentParts.join("\n").trim();
-      if (!content) {
-        continue;
-      }
-      content = stripInboundMetadata(content);
-      if (role === "user") {
-        content = stripMessageIdHints(stripEnvelope(content)).trim();
-      }
+      const rawText = contentParts.join("\n");
+      let content =
+        role === "user"
+          ? stripUserEnvelopeForDisplay(rawText).trim()
+          : stripInboundMetadata(rawText.trim());
       if (!content) {
         continue;
       }

@@ -3168,108 +3168,43 @@ esac
     expect(output.scriptContent).toBe("");
   });
 
-  it.each([
-    {
-      name: "bootstraps raw AWS macOS shell scripts with setup inside command substitutions",
-      shellScript: "version=$(cd repo && pnpm --version)",
-    },
-    {
-      name: "bootstraps raw AWS macOS shell scripts with assignment-prefix command substitutions",
-      shellScript: "TOOL_ROOT=$(pwd) pnpm --version",
-    },
-    {
-      name: "bootstraps raw AWS macOS shell scripts with case branches inside command substitutions",
-      shellScript: 'version=$(case "$pm" in pnpm) pnpm --version ;; esac)',
-    },
-    {
-      name: "bootstraps raw AWS macOS shell scripts with grouped setup inside command substitutions",
-      shellScript: 'echo "$( (echo setup); pnpm --version )"',
-    },
-    {
-      name: "bootstraps raw AWS macOS shell scripts after comments and setup commands",
-      shellScript: ["# setup", "cd repo && pnpm --version"].join("\n"),
-    },
-    {
-      name: "bootstraps raw AWS macOS shell scripts after escaped newlines",
-      shellScript: "cd repo && \\\npnpm --version",
-    },
-    {
-      expectedCommand: `${remoteChangedGateExport} set -e; exec pnpm check:changed`,
-      name: "bootstraps raw AWS macOS shell scripts with exec-prefixed JavaScript commands",
-      shellScript: "set -e; exec pnpm check:changed",
-    },
-    {
-      name: "bootstraps raw AWS macOS shell scripts with time-prefixed JavaScript commands",
-      shellScript: "time -p node -e 'process.exit(0)'",
-    },
-    {
-      name: "bootstraps raw AWS macOS shell scripts with JavaScript control conditions",
-      shellScript: "if node -e 'process.exit(0)'; then echo ok; fi",
-    },
-    {
-      name: "bootstraps raw AWS macOS shell scripts with env-prefixed JavaScript control conditions",
-      shellScript: "if CI=1 pnpm --version; then echo ok; fi",
-    },
-    {
-      name: "bootstraps raw AWS macOS shell scripts with JavaScript pipeline stages",
-      shellScript: "echo '{}' | node -e 'process.stdin.resume()'",
-    },
-    {
-      name: "bootstraps raw AWS macOS shell scripts after background setup commands",
-      shellScript: "setup_task & pnpm --version",
-    },
-    {
-      name: "bootstraps raw AWS macOS shell scripts with JavaScript else branches",
-      shellScript: "if test -d node_modules; then echo cached; else pnpm --version; fi",
-    },
-    {
-      name: "bootstraps raw AWS macOS shell scripts with JavaScript case branches",
-      shellScript: 'case "$(uname -m)" in arm64|x64) pnpm --version ;; esac',
-    },
-  ])("$name", ({ expectedCommand, shellScript }) => {
+  it.each(
+    // prettier-ignore
+    [
+    ["bootstraps raw AWS macOS shell scripts with setup inside command substitutions", "version=$(cd repo && pnpm --version)", undefined],
+    ["bootstraps raw AWS macOS shell scripts with assignment-prefix command substitutions", "TOOL_ROOT=$(pwd) pnpm --version", undefined],
+    ["bootstraps raw AWS macOS shell scripts with case branches inside command substitutions", 'version=$(case "$pm" in pnpm) pnpm --version ;; esac)', undefined],
+    ["bootstraps raw AWS macOS shell scripts with grouped setup inside command substitutions", 'echo "$( (echo setup); pnpm --version )"', undefined],
+    ["bootstraps raw AWS macOS shell scripts after comments and setup commands", ["# setup", "cd repo && pnpm --version"].join("\n"), undefined],
+    ["bootstraps raw AWS macOS shell scripts after escaped newlines", "cd repo && \\\npnpm --version", undefined],
+    ["bootstraps raw AWS macOS shell scripts with exec-prefixed JavaScript commands", "set -e; exec pnpm check:changed", `${remoteChangedGateExport} set -e; exec pnpm check:changed`],
+    ["bootstraps raw AWS macOS shell scripts with time-prefixed JavaScript commands", "time -p node -e 'process.exit(0)'", undefined],
+    ["bootstraps raw AWS macOS shell scripts with JavaScript control conditions", "if node -e 'process.exit(0)'; then echo ok; fi", undefined],
+    ["bootstraps raw AWS macOS shell scripts with env-prefixed JavaScript control conditions", "if CI=1 pnpm --version; then echo ok; fi", undefined],
+    ["bootstraps raw AWS macOS shell scripts with JavaScript pipeline stages", "echo '{}' | node -e 'process.stdin.resume()'", undefined],
+    ["bootstraps raw AWS macOS shell scripts after background setup commands", "setup_task & pnpm --version", undefined],
+    ["bootstraps raw AWS macOS shell scripts with JavaScript else branches", "if test -d node_modules; then echo cached; else pnpm --version; fi", undefined],
+    ["bootstraps raw AWS macOS shell scripts with JavaScript case branches", 'case "$(uname -m)" in arm64|x64) pnpm --version ;; esac', undefined],
+  ] as const,
+  )("%s", (_name, shellScript, expectedCommand) => {
     const { remoteCommand } = runSuccessfulMacosShell(shellScript);
     expectMacosJsBootstrap(remoteCommand, expectedCommand ?? shellScript);
   });
 
-  it.each([
-    {
-      name: "does not bootstrap raw AWS macOS shell scripts for JavaScript-named case labels",
-      shellScript: 'case "$packageManager" in pnpm) echo "$packageManager" ;; esac',
-    },
-    {
-      expectSingleShell: true,
-      name: "does not bootstrap raw AWS macOS shell scripts that only mention JavaScript tools",
-      shellScript: 'echo "node and pnpm are documented here"',
-    },
-    {
-      name: "does not bootstrap raw AWS macOS shell scripts for quoted JavaScript tool mentions",
-      shellScript: 'echo "docs; pnpm --version"',
-    },
-    {
-      name: "does not bootstrap raw AWS macOS shell scripts for inline comment mentions",
-      shellScript: "echo ok # $(pnpm --version)",
-    },
-    {
-      name: "does not bootstrap raw AWS macOS shell scripts for reserved words in arguments",
-      shellScript: "echo then pnpm --version && echo use-case",
-    },
-    {
-      name: "does not bootstrap raw AWS macOS shell scripts for arithmetic expansion names",
-      shellScript: "node=1; echo $((node + 1))",
-    },
-    {
-      name: "does not bootstrap raw AWS macOS shell scripts for quoted assignment mentions",
-      shellScript: 'MSG="use pnpm here" printf "%s\\n" "$MSG"',
-    },
-    {
-      name: "does not bootstrap raw AWS macOS shell scripts for command lookup checks",
-      shellScript: "command -v pnpm",
-    },
-    {
-      name: "does not bootstrap raw AWS macOS shell scripts for timed command lookup checks",
-      shellScript: "/usr/bin/time -l command -v pnpm",
-    },
-  ])("$name", ({ expectSingleShell, shellScript }) => {
+  it.each(
+    // prettier-ignore
+    [
+    ["does not bootstrap raw AWS macOS shell scripts for JavaScript-named case labels", 'case "$packageManager" in pnpm) echo "$packageManager" ;; esac', undefined],
+    ["does not bootstrap raw AWS macOS shell scripts that only mention JavaScript tools", 'echo "node and pnpm are documented here"', true],
+    ["does not bootstrap raw AWS macOS shell scripts for quoted JavaScript tool mentions", 'echo "docs; pnpm --version"', undefined],
+    ["does not bootstrap raw AWS macOS shell scripts for inline comment mentions", "echo ok # $(pnpm --version)", undefined],
+    ["does not bootstrap raw AWS macOS shell scripts for reserved words in arguments", "echo then pnpm --version && echo use-case", undefined],
+    ["does not bootstrap raw AWS macOS shell scripts for arithmetic expansion names", "node=1; echo $((node + 1))", undefined],
+    ["does not bootstrap raw AWS macOS shell scripts for quoted assignment mentions", 'MSG="use pnpm here" printf "%s\\n" "$MSG"', undefined],
+    ["does not bootstrap raw AWS macOS shell scripts for command lookup checks", "command -v pnpm", undefined],
+    ["does not bootstrap raw AWS macOS shell scripts for timed command lookup checks", "/usr/bin/time -l command -v pnpm", undefined],
+  ] as const,
+  )("%s", (_name, shellScript, expectSingleShell) => {
     const { output, remoteCommand } = runSuccessfulMacosShell(shellScript);
     if (expectSingleShell) {
       expect(output.args.filter((arg) => arg === "--shell")).toHaveLength(1);

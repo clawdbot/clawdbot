@@ -159,6 +159,16 @@ const mocks = vi.hoisted(() => {
     }),
     loadModelsConfigArgs: vi.fn(),
     loadProviderUsageSummary: vi.fn().mockResolvedValue(undefined),
+    runAuthProbes: vi
+      .fn<typeof import("./list.probe.js").runAuthProbes>()
+      .mockImplementation(async ({ options }) => ({
+        startedAt: 0,
+        finishedAt: 0,
+        durationMs: 0,
+        totalTargets: 0,
+        options,
+        results: [],
+      })),
     resolveRuntimeSyntheticAuthProviderRefs: vi.fn().mockReturnValue([]),
     resolveProviderSyntheticAuthWithPlugin: vi.fn().mockReturnValue(undefined),
     resolveAgentHarnessOwnerPluginIds: vi.fn().mockReturnValue(["codex"]),
@@ -277,6 +287,7 @@ vi.mock("../../config/config.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../config/config.js")>()),
   createConfigIO: mocks.createConfigIO,
 }));
+vi.mock("./list.probe.js", () => ({ runAuthProbes: mocks.runAuthProbes }));
 vi.mock("./load-config.js", () => ({
   loadModelsConfig: vi.fn(async (...args: unknown[]) => {
     mocks.loadModelsConfigArgs(...args);
@@ -734,10 +745,34 @@ describe("modelsStatusCommand auth overview", () => {
     [{ probeTimeout: "5000ms" }, "--probe-timeout"],
     [{ probeConcurrency: "2.5" }, "--probe-concurrency"],
     [{ probeMaxTokens: "64x" }, "--probe-max-tokens"],
-  ])("rejects partial probe numeric option %s", async (opts, label) => {
+    [{ probeTimeout: "" }, "--probe-timeout"],
+    [{ probeTimeout: "   " }, "--probe-timeout"],
+    [{ probeConcurrency: "" }, "--probe-concurrency"],
+    [{ probeConcurrency: "   " }, "--probe-concurrency"],
+    [{ probeMaxTokens: "" }, "--probe-max-tokens"],
+    [{ probeMaxTokens: "   " }, "--probe-max-tokens"],
+  ])("rejects invalid probe numeric option %j", async (opts, label) => {
+    const localRuntime = createRuntime();
+    mocks.runAuthProbes.mockClear();
     await expect(
-      modelsStatusCommand({ json: true, ...opts }, createRuntime() as never),
+      modelsStatusCommand({ json: true, probe: true, ...opts }, localRuntime),
     ).rejects.toThrow(label);
+    expect(mocks.runAuthProbes).not.toHaveBeenCalled();
+    expect(localRuntime.log).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [{}, { timeoutMs: 8000, concurrency: 2, maxTokens: 8 }],
+    [
+      { probeTimeout: "1.5", probeConcurrency: "1", probeMaxTokens: "1" },
+      { timeoutMs: 1.5, concurrency: 1, maxTokens: 1 },
+    ],
+  ])("forwards probe numeric options %j", async (opts, expected) => {
+    mocks.runAuthProbes.mockClear();
+    await modelsStatusCommand({ json: true, probe: true, ...opts }, createRuntime());
+    expect(mocks.runAuthProbes).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ options: expect.objectContaining(expected) }),
+    );
   });
 
   it("includes masked auth sources in JSON output", async () => {

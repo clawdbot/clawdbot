@@ -22,7 +22,7 @@ import {
 } from "./status-reaction-variants.js";
 import { parseTelegramTarget } from "./targets.js";
 
-type TelegramReactionOpts = TelegramApiCallOpts & {
+type TelegramReactionOpts = Omit<TelegramMessageActionOpts, "notify"> & {
   remove?: boolean;
 };
 

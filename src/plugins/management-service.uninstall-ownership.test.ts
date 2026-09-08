@@ -24,6 +24,9 @@ vi.mock("../config/config.js", () => ({
 
 vi.mock("./install-persistence.js", () => ({
   persistPluginInstall: vi.fn(),
+}));
+
+vi.mock("./install-config-mutation.js", () => ({
   resolveInstallConfigMutationPreflights: () => ({
     hookMutation: { mode: "allowed" },
     pluginMutation: { mode: "allowed" },
@@ -449,12 +452,12 @@ describe("plugin management uninstall channel ownership", () => {
       };
     });
     mocks.replaceConfig.mockImplementation(
-      async ({ nextConfig }: { nextConfig: OpenClawConfig }) => {
-        expect(nextConfig.plugins?.load?.paths).toEqual([unrelatedPath]);
+      async ({ sourceConfig }: { sourceConfig: OpenClawConfig }) => {
+        expect(sourceConfig.plugins?.load?.paths).toEqual([unrelatedPath]);
         currentConfig = {
-          ...nextConfig,
+          ...sourceConfig,
           logging: { level: "debug" },
-          plugins: { ...nextConfig.plugins, load: { paths: [unrelatedPath, addedPath] } },
+          plugins: { ...sourceConfig.plugins, load: { paths: [unrelatedPath, addedPath] } },
         };
       },
     );

@@ -2178,178 +2178,41 @@ describe("message tool secret scoping", () => {
     expect(mocks.runMessageAction).not.toHaveBeenCalled();
   });
 
-  it.each([
-    {
-      name: "delegated same-provider alternate",
-      channel: "googlechat",
-      accountId: "alternate",
-      requesterAccountId: "current",
-      trusted: true,
-      origin: undefined,
-      rejected: true,
-    },
-    {
-      name: "delegated same-provider account with equivalent casing",
-      channel: "googlechat",
-      accountId: "CURRENT",
-      requesterAccountId: "current",
-      trusted: true,
-      origin: undefined,
-      rejected: false,
-    },
-    {
-      name: "direct same-provider alternate without a turn capability",
-      channel: "googlechat",
-      accountId: "alternate",
-      requesterAccountId: undefined,
-      trusted: false,
-      origin: "direct-operator" as const,
-      rejected: false,
-    },
-    {
-      name: "delegated cross-provider alternate",
-      channel: "slack",
-      accountId: "alternate",
-      requesterAccountId: "current",
-      trusted: true,
-      origin: undefined,
-      rejected: false,
-    },
-    {
-      name: "source-less same-provider alternate",
-      channel: "googlechat",
-      accountId: "alternate",
-      requesterAccountId: undefined,
-      trusted: false,
-      origin: undefined,
-      rejected: false,
-    },
-    {
-      name: "delegated same-provider account without trusted account identity",
-      channel: "googlechat",
-      accountId: "alternate",
-      requesterAccountId: undefined,
-      trusted: true,
-      origin: undefined,
-      rejected: true,
-    },
-    {
-      name: "unknown-origin same-provider alternate",
-      channel: "googlechat",
-      accountId: "alternate",
-      requesterAccountId: "current",
-      trusted: true,
-      origin: "future-origin" as never,
-      rejected: true,
-    },
-    {
-      name: "delegated unscoped broadcast including the current provider",
-      channel: "googlechat",
-      accountId: "alternate",
-      requesterAccountId: "current",
-      trusted: true,
-      origin: undefined,
-      rejected: true,
-      broadcast: true,
-    },
-    {
-      name: "delegated channel-less uniformly prefixed broadcast",
-      channel: "googlechat",
-      accountId: "alternate",
-      requesterAccountId: "current",
-      trusted: true,
-      origin: undefined,
-      rejected: true,
-      broadcast: true,
-      broadcastTargets: ["slack:channel:one", "slack:channel:two"],
-    },
-    {
-      name: "delegated all-channel uniformly prefixed broadcast",
-      channel: "googlechat",
-      accountId: "alternate",
-      requesterAccountId: "current",
-      trusted: true,
-      origin: undefined,
-      rejected: true,
-      broadcast: true,
-      broadcastChannel: "all",
-      broadcastTargets: ["slack:channel:one", "slack:channel:two"],
-    },
-    {
-      name: "delegated explicitly scoped cross-provider broadcast",
-      channel: "slack",
-      accountId: "alternate",
-      requesterAccountId: "current",
-      trusted: true,
-      origin: undefined,
-      rejected: false,
-      broadcast: true,
-      broadcastChannel: "slack",
-      broadcastTargets: ["slack:channel:one", "slack:channel:two"],
-    },
-    {
-      name: "delegated fallback-resolved current-provider broadcast",
-      channel: "googlechat",
-      accountId: "alternate",
-      requesterAccountId: "current",
-      trusted: true,
-      origin: undefined,
-      rejected: true,
-      broadcast: true,
-      broadcastChannel: "last",
-      broadcastTargets: ["googlechat:spaces/current"],
-    },
-    {
-      name: "delegated fallback-resolved broadcast with matching current account",
-      channel: "googlechat",
-      accountId: "current",
-      requesterAccountId: "current",
-      trusted: true,
-      origin: undefined,
-      rejected: false,
-      broadcast: true,
-      broadcastChannel: "last",
-      broadcastTargets: ["googlechat:spaces/current"],
-      expectedRunnerChannel: "googlechat",
-    },
-    {
-      name: "direct fallback-resolved broadcast with alternate account",
-      channel: "googlechat",
-      accountId: "alternate",
-      requesterAccountId: undefined,
-      trusted: false,
-      origin: "direct-operator" as const,
-      rejected: false,
-      broadcast: true,
-      broadcastChannel: "last",
-      broadcastTargets: ["googlechat:spaces/current"],
-      expectedRunnerChannel: "googlechat",
-    },
-    {
-      name: "delegated channel-less broadcast with matching current account",
-      channel: "googlechat",
-      accountId: "current",
-      requesterAccountId: "current",
-      trusted: true,
-      origin: undefined,
-      rejected: false,
-      broadcast: true,
-      broadcastTargets: ["slack:channel:one", "slack:channel:two"],
-    },
-    {
-      name: "direct channel-less uniformly prefixed broadcast",
-      channel: "googlechat",
-      accountId: "alternate",
-      requesterAccountId: undefined,
-      trusted: false,
-      origin: "direct-operator" as const,
-      rejected: false,
-      broadcast: true,
-      broadcastTargets: ["slack:channel:one", "slack:channel:two"],
-    },
-  ])(
-    "$name respects trusted current-turn account isolation before secret resolution",
-    async (testCase) => {
+  it.each(
+    // prettier-ignore
+    [
+    ["delegated same-provider alternate", "googlechat", "alternate", "current", true, undefined, true, undefined, undefined, undefined, undefined],
+    ["delegated same-provider account with equivalent casing", "googlechat", "CURRENT", "current", true, undefined, false, undefined, undefined, undefined, undefined],
+    ["direct same-provider alternate without a turn capability", "googlechat", "alternate", undefined, false, "direct-operator" as const, false, undefined, undefined, undefined, undefined],
+    ["delegated cross-provider alternate", "slack", "alternate", "current", true, undefined, false, undefined, undefined, undefined, undefined],
+    ["source-less same-provider alternate", "googlechat", "alternate", undefined, false, undefined, false, undefined, undefined, undefined, undefined],
+    ["delegated same-provider account without trusted account identity", "googlechat", "alternate", undefined, true, undefined, true, undefined, undefined, undefined, undefined],
+    ["unknown-origin same-provider alternate", "googlechat", "alternate", "current", true, "future-origin" as never, true, undefined, undefined, undefined, undefined],
+    ["delegated unscoped broadcast including the current provider", "googlechat", "alternate", "current", true, undefined, true, true, undefined, undefined, undefined],
+    ["delegated channel-less uniformly prefixed broadcast", "googlechat", "alternate", "current", true, undefined, true, true, undefined, ["slack:channel:one", "slack:channel:two"], undefined],
+    ["delegated all-channel uniformly prefixed broadcast", "googlechat", "alternate", "current", true, undefined, true, true, "all", ["slack:channel:one", "slack:channel:two"], undefined],
+    ["delegated explicitly scoped cross-provider broadcast", "slack", "alternate", "current", true, undefined, false, true, "slack", ["slack:channel:one", "slack:channel:two"], undefined],
+    ["delegated fallback-resolved current-provider broadcast", "googlechat", "alternate", "current", true, undefined, true, true, "last", ["googlechat:spaces/current"], undefined],
+    ["delegated fallback-resolved broadcast with matching current account", "googlechat", "current", "current", true, undefined, false, true, "last", ["googlechat:spaces/current"], "googlechat"],
+    ["direct fallback-resolved broadcast with alternate account", "googlechat", "alternate", undefined, false, "direct-operator" as const, false, true, "last", ["googlechat:spaces/current"], "googlechat"],
+    ["delegated channel-less broadcast with matching current account", "googlechat", "current", "current", true, undefined, false, true, undefined, ["slack:channel:one", "slack:channel:two"], undefined],
+    ["direct channel-less uniformly prefixed broadcast", "googlechat", "alternate", undefined, false, "direct-operator" as const, false, true, undefined, ["slack:channel:one", "slack:channel:two"], undefined],
+  ] as const,
+  )(
+    "%s respects trusted current-turn account isolation before secret resolution",
+    async (
+      _name,
+      channel,
+      accountId,
+      requesterAccountId,
+      trusted,
+      origin,
+      rejected,
+      broadcast,
+      broadcastChannel,
+      broadcastTargets,
+      expectedRunnerChannel,
+    ) => {
       const googleChatPlugin = createChannelPlugin({
         id: "googlechat",
         label: "Google Chat",
@@ -2380,13 +2243,13 @@ describe("message tool secret scoping", () => {
           { pluginId: "slack", source: "test", plugin: slackPlugin },
         ]),
       );
-      const token = testCase.trusted
+      const token = trusted
         ? mintMessageActionTurnCapability({
             agentId: "main",
             runId: "run-1",
             sessionKey: "agent:main:googlechat:current:space:current",
             sessionId: "session-1",
-            requesterAccountId: testCase.requesterAccountId,
+            requesterAccountId,
             toolContext: {
               currentChannelProvider: "googlechat",
               currentChannelId: "spaces/current",
@@ -2397,8 +2260,8 @@ describe("message tool secret scoping", () => {
         mintedTurnCapabilities.push(token);
       }
       mockSendResult({
-        channel: testCase.channel,
-        to: testCase.channel === "googlechat" ? "spaces/current" : "channel:other",
+        channel,
+        to: channel === "googlechat" ? "spaces/current" : "channel:other",
       });
 
       const tool = createMessageTool({
@@ -2407,7 +2270,7 @@ describe("message tool secret scoping", () => {
         agentSessionKey: "agent:main:googlechat:current:space:current",
         sessionId: "session-1",
         messageActionTurnCapability: token,
-        conversationReadOrigin: testCase.origin,
+        conversationReadOrigin: origin,
         config: {
           channels: {
             googlechat: {
@@ -2430,28 +2293,23 @@ describe("message tool secret scoping", () => {
         runMessageAction: mocks.runMessageAction as never,
       });
 
-      const invocation = testCase.broadcast
+      const invocation = broadcast
         ? tool.execute("1", {
             action: "broadcast",
-            ...("broadcastChannel" in testCase && testCase.broadcastChannel
-              ? { channel: testCase.broadcastChannel }
-              : {}),
-            targets:
-              "broadcastTargets" in testCase
-                ? testCase.broadcastTargets
-                : ["googlechat:spaces/current", "slack:channel:other"],
-            accountId: testCase.accountId,
+            ...(broadcastChannel ? { channel: broadcastChannel } : {}),
+            targets: broadcastTargets ?? ["googlechat:spaces/current", "slack:channel:other"],
+            accountId,
             message: "hi",
           })
         : tool.execute("1", {
             action: "send",
-            channel: testCase.channel,
-            target: testCase.channel === "googlechat" ? "spaces/current" : "channel:other",
-            accountId: testCase.accountId,
+            channel,
+            target: channel === "googlechat" ? "spaces/current" : "channel:other",
+            accountId,
             message: "hi",
           });
 
-      if (testCase.rejected) {
+      if (rejected) {
         await expect(invocation).rejects.toThrow("does not match the trusted current account");
         expect(mocks.resolveCommandSecretRefsViaGateway).not.toHaveBeenCalled();
         expect(mocks.runMessageAction).not.toHaveBeenCalled();
@@ -2461,8 +2319,8 @@ describe("message tool secret scoping", () => {
       await expect(invocation).resolves.toBeDefined();
       expect(mocks.resolveCommandSecretRefsViaGateway).toHaveBeenCalledOnce();
       expect(mocks.runMessageAction).toHaveBeenCalledOnce();
-      if ("expectedRunnerChannel" in testCase) {
-        expect(firstRunMessageActionInput()?.params?.channel).toBe(testCase.expectedRunnerChannel);
+      if (expectedRunnerChannel !== undefined) {
+        expect(firstRunMessageActionInput()?.params?.channel).toBe(expectedRunnerChannel);
       }
     },
   );

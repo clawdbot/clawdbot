@@ -15,6 +15,7 @@ import {
   parseMarkdownFileLinkTarget,
   splitMarkdownFileLineSuffix,
 } from "./markdown-file-links.ts";
+import { installMarkdownGitHubRefs } from "./markdown-github-refs.ts";
 import { hasMarkdownLinkBoundaries } from "./markdown-link-boundary.ts";
 import type { MarkdownRenderEnv } from "./markdown-render-options.ts";
 import { installMarkdownSessionLinks, SESSION_LINK_SCAN_RE } from "./markdown-session-links.ts";
@@ -37,6 +38,15 @@ const GITHUB_LINK_CLASS = "markdown-github-link";
 // Marks anchors whose visible text is the URL itself, which CSS may break at
 // any character. Authored labels keep normal word wrapping.
 const BARE_URL_CLASS = "markdown-bare-url";
+// Anchors minted from a code span that held only a GitHub URL; they carry a
+// generated label exactly like linkify output.
+const CODE_SPAN_LINK_MARKUP = "code-span-url";
+const CODE_SPAN_URL_BREAK_RE = /[\s\p{Cc}]/u;
+
+function isGitHubHost(hostname: string): boolean {
+  const host = hostname.toLowerCase();
+  return host === "github.com" || host === "www.github.com";
+}
 
 // Inline-code file links are rendered by the code_inline rule, which runs after
 // every core rule. The core rule therefore parks the resolved target here so the
@@ -498,27 +508,56 @@ export function createMarkdownParser(): MarkdownItParser {
 
   // Classify web anchors for presentation; runs after linkify so bare URLs are
   // already anchors. The GitHub mark skips links whose only content is an image
-  // (badges/shields), where a mark beside a mark reads as noise. Code spans and
-  // fences need no exclusion: markdown-it does not linkify inside them.
+  // (badges/shields), where a mark beside a mark reads as noise. markdown-it
+  // does not linkify inside code spans or fences; a code span holding nothing
+  // but a GitHub URL is promoted here to the same anchor a bare URL gets, since
+  // models routinely quote links that way and the reference is what matters.
   markdownParser.core.ruler.after("linkify", "web-link-classes", (state) => {
     for (const blockToken of state.tokens) {
       if (blockToken.type !== "inline" || !blockToken.children) {
         continue;
       }
       const children = blockToken.children;
+      let linkDepth = 0;
       for (let index = 0; index < children.length; index++) {
-        const open = children[index];
+        let open = children[index];
+        if (open?.type === "link_close") {
+          linkDepth = Math.max(0, linkDepth - 1);
+          continue;
+        }
+        if (open?.type === "code_inline" && linkDepth === 0) {
+          // The URL parser strips or percent-encodes whitespace and control
+          // characters instead of failing, so a span with prose beside the URL
+          // would fold that prose into the href. CommonMark has already stripped
+          // symmetric padding; anything left is content, and only a span that is
+          // entirely one URL is promoted.
+          const content = open.content;
+          const codeUrl = CODE_SPAN_URL_BREAK_RE.test(content) ? null : parseWebLinkHref(content);
+          if (!codeUrl || !isGitHubHost(codeUrl.hostname)) {
+            continue;
+          }
+          const label = new state.Token("text", "", 0);
+          label.content = content;
+          open = new state.Token("link_open", "a", 1);
+          open.markup = CODE_SPAN_LINK_MARKUP;
+          open.attrSet("href", label.content);
+          children.splice(index, 1, open, label, new state.Token("link_close", "a", -1));
+        }
         if (open?.type !== "link_open") {
           continue;
         }
+        linkDepth += 1;
         const href = String(open.attrGet("href") ?? "");
         const url = href ? parseWebLinkHref(href) : null;
         if (!url) {
           continue;
         }
-        const generatedUrlLabel = open.markup === "linkify" || open.markup === "autolink";
+        const generatedUrlLabel =
+          open.markup === "linkify" ||
+          open.markup === "autolink" ||
+          open.markup === CODE_SPAN_LINK_MARKUP;
         const host = url.hostname.toLowerCase();
-        const githubLink = host === "github.com" || host === "www.github.com";
+        const githubLink = isGitHubHost(host);
         if (generatedUrlLabel) {
           open.attrJoin("class", BARE_URL_CLASS);
         }
@@ -570,6 +609,8 @@ export function createMarkdownParser(): MarkdownItParser {
       }
     }
   });
+
+  installMarkdownGitHubRefs(markdownParser);
 
   // Enable GFM task list checkboxes (- [x] / - [ ]).
   // enabled: false keeps checkboxes read-only (disabled="") — task lists in
