@@ -455,7 +455,7 @@ async function readAlertFields(page: Page) {
     after: await page.locator("#cron-failure-alert-after").inputValue(),
     cooldown: await page.locator("#cron-failure-alert-cooldown-seconds").inputValue(),
     mode: await pickerValue(mode),
-    modeLabel: await mode.locator('input[role="combobox"]').inputValue(),
+    modeLabel: await mode.locator(".picker-select__trigger .picker-select__label").textContent(),
   };
 }
 

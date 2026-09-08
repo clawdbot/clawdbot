@@ -351,7 +351,8 @@ describe("ModelProvidersPage agent scope", () => {
 
     await updatePickers(page);
     const fallback = [...page.querySelectorAll<SelectPicker>("openclaw-select-picker")].find(
-      (select) => select.querySelector("button")?.getAttribute("aria-label") === "Fallback Model",
+      (select) =>
+        select.querySelector('[role="listbox"]')?.getAttribute("aria-label") === "Fallback Model",
     );
     expect(fallback).toBeDefined();
     await choosePickerValue(fallback!, "xai/grok");

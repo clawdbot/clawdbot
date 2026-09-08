@@ -168,7 +168,7 @@ suite.define(() => {
         );
         const timezoneOptions = await page
           .locator("#cron-tz-suggestions option")
-          .evaluateAll((options) => options.map((option) => option.getAttribute("data-value")));
+          .evaluateAll((options) => options.map((option) => option.getAttribute("value")));
         expect(timezoneOptions).toContain(browserTimezone);
         expect(timezoneOptions).toContain("UTC");
         expect(timezoneOptions.length).toBeGreaterThan(100);

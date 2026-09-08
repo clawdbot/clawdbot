@@ -219,7 +219,7 @@ describe("cron view editor", () => {
     });
     await updatePickers(container);
     const unitSelect = Array.from(container.querySelectorAll("openclaw-select-picker")).find(
-      (select) => select.querySelector("button")?.getAttribute("aria-label") === "Unit",
+      (select) => select.querySelector('[role="listbox"]')?.getAttribute("aria-label") === "Unit",
     );
     expect(unitSelect).toBeInstanceOf(HTMLElement);
     if (!unitSelect) {

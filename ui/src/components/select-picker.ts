@@ -2,7 +2,6 @@ import WaPopup from "@awesome.me/webawesome/dist/components/popup/popup.js";
 import { html, nothing, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import { live } from "lit/directives/live.js";
-import { ref } from "lit/directives/ref.js";
 import { t } from "../i18n/index.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import { configureAnchoredPopup } from "./anchored-overlay.ts";
@@ -124,6 +123,7 @@ export class SelectPicker<
   }
 
   protected override updated(changed: PropertyValues) {
+    this.configurePopup();
     if (this.mode === "closed" || (!changed.has("activeValue") && !changed.has("query"))) {
       return;
     }
@@ -165,13 +165,14 @@ export class SelectPicker<
     }
   };
 
-  private readonly configurePopup = (element?: Element) => {
+  private configurePopup() {
+    const element = this.querySelector<WaPopup>("wa-popup");
     if (!(element instanceof WaPopup) || !this.trigger) {
       return;
     }
     configureAnchoredPopup(element, this.trigger, this.params.placement ?? "bottom");
     element.sync = "width";
-  };
+  }
 
   private readonly handleKeydown = (event: KeyboardEvent) => {
     const editing = event.target instanceof HTMLInputElement;
@@ -273,7 +274,7 @@ export class SelectPicker<
           <span class="picker-select__label">${selected?.label ?? this.params.label}</span>
           <span class="picker-select__chevron" aria-hidden="true">${icons.chevronDown}</span>
         </button>
-        <wa-popup ?active=${open} ${ref(this.configurePopup)}>
+        <wa-popup ?active=${open}>
           <div class="picker-select__menu">
             ${
               this.mode === "search"

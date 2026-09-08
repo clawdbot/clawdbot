@@ -431,7 +431,7 @@ describe("cron view selects", () => {
       runsIn.querySelector('[role="option"][aria-selected="true"]')?.getAttribute("data-value"),
     ).toBe("isolated");
     const unit = Array.from(container.querySelectorAll<HTMLElement>("openclaw-select-picker")).find(
-      (select) => select.querySelector("button")?.getAttribute("aria-label") === "Unit",
+      (select) => select.querySelector('[role="listbox"]')?.getAttribute("aria-label") === "Unit",
     );
     expect(
       unit?.querySelector('[role="option"][aria-selected="true"]')?.getAttribute("data-value"),

@@ -1,3 +1,4 @@
+import type WaPopup from "@awesome.me/webawesome/dist/components/popup/popup.js";
 import { html, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -66,6 +67,12 @@ async function mount(overrides: Partial<PickerParams<PickerOption>> = {}) {
 }
 
 describe("renderPicker", () => {
+  it("anchors its popup to the mounted trigger before the first open", async () => {
+    const p = await mount();
+    const popup = p.picker.querySelector<WaPopup>("wa-popup");
+    expect(popup?.anchor).toBe(p.trigger);
+  });
+
   it("leaves closed-trigger Escape to the page after dismissing the menu without a write", async () => {
     const p = await mount();
     const pageKey = vi.fn();
