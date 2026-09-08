@@ -43,6 +43,7 @@ type PreparedSkillProposalDraft = {
 export function prepareSkillProposalDraft(input: {
   name: string;
   description: string;
+  skillDescription: string;
   content: string;
   fallbackFrontmatterContent?: string;
   version?: string;
@@ -59,7 +60,7 @@ export function prepareSkillProposalDraft(input: {
     const supportFiles = prepareSkillProposalSupportFiles(input.supportFiles);
     const content = renderProposalMarkdown({
       name: input.name,
-      description: input.description,
+      description: input.skillDescription,
       content: input.content,
       fallbackFrontmatterContent: input.fallbackFrontmatterContent,
       version: input.version,
@@ -70,6 +71,7 @@ export function prepareSkillProposalDraft(input: {
     const scan = scanProposalBundle(content, supportFiles, [
       ...(input.secretScanMetadata ?? []),
       { file: "description", content: input.description },
+      { file: "skill-description", content: input.skillDescription },
       { file: "goal", content: goal },
       { file: "evidence", content: evidence },
     ]);
