@@ -45,6 +45,8 @@ import {
 import type { DiscordSendResult } from "./send.types.js";
 
 export const DISCORD_TEXT_CHUNK_LIMIT = 2000;
+// Shared planning owns explicit per-send limits; Discord's sender resolves account config/defaults.
+const DISCORD_PRECHUNK_MAX_LINES = Number.MAX_SAFE_INTEGER;
 const log = createSubsystemLogger("discord/outbound");
 const loadDiscordThreadBindings = createLazyRuntimeModule(
   () => import("./monitor/thread-bindings.js"),
@@ -90,10 +92,11 @@ async function maybeSendDiscordWebhookText(params: DiscordOutboundMessageContext
     accountId: binding.accountId,
     threadId: binding.threadId,
     cfg: params.cfg,
-    replyTo: params.replyToId ?? undefined,
+    replyTo: resolveDiscordReplyReference(params),
     username: truncateUtf16Safe(username, 80) || undefined,
     avatarUrl: normalizeOptionalString(params.identity?.avatarUrl),
     tableMode: params.formatting?.tableMode,
+    chunking: { maxLines: params.formatting?.maxLinesPerMessage },
     ...resolveDiscordDeliveryOptions(params),
   });
 }
@@ -127,7 +130,7 @@ export const discordOutbound: ChannelOutboundAdapter = {
   chunker: (text, limit, ctx) =>
     chunkDiscordTextWithMode(text, {
       maxChars: limit,
-      maxLines: ctx?.formatting?.maxLinesPerMessage,
+      maxLines: ctx?.formatting?.maxLinesPerMessage ?? DISCORD_PRECHUNK_MAX_LINES,
     }),
   textChunkLimit: DISCORD_TEXT_CHUNK_LIMIT,
   pollMaxOptions: 10,

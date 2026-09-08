@@ -227,7 +227,7 @@ describe("discordOutbound", () => {
     expect(options.webhookToken).toBe("tok-1");
     expect(options.accountId).toBe("default");
     expect(options.threadId).toBe("thread-1");
-    expect(options.replyTo).toBe("reply-1");
+    expect(options.replyTo).toEqual({ messageId: "reply-1", scope: "all" });
     expect(options.username).toBe("Codex");
     expect(options.avatarUrl).toBe("https://example.com/avatar.png");
     expect(options.cfg).toBe(cfg);
