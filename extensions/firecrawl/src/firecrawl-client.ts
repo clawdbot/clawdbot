@@ -126,24 +126,6 @@ function isOfficialFirecrawlEndpoint(url: URL): boolean {
   return url.protocol === "https:" && ALLOWED_FIRECRAWL_HOSTS.has(url.hostname);
 }
 
-async function firecrawlEndpointTargetsPrivateNetwork(
-  url: URL,
-  lookupFn?: LookupFn,
-): Promise<boolean> {
-  if (isBlockedHostnameOrIp(url.hostname)) {
-    return true;
-  }
-  try {
-    const pinned = await resolvePinnedHostnameWithPolicy(url.hostname, {
-      lookupFn,
-      policy: { allowPrivateNetwork: true },
-    });
-    return pinned.addresses.every((address) => isPrivateIpAddress(address));
-  } catch {
-    return false;
-  }
-}
-
 async function validateFirecrawlBaseUrl(
   baseUrl: string,
   lookupFn?: LookupFn,
@@ -162,8 +144,19 @@ async function validateFirecrawlBaseUrl(
     return "strict";
   }
 
-  const isPrivateTarget = await firecrawlEndpointTargetsPrivateNetwork(url, lookupFn);
-  if (isPrivateTarget) {
+  if (isBlockedHostnameOrIp(url.hostname)) {
+    return "selfHosted";
+  }
+  // Private addresses are allowed during resolution; a lookup failure must not
+  // become a public-endpoint policy error.
+  const pinned = await resolvePinnedHostnameWithPolicy(url.hostname, {
+    lookupFn,
+    policy: { allowPrivateNetwork: true },
+  }).catch((reason: unknown) => {
+    const cause = reason instanceof Error ? reason.message : String(reason);
+    throw new Error(`Unable to resolve Firecrawl baseUrl host: ${url.hostname} (${cause})`);
+  });
+  if (pinned.addresses.every((address) => isPrivateIpAddress(address))) {
     return "selfHosted";
   }
   if (url.protocol === "http:") {
