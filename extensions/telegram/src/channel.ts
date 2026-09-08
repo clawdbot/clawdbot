@@ -712,6 +712,12 @@ const resolveTelegramAllowlistGroupOverrides = createNestedAllowlistOverrideReso
 
 export const telegramPlugin = createChatChannelPlugin({
   base: {
+    streaming: {
+      dispatchRecoveryReply: async (params) => {
+        const { dispatchTelegramRecoveryReply } = await import("./restart-recovery-reply.js");
+        await dispatchTelegramRecoveryReply(params);
+      },
+    },
     ...createTelegramPluginBase({
       setupWizard: telegramSetupWizard,
       setupContract: telegramSetupContract,

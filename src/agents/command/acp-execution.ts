@@ -25,6 +25,7 @@ import {
 import { prepareInternalSessionEffectsSession } from "../internal-session-effects.js";
 import type { AgentRunSessionTarget } from "../run-session-target.js";
 import { isAgentRunRestartAbortReason } from "../run-termination.js";
+import { withCommandChannelReplyEvents } from "./channel-reply-event-bridges.js";
 import { applyAgentRunAbortMetadata } from "./lifecycle.js";
 import type { PreparedAgentCommandExecution } from "./prepare.js";
 import {
@@ -159,67 +160,81 @@ export async function runAcpAgentCommand(params: {
       },
       isActive: isElicitationActive,
     });
-    await params.acpManager.runTurn({
-      admittedRunContext,
-      cfg: params.cfg,
-      sessionKey: params.sessionKey,
-      agentId: params.sessionAgentId,
-      provenance: params.provenance,
-      text: params.body,
-      attachments: acpImageAttachments.length > 0 ? acpImageAttachments : undefined,
-      mode: "prompt",
-      requestId: params.runId,
-      signal: params.opts.abortSignal,
-      onElicitation,
-      onBeforePrompt: async () => {
-        const recorder = params.opts.userTurnTranscriptRecorder;
-        if (recorder && !recorder.hasPersisted() && !(await recorder.persistApproved())) {
-          throw new Error("ACP input could not enter the session transcript");
-        }
-        params.opts.onExecutionStarted?.();
+    await withCommandChannelReplyEvents(
+      {
+        opts: params.opts,
+        cfg: params.cfg,
+        sessionKey: params.sessionKey,
+        storePath: params.storePath,
+        runId: params.runId,
+        provider: "acp",
+        model: params.sessionEntry?.model ?? "acp",
+        resolvedVerboseLevel:
+          params.sessionEntry?.verboseLevel ?? params.cfg.agents?.defaults?.verboseDefault ?? "off",
       },
-      onLifecycle: (event) => {
-        if (event.type === "prompt_submitted") {
-          attemptExecutionRuntime.emitAcpPromptSubmitted({
-            runId: params.runId,
-            sessionKey: params.sessionKey,
-            at: event.at,
-          });
-        }
-      },
-      onEvent: (event) => {
-        if (event.type !== "text_delta") {
-          attemptExecutionRuntime.emitAcpRuntimeEvent({
-            runId: params.runId,
-            toolTracker: acpToolTracker,
-            sessionKey: params.sessionKey,
-            agentId: params.sessionAgentId,
-            abortSignal: params.opts.abortSignal,
-            event,
-          });
-        }
-        if (event.type === "done") {
-          stopReason = event.stopReason;
-          resultStatus = event.status;
-          return;
-        }
-        if (
-          event.type !== "text_delta" ||
-          (event.stream && event.stream !== "output") ||
-          !event.text
-        ) {
-          return;
-        }
-        const visibleUpdate = visibleTextAccumulator.consume(event.text);
-        if (visibleUpdate) {
-          attemptExecutionRuntime.emitAcpAssistantDelta({
-            runId: params.runId,
-            text: visibleUpdate.text,
-            delta: visibleUpdate.delta,
-          });
-        }
-      },
-    });
+      () =>
+        params.acpManager.runTurn({
+          admittedRunContext,
+          cfg: params.cfg,
+          sessionKey: params.sessionKey,
+          agentId: params.sessionAgentId,
+          provenance: params.provenance,
+          text: params.body,
+          attachments: acpImageAttachments.length > 0 ? acpImageAttachments : undefined,
+          mode: "prompt",
+          requestId: params.runId,
+          signal: params.opts.abortSignal,
+          onElicitation,
+          onBeforePrompt: async () => {
+            const recorder = params.opts.userTurnTranscriptRecorder;
+            if (recorder && !recorder.hasPersisted() && !(await recorder.persistApproved())) {
+              throw new Error("ACP input could not enter the session transcript");
+            }
+            params.opts.onExecutionStarted?.();
+          },
+          onLifecycle: (event) => {
+            if (event.type === "prompt_submitted") {
+              attemptExecutionRuntime.emitAcpPromptSubmitted({
+                runId: params.runId,
+                sessionKey: params.sessionKey,
+                at: event.at,
+              });
+            }
+          },
+          onEvent: (event) => {
+            if (event.type !== "text_delta") {
+              attemptExecutionRuntime.emitAcpRuntimeEvent({
+                runId: params.runId,
+                toolTracker: acpToolTracker,
+                sessionKey: params.sessionKey,
+                agentId: params.sessionAgentId,
+                abortSignal: params.opts.abortSignal,
+                event,
+              });
+            }
+            if (event.type === "done") {
+              stopReason = event.stopReason;
+              resultStatus = event.status;
+              return;
+            }
+            if (
+              event.type !== "text_delta" ||
+              (event.stream && event.stream !== "output") ||
+              !event.text
+            ) {
+              return;
+            }
+            const visibleUpdate = visibleTextAccumulator.consume(event.text);
+            if (visibleUpdate) {
+              attemptExecutionRuntime.emitAcpAssistantDelta({
+                runId: params.runId,
+                text: visibleUpdate.text,
+                delta: visibleUpdate.delta,
+              });
+            }
+          },
+        }),
+    );
     if (isAgentRunRestartAbortReason(params.opts.abortSignal?.reason)) {
       throw params.opts.abortSignal?.reason;
     }

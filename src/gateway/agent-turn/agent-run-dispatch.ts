@@ -53,6 +53,7 @@ import {
 import type { GatewayCronCreatorAuthorityAdmission } from "../server-methods/cron-creator-authority-admission.js";
 import { formatForLog } from "../ws-log.js";
 import { setGatewayDedupeEntries } from "./agent-dedupe.js";
+import { runAgentWithRecoveryChannelReply } from "./agent-recovery-channel-reply.js";
 import { readAgentRunDispatchExecutionIdentity } from "./agent-run-dispatch-execution-identity.js";
 import type { AgentTurnContext, AgentTurnIo } from "./types.js";
 
@@ -258,17 +259,20 @@ export function dispatchAgentRunFromGateway(params: {
     : ingressOptsWithSpawnFacts;
   const runAgent = () =>
     runWithCanonicalSkillWorkspace(params.canonicalSkillWorkspaceDir, () =>
-      agentCommandFromGatewayIngress(
-        cronCreatorAuthorityCapability
+      runAgentWithRecoveryChannelReply({
+        opts: cronCreatorAuthorityCapability
           ? { ...ingressOptsWithTaskBinding, cronCreatorAuthorityCapability }
           : ingressOptsWithTaskBinding,
-        defaultRuntime,
-        params.context.deps,
-        {
-          restoreAdmittedRecovery: params.restoreAdmittedRecovery,
-        },
-        params.commandRuntimeContext,
-      ),
+        cfg: params.commandRuntimeContext?.config ?? params.context.getRuntimeConfig(),
+        run: (opts) =>
+          agentCommandFromGatewayIngress(
+            opts,
+            defaultRuntime,
+            params.context.deps,
+            { restoreAdmittedRecovery: params.restoreAdmittedRecovery },
+            params.commandRuntimeContext,
+          ),
+      }),
     );
   const agentRun = cronCreatorAuthorityCapability
     ? runWithCronCreatorAuthorityCapability(

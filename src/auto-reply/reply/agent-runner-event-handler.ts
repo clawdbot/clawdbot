@@ -29,8 +29,19 @@ function readApprovalScopeValue(value: unknown): "turn" | "session" | undefined 
 
 /** Bridges embedded-agent events into channel progress and compaction notices. */
 export function createAgentRunEventHandler(params: {
-  turn: AgentTurnParams;
-  lifecycleBackstop: AgentLifecycleTerminalBackstop;
+  turn: Pick<
+    AgentTurnParams,
+    | "opts"
+    | "sessionKey"
+    | "toolProgressDetail"
+    | "replyOperation"
+    | "applyReplyToMode"
+    | "onCompactionNoticePayload"
+  > & {
+    sessionCtx: Pick<AgentTurnParams["sessionCtx"], "MessageSidFull" | "MessageSid">;
+    typingSignals: Pick<AgentTurnParams["typingSignals"], "signalToolStart">;
+  };
+  lifecycleBackstop?: AgentLifecycleTerminalBackstop;
   notifyAgentRunStart: () => void;
   sourceRepliesAreToolOnly: boolean;
   provider: string;
@@ -82,7 +93,7 @@ export function createAgentRunEventHandler(params: {
 
   return async (evt) => {
     params.turn.replyOperation?.recordActivity();
-    params.lifecycleBackstop.note(evt);
+    params.lifecycleBackstop?.note(evt);
     const hasLifecyclePhase = evt.stream === "lifecycle" && typeof evt.data.phase === "string";
     if (evt.stream !== "lifecycle" || hasLifecyclePhase) {
       params.notifyAgentRunStart();

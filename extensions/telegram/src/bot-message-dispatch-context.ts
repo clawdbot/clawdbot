@@ -3,7 +3,7 @@ import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { createChannelHistoryWindow } from "openclaw/plugin-sdk/reply-history";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
-import type { TelegramMessageContext } from "./bot-message-context.js";
+import type { TelegramReplyContext as TelegramMessageContext } from "./bot-message-context.js";
 import {
   buildTelegramGroupFrom,
   buildTelegramGroupPeerId,
