@@ -258,7 +258,13 @@ function hasIMessageEchoMatch(params: {
     has: (
       scope: string,
       lookup: { text?: string; media?: MediaPlaceholderTextFact; messageId?: string },
-      options?: boolean | { skipIdShortCircuit?: boolean; includePendingText?: boolean },
+      options?:
+        | boolean
+        | {
+            skipIdShortCircuit?: boolean;
+            includePendingText?: boolean;
+            requireMessageIdTextMatch?: boolean;
+          },
     ) => boolean;
   };
   scope: string | readonly string[];
@@ -267,6 +273,7 @@ function hasIMessageEchoMatch(params: {
   messageIds: string[];
   skipIdShortCircuit?: boolean;
   includePendingText?: boolean;
+  replyToGuid?: string;
 }): boolean {
   // Outbound sends persist echo scopes keyed by whichever target shape was
   // used (chat_id, chat_guid, chat_identifier, or imessage:<handle>). Inbound
@@ -285,6 +292,26 @@ function hasIMessageEchoMatch(params: {
       if (params.echoCache.has(scope, { messageId })) {
         return true;
       }
+    }
+    // Paired mirror rows carry a distinct GUID but reference the outbound
+    // GUID via reply_to_guid. The messageId short-circuit above cannot cover
+    // this — reply_to_guid is not the inbound row's own GUID. Probe the
+    // cache with reply_to_guid as the lookup ID and requireMessageIdTextMatch
+    // so the cache does not short-circuit on ID alone; text must also match
+    // the same cached outbound entry, preventing legitimate inline replies
+    // with different body text from being dropped.
+    if (
+      params.replyToGuid &&
+      params.text &&
+      params.echoCache.has(
+        scope,
+        { messageId: params.replyToGuid, text: params.text },
+        {
+          requireMessageIdTextMatch: true,
+        },
+      )
+    ) {
+      return true;
     }
     const fallbackMessageId = params.messageIds[0];
     if (!params.text && !params.media && !fallbackMessageId) {
@@ -419,7 +446,13 @@ export async function resolveIMessageInboundDecision(params: {
     has: (
       scope: string,
       lookup: { text?: string; media?: MediaPlaceholderTextFact; messageId?: string },
-      options?: boolean | { skipIdShortCircuit?: boolean; includePendingText?: boolean },
+      options?:
+        | boolean
+        | {
+            skipIdShortCircuit?: boolean;
+            includePendingText?: boolean;
+            requireMessageIdTextMatch?: boolean;
+          },
     ) => boolean;
   };
   selfChatCache?: SelfChatCache;
@@ -500,6 +533,7 @@ export async function resolveIMessageInboundDecision(params: {
   const inboundMessageIds = resolveInboundEchoMessageIds(params.message);
   const inboundMessageId = inboundMessageIds[0];
   const hasInboundGuid = Boolean(normalizeReplyField(params.message.guid));
+  const replyToGuid = normalizeReplyField(params.message.reply_to_guid) ?? undefined;
 
   if (params.message.is_from_me) {
     if (isAmbiguousSelfThread) {
@@ -537,6 +571,49 @@ export async function resolveIMessageInboundDecision(params: {
   }
   if (isGroup && !chatId) {
     return { kind: "drop", reason: "group without chat_id" };
+  }
+
+  // Early reply_to_guid echo probe: paired mirror rows carry a distinct GUID
+  // but reference the outbound GUID via reply_to_guid. Check this before
+  // access/pairing so a mirror from an unpaired or blocked sender is still
+  // suppressed as an echo rather than triggering pairing or access handling.
+  // Skip authored (is_from_me=true) rows — those are self-chat echoes handled
+  // by the self-chat cache above, not paired mirrors from the database.
+  if (params.echoCache && !params.message.is_from_me && replyToGuid && bodyText) {
+    const earlyEchoScope = buildIMessageEchoScope({
+      accountId: params.accountId,
+      isGroup,
+      chatId,
+      chatGuid,
+      chatIdentifier,
+      sender,
+    });
+    if (
+      hasIMessageEchoMatch({
+        echoCache: params.echoCache,
+        scope: earlyEchoScope,
+        text: bodyText,
+        messageIds: inboundMessageIds,
+        replyToGuid,
+      })
+    ) {
+      params.logVerbose?.(
+        describeIMessageEchoDropLog({ messageText: bodyText, messageId: inboundMessageId }),
+      );
+      // Use "self-chat echo" when either isSelfChat is true or the self-chat
+      // cache confirms this as a duplicate, so the loop rate limiter exempts
+      // benign mirror drops. isSelfChat requires destination_caller_id, but
+      // the self-chat cache can recognize duplicates without that field.
+      const isSelfChatMirror =
+        isSelfChat ||
+        Boolean(
+          params.selfChatCache?.has({
+            ...selfChatLookup,
+            text: bodyText,
+          }),
+        );
+      return { kind: "drop", reason: isSelfChatMirror ? "self-chat echo" : "echo" };
+    }
   }
 
   const groupId = isGroup ? groupIdCandidate : undefined;
@@ -733,6 +810,7 @@ export async function resolveIMessageInboundDecision(params: {
         media: mediaFacts[0],
         messageIds: inboundMessageIds,
         includePendingText: isSelfChat,
+        replyToGuid: isSelfChat ? undefined : replyToGuid,
       })
     ) {
       params.logVerbose?.(

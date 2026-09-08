@@ -13,6 +13,13 @@ type SentMessageLookup = {
 type SentMessageLookupOptions = {
   skipIdShortCircuit?: boolean;
   includePendingText?: boolean;
+  /**
+   * When true, a matching messageId alone is not sufficient — the normalized
+   * text must also match the same cached outbound entry. Used by the
+   * reply_to_guid echo probe so a legitimate inline reply that references a
+   * recent outbound GUID is not dropped solely on ID equality.
+   */
+  requireMessageIdTextMatch?: boolean;
 };
 
 export type SentMessageCache = {
@@ -66,6 +73,7 @@ class DefaultSentMessageCache implements SentMessageCache {
   private mediaCache = new Map<string, number>();
   private mediaBackedByIdCache = new Map<string, number>();
   private messageIdCache = new Map<string, number>();
+  private guidTextCache = new Map<string, number>();
 
   remember(scope: string, lookup: SentMessageLookup): void {
     const textKey = normalizeEchoTextKey(lookup.text);
@@ -81,6 +89,7 @@ class DefaultSentMessageCache implements SentMessageCache {
       this.messageIdCache.set(`${scope}:${messageIdKey}`, Date.now());
       if (textKey) {
         this.textBackedByIdCache.set(`${scope}:${textKey}`, Date.now());
+        this.guidTextCache.set(`${scope}:${messageIdKey}:${textKey}`, Date.now());
       }
       if (mediaKey) {
         this.mediaBackedByIdCache.set(`${scope}:${mediaKey}`, Date.now());
@@ -105,6 +114,7 @@ class DefaultSentMessageCache implements SentMessageCache {
         messageId: lookup.messageId,
         skipIdShortCircuit: resolvedOptions.skipIdShortCircuit,
         includePendingText: resolvedOptions.includePendingText,
+        requireMessageIdTextMatch: resolvedOptions.requireMessageIdTextMatch,
       })
     ) {
       return true;
@@ -115,13 +125,32 @@ class DefaultSentMessageCache implements SentMessageCache {
     let canUseMediaFallback = !messageIdKey;
     if (messageIdKey) {
       const idTimestamp = this.messageIdCache.get(`${scope}:${messageIdKey}`);
-      if (idTimestamp && Date.now() - idTimestamp <= SENT_MESSAGE_ID_TTL_MS) {
+      if (
+        idTimestamp &&
+        Date.now() - idTimestamp <= SENT_MESSAGE_ID_TTL_MS &&
+        !resolvedOptions.requireMessageIdTextMatch
+      ) {
         return true;
       }
       const textTimestamp = textKey ? this.textCache.get(`${scope}:${textKey}`) : undefined;
       const textBackedByIdTimestamp = textKey
         ? this.textBackedByIdCache.get(`${scope}:${textKey}`)
         : undefined;
+      // When requireMessageIdTextMatch is set, a matching messageId is only
+      // sufficient when the exact GUID and text were recorded together in the
+      // same outbound entry. guidTextCache is keyed by scope:guid:text so two
+      // sends with different GUIDs and different texts cannot satisfy each
+      // other's markers. This prevents dropping a legitimate inline reply that
+      // references one recent outbound GUID but has the same text as another.
+      if (
+        resolvedOptions.requireMessageIdTextMatch &&
+        idTimestamp &&
+        Date.now() - idTimestamp <= SENT_MESSAGE_ID_TTL_MS &&
+        textKey &&
+        this.guidTextCache.has(`${scope}:${messageIdKey}:${textKey}`)
+      ) {
+        return true;
+      }
       const hasTextOnlyMatch =
         typeof textTimestamp === "number" &&
         (!textBackedByIdTimestamp || textTimestamp > textBackedByIdTimestamp);
@@ -177,6 +206,11 @@ class DefaultSentMessageCache implements SentMessageCache {
     for (const [key, timestamp] of this.messageIdCache.entries()) {
       if (now - timestamp > SENT_MESSAGE_ID_TTL_MS) {
         this.messageIdCache.delete(key);
+      }
+    }
+    for (const [key, timestamp] of this.guidTextCache.entries()) {
+      if (now - timestamp > SENT_MESSAGE_ID_TTL_MS) {
+        this.guidTextCache.delete(key);
       }
     }
   }
