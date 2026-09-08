@@ -73,7 +73,7 @@ suite.define(() => {
           await page.goto(url.toString());
           const confirmation = page.locator("openclaw-gateway-url-confirmation");
           await confirmation.waitFor();
-          await confirmation.getByRole("button", { name: "Confirm", exact: true }).click();
+          await confirmation.getByRole("button", { name: /^Switch to /u }).click();
           await waitForControlUiGatewayReady(page, { timeout: 30_000 });
 
           const setInputValue = async (selector: string, value: string) => {
@@ -103,9 +103,7 @@ suite.define(() => {
               .poll(() =>
                 page
                   .locator("wa-select#cron-payload-kind")
-                  .evaluate((element) =>
-                    String((element as HTMLElement & { value: string }).value),
-                  ),
+                  .evaluate((element) => (element as HTMLElement & { value: string }).value),
               )
               .toBe("systemEvent");
             await page.locator('[data-test-id="cron-submit"]').dispatchEvent("click");

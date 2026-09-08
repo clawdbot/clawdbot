@@ -1,17 +1,8 @@
 import { isSystemOwnedCronPayloadKind, type CronJob } from "./types.js";
 
-export const CRON_GROUP_MAX_LENGTH = 64;
-export const CRON_TAG_MAX_LENGTH = 64;
-export const CRON_TAGS_MAX_COUNT = 20;
-
-export type CronAutomationType =
-  | "agentTurn"
-  | "command"
-  | "script"
-  | "systemEvent"
-  | "heartbeat"
-  | "skillCollectionReview"
-  | "unknown";
+const CRON_GROUP_MAX_LENGTH = 64;
+const CRON_TAG_MAX_LENGTH = 64;
+const CRON_TAGS_MAX_COUNT = 20;
 
 export function normalizeCronGroup(value: unknown): string | undefined {
   if (typeof value !== "string") {
@@ -84,7 +75,7 @@ export function isSystemOwnedCronJob(job: Pick<CronJob, "declarationKey" | "payl
   // A declaration namespace can be reserved for Gateway reconciliation without
   // making every row in that namespace read-only. In particular, doctor-migrated
   // heartbeat tasks use public systemEvent payloads and remain operator-managed.
-  return isSystemOwnedCronPayloadKind(job.payload.kind);
+  return isSystemOwnedCronPayloadKind(job.payload?.kind);
 }
 
 export function resolveCronJobGroup(
@@ -94,16 +85,4 @@ export function resolveCronJobGroup(
     return "System";
   }
   return normalizeCronGroup(job.group) ?? "Ungrouped";
-}
-
-export function resolveCronAutomationType(job: Pick<CronJob, "payload">): CronAutomationType {
-  const kind = job.payload?.kind;
-  return kind === "agentTurn" ||
-    kind === "command" ||
-    kind === "script" ||
-    kind === "systemEvent" ||
-    kind === "heartbeat" ||
-    kind === "skillCollectionReview"
-    ? kind
-    : "unknown";
 }

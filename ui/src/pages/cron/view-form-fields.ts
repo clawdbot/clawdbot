@@ -4,8 +4,13 @@ import { renderChannelPicker } from "../../components/channel-picker.ts";
 import { renderPicker, type PickerOption } from "../../components/select-picker.ts";
 import { renderSettingsToggleRow } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
-import type { CronFieldKey, CronFormState } from "../../lib/cron/index.ts";
-import type { CronProps } from "./view.ts";
+import type { CronFieldErrors, CronFieldKey, CronFormState } from "../../lib/cron/index.ts";
+
+type CronFormProps = {
+  form: CronFormState;
+  fieldErrors: CronFieldErrors;
+  onFormChange: (patch: Partial<CronFormState>) => void;
+};
 
 export function errorIdForField(key: CronFieldKey) {
   return `cron-error-${key}`;
@@ -82,7 +87,7 @@ type CronInputOptions = {
 };
 
 export function renderCronInput(
-  props: CronProps,
+  props: CronFormProps,
   field: CronStringFormField,
   options: CronInputOptions,
 ) {
@@ -112,7 +117,7 @@ export function renderCronInput(
 }
 
 export function renderCronInputField(
-  props: CronProps,
+  props: CronFormProps,
   field: CronStringFormField,
   options: CronInputOptions,
 ) {
@@ -139,7 +144,7 @@ type CronSelectOptions = {
 };
 
 export function renderCronSelect(
-  props: CronProps,
+  props: CronFormProps,
   field: CronStringFormField,
   options: CronSelectOptions,
 ) {
@@ -156,7 +161,7 @@ export function renderCronSelect(
 }
 
 export function renderCronSelectField(
-  props: CronProps,
+  props: CronFormProps,
   field: CronStringFormField,
   options: CronSelectOptions,
 ) {
@@ -169,7 +174,7 @@ export function renderCronSelectField(
 }
 
 export function renderToggleRow(
-  props: CronProps,
+  props: CronFormProps,
   field: CronBooleanFormField,
   params: { label: string; help?: string },
 ) {

@@ -1,10 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  assertValidCronMetadata,
-  normalizeCronTags,
-  resolveCronAutomationType,
-  resolveCronJobGroup,
-} from "./metadata.js";
+import { assertValidCronMetadata, normalizeCronTags, resolveCronJobGroup } from "./metadata.js";
 
 const job = (overrides: Record<string, unknown> = {}) =>
   ({
@@ -31,12 +26,5 @@ describe("cron metadata", () => {
     expect(() => assertValidCronMetadata({ group: " system " })).toThrow(/reserved/);
     expect(() => assertValidCronMetadata({ tags: ["ok", "OK"] })).toThrow(/duplicates/);
     expect(() => assertValidCronMetadata({ tags: [" "] })).toThrow(/blank/);
-  });
-
-  it("reports the payload kind used by type grouping", () => {
-    expect(resolveCronAutomationType(job({ payload: { kind: "command", argv: ["echo"] } }))).toBe(
-      "command",
-    );
-    expect(resolveCronAutomationType(job({ payload: { kind: "future" } }))).toBe("unknown");
   });
 });
