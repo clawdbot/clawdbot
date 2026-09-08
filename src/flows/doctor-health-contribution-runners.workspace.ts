@@ -130,9 +130,16 @@ export async function runWorkspaceStatusHealth(ctx: DoctorHealthFlowContext): Pr
 }
 
 export async function runWorkspaceAliasHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  const { maybeRepairRepointedWorkspaceAliases } =
+  const { collectRepointedWorkspaceAliasFindings } =
     await import("../commands/doctor-workspace-alias.js");
-  await maybeRepairRepointedWorkspaceAliases({ cfg: ctx.cfg, prompter: ctx.prompter });
+  const findings = collectRepointedWorkspaceAliasFindings(ctx.cfg);
+  if (findings.length > 0) {
+    const { note } = await import("../../packages/terminal-core/src/note.js");
+    note(
+      findings.map((finding) => `${finding.message} ${finding.fixHint}`).join("\n"),
+      "Workspace",
+    );
+  }
 }
 
 export async function runSkillsHealth(ctx: DoctorHealthFlowContext): Promise<void> {

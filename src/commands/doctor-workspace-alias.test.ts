@@ -93,7 +93,7 @@ describe("doctor workspace alias repair", () => {
     const cfg = buildAliasCfg(alias);
     await testState!.writeConfig(cfg);
     const prompter = buildPrompter({
-      confirmAggressiveAutoFix: vi.fn(async () => {
+      confirmRuntimeRepair: vi.fn(async () => {
         await testState!.writeConfig({
           agents: { entries: { main: { workspace: alias }, other: { workspace: original } } },
         });
@@ -110,7 +110,7 @@ describe("doctor workspace alias repair", () => {
     const changed = testState!.path("changed-target");
     fs.mkdirSync(changed);
     const prompter = buildPrompter({
-      confirmAggressiveAutoFix: vi.fn(async () => {
+      confirmRuntimeRepair: vi.fn(async () => {
         fs.unlinkSync(alias);
         fs.symlinkSync(changed, alias, process.platform === "win32" ? "junction" : "dir");
         return true;
@@ -141,17 +141,17 @@ describe("doctor workspace alias repair", () => {
     expect(collectRepointedWorkspaceAliasFindings(buildAliasCfg(dir))).toHaveLength(0);
   });
 
-  it("requires the aggressive gate even when generated hashes match", async () => {
+  it("requires explicit confirmation even when generated hashes match", async () => {
     const { alias, original } = repointAlias({ seedAttestedFile: true });
     const prompter = buildPrompter();
 
     await maybeRepairRepointedWorkspaceAliases({ cfg: buildAliasCfg(alias), prompter });
 
     expect(prompter.confirmAutoFix).not.toHaveBeenCalled();
-    expect(prompter.confirmAggressiveAutoFix).toHaveBeenCalledOnce();
+    expect(prompter.confirmRuntimeRepair).toHaveBeenCalledOnce();
     expect(readWorkspaceStateSnapshot(original).setupExists).toBe(true);
 
-    const approving = buildPrompter({ confirmAggressiveAutoFix: vi.fn(async () => true) });
+    const approving = buildPrompter({ confirmRuntimeRepair: vi.fn(async () => true) });
     await maybeRepairRepointedWorkspaceAliases({ cfg: buildAliasCfg(alias), prompter: approving });
     const snapshot = readWorkspaceStateSnapshot(alias);
     expect(snapshot.setupExists).toBe(true);
@@ -163,7 +163,7 @@ describe("doctor workspace alias repair", () => {
       cfg: buildAliasCfg(alias),
       prompter: secondPrompter,
     });
-    expect(secondPrompter.confirmAggressiveAutoFix).not.toHaveBeenCalled();
+    expect(secondPrompter.confirmRuntimeRepair).not.toHaveBeenCalled();
   });
 
   it("requires the explicit operator gate when continuity is unproven", async () => {
@@ -173,11 +173,11 @@ describe("doctor workspace alias repair", () => {
     await maybeRepairRepointedWorkspaceAliases({ cfg: buildAliasCfg(alias), prompter });
 
     expect(prompter.confirmAutoFix).not.toHaveBeenCalled();
-    expect(prompter.confirmAggressiveAutoFix).toHaveBeenCalledOnce();
+    expect(prompter.confirmRuntimeRepair).toHaveBeenCalledOnce();
     // Declined: stored state stays with the original canonical target.
     expect(readWorkspaceStateSnapshot(original).setupExists).toBe(true);
 
-    const approving = buildPrompter({ confirmAggressiveAutoFix: vi.fn(async () => true) });
+    const approving = buildPrompter({ confirmRuntimeRepair: vi.fn(async () => true) });
     await maybeRepairRepointedWorkspaceAliases({ cfg: buildAliasCfg(alias), prompter: approving });
     expect(readWorkspaceStateSnapshot(alias).setupExists).toBe(true);
   });
@@ -185,21 +185,21 @@ describe("doctor workspace alias repair", () => {
   it("refuses to merge when the current target already owns state", async () => {
     const { alias, original, replacement } = repointAlias({ seedAttestedFile: false });
     mergeWorkspaceSetupState(replacement, { bootstrapSeededAt: "2026-07-16T02:00:00.000Z" }, 2_000);
-    const prompter = buildPrompter({ confirmAggressiveAutoFix: vi.fn(async () => true) });
+    const prompter = buildPrompter({ confirmRuntimeRepair: vi.fn(async () => true) });
 
     await maybeRepairRepointedWorkspaceAliases({ cfg: buildAliasCfg(alias), prompter });
 
     expect(prompter.confirmAutoFix).not.toHaveBeenCalled();
-    expect(prompter.confirmAggressiveAutoFix).not.toHaveBeenCalled();
+    expect(prompter.confirmRuntimeRepair).not.toHaveBeenCalled();
     expect(readWorkspaceStateSnapshot(original).setupExists).toBe(true);
     expect(readWorkspaceStateSnapshot(replacement).setupExists).toBe(true);
   });
 
-  it("allows an interactive approval outside non-interactive repair mode", async () => {
-    const { alias } = repointAlias({ seedAttestedFile: true });
+  it("does not move records from diagnostic mode", async () => {
+    const { alias, original } = repointAlias({ seedAttestedFile: true });
     const prompter = buildPrompter({
       shouldRepair: false,
-      confirmAggressiveAutoFix: vi.fn(async () => true),
+      confirmRuntimeRepair: vi.fn(async () => true),
       repairMode: {
         shouldRepair: false,
         shouldForce: false,
@@ -212,13 +212,13 @@ describe("doctor workspace alias repair", () => {
     await maybeRepairRepointedWorkspaceAliases({ cfg: buildAliasCfg(alias), prompter });
 
     expect(prompter.confirmAutoFix).not.toHaveBeenCalled();
-    expect(prompter.confirmAggressiveAutoFix).toHaveBeenCalledOnce();
-    expect(readWorkspaceStateSnapshot(alias).setupExists).toBe(true);
+    expect(prompter.confirmRuntimeRepair).not.toHaveBeenCalled();
+    expect(readWorkspaceStateSnapshot(original).setupExists).toBe(true);
   });
 
   it("refuses to transfer state while another configured agent uses the stored target", async () => {
     const { alias, original } = repointAlias({ seedAttestedFile: false });
-    const prompter = buildPrompter({ confirmAggressiveAutoFix: vi.fn(async () => true) });
+    const prompter = buildPrompter({ confirmRuntimeRepair: vi.fn(async () => true) });
     const cfg = {
       agents: {
         entries: {
@@ -230,7 +230,7 @@ describe("doctor workspace alias repair", () => {
 
     await maybeRepairRepointedWorkspaceAliases({ cfg, prompter });
 
-    expect(prompter.confirmAggressiveAutoFix).not.toHaveBeenCalled();
+    expect(prompter.confirmRuntimeRepair).not.toHaveBeenCalled();
     expect(readWorkspaceStateSnapshot(original).setupExists).toBe(true);
   });
 });

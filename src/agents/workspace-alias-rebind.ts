@@ -235,6 +235,7 @@ export async function rebindRepointedWorkspaceAlias(
     database: database.db,
     storedIdentity: stored,
     currentIdentity: current,
+    currentDirectoryPath: expected.currentDirectoryPath,
     storedSetup: expected.state.setup,
   });
   await verifyConfiguration?.();

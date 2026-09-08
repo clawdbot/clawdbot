@@ -73,7 +73,13 @@ describe("workspace migration receipt move", () => {
       },
       { env: context.env },
     );
-    const params = { database: db, storedIdentity, currentIdentity, storedSetup };
+    const params = {
+      database: db,
+      storedIdentity,
+      currentIdentity,
+      storedSetup,
+      currentDirectoryPath: currentIdentity.workspacePath,
+    };
     const rows = () => db.prepare("SELECT * FROM migration_sources ORDER BY source_key").all();
     return { ...context, ...params, db, receipt, params, rows };
   }

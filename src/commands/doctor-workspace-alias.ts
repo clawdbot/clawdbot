@@ -38,7 +38,7 @@ export type WorkspaceAliasFinding = {
 
 const WORKSPACE_ALIAS_CHECK_ID = "core/doctor/workspace-alias";
 const REPAIR_HINT =
-  "If the same workspace moved, run `openclaw doctor` and confirm the move, or use `openclaw doctor --fix --force`. Otherwise restore the original link or configure the intended workspace directly.";
+  "If the same workspace moved, run `openclaw doctor --fix` and confirm the move, or use `openclaw doctor --fix --force`. Otherwise restore the original link or configure the intended workspace directly.";
 const REBIND_MESSAGES: Record<Exclude<WorkspaceAliasRebindOutcome, "rebound">, string> = {
   "no-repoint": "The alias no longer needs repair.",
   "repoint-changed":
@@ -83,6 +83,10 @@ export async function maybeRepairRepointedWorkspaceAliases(params: {
   cfg: OpenClawConfig;
   prompter: DoctorPrompter;
 }): Promise<void> {
+  // Explicit repair acquires Doctor's maintenance owner before any state move.
+  if (!params.prompter.shouldRepair) {
+    return;
+  }
   const workspaceDirs = configuredWorkspaceDirs(params.cfg);
   const configuration = await readConfigFileSnapshot();
   const verifyConfiguration = async () => {
@@ -106,10 +110,16 @@ export async function maybeRepairRepointedWorkspaceAliases(params: {
         note(`${description} ${REBIND_MESSAGES[inspection.outcome]}`, "Workspace");
         continue;
       }
-      const approved = await params.prompter.confirmAggressiveAutoFix({
+      const confirmation = {
         message: `${description} Confirm only if this is the same workspace after a folder move. Transfer its saved setup and file-verification history without changing workspace files?`,
         initialValue: false,
-      });
+      };
+      const approved = params.prompter.shouldForce
+        ? await params.prompter.confirmAggressiveAutoFix(confirmation)
+        : await params.prompter.confirmRuntimeRepair({
+            ...confirmation,
+            requiresInteractiveConfirmation: true,
+          });
       if (!approved) {
         note(`${description} No records were transferred. ${REPAIR_HINT}`, "Workspace");
         continue;
@@ -134,4 +144,27 @@ export async function maybeRepairRepointedWorkspaceAliases(params: {
       );
     }
   }
+}
+
+/** Stop migration discovery if its workspace owner still needs an operator decision. */
+export function createWorkspaceAliasMigrationRepair(
+  prompter: DoctorPrompter | undefined,
+  beforePrompt: () => void,
+): ((cfg: OpenClawConfig) => Promise<void>) | undefined {
+  if (!prompter?.shouldRepair) {
+    return undefined;
+  }
+  return async (cfg) => {
+    if (collectRepointedWorkspaceAliasFindings(cfg).length === 0) {
+      return;
+    }
+    beforePrompt();
+    await maybeRepairRepointedWorkspaceAliases({ cfg, prompter });
+    const unresolved = collectRepointedWorkspaceAliasFindings(cfg);
+    if (unresolved.length > 0) {
+      throw new Error(
+        unresolved.map((finding) => `${finding.message} ${finding.fixHint}`).join("\n"),
+      );
+    }
+  };
 }

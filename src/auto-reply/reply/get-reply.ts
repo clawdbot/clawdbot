@@ -548,7 +548,7 @@ export async function getReplyFromConfig(
     logVerbose(`workspace unavailable; replying with repair notice: ${error.message}`);
     const text =
       error instanceof WorkspaceAliasRepointedError
-        ? "⚠️ This agent's workspace state needs repair: the configured workspace path no longer matches its stored identity. Ask the gateway operator to run `openclaw doctor` and confirm the move only if the same workspace moved."
+        ? "⚠️ This agent's workspace state needs repair: the configured workspace path no longer matches its stored identity. Ask the gateway operator to run `openclaw doctor --fix` and confirm the move only if the same workspace moved."
         : "⚠️ This agent's workspace is missing on the gateway host. Ask the operator to restore the workspace from backup and run `openclaw doctor`.";
     return markReplyPayloadForSourceSuppressionDelivery({ text });
   }

@@ -91,12 +91,19 @@ function receiptMoveFailure(sourcePath: string, reason: string): Error {
 function moveWorkspacePath(
   value: string,
   storedIdentity: WorkspaceStateIdentity,
-  currentIdentity: WorkspaceStateIdentity,
+  currentDirectoryPath: string,
 ): string {
-  const relative = path.relative(storedIdentity.workspacePath, value);
-  return relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)
-    ? path.join(currentIdentity.workspacePath, relative)
-    : value;
+  const sourceParts = path.resolve(value).split(path.sep);
+  const relative = path.relative(
+    storedIdentity.workspacePath,
+    path.resolve(value).normalize("NFC"),
+  );
+  if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    return value;
+  }
+  // Keys use NFC, but backup/source filenames must retain their filesystem bytes.
+  const depth = relative.split(path.sep).filter(Boolean).length;
+  return path.join(currentDirectoryPath, ...sourceParts.slice(sourceParts.length - depth));
 }
 
 function readWorkspaceMoveReceipts(
@@ -204,8 +211,9 @@ export async function prepareWorkspaceMigrationReceiptMove(params: {
   storedIdentity: WorkspaceStateIdentity;
   currentIdentity: WorkspaceStateIdentity;
   storedSetup: (WorkspaceSetupMilestones & { version: number | null }) | undefined;
+  currentDirectoryPath: string;
 }): Promise<WorkspaceMigrationReceiptMove> {
-  const { database, storedIdentity, currentIdentity, storedSetup } = params;
+  const { database, storedIdentity, currentIdentity, storedSetup, currentDirectoryPath } = params;
   const receipts = readWorkspaceMoveReceipts(database, storedIdentity, currentIdentity);
   const plan: WorkspaceMigrationReceiptMove = {
     storedIdentity,
@@ -230,7 +238,7 @@ export async function prepareWorkspaceMigrationReceiptMove(params: {
     if (!path.isAbsolute(receipt.source_path)) {
       throw receiptMoveFailure(receipt.source_path, "the migration source path is invalid");
     }
-    const sourcePath = moveWorkspacePath(receipt.source_path, storedIdentity, currentIdentity);
+    const sourcePath = moveWorkspacePath(receipt.source_path, storedIdentity, currentDirectoryPath);
     const movedReport: Record<string, unknown> = {
       ...report,
       workspaceKey: currentIdentity.workspaceKey,
@@ -297,7 +305,7 @@ export async function prepareWorkspaceMigrationReceiptMove(params: {
         }
         if (sourceExists || claimExists) {
           await verifyCarriedReceiptFile(
-            currentIdentity.workspacePath,
+            currentDirectoryPath,
             sourceExists ? sourcePath : claimPath,
             receipt.source_sha256,
           );
@@ -317,13 +325,13 @@ export async function prepareWorkspaceMigrationReceiptMove(params: {
         if (typeof report.archivePath !== "string" || !path.isAbsolute(report.archivePath)) {
           throw receiptMoveFailure(receipt.source_path, "the setup backup path is invalid");
         }
-        const archivePath = moveWorkspacePath(report.archivePath, storedIdentity, currentIdentity);
+        const archivePath = moveWorkspacePath(
+          report.archivePath,
+          storedIdentity,
+          currentDirectoryPath,
+        );
         if (archivePath !== report.archivePath && receipt.removed_source !== 1) {
-          await verifyCarriedReceiptFile(
-            currentIdentity.workspacePath,
-            archivePath,
-            receipt.source_sha256,
-          );
+          await verifyCarriedReceiptFile(currentDirectoryPath, archivePath, receipt.source_sha256);
         }
         movedReport.archivePath = archivePath;
       }

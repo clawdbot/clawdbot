@@ -17,15 +17,22 @@ describe("workspace move migration recovery", () => {
   const { setup, detect, migrate } = useWorkspaceMigrationTestFixture();
 
   it.each([
-    { interrupted: false, removeBackup: false },
-    { interrupted: true, removeBackup: false },
-    { interrupted: false, removeBackup: true },
+    { interrupted: false, removeBackup: false, decomposed: false, originalDecomposed: false },
+    { interrupted: true, removeBackup: false, decomposed: false, originalDecomposed: false },
+    { interrupted: false, removeBackup: true, decomposed: false, originalDecomposed: false },
+    { interrupted: false, removeBackup: false, decomposed: true, originalDecomposed: false },
+    { interrupted: false, removeBackup: false, decomposed: false, originalDecomposed: true },
   ])(
-    "preserves migration history after a move (interrupted: $interrupted, removed backup: $removeBackup)",
-    async ({ interrupted, removeBackup }) => {
+    "preserves migration history after a move (interrupted: $interrupted, removed backup: $removeBackup, decomposed: $decomposed, original decomposed: $originalDecomposed)",
+    async ({ interrupted, removeBackup, decomposed, originalDecomposed }) => {
       const context = setup();
+      if (originalDecomposed) {
+        const original = path.join(context.homeDir, "original-e\u0301");
+        fs.renameSync(context.workspaceDir, original);
+        context.workspaceDir = original;
+      }
       const alias = path.join(context.homeDir, "workspace-alias");
-      const moved = path.join(context.homeDir, "moved-workspace");
+      const moved = path.join(context.homeDir, decomposed ? "moved-e\u0301" : "moved-workspace");
       const link = () =>
         fs.symlinkSync(
           fs.existsSync(moved) ? moved : context.workspaceDir,
@@ -80,8 +87,8 @@ describe("workspace move migration recovery", () => {
       const identity = resolveWorkspaceStateIdentity(moved);
       const movedSource = {
         ...source,
-        sourcePath: path.join(identity.workspacePath, "openclaw-workspace-state.json"),
-        rootDir: identity.workspacePath,
+        sourcePath: path.join(moved, "openclaw-workspace-state.json"),
+        rootDir: moved,
         workspaceDir: identity.workspacePath,
         workspaceKey: identity.workspaceKey,
       };
@@ -89,7 +96,7 @@ describe("workspace move migration recovery", () => {
       expect(receipt).toMatchObject({
         sha256: originalReceipt.sha256,
         removedSource: !interrupted,
-        archivePath: expect.stringContaining(identity.workspacePath),
+        archivePath: expect.stringContaining(moved),
       });
       expect(fs.existsSync(receipt!.archivePath!)).toBe(!removeBackup);
       if (!removeBackup) {

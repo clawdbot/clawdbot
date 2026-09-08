@@ -734,9 +734,9 @@ That stages grounded durable candidates into the short-term dreaming store while
   <Accordion title="20. Repointed workspace aliases">
     If you move a workspace folder and update its symlink, OpenClaw refuses to use the new target until you confirm the move. Incoming messages receive a repair notice instead of remaining stuck in retries.
 
-    Run `openclaw doctor` and confirm only if the destination contains the same workspace. For unattended recovery, `openclaw doctor --fix --force --non-interactive` supplies that confirmation; ordinary non-interactive `--fix` does not. Keep the workspace paths and configuration unchanged until Doctor finishes.
+    Run `openclaw doctor --fix` and confirm only if the destination contains the same workspace. Doctor coordinates an owned managed Gateway; stop a foreground or externally managed Gateway through its owner first. For unattended recovery, `openclaw doctor --fix --force --non-interactive` supplies that confirmation; ordinary non-interactive `--fix` does not. Plain `openclaw doctor` reports the problem without transferring records. Keep the workspace paths and configuration unchanged until Doctor finishes.
 
-    The repair preserves setup completion, file-verification history, and migration records without changing workspace files. It removes stale path associations so later cleanup of the old location cannot delete the moved workspace's records. Repeat Doctor or restart the Gateway after recovery to check the installation.
+    The repair preserves setup completion, file-verification history, and migration records without changing workspace files. It removes stale path associations so later cleanup of the old location cannot delete the moved workspace's records. Start any Gateway you stopped manually, then send a message to check recovery.
 
     Doctor leaves records untouched if the original folder still exists, the destination is missing or already owns records, another configured workspace still uses the old location, or inspection facts change. Pending or conflicting migration history must be resolved before the move can proceed. Follow the reported recovery instructions; do not delete workspace records to force a merge.
 
