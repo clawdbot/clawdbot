@@ -164,11 +164,15 @@ redacts sensitive values before writing export files:
 
 The exporter also bounds input size:
 
-- runtime capture: the live capture is a rolling window capped at 10 MiB, dropping the oldest events to make room for new ones; export accepts existing legacy runtime sidecar files up to 50 MiB
-- session files: 50 MiB
+- runtime capture: the live capture is a rolling window capped at 10 MiB, dropping the oldest events to make room for new ones; export accepts existing runtime sources — the SQLite runtime store or legacy runtime sidecar files — up to 50 MiB
+- session (transcript) sources: 50 MiB, whether read from the SQLite transcript store or a session file
 - runtime events per export: 200,000
 - total exported events: 250,000
 - individual runtime event lines are truncated above 256 KiB
+
+Sources above these limits are rejected before any events are parsed, so an
+oversized store or file fails with a typed size error instead of exhausting
+memory.
 
 Review bundles before sharing them outside your team. Redaction is best-effort
 and cannot know every application-specific secret.
@@ -187,9 +191,9 @@ If the command rejects the output path:
 - do not pass `/tmp/...` or `~/...`
 - keep the export inside `.openclaw/trajectory-exports/`
 
-If the export fails with a size error, the session or sidecar exceeded the
-export safety limits above. Start a new session or export a smaller
-reproduction.
+If the export fails with a size error, a transcript or runtime source — the
+SQLite store or a file — exceeded the export safety limits above. Start a new
+session or export a smaller reproduction.
 
 ## Related
 

@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import type { Message } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   readPersistedAuthProfileStateRaw,
@@ -61,7 +62,10 @@ import {
   replaceSessionEntrySync,
 } from "./session-accessor.sqlite-entry.js";
 import { forkSessionEntryFromParentTarget } from "./session-accessor.sqlite-parent-session.js";
-import { loadTranscriptEventsSync } from "./session-accessor.sqlite-read.js";
+import {
+  loadTranscriptEventsSync,
+  readTranscriptStatsSync,
+} from "./session-accessor.sqlite-read.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
 import { setCanonicalSqliteSessionMainKey } from "./session-canonical-key.js";
 import type { InternalSessionEntry, SessionCompactionCheckpoint, SessionEntry } from "./types.js";
@@ -2693,6 +2697,131 @@ describe("sqlite session normalization", () => {
       expect.objectContaining({ id: "pre-msg", type: "message" }),
     ]);
     expect(fs.existsSync(path.join(paths.tempDir, `${result.entry.sessionId}.jsonl`))).toBe(false);
+  });
+});
+
+describe("SQLite transcript reader byte budget", () => {
+  let tempDir: string;
+  let storePath: string;
+
+  beforeEach(() => {
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-transcript-byte-"));
+    storePath = path.join(tempDir, "sessions.json");
+  });
+
+  afterEach(() => {
+    closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  function userMessage(content: string): Message {
+    return { role: "user", content, timestamp: 1 };
+  }
+
+  it("counts JSONL row separators in the transcript byte budget", async () => {
+    const sessionId = "session-transcript-separator";
+    const sessionKey = "agent:main:session-transcript-separator";
+    await replaceTranscriptEvents({ agentId: "main", sessionId, sessionKey, storePath }, [
+      {
+        type: "session",
+        version: 3,
+        id: sessionId,
+        timestamp: "2026-04-01T05:46:39.000Z",
+        cwd: tempDir,
+      },
+      {
+        type: "message",
+        id: "entry-separator-0",
+        parentId: null,
+        timestamp: "2026-04-01T05:46:40.000Z",
+        message: userMessage("separator-row-0"),
+      },
+      {
+        type: "message",
+        id: "entry-separator-1",
+        parentId: null,
+        timestamp: "2026-04-01T05:46:41.000Z",
+        message: userMessage("separator-row-1"),
+      },
+    ]);
+    const stats = readTranscriptStatsSync({
+      agentId: "main",
+      sessionId,
+      sessionKey,
+      storePath,
+    });
+    expect(() =>
+      loadTranscriptEventsSync({
+        agentId: "main",
+        sessionId,
+        sessionKey,
+        storePath,
+        maxEventBytes: stats.sizeBytes - 1,
+      }),
+    ).toThrow(/transcript store is too large to export/u);
+    expect(
+      loadTranscriptEventsSync({
+        agentId: "main",
+        sessionId,
+        sessionKey,
+        storePath,
+        maxEventBytes: stats.sizeBytes,
+      }).length,
+    ).toBe(3);
+  });
+
+  it("transcript byte budget matches the canonical JSONL serializer size", async () => {
+    const sessionId = "session-transcript-canonical-bytes";
+    const sessionKey = "agent:main:session-transcript-canonical-bytes";
+    const events = [
+      {
+        type: "session",
+        version: 3,
+        id: sessionId,
+        timestamp: "2026-04-01T05:46:39.000Z",
+        cwd: tempDir,
+      },
+      {
+        type: "message",
+        id: "entry-canonical-0",
+        parentId: null,
+        timestamp: "2026-04-01T05:46:40.000Z",
+        message: userMessage("canonical-row-0"),
+      },
+      {
+        type: "message",
+        id: "entry-canonical-1",
+        parentId: null,
+        timestamp: "2026-04-01T05:46:41.000Z",
+        message: userMessage("canonical-row-1"),
+      },
+    ];
+    await replaceTranscriptEvents({ agentId: "main", sessionId, sessionKey, storePath }, events);
+    const stats = readTranscriptStatsSync({
+      agentId: "main",
+      sessionId,
+      sessionKey,
+      storePath,
+    });
+    expect(() =>
+      loadTranscriptEventsSync({
+        agentId: "main",
+        sessionId,
+        sessionKey,
+        storePath,
+        maxEventBytes: stats.sizeBytes - 1,
+      }),
+    ).toThrow(/transcript store is too large to export/u);
+    expect(
+      loadTranscriptEventsSync({
+        agentId: "main",
+        sessionId,
+        sessionKey,
+        storePath,
+        maxEventBytes: stats.sizeBytes,
+      }).length,
+    ).toBe(3);
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

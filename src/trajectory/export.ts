@@ -230,6 +230,7 @@ async function readSessionEntries(params: {
       sessionId: completeTarget.sessionId,
       sessionKey: completeTarget.sessionKey,
       storePath: completeTarget.storePath,
+      maxEventBytes: MAX_TRAJECTORY_SESSION_FILE_BYTES,
     });
     return collectSessionEntries(events.map((value, index) => ({ row: index + 1, value })));
   }
@@ -311,6 +312,7 @@ async function readSessionEntries(params: {
         sessionId: marker.sessionId,
         ...(markerSessionKey ? { sessionKey: markerSessionKey } : {}),
         storePath: marker.storePath,
+        maxEventBytes: MAX_TRAJECTORY_SESSION_FILE_BYTES,
       })
     ).map((value, index) => ({ row: index + 1, value })),
   );
@@ -483,12 +485,9 @@ async function readRuntimeTrajectoryEvents(params: {
       agentId: marker.agentId,
       sessionId: marker.sessionId,
       storePath: marker.storePath,
+      maxEventBytes: TRAJECTORY_RUNTIME_FILE_MAX_BYTES,
+      maxEventCount: MAX_TRAJECTORY_RUNTIME_EVENTS,
     });
-    if (events.length > MAX_TRAJECTORY_RUNTIME_EVENTS) {
-      throw new Error(
-        `Trajectory runtime store has too many events to export (limit ${MAX_TRAJECTORY_RUNTIME_EVENTS})`,
-      );
-    }
     return { events, warnings: [] };
   }
 
@@ -1237,6 +1236,7 @@ export async function exportTrajectoryBundle(params: BuildTrajectoryBundleParams
       );
     }
   }
+
   const {
     header,
     leafId,
