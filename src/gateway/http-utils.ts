@@ -10,6 +10,7 @@ import {
   AgentSelectionRequiredError,
   listAgentIds,
   resolveDefaultAgentId,
+  tryResolveDefaultAgentId,
 } from "../agents/agent-scope.js";
 import { modelKey, parseModelRef, resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { createModelVisibilityPolicy } from "../agents/model-visibility-policy.js";
@@ -24,6 +25,7 @@ import {
   isSubagentSessionKey,
   isValidAgentId,
   normalizeAgentId,
+  parseAgentSessionKey,
 } from "../routing/session-key.js";
 import {
   isAgentHarnessSessionKey,
@@ -78,6 +80,15 @@ class InvalidGatewayModelError extends Error {
   }
 }
 
+class GatewayAgentSelectionConflictError extends Error {
+  constructor(selected: string, fromSessionKey: string) {
+    super(
+      `Selected agent '${selected}' does not match the agent in \`x-openclaw-session-key\` ('${fromSessionKey}').`,
+    );
+    this.name = "GatewayAgentSelectionConflictError";
+  }
+}
+
 export function isUnknownGatewayAgentError(err: unknown): err is UnknownGatewayAgentError {
   return err instanceof UnknownGatewayAgentError;
 }
@@ -94,6 +105,12 @@ export function isGatewaySessionKeyOverrideError(
   err: unknown,
 ): err is GatewaySessionKeyOverrideError {
   return err instanceof GatewaySessionKeyOverrideError;
+}
+
+export function isGatewayAgentSelectionConflictError(
+  err: unknown,
+): err is GatewayAgentSelectionConflictError {
+  return err instanceof GatewayAgentSelectionConflictError;
 }
 
 function assertKnownAgentId(agentId: string, cfg = getRuntimeConfig()): void {
@@ -127,7 +144,7 @@ export function resolveAgentIdFromModel(
   }
   const lowered = normalizeLowercaseStringOrEmpty(raw);
   if (lowered === OPENCLAW_MODEL_ID || lowered === OPENCLAW_DEFAULT_MODEL_ID) {
-    return resolveDefaultAgentId(cfg);
+    return tryResolveDefaultAgentId(cfg);
   }
 
   const m =
@@ -217,7 +234,40 @@ export async function resolveOpenAiCompatModelOverride(params: {
   return { modelOverride: raw };
 }
 
-/** Resolves the request agent from headers, model alias, or the configured default. */
+function resolveAgentIdFromSessionKeyHeader(req: IncomingMessage): string | undefined {
+  const explicit = getHeader(req, "x-openclaw-session-key")?.trim();
+  if (!explicit) {
+    return undefined;
+  }
+  const agentId = parseAgentSessionKey(explicit)?.agentId;
+  return agentId ? normalizeAgentId(agentId) : undefined;
+}
+
+// `openclaw` and `openclaw/default` name no agent, so they must not outrank an
+// agent-scoped session key. Only the suffixed forms select an agent by id.
+function resolveNamedAgentIdFromModel(model: string | undefined): string | undefined {
+  const raw = model?.trim();
+  if (!raw) {
+    return undefined;
+  }
+  const lowered = normalizeLowercaseStringOrEmpty(raw);
+  if (lowered === OPENCLAW_MODEL_ID || lowered === OPENCLAW_DEFAULT_MODEL_ID) {
+    return undefined;
+  }
+  return resolveAgentIdFromModel(raw);
+}
+
+// The session key owns execution downstream: command preparation derives its
+// agent from `agent:<id>:` when nothing overrides it. A selector that names a
+// different agent would run one agent under another's session, so reject it
+// here instead of splitting the owner across the two layers.
+function assertSessionKeyAgentMatches(selected: string, fromSessionKey: string | undefined): void {
+  if (fromSessionKey && fromSessionKey !== selected) {
+    throw new GatewayAgentSelectionConflictError(selected, fromSessionKey);
+  }
+}
+
+/** Resolves the request agent from headers, model alias, session key, or the configured default. */
 export function resolveAgentIdForRequest(params: {
   req: IncomingMessage;
   model: string | undefined;
@@ -227,16 +277,25 @@ export function resolveAgentIdForRequest(params: {
     throw new InvalidGatewayModelError();
   }
 
+  const fromSessionKey = resolveAgentIdFromSessionKeyHeader(params.req);
+
   const fromHeader = resolveAgentIdFromHeader(params.req);
   if (fromHeader) {
     assertKnownAgentId(fromHeader, cfg);
+    assertSessionKeyAgentMatches(fromHeader, fromSessionKey);
     return fromHeader;
   }
 
-  const fromModel = resolveAgentIdFromModel(params.model, cfg);
+  const fromModel = resolveNamedAgentIdFromModel(params.model);
   if (fromModel) {
     assertKnownAgentId(fromModel, cfg);
+    assertSessionKeyAgentMatches(fromModel, fromSessionKey);
     return fromModel;
+  }
+
+  if (fromSessionKey) {
+    assertKnownAgentId(fromSessionKey, cfg);
+    return fromSessionKey;
   }
 
   return resolveDefaultAgentId(cfg);

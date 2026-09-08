@@ -35,6 +35,7 @@ import {
   getHeader,
   isAgentSelectionRequiredError,
   isOpenClawAgentModelId,
+  isGatewayAgentSelectionConflictError,
   isUnknownGatewayAgentError,
   resolveAgentIdForRequest,
   resolveOpenAiCompatibleHttpOperatorScopes,
@@ -256,7 +257,11 @@ export async function handleOpenAiEmbeddingsHttpRequest(
   try {
     agentId = resolveAgentIdForRequest({ req, model: requestModel });
   } catch (err) {
-    if (isAgentSelectionRequiredError(err) || isUnknownGatewayAgentError(err)) {
+    if (
+      isAgentSelectionRequiredError(err) ||
+      isUnknownGatewayAgentError(err) ||
+      isGatewayAgentSelectionConflictError(err)
+    ) {
       sendInvalidRequest(res, err.message);
       return true;
     }
