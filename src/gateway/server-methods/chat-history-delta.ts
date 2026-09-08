@@ -6,7 +6,10 @@ import {
   type SessionTranscriptDisplayDeltaResult,
 } from "../../config/sessions/session-accessor.sqlite-history-events.js";
 import { jsonUtf8BytesOrInfinity } from "../../infra/json-utf8-bytes.js";
-import { createCurrentUserProfileMessageProjector } from "../chat-display-projection.js";
+import {
+  createCurrentUserProfileMessageProjector,
+  projectChatDisplayMessagesWithState,
+} from "../chat-display-projection.js";
 import { resolveCurrentUserProfileDisplay } from "../current-user-profile-display.js";
 import {
   projectSessionMessagePayload,
@@ -84,6 +87,19 @@ export function readChatHistoryDelta(params: {
     const event = readMessageEvent(row.event);
     if (!event || row.messageSeq === undefined) {
       continue;
+    }
+    const historyProjection = projectChatDisplayMessagesWithState([event.message], {
+      ...projectionState,
+      includeCommentaryFallbacks: true,
+    });
+    if (
+      historyProjection.messages.some(
+        (message) => asOptionalRecord(message.openclawStreamFallback)?.source === "segment",
+      )
+    ) {
+      // One transcript entry can own both commentary and a tool call. The single-message
+      // envelope cannot carry that split; let the full history owner reconcile both rows.
+      return { kind: "reset" };
     }
     const projected = projectSessionMessagePayload({
       agentId: params.agentId,

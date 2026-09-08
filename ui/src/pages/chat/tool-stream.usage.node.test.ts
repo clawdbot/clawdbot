@@ -1,7 +1,8 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
+import { resetToolStream } from "./tool-stream-state.ts";
 import { createHost } from "./tool-stream.test-helpers.ts";
-import { handleAgentEvent, resetToolStream } from "./tool-stream.ts";
+import { handleAgentEvent } from "./tool-stream.ts";
 
 type AgentEvent = NonNullable<Parameters<typeof handleAgentEvent>[1]>;
 

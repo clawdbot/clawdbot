@@ -190,6 +190,10 @@ export type ChatStreamSegment = {
   boundaryMarker?: true;
   /** Hidden durable replacement; cumulative text still owns the prefix baseline. */
   persisted?: true;
+  /** Keyed item that consumed this cumulative occurrence; late updates cannot consume another. */
+  retiredItemId?: string;
+  /** Original cumulative prefix when the item overtook its final chat delta. */
+  pendingStreamText?: string;
   toolCallId?: string;
   itemId?: string;
 };

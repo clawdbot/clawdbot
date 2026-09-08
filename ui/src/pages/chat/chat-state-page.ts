@@ -63,7 +63,7 @@ import {
   openSlot,
 } from "./sidebar-layout.ts";
 import type { RunOutputUsage } from "./tool-stream-contract.ts";
-import { resetToolStream } from "./tool-stream.ts";
+import { resetToolStream } from "./tool-stream-state.ts";
 
 type ChatPageElement = {
   dispatchEvent: (event: Event) => boolean;

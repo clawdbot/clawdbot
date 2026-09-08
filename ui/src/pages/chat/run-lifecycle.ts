@@ -34,7 +34,7 @@ import type {
   WaitingApprovalStatus,
 } from "./tool-stream-contract.ts";
 // Control UI chat module implements run lifecycle behavior.
-import { resetToolStream, resetToolStreamRun } from "./tool-stream.ts";
+import { resetToolStream, resetToolStreamRun } from "./tool-stream-state.ts";
 
 export const CHAT_RUN_STATUS_TOAST_DURATION_MS = 5_000;
 
