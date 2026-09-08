@@ -1,3 +1,4 @@
+import { resolveSummaryOutputTokens } from "../../packages/agent-core/src/harness/compaction/compaction.js";
 import { CompactionError } from "../../packages/agent-core/src/harness/types.js";
 /**
  * Summarization and fallback helpers for transcript compaction.
@@ -87,6 +88,7 @@ type CompactionSummaryParams = {
   thinkingLevel?: ThinkingLevel;
   streamFn?: StreamFn;
   usageSink?: SessionModelUsageSink;
+  singlePass?: boolean;
 };
 
 function resolveIdentifierPreservationInstructions(
@@ -122,7 +124,7 @@ async function summarizeChunks(params: CompactionSummaryParams): Promise<string>
 
   const chunks = await buildSummaryChunksWithWorker({
     messages: params.messages,
-    maxChunkTokens: params.maxChunkTokens,
+    maxChunkTokens: params.singlePass ? Number.MAX_SAFE_INTEGER : params.maxChunkTokens,
     signal: params.signal,
   });
   let summary = params.previousSummary;
@@ -304,16 +306,24 @@ export async function summarizeInStages(
     return await summarizeWithFallback(params);
   }
 
+  const summaryOutputTokens = resolveSummaryOutputTokens({
+    reserveTokens: params.reserveTokens,
+    modelMaxTokens: params.model.maxTokens,
+  });
   const plan = await buildStageSplitPlanWithWorker({
     messages,
     maxChunkTokens: params.maxChunkTokens,
     parts: params.parts,
     minMessagesForSplit: params.minMessagesForSplit,
+    contextWindow: params.contextWindow,
+    summaryOutputTokens,
     signal: params.signal,
   });
 
   if (plan.mode === "single") {
-    return await summarizeWithFallback(params);
+    // Only a verified whole-request fit may bypass the chunk budget; the planner's
+    // legacy single-stage shortcuts still need bounded requests.
+    return await summarizeWithFallback({ ...params, singlePass: plan.fitsWholeRequest === true });
   }
 
   const partialSummaries: string[] = [];
