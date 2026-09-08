@@ -301,6 +301,52 @@ describe("ModelRegistry models.json auth", () => {
     expect(fork.find("custom", "after-reload")).toBeDefined();
   });
 
+  it.each(["persisted", "registered"] as const)("preserves %s prompt budgets", (source) => {
+    // Synthetic providers deliberately share an id but not a prompt budget.
+    // Native window and output capacity must remain separate from that budget.
+    const providers: Record<string, ProviderConfigInput> = Object.fromEntries(
+      (
+        [
+          ["fixture-primary", 1_000_000, 872_000],
+          ["fixture-secondary", 1_050_000, 922_000],
+        ] as const
+      ).map(([provider, contextWindow, contextTokens]) => [
+        provider,
+        {
+          api: "openai-responses",
+          baseUrl: "https://models.example/v1",
+          models: [
+            {
+              id: "shared-model",
+              name: "Shared model",
+              reasoning: false,
+              input: ["text"],
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              contextWindow,
+              contextTokens,
+              maxTokens: 128_000,
+            },
+          ],
+        },
+      ]),
+    );
+    const registry =
+      source === "persisted"
+        ? ModelRegistry.create(AuthStorage.inMemory(), writeModelsJson({ providers }))
+        : ModelRegistry.inMemory(AuthStorage.inMemory());
+    if (source === "registered") {
+      for (const [provider, config] of Object.entries(providers)) {
+        registry.registerProvider(provider, config);
+      }
+    }
+    expect(registry.getError()).toBeUndefined();
+    for (const candidate of [registry, registry.fork(AuthStorage.inMemory())]) {
+      for (const [provider, config] of Object.entries(providers)) {
+        expect(candidate.find(provider, "shared-model")).toMatchObject(config.models![0]!);
+      }
+    }
+  });
+
   it("uses stored auth for dynamically registered provider models", () => {
     const authStorage = AuthStorage.inMemory({
       custom: { type: "api_key", key: "test-token-placeholder" },
@@ -324,6 +370,7 @@ describe("ModelRegistry models.json auth", () => {
     });
 
     expect(registry.getAvailable().map((model) => model.id)).toEqual(["example-model"]);
+    expect(registry.find("custom", "example-model")?.contextTokens).toBeUndefined();
   });
 
   it("automatically migrates released provider models before the first registry load", async () => {

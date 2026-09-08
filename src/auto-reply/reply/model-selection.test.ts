@@ -354,6 +354,63 @@ describe("createModelSelectionState catalog loading", () => {
     });
   });
 
+  it.each([
+    ["fixture-primary", 872_000],
+    ["fixture-secondary", 922_000],
+  ] as const)(
+    "uses prepared prompt budgets without an authored %s provider row",
+    async (provider, expected) => {
+      vi.mocked(loadModelCatalogLocal).mockClear();
+      catalogRuntimeMocks.loadModelCatalogSnapshot.mockClear();
+      const entries = [
+        {
+          provider: "fixture-secondary",
+          id: "shared-model",
+          name: "Shared model",
+          reasoning: false,
+          contextWindow: 1_050_000,
+          contextTokens: 922_000,
+        },
+        {
+          provider: "fixture-primary",
+          id: "shared-model",
+          name: "Shared model",
+          reasoning: false,
+          contextWindow: 1_000_000,
+          contextTokens: 872_000,
+        },
+      ];
+      const cfg: OpenClawConfig = {
+        agents: { defaults: { models: { [`${provider}/shared-model`]: {} } } },
+      };
+      const state = await createModelSelectionState({
+        cfg,
+        agentCfg: cfg.agents?.defaults,
+        defaultProvider: provider,
+        defaultModel: "shared-model",
+        provider,
+        model: "shared-model",
+        hasModelDirective: false,
+        preparedModelCatalog: { entries, routeVariants: entries, authoritative: true },
+      });
+      expect(
+        resolveContextTokens({
+          cfg,
+          provider: state.provider,
+          model: state.model,
+          modelContextTokens: state.modelContextTokens,
+          modelContextWindow: state.modelContextWindow,
+        }),
+      ).toBe(expected);
+      expect(await state.resolveThinkingCatalog()).toEqual([
+        expect.objectContaining({ provider, id: "shared-model", contextTokens: expected }),
+      ]);
+      expect(loadModelCatalogLocal).not.toHaveBeenCalled();
+      expect(catalogRuntimeMocks.loadModelCatalogSnapshot).not.toHaveBeenCalled();
+      expect(loadProviderScopedThinkingCatalog).not.toHaveBeenCalled();
+    },
+  );
+
   it("uses the prepared gateway owner catalog without an exact-generation reload", async () => {
     vi.mocked(loadModelCatalogLocal).mockClear();
     catalogRuntimeMocks.loadModelCatalogSnapshot.mockClear();
