@@ -6,6 +6,7 @@ import { z } from "zod";
 import { sha256Hex } from "./crypto-digest.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { hasNodeErrorCode } from "./path-guards.js";
+import { reopenUpdateCheckpointAfterImages } from "./update-checkpoint-after-images.js";
 import { checkpointContentMatches } from "./update-checkpoint-files.js";
 import {
   UpdateCheckpointRestorePlanRefSchema,
@@ -44,6 +45,7 @@ export const planSchema = z
     restoreId: z.string().uuid(),
     checkpointRef: UpdateCheckpointRefSchema,
     afterUpdateRef: UpdateCheckpointRefSchema,
+    afterUpdateRefs: z.array(UpdateCheckpointRefSchema).min(1).optional(),
     resources: z.array(
       z
         .object({
@@ -162,7 +164,10 @@ export async function reopenUpdateCheckpointRestorePlan(
     throw new Error("Restore plan identity mismatch");
   }
   const checkpoint = await reopenUpdateCheckpoint(plan.checkpointRef, access);
-  const afterUpdate = await reopenUpdateCheckpoint(plan.afterUpdateRef, access);
+  const { afterUpdate, pluginIndexMutations } = await reopenUpdateCheckpointAfterImages(
+    plan,
+    access,
+  );
   const remaining = new Set(
     checkpoint.manifest.resources
       .filter((entry) => entry.restore === "replace")
@@ -213,7 +218,7 @@ export async function reopenUpdateCheckpointRestorePlan(
       try {
         if (
           !checkpointPluginIndexMutationsMatch({
-            mutations: (afterUpdate.manifest.pluginIndexMutations ?? []).filter(
+            mutations: pluginIndexMutations.filter(
               (entry) => entry.databasePath === resource.sourcePath,
             ),
             databasePath: resource.sourcePath,

@@ -1,8 +1,7 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { describe, expect, it, vi } from "vitest";
 import { withExistingOpenClawStateDatabaseArtifactPreservingReadOnly } from "../state/openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -10,6 +9,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { inspectCheckpointFile } from "./update-checkpoint-files.js";
+import type { UpdateCheckpointPluginIndexMutation } from "./update-checkpoint-plugin-index.js";
 import {
   reopenUpdateCheckpointRestorePlan,
   restoreUpdateCheckpointResource,
@@ -17,6 +17,13 @@ import {
 import { buildCheckpointReaderRuntime } from "./update-checkpoint-runtime.test-support.js";
 import { captureUpdateCheckpoint, reopenUpdateCheckpoint } from "./update-checkpoint.js";
 import { createUpdateRun, getUpdateRun } from "./update-run-ledger.js";
+import {
+  captureCheckpointPhases,
+  trackCheckpointFixtureDirs,
+  registerCheckpointPhaseReceiptTest,
+  fileHash,
+  family,
+} from "./update-run-recovery-checkpoint-phase.test-support.js";
 import { createUpdateRecoveryCheckpointAdapter } from "./update-run-recovery-checkpoint.js";
 import {
   bindUpdateRecoveryNativeManager,
@@ -35,7 +42,6 @@ import {
   acceptUpdateRecoveryHandoff,
   recordUpdateRecoveryFailure,
   bindUpdateRecoveryCheckpoint,
-  bindUpdateRecoveryAfterImage,
   recordUpdateRecoveryIntent,
   recordUpdateRecoveryObservation,
   recordUpdateRecoveryRestoreProgress,
@@ -44,24 +50,11 @@ import {
   type UpdateRecoveryRecord,
 } from "./update-run-recovery.js";
 
-const dirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(() => {
-    vi.restoreAllMocks();
-    closeOpenClawStateDatabaseForTest();
-    cleanup();
-  }),
-);
-function fileHash(file: string) {
-  return createHash("sha256").update(fs.readFileSync(file)).digest("hex");
-}
-function family(file: string) {
-  return [file, `${file}-wal`, `${file}-shm`, `${file}-journal`].map((entry) =>
-    fs.existsSync(entry) ? fileHash(entry) : null,
-  );
-}
+const dirs = trackCheckpointFixtureDirs();
 async function fixture(
   withService = false,
   phase: "unprepared" | "preparing" | "sealed" = "sealed",
+  phasedPluginWrites = false,
 ) {
   const root = fs.realpathSync(dirs.make("recovery-checkpoint-adapter-"));
   const options = { env: { HOME: root, OPENCLAW_STATE_DIR: root } };
@@ -94,7 +87,10 @@ async function fixture(
     },
     assertQuiescent: () => fence.assertCurrent(),
   };
-  const capture = async (content: string) => {
+  const capture = async (
+    content: string,
+    pluginIndexMutations?: UpdateCheckpointPluginIndexMutation[],
+  ) => {
     fs.writeFileSync(configPath, content);
     const output = { sourcePath: configPath, state: await inspectCheckpointFile(configPath) };
     if (withService) {
@@ -104,6 +100,7 @@ async function fixture(
     const ref = await captureUpdateCheckpoint({
       ...access,
       exclusions: [],
+      pluginIndexMutations,
       expectedSources: [
         output,
         ...(withService
@@ -136,13 +133,17 @@ async function fixture(
     fence,
     options,
   );
-  const after = await capture("candidate");
-  record = bindUpdateRecoveryAfterImage(
+  record = await captureCheckpointPhases({
     record,
-    { checkpointRef: initial.ref, afterUpdate: after, effectIds: [effectId] },
+    phasedPluginWrites,
+    runtime,
     fence,
     options,
-  );
+    file,
+    initial,
+    effectId,
+    capture,
+  });
   record = recordUpdateRecoveryIntent(
     record,
     {
@@ -221,6 +222,8 @@ async function fixture(
 }
 
 describe("checkpoint to recovery claim/progress adapter", () => {
+  registerCheckpointPhaseReceiptTest(() => fixture(false, "sealed", true));
+
   it("reconciles publication before reclaim and advances only the canonical copy from owner observations", async () => {
     const f = await fixture();
     const sealed = f.adapter.record;

@@ -58,6 +58,7 @@ export function createUpdateRecoveryCheckpointAdapter(params: {
   }
   const checkpoint = current.checkpoint;
   const afterImage = current.afterImages.at(-1)!;
+  const afterUpdateRefs = current.afterImages.map((image) => image.afterUpdate.ref);
   let busy = false;
   let writeFailed = false;
   function assertUsable() {
@@ -127,6 +128,8 @@ export function createUpdateRecoveryCheckpointAdapter(params: {
     if (
       !isDeepStrictEqual(reopened.plan.checkpointRef, checkpoint.ref) ||
       !isDeepStrictEqual(reopened.plan.afterUpdateRef, afterImage.afterUpdate.ref) ||
+      (reopened.plan.afterUpdateRefs !== undefined &&
+        !isDeepStrictEqual(reopened.plan.afterUpdateRefs, afterUpdateRefs)) ||
       !shared?.sqlite ||
       !shared.recovery ||
       shared.sourcePath !== databasePath ||
@@ -264,6 +267,7 @@ export function createUpdateRecoveryCheckpointAdapter(params: {
           assertQuiescent,
           checkpointRef: checkpoint.ref,
           afterUpdateRef: afterImage.afterUpdate.ref,
+          ...(afterUpdateRefs.length > 1 ? { afterUpdateRefs } : {}),
           ...(progress
             ? {
                 preparingPlan: {

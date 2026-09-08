@@ -9,6 +9,7 @@ import { sha256Hex } from "./crypto-digest.js";
 import { requireDirectorySync, syncDirectory, syncDirectorySync } from "./directory-durability.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { createVerifiedSqliteSnapshot } from "./sqlite-snapshot.js";
+import { reopenUpdateCheckpointAfterImages } from "./update-checkpoint-after-images.js";
 import {
   copyCheckpointFile,
   inspectCheckpointFile,
@@ -52,6 +53,8 @@ export async function prepareUpdateCheckpointRestore(
   params: UpdateCheckpointAccess & {
     checkpointRef: UpdateCheckpointRef;
     afterUpdateRef: UpdateCheckpointRef;
+    /** Ordered immutable phase endpoints, ending at afterUpdateRef. */
+    afterUpdateRefs?: readonly UpdateCheckpointRef[];
     /** Resume only the exact durable preparing identity; never supersede a sealed ref. */
     preparingPlan?: UpdateCheckpointRestorePlanIdentity;
     prepareSharedDatabase: (databases: {
@@ -70,7 +73,10 @@ export async function prepareUpdateCheckpointRestore(
   | { status: "unavailable"; resource: string }
 > {
   const checkpoint = await reopenUpdateCheckpoint(params.checkpointRef, params);
-  const afterUpdate = await reopenUpdateCheckpoint(params.afterUpdateRef, params);
+  const { afterUpdate, pluginIndexMutations } = await reopenUpdateCheckpointAfterImages(
+    params,
+    params,
+  );
   const restoreId = params.preparingPlan?.restoreId ?? randomUUID();
   const planIdentity = Object.freeze({
     restoreId,
@@ -99,7 +105,11 @@ export async function prepareUpdateCheckpointRestore(
     const reopened = await reopenUpdateCheckpointRestorePlan(planRef, params);
     if (
       JSON.stringify(reopened.plan.checkpointRef) !== JSON.stringify(params.checkpointRef) ||
-      JSON.stringify(reopened.plan.afterUpdateRef) !== JSON.stringify(params.afterUpdateRef)
+      JSON.stringify(reopened.plan.afterUpdateRef) !== JSON.stringify(params.afterUpdateRef) ||
+      !isDeepStrictEqual(
+        reopened.plan.afterUpdateRefs ?? [reopened.plan.afterUpdateRef],
+        params.afterUpdateRefs ?? [params.afterUpdateRef],
+      )
     ) {
       throw new Error("Existing preparation belongs to different checkpoint images");
     }
@@ -109,6 +119,7 @@ export async function prepareUpdateCheckpointRestore(
     restoreId,
     checkpointRef: params.checkpointRef,
     afterUpdateRef: params.afterUpdateRef,
+    ...(params.afterUpdateRefs ? { afterUpdateRefs: [...params.afterUpdateRefs] } : {}),
     resources: [],
   };
   try {
@@ -238,7 +249,7 @@ export async function prepareUpdateCheckpointRestore(
               try {
                 carryForwardUpdateCheckpointSqlite({
                   databasePath: resource.sourcePath,
-                  pluginIndexMutations: (afterUpdate.manifest.pluginIndexMutations ?? []).filter(
+                  pluginIndexMutations: pluginIndexMutations.filter(
                     (receipt) => receipt.databasePath === resource.sourcePath,
                   ),
                   checkpoint: oldDb,

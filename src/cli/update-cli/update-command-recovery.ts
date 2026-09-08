@@ -173,7 +173,9 @@ export async function replayUpdateCommandRecovery(
         try {
           const prepared = await adapter.prepare();
           if (prepared.status !== "ready") {
-            throw new UpdateCommandRecoveryPendingError("Checkpoint preparation is unavailable.");
+            throw new UpdateCommandRecoveryPendingError(
+              `Checkpoint preparation is unavailable for ${prepared.resource}.`,
+            );
           }
           replayRecord = await adapter.seal(prepared.planRef);
         } finally {
