@@ -1,108 +1,32 @@
-/** Doctor detection and non-destructive repair for repointed workspace path aliases. */
-import crypto from "node:crypto";
-import fs from "node:fs";
-import path from "node:path";
+import os from "node:os";
+import { isDeepStrictEqual } from "node:util";
 import { note } from "../../packages/terminal-core/src/note.js";
 import {
-  listAgentIds,
-  resolveAgentWorkspaceDir,
-  resolveDefaultAgentId,
-} from "../agents/agent-scope.js";
-import {
   detectRepointedWorkspaceAlias,
+  inspectWorkspaceAliasMove,
   rebindRepointedWorkspaceAlias,
   type RepointedWorkspaceAliasFacts,
+  type WorkspaceAliasRebindOutcome,
 } from "../agents/workspace-alias-rebind.js";
-import { resolveWorkspaceStateIdentity } from "../agents/workspace-state-identity.js";
+import { listWorkspaceStateDirs } from "../agents/workspace-state-dirs.js";
+import { readConfigFileSnapshot } from "../config/io.js";
+import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { shortenHomePath } from "../utils.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 
-type WorkspaceAliasScope = {
-  agentId: string;
-  workspaceDir: string;
-  labelAgent: boolean;
-};
-
-type DetectedWorkspaceAliasScope = WorkspaceAliasScope & {
-  facts: RepointedWorkspaceAliasFacts;
-};
-
-function resolveWorkspaceAliasScopes(cfg: OpenClawConfig): WorkspaceAliasScope[] {
-  const listedAgentIds = listAgentIds(cfg);
-  const agentIds = listedAgentIds.length > 0 ? listedAgentIds : [resolveDefaultAgentId(cfg)];
-  const labelAgent = agentIds.length > 1;
-  return agentIds.map((agentId) => ({
-    agentId,
-    workspaceDir: resolveAgentWorkspaceDir(cfg, agentId),
-    labelAgent,
-  }));
-}
-
-function detectRepointedWorkspaceAliasScopes(cfg: OpenClawConfig): DetectedWorkspaceAliasScope[] {
-  const detected: DetectedWorkspaceAliasScope[] = [];
-  for (const scope of resolveWorkspaceAliasScopes(cfg)) {
-    let facts: RepointedWorkspaceAliasFacts | undefined;
-    try {
-      facts = detectRepointedWorkspaceAlias(scope.workspaceDir);
-    } catch (error) {
-      note(
-        `Workspace alias check failed for ${shortenHomePath(scope.workspaceDir)}: ${formatErrorMessage(error)}`,
-        "Workspace",
-      );
-      continue;
-    }
-    if (facts) {
-      detected.push({ ...scope, facts });
-    }
-  }
-  return detected;
+function configuredWorkspaceDirs(cfg: OpenClawConfig): string[] {
+  return listWorkspaceStateDirs({
+    cfg,
+    env: process.env,
+    homedir: os.homedir,
+    stateDir: resolveStateDir(),
+  });
 }
 
 function describeRepointedWorkspaceAlias(facts: RepointedWorkspaceAliasFacts): string {
-  return (
-    `workspace path ${shortenHomePath(facts.aliasPath)} now resolves to ` +
-    `${shortenHomePath(facts.currentWorkspacePath)}, but its stored setup state still belongs to ` +
-    shortenHomePath(facts.storedWorkspacePath)
-  );
-}
-
-/**
- * Continuity proof for auto-adoption: every attested generated file must exist
- * in the alias's current target with its recorded hash. Anything less keeps the
- * rebind an explicit operator decision.
- */
-async function attestedHashesMatchCurrentTarget(
-  facts: RepointedWorkspaceAliasFacts,
-): Promise<boolean> {
-  if (facts.storedAttestationHashes.size === 0) {
-    return false;
-  }
-  for (const [filename, sha256] of facts.storedAttestationHashes) {
-    try {
-      const buffer = await fs.promises.readFile(path.join(facts.currentWorkspacePath, filename));
-      if (crypto.createHash("sha256").update(buffer).digest("hex") !== sha256) {
-        return false;
-      }
-    } catch {
-      return false;
-    }
-  }
-  return true;
-}
-
-function findConfiguredStoredTargetOwner(params: {
-  cfg: OpenClawConfig;
-  currentAgentId: string;
-  storedWorkspacePath: string;
-}): WorkspaceAliasScope | undefined {
-  return resolveWorkspaceAliasScopes(params.cfg).find(
-    (scope) =>
-      scope.agentId !== params.currentAgentId &&
-      resolveWorkspaceStateIdentity(scope.workspaceDir).workspacePath ===
-        params.storedWorkspacePath,
-  );
+  return `Workspace path ${shortenHomePath(facts.aliasPath)} now resolves to ${shortenHomePath(facts.currentWorkspacePath)}, but its saved setup records belong to ${shortenHomePath(facts.storedWorkspacePath)}.`;
 }
 
 export type WorkspaceAliasFinding = {
@@ -113,73 +37,99 @@ export type WorkspaceAliasFinding = {
 };
 
 const WORKSPACE_ALIAS_CHECK_ID = "core/doctor/workspace-alias";
+const REPAIR_HINT =
+  "If the same workspace moved, run `openclaw doctor` and confirm the move, or use `openclaw doctor --fix --force`. Otherwise restore the original link or configure the intended workspace directly.";
+const REBIND_MESSAGES: Record<Exclude<WorkspaceAliasRebindOutcome, "rebound">, string> = {
+  "no-repoint": "The alias no longer needs repair.",
+  "repoint-changed":
+    "The workspace changed after inspection. Nothing was transferred; rerun doctor to inspect it again.",
+  "current-target-owns-state":
+    "The destination already owns workspace records. Nothing was merged or deleted. Restore the original link, or configure that destination directly if you intended to switch workspaces.",
+  "original-workspace-exists":
+    "The original workspace still exists. This repair only moves records after the original folder has moved; restore the link if the move was not intended.",
+  "target-directory-missing":
+    "The destination is not an existing directory. Restore the moved folder before repairing the link.",
+  "configured-workspace-conflict":
+    "Another workspace path still refers to the original location. Update the links for the moved workspace, then rerun doctor; no records were transferred.",
+};
 
-/** Read-only findings for `openclaw doctor` preview and health reporting. */
+/** Read-only findings include failed inspection so health cannot report a false success. */
 export function collectRepointedWorkspaceAliasFindings(
   cfg: OpenClawConfig,
 ): WorkspaceAliasFinding[] {
-  return detectRepointedWorkspaceAliasScopes(cfg).map(({ agentId, labelAgent, facts }) => ({
-    checkId: WORKSPACE_ALIAS_CHECK_ID,
-    severity: "warning",
-    message: `${labelAgent ? `Agent "${agentId}": ` : ""}${describeRepointedWorkspaceAlias(facts)}. Inbound messages for this workspace fail until the alias is repaired.`,
-    fixHint:
-      "Run `openclaw doctor` and confirm the rebind, or use `openclaw doctor --fix --force`.",
-  }));
+  const findings: WorkspaceAliasFinding[] = [];
+  for (const workspaceDir of configuredWorkspaceDirs(cfg)) {
+    let message: string;
+    try {
+      const facts = detectRepointedWorkspaceAlias(workspaceDir);
+      if (!facts) {
+        continue;
+      }
+      message = `${describeRepointedWorkspaceAlias(facts)} Incoming messages cannot use this workspace until it is repaired.`;
+    } catch (error) {
+      message = `Workspace alias inspection failed for ${shortenHomePath(workspaceDir)}: ${formatErrorMessage(error)}`;
+    }
+    findings.push({
+      checkId: WORKSPACE_ALIAS_CHECK_ID,
+      severity: "warning",
+      message,
+      fixHint: REPAIR_HINT,
+    });
+  }
+  return findings;
 }
 
-/** Detects repointed workspace aliases and repairs them under doctor's repair flow. */
 export async function maybeRepairRepointedWorkspaceAliases(params: {
   cfg: OpenClawConfig;
   prompter: DoctorPrompter;
 }): Promise<void> {
-  for (const { agentId, workspaceDir, labelAgent, facts } of detectRepointedWorkspaceAliasScopes(
-    params.cfg,
-  )) {
-    const prefix = labelAgent ? `Agent "${agentId}": ` : "";
-    const description = describeRepointedWorkspaceAlias(facts);
-    if (facts.currentTargetHasOwnState) {
-      note(
-        `${prefix}${description}. The current target already has its own workspace state, so doctor cannot rebind without merging two workspaces. Delete one workspace's state first if this repoint was intentional.`,
-        "Workspace",
+  const workspaceDirs = configuredWorkspaceDirs(params.cfg);
+  const configuration = await readConfigFileSnapshot();
+  const verifyConfiguration = async () => {
+    const current = await readConfigFileSnapshot();
+    if (current.readError || !isDeepStrictEqual(current.sourceConfig, configuration.sourceConfig)) {
+      throw new Error(
+        "Workspace configuration changed during repair. No records were transferred; rerun doctor to inspect the current workspace owners.",
       );
-      continue;
     }
-    const configuredOwner = findConfiguredStoredTargetOwner({
-      cfg: params.cfg,
-      currentAgentId: agentId,
-      storedWorkspacePath: facts.storedWorkspacePath,
-    });
-    if (configuredOwner) {
+  };
+  for (const workspaceDir of workspaceDirs) {
+    try {
+      // Earlier repairs can cover another spelling; inspect each scope when used.
+      const facts = detectRepointedWorkspaceAlias(workspaceDir);
+      if (!facts) {
+        continue;
+      }
+      const description = describeRepointedWorkspaceAlias(facts);
+      const inspection = inspectWorkspaceAliasMove(workspaceDir, facts, workspaceDirs);
+      if (inspection.kind === "blocked") {
+        note(`${description} ${REBIND_MESSAGES[inspection.outcome]}`, "Workspace");
+        continue;
+      }
+      const approved = await params.prompter.confirmAggressiveAutoFix({
+        message: `${description} Confirm only if this is the same workspace after a folder move. Transfer its saved setup and file-verification history without changing workspace files?`,
+        initialValue: false,
+      });
+      if (!approved) {
+        note(`${description} No records were transferred. ${REPAIR_HINT}`, "Workspace");
+        continue;
+      }
+      const outcome = await rebindRepointedWorkspaceAlias(
+        workspaceDir,
+        facts,
+        {},
+        workspaceDirs,
+        verifyConfiguration,
+      );
       note(
-        `${prefix}${description}. Agent "${configuredOwner.agentId}" still uses the stored target, so doctor will not transfer its state.`,
+        outcome === "rebound"
+          ? `Rebound workspace state for ${shortenHomePath(facts.aliasPath)} to ${shortenHomePath(facts.currentWorkspacePath)}. Workspace files were not changed.`
+          : `${description} ${REBIND_MESSAGES[outcome]}`,
         "Workspace",
       );
-      continue;
-    }
-    const hashesMatch = await attestedHashesMatchCurrentTarget(facts);
-    // Generated bootstrap templates can corroborate a target, but they do not identify it.
-    const approved = await params.prompter.confirmAggressiveAutoFix({
-      message: hashesMatch
-        ? `${prefix}${description}. Generated template hashes match the current target but do not prove its identity. Rebind the stored state to it?`
-        : `${prefix}${description}. Attested workspace files do NOT verify against the current target. Rebind the stored state to it anyway?`,
-      initialValue: false,
-    });
-    if (!approved) {
+    } catch (error) {
       note(
-        `${prefix}Left the repointed workspace alias in place. Inbound messages for this workspace keep failing until it is repaired.`,
-        "Workspace",
-      );
-      continue;
-    }
-    const outcome = rebindRepointedWorkspaceAlias(workspaceDir, facts);
-    if (outcome === "rebound") {
-      note(
-        `${prefix}Rebound workspace state for ${shortenHomePath(facts.aliasPath)} to ${shortenHomePath(facts.currentWorkspacePath)}.`,
-        "Workspace",
-      );
-    } else {
-      note(
-        `${prefix}Workspace alias rebind for ${shortenHomePath(facts.aliasPath)} was not applied (${outcome}); re-run \`openclaw doctor\` to re-check.`,
+        `Workspace repair was not applied for ${shortenHomePath(workspaceDir)}: ${formatErrorMessage(error)}`,
         "Workspace",
       );
     }

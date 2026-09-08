@@ -67,12 +67,11 @@ function repointAlias(params: { seedAttestedFile?: boolean }): {
   const original = testState!.workspaceDir;
   const alias = testState!.path("workspace-link");
   const replacement = testState!.path("replacement-workspace");
-  fs.mkdirSync(replacement, { recursive: true });
   fs.symlinkSync(original, alias, process.platform === "win32" ? "junction" : "dir");
   mergeWorkspaceSetupState(alias, { bootstrapSeededAt: "2026-07-16T01:00:00.000Z" }, 1_000);
   if (params.seedAttestedFile) {
     const content = "seeded bootstrap content";
-    fs.writeFileSync(path.join(replacement, "BOOTSTRAP.md"), content);
+    fs.writeFileSync(path.join(original, "BOOTSTRAP.md"), content);
     replaceWorkspaceAttestation({
       workspaceDir: alias,
       attestedAtMs: 1_000,
@@ -82,12 +81,46 @@ function repointAlias(params: { seedAttestedFile?: boolean }): {
       nowMs: 1_000,
     });
   }
+  fs.renameSync(original, replacement);
   fs.unlinkSync(alias);
   fs.symlinkSync(replacement, alias, process.platform === "win32" ? "junction" : "dir");
   return { alias, original, replacement };
 }
 
 describe("doctor workspace alias repair", () => {
+  it("leaves state intact when configuration changes during confirmation", async () => {
+    const { alias, original, replacement } = repointAlias({ seedAttestedFile: true });
+    const cfg = buildAliasCfg(alias);
+    await testState!.writeConfig(cfg);
+    const prompter = buildPrompter({
+      confirmAggressiveAutoFix: vi.fn(async () => {
+        await testState!.writeConfig({
+          agents: { entries: { main: { workspace: alias }, other: { workspace: original } } },
+        });
+        return true;
+      }),
+    });
+    await maybeRepairRepointedWorkspaceAliases({ cfg, prompter });
+    expect(readWorkspaceStateSnapshot(original).setupExists).toBe(true);
+    expect(readWorkspaceStateSnapshot(replacement).setupExists).toBe(false);
+  });
+
+  it("does not adopt a target substituted during confirmation", async () => {
+    const { alias, original } = repointAlias({ seedAttestedFile: true });
+    const changed = testState!.path("changed-target");
+    fs.mkdirSync(changed);
+    const prompter = buildPrompter({
+      confirmAggressiveAutoFix: vi.fn(async () => {
+        fs.unlinkSync(alias);
+        fs.symlinkSync(changed, alias, process.platform === "win32" ? "junction" : "dir");
+        return true;
+      }),
+    });
+    await maybeRepairRepointedWorkspaceAliases({ cfg: buildAliasCfg(alias), prompter });
+    expect(readWorkspaceStateSnapshot(original).setupExists).toBe(true);
+    expect(readWorkspaceStateSnapshot(changed).setupExists).toBe(false);
+  });
+
   it("reports a repointed alias as a warning finding", () => {
     const { alias } = repointAlias({ seedAttestedFile: false });
 

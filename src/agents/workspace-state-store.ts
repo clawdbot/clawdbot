@@ -51,10 +51,6 @@ export function isSafeWorkspaceAttestationFilename(filename: string): boolean {
   );
 }
 
-export function isValidWorkspaceAttestationHash(filename: string, sha256: string): boolean {
-  return isSafeWorkspaceAttestationFilename(filename) && SHA256_HEX_PATTERN.test(sha256);
-}
-
 function isCanonicalIsoTimestamp(value: string): boolean {
   const timestamp = new Date(value);
   return Number.isFinite(timestamp.getTime()) && timestamp.toISOString() === value;
@@ -112,7 +108,7 @@ type WorkspaceStateDatabaseHandle = Pick<
   "db" | "path"
 >;
 
-export function workspacePathEntryExists(workspaceDir: string): boolean {
+function workspacePathEntryExists(workspaceDir: string): boolean {
   try {
     fs.lstatSync(path.resolve(resolveUserPath(workspaceDir)));
     return true;
@@ -156,21 +152,22 @@ function resolveWorkspaceIdentityFromDatabase(params: {
     if (rowIdentity.workspaceKey !== row.workspace_key) {
       throw new Error("workspace path alias target is invalid");
     }
+    // A repointed alias can also resolve to an already initialized workspace.
+    // Report the repairable alias failure before the two owners look like corruption.
+    if (
+      workspacePathEntryExists(params.workspaceDir) &&
+      rowIdentity.workspaceKey !== canonicalIdentity.workspaceKey
+    ) {
+      throw new WorkspaceAliasRepointedError({
+        aliasPath: aliases[0]!.workspacePath,
+        storedWorkspacePath: rowIdentity.workspacePath,
+        currentWorkspacePath: canonicalIdentity.workspacePath,
+      });
+    }
     if (storedIdentity && storedIdentity.workspaceKey !== rowIdentity.workspaceKey) {
       throw new Error("workspace path aliases resolve to conflicting state");
     }
     storedIdentity = rowIdentity;
-  }
-  if (
-    storedIdentity &&
-    workspacePathEntryExists(params.workspaceDir) &&
-    storedIdentity.workspaceKey !== canonicalIdentity.workspaceKey
-  ) {
-    throw new WorkspaceAliasRepointedError({
-      aliasPath: aliases[0]!.workspacePath,
-      storedWorkspacePath: storedIdentity.workspacePath,
-      currentWorkspacePath: canonicalIdentity.workspacePath,
-    });
   }
   const existingAliasKeys = new Set(rows.map((row) => row.alias_key));
   return {
@@ -182,7 +179,7 @@ function resolveWorkspaceIdentityFromDatabase(params: {
   };
 }
 
-function registerWorkspacePathAliases(params: {
+export function registerWorkspaceStateAliasIdentitiesInTransaction(params: {
   database: WorkspaceStateDatabaseHandle;
   identity: WorkspaceStateIdentity;
   aliases: readonly WorkspaceStateIdentity[];
@@ -221,15 +218,6 @@ function registerWorkspacePathAliases(params: {
   }
 }
 
-export function registerWorkspaceStateAliasIdentitiesInTransaction(params: {
-  database: WorkspaceStateDatabaseHandle;
-  aliases: readonly WorkspaceStateIdentity[];
-  identity: WorkspaceStateIdentity;
-  updatedAtMs: number;
-}): void {
-  registerWorkspacePathAliases(params);
-}
-
 export function registerWorkspaceStateAliasesInTransaction(params: {
   database: WorkspaceStateDatabaseHandle;
   workspaceDirs: readonly string[];
@@ -250,7 +238,7 @@ export function registerWorkspaceStateAliasesInTransaction(params: {
   });
 }
 
-function readSnapshotFromDatabase(params: {
+export function readWorkspaceStateSnapshotFromDatabase(params: {
   identity: WorkspaceStateIdentity;
   database: WorkspaceStateDatabaseHandle;
 }): WorkspaceStateSnapshot {
@@ -299,7 +287,10 @@ function readSnapshotFromDatabase(params: {
     for (const row of hashRows) {
       // Validate names structurally rather than against today's bootstrap set:
       // retiring a seeded file must not make an existing attestation unreadable.
-      if (!isValidWorkspaceAttestationHash(row.filename, row.sha256)) {
+      if (
+        !isSafeWorkspaceAttestationFilename(row.filename) ||
+        !SHA256_HEX_PATTERN.test(row.sha256)
+      ) {
         throw new Error("workspace attestation hash row is invalid");
       }
       generatedHashes.set(row.filename, row.sha256);
@@ -337,7 +328,10 @@ export function readWorkspaceStateSnapshot(
       (database) =>
         runSqliteDeferredTransactionSync(database.db, () => {
           const resolution = resolveWorkspaceIdentityFromDatabase({ workspaceDir, database });
-          return readSnapshotFromDatabase({ identity: resolution.identity, database });
+          return readWorkspaceStateSnapshotFromDatabase({
+            identity: resolution.identity,
+            database,
+          });
         }),
       options,
     );
@@ -354,7 +348,7 @@ export function readWorkspaceStateSnapshot(
     const resolution = resolveWorkspaceIdentityFromDatabase({ workspaceDir, database });
     return {
       resolution,
-      snapshot: readSnapshotFromDatabase({ identity: resolution.identity, database }),
+      snapshot: readWorkspaceStateSnapshotFromDatabase({ identity: resolution.identity, database }),
     };
   });
   if (
@@ -378,7 +372,7 @@ export function readWorkspaceStateSnapshot(
         currentWorkspacePath: currentCanonicalIdentity.workspacePath,
       });
     }
-    const snapshot = readSnapshotFromDatabase({
+    const snapshot = readWorkspaceStateSnapshotFromDatabase({
       identity: initial.resolution.identity,
       database: writeDatabase,
     });
@@ -389,7 +383,7 @@ export function readWorkspaceStateSnapshot(
           alias,
         ]),
       );
-      registerWorkspacePathAliases({
+      registerWorkspaceStateAliasIdentitiesInTransaction({
         database: writeDatabase,
         identity: initial.resolution.identity,
         aliases: [...aliases.values()],
@@ -416,7 +410,7 @@ export function mergeWorkspaceSetupState(
   return runOpenClawStateWriteTransaction((database) => {
     const resolution = resolveWorkspaceIdentityFromDatabase({ workspaceDir, database });
     const identity = resolution.identity;
-    const snapshot = readSnapshotFromDatabase({ identity, database });
+    const snapshot = readWorkspaceStateSnapshotFromDatabase({ identity, database });
     const bootstrapSeededAt = snapshot.setup.bootstrapSeededAt ?? next.bootstrapSeededAt;
     const setupCompletedAt = snapshot.setup.setupCompletedAt ?? next.setupCompletedAt;
     const merged: WorkspaceSetupState = {
@@ -447,7 +441,7 @@ export function mergeWorkspaceSetupState(
           }),
         ),
     );
-    registerWorkspacePathAliases({
+    registerWorkspaceStateAliasIdentitiesInTransaction({
       database,
       identity,
       aliases: resolution.aliases,
@@ -485,13 +479,13 @@ export function replaceWorkspaceAttestation(params: {
       database,
     });
     const identity = resolution.identity;
-    const snapshot = readSnapshotFromDatabase({ identity, database });
+    const snapshot = readWorkspaceStateSnapshotFromDatabase({ identity, database });
     if (
       snapshot.attestation &&
       snapshot.attestation.attestedAtMs > params.attestedAtMs &&
       snapshot.attestation.attestedAtMs <= updatedAtMs
     ) {
-      registerWorkspacePathAliases({
+      registerWorkspaceStateAliasIdentitiesInTransaction({
         database,
         identity,
         aliases: resolution.aliases,
@@ -537,7 +531,7 @@ export function replaceWorkspaceAttestation(params: {
         ),
       );
     }
-    registerWorkspacePathAliases({
+    registerWorkspaceStateAliasIdentitiesInTransaction({
       database,
       identity,
       aliases: resolution.aliases,
@@ -621,7 +615,7 @@ export function retireWorkspaceRelocationAttestation(params: {
   identity: WorkspaceStateIdentity;
   attestedAtMs: number;
 }): boolean {
-  const snapshot = readSnapshotFromDatabase(params);
+  const snapshot = readWorkspaceStateSnapshotFromDatabase(params);
   if (
     snapshot.setupExists ||
     snapshot.attestation?.attestedAtMs !== params.attestedAtMs ||
@@ -648,9 +642,9 @@ export function clearExpiredWorkspaceStateForVanishedWorkspace(
   return runOpenClawStateWriteTransaction((database) => {
     const resolution = resolveWorkspaceIdentityFromDatabase({ workspaceDir, database });
     const identity = resolution.identity;
-    const snapshot = readSnapshotFromDatabase({ identity, database });
+    const snapshot = readWorkspaceStateSnapshotFromDatabase({ identity, database });
     const preserveRecentState = () => {
-      registerWorkspacePathAliases({
+      registerWorkspaceStateAliasIdentitiesInTransaction({
         database,
         identity,
         aliases: resolution.aliases,

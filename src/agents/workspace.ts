@@ -39,13 +39,12 @@ import {
 } from "./workspace-bootstrap-read.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR } from "./workspace-default.js";
 import { readWorkspaceFileCache, writeWorkspaceFileCache } from "./workspace-file-cache.js";
-import { WorkspaceVanishedError } from "./workspace-state-identity.js";
-export { WORKSPACE_VANISHED_ERROR_CODE } from "./workspace-state-identity.js";
 import {
   assertNoUnmigratedWorkspaceState,
   LEGACY_WORKSPACE_STATE_CURRENT_FILENAME,
   LEGACY_WORKSPACE_STATE_DIRNAME,
 } from "./workspace-legacy-state.js";
+import { WorkspaceVanishedError } from "./workspace-state-identity.js";
 import {
   clearExpiredWorkspaceStateForVanishedWorkspace,
   mergeWorkspaceSetupState,
@@ -57,6 +56,7 @@ import {
   type WorkspaceSetupState,
 } from "./workspace-state-store.js";
 import { resolveWorkspaceTemplateSearchDirs } from "./workspace-templates.js";
+export { WORKSPACE_VANISHED_ERROR_CODE } from "./workspace-state-identity.js";
 export {
   DEFAULT_AGENT_WORKSPACE_DIR,
   resolveDefaultAgentWorkspaceDir,
