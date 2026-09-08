@@ -45,25 +45,30 @@ export async function transcribeDeepgramAudio(
     assertOkOrThrowHttpError,
     postTranscriptionRequest,
     readProviderJsonObjectResponse,
-    resolveProviderHttpRequestConfig,
+    resolveProviderHttpRequestConfigWithOriginTrust,
     requireTranscriptionText,
   } = await import("openclaw/plugin-sdk/provider-http");
-  const fetchFn = params.fetchFn ?? fetch;
+  const { isDeepgramFluxModel, transcribeDeepgramFluxAudio } = await import("./audio-flux.js");
   const model = resolveModel(params.model);
-  const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
-    resolveProviderHttpRequestConfig({
-      baseUrl: params.baseUrl,
-      defaultBaseUrl: DEFAULT_DEEPGRAM_AUDIO_BASE_URL,
-      headers: params.headers,
-      request: params.request,
-      defaultHeaders: {
-        authorization: `Token ${params.apiKey}`,
-        "content-type": params.mime ?? "application/octet-stream",
-      },
-      provider: "deepgram",
-      capability: "audio",
-      transport: "media-understanding",
-    });
+  const flux = isDeepgramFluxModel(model);
+  const requestConfig = resolveProviderHttpRequestConfigWithOriginTrust({
+    baseUrl: params.baseUrl,
+    defaultBaseUrl: DEFAULT_DEEPGRAM_AUDIO_BASE_URL,
+    headers: params.headers,
+    request: params.request,
+    defaultHeaders: {
+      authorization: `Token ${params.apiKey}`,
+      ...(flux ? {} : { "content-type": params.mime ?? "application/octet-stream" }),
+    },
+    provider: "deepgram",
+    capability: "audio",
+    transport: "media-understanding",
+  });
+  if (flux) {
+    return await transcribeDeepgramFluxAudio({ request: params, requestConfig, model });
+  }
+  const fetchFn = params.fetchFn ?? fetch;
+  const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } = requestConfig;
 
   const url = new URL(`${baseUrl}/listen`);
   url.searchParams.set("model", model);
