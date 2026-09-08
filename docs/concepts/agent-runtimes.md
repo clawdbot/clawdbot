@@ -57,10 +57,13 @@ Several surfaces share the Codex name:
 
 These surfaces are intentionally independent. Enabling the `codex` plugin
 makes native app-server features available; `openclaw doctor --fix` owns
-legacy Codex route repair and stale session pin cleanup. Automatic Codex
-selection requires a compatible effective route: an exact official HTTPS
+legacy Codex route repair and stale session pin cleanup. By default, automatic
+Codex selection requires a compatible effective route: an exact official HTTPS
 Platform Responses or ChatGPT Responses endpoint without authored request
-overrides. The `openai/*` prefix alone does not select Codex.
+overrides. Operators can also enable
+[custom native providers](/plugins/codex-harness-reference#custom-native-providers)
+when Codex can use the same Responses endpoint and selected API key. The
+`openai/*` prefix alone does not select Codex.
 
 The common ChatGPT/Codex subscription setup uses Codex OAuth for auth, but
 keeps the model ref as `openai/*` and selects the `codex` runtime:
@@ -229,9 +232,13 @@ they run through the Codex app-server harness instead of preserving a Codex
 CLI backend.
 
 For OpenAI agent models, unset runtime and `auto` can select Codex when the
-provider-owned effective route declares it compatible. Custom endpoints,
-Completions adapters, and authored request overrides stay on OpenClaw rather
-than losing their transport settings. Explicit `agentRuntime.id: "openclaw"`
+provider-owned effective route declares it compatible. Custom endpoints stay
+on OpenClaw unless you enable a separate custom provider ID through
+`plugins.entries.codex.config.appServer.providerIds`. This requires
+[matching native Responses configuration](/plugins/codex-harness-reference#custom-native-providers),
+agent-home local stdio, and the exact API key selected by OpenClaw. The allowlist
+cannot override an incompatible provider runtime policy. Completions adapters and authored request
+overrides retain their OpenClaw transport behavior. Explicit `agentRuntime.id: "openclaw"`
 also keeps the built-in runtime available; with a selected `openai` OAuth
 profile, it uses OpenClaw's Codex-auth transport while keeping the public model
 ref as `openai/*`. Stale historical producer fields do not pin the next turn
