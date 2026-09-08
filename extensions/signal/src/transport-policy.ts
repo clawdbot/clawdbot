@@ -67,6 +67,29 @@ export function resolveLocalSignalTransportPort(baseUrl: string): number | undef
   }
 }
 
+/**
+ * When managed-native has a local connection URL but no explicit httpPort, prefer
+ * binding the daemon to that URL's port so client and autoStart daemon agree.
+ * Returns undefined when the URL is an independent endpoint (different host/family
+ * or non-local), so multi-account allocation can still reassign binds.
+ */
+export function preferredManagedNativePortFromConnectionUrl(
+  transport: SignalTransportConfig,
+): number | undefined {
+  if (transport.kind !== "managed-native" || transport.httpPort !== undefined || !transport.url) {
+    return undefined;
+  }
+  const localPort = resolveLocalSignalTransportPort(transport.url);
+  if (localPort === undefined || !isValidSignalManagedNativePort(localPort)) {
+    return undefined;
+  }
+  const candidate: SignalManagedNativeTransport = { ...transport, httpPort: localPort };
+  if (!isSignalManagedNativeConnectionUrlForBind(candidate)) {
+    return undefined;
+  }
+  return localPort;
+}
+
 export function isSignalManagedNativeConnectionUrlForBind(
   transport: SignalTransportConfig,
 ): boolean {
@@ -114,7 +137,15 @@ export function assignSignalManagedNativePort(
     throw new Error("Signal managed native port must be an integer between 1 and 65535.");
   }
   const connectionUrlValue = transport.url;
-  if (!connectionUrlValue || !isSignalManagedNativeConnectionUrlForBind(transport)) {
+  // When httpPort is omitted but the connection URL is a bind-aligned local
+  // endpoint, treat the URL port as the provisional bind for alignment. That
+  // way fallback allocation (preferred port already reserved) still rewrites
+  // the probe URL to the allocated port instead of leaving bind and URL
+  // divergent (see vincentkoc review on #116176).
+  const preferredUrlPort = preferredManagedNativePortFromConnectionUrl(transport);
+  const alignmentProbe: SignalManagedNativeTransport =
+    preferredUrlPort === undefined ? transport : { ...transport, httpPort: preferredUrlPort };
+  if (!connectionUrlValue || !isSignalManagedNativeConnectionUrlForBind(alignmentProbe)) {
     return { ...transport, httpPort };
   }
   const connectionUrl = new URL(connectionUrlValue);

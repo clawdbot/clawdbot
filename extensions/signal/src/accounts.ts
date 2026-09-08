@@ -15,6 +15,7 @@ import {
   assignSignalManagedNativePort,
   DEFAULT_SIGNAL_MANAGED_NATIVE_PORT,
   isSignalManagedNativeConnectionUrlForBind,
+  preferredManagedNativePortFromConnectionUrl,
   resolveLocalSignalTransportPort,
 } from "./transport-policy.js";
 import { buildSignalTransportHttpUrl, normalizeSignalTransportHost } from "./transport-url.js";
@@ -177,7 +178,13 @@ function resolveSignalManagedNativePort(params: {
       } else {
         implicitManagedAccountIds.push(accountId);
       }
-      if (transport.url && !isSignalManagedNativeConnectionUrlForBind(transport)) {
+      // Prefer treating a local connection URL as this account's bind when no
+      // explicit httpPort is set, so autoStart does not bind 8080 while the
+      // client probes a non-default httpUrl port (see #116165).
+      const preferredBindPort = preferredManagedNativePortFromConnectionUrl(transport);
+      const effectiveForBindCheck =
+        preferredBindPort === undefined ? transport : { ...transport, httpPort: preferredBindPort };
+      if (transport.url && !isSignalManagedNativeConnectionUrlForBind(effectiveForBindCheck)) {
         const localConnectionPort = resolveLocalSignalTransportPort(transport.url);
         if (localConnectionPort !== undefined) {
           reservedPorts.add(localConnectionPort);
@@ -189,7 +196,14 @@ function resolveSignalManagedNativePort(params: {
   }
 
   for (const accountId of implicitManagedAccountIds) {
-    const port = allocateSignalManagedNativePort({ reservedPorts });
+    const accountConfig = resolveSignalAccountConfig(params.cfg, accountId);
+    const preferredPort = preferredManagedNativePortFromConnectionUrl(
+      accountConfig.transport ?? { kind: "managed-native" },
+    );
+    const port = allocateSignalManagedNativePort({
+      reservedPorts,
+      ...(preferredPort !== undefined ? { preferredPort } : {}),
+    });
     reservedPorts.add(port);
     if (normalizeAccountId(accountId) === params.accountId) {
       return port;
