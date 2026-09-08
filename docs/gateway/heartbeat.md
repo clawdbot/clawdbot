@@ -141,7 +141,8 @@ Outside heartbeats, stray `HEARTBEAT_OK` at the start/end of a message is stripp
 ### Scope and precedence
 
 - `agents.defaults.heartbeat` sets global heartbeat behavior.
-- `agents.entries.*.heartbeat` merges on top; if any agent has a `heartbeat` block, **only those agents** run heartbeats.
+- `agents.entries.*.heartbeat` merges on top; if any agent has a `heartbeat` block that keeps a cadence, **only those agents** run heartbeats.
+- A per-agent block whose merged cadence is `0m` is an opt-out, not an enrollment selector: it disables that agent only, and its siblings keep the cadence they inherit from `agents.defaults.heartbeat`.
 - Ambient ownership resolves through `agents.defaults.heartbeat.agentId`, `agents.defaults.systemAgent.agentId`, the legacy default owner, then the sole agent; when no per-agent or default heartbeat block applies and that chain leaves a multi-agent roster ownerless, heartbeats stay disabled and emit validation and Gateway warnings.
 - `channels.defaults.heartbeatVisibility` sets visibility defaults for all channels.
 - `channels.<channel>.heartbeatVisibility` overrides channel defaults.
@@ -149,7 +150,9 @@ Outside heartbeats, stray `HEARTBEAT_OK` at the start/end of a message is stripp
 
 ### Per-agent heartbeats
 
-If any `agents.entries.*` entry includes a `heartbeat` block, **only those agents** run heartbeats. The per-agent block merges on top of `agents.defaults.heartbeat` (so you can set shared defaults once and override per agent).
+If any `agents.entries.*` entry includes a `heartbeat` block that keeps a cadence, **only those agents** run heartbeats. The per-agent block merges on top of `agents.defaults.heartbeat` (so you can set shared defaults once and override per agent).
+
+Entries that only disable the cadence (`heartbeat: { every: "0m" }`) do not select the enrolled set. Disabling one agent leaves every other agent on its inherited cadence, and the disabled agent keeps its monitor row (disabled) and scratch.
 
 Example: two agents, only the second agent runs heartbeats.
 
