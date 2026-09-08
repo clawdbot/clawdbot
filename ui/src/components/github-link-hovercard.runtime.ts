@@ -2,13 +2,11 @@ import { initialState, Task } from "@lit/task";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing, ReactiveElement, render, type TemplateResult } from "lit";
 import type { ControlUiGitHubPreview } from "../../../src/gateway/control-ui-contract.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { i18n, t } from "../i18n/index.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
-import { formatUiError } from "../lib/format-error.ts";
 import { formatRelativeTimestamp } from "../lib/format.ts";
 import "../styles/github-link-hovercard.css";
 import {
@@ -32,6 +30,7 @@ type PreviewState = {
 };
 
 type CacheEntry = {
+  failed?: boolean;
   expiresAt: number;
   promise: Promise<ControlUiGitHubPreview>;
   signal: AbortSignal;
@@ -180,56 +179,7 @@ function renderCardLink(className: string, href: string, content: string | Templ
   >`;
 }
 
-function renderLoading(card: HTMLDivElement): void {
-  card.dataset.loading = "true";
-  card.removeAttribute("data-state");
-  card.setAttribute("aria-label", t("githubPreview.loading"));
-  const rows = [
-    ["header", ["badge", "repo", "time"]],
-    ["title", ["title"]],
-    ["footer", ["author", "metrics"]],
-  ] as const;
-  render(
-    html`<div class="github-link-hovercard__skeleton" aria-hidden="true">
-      ${rows.map(
-        ([rowClass, parts]) =>
-          html`<div class=${`github-link-hovercard__${rowClass}`}>
-            ${parts.map(
-              (part) =>
-                html`<span class=${`skeleton github-link-hovercard__placeholder--${part}`}></span>`,
-            )}
-          </div>`,
-      )}
-    </div>`,
-    card,
-  );
-}
-
-function renderUnavailable(card: HTMLDivElement, error: string): void {
-  card.dataset.loading = "false";
-  card.dataset.state = "unavailable";
-  const label = t("githubPreview.unavailable");
-  card.setAttribute("aria-label", label);
-  const showError = error && error !== label;
-  const errorId = `${card.id}-error`;
-  if (showError) {
-    card.setAttribute("aria-describedby", errorId);
-  }
-  render(
-    html`<div class="github-link-hovercard__unavailable">
-      <div>${label}</div>
-      ${
-        showError
-          ? html`<div class="github-link-hovercard__error" id=${errorId}>${error}</div>`
-          : nothing
-      }
-    </div>`,
-    card,
-  );
-}
-
 function renderPreview(card: HTMLDivElement, preview: GitHubPreview): void {
-  card.dataset.loading = "false";
   const state = previewState(preview);
   card.dataset.state = state.tone;
   const comments = preview.comments ?? 0;
@@ -351,7 +301,7 @@ export class GitHubLinkHovercardProvider extends ReactiveElement {
     const anchor = this.activeAnchor;
     // The card is portaled outside the routed tree, whose replacement can remove
     // a hovered link without a pointer event reaching this delegated handler.
-    if (anchor && !this.contains(anchor)) {
+    if (anchor && (!this.contains(anchor) || anchor.href !== this.activeTarget?.href)) {
       this.close();
     }
   });
@@ -386,18 +336,23 @@ export class GitHubLinkHovercardProvider extends ReactiveElement {
   }
 
   protected override updated(): void {
-    const card = this.hovercard.card;
-    if (!card) {
+    const anchor = this.activeAnchor;
+    const target = this.activeTarget;
+    if (!anchor || !target) {
       return;
     }
-    card.removeAttribute("aria-describedby");
+    if (!this.isConnected || !this.contains(anchor) || anchor.href !== target.href) {
+      this.close();
+      return;
+    }
     this.previewTask.render({
-      initial: () => renderLoading(card),
-      pending: () => renderLoading(card),
-      complete: (preview) => renderPreview(card, preview),
-      error: (error) => renderUnavailable(card, truncateUtf16Safe(formatUiError(error), 320)),
+      complete: (preview) => {
+        if (preview.href === target.href && (this.hovercard.card || this.hovercard.held)) {
+          this.show(anchor, preview);
+        }
+      },
+      error: () => this.close(),
     });
-    this.hovercard.position();
   }
 
   private readonly handlePointerOver = (event: Event) => {
@@ -522,17 +477,28 @@ export class GitHubLinkHovercardProvider extends ReactiveElement {
       return;
     }
     this.close();
+    // A known failure has no popup affordance or loading skeleton until its backoff expires.
+    if (this.cachedPreview(target)?.failed) {
+      return;
+    }
     this.activeAnchor = anchor;
     this.activeTarget = target;
-    // Announce the popup affordance as soon as the link is recognized; show()
-    // flips the state once the card exists, close() takes the whole set away.
-    this.hovercard.markTrigger(anchor);
-    this.activeAnchorObserver.observe(this, { childList: true, subtree: true });
-    this.hovercard.scheduleOpen(delay, () => this.show(anchor, target));
+    this.activeAnchorObserver.observe(this, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ["href"],
+    });
+    // Intent starts the request, not a popup. Without a mounted card, leaving
+    // the trigger cancels immediately rather than waiting for the portal gap.
+    this.hovercard.scheduleOpen(delay, () => void this.previewTask.run([target]));
   }
 
-  private show(anchor: HTMLAnchorElement, target: GitHubLinkTarget): void {
-    if (this.activeAnchor !== anchor || this.activeTarget?.href !== target.href) {
+  private show(anchor: HTMLAnchorElement, preview: GitHubPreview): void {
+    const existing = this.hovercard.card;
+    if (existing) {
+      renderPreview(existing, preview);
+      this.hovercard.position();
       return;
     }
     nextHovercardId += 1;
@@ -540,26 +506,34 @@ export class GitHubLinkHovercardProvider extends ReactiveElement {
       `openclaw-github-hovercard-${nextHovercardId}`,
       "github-link-hovercard",
     );
-    renderLoading(card);
+    renderPreview(card, preview);
     // The card is portaled to document.body, so the provider's delegated pointer
     // listeners never see it; it reports its own hover to keep intent shared.
     card.addEventListener("pointerleave", this.handleCardPointerLeave);
     card.addEventListener("keydown", this.handleCardKeyDown);
+    this.hovercard.markTrigger(anchor);
     this.hovercard.mount(anchor, card, "vertical", true, () => render(nothing, card));
+  }
 
-    void this.previewTask.run([target]);
+  private cacheKey(target: GitHubLinkTarget): string {
+    return `${target.kind}:${target.owner.toLowerCase()}/${target.repo.toLowerCase()}#${target.number}`;
+  }
+
+  private cachedPreview(target: GitHubLinkTarget): CacheEntry | undefined {
+    const cached = this.cache.get(this.cacheKey(target));
+    return cached && !cached.signal.aborted && cached.expiresAt > Date.now() ? cached : undefined;
   }
 
   private loadPreview(
     target: GitHubLinkTarget,
     signal: AbortSignal,
   ): Promise<ControlUiGitHubPreview> {
-    const key = `${target.kind}:${target.owner.toLowerCase()}/${target.repo.toLowerCase()}#${target.number}`;
+    const key = this.cacheKey(target);
     const now = Date.now();
-    const cached = this.cache.get(key);
+    const cached = this.cachedPreview(target);
     this.cache.delete(key);
     // Dismissal invalidates only that request, even before its rejection settles.
-    if (cached && !cached.signal.aborted && cached.expiresAt > now) {
+    if (cached) {
       this.cache.set(key, cached);
       return cached.promise;
     }
@@ -588,6 +562,7 @@ export class GitHubLinkHovercardProvider extends ReactiveElement {
       promise: load().catch((error: unknown) => {
         // Keep short-lived failures cached so repeatedly crossing a broken or
         // private link does not burn GitHub's anonymous rate limit.
+        entry.failed = true;
         entry.expiresAt = Date.now() + FAILURE_CACHE_MS;
         throw error;
       }),
