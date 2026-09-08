@@ -54,12 +54,12 @@ function mergeCronAgentModelOverride(params: {
   return nextDefaults;
 }
 
-/** Selects the active runtime snapshot before deriving isolated cron agent defaults. */
-export function resolveCronAgentConfig(params: {
+/** Derives isolated cron agent defaults from one immutable config snapshot. */
+export function resolveCronAgentConfigFromSnapshot(params: {
   config: OpenClawConfig;
   agentConfigOverride?: ResolvedAgentConfig;
 }) {
-  const runtimeConfig = resolveCronActiveRuntimeConfig(params.config);
+  const runtimeConfig = params.config;
   const { overrideModel, definedOverrides } = extractCronAgentDefaultsOverride(
     params.agentConfigOverride,
   );
@@ -77,4 +77,15 @@ export function resolveCronAgentConfig(params: {
       agents: Object.assign({}, runtimeConfig.agents, { defaults: agentDefaults }),
     } satisfies OpenClawConfig,
   };
+}
+
+/** Selects the active runtime snapshot before deriving isolated cron agent defaults. */
+export function resolveCronAgentConfig(params: {
+  config: OpenClawConfig;
+  agentConfigOverride?: ResolvedAgentConfig;
+}) {
+  return resolveCronAgentConfigFromSnapshot({
+    ...params,
+    config: resolveCronActiveRuntimeConfig(params.config),
+  });
 }

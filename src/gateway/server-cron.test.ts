@@ -534,7 +534,9 @@ describe("buildGatewayCronService", () => {
       skills: { workshop: { autonomous: { mode: "auto" } } },
     } satisfies OpenClawConfig;
     const state = loadCronService(cfg);
-    const [spec] = resolveSkillCollectionReviewMonitorSpecs(cfg, { schedulerSeed: "test-seed" });
+    const [spec] = resolveSkillCollectionReviewMonitorSpecs(cfg, [], {
+      schedulerSeed: "test-seed",
+    });
 
     if (!spec) {
       throw new Error("expected the skill collection review monitor spec");
