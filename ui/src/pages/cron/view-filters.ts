@@ -63,6 +63,7 @@ function renderJobsFilter(
         .value=${params.value}
         @change=${(event: Event) =>
           void props.onJobsFiltersChange({
+            // SAFETY: this handler is attached directly to the select rendered here.
             [field]: (event.currentTarget as HTMLSelectElement).value,
           })}
       >
@@ -94,12 +95,14 @@ export function renderJobsFilterPopover(props: CronJobsFilterProps, active: bool
       placement="bottom-end"
       without-arrow
       @wa-show=${(event: Event) => {
+        // SAFETY: Web Awesome popover events originate from the rendered element.
         (event.currentTarget as Element).previousElementSibling?.setAttribute(
           "aria-expanded",
           "true",
         );
       }}
       @wa-hide=${(event: Event) => {
+        // SAFETY: Web Awesome popover events originate from the rendered element.
         (event.currentTarget as Element).previousElementSibling?.setAttribute(
           "aria-expanded",
           "false",

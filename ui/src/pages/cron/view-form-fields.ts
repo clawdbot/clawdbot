@@ -103,8 +103,10 @@ export function renderCronInput(
       aria-invalid=${ifDefined(options.errorKey ? (error ? "true" : "false") : undefined)}
       aria-describedby=${ifDefined(describedBy)}
       placeholder=${ifDefined(options.placeholder)}
-      @input=${(event: Event) =>
-        props.onFormChange({ [field]: (event.currentTarget as HTMLInputElement).value })}
+      @input=${(event: Event) => {
+        // SAFETY: this handler is attached directly to the input rendered here.
+        props.onFormChange({ [field]: (event.currentTarget as HTMLInputElement).value });
+      }}
     />
   `;
 }

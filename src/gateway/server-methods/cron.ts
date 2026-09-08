@@ -803,9 +803,7 @@ export const cronHandlers: GatewayRequestHandlers = {
         : undefined;
     let normalized: unknown;
     try {
-      assertValidCronMetadata(
-        params && typeof params === "object" ? (params as { group?: unknown; tags?: unknown }) : {},
-      );
+      assertValidCronMetadata(params && typeof params === "object" ? params : {});
       assertCronDeliveryInputNonBlankFields((params as { delivery?: unknown } | null)?.delivery);
       normalized =
         normalizeCronJobCreate(params, {
@@ -992,11 +990,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       if (typeof rawDisplayName === "string" && rawDisplayName.trim().length === 0) {
         throw new Error("displayName must not be blank");
       }
-      assertValidCronMetadata(
-        rawPatch && typeof rawPatch === "object"
-          ? (rawPatch as { group?: unknown; tags?: unknown })
-          : {},
-      );
+      assertValidCronMetadata(rawPatch && typeof rawPatch === "object" ? rawPatch : {});
       assertCronDeliveryInputNonBlankFields(
         rawPatch && typeof rawPatch === "object"
           ? (rawPatch as { delivery?: unknown }).delivery

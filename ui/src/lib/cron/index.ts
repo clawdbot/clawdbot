@@ -132,6 +132,7 @@ export function getCronJobPayload(job: CronJob): CronPayload | null {
 }
 
 export function getCronJobGroup(job: CronJob): string {
+  // SAFETY: CronJob is an extensible gateway response and older clients may omit this field.
   const effectiveGroup = (job as CronJob & { effectiveGroup?: unknown }).effectiveGroup;
   if (typeof effectiveGroup === "string") {
     return effectiveGroup;
