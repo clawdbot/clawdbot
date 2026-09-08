@@ -324,6 +324,12 @@ interrupted by a restart and to continue from the existing transcript. If a
 final reply had already been produced but not delivered, its text is included
 so the agent can deliver it instead of redoing the work.
 
+When a recovered turn starts with an eligible channel delivery route, OpenClaw
+sends a resumption notice to that conversation, retaining its account and topic.
+The final reply uses the same delivery route. Transcript-only turns stay private,
+and a turn that has already finished does not receive a late resumption notice.
+A failed notice does not restart or replay the recovered work.
+
 Startup reconciliation retries transient failures up to three times with
 exponential backoff. Separately, each interrupted main-session cycle has a
 durable budget of three charged automatic dispatch attempts, retained across
