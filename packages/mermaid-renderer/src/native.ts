@@ -1,3 +1,4 @@
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { MermaidTransientError, renderMermaidSvg, type MermaidTheme } from "./renderer.ts";
 
 type NativeMermaidJob = {
@@ -74,7 +75,7 @@ async function renderNativeMermaid(job: NativeMermaidJob) {
       id: job.id,
       success: false,
       retryable: error instanceof MermaidTransientError,
-      error: String(error instanceof Error ? error.message : error).slice(0, 1_000),
+      error: truncateUtf16Safe(String(error instanceof Error ? error.message : error), 1_000),
     });
   } finally {
     window.clearTimeout(decodeTimeout);

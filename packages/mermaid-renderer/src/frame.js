@@ -2,6 +2,16 @@
 // same-origin ES modules without relaxing the host's asset CORS policy.
 (() => {
   const mermaid = globalThis.mermaid;
+  const truncateUtf16Safe = (value, maxLength) => {
+    if (value.length <= maxLength) {
+      return value;
+    }
+    const boundary =
+      /[\uD800-\uDBFF]/u.test(value[maxLength - 1]) && /[\uDC00-\uDFFF]/u.test(value[maxLength])
+        ? maxLength - 1
+        : maxLength;
+    return value.slice(0, boundary);
+  };
   const properties = [
     "fill",
     "fill-opacity",
@@ -102,7 +112,7 @@
       } catch (error) {
         port.postMessage({
           id,
-          error: String(error instanceof Error ? error.message : error).slice(0, 1_000),
+          error: truncateUtf16Safe(String(error instanceof Error ? error.message : error), 1_000),
         });
       } finally {
         document.body.replaceChildren();
