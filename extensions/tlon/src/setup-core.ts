@@ -171,25 +171,11 @@ export function applyTlonSetupConfig(params: {
   const base = namedConfig.channels?.tlon ?? {};
   const payload = buildTlonAccountFields(input);
 
-  if (useDefault) {
-    return {
-      ...namedConfig,
-      channels: {
-        ...namedConfig.channels,
-        tlon: {
-          ...base,
-          enabled: true,
-          ...payload,
-        },
-      },
-    };
-  }
-
   return patchScopedAccountConfig({
     cfg: namedConfig,
     channelKey: tlonChannelId(),
     accountId,
-    patch: { enabled: base.enabled ?? true },
+    patch: useDefault ? { enabled: true, ...payload } : { enabled: base.enabled ?? true },
     accountPatch: {
       enabled: true,
       ...payload,

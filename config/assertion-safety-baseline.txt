@@ -1280,7 +1280,7 @@ extensions/twitch/src/config.ts	10
 extensions/twitch/src/monitor.ts	3
 extensions/twitch/src/outbound.ts	2
 extensions/twitch/src/resolver.ts	1
-extensions/twitch/src/setup-surface.ts	6
+extensions/twitch/src/setup-surface.ts	1
 extensions/twitch/src/status.ts	2
 extensions/twitch/src/token.ts	3
 extensions/twitch/src/twitch-ingress.ts	4
@@ -1396,8 +1396,7 @@ extensions/zai/model-definitions.ts	1
 extensions/zalo/setup-api.ts	3
 extensions/zalo/src/accounts.ts	3
 extensions/zalo/src/proxy.ts	1
-extensions/zalo/src/setup-allow-from.ts	3
-extensions/zalo/src/setup-surface.ts	10
+extensions/zalo/src/setup-allow-from.ts	1
 extensions/zalo/src/token.ts	1
 extensions/zalo/src/webhook-spool.ts	1
 extensions/zalouser/src/accounts.ts	1
