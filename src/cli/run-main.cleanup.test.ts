@@ -12,6 +12,7 @@ const dispatch = vi.hoisted(() => ({
   command: undefined as Promise<void> | undefined,
   memoryClosed: vi.fn(async () => {}),
 }));
+const installUnhandledRejectionHandlerMock = vi.hoisted(() => vi.fn());
 // Only bootstrap/dispatch are replaced; process entry, registry scopes and cleanup are real.
 vi.mock("./route.js", () => ({
   tryRouteCli: async () => {
@@ -32,7 +33,7 @@ vi.mock("../infra/openclaw-exec-env.js", () => ({ ensureOpenClawExecMarkerOnProc
 vi.mock("../infra/warning-filter.js", () => ({ installProcessWarningFilter() {} }));
 vi.mock("../infra/unhandled-rejections.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/unhandled-rejections.js")>()),
-  installUnhandledRejectionHandler() {},
+  installUnhandledRejectionHandler: installUnhandledRejectionHandlerMock,
 }));
 vi.mock("../logging/console.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../logging/console.js")>()),
@@ -171,7 +172,9 @@ beforeEach(async () => {
   process.argv = argv;
   runtime.setActivePluginRegistry(emptyRegistry.createEmptyPluginRegistry());
   dispatch.command = undefined;
+  dispatch.run = async () => {};
   dispatch.memoryClosed.mockClear();
+  installUnhandledRejectionHandlerMock.mockClear();
 });
 afterEach(() => {
   process.argv = originalArgv;
@@ -204,6 +207,17 @@ async function runProcessEntry() {
 }
 
 describe("CLI process harness cleanup", () => {
+  it("installs the rejection handler before the direct Gateway fast path", async () => {
+    dispatch.run = async () => {
+      expect(installUnhandledRejectionHandlerMock).toHaveBeenCalledOnce();
+    };
+
+    const { runCli } = await import("./run-main.js");
+    await runCli(["node", "openclaw", "gateway"]);
+
+    expect(installUnhandledRejectionHandlerMock).toHaveBeenCalledOnce();
+  });
+
   it.each(["current", "transient-resolve", "transient-reject"])(
     "joins %s resources at process completion",
     async (mode) => {
