@@ -54,6 +54,19 @@ describe("quoted message store", () => {
     expect(resolveLineQuotedMessage("default", "long-1", "C-room")?.body).toHaveLength(5000);
   });
 
+  it("keeps a body LINE accepted whole when it is not all in the basic plane", () => {
+    // LINE counts its own limit in code points, so 5000 emoji are a body it took.
+    // Bounding this store in UTF-16 units instead would drop half of it.
+    const body = "\u{1F600}".repeat(5000);
+    recordLineAgentVisibleMessage("default", {
+      id: "astral-1",
+      conversationId: "C-room",
+      body,
+    });
+
+    expect(resolveLineQuotedMessage("default", "astral-1", "C-room")?.body).toBe(body);
+  });
+
   it("keeps a long body whole for the prompt layer to shorten", () => {
     recordLineAgentVisibleMessage("default", {
       id: "long-2",

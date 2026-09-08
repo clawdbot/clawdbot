@@ -1,7 +1,7 @@
 // Line plugin module remembers what an inbound quote points at.
 import type { webhook } from "@line/bot-sdk";
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { truncateCodePoints } from "openclaw/plugin-sdk/text-utility-runtime";
 
 /** One message a later quote can name, as this account already knew it. */
 export type LineQuotedMessage = {
@@ -34,8 +34,10 @@ const MESSAGE_LIMIT = 500;
 // Bounds the store against a body LINE should not have accepted in the first
 // place. It sits at LINE's own text limit, deliberately above the prompt's cap:
 // shortening a quote for the model belongs to the prompt layer, which keeps the
-// actionable tail that a cut here would drop.
-const QUOTED_BODY_MAX_CHARS = 5000;
+// actionable tail that a cut here would drop. LINE counts that limit in code
+// points, so this one is measured the same way — counting UTF-16 units would cut
+// a body of emoji or other non-BMP text at half the length LINE accepted.
+const QUOTED_BODY_MAX_CODE_POINTS = 5000;
 
 // The bounds are per account, not shared: LINE runs several configured accounts in
 // one process, and a busy account must not evict a quiet one's entries or the
@@ -86,7 +88,9 @@ export function recordLineAgentVisibleMessage(
   accountId: string,
   message: { id: string; conversationId: string; body?: string; senderId?: string },
 ): void {
-  const body = message.body ? truncateUtf16Safe(message.body, QUOTED_BODY_MAX_CHARS) : undefined;
+  const body = message.body
+    ? truncateCodePoints(message.body, QUOTED_BODY_MAX_CODE_POINTS)
+    : undefined;
   remember(
     receivedByAccount,
     accountId,

@@ -341,9 +341,12 @@ async function finalizeLineInboundContext(params: {
     params.quote?.messageId,
     params.source.peerId,
   );
-  // A LINE webhook carries no display name and no group name, so both are
-  // separate lookups. They are cached, they run in parallel, and either one
-  // failing degrades to the raw id rather than failing the turn.
+  // A LINE webhook carries no display name and no group name, so each of those is
+  // its own lookup. They are cached and run together below, and none of them can
+  // reject: `getUserProfile` and `getLineGroupName` answer null on any failure
+  // (`send.ts`), so an unreachable profile costs a name, never the turn. The
+  // access-group expansion joins them as the fourth input this context needs; it
+  // reads config only and has no failure to absorb.
   const resolveDisplayName = (userId: string | undefined) =>
     userId
       ? getUserProfile(userId, {
