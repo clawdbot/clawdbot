@@ -86,7 +86,7 @@ describe("buildSilentFallbackFailurePayload", () => {
     expect(payload?.text).toContain(transition.activeModelRef);
   });
 
-  it("avoids couldn't-reach when attempts are format/4xx", () => {
+  it("uses responded wording when every attempt is format/4xx", () => {
     const payload = buildSilentFallbackFailurePayload({
       ...base,
       fallbackAttempts: [{ reason: "format" }, { reason: "format" }],
@@ -95,12 +95,33 @@ describe("buildSilentFallbackFailurePayload", () => {
     expect(payload?.text).not.toContain("couldn't reach");
   });
 
-  it("does not claim unreachable when attempts are empty", () => {
+  it("uses neutral wording when attempts are empty", () => {
     const payload = buildSilentFallbackFailurePayload({
       ...base,
       fallbackAttempts: [],
     });
-    expect(payload?.text).toContain("responded but produced no usable reply");
+    expect(payload?.text).toContain("produced no usable reply");
+    expect(payload?.text).not.toContain("responded");
+    expect(payload?.text).not.toContain("couldn't reach");
+  });
+
+  it("uses neutral wording for unknown reasons", () => {
+    const payload = buildSilentFallbackFailurePayload({
+      ...base,
+      fallbackAttempts: [{ reason: "unknown" }],
+    });
+    expect(payload?.text).toContain("produced no usable reply");
+    expect(payload?.text).not.toContain("responded");
+    expect(payload?.text).not.toContain("couldn't reach");
+  });
+
+  it("uses neutral wording for mixed transport and format attempts", () => {
+    const payload = buildSilentFallbackFailurePayload({
+      ...base,
+      fallbackAttempts: [{ reason: "timeout" }, { reason: "format" }],
+    });
+    expect(payload?.text).toContain("produced no usable reply");
+    expect(payload?.text).not.toContain("responded");
     expect(payload?.text).not.toContain("couldn't reach");
   });
 });

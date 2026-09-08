@@ -1,7 +1,8 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { hasSessionAutoModelFallbackProvenance } from "../../agents/agent-scope.js";
 import { hasVisibleCommittedMessagingToolDeliveryEvidence } from "../../agents/embedded-agent-runner/delivery-evidence.js";
-import { resolveFailoverStatus, type FailoverReason } from "../../agents/failover-error.js";
+import { resolveFailoverStatus } from "../../agents/failover-error.js";
+import type { FailoverReason } from "../../agents/failover/signal.js";
 import type { ModelRef } from "../../agents/model-ref-shared.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
@@ -85,12 +86,33 @@ function isTransportUnreachableFailoverReason(reason: FailoverReason): boolean {
   );
 }
 
+function isPositiveNonTransportResponseEvidence(reason: FailoverReason): boolean {
+  // Only claim the backend "responded" when attempt reasons establish an
+  // application-level failure (e.g. format/4xx), not transport/unknown/mixed.
+  if (isTransportUnreachableFailoverReason(reason)) {
+    return false;
+  }
+  if (reason === "unknown" || reason === "unclassified" || reason === "no_error_details") {
+    return false;
+  }
+  return reason === "empty_response" || resolveFailoverStatus(reason) !== undefined;
+}
+
 function shouldClaimConfiguredBackendUnreachable(
   attempts: ReadonlyArray<{ reason: FailoverReason }>,
 ): boolean {
   return (
     attempts.length > 0 &&
     attempts.every((attempt) => isTransportUnreachableFailoverReason(attempt.reason))
+  );
+}
+
+function shouldClaimConfiguredBackendResponded(
+  attempts: ReadonlyArray<{ reason: FailoverReason }>,
+): boolean {
+  return (
+    attempts.length > 0 &&
+    attempts.every((attempt) => isPositiveNonTransportResponseEvidence(attempt.reason))
   );
 }
 
@@ -117,10 +139,14 @@ export function buildSilentFallbackFailurePayload(params: {
   }
   const selected = params.fallbackTransition.selectedModelRef;
   const active = params.fallbackTransition.activeModelRef;
-  const claimUnreachable = shouldClaimConfiguredBackendUnreachable(params.fallbackAttempts ?? []);
+  const attempts = params.fallbackAttempts ?? [];
+  const claimUnreachable = shouldClaimConfiguredBackendUnreachable(attempts);
+  const claimResponded = shouldClaimConfiguredBackendResponded(attempts);
   const primary = claimUnreachable
     ? `⚠️ I couldn't reach the configured model backend ${selected}. `
-    : `⚠️ The configured model backend ${selected} responded but produced no usable reply. `;
+    : claimResponded
+      ? `⚠️ The configured model backend ${selected} responded but produced no usable reply. `
+      : `⚠️ The configured model backend ${selected} produced no usable reply. `;
   return markReplyPayloadForSourceSuppressionDelivery({
     text: `${primary}Fallback used ${active}, but it produced no visible reply.`,
     isError: true,
