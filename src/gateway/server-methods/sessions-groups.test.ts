@@ -18,7 +18,7 @@ const pathMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../session-groups.js", () => ({
-  addSessionGroup: groupMocks.add,
+  ensureSessionGroupRegistered: groupMocks.add,
   deleteSessionGroup: vi.fn(),
   listSessionGroupDefaults: vi.fn(() => []),
   listSessionGroups: vi.fn(() => []),
@@ -286,7 +286,7 @@ describe("sessions.groups.add", () => {
   });
 
   it("returns the persisted sidebar section order", async () => {
-    groupMocks.add.mockReturnValue({ name: "New", position: 1 });
+    groupMocks.add.mockReturnValue(true);
     const listGroups = vi.mocked((await import("../session-groups.js")).listSessionGroups);
     listGroups.mockReturnValue([
       { name: "Existing", position: 0 },

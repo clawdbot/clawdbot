@@ -281,49 +281,6 @@ export function putSessionGroups(params: {
   return listSessionGroups(env);
 }
 
-/** Adds one group to the catalog, appended at the end. Idempotent for existing names. */
-export function addSessionGroup(
-  name: string,
-  env: NodeJS.ProcessEnv = process.env,
-): SessionGroupRecord {
-  const normalized = normalizeOptionalString(name);
-  if (!normalized) {
-    throw new Error("group add requires a non-empty name");
-  }
-  return runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      const kysely = kyselyFor(db);
-      const existing = executeSqliteQuerySync(
-        db,
-        kysely
-          .selectFrom("session_groups")
-          .select(["name", "position"])
-          .where("name", "=", normalized)
-          .limit(1),
-      ).rows[0];
-      if (existing) {
-        return { name: existing.name, position: existing.position };
-      }
-      const maxRow = executeSqliteQuerySync(
-        db,
-        kysely.selectFrom("session_groups").select("position").orderBy("position", "desc").limit(1),
-      ).rows[0];
-      const position = (maxRow?.position ?? -1) + 1;
-      const created_at = Date.now();
-      executeSqliteQuerySync(
-        db,
-        kysely.insertInto("session_groups").values({
-          name: normalized,
-          position,
-          created_at,
-        }),
-      );
-      return { name: normalized, position };
-    },
-    { env },
-  );
-}
-
 /**
  * Reorders the listed groups by their input position. Groups not in the input
  * keep their current position and are not inserted or deleted.

@@ -17,7 +17,6 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import {
-  addSessionGroup,
   deleteSessionGroup,
   ensureSessionGroupRegistered,
   listSessionGroupDefaults,
@@ -613,16 +612,16 @@ describe("session groups catalog", () => {
     expect(result.sectionOrder).toEqual(["category:B", "work"]);
   });
 
-  it("adds groups idempotently without touching existing rows", () => {
-    expect(addSessionGroup("Work", env)).toEqual({ name: "Work", position: 0 });
-    expect(addSessionGroup("Personal", env)).toEqual({ name: "Personal", position: 1 });
-    expect(addSessionGroup("Work", env)).toEqual({ name: "Work", position: 0 });
+  it("registers groups idempotently through the canonical owner without touching existing rows", () => {
+    expect(ensureSessionGroupRegistered("Work", env)).toBe(true);
+    expect(ensureSessionGroupRegistered("Personal", env)).toBe(true);
+    expect(ensureSessionGroupRegistered("Work", env)).toBe(false);
     expect(listSessionGroups(env).map((group) => group.name)).toEqual(["Work", "Personal"]);
   });
 
-  it("preserves concurrent adds through the atomic add path", () => {
-    addSessionGroup("A", env);
-    addSessionGroup("B", env);
+  it("preserves concurrent adds through the atomic registration path", () => {
+    ensureSessionGroupRegistered("A", env);
+    ensureSessionGroupRegistered("B", env);
     expect(listSessionGroups(env).map((group) => group.name)).toEqual(["A", "B"]);
   });
 

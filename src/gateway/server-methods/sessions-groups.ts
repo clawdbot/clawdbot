@@ -18,8 +18,8 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { ADMIN_SCOPE } from "../method-scopes.js";
 import { filterMutableSessionGroupRecords } from "../session-group-defaults-access.js";
 import {
-  addSessionGroup,
   deleteSessionGroup,
+  ensureSessionGroupRegistered,
   listSessionGroupDefaults,
   listSidebarSectionOrder,
   listSessionGroups,
@@ -106,7 +106,9 @@ export const sessionGroupHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
-      addSessionGroup(params.name);
+      // Registration is the canonical atomic insert: the same normalized,
+      // idempotent lookup-and-append every other category producer uses.
+      ensureSessionGroupRegistered(params.name);
       respond(
         true,
         { ok: true, groups: listSessionGroups(), sectionOrder: listSidebarSectionOrder() },

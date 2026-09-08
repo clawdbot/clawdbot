@@ -3,12 +3,12 @@
  * Split from method-scopes.test.ts to keep both files under the max-lines budget.
  */
 import { afterEach, describe, expect, it } from "vitest";
-import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   authorizeOperatorScopesForMethod,
   resolveLeastPrivilegeOperatorScopesForMethod,
-} from "./method-scopes.js";
+} from "../method-scopes.js";
 
 afterEach(() => {
   setActivePluginRegistry(createEmptyPluginRegistry());
