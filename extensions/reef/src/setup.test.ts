@@ -104,7 +104,11 @@ describe("Reef setup wizard identity binding", () => {
     });
   });
 
-  it.each([
+  const noRuntimePromptCases: Array<{
+    name: string;
+    cfg: OpenClawConfig;
+    runtimeConfigured: boolean;
+  }> = [
     { name: "unconfigured runtime", cfg: {}, runtimeConfigured: false },
     {
       name: "inherited Codex runtime",
@@ -156,7 +160,9 @@ describe("Reef setup wizard identity binding", () => {
         },
       } satisfies OpenClawConfig,
     },
-  ])(
+  ];
+
+  it.each(noRuntimePromptCases)(
     "configures host-authorized OAuth without a runtime prompt: $name",
     async ({ cfg: input, runtimeConfigured }) => {
       const cfg: OpenClawConfig = structuredClone(input);
@@ -351,9 +357,11 @@ describe("Reef setup wizard identity binding", () => {
   ];
 
   it.each(
-    runtimePolicyCases.flatMap((testCase) =>
-      (testCase.rejection ? [false] : [false, true]).map((accepted) => ({
-        ...testCase,
+    runtimePolicyCases.flatMap(({ name, cfg, rejection }) =>
+      (rejection ? [false] : [false, true]).map((accepted) => ({
+        name,
+        cfg,
+        rejection,
         accepted,
       })),
     ),
