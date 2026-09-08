@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 set -euo pipefail
 
 # Called after the canonical source build, before the app is signed. The
@@ -38,7 +38,7 @@ for arch in "$@"; do
   mkdir -p "$SCRATCH/$arch/home" "$SCRATCH/$arch/tmp"
   env -i HOME="$SCRATCH/$arch/home" PATH="/usr/bin:/bin:/usr/sbin:/sbin" \
     TMPDIR="$SCRATCH/$arch/tmp" OPENCLAW_INSTALL_CLI_SH_NO_RUN=1 \
-    bash -c '
+    /bin/bash -c '
       set -euo pipefail
       source "$1/scripts/install-cli.sh"
       PREFIX="$2/prefix"

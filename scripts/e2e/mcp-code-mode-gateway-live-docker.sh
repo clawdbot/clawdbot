@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Bash 5.3+ can deadlock writing heredoc pipes on macOS before the reader starts.
+if [[ ${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 3))); then
+  exec /bin/bash "$0" "$@"
+fi
 # Runs the packaged Gateway/code-mode/MCP API-file smoke against a live OpenAI
 # provider so the real agent has to discover and use the virtual declarations.
 set -euo pipefail
@@ -74,7 +78,7 @@ docker_e2e_run_with_harness \
   -e "OPENCLAW_MCP_CODE_MODE_CLIENT_BODY_MAX_BYTES=$CLIENT_BODY_MAX_BYTES" \
   -e "OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1" \
   -e "OPENCLAW_MCP_CODE_MODE_MODEL=${OPENCLAW_MCP_CODE_MODE_LIVE_MODEL:-openclaw/main}" \
-  "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DOCKER_ARGS[@]}" \
+  ${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DOCKER_ARGS[@]+"${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DOCKER_ARGS[@]}"} \
   "$IMAGE_NAME" \
   bash scripts/e2e/lib/mcp-code-mode/scenario.sh live "$PORT" >"$CLIENT_LOG" 2>&1
 status=${PIPESTATUS[0]}

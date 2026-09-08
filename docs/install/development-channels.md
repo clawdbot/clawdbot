@@ -109,7 +109,7 @@ Notes:
   workspace checkout is not a self-contained package artifact. Use
   `openclaw update --channel dev` (package installs switch to a git checkout)
   or reinstall with the installer's git method:
-  `curl -fsSL https://openclaw.ai/install.sh | bash -s -- --install-method git --version main`.
+  `curl -fsSL https://openclaw.ai/install.sh | /bin/bash -s -- --install-method git --version main`.
 - Downgrade protection: if the target version is older than the current
   version, OpenClaw prompts for confirmation (skip with `--yes`).
 - Extended-stable always uses its verified exact package target. It is not a

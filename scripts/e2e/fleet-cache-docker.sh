@@ -136,7 +136,7 @@ run_case() {
   local expected_tmp="$5"
   shift 5
   tenant="fleet-cache-${scratch##*.}-$name"
-  tenant="${tenant,,}"
+  tenant="$(printf '%s' "$tenant" | tr '[:upper:]' '[:lower:]')"
   case_dir="$scratch/$name"
   mkdir -p "$case_dir/home" "$case_dir/state" "$case_dir/host-cache"
   if [[ -n "$expected_tmp" ]]; then
@@ -195,7 +195,7 @@ run_previous_default_case() {
   fi
   uid=1000
   tenant="fleet-cache-${scratch##*.}-$ownership-$operation"
-  tenant="${tenant,,}"
+  tenant="$(printf '%s' "$tenant" | tr '[:upper:]' '[:lower:]')"
   case_dir="$scratch/$ownership-$operation"
   mkdir -p "$case_dir/home" "$case_dir/state" "$case_dir/host-cache"
   sudo -n chown -R "$uid:$uid" "$case_dir"

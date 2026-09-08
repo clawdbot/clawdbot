@@ -384,7 +384,7 @@ instead — it manages the checkout, build, and gateway restart for you.
 ## Alternative: re-run the installer
 
 ```bash
-curl -fsSL https://openclaw.ai/install.sh | bash
+curl -fsSL https://openclaw.ai/install.sh | /bin/bash
 ```
 
 Add `--no-onboard` to skip onboarding. To force a specific install type, pass
@@ -395,13 +395,13 @@ the installer. It runs the global package install directly and can recover a
 partially updated npm install. Keep an unverified Gateway stopped while repairing it.
 
 ```bash
-curl -fsSL https://openclaw.ai/install.sh | bash -s -- --install-method npm
+curl -fsSL https://openclaw.ai/install.sh | /bin/bash -s -- --install-method npm
 ```
 
 Pin the recovery to a specific version or dist-tag with `--version`:
 
 ```bash
-curl -fsSL https://openclaw.ai/install.sh | bash -s -- --install-method npm --version <version-or-dist-tag>
+curl -fsSL https://openclaw.ai/install.sh | /bin/bash -s -- --install-method npm --version <version-or-dist-tag>
 ```
 
 ## Alternative: manual npm, pnpm, or bun

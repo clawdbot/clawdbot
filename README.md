@@ -27,7 +27,7 @@ The installer supports macOS, Linux, and Windows. It provisions a supported Node
 
 ```bash
 # macOS / Linux / WSL2
-curl -fsSL https://openclaw.ai/install.sh | bash
+curl -fsSL https://openclaw.ai/install.sh | /bin/bash
 ```
 
 ```powershell

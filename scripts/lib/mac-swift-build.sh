@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 
 build_path_for_arch() {
   echo "$BUILD_ROOT/$1"

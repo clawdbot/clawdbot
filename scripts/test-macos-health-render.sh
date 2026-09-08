@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 set -euo pipefail
 
 # Run only on the disposable CI macOS worker after its normal Swift test build.

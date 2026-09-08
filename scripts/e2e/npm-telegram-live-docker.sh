@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Bash 5.3+ can deadlock writing heredoc pipes on macOS before the reader starts.
+if [[ ${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 3))); then
+  exec /bin/bash "$0" "$@"
+fi
 # Installs an OpenClaw package candidate in Docker, performs Telegram
 # onboarding/doctor recovery, then runs the Telegram QA live harness.
 set -euo pipefail
@@ -358,7 +362,10 @@ process.stdin.on("end", () => {
 });
 '
     )"
-    mapfile -t package_fields <<<"$package_metadata"
+    package_fields=()
+    while IFS= read -r package_field; do
+      package_fields+=("$package_field")
+    done <<<"$package_metadata"
     registry_args+=("${package_fields[0]}" "${package_fields[1]}" "$package_tgz")
   done
   registry_port_file="$(mktemp)"

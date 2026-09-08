@@ -4,6 +4,9 @@ This directory owns local tooling, script wrappers, and generated-artifact helpe
 
 ## Wrapper Rules
 
+- macOS-only Bash scripts use `#!/bin/bash` and Bash 3.2-compatible syntax; invoke them directly or with `/bin/bash`, including fixtures.
+- Portable Bash entrypoints using heredocs/here-strings (including sourced helpers) carry the inline Darwin Bash 5.3+ re-exec guard before those operations to prevent heredoc pipe deadlocks; stdin/sourced installers must request `/bin/bash` when replay is impossible.
+
 - Prefer existing wrappers over raw tool entrypoints when the repo already has a curated seam.
 - For tests, prefer `scripts/run-vitest.mjs` or the root `pnpm test ...` entrypoints over raw `vitest run` calls.
 - Never use bare `vitest ...` in automation; it starts local watch mode unless `run` or `--run` is explicit.

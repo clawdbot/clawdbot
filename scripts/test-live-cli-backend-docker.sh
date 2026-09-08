@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Bash 5.3+ can deadlock writing heredoc pipes on macOS before the reader starts.
+if [[ ${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 3))); then
+  exec /bin/bash "$0" "$@"
+fi
 set -euo pipefail
 
 SCRIPT_ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -154,13 +158,13 @@ fi
 openclaw_live_collect_auth_for_providers "$CLI_PROVIDER"
 if [[ "${CLAUDE_SUBSCRIPTION_AUTH_SOURCE:-}" == "env-token" ]]; then
   retained_auth_files=()
-  for auth_file in "${AUTH_FILES[@]}"; do
+  for auth_file in ${AUTH_FILES[@]+"${AUTH_FILES[@]}"}; do
     case "$auth_file" in
       .claude.json | .claude/.credentials.json) ;;
       *) retained_auth_files+=("$auth_file") ;;
     esac
   done
-  AUTH_FILES=("${retained_auth_files[@]}")
+  AUTH_FILES=(${retained_auth_files[@]+"${retained_auth_files[@]}"})
 fi
 openclaw_live_finalize_auth_mounts
 

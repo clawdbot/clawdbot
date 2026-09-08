@@ -311,7 +311,7 @@ ${cleanup}
     const start = script.indexOf('if [[ "${SKIP_TSC:-0}"');
     const end = script.indexOf('node - "$ROOT_DIR/dist/build-info.json"', start);
     const result = spawnSync(
-      "bash",
+      process.platform === "win32" ? "bash" : "/bin/bash",
       [
         "-c",
         `
@@ -348,7 +348,7 @@ function makePlist(): string {
   return plist;
 }
 
-function runHelper(script: string, shell = "bash") {
+function runHelper(script: string, shell = process.platform === "win32" ? "bash" : "/bin/bash") {
   // Login/logout hooks can replace the helper's exit status on headless hosts.
   return spawnSync(shell, ["-c", script], {
     cwd: process.cwd(),
@@ -418,7 +418,7 @@ function runSwiftToolchainHarness(options: {
     writeFileSync(
       xcodebuild,
       [
-        "#!/usr/bin/env bash",
+        "#!/bin/bash",
         '[[ "$*" == "-version" ]] || exit 2',
         ...(options.xcodebuildFailure
           ? [`printf '%s\\n' ${JSON.stringify(options.xcodebuildFailure)} >&2`, "exit 1"]
@@ -432,7 +432,7 @@ function runSwiftToolchainHarness(options: {
   writeFileSync(
     path.join(toolsDir, "xcrun"),
     [
-      "#!/usr/bin/env bash",
+      "#!/bin/bash",
       '[[ "${1:-}" == "xcodebuild" && "${2:-}" == "-version" ]] || exit 2',
       'developer_dir="${DEVELOPER_DIR:-$MOCK_SELECTED_DEVELOPER_DIR}"',
       'xcodebuild="$developer_dir/usr/bin/xcodebuild"',
@@ -448,7 +448,7 @@ function runSwiftToolchainHarness(options: {
   writeFileSync(
     path.join(toolsDir, "swift"),
     [
-      "#!/usr/bin/env bash",
+      "#!/bin/bash",
       `echo 'swift-driver version: 1.120.0 Apple Swift version ${options.swiftVersion} (swiftlang-${options.swiftVersion} clang-1700.0.13.5)'`,
       "",
     ].join("\n"),
@@ -956,11 +956,11 @@ function runStopPackagedAppHarness(killZeroStatus: 0 | 1) {
 
   writeFileSync(
     lsofPath,
-    ["#!/usr/bin/env bash", `printf 'n%s\\n' ${JSON.stringify(appBinary)}`].join("\n"),
+    ["#!/bin/bash", `printf 'n%s\\n' ${JSON.stringify(appBinary)}`].join("\n"),
     "utf8",
   );
-  writeFileSync(pgrepPath, "#!/usr/bin/env bash\nprintf '123\\n'\n", "utf8");
-  writeFileSync(sleepPath, "#!/usr/bin/env bash\nexit 0\n", "utf8");
+  writeFileSync(pgrepPath, "#!/bin/bash\nprintf '123\\n'\n", "utf8");
+  writeFileSync(sleepPath, "#!/bin/bash\nexit 0\n", "utf8");
   chmodSync(lsofPath, 0o755);
   chmodSync(pgrepPath, 0o755);
   chmodSync(sleepPath, 0o755);
@@ -990,7 +990,7 @@ function runSwiftCompatibilityHarness(buildConfig: "debug" | "release") {
 
   writeFileSync(
     xcodeSelectPath,
-    ["#!/usr/bin/env bash", `printf '%s\\n' ${JSON.stringify(developerDir)}`].join("\n"),
+    ["#!/bin/bash", `printf '%s\\n' ${JSON.stringify(developerDir)}`].join("\n"),
     "utf8",
   );
   chmodSync(xcodeSelectPath, 0o755);
@@ -1016,7 +1016,7 @@ function runSwiftPackageResolutionHarness(mutateLockfile: boolean) {
   writeFileSync(
     swiftPath,
     [
-      "#!/usr/bin/env bash",
+      "#!/bin/bash",
       mutateLockfile ? `printf 'changed\\n' > ${JSON.stringify(resolvedFile)}` : ":",
     ].join("\n"),
     "utf8",
@@ -1170,7 +1170,9 @@ describe("package-mac-app plist stamping", () => {
 
   it("gates only release packaging on clean matching source and verifies the embedded commit", () => {
     const script = readFileSync(scriptPath, "utf8");
-    const sourceCheck = script.indexOf('bash "$ROOT_DIR/scripts/apple-release-source-check.sh"');
+    const sourceCheck = script.indexOf(
+      '/bin/bash "$ROOT_DIR/scripts/apple-release-source-check.sh"',
+    );
     const build = script.indexOf('node "$ROOT_DIR/scripts/build-mac-swift.mts"');
     const embeddedRead = script.indexOf(
       'plist_print_required "$APP_ROOT/Contents/Info.plist" OpenClawGitCommit',
@@ -1383,9 +1385,9 @@ describe("package-mac-app plist stamping", () => {
     );
   });
 
-  it.runIf(process.platform === "darwin")(
-    "merges framework Mach-O binaries when the checkout path contains glob metacharacters",
-    () => {
+  it.runIf(process.platform === "darwin").each(["arm64", "arm64e"] as const)(
+    "merges framework Mach-O binaries with %s slices and glob metacharacters in the checkout path",
+    (secondaryArchitecture) => {
       const root = tempDirs.make("openclaw-package-framework-[fixture]-");
       const primary = path.join(root, "Primary.framework");
       const secondary = path.join(root, "Secondary.framework");
@@ -1396,41 +1398,56 @@ describe("package-mac-app plist stamping", () => {
         mkdirSync(path.dirname(path.join(framework, relativeBinary)), { recursive: true });
       }
 
-      const fixtureBinary = "/bin/ls";
-      const fixtureArchitectures = spawnSync("/usr/bin/lipo", ["-archs", fixtureBinary], {
-        encoding: "utf8",
-      })
-        .stdout.trim()
-        .split(/\s+/u);
-      const [primaryArchitecture, secondaryArchitecture] = fixtureArchitectures;
-      if (!primaryArchitecture || !secondaryArchitecture) {
-        throw new Error(`${fixtureBinary} must contain at least two architectures`);
-      }
+      // Inert mach_header_64 dylibs (mach-o/loader.h and mach/machine.h).
+      // Own the CPU/subtype bytes so host executables and compiler SDKs cannot
+      // change this fixture's slice set; real file/lipo still classify and merge it.
+      const thinMachO = (cpu: number, subtype: number) => {
+        const bytes = Buffer.alloc(32);
+        [0xfeedfacf, cpu, subtype, 6, 0, 0, 0, 0].forEach((value, index) =>
+          bytes.writeUInt32LE(value, index * 4),
+        );
+        return bytes;
+      };
+      const intel = thinMachO(0x01000007, 3);
+      const arm = thinMachO(0x0100000c, secondaryArchitecture === "arm64e" ? 2 : 0);
       const primaryBinary = path.join(primary, relativeBinary);
       const secondaryBinary = path.join(secondary, relativeBinary);
       const destinationBinary = path.join(destination, relativeBinary);
-      expect(
-        spawnSync("/usr/bin/lipo", [
-          "-thin",
-          primaryArchitecture,
-          fixtureBinary,
-          "-output",
-          primaryBinary,
-        ]).status,
-      ).toBe(0);
-      expect(spawnSync("/bin/cp", [fixtureBinary, secondaryBinary]).status).toBe(0);
-      writeFileSync(destinationBinary, readFileSync(primaryBinary));
+      const armBinary = path.join(root, "arm-slice");
+      writeFileSync(primaryBinary, intel);
+      writeFileSync(armBinary, arm);
+      const universal = spawnSync(
+        "/usr/bin/lipo",
+        ["-create", primaryBinary, armBinary, "-output", secondaryBinary],
+        { encoding: "utf8" },
+      );
+      expect(universal.status, universal.stderr).toBe(0);
+      writeFileSync(destinationBinary, intel);
 
       const result = runHelper(`
         set -euo pipefail
         ${getMergeFrameworkMachOsBlock()}
         merge_framework_machos ${JSON.stringify(primary)} ${JSON.stringify(destination)} ${JSON.stringify(secondary)}
-        /usr/bin/lipo -info ${JSON.stringify(destinationBinary)}
+        /usr/bin/lipo -archs ${JSON.stringify(destinationBinary)}
       `);
 
       expect(result.status, result.stderr).toBe(0);
-      expect(result.stdout).toContain(primaryArchitecture);
-      expect(result.stdout).toContain(secondaryArchitecture);
+      expect(result.stdout.trim().split(/\s+/u).toSorted()).toEqual(
+        ["x86_64", secondaryArchitecture].toSorted(),
+      );
+      for (const [arch, bytes] of [
+        ["x86_64", intel],
+        [secondaryArchitecture, arm],
+      ] as const) {
+        const extracted = path.join(root, `merged-${arch}`);
+        const slice = spawnSync(
+          "/usr/bin/lipo",
+          ["-thin", arch, destinationBinary, "-output", extracted],
+          { encoding: "utf8" },
+        );
+        expect(slice.status, slice.stderr).toBe(0);
+        expect(readFileSync(extracted)).toEqual(bytes);
+      }
     },
   );
 
@@ -1573,7 +1590,7 @@ describe("package-mac-app plist stamping", () => {
       writeFileSync(
         runnerPath,
         [
-          "#!/usr/bin/env bash",
+          "#!/bin/bash",
           "set -euo pipefail",
           'printf \'%s|%s\\n\' "$PWD" "$*" >> "$OPENCLAW_TEST_LOG"',
           'if [[ "${1:-}" == "pnpm" && "${2:-}" == "--version" ]]; then',
@@ -1623,7 +1640,7 @@ describe("package-mac-app plist stamping", () => {
     writeFileSync(
       path.join(toolsDir, "pnpm"),
       [
-        "#!/usr/bin/env bash",
+        "#!/bin/bash",
         "set -euo pipefail",
         'printf "global|%s|%s\\n" "$PWD" "$*" >> "$OPENCLAW_TEST_LOG"',
         'if [[ "${1:-}" == "--version" ]]; then echo "11.8.0"; fi',
@@ -1634,7 +1651,7 @@ describe("package-mac-app plist stamping", () => {
     writeFileSync(
       path.join(toolsDir, "corepack"),
       [
-        "#!/usr/bin/env bash",
+        "#!/bin/bash",
         "set -euo pipefail",
         'printf "corepack|%s|%s\\n" "$PWD" "$*" >> "$OPENCLAW_TEST_LOG"',
         'if [[ "${1:-}" == "pnpm" && "${2:-}" == "--version" ]]; then',
@@ -1809,7 +1826,7 @@ describe("package-mac-app plist stamping", () => {
     writeFileSync(
       nodePath,
       [
-        "#!/usr/bin/env bash",
+        "#!/bin/bash",
         "set -euo pipefail",
         'if [[ "$PWD" != "$OPENCLAW_ROOT" ]]; then',
         '  echo "node ran outside repo root: $PWD" >&2',
@@ -1877,7 +1894,7 @@ describe("package-mac-app plist stamping", () => {
       writeFileSync(path.join(appRoot, "candidate"), "verified replacement");
       writeFileSync(
         signerPath,
-        '#!/usr/bin/env bash\nset -euo pipefail\n[[ -d "$1" ]]\nprintf "identity=%s\\n" "${SIGN_IDENTITY-<unset>}"\nprintf "sign\\n" >> "${0%/*}/../events"\n',
+        '#!/bin/bash\nset -euo pipefail\n[[ -d "$1" ]]\nprintf "identity=%s\\n" "${SIGN_IDENTITY-<unset>}"\nprintf "sign\\n" >> "${0%/*}/../events"\n',
       );
       chmodSync(signerPath, 0o755);
       for (const arch of ["arm64", "x86_64"]) {
