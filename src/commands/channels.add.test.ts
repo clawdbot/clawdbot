@@ -22,6 +22,7 @@ import {
   createExternalChatCatalogEntry,
   createExternalChatSetupPlugin,
 } from "./channels.plugin-install.test-helpers.js";
+import { committedConfigFiles as configFiles } from "./committed-config.test-support.js";
 import {
   baseConfigSnapshot,
   createTestConfigSnapshot,
@@ -475,6 +476,7 @@ describe("channelsAddCommand", () => {
 
   beforeEach(async () => {
     resetPluginRuntimeStateForTest();
+    configFiles.clear();
     configMocks.readConfigFileSnapshot.mockClear();
     configMocks.readConfigFileSnapshotForWrite.mockClear();
     configMocks.writeConfigFile.mockClear();
@@ -485,10 +487,10 @@ describe("channelsAddCommand", () => {
       });
     pluginInstallRecordCommitMocks.commitConfigWithPendingPluginInstalls.mockReset();
     pluginInstallRecordCommitMocks.commitConfigWithPendingPluginInstalls.mockImplementation(
-      async (params: { sourceConfig: unknown }) => {
+      async (params: { sourceConfig: OpenClawConfig }) => {
         await configMocks.writeConfigFile(params.sourceConfig);
         return {
-          config: params.sourceConfig,
+          ...configFiles.write(params.sourceConfig),
           installRecords: {},
           movedInstallRecords: false,
         };
@@ -740,6 +742,39 @@ describe("channelsAddCommand", () => {
     expect(setupOptions()).not.toHaveProperty("finishAfterInitialSelection");
     expect(setupOptions().deferDeviceLinkToClient).toBe(true);
   });
+
+  it.each(["authority", "write"] as const)(
+    "does not run guided hooks after %s rejection",
+    async (failure) => {
+      const hook = vi.fn(async () => {});
+      const beforePersistentEffect = vi.fn(async () => {
+        if (failure === "authority") {
+          throw new Error("owner revoked");
+        }
+      });
+      channelWizardMocks.setupChannels.mockImplementationOnce(async (...args: unknown[]) => {
+        const options = args[3] as SetupChannelsOptions;
+        options.onPostWriteHook?.({ channel: "matrix", accountId: "ops", run: hook });
+        return { ...(args[0] as OpenClawConfig), messages: { responsePrefix: "configured" } };
+      });
+      if (failure === "write") {
+        pluginInstallRecordCommitMocks.commitConfigWithPendingPluginInstalls.mockRejectedValueOnce(
+          new Error("write failed"),
+        );
+      }
+
+      await expect(
+        channelsAddCommand({}, runtime, { hasFlags: false, beforePersistentEffect }),
+      ).rejects.toThrow(failure === "authority" ? "owner revoked" : "write failed");
+
+      expect(hook).not.toHaveBeenCalled();
+      expect(beforePersistentEffect).toHaveBeenCalledOnce();
+      expect(configMocks.writeConfigFile).not.toHaveBeenCalled();
+      expect(
+        pluginInstallRecordCommitMocks.commitConfigWithPendingPluginInstalls,
+      ).toHaveBeenCalledTimes(failure === "authority" ? 0 : 1);
+    },
+  );
 
   it.each(["external-chat", "ext"])(
     "preselects a hosted catalog channel from the %s selector",
@@ -1903,7 +1938,7 @@ describe("channelsAddCommand", () => {
         const writtenConfigLocal = { ...params.sourceConfig, plugins };
         await configMocks.writeConfigFile(writtenConfigLocal);
         return {
-          config: writtenConfigLocal,
+          ...configFiles.write(writtenConfigLocal),
           installRecords,
           movedInstallRecords: true,
         };

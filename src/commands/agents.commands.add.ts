@@ -30,7 +30,7 @@ import { formatCliCommand } from "../cli/command-format.js";
 import { ExpectedCliError } from "../cli/failure-output.js";
 import { isTerminalInteractive } from "../cli/terminal-interactivity.js";
 import { logConfigUpdated } from "../config/logging.js";
-import { createChannelSetupTransaction } from "../flows/channel-setup.js";
+import { createChannelSetupHooks } from "../flows/channel-setup.js";
 import {
   commitConfigWithPendingPluginInstalls,
   transformConfigWithPendingPluginInstalls,
@@ -423,7 +423,7 @@ export async function agentsAddCommand(
       validateCatalog: false,
     });
 
-    const channelSetup = createChannelSetupTransaction({ runtime: wizardRuntime });
+    const channelSetup = createChannelSetupHooks({ runtime: wizardRuntime });
     let selection: ChannelChoice[] = [];
     const channelAccountIds: Partial<Record<ChannelChoice, string>> = {};
     nextConfig = await setupChannels(nextConfig, wizardRuntime, prompter, {
@@ -504,14 +504,13 @@ export async function agentsAddCommand(
         ? await persistProviderAuthProfileBatch(stagedAuthBatch)
         : undefined;
       try {
-        nextConfig = await channelSetup.commit(nextConfig, async (configToCommit) => {
-          const committed = await commitConfigWithPendingPluginInstalls({
-            sourceConfig: configToCommit,
-            writeOptions: writeSnapshot.writeOptions,
-            baseHash: writeSnapshot.snapshot.hash,
-          });
-          return committed.config;
+        const committed = await commitConfigWithPendingPluginInstalls({
+          sourceConfig: nextConfig,
+          writeOptions: writeSnapshot.writeOptions,
+          baseHash: writeSnapshot.snapshot.hash,
         });
+        await channelSetup.runPostWriteHooks(committed.path);
+        nextConfig = committed.nextConfig;
       } catch (error) {
         authPersistence?.rollback();
         throw error;
@@ -550,7 +549,7 @@ export async function agentsAddCommand(
         workspace: created.workspace,
         agentDir: created.agentDir,
       };
-      await channelSetup.runPostWriteHooks(nextConfig);
+      await channelSetup.runPostWriteHooks(created.configPath);
     }
     await reportPortableAuthCopy?.();
     if (!opts.json) {

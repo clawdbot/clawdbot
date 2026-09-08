@@ -24,10 +24,11 @@ describe("committed plugin configuration", () => {
         const result = await commitConfigWithPendingPluginInstalls({ nextConfig });
         const persisted = JSON.parse(await fs.readFile(state.configPath, "utf8"));
 
-        expect(result.config).toEqual(persisted);
-        expect(result.config.meta?.lastTouchedVersion).toEqual(expect.any(String));
+        expect(result.path).toBe(state.configPath);
+        expect(result.nextConfig).toEqual(persisted);
+        expect(result.nextConfig.meta?.lastTouchedVersion).toEqual(expect.any(String));
         expect(result.movedInstallRecords).toBe(pending);
-        expect(result.config.plugins?.installs).toBeUndefined();
+        expect(result.nextConfig.plugins?.installs).toBeUndefined();
       });
     },
   );

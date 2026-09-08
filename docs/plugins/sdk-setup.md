@@ -166,6 +166,8 @@ For a boolean `useEnv` field, set `envVars` to the static environment variable n
 
 The released `setup`/`ChannelSetupInput` adapter stays available for existing external plugins. New plugins should expose `setupContract`; OpenClaw always prefers it when both are present.
 
+Use `afterAccountConfigWritten` (or a wizard's `afterConfigWritten`) for connection checks and other work that requires saved configuration. OpenClaw runs these callbacks after the write succeeds and passes a runtime `cfg` reread from the exact committed file, with environment references and plugin defaults resolved. The saved file can retain `${VAR}` references. Missing or invalid saved configuration prevents callback execution; callback failures are reported as post-setup warnings without undoing the saved configuration.
+
 | Field                                  | Type       | What it means                                                                 |
 | -------------------------------------- | ---------- | ----------------------------------------------------------------------------- |
 | `id`                                   | `string`   | Canonical channel id.                                                         |

@@ -306,7 +306,6 @@ async function channelsAddCommandImpl(
     writeOptions: writeSnapshot.writeOptions,
     baseHash: writeSnapshot.snapshot.hash,
   });
-  const writtenConfig = committed.config;
   if (committed.movedInstallRecords || pluginRegistrySourceChanged) {
     await refreshPluginRegistryAfterConfigMutation({
       reason: "source-changed",
@@ -335,7 +334,7 @@ async function channelsAddCommandImpl(
             }),
         },
       ],
-      cfg: writtenConfig,
+      configPath: committed.path,
       runtime,
       ...(params?.beforePersistentEffect
         ? { beforePersistentEffect: params.beforePersistentEffect }

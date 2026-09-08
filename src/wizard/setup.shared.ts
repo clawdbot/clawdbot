@@ -95,8 +95,8 @@ export async function writeWizardConfigFile(
     /** Runtime follow-up intent for the Gateway config watcher. */
     afterWrite?: ConfigWriteAfterWrite;
   } = {},
-): Promise<OpenClawConfig> {
-  const committed = await transformConfigWithPendingPluginInstalls({
+) {
+  return await transformConfigWithPendingPluginInstalls({
     ...(opts.baseHash !== undefined ? { baseHash: opts.baseHash } : {}),
     // Caller-owned snapshots are one-shot CAS preconditions, not retry baselines.
     ...(opts.baseHash !== undefined || opts.baseSnapshot ? { maxAttempts: 1 } : {}),
@@ -114,7 +114,6 @@ export async function writeWizardConfigFile(
         : config,
     }),
   });
-  return committed.nextConfig;
 }
 
 export async function readSetupConfigFileSnapshot() {

@@ -211,6 +211,7 @@ describe("SystemAgentChatEngine approval", () => {
         agentDir: "/tmp/agent-researcher",
         bootstrapPending: true,
         config: {},
+        configPath: "/tmp/openclaw.json",
       }));
       const engine = new SystemAgentChatEngine({
         runAgentTurn: async () => ({ text: "noted" }),
