@@ -16,9 +16,13 @@ const NODE_BUILTIN_MODULES = new Set(builtinModules.map((name) => name.replace(/
 function moduleOwner(rootDir: string, moduleId: string): RuntimeOwner | null {
   const sourcePath = moduleId.split("?", 1)[0] ?? moduleId;
   const relativePath = path.relative(rootDir, sourcePath);
-  if (relativePath.startsWith("..") || path.isAbsolute(relativePath)) return null;
+  if (relativePath.startsWith("..") || path.isAbsolute(relativePath)) {
+    return null;
+  }
   const segments = relativePath.split(path.sep);
-  if (segments[0] === "node_modules") return null;
+  if (segments[0] === "node_modules") {
+    return null;
+  }
   return segments[0] === "extensions" && segments[1] ? `extension:${segments[1]}` : "root";
 }
 
@@ -33,7 +37,9 @@ export function collectRuntimeDependencyOwnership(params: {
   for (const moduleId of [...new Set(params.moduleIds)].toSorted()) {
     const sourcePath = moduleId.split("?", 1)[0] ?? moduleId;
     const owner = moduleOwner(params.rootDir, sourcePath);
-    if (!owner) continue;
+    if (!owner) {
+      continue;
+    }
     let source: string;
     try {
       source = readSource(sourcePath);
@@ -42,7 +48,9 @@ export function collectRuntimeDependencyOwnership(params: {
     }
     for (const importedFile of ts.preProcessFile(source, true, true).importedFiles) {
       const dependencyName = packageNameFromSpecifier(importedFile.fileName);
-      if (!dependencyName || NODE_BUILTIN_MODULES.has(dependencyName)) continue;
+      if (!dependencyName || NODE_BUILTIN_MODULES.has(dependencyName)) {
+        continue;
+      }
       const owners = ownersByDependency.get(dependencyName) ?? new Set<RuntimeOwner>();
       owners.add(owner);
       ownersByDependency.set(dependencyName, owners);
@@ -78,7 +86,9 @@ export function createRuntimeDependencyOwnershipBuildPlugin(rootDir = process.cw
     },
     transform(code, id) {
       const sourcePath = id.split("?", 1)[0] ?? id;
-      if (moduleOwner(rootDir, sourcePath)) sources.set(sourcePath, code);
+      if (moduleOwner(rootDir, sourcePath)) {
+        sources.set(sourcePath, code);
+      }
       return null;
     },
     generateBundle() {
