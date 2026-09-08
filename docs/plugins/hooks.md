@@ -497,6 +497,7 @@ type BeforeToolCallResult = {
   requireApproval?: {
     title: string;
     description: string;
+    scope?: ApprovalScope;
     severity?: "info" | "warning" | "critical";
     timeoutMs?: number;
     /** @deprecated Unresolved approvals always deny. */

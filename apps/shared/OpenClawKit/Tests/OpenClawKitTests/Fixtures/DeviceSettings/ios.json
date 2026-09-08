@@ -1,0 +1,17 @@
+{
+  "contract": 1,
+  "device": {"platform": "ios", "formFactor": "phone", "appVersion": "2026.9.5", "appBuild": "456", "profileName": null, "modelName": "iPhone 17"},
+  "app": {"appearance": "system", "notificationsEnabled": true},
+  "capabilities": {"cameraEnabled": false, "keepAwakeEnabled": true, "healthSummaryAvailable": true, "healthSummaryEnabled": false},
+  "permissions": {
+    "entries": [
+      {"id": "notifications", "status": "granted"}, {"id": "camera", "status": "denied"},
+      {"id": "microphone", "status": "notDetermined"}, {"id": "speechRecognition", "status": "unavailable"},
+      {"id": "location", "status": "granted"}, {"id": "contacts", "status": "limited"},
+      {"id": "calendars", "status": "denied"}, {"id": "reminders", "status": "notDetermined"},
+      {"id": "photos", "status": "limited"}
+    ],
+    "location": {"mode": "whileUsing", "precise": false, "preciseEditable": false}
+  },
+  "voice": {"supported": true, "wakeEnabled": false, "talkEnabled": true, "talkButtonEnabled": true, "talkBackgroundEnabled": false, "speakerphoneEnabled": true}
+}

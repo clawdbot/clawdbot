@@ -60,6 +60,7 @@ describe("BrowserPanelController tab and lifecycle ownership", () => {
     async (completion) => {
       stubScreenshotMedia();
       const previousCapture = createDeferred<unknown>();
+      const captureStarted = createDeferred();
       const openedTab = createDeferred<ReturnType<typeof createBrowserPanelTestTab>>();
       const activeUrl = "https://example.test/active";
       const newUrl = "https://example.test/new";
@@ -75,6 +76,7 @@ describe("BrowserPanelController tab and lifecycle ownership", () => {
         }
         if (envelope.path === "/screenshot") {
           if (envelope.body?.targetId === "active-tab") {
+            captureStarted.resolve();
             return await previousCapture.promise;
           }
           return { path: "/fresh.png", targetId: "raw-new", url: newUrl };
@@ -88,7 +90,7 @@ describe("BrowserPanelController tab and lifecycle ownership", () => {
       const previousView = controller.view;
 
       const capture = controller.refreshAll();
-      await flushBrowserResponses();
+      await captureStarted.promise;
       const opening = controller.openUrl(newUrl, { newTab: true });
       expect(controller.loading).toBe(true);
       expect(controller.view).toBe(previousView);

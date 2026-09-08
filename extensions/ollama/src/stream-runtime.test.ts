@@ -664,16 +664,20 @@ describe("convertToOllamaMessages", () => {
     });
   });
 
-  it("converts assistant messages with toolCall content blocks", () => {
+  it("preserves assistant thinking alongside text and tool calls", () => {
     const result = convertAssistantContent([
+      { type: "thinking", thinking: "Check the directory.\n" },
+      { type: "thinking", thinking: "Then report its contents." },
+      { type: "thinking", thinking: "redacted reasoning", redacted: true },
       { type: "text", text: "Let me check." },
       { type: "toolCall", id: "call_1", name: "bash", arguments: { command: "ls" } },
     ]);
-    expect(requireEntry(result, 0, "first converted Ollama message").role).toBe("assistant");
-    expect(requireEntry(result, 0, "first converted Ollama message").content).toBe("Let me check.");
-    expect(requireEntry(result, 0, "first converted Ollama message").tool_calls).toEqual([
-      { id: "call_1", function: { name: "bash", arguments: { command: "ls" } } },
-    ]);
+    expect(requireEntry(result, 0, "first converted Ollama message")).toEqual({
+      role: "assistant",
+      content: "Let me check.",
+      thinking: "Check the directory.\nThen report its contents.",
+      tool_calls: [{ id: "call_1", function: { name: "bash", arguments: { command: "ls" } } }],
+    });
   });
 
   it("preserves assistant tool-call ids before Ollama replay", () => {

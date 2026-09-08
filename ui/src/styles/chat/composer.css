@@ -3669,15 +3669,7 @@
 }
 
 .chat-controls__context-window-options {
-  --settings-control-height: 24px;
-
   flex: 0 0 auto;
-  flex-wrap: nowrap;
-}
-
-.chat-controls__context-window-options .settings-segmented__btn {
-  padding: 0 6px;
-  font-size: 10px;
 }
 
 .chat-controls__speed-toggle {

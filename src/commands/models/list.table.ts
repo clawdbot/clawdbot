@@ -45,6 +45,9 @@ export function printModelTable(
   }
 
   const rich = isRich(opts);
+  const formatRowTag = rich
+    ? (tag: string) => formatTag(sanitizeTerminalText(tag))
+    : sanitizeTerminalText;
   const header = [
     padTerminalCell("Model", MODEL_PAD),
     padTerminalCell("Input", INPUT_PAD),
@@ -56,20 +59,14 @@ export function printModelTable(
   runtime.log(rich ? theme.heading(header) : header);
 
   for (const row of rows) {
-    const keyLabel = padTerminalCell(truncate(sanitizeTerminalText(row.key), MODEL_PAD), MODEL_PAD);
+    const keyLabel = padTerminalCell(truncate(row.key, MODEL_PAD), MODEL_PAD);
     const inputLabel = padTerminalCell(sanitizeTerminalText(row.input) || "-", INPUT_PAD);
     const ctxLabel = padTerminalCell(formatContextLabel(row), CTX_PAD);
     const localText = row.local === null ? "-" : row.local ? "yes" : "no";
     const localLabel = padTerminalCell(localText, LOCAL_PAD);
     const authText = row.available === null ? "-" : row.available ? "yes" : "no";
     const authLabel = padTerminalCell(authText, AUTH_PAD);
-    const tags = row.tags.map(sanitizeTerminalText);
-    const tagsLabel =
-      tags.length > 0
-        ? rich
-          ? tags.map((tag) => formatTag(tag, rich)).join(",")
-          : tags.join(",")
-        : "";
+    const tagsLabel = row.tags.map(formatRowTag).join(",");
 
     const coloredInput = colorize(
       rich,

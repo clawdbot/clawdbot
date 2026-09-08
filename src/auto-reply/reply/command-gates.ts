@@ -1,4 +1,5 @@
 // Applies command feature gates before command handlers execute.
+import { redactIdentifier } from "@openclaw/normalization-core/node-crypto";
 import { formatCommandOwnerHint } from "../../commands/doctor-command-owner.js";
 import {
   isCommandFlagEnabled,
@@ -6,7 +7,6 @@ import {
   type CommandFlagKey,
 } from "../../config/commands.flags.js";
 import { logVerbose } from "../../globals.js";
-import { redactIdentifier } from "../../logging/redact-identifier.js";
 import { isNativeCommandTurn, resolveCommandTurnContext } from "../command-turn-context.js";
 import type { ReplyPayload } from "../types.js";
 import type {

@@ -692,6 +692,8 @@ struct OpenClawApp: App {
     init() {
         Self.installUncaughtExceptionLogger()
         GatewaySettingsStore.bootstrapPersistence()
+        (UserDefaults(suiteName: OpenClawAppGroup.identifier) ?? .standard)
+            .removeObject(forKey: "share.defaultInstruction")
         OpenClawType.installUIKitAppearance()
         let appModel = NodeAppModel(audioAdmissionInitiallyAllowed: false)
         #if DEBUG

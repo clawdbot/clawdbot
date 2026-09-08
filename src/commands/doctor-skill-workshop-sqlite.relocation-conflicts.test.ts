@@ -1,11 +1,25 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { applySkillProposal, proposeCreateSkill } from "../skills/workshop/service.js";
+import {
+  applySkillProposal,
+  listSkillProposals,
+  proposeCreateSkill,
+  proposeUpdateSkill,
+} from "../skills/workshop/service.js";
 import { resolveWorkshopSkillsDir } from "../skills/workshop/skills-root.js";
+import {
+  writeSkillProposalRollback,
+  readSkillProposalRollback,
+} from "../skills/workshop/store-sqlite-rollback.js";
 import { hashSkillProposalContent, importLegacySkillProposal } from "../skills/workshop/store.js";
 import * as workshopStore from "../skills/workshop/store.js";
-import { SKILL_WORKSHOP_SCHEMA, type SkillProposalRecord } from "../skills/workshop/types.js";
+import {
+  SKILL_WORKSHOP_ROLLBACK_SCHEMA,
+  SKILL_WORKSHOP_SCHEMA,
+  type SkillProposalRecord,
+  type SkillProposalRollback,
+} from "../skills/workshop/types.js";
 import { repairOpenClawStateDatabaseSchemaIfNeeded } from "../state/openclaw-state-db.js";
 import {
   createOpenClawTestState,
@@ -40,6 +54,131 @@ afterEach(async () => {
   await tempDirs.cleanup();
 });
 describe("doctor Skill Workshop SQLite relocation conflicts and recovery", () => {
+  it.each(["create", "update"] as const)(
+    "retires a missing %s draft without losing valid drafts or recovery files",
+    async (kind) => {
+      const options = {
+        config: {},
+        env: testState.env,
+        agentId: "main",
+        workspaceDir: testState.workspaceDir,
+      };
+      const targetDir = path.join(
+        resolveWorkshopSkillsDir({}, "main", testState.env),
+        "missing-draft",
+      );
+      const installed =
+        "---\nname: missing-draft\ndescription: Existing procedure\n---\n\nKeep the existing procedure.\n";
+      if (kind === "update") {
+        await fs.mkdir(targetDir, { recursive: true });
+        await fs.writeFile(path.join(targetDir, "SKILL.md"), installed);
+      }
+      const input = {
+        ...options,
+        description: "Missing draft fixture",
+        content: "# Proposed procedure\n",
+        supportFiles: [{ path: "references/proof.md", content: "Keep recovery evidence.\n" }],
+      };
+      const missing =
+        kind === "create"
+          ? await proposeCreateSkill({ ...input, name: "missing-draft" })
+          : await proposeUpdateSkill({ ...input, skillName: "missing-draft" });
+      const valid = await proposeCreateSkill({
+        ...options,
+        name: "valid-draft",
+        description: "Valid sibling",
+        content: "# Valid procedure\n\nKeep this draft.\n",
+      });
+      const draftFile = path.join(
+        testState.stateDir,
+        "skill-workshop",
+        "proposals",
+        missing.record.id,
+        missing.record.draftFile,
+      );
+      await fs.unlink(draftFile);
+
+      expect(
+        (await listSkillProposals(options)).proposals.find(
+          (record) => record.id === missing.record.id,
+        ),
+      ).toMatchObject({ status: "pending", degradedState: "draft-missing" });
+      await migrateLegacySkillWorkshopProposals(options);
+      expect((await readSkillProposalRecord(missing.record.id, options))?.status).toBe("pending");
+      const repaired = await migrateLegacySkillWorkshopProposals({
+        ...options,
+        retireMissingDrafts: true,
+      });
+      expect(repaired.warnings).toEqual([]);
+      expect(repaired.changes.join("\n")).toContain("marked 1 stale");
+      expect(await readSkillProposalRecord(missing.record.id, options)).toMatchObject({
+        status: "stale",
+        draftHash: missing.record.draftHash,
+        supportFiles: missing.record.supportFiles,
+        statusReason: expect.stringContaining("draft is missing"),
+      });
+      await expect(
+        fs.readFile(path.join(path.dirname(draftFile), "references/proof.md"), "utf8"),
+      ).resolves.toBe("Keep recovery evidence.\n");
+      const unchanged = await workshopStore.readSkillProposal(valid.record.id, options, options, {
+        config: {},
+      });
+      expect(unchanged?.record).toEqual(valid.record);
+      expect(unchanged?.content).toBe(valid.content);
+      if (kind === "update") {
+        await expect(fs.readFile(path.join(targetDir, "SKILL.md"), "utf8")).resolves.toBe(
+          installed,
+        );
+      } else {
+        await expect(fs.access(targetDir)).rejects.toThrow();
+      }
+      await expect(
+        migrateLegacySkillWorkshopProposals({ ...options, retireMissingDrafts: true }),
+      ).resolves.toEqual({ changes: [], warnings: [], detected: 2, migrated: 0 });
+    },
+  );
+
+  it("preserves unfinished apply recovery when its draft is missing", async () => {
+    const options = {
+      config: {},
+      env: testState.env,
+      agentId: "main",
+      workspaceDir: testState.workspaceDir,
+    };
+    const proposal = await proposeCreateSkill({
+      ...options,
+      name: "unfinished-draft",
+      description: "Unfinished apply",
+      content: "# Pending procedure\n",
+    });
+    const rollback: SkillProposalRollback = {
+      schema: SKILL_WORKSHOP_ROLLBACK_SCHEMA,
+      proposalId: proposal.record.id,
+      writtenAt: proposal.record.createdAt,
+      targetSkillFile: proposal.record.target.skillFile,
+      action: "create",
+    };
+    await writeSkillProposalRollback({ proposalId: proposal.record.id, rollback, store: options });
+    await fs.unlink(
+      path.join(
+        testState.stateDir,
+        "skill-workshop",
+        "proposals",
+        proposal.record.id,
+        proposal.record.draftFile,
+      ),
+    );
+
+    const result = await migrateLegacySkillWorkshopProposals({
+      ...options,
+      retireMissingDrafts: true,
+    });
+    expect(result.changes).toEqual([]);
+    expect(result.warnings.join("\n")).toContain("unfinished apply recovery");
+    expect((await readSkillProposalRecord(proposal.record.id, options))?.status).toBe("pending");
+    expect(await readSkillProposalRollback(proposal.record.id, options)).toEqual(rollback);
+  });
+
   it("stales an applied legacy directory without a loadable skill file", async () => {
     const workspaceDir = await fs.realpath(
       await tempDirs.make("openclaw-workshop-invalid-relocation-workspace-"),

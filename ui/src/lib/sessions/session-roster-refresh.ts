@@ -350,11 +350,13 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
       }
       result = host.reconcileList(result, issuedRevision, requestOptions.agentId);
       const currentState = host.readState();
-      const mergeWithCurrent = append && typeof requestOptions.offset === "number";
+      const mergeWithCurrent =
+        !currentState.resultCached && append && typeof requestOptions.offset === "number";
+      const currentResult = currentState.resultCached ? null : currentState.result;
       let nextResult =
-        result && mergeWithCurrent && currentState.result
-          ? appendSessionResults(currentState.result, result)
-          : reconcileRosterPresentationMetadata(result, currentState.result);
+        result && mergeWithCurrent && currentResult
+          ? appendSessionResults(currentResult, result)
+          : reconcileRosterPresentationMetadata(result, currentResult);
       if (append && nextResult && !backgroundHydrate) {
         lastListOptions = retainSessionPaginationWindow(
           durableListOptions,
@@ -364,7 +366,7 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
           host.snapshot(),
         );
       }
-      if (nextResult) {
+      if (nextResult && !currentState.resultCached) {
         nextResult = preserveCurrentSessionRow(
           nextResult,
           currentState,
@@ -385,6 +387,7 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
         {
           ...state,
           result: nextResult,
+          resultCached: false,
           agentId: requestOptions.agentId?.trim() ? normalizeAgentId(requestOptions.agentId) : null,
           loading: backgroundHydrate ? state.loading : false,
           error,
@@ -663,9 +666,7 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
       );
     },
     refresh,
-    bootstrap(options: SessionRefreshOptions) {
-      return refreshInternal(options, true);
-    },
+    bootstrap: (options: SessionRefreshOptions) => refreshInternal(options, true),
     refreshReplacement: (agentId?: string | null) => refreshReplacementOwned(agentId),
     refreshReplacementResult,
     publishedSession,

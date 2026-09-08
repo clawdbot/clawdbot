@@ -383,14 +383,15 @@ export class SystemAgentChatEngine extends RuntimeSystemAgentChatEngine {
   }
 }
 
-export async function advanceGatewayWizardToToken(engine: SystemAgentChatEngine) {
+export async function advanceGatewayWizardToSecretStorage(engine: SystemAgentChatEngine) {
   const portStep = await engine.handle("configure gateway");
   expect((await engine.handle("19001")).text).toContain("Gateway bind address");
-  expect((await engine.handle("2")).text).toContain("Gateway access protection");
-  expect((await engine.handle("1")).text).toContain("Tailscale exposure");
-  expect((await engine.handle("1")).text).toContain("provide the gateway token");
-  const tokenStep = await engine.handle("1");
-  return { portStep, tokenStep };
+  // The wizard no longer asks token vs password; bind goes straight to Tailscale exposure,
+  // then to how the generated secret is stored.
+  expect((await engine.handle("2")).text).toContain("Tailscale exposure");
+  const storageStep = await engine.handle("1");
+  expect(storageStep.text).toContain("store the Gateway");
+  return { portStep, storageStep };
 }
 
 beforeAll(async () => {

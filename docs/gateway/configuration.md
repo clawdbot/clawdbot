@@ -254,7 +254,7 @@ skipped when a candidate contains a redacted secret placeholder such as `***` or
     - Omit `agents.entries.*.skills` to inherit the defaults.
     - Set `agents.entries.*.skills: []` for no skills.
     - See [Skills](/tools/skills), [Skills config](/tools/skills-config), and
-      the [Configuration Reference](/gateway/config-agents#agents-defaults-skills).
+      the [Configuration Reference](/gateway/config-agents/workspace-and-bootstrap#agents-defaults-skills).
 
   </Accordion>
 
@@ -305,7 +305,7 @@ skipped when a candidate contains a redacted secret placeholder such as `***` or
     - `dmScope`: `main` (shared) | `per-peer` | `per-channel-peer` | `per-account-channel-peer`
     - `threadBindings`: global defaults for thread-bound session routing. Spawn with `sessions_spawn({ thread: true })` or `/acp spawn --thread auto`. Use `/session unbind`, `/agents`, `/session idle`, and `/session max-age` to detach, list, and tune bindings (Discord binds threads, Telegram binds topics/conversations).
     - See [Session Management](/concepts/session) for scoping, identity links, and send policy.
-    - See [full reference](/gateway/config-agents#session) for all fields.
+    - See [full reference](/gateway/config-agents/sessions#session) for all fields.
 
   </Accordion>
 
@@ -327,7 +327,7 @@ skipped when a candidate contains a redacted secret placeholder such as `***` or
 
     Build the image first - from a source checkout run `scripts/sandbox-setup.sh`, or from an npm install see the inline `docker build` command in [Sandboxing § Images and setup](/gateway/sandboxing#images-and-setup).
 
-    See [Sandboxing](/gateway/sandboxing) for the full guide and [full reference](/gateway/config-agents#agentsdefaultssandbox) for all options.
+    See [Sandboxing](/gateway/sandboxing) for the full guide and [full reference](/gateway/config-agents/sandbox#agentsdefaultssandbox) for all options.
 
   </Accordion>
 
@@ -484,7 +484,7 @@ skipped when a candidate contains a redacted secret placeholder such as `***` or
     }
     ```
 
-    See [Multi-Agent](/concepts/multi-agent) and [full reference](/gateway/config-agents#multi-agent-routing) for binding rules and per-agent access profiles.
+    See [Multi-Agent](/concepts/multi-agent) and [full reference](/gateway/config-agents/entries-and-multi-agent#multi-agent-routing) for binding rules and per-agent access profiles.
 
   </Accordion>
 
@@ -723,6 +723,15 @@ from LAN advertisements and any configured wide-area DNS-SD zone. `off` stops
 LAN advertisements while configured wide-area discovery remains enabled. The
 Bonjour plugin must already be enabled, and environment overrides still apply.
 
+The Gateway accepts its configured secret whether the client sends it as a token or a password; `gateway.auth.mode` still decides which config value is the secret.
+
+Local onboarding generates a Gateway secret by default (`gateway.auth.mode: "token"`)
+without asking you to choose an auth mechanism. Existing password-mode configs
+are preserved. To choose your own password explicitly, use
+`openclaw onboard --gateway-password <value>` or `--gateway-auth password`.
+Remote onboarding asks for one Gateway secret and stores it as `gateway.remote.token`.
+See [Onboard](/cli/onboard) for storage choices and connecting without a shared secret.
+
 Token and password rotation hot-applies only when the effective auth mode stays
 the same. Existing clients using the old shared credential must reconnect with
 the new credential; independently paired device-token clients remain connected.
@@ -799,6 +808,13 @@ openclaw gateway call config.patch --params '{
   "baseHash": "<hash>"
 }'
 ```
+
+`config.patch` records explicitly supplied values in the config file even when
+they equal the current runtime defaults. Unchanged runtime defaults stay omitted. Its
+successful response includes `changedPaths`, the effective runtime paths changed
+after validation and secret restoration, or `[]` for a no-op. These paths contain
+no configuration values; clients can use them to distinguish a channel change
+from an unrelated write even when secret values are redacted.
 
 Both `config.apply` and `config.patch` accept `raw`, `baseHash`, `sessionKey`,
 `note`, and `restartDelayMs`. `baseHash` is required for both methods once a

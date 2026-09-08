@@ -133,7 +133,7 @@ describe("AppSidebar interleaved zone", () => {
     expect(sidebar.querySelector('[data-session-key="agent:main:extra"]')).toBeNull();
   });
 
-  it("leads a pinned row like any other session row while activity trails it", async () => {
+  it("leads a pinned row with activity like any other session row", async () => {
     const keys = ["agent:main:main", "agent:main:page", "agent:main:plain"];
     const sessions = createSessionsHarness("main", keys);
     const result = sessions.sessions.state.result;
@@ -159,11 +159,11 @@ describe("AppSidebar interleaved zone", () => {
       plain?.querySelector(".sidebar-session-indicator")?.innerHTML,
     );
     expect(row?.querySelector(".nav-item__state")).toBeNull();
-    expect(row?.querySelector(".session-row-state .sidebar-recent-session__state")).not.toBeNull();
+    expect(row?.querySelector(".sidebar-session-indicator .session-glyph__ring")).not.toBeNull();
   });
 
-  it("keeps pinned attention leading while unread trails the row", async () => {
-    const keys = ["agent:main:main", "agent:main:page"];
+  it("badges pinned attention just like ordinary rows", async () => {
+    const keys = ["agent:main:main", "agent:main:page", "agent:main:plain"];
     const sessions = createSessionsHarness("main", keys);
     const result = sessions.sessions.state.result;
     expect(result).not.toBeNull();
@@ -171,9 +171,9 @@ describe("AppSidebar interleaved zone", () => {
       return;
     }
     for (const row of result.sessions) {
-      if (row.key === "agent:main:page") {
+      if (row.key !== "agent:main:main") {
         Object.assign(row, {
-          pinned: true,
+          pinned: row.key === "agent:main:page",
           unread: true,
           status: "failed",
           lastRunError: "boom",
@@ -184,12 +184,16 @@ describe("AppSidebar interleaved zone", () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar } = await mountSidebar(gateway, sessions.sessions);
 
-    const row = sidebar.querySelector('[data-session-key="agent:main:page"]');
-    const glyph = row?.querySelector(".sidebar-session-indicator .session-glyph");
-    expect(glyph?.querySelector(".sidebar-session-attention__icon")).not.toBeNull();
-    expect(glyph?.querySelector(".session-glyph__badge--unread")).toBeNull();
-    expect(row?.querySelector(".session-row-state .sidebar-recent-session__unread")).not.toBeNull();
-    expect(row?.querySelector(".nav-item__state")).toBeNull();
+    for (const key of ["agent:main:page", "agent:main:plain"]) {
+      const row = sidebar.querySelector(`[data-session-key="${key}"]`);
+      const glyph = row?.querySelector(".sidebar-session-indicator .session-glyph");
+      expect(glyph?.querySelector(".sidebar-session-attention__icon")).not.toBeNull();
+      expect(
+        glyph?.querySelectorAll('.session-glyph__badge--unread[role="img"][aria-label="Unread"]'),
+      ).toHaveLength(1);
+      expect(row?.querySelector(".session-row-state")).toBeNull();
+      expect(row?.querySelector(".nav-item__state")).toBeNull();
+    }
   });
 
   it("keeps many pinned sessions always visible", async () => {

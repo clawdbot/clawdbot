@@ -21,6 +21,7 @@ import {
   tryRealpath,
 } from "../loading/symlink-targets.js";
 import { createWorkshopWatcherKey, resolveWorkshopWatchRoots } from "../workshop/skills-root.js";
+import { areOrderedArraysEqual } from "./ordered-array-equality.js";
 import {
   bumpSkillsSnapshotVersion,
   clearSkillsSnapshotVersionForWorkspace,
@@ -477,20 +478,6 @@ function resolveSkillsWatcherUsePolling(): boolean {
   return Boolean(normalized) && normalized !== "false" && normalized !== "0";
 }
 
-// Requires resolveWatchTargets to produce a stable-order result (it returns a
-// sorted array); positional comparison is intentional for hot-path efficiency.
-function sameWatchTargets(a: WatchTarget[], b: WatchTarget[]): boolean {
-  return (
-    a.length === b.length &&
-    a.every(
-      (target, index) =>
-        target.path === b[index]?.path &&
-        target.watchRoot === b[index]?.watchRoot &&
-        target.depth === b[index]?.depth,
-    )
-  );
-}
-
 function createSkillsPathWatcher(target: WatchTarget): SkillsPathWatchState {
   const usePolling = resolveSkillsWatcherUsePolling();
   // Chokidar's missing-root fallback retains only the final basename, so it
@@ -730,7 +717,15 @@ export function ensureSkillsWatcher(params: {
     watcherKey,
     params.pluginMetadataSnapshot,
   );
-  const targetsUnchanged = sameWatchTargets(previousTargets, watchTargets);
+  // resolveWatchTargets returns stable sorted order, so positional equality is intentional.
+  const targetsUnchanged = areOrderedArraysEqual(
+    previousTargets,
+    watchTargets,
+    (previous, next) =>
+      previous.path === next.path &&
+      previous.watchRoot === next.watchRoot &&
+      previous.depth === next.depth,
+  );
   const watcherDepthsCoverTargets = watchTargets.every(
     (watchTarget) => (pathWatchers.get(watchTarget.path)?.depth ?? -1) >= watchTarget.depth,
   );

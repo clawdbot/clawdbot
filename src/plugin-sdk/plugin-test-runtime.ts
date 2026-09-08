@@ -70,6 +70,7 @@ export {
 } from "../plugins/hook-runner-global.js";
 export { addTestHook } from "../plugins/hooks.test-helpers.js";
 export { createPluginRecord } from "../plugins/status.test-helpers.js";
+export { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 export {
   resolveBundledExplicitWebFetchProvidersFromPublicArtifacts,
   resolveBundledExplicitWebSearchProvidersFromPublicArtifacts,
@@ -141,6 +142,9 @@ export { createMockPluginRegistry } from "../plugins/hooks.test-helpers.js";
 export { createAdmittedHostCapabilityTestFixture } from "../agents/harness/host-capability.test-support.js";
 export async function loadWebFetchToolFactoryForTest() {
   return (await import("../agents/tools/web-fetch.js")).createWebFetchTool;
+}
+export async function loadUserTurnTranscriptRecorderFactoryForTest() {
+  return (await import("../sessions/user-turn-transcript.js")).createUserTurnTranscriptRecorder;
 }
 export { buildPluginApi } from "../plugins/api-builder.js";
 export {

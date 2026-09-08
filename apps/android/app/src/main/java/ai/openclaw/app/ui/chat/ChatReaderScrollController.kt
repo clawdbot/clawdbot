@@ -1,13 +1,16 @@
 package ai.openclaw.app.ui.chat
 
 import androidx.compose.foundation.gestures.stopScroll
+import androidx.compose.foundation.interaction.DragInteraction
+import androidx.compose.foundation.lazy.LazyListLayoutInfo
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -22,7 +25,12 @@ import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
 
 internal enum class ChatScrollFollowTarget {
@@ -85,11 +93,110 @@ internal data class ChatReaderScrollController(
   val listState: LazyListState,
   val showJumpToLatest: Boolean,
   val jumpToLatest: () -> Unit,
-  val onManualNavigation: () -> Unit,
+  val navigation: ChatReaderNavigation,
   val nestedScrollConnection: NestedScrollConnection,
 )
 
-internal val LocalChatReaderNavigation = staticCompositionLocalOf<() -> Unit> { {} }
+private data class ChatReaderViewport(
+  val scrolling: Boolean,
+  val index: Int,
+  val offset: Int,
+  val placementRevision: Int,
+  val layout: LazyListLayoutInfo,
+  val canScroll: Boolean,
+  val navigating: Boolean,
+)
+
+internal class ChatReaderNavigation(
+  private val scope: CoroutineScope,
+  private val listState: LazyListState? = null,
+  private val pauseFollowing: () -> Unit = {},
+) {
+  val anchors = ChatReaderAnchors(listState)
+
+  private data class Request(
+    val job: Job,
+    val automatic: Boolean,
+  )
+
+  private var active by mutableStateOf<Request?>(null)
+  val isNavigating: Boolean get() = active != null
+
+  fun launch(
+    owner: CoroutineScope,
+    automatic: Boolean = false,
+    action: suspend () -> Unit,
+  ): Job =
+    owner.launch(start = CoroutineStart.UNDISPATCHED) {
+      // Admit in the coroutine before suspension: cancelled row/session callbacks
+      // return a cancelled job without retiring current work or skipping its cleanup.
+      ensureActive()
+      scope.ensureActive()
+      if (!automatic) {
+        anchors.invalidate()
+        pauseFollowing()
+      }
+      retire()
+      val request = coroutineContext.job
+      active = Request(request, automatic)
+      try {
+        listState?.stopScroll()
+        action()
+      } finally {
+        if (active?.job === request) active = null
+      }
+    }
+
+  fun pause() {
+    launch(scope) {}
+  }
+
+  fun cancel(request: Job) {
+    if (active?.job === request) pause() else request.cancel()
+  }
+
+  fun cancelAutomatic() {
+    active?.takeIf { it.automatic }?.job?.cancel()
+  }
+
+  fun retire() {
+    active?.job?.cancel()
+    active = null
+  }
+
+  fun viewportHeight(contentHeight: Int): Int = minOf(contentHeight, listState?.layoutInfo?.viewportSize?.height ?: contentHeight)
+}
+
+internal class ChatReaderAction(
+  private val scope: CoroutineScope,
+  private val navigation: ChatReaderNavigation,
+) {
+  private var request: Job? = null
+
+  fun launch(action: suspend () -> Unit) {
+    request = navigation.launch(scope, action = action)
+  }
+
+  fun pause() = launch {}
+
+  fun cancel() {
+    request?.let(navigation::cancel)
+    request = null
+  }
+
+  fun viewportHeight(contentHeight: Int): Int = navigation.viewportHeight(contentHeight)
+}
+
+internal val LocalChatReaderNavigation = staticCompositionLocalOf<ChatReaderNavigation?> { null }
+
+@Composable
+internal fun rememberChatReaderAction(): ChatReaderAction {
+  val scope = rememberCoroutineScope()
+  val navigation = LocalChatReaderNavigation.current ?: remember(scope) { ChatReaderNavigation(scope) }
+  val action = remember(scope, navigation) { ChatReaderAction(scope, navigation) }
+  DisposableEffect(action) { onDispose { action.cancel() } }
+  return action
+}
 
 @Composable
 internal fun rememberChatReaderScrollController(
@@ -98,7 +205,7 @@ internal fun rememberChatReaderScrollController(
   historyLoading: Boolean,
 ): ChatReaderScrollController {
   val listState = rememberLazyListState()
-  val scope = rememberCoroutineScope()
+  val scope = key(sessionKey) { rememberCoroutineScope() }
   val targetTolerancePx = with(LocalDensity.current) { 24.dp.roundToPx() }
   val currentTimeline by rememberUpdatedState(timeline)
   val readerStateSaver = remember(sessionKey) { createChatReaderStateSaver(sessionKey) }
@@ -106,14 +213,28 @@ internal fun rememberChatReaderScrollController(
     rememberSaveable(sessionKey, stateSaver = readerStateSaver) {
       mutableStateOf(ChatReaderState(ownerSessionKey = sessionKey))
     }
-  var applyingScrollCount by remember(sessionKey) { mutableIntStateOf(0) }
   var isUserScrolling by remember(sessionKey) { mutableStateOf(false) }
 
-  fun pauseFollowing() {
-    readerState = readerState.copy(followTarget = null)
-    // Stop an older automatic animation at its default priority, never interrupt
-    // a newer user drag that has already taken ownership of the scroll state.
-    if (applyingScrollCount > 0) scope.launch(start = CoroutineStart.UNDISPATCHED) { listState.stopScroll() }
+  val navigation =
+    remember(scope) {
+      ChatReaderNavigation(scope, listState) {
+        // Explicit reading replaces the gesture; its idle must not restore following.
+        // The viewport still hides Jump while the latest content remains visible.
+        isUserScrolling = false
+        readerState = readerState.copy(followTarget = null, hasNewerContent = true)
+      }
+    }
+
+  DisposableEffect(navigation) {
+    onDispose {
+      navigation.retire()
+      navigation.anchors.clearReading()
+    }
+  }
+  LaunchedEffect(navigation) {
+    listState.interactionSource.interactions.collect { interaction ->
+      if (interaction is DragInteraction.Start) navigation.pause()
+    }
   }
 
   val nestedScroll =
@@ -125,28 +246,31 @@ internal fun rememberChatReaderScrollController(
         ): Offset {
           // A code viewport can consume the whole drag without scrolling the transcript.
           // Its reader intent must still retire follow, without consuming the gesture.
-          if (source == NestedScrollSource.UserInput && available.y != 0f) pauseFollowing()
+          if (source == NestedScrollSource.UserInput && available.y != 0f) {
+            navigation.anchors.invalidate()
+            readerState = readerState.copy(followTarget = null)
+            // Bring-into-view also emits UserInput; do not cancel its own reveal.
+            navigation.cancelAutomatic()
+          }
           return Offset.Zero
         }
       }
     }
 
-  suspend fun applyTransition(transition: ChatReaderTransition) {
-    readerState = transition.state
-    val index = transition.scrollIndex ?: return
-    // A replacement cancels its predecessor before the predecessor's finally runs.
-    // Count active invocations so that cleanup cannot hide the newer animation.
-    applyingScrollCount += 1
-    try {
-      if (transition.animated) {
-        listState.animateScrollToItem(index)
-      } else {
-        listState.scrollToItem(index)
-      }
-    } finally {
-      applyingScrollCount -= 1
+  suspend fun applyTransition(transition: ChatReaderTransition) =
+    coroutineScope {
+      readerState = transition.state
+      if (transition.state.followTarget != null) navigation.anchors.clearReading()
+      val index = transition.scrollIndex ?: return@coroutineScope
+      navigation
+        .launch(this, automatic = true) {
+          if (transition.animated) {
+            listState.animateScrollToItem(index)
+          } else {
+            listState.scrollToItem(index)
+          }
+        }.join()
     }
-  }
 
   // Loading only changes empty-timeline transitions. A populated-history refresh
   // must not cancel a moving scroll after its content version has been recorded.
@@ -161,20 +285,45 @@ internal fun rememberChatReaderScrollController(
   }
 
   LaunchedEffect(sessionKey) {
+    var previousViewport: ChatReaderViewport? = null
     snapshotFlow {
-      Triple(
+      ChatReaderViewport(
         listState.isScrollInProgress,
         listState.firstVisibleItemIndex,
         listState.firstVisibleItemScrollOffset,
+        navigation.anchors.revision,
+        listState.layoutInfo,
+        listState.canScrollBackward || listState.canScrollForward,
+        navigation.isNavigating,
       )
-    }.collect { (scrolling, index, offset) ->
-      if (!readerState.initialized || applyingScrollCount > 0) return@collect
+    }.collect { viewport ->
+      // Observe geometry during navigation without replaying its suppressed resize later.
+      val previous = previousViewport
+      previousViewport = viewport
+      if (!readerState.initialized || viewport.navigating) return@collect
+      val (scrolling, index, offset) = viewport
+      val resizedToFit =
+        previous != null && !previous.navigating && !previous.scrolling && previous.canScroll &&
+          !viewport.canScroll && viewport.layout.totalItemsCount > 0 &&
+          previous.layout.viewportSize != viewport.layout.viewportSize
       if (scrolling) {
+        navigation.anchors.clearReading()
         isUserScrolling = true
         readerState = readerState.copy(followTarget = null)
-      } else if (isUserScrolling) {
+        return@collect
+      } else if (isUserScrolling || resizedToFit) {
         isUserScrolling = false
         readerState = readerState.onViewportChanged(index, offset, currentTimeline, targetTolerancePx)
+      }
+      if (readerState.followTarget != null) {
+        navigation.anchors.clearReading()
+      } else if (navigation.anchors.needsCorrection()) {
+        navigation
+          .launch(this, automatic = true) {
+            listState.scroll {
+              if (readerState.followTarget == null) navigation.anchors.correct(::scrollBy)
+            }
+          }.join()
       }
     }
   }
@@ -193,11 +342,12 @@ internal fun rememberChatReaderScrollController(
     listState = listState,
     showJumpToLatest = readerState.hasNewerContent && timeline.items.isNotEmpty() && latestContentHidden,
     jumpToLatest = {
-      scope.launch {
+      navigation.retire()
+      scope.launch(start = CoroutineStart.UNDISPATCHED) {
         applyTransition(readerState.jumpToLatest(currentTimeline))
       }
     },
-    onManualNavigation = ::pauseFollowing,
+    navigation = navigation,
     nestedScrollConnection = nestedScroll,
   )
 }

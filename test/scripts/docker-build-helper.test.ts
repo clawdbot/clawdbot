@@ -56,7 +56,6 @@ const AGENTS_DELETE_SHARED_WORKSPACE_DOCKER_E2E_PATH =
 const OPENWEBUI_DOCKER_E2E_PATH = "scripts/e2e/openwebui-docker.sh";
 const ONBOARD_DOCKER_E2E_PATH = "scripts/e2e/onboard-docker.sh";
 const ONBOARD_SCENARIO_PATH = "scripts/e2e/lib/onboard/scenario.sh";
-const KITCHEN_SINK_PLUGIN_DOCKER_E2E_PATH = "scripts/e2e/kitchen-sink-plugin-docker.sh";
 const KITCHEN_SINK_RPC_DOCKER_E2E_PATH = "scripts/e2e/kitchen-sink-rpc-docker.sh";
 const CODEX_ON_DEMAND_DOCKER_E2E_PATH = "scripts/e2e/codex-on-demand-docker.sh";
 const MCP_CODE_MODE_GATEWAY_DOCKER_E2E_PATH = "scripts/e2e/mcp-code-mode-gateway-docker.sh";
@@ -93,12 +92,14 @@ const BUNDLED_PLUGIN_INSTALL_UNINSTALL_RUNTIME_SMOKE_PATH =
 const CLEANUP_SMOKE_DOCKERFILE_PATH = "scripts/docker/cleanup-smoke/Dockerfile";
 const CLEANUP_SMOKE_RUN_PATH = "scripts/docker/cleanup-smoke/run.sh";
 const PLUGINS_DOCKER_E2E_PATH = "scripts/e2e/plugins-docker.sh";
+const KITCHEN_SINK_PLUGIN_DOCKER_E2E_PATH = "scripts/e2e/kitchen-sink-plugin-docker.sh";
 const PLUGINS_DOCKER_SWEEP_PATH = "scripts/e2e/lib/plugins/sweep.sh";
 const PLUGINS_DOCKER_MARKETPLACE_PATH = "scripts/e2e/lib/plugins/marketplace.sh";
 const PLUGINS_DOCKER_CLAWHUB_PATH = "scripts/e2e/lib/plugins/clawhub.sh";
 const PLUGINS_DOCKER_ASSERTIONS_PATH = "scripts/e2e/lib/plugins/assertions.mjs";
 const PLUGINS_DOCKER_NPM_REGISTRY_PATH = "scripts/e2e/lib/plugins/npm-registry-server.mjs";
 const PLUGIN_UPDATE_DOCKER_E2E_PATH = "scripts/e2e/plugin-update-unchanged-docker.sh";
+const PLUGIN_UPDATE_CORRUPT_DOCKER_E2E_PATH = "scripts/e2e/update-corrupt-plugin-docker.sh";
 const PLUGIN_UPDATE_SCENARIO_PATH = "scripts/e2e/lib/plugin-update/unchanged-scenario.sh";
 const PLUGIN_UPDATE_CORRUPT_SCENARIO_PATH =
   "scripts/e2e/lib/plugin-update/corrupt-update-scenario.sh";
@@ -123,6 +124,7 @@ const RELEASE_UPGRADE_USER_JOURNEY_SCENARIO_PATH =
   "scripts/e2e/lib/release-upgrade-user-journey/scenario.sh";
 const RELEASE_TYPED_ONBOARDING_SCENARIO_PATH =
   "scripts/e2e/lib/release-typed-onboarding/scenario.sh";
+const RELEASE_TYPED_ONBOARDING_DOCKER_E2E_PATH = "scripts/e2e/release-typed-onboarding-docker.sh";
 const RELEASE_USER_JOURNEY_DOCKER_E2E_PATH = "scripts/e2e/release-user-journey-docker.sh";
 const RELEASE_USER_JOURNEY_SCENARIO_PATH = "scripts/e2e/lib/release-user-journey/scenario.sh";
 const UPGRADE_SURVIVOR_RUN_SCRIPT = "scripts/e2e/lib/upgrade-survivor/run.sh";
@@ -1429,7 +1431,8 @@ mktemp() {
 }
 
 tail() {
-  printf "%s\\n" "$*" >"$TMPDIR/tail-seen"
+  [[ "$#" = "3" && "$1" = "-c" && "$2" = "65536" && -p "$3" ]] || return 1
+  printf "%s %s\\n" "$1" "$2" >"$TMPDIR/tail-seen"
   /usr/bin/tail "$@"
 }
 
@@ -1446,15 +1449,15 @@ status="$?"
 set -e
 
 stderr="$(<"$TMPDIR/stderr")"
-[[ "$status" = "125" ]]
-[[ "$stderr" = before\\ Docker* ]]
-[[ "$stderr" = *"NanoCPUs can not be set"* ]]
-[[ "$stderr" = *"Docker E2E resource limits are incompatible with this Docker runtime"* ]]
-[[ "$stderr" = *"OPENCLAW_DOCKER_E2E_DISABLE_RESOURCE_LIMITS=1"* ]]
-[[ "$(grep -c '^run ' "$TMPDIR/docker-seen")" = "1" ]]
-[[ "$(<"$TMPDIR/tail-seen")" = "-c 65536" ]]
-[[ "$(<"$TMPDIR/mktemp-seen")" = -d* ]]
-[[ ! -e "$(<"$TMPDIR/diagnostic-dir")" ]]
+[[ "$status" = "125" ]] || exit 1
+[[ "$stderr" = before\\ Docker* ]] || exit 1
+[[ "$stderr" = *"NanoCPUs can not be set"* ]] || exit 1
+[[ "$stderr" = *"Docker E2E resource limits are incompatible with this Docker runtime"* ]] || exit 1
+[[ "$stderr" = *"OPENCLAW_DOCKER_E2E_DISABLE_RESOURCE_LIMITS=1"* ]] || exit 1
+[[ "$(grep -c '^run ' "$TMPDIR/docker-seen")" = "1" ]] || exit 1
+test "$(<"$TMPDIR/tail-seen")" = "-c 65536"
+[[ "$(<"$TMPDIR/mktemp-seen")" = -d* ]] || exit 1
+[[ ! -e "$(<"$TMPDIR/diagnostic-dir")" ]] || exit 1
 `,
     },
     {
@@ -1483,10 +1486,10 @@ status="$?"
 set -e
 
 stderr="$(<"$TMPDIR/stderr")"
-[[ "$status" = "125" ]]
-[[ "$stderr" = *"No such image: cgroup-helper"* ]]
-[[ "$stderr" != *"OPENCLAW_DOCKER_E2E_DISABLE_RESOURCE_LIMITS"* ]]
-[[ "$(grep -c '^run ' "$TMPDIR/docker-seen")" = "1" ]]
+[[ "$status" = "125" ]] || exit 1
+[[ "$stderr" = *"No such image: cgroup-helper"* ]] || exit 1
+[[ "$stderr" != *"OPENCLAW_DOCKER_E2E_DISABLE_RESOURCE_LIMITS"* ]] || exit 1
+[[ "$(grep -c '^run ' "$TMPDIR/docker-seen")" = "1" ]] || exit 1
 `,
     },
     {
@@ -1506,9 +1509,9 @@ OPENCLAW_DOCKER_E2E_PIDS_LIMIT=many docker_e2e_docker_cmd run demo 2>"$TMPDIR/st
 status="$?"
 set -e
 
-[[ "$status" = "2" ]]
-[[ "$(<"$TMPDIR/stderr")" = *"invalid OPENCLAW_DOCKER_E2E_PIDS_LIMIT: many"* ]]
-[[ ! -e "$TMPDIR/docker-seen" ]]
+[[ "$status" = "2" ]] || exit 1
+[[ "$(<"$TMPDIR/stderr")" = *"invalid OPENCLAW_DOCKER_E2E_PIDS_LIMIT: many"* ]] || exit 1
+[[ ! -e "$TMPDIR/docker-seen" ]] || exit 1
 `,
     },
     {
@@ -1532,9 +1535,9 @@ OPENCLAW_DOCKER_E2E_PIDS_LIMIT=many docker_e2e_docker_run_cmd run demo 2>"$TMPDI
 status="$?"
 set -e
 
-[[ "$status" = "2" ]]
-[[ "$(<"$TMPDIR/stderr")" = *"invalid OPENCLAW_DOCKER_E2E_PIDS_LIMIT: many"* ]]
-[[ ! -e "$TMPDIR/docker-seen" ]]
+[[ "$status" = "2" ]] || exit 1
+[[ "$(<"$TMPDIR/stderr")" = *"invalid OPENCLAW_DOCKER_E2E_PIDS_LIMIT: many"* ]] || exit 1
+[[ ! -e "$TMPDIR/docker-seen" ]] || exit 1
 `,
     },
     {
@@ -1567,11 +1570,11 @@ status="$?"
 set -e
 
 stderr="$(<"$TMPDIR/stderr")"
-[[ "$status" = "125" ]]
-[[ "$stderr" = *"controller pids is not available"* ]]
-[[ "$stderr" = *"Docker E2E resource limits are incompatible with this Docker runtime"* ]]
-[[ "$stderr" = *"OPENCLAW_DOCKER_E2E_DISABLE_RESOURCE_LIMITS=1"* ]]
-[[ "$(grep -c '^run ' "$TMPDIR/docker-seen")" = "1" ]]
+[[ "$status" = "125" ]] || exit 1
+[[ "$stderr" = *"controller pids is not available"* ]] || exit 1
+[[ "$stderr" = *"Docker E2E resource limits are incompatible with this Docker runtime"* ]] || exit 1
+[[ "$stderr" = *"OPENCLAW_DOCKER_E2E_DISABLE_RESOURCE_LIMITS=1"* ]] || exit 1
+[[ "$(grep -c '^run ' "$TMPDIR/docker-seen")" = "1" ]] || exit 1
 `,
     },
     {
@@ -1757,11 +1760,29 @@ export -f node
 source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
 
 docker() {
+  local last_arg=""
+  local arg
+  for arg in "$@"; do
+    last_arg="$arg"
+  done
   if [[ "$1" == "rm" ]]; then
     shift
     test "$1" = "-f"
     shift
+    printf "rm %s\\n" "$1" >>"$TMPDIR/docker-lifecycle"
     printf "%s\\n" "$1" >>"$TMPDIR/docker-rm-seen"
+    return 0
+  fi
+  if [[ "$1" == "inspect" ]]; then
+    printf "inspect %s\\n" "$last_arg" >>"$TMPDIR/docker-lifecycle"
+    if [[ "\${DOCKER_STUB_INSPECT_STATUS:-0}" != "0" ]]; then
+      printf "%s\\n" "\${DOCKER_STUB_INSPECT_ERROR:-inspect failed}" >&2
+      return "$DOCKER_STUB_INSPECT_STATUS"
+    fi
+    printf "ExitCode=%s\\nOOMKilled=%s\\nError=%s\\n" \\
+      "\${DOCKER_STUB_EXIT_CODE:-0}" \\
+      "\${DOCKER_STUB_OOM:-false}" \\
+      "\${DOCKER_STUB_ERROR:-}"
     return 0
   fi
 
@@ -1769,8 +1790,8 @@ docker() {
   local mount_path=""
   local expect_volume_path=0
   local expect_cidfile=0
-  local arg
   for arg in "$@"; do
+    test "$arg" != "--rm"
     if [[ "$expect_cidfile" == "1" ]]; then
       cidfile="$arg"
       expect_cidfile=0
@@ -1792,7 +1813,8 @@ docker() {
 
   test -n "$cidfile"
   test ! -e "$cidfile"
-  printf "container-%s\\n" "\${DOCKER_STUB_STATUS:-}" >"$cidfile"
+  printf "container-%s\\n" "\${DOCKER_STUB_STATUS:-0}" >"$cidfile"
+  printf "run container-%s\\n" "\${DOCKER_STUB_STATUS:-0}" >>"$TMPDIR/docker-lifecycle"
   test -n "$mount_path"
   test -f "$mount_path"
   printf "%s\\n" "$mount_path" >"$TMPDIR/package-mount-seen"
@@ -1803,10 +1825,22 @@ export -f docker
 package_tgz="$(docker_e2e_prepare_package_tgz mount-cleanup)"
 pack_dir="$(dirname "$package_tgz")"
 docker_e2e_package_mount_args "$package_tgz"
-DOCKER_STUB_STATUS=7 docker_e2e_run_with_harness image-name bash -lc true || run_status="$?"
+export DOCKER_STUB_STATUS=7
+export DOCKER_STUB_EXIT_CODE=137
+export DOCKER_STUB_OOM=true
+DOCKER_STUB_ERROR="$(printf '%05000d' 0)"
+export DOCKER_STUB_ERROR
+docker_e2e_run_with_harness image-name bash -lc true 2>"$TMPDIR/failure-stderr" || run_status="$?"
 test "\${run_status:-0}" = "7"
 test "$(cat "$TMPDIR/docker-timeout-seen")" = "--kill-after=30s 3s"
 grep -qx "container-7" "$TMPDIR/docker-rm-seen"
+test "$(sed -n '1p' "$TMPDIR/docker-lifecycle")" = "run container-7"
+test "$(sed -n '2p' "$TMPDIR/docker-lifecycle")" = "inspect container-7"
+test "$(sed -n '3p' "$TMPDIR/docker-lifecycle")" = "rm container-7"
+grep -q '^Docker container state:$' "$TMPDIR/failure-stderr"
+grep -q '^ExitCode=137$' "$TMPDIR/failure-stderr"
+grep -q '^OOMKilled=true$' "$TMPDIR/failure-stderr"
+test "$(wc -c <"$TMPDIR/failure-stderr")" -lt 5000
 test -f "$TMPDIR/package-mount-seen"
 test ! -e "$pack_dir"
 test -z "$(find "$TMPDIR" -maxdepth 1 -name 'openclaw-docker-e2e-container.*' -print)"
@@ -1815,11 +1849,25 @@ external_dir="$TMPDIR/external-package"
 mkdir -p "$external_dir"
 printf fixture >"$external_dir/openclaw-current.tgz"
 docker_e2e_package_mount_args "$external_dir/openclaw-current.tgz"
+export DOCKER_STUB_STATUS=23
+export DOCKER_STUB_INSPECT_STATUS=9
+export DOCKER_STUB_INSPECT_ERROR="daemon unavailable"
+docker_e2e_run_with_harness image-name bash -lc true 2>"$TMPDIR/inspect-failure-stderr" || inspect_failure_status="$?"
+test "\${inspect_failure_status:-0}" = "23"
+grep -q "Docker container state unavailable (inspect exit 9): daemon unavailable" "$TMPDIR/inspect-failure-stderr"
+tail -n 3 "$TMPDIR/docker-lifecycle" >"$TMPDIR/inspect-failure-lifecycle"
+printf "run container-23\\ninspect container-23\\nrm container-23\\n" >"$TMPDIR/expected-inspect-failure-lifecycle"
+cmp "$TMPDIR/expected-inspect-failure-lifecycle" "$TMPDIR/inspect-failure-lifecycle"
+
+unset DOCKER_STUB_STATUS DOCKER_STUB_EXIT_CODE DOCKER_STUB_OOM DOCKER_STUB_ERROR
+unset DOCKER_STUB_INSPECT_STATUS DOCKER_STUB_INSPECT_ERROR
 unset DOCKER_COMMAND_TIMEOUT
 rm -f "$TMPDIR/docker-timeout-seen"
-docker_e2e_run_with_harness image-name bash -lc true
+docker_e2e_run_with_harness image-name bash -lc true 2>"$TMPDIR/success-stderr"
 test "$(cat "$TMPDIR/docker-timeout-seen")" = "--kill-after=30s 3600s"
-grep -qx "container-" "$TMPDIR/docker-rm-seen"
+grep -qx "container-0" "$TMPDIR/docker-rm-seen"
+test "$(tail -n 2 "$TMPDIR/docker-lifecycle")" = $'run container-0\\nrm container-0'
+test ! -s "$TMPDIR/success-stderr"
 test -f "$external_dir/openclaw-current.tgz"
 `,
     },
@@ -2949,6 +2997,17 @@ docker_e2e_docker_run_cmd run demo
     expect(script).not.toContain("/tmp/openclaw-channel-add.log");
   });
 
+  it("runs an authorized frozen target's shipped typed-onboarding journey", () => {
+    const runner = readFileSync(RELEASE_TYPED_ONBOARDING_DOCKER_E2E_PATH, "utf8");
+
+    expectTextToIncludeAll(runner, [
+      'openclaw_resolve_frozen_core_harness_capabilities "$TARGET_ROOT_DIR"',
+      'openclaw_resolve_frozen_target_file "$TARGET_ROOT_DIR"',
+      "scripts/e2e/lib/release-typed-onboarding/scenario.sh",
+      '-v "$SCENARIO_PATH:/app/scripts/e2e/lib/release-typed-onboarding/scenario.sh:ro"',
+    ]);
+  });
+
   it("keeps real-TTY onboarding drivers aligned with the guided prompt sequence", () => {
     expectOrderedScriptFragments(readFileSync(RELEASE_TYPED_ONBOARDING_SCENARIO_PATH, "utf8"), [
       'wait_for_log "Continue?"',
@@ -2967,7 +3026,9 @@ docker_e2e_docker_run_cmd run demo
       "send $'\\r'",
       'wait_for_log "How should I set things up?"',
       "send $'\\r'",
-      'wait_for_log "Use Current model?"',
+      'wait_for_log "Model/auth provider"',
+      "send $'\\r'",
+      'wait_for_log "Use which detected AI?"',
       "send $'\\r'",
     ]);
   });
@@ -4546,6 +4607,7 @@ ${storage === "wal" ? 'process.kill(process.pid, "SIGKILL");' : ""}`,
         env: {
           ...process.env,
           OPENCLAW_SYSTEMCTL_SHIM_DAEMON_LOG: logPath,
+          OPENCLAW_SYSTEMCTL_SHIM_MANAGER_ENV: "{}",
           OPENCLAW_SYSTEMCTL_SHIM_EXEC_START: `${shellQuote(process.execPath)} ${shellQuote(childPath)}`,
         },
         stdio: "ignore",
@@ -5172,6 +5234,7 @@ exit 0
           ...process.env,
           COUNT_FILE: countPath,
           OPENCLAW_SYSTEMCTL_SHIM_DAEMON_LOG: logPath,
+          OPENCLAW_SYSTEMCTL_SHIM_MANAGER_ENV: "{}",
           OPENCLAW_SYSTEMCTL_SHIM_EXEC_START: command,
         },
         stdio: "ignore",
@@ -5206,6 +5269,7 @@ exit 0
         env: {
           ...process.env,
           OPENCLAW_SYSTEMCTL_SHIM_DAEMON_LOG: logPath,
+          OPENCLAW_SYSTEMCTL_SHIM_MANAGER_ENV: "{}",
           OPENCLAW_SYSTEMCTL_SHIM_EXEC_START: command,
           STATE_FILE: statePath,
         },
@@ -5257,6 +5321,7 @@ process.exit(starts === 1 ? 1 : 78);
           ...process.env,
           OPENCLAW_CLAWHUB_URL: "http://127.0.0.1:43123",
           OPENCLAW_SYSTEMCTL_SHIM_DAEMON_LOG: logPath,
+          OPENCLAW_SYSTEMCTL_SHIM_MANAGER_ENV: "{}",
           OPENCLAW_SYSTEMCTL_SHIM_EXEC_START: `${shellQuote(process.execPath)} ${shellQuote(gatewayPath)}`,
           URLS_FILE: urlsPath,
         },
@@ -5321,6 +5386,7 @@ setInterval(() => {}, 1_000);
             DESCENDANT_PID_FILE: descendantPidPath,
             DESCENDANT_SCRIPT: descendantPath,
             OPENCLAW_SYSTEMCTL_SHIM_DAEMON_LOG: logPath,
+            OPENCLAW_SYSTEMCTL_SHIM_MANAGER_ENV: "{}",
             OPENCLAW_SYSTEMCTL_SHIM_EXEC_START: `${shellQuote(process.execPath)} ${shellQuote(gatewayPath)}`,
             STATE_FILE: statePath,
           },
@@ -5405,6 +5471,7 @@ if (starts === 1) {
             DESCENDANT_PID_FILE: descendantPidPath,
             DESCENDANT_SCRIPT: descendantPath,
             OPENCLAW_SYSTEMCTL_SHIM_DAEMON_LOG: logPath,
+            OPENCLAW_SYSTEMCTL_SHIM_MANAGER_ENV: "{}",
             OPENCLAW_SYSTEMCTL_SHIM_EXEC_START: `${shellQuote(process.execPath)} ${shellQuote(gatewayPath)}`,
             REPLACEMENT_FILE: replacementPath,
             STARTS_FILE: startsPath,
@@ -5825,6 +5892,26 @@ grep -Fxq preserved "$TMPDIR/caller-fd"
     );
   });
 
+  it("uses each authorized frozen release's shipped scenario assertions", () => {
+    for (const [runnerPath, assertionPath] of [
+      [CODEX_ON_DEMAND_DOCKER_E2E_PATH, "scripts/e2e/lib/codex-on-demand/assertions.mjs"],
+      [
+        NPM_ONBOARD_CHANNEL_AGENT_DOCKER_E2E_PATH,
+        "scripts/e2e/lib/npm-onboard-channel-agent/assertions.mjs",
+      ],
+      [UPGRADE_SURVIVOR_DOCKER_E2E_PATH, "scripts/e2e/lib/upgrade-survivor/assertions.mjs"],
+      [
+        PLUGIN_UPDATE_CORRUPT_DOCKER_E2E_PATH,
+        "scripts/e2e/lib/plugin-update/corrupt-update-scenario.sh",
+      ],
+      [KITCHEN_SINK_PLUGIN_DOCKER_E2E_PATH, "scripts/e2e/lib/kitchen-sink-plugin/assertions.mjs"],
+    ] as const) {
+      const runner = readFileSync(runnerPath, "utf8");
+      expect(runner).toContain(`openclaw_resolve_frozen_target_file`);
+      expect(runner).toContain(`${assertionPath}:ro`);
+    }
+  });
+
   it("serves the version-matched Codex candidate during package onboarding", () => {
     const runner = readFileSync(CODEX_ON_DEMAND_DOCKER_E2E_PATH, "utf8");
     const registryHelper = readFileSync(PREPUBLISH_PLUGIN_REGISTRY_HELPER_PATH, "utf8");
@@ -6091,6 +6178,15 @@ source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
     expect(dockerfile).toContain("procps");
   });
 
+  it("copies the pnpm lockfile into the runtime image before normalizing its permissions", () => {
+    const dockerfile = readFileSync("Dockerfile", "utf8");
+    const copy = "COPY --from=runtime-assets --chown=node:node /app/pnpm-lock.yaml .";
+    const chmod = "chmod a+r /app/pnpm-lock.yaml";
+
+    expect(dockerfile).toContain(copy);
+    expect(dockerfile.indexOf(copy)).toBeLessThan(dockerfile.indexOf(chmod));
+  });
+
   it("caches package downloads across prepared Docker E2E image builds", () => {
     const dockerfile = readFileSync("scripts/e2e/Dockerfile", "utf8");
     expect(dockerfile).toContain(
@@ -6132,7 +6228,7 @@ source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
     writeFileSync(join(physicalRoot, "package.json"), '{"name":"openclaw"}');
     writeFileSync(
       join(physicalRoot, "cli.cjs"),
-      'process.stdout.write(require.resolve("@openclaw/fs-safe/package.json"));',
+      'process.stdout.write(require.resolve("@openclaw/fs-safe"));',
     );
     writeFileSync(
       join(fsSafe, "package.json"),
@@ -6140,12 +6236,14 @@ source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
         name: "@openclaw/fs-safe",
         type: "module",
         exports: {
-          "./package.json": "./package.json",
+          ".": "./dist/index.js",
           "./config": "./config.js",
           "./durability": "./durability.js",
         },
       }),
     );
+    mkdirSync(join(fsSafe, "dist"), { recursive: true });
+    writeFileSync(join(fsSafe, "dist/index.js"), "export {};\n");
     writeFileSync(
       join(fsSafe, "config.js"),
       'export function configureFsSafeNative({ mode }) { if (mode !== "off") throw new Error("fixture requires fallback mode"); }',
@@ -6163,7 +6261,7 @@ export async function sha256File(file) {
     symlinkSync(physicalRoot, logicalRoot, process.platform === "win32" ? "junction" : "dir");
     expect(
       execFileSync(process.execPath, [join(logicalRoot, "cli.cjs")], { encoding: "utf8" }),
-    ).toBe(join(fsSafe, "package.json"));
+    ).toBe(join(fsSafe, "dist/index.js"));
     for (const packageRoot of [physicalRoot, logicalRoot]) {
       const result = spawnSync(
         process.execPath,
@@ -6371,6 +6469,17 @@ process.exit(73);
     expect(pluginBinding).not.toContain('readFileSync(logPath, "utf8")');
   });
 
+  it("materializes legacy bundle-MCP client links before its read-only Docker mount", () => {
+    const runner = readFileSync(AGENT_BUNDLE_MCP_TOOLS_DOCKER_E2E_PATH, "utf8");
+
+    expectTextToIncludeAll(runner, [
+      'ln -s /app/dist "$LEGACY_CLIENT_SOURCE_ROOT/dist"',
+      'ln -s /app/node_modules "$LEGACY_CLIENT_SOURCE_ROOT/node_modules"',
+      '-v "$LEGACY_CLIENT_SOURCE_ROOT:$LEGACY_CLIENT_ROOT:ro"',
+    ]);
+    expect(runner).not.toContain("CLIENT_PRELUDE");
+  });
+
   it("keeps Open WebUI Docker E2E resource-guarded", () => {
     const runner = readFileSync(OPENWEBUI_DOCKER_E2E_PATH, "utf8");
     expectTextToIncludeAll(runner, [
@@ -6553,6 +6662,33 @@ process.exit(73);
       ]);
     },
   );
+
+  it("passes source-qualified overrides without leaking frozen control-plane identity", () => {
+    const runner = readFileSync(MCP_CODE_MODE_GATEWAY_DOCKER_E2E_PATH, "utf8");
+
+    expectTextToIncludeAll(runner, [
+      "MCP_CODE_MODE_SEED_ENV_ARGS=()",
+      "OPENCLAW_FROZEN_TARGET_MCP_MEMORY_CONFIG_MODE=agent",
+      "OPENCLAW_FROZEN_TARGET_MCP_CODE_MODE_CATALOG_MODE=legacy",
+      '"${MCP_CODE_MODE_SEED_ENV_ARGS[@]}"',
+    ]);
+    for (const path of [
+      MCP_CODE_MODE_GATEWAY_DOCKER_E2E_PATH,
+      ONBOARD_DOCKER_E2E_PATH,
+      "scripts/e2e/session-runtime-context-docker.sh",
+    ]) {
+      const source = readFileSync(path, "utf8");
+      expect(source).not.toContain('-e "OPENCLAW_SELECTED_SHA=$OPENCLAW_SELECTED_SHA"');
+      expect(source).not.toContain('-e "OPENCLAW_TOOLING_SHA=$OPENCLAW_TOOLING_SHA"');
+    }
+    const liveGateway = readFileSync("scripts/test-live-gateway-models-docker.sh", "utf8");
+    expect(liveGateway).not.toContain("OPENCLAW_SELECTED_SHA");
+    expect(liveGateway).not.toContain("OPENCLAW_TOOLING_SHA");
+    expectTextToIncludeAll(liveGateway, [
+      'openclaw_resolve_frozen_live_cli_backend_package_mode "$ROOT_DIR"',
+      "OPENCLAW_FROZEN_TARGET_LIVE_CLI_BACKEND_PACKAGE_MODE=legacy",
+    ]);
+  });
 
   it.each([
     ["timeout", "OPENCLAW_OPENAI_CHAT_TOOLS_TIMEOUT_SECONDS", "180s"],
@@ -6807,6 +6943,15 @@ process.exit(73);
     expect(runner).not.toContain(
       'run_logged gateway-network-client timeout "$CLIENT_TIMEOUT" docker run --rm',
     );
+  });
+
+  it("uses the selected release's legacy gateway client only after frozen authorization", () => {
+    const runner = readFileSync(GATEWAY_NETWORK_DOCKER_E2E_PATH, "utf8");
+    expect(runner).toContain('[[ "$FROZEN_CONTEXT" == "1" ]]');
+    expect(runner).toContain("scripts/e2e/lib/gateway-network/client.mjs");
+    expect(runner).toContain('-v "$LEGACY_GATEWAY_LIB:/tmp/openclaw-selected-e2e-lib:ro"');
+    expect(runner).toContain("node /tmp/openclaw-selected-e2e-lib/gateway-network/client.mjs");
+    expect(runner).not.toContain("/tmp/openclaw-gateway-network-client.mjs");
   });
 
   it("proves gateway suspension across a same-container process restart", () => {
@@ -7738,6 +7883,19 @@ done
     expect(helper).not.toContain('require("node:readline")');
     expect(helper).not.toContain("fs.readFileSync");
     expect(helper).not.toContain('.split("\\n")');
+  });
+
+  it("accepts the image compatibility alias in installer E2E transcripts", () => {
+    const runner = readFileSync(INSTALL_E2E_RUNNER_PATH, "utf8");
+    const start = runner.indexOf("assert_session_used_tools() {");
+    const end = runner.indexOf("\nsession_jsonl_path()", start);
+    const helper = runner.slice(start, end);
+
+    expect(helper).toContain('spec.split("|").filter(Boolean)');
+    expect(helper).toContain("group.some((tool) => seen.has(tool))");
+    expect(runner).toContain(
+      'assert_session_used_tools "$profile" "$TURN4_SESSION_ID" "image|view_image" write',
+    );
   });
 
   it("exports SQLite-backed installer E2E sessions before scanning tools", () => {

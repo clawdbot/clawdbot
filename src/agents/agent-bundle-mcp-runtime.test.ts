@@ -3388,6 +3388,90 @@ process.on("SIGINT", shutdown);`,
     await manager.disposeAll();
   });
 
+  it("does not let run settlement disarm an ended session before late creation", async () => {
+    const sessionId = "session-ended-before-creation";
+    await retireSessionMcpRuntime({
+      sessionId,
+      reason: "session-end",
+      preserveActiveLeases: true,
+      retainAcrossReuse: true,
+    });
+    await retireSessionMcpRuntime({
+      sessionId,
+      reason: "embedded-run-end",
+      preserveActiveLeases: true,
+    });
+    try {
+      const runtime = await getOrCreateSessionMcpRuntime({
+        sessionId,
+        workspaceDir: "/workspace",
+        cfg: { mcp: { servers: {} } },
+      });
+      await completeDeferredSessionMcpRuntimeRetirement(runtime);
+      expect(testing.getCachedSessionIds()).not.toContain(sessionId);
+    } finally {
+      await retireSessionMcpRuntime({ sessionId, reason: "test-cleanup" });
+    }
+  });
+
+  it.each(["reset", "shutdown"] as const)(
+    "keeps an unleased stdio child alive until %s",
+    async (cleanup) => {
+      const tempDir = makeTempDir(tempDirs, "bundle-mcp-keep-alive-");
+      const serverPath = path.join(tempDir, "server.mjs");
+      const pidPath = path.join(tempDir, "server.pid");
+      await writeListToolsMcpServer({
+        filePath: serverPath,
+        logPath: path.join(tempDir, "server.log"),
+        pidPath,
+      });
+      const manager = createSessionMcpRuntimeManager({
+        enableIdleSweepTimer: false,
+        now: () => Date.now(),
+      });
+      const params: RuntimeParams = {
+        sessionId: "session-child-keep-alive",
+        workspaceDir: tempDir,
+        cfg: { mcp: { servers: { child: { command: process.execPath, args: [serverPath] } } } },
+      };
+      try {
+        const runtime = await manager.getOrCreate(params);
+        await runtime.getCatalog();
+        await runtime.callTool("child", "slow_tool", {});
+        await waitForFileText(pidPath, "", LIST_TOOLS_SERVER_LOG_TIMEOUT_MS);
+        const pid = Number.parseInt(await fs.readFile(pidPath, "utf8"), 10);
+        const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 86_400_000);
+        try {
+          expect(await manager.sweepIdleRuntimes()).toBe(0);
+          expect(manager.peekSession({ sessionId: params.sessionId })).toBe(runtime);
+          expect(() => process.kill(pid, 0)).not.toThrow();
+        } finally {
+          clock.mockRestore();
+        }
+        if (cleanup === "reset") {
+          await manager.disposeSession(params.sessionId);
+        } else {
+          await manager.disposeAll();
+        }
+        await waitForPredicate(
+          () => {
+            try {
+              process.kill(pid, 0);
+              return false;
+            } catch {
+              return true;
+            }
+          },
+          "keep-alive MCP child exit",
+          LIST_TOOLS_SERVER_LOG_TIMEOUT_MS,
+        );
+        expect(manager.listRuntimeKeys()).toEqual([]);
+      } finally {
+        await manager.disposeAll();
+      }
+    },
+  );
+
   it("keeps a real requester-scoped MCP transport alive during an idle sweep", async () => {
     const resolverRegistry = createMcpProofPluginRegistry();
     await withPluginRuntimeRegistryScope(resolverRegistry.registry, async () => {
@@ -3423,7 +3507,7 @@ process.on("SIGINT", shutdown);`,
       const params = makeRequesterParams(
         "session-real-requester-sweep",
         {
-          mcp: { servers: { "real-requester": declaredServer } },
+          mcp: { sessionIdleTtlMs: 600_000, servers: { "real-requester": declaredServer } },
         },
         "proof-requester",
       );
@@ -3543,7 +3627,7 @@ describe("requester-scoped MCP connection resolution", () => {
     ["full", 2],
     ["requester-only", 1],
   ] as const)(
-    "expires %s runtimes at ten idle minutes while preserving reuse and active leases",
+    "expires %s runtimes at the configured idle TTL while preserving reuse and active leases",
     async (entrypoint, expectedExpired) => {
       const resolverRegistry = createMcpProofPluginRegistry();
       await withPluginRuntimeRegistryScope(resolverRegistry.registry, async () => {
@@ -3564,6 +3648,7 @@ describe("requester-scoped MCP connection resolution", () => {
           ...(entrypoint === "static" ? {} : { requesterSenderId: "sender-a" }),
           cfg: {
             mcp: {
+              sessionIdleTtlMs: 1_200_000.9,
               servers: {
                 shared: { command: "true" },
                 ...(entrypoint === "static"
@@ -3579,12 +3664,12 @@ describe("requester-scoped MCP connection resolution", () => {
             : manager.getOrCreate(params);
         try {
           await getRuntime();
-          nowMs += 10 * 60 * 1000 - 1;
+          nowMs += 1_200_000 - 1;
           expect(await manager.sweepIdleRuntimes()).toBe(0);
 
           const reused = expectDefined(await getRuntime(), "admitted MCP runtime");
           expect(reused.lastUsedAt).toBe(nowMs);
-          nowMs += 10 * 60 * 1000 - 1;
+          nowMs += 1_200_000 - 1;
           expect(await manager.sweepIdleRuntimes()).toBe(0);
           const release = expectDefined(reused.acquireLease, "MCP runtime lease")();
           nowMs += 1;
@@ -3603,7 +3688,83 @@ describe("requester-scoped MCP connection resolution", () => {
     },
   );
 
-  it("sweeps admitted runtimes on the fixed idle timer and stops maintenance after disposal", async () => {
+  it.each([undefined, 0] as const)(
+    "keeps session runtimes alive with TTL %s without scheduling idle maintenance",
+    async (sessionIdleTtlMs) => {
+      vi.useFakeTimers();
+      const manager = createSessionMcpRuntimeManager();
+      const params: RuntimeParams = {
+        sessionId: "session-keep-alive",
+        workspaceDir: "/workspace",
+        cfg: { mcp: { sessionIdleTtlMs, servers: {} } },
+      };
+      try {
+        const runtime = await manager.getOrCreate(params);
+        await vi.advanceTimersByTimeAsync(86_400_000);
+        expect(manager.peekSession({ sessionId: params.sessionId })).toBe(runtime);
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        await manager.disposeAll();
+      }
+    },
+  );
+
+  it("changes idle policy on reuse and reload without replacing the runtime", async () => {
+    vi.useFakeTimers();
+    const manager = createSessionMcpRuntimeManager();
+    const params: RuntimeParams = {
+      sessionId: "session-policy",
+      workspaceDir: "/workspace",
+      cfg: { mcp: { servers: {} } },
+    };
+    try {
+      const runtime = await manager.getOrCreate(params);
+      params.cfg = { mcp: { sessionIdleTtlMs: 120_000, servers: {} } };
+      expect(await manager.getOrCreate(params)).toBe(runtime);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(manager.peekSession({ sessionId: params.sessionId })).toBe(runtime);
+      await manager.reloadConfig({ cfg: { mcp: { servers: {} } } });
+      // A turn prepared before publication must not restore its former idle policy.
+      expect(await manager.getOrCreate(params)).toBe(runtime);
+      expect(vi.getTimerCount()).toBe(0);
+      await vi.advanceTimersByTimeAsync(86_400_000);
+      expect(manager.peekSession({ sessionId: params.sessionId })).toBe(runtime);
+      await manager.reloadConfig({ cfg: { mcp: { sessionIdleTtlMs: 1_000, servers: {} } } });
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(manager.listRuntimeKeys()).toEqual([]);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      await manager.disposeAll();
+    }
+  });
+
+  it("keeps replacement capacity reserved when an old child's cleanup is uncertain", async () => {
+    const manager = createSessionMcpRuntimeManager({ enableIdleSweepTimer: false });
+    const params: RuntimeParams = {
+      sessionId: "uncertain-child",
+      workspaceDir: "/workspace",
+      cfg: { mcp: { servers: { child: { command: "true" } } } },
+    };
+    try {
+      const previous = await manager.getOrCreate(params);
+      previous.joinCleanup = async () => {
+        throw new Error("child cleanup uncertain");
+      };
+      await expect(
+        manager.getOrCreate({ ...params, workspaceDir: "/replacement" }),
+      ).rejects.toThrow("child cleanup uncertain");
+      for (let index = 0; index < 255; index += 1) {
+        await manager.getOrCreate({ ...params, sessionId: `other-${index}` });
+      }
+      await expect(manager.getOrCreate({ ...params, sessionId: "overflow" })).rejects.toThrow(
+        "live runtime limit (256)",
+      );
+    } finally {
+      await manager.disposeAll();
+    }
+  });
+
+  it("sweeps admitted runtimes only with an opt-in idle timer and stops maintenance after disposal", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(100_000);
     const now = vi.fn(() => Date.now());
@@ -3611,7 +3772,7 @@ describe("requester-scoped MCP connection resolution", () => {
     const params: RuntimeParams = {
       sessionId: "session-idle-timer",
       workspaceDir: "/workspace",
-      cfg: { mcp: { servers: {} } },
+      cfg: { mcp: { sessionIdleTtlMs: 600_000, servers: {} } },
     };
     try {
       await manager.getOrCreate(params);
@@ -4164,75 +4325,6 @@ describe("requester-scoped MCP connection resolution", () => {
       await manager.disposeAll();
     });
   });
-
-  it.each([
-    ["full", 3],
-    ["requester-only", 2],
-  ] as const)(
-    "evicts LRU idle requester runtimes past the per-session cap via %s materialization",
-    async (entrypoint, expectedRuntimeCount) => {
-      const resolverRegistry = createMcpProofPluginRegistry();
-      await withPluginRuntimeRegistryScope(resolverRegistry.registry, async () => {
-        const resolverApi = resolverRegistry.apiFor("test-plugin");
-        resolverApi.registerMcpServerConnectionResolver({
-          serverName: "user-mail",
-          resolve: async (ctx) => ({ url: `https://mcp.example.test/${ctx.requesterSenderId}` }),
-        });
-
-        const disposedSenders: string[] = [];
-        let syntheticLastUsedAt = 100_000;
-        const createRuntime: RuntimeFactory = (params) => {
-          const sender = params.requesterScope?.requesterSenderId;
-          // Distinct ascending lastUsedAt per runtime so LRU ordering is deterministic.
-          const lastUsedAt = (syntheticLastUsedAt += 1_000);
-          return {
-            ...makeManagedRuntime(params),
-            get lastUsedAt() {
-              return lastUsedAt;
-            },
-            markUsed: () => {},
-            dispose: async () => {
-              if (sender) {
-                disposedSenders.push(sender);
-              }
-            },
-          };
-        };
-        const manager = createSessionMcpRuntimeManager({
-          createRuntime,
-          // Pin the sweep clock near the synthetic lastUsedAt values so the idle
-          // TTL sweep never fires; this test exercises only the cap eviction.
-          now: () => 150_000,
-          maxIdleRequesterRuntimesPerSession: 2,
-        });
-        const cfg = {
-          mcp: { servers: { "user-mail": { transport: "streamable-http" } } },
-        };
-
-        for (const sender of ["sender-a", "sender-b", "sender-c"]) {
-          const runtimeParams = makeRequesterParams("session-cap", cfg as never, sender);
-          if (entrypoint === "full") {
-            await manager.getOrCreate(runtimeParams);
-          } else {
-            await manager.getOrCreateRequesterScoped(runtimeParams);
-          }
-        }
-
-        // sender-a is the least recently used zero-lease scoped runtime.
-        expect(disposedSenders).toEqual(["sender-a"]);
-        const runtimeKeys = manager.listRuntimeKeys();
-        expect(runtimeKeys).toHaveLength(expectedRuntimeCount);
-        expect(runtimeKeys.includes("session-cap")).toBe(entrypoint === "full");
-        expect(
-          runtimeKeys
-            .filter((key) => key.startsWith("{"))
-            .map((key) => (JSON.parse(key) as { requesterSenderId: string }).requesterSenderId),
-        ).toEqual(["sender-b", "sender-c"]);
-
-        await manager.disposeAll();
-      });
-    },
-  );
 
   it("re-merges the combined catalog after a part refreshes on tools/list_changed", async () => {
     const resolverRegistry = createMcpProofPluginRegistry();

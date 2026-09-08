@@ -3,6 +3,8 @@
  *
  * Builds lightweight channel plugin views from config, manifests, and setup metadata.
  */
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   sortUniqueStrings,
   uniqueStrings,
@@ -189,25 +191,25 @@ function resolveManifestChannelDefaultAccountId(cfg: OpenClawConfig, channelId: 
   });
 }
 
-function resolveManifestChannelAccountConfig(params: {
+function resolveManifestChannelAccount(params: {
   cfg: OpenClawConfig;
   channelId: string;
   accountId?: string | null;
-}): Record<string, unknown> {
+}): ReturnType<ManifestChannelPlugin["config"]["resolveAccount"]> {
   const channelConfig = getChannelConfigRecord(params.cfg, params.channelId);
-  const resolvedAccountId = normalizeAccountId(params.accountId);
-  const accounts = channelConfig.accounts;
-  if (accounts && typeof accounts === "object" && !Array.isArray(accounts)) {
-    const accountConfig = resolveNormalizedAccountEntry(
-      accounts as Record<string, unknown>,
-      resolvedAccountId,
-      normalizeManifestAccountConfigKey,
-    );
-    if (accountConfig && typeof accountConfig === "object" && !Array.isArray(accountConfig)) {
-      return accountConfig as Record<string, unknown>;
-    }
-  }
-  return channelConfig;
+  const accountId = normalizeAccountId(params.accountId);
+  const accounts = asOptionalRecord(channelConfig.accounts);
+  const config =
+    asOptionalRecord(
+      accounts
+        ? resolveNormalizedAccountEntry(accounts, accountId, normalizeManifestAccountConfigKey)
+        : undefined,
+    ) ?? channelConfig;
+  return {
+    accountId,
+    name: normalizeOptionalString(readOwnRecordValue(config, "name")),
+    config,
+  };
 }
 
 function buildManifestChannelPlugin(params: {
@@ -297,14 +299,8 @@ function createManifestChannelPlugin(params: {
     config: {
       listAccountIds: (cfg) => listManifestChannelAccountIds(cfg, params.channelId),
       defaultAccountId: (cfg) => resolveManifestChannelDefaultAccountId(cfg, params.channelId),
-      resolveAccount: (cfg, accountId) => ({
-        accountId: normalizeAccountId(accountId),
-        config: resolveManifestChannelAccountConfig({
-          cfg,
-          channelId: params.channelId,
-          accountId,
-        }),
-      }),
+      resolveAccount: (cfg, accountId) =>
+        resolveManifestChannelAccount({ cfg, channelId: params.channelId, accountId }),
       isEnabled: (account, cfg) =>
         getChannelConfigRecord(cfg, params.channelId).enabled !== false &&
         account.config.enabled !== false,

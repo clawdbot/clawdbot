@@ -98,6 +98,12 @@ OpenAI-SDK-style examples, but new config should use `baseUrl`.
 
     `--custom-base-url` and `--custom-model-id` are optional; omitting them uses the local default host and the `gemma4` suggested model.
 
+    A local model advertised as embedding-only cannot be selected as the chat
+    default. Setup reports an error and leaves the existing configuration intact;
+    reset preflight also rejects an explicitly selected embedding-only model or
+    an inventory advertised as entirely embedding-only. Models that support both
+    completion and embeddings remain eligible.
+
   </Tab>
 
   <Tab title="Manual setup">
@@ -1068,6 +1074,11 @@ For full setup and behavior, see [Ollama Web Search](/tools/ollama-search).
     `options.think`. Auto-discovered models whose `/api/show` reports a
     `thinking` capability expose `/think low`, `/think medium`, `/think high`,
     and `/think max`; non-thinking models expose only `/think off`.
+
+    When replaying an assistant message, native requests retain its available
+    reasoning in Ollama's separate `thinking` field alongside text and tool
+    calls. This lets tool follow-ups reuse reasoning retained by the session's
+    history policy without mixing it into visible answer text.
 
     ```bash
     openclaw agent --model ollama/gemma4 --thinking off

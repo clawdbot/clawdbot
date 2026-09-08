@@ -157,7 +157,6 @@ function retargetWorkshopProposal(
       skillFile: target.skillFile,
       source: "openclaw-workshop",
     },
-    updatedAt: new Date().toISOString(),
   };
 }
 

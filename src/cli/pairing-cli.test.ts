@@ -229,6 +229,14 @@ describe("pairing cli", () => {
     expect(listChannelPairingRequests).toHaveBeenCalledWith("telegram", process.env, "yy");
   });
 
+  it.each(["", "   "])("rejects an explicitly empty --account for list", async (account) => {
+    await expect(
+      runPairing(["pairing", "list", "--channel", "telegram", "--account", account]),
+    ).rejects.toThrow("--account must not be blank");
+
+    expect(listChannelPairingRequests).not.toHaveBeenCalled();
+  });
+
   it("normalizes channel aliases", async () => {
     listChannelPairingRequests.mockResolvedValueOnce([]);
 
@@ -294,8 +302,8 @@ describe("pairing cli", () => {
       const replaceCall = expectDefined<unknown[]>(
         replaceConfigFile.mock.calls.at(0),
         "config replace",
-      )[0] as { nextConfig?: { commands?: { ownerAllowFrom?: string[] } } } | undefined;
-      expect(replaceCall?.nextConfig?.commands?.ownerAllowFrom).toEqual(["telegram:123"]);
+      )[0] as { sourceConfig?: { commands?: { ownerAllowFrom?: string[] } } } | undefined;
+      expect(replaceCall?.sourceConfig?.commands?.ownerAllowFrom).toEqual(["telegram:123"]);
       expect(log.mock.calls).toEqual([
         [`${theme.success("Approved")} ${theme.muted("telegram")} sender ${theme.command("123")}.`],
         [
@@ -347,6 +355,16 @@ describe("pairing cli", () => {
       code: "ABCDEFGH",
       accountId: "yy",
     });
+  });
+
+  it.each(["", "   "])("rejects an explicitly empty --account for approve", async (account) => {
+    await expect(
+      runPairing(["pairing", "approve", "--channel", "telegram", "--account", account, "ABCDEFGH"]),
+    ).rejects.toThrow("--account must not be blank");
+
+    expect(approveChannelPairingCode).not.toHaveBeenCalled();
+    expect(readConfigFileSnapshotForWrite).not.toHaveBeenCalled();
+    expect(replaceConfigFile).not.toHaveBeenCalled();
   });
 
   it("defaults approve to the sole available channel when only code is provided", async () => {

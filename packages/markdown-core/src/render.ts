@@ -5,7 +5,6 @@ import {
   isAutoLinkedMarkdownLink,
   type MarkdownAnnotationSpan,
 } from "./ir-spans.js";
-// Markdown Core module implements render behavior.
 import type { MarkdownIR, MarkdownLinkSpan, MarkdownStyle, MarkdownStyleSpan } from "./ir.js";
 
 /** Marker pair used to wrap a styled Markdown span in the target renderer. */

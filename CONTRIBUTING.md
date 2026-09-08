@@ -52,6 +52,18 @@ pnpm's isolated linker, which keeps dependencies in `node_modules/.pnpm` and lin
 them into each workspace package. On supported macOS volumes, this also lets pnpm
 reuse whole-package APFS clones instead of importing every file separately.
 
+Give each source checkout its own physical dependency installation. Tooling does
+not automatically link a missing `node_modules` to another checkout. Existing
+borrowed installs can still serve direct Node tooling. Normal pnpm install checks
+the checkout-root `node_modules`, the explicitly configured root module directory,
+and their `.pnpm` directories before reconciliation, refusing borrowed links there.
+Preserve that donor and create an independently owned install instead of removing
+or reinstalling through its link. Explicit hydrated module directories remain
+supported when the workspace link points to the configured physical directory.
+This admission check runs through `pnpm:devPreinstall`; `--ignore-scripts` skips
+it. The check does not lock paths against concurrent replacement, inspect every
+workspace package's dependencies, or validate every alternate pnpm directory setting.
+
 When updating a checkout that used the hoisted layout, stop builds, tests, and
 watchers using that checkout's dependencies before running the install command.
 Do not change the linker while other jobs are using the same `node_modules`.
@@ -60,8 +72,8 @@ must declare their own development dependencies rather than rely on hoisting.
 
 ## Before You PR
 
-- Use **Node 24.15+** for source checkouts when possible. OpenClaw also supports Node 22.22.3+ and Node 25.9+, but Node 23, Node 22 before 22.22.3, and Node 24 before 24.15 are below the repository engine floor and can fail before `pnpm` commands run. See [Node install guidance](docs/install/node.md) if your local version is too old.
-- Run the Vitest 5 suite on Node 22.22.3+, Node 24.15+, or Node 26+. Node 25 remains supported for the packaged OpenClaw runtime, but is outside Vitest 5's declared engine range.
+- Use **Node 24.16+ LTS** or **Node 26.1+** for source checkouts. Older Node releases can truncate SQLite TEXT reads; Node 22, 23, and 25 are unsupported. See [Node install guidance](docs/install/node.md) if your local version is too old.
+- Run the Vitest 5 suite on Node 24.16+ or Node 26.1+, matching the packaged runtime floor.
 - Test locally with your OpenClaw instance
 - Before implementing a material SQLite or persistent-store change, open or link a maintainer discussion and get the design accepted. See the [database schema review checkpoint](docs/reference/database-schemas.md#review-checkpoint-for-material-changes).
 - External PRs must describe the user, product, or operational problem in **What Problem This Solves** and include useful validation in **Evidence**. Focused tests, CI results, screenshots, recordings, terminal output, live observations, redacted logs, and artifact links all count. Reviewers will inspect the code, tests, and CI; use the PR body to explain intent and make validation easy to understand.

@@ -169,7 +169,7 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
     - **Global default + current session**: Owner/admin `/model <model> -g` (or `--global`) updates `agents.defaults.model`.
 
     Bare `/model <model>` keeps owner/admin configured-default persistence unless
-    you set the optional [model selection scope](/gateway/config-agents#agentsdefaultsmodelselectionscope).
+    you set the optional [model selection scope](/gateway/config-agents/models#agentsdefaultsmodelselectionscope).
 
     Example - same model, different per-agent settings:
 
@@ -421,7 +421,7 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
   <Accordion title="Can I keep DMs personal but make groups public/sandboxed with one agent?">
     Yes, if private traffic is **DMs** and public traffic is **groups**. Set `agents.defaults.sandbox.mode: "non-main"` so group/channel sessions (non-main keys) run in the configured sandbox backend while the main DM session stays on-host. Select `backend: "docker"` for Docker or `backend: "podman"` for Podman. Restrict tools available in sandboxed sessions via `tools.sandbox.tools`.
 
-    Setup walkthrough: [Groups: personal DMs + public groups](/channels/groups#pattern-personal-dms-public-groups-single-agent). Key reference: [Gateway configuration](/gateway/config-agents#agentsdefaultssandbox).
+    Setup walkthrough: [Groups: personal DMs + public groups](/channels/groups#pattern-personal-dms-public-groups-single-agent). Key reference: [Gateway configuration](/gateway/config-agents/sandbox#agentsdefaultssandbox).
 
   </Accordion>
 

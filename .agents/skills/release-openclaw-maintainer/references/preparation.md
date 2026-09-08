@@ -71,23 +71,29 @@ For records whose `warningStarts` or `removeAfter` falls within seven days of
 release, include Upcoming deprecations with code, date, replacement and
 `docsPath` (or `/plugins/compatibility`).
 
-Freeze the product-complete tree, including approved versions and fixes but no
-new release changelog, as **Code SHA**. After this point admit only confirmed
+Freeze the product-complete tree, including approved versions, fixes and
+complete release notes, as **Code SHA**. If the notes are final, this is also
+**Release SHA**. After this point admit only confirmed
 product, package/provenance, security, or publication-blocking defects; defer
-adjacent improvements. Validate that Code SHA before changelog work.
+adjacent improvements. Validate that exact source and its publication bytes.
 
 ## Changelog and release notes
 
 Use `$openclaw-changelog-update` for source-history inventory, human credit,
-editorial grouping, renderer limits, and verification. Generate once after
-Code SHA passes; same-candidate retries reuse it. Beta notes use the stable-base
+editorial grouping, renderer limits, and verification. Generate the complete
+history manifest and notes during preparation; editorial work may overlap
+Code validation. Refresh them for actual source changes, not tooling retries.
+Beta notes use the stable-base
 `## YYYY.M.PATCH` section, with Highlights, Changes and Fixes. Canonical PR
 provenance follows current `origin/main`; retain a release-branch PR only while
 its change has not been forward-ported. Do not change root README as routine
 release prep or prefill a future changelog section.
 
-Commit only the release changelog to create **Release SHA**. Its complete diff
-from Code SHA must be exactly `CHANGELOG.md`; otherwise reenter product
-validation. Use the canonical release-note renderer and verifier before
+When final notes were already included in the qualified Code SHA, retain that
+same commit as Release SHA. If notes change afterward, commit only the release
+changelog and optionally reuse Code evidence: the complete Code-to-Release
+diff must be exactly `CHANGELOG.md`, with fresh qualification of the changed
+package bytes. Any other delta reenters product validation. Use the canonical
+release-note renderer and verifier before
 publication and closeout. The publish workflow owns GitHub page finalization
 only after postpublish evidence succeeds.

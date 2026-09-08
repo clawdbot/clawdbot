@@ -350,28 +350,37 @@ function parseCleanupPaths(value: string): AgentDeletionJournalCleanupPath[] {
   return parsed;
 }
 
+/** Read the journal through an already validated shared-state connection. */
+export function readAgentDeletionJournalInDatabase(
+  database: OpenClawStateDatabase,
+  agentId: string,
+): AgentDeletionJournalEntry | undefined {
+  ensureAgentDeletionJournalSchema(database.db);
+  const db = getNodeSqliteKysely<AgentDeletionDatabase>(database.db);
+  const row = executeSqliteQueryTakeFirstSync(
+    database.db,
+    db
+      .selectFrom("agent_deletion_journal")
+      .selectAll()
+      .where("agent_id", "=", normalizeAgentId(agentId)),
+  );
+  return row ? fromRow(row) : undefined;
+}
+
 export function readAgentDeletionJournal(
   agentId: string,
   options: OpenClawStateDatabaseOptions = {},
 ): AgentDeletionJournalEntry | undefined {
-  const id = normalizeAgentId(agentId);
   const databasePath = path.resolve(
     options.path ?? resolveOpenClawStateSqlitePath(options.env ?? process.env),
   );
   if (!existsSync(databasePath)) {
     return undefined;
   }
-  let entry: AgentDeletionJournalEntry | undefined;
-  runOpenClawStateWriteTransaction((database) => {
-    ensureAgentDeletionJournalSchema(database.db);
-    const db = getNodeSqliteKysely<AgentDeletionDatabase>(database.db);
-    const row = executeSqliteQueryTakeFirstSync(
-      database.db,
-      db.selectFrom("agent_deletion_journal").selectAll().where("agent_id", "=", id),
-    );
-    entry = row ? fromRow(row) : undefined;
-  }, options);
-  return entry;
+  return runOpenClawStateWriteTransaction(
+    (database) => readAgentDeletionJournalInDatabase(database, agentId),
+    options,
+  );
 }
 
 export function beginAgentDeletionJournal(
@@ -519,17 +528,6 @@ export function updateAgentDeletionJournalDatabasePaths(
     updated = Number(result.numAffectedRows ?? 0) > 0;
   }, options);
   return updated;
-}
-
-export function completeAgentDeletionJournal(
-  agentId: string,
-  operationId: string,
-  options: OpenClawStateDatabaseOptions = {},
-): boolean {
-  return runOpenClawStateWriteTransaction(
-    (database) => completeAgentDeletionJournalInDatabase(database, agentId, operationId),
-    options,
-  );
 }
 
 /** Complete a deletion journal inside a caller-owned shared-state transaction. */

@@ -30,6 +30,11 @@ import {
   withPluginCache,
 } from "./plugin-cache.js";
 import { resolvePluginControlPlaneFingerprint } from "./plugin-control-plane-context.js";
+import {
+  listPluginManifestContributionIds,
+  PLUGIN_METADATA_CONTRIBUTION_KEYS,
+  type PluginMetadataContributionKey,
+} from "./plugin-metadata-contributions.js";
 import { resolvePluginMetadataEnvFingerprint } from "./plugin-metadata-env.js";
 import { buildPluginMetadataProviderFacts } from "./plugin-metadata-provider-facts.js";
 import { registerPluginMetadataSnapshotReaders } from "./plugin-metadata-snapshot-readers.js";
@@ -43,6 +48,7 @@ import type {
 import { createPluginRegistryIdNormalizer } from "./plugin-registry-id-normalizer.js";
 import { loadPluginRegistrySnapshotWithMetadata } from "./plugin-registry-snapshot.js";
 import { normalizePluginIdScope, serializePluginIdScope } from "./plugin-scope.js";
+import { buildDeclaredProviderOwnerIndex } from "./provider-owner-index.js";
 
 const MAX_PLUGIN_METADATA_PROJECTIONS = 64;
 export type {
@@ -179,33 +185,29 @@ function appendOwner(owners: Map<string, string[]>, ownedId: string, pluginId: s
   owners.set(ownedId, [pluginId]);
 }
 
-function freezeOwnerMap(owners: Map<string, string[]>): ReadonlyMap<string, readonly string[]> {
-  // These maps and arrays are private until this transfer to the snapshot.
-  owners.forEach((pluginIds) => Object.freeze(pluginIds));
-  return owners;
-}
-
 function buildPluginMetadataOwnerMaps(
   plugins: readonly PluginManifestRecord[],
 ): PluginMetadataSnapshotOwnerMaps {
-  const channels = new Map<string, string[]>();
-  const channelConfigs = new Map<string, string[]>();
-  const providers = new Map<string, string[]>();
-  const modelCatalogProviders = new Map<string, string[]>();
-  const cliBackends = new Map<string, string[]>();
-  const setupProviders = new Map<string, string[]>();
-  const commandAliases = new Map<string, string[]>();
-  const contracts = new Map<string, string[]>();
+  const owners: Record<PluginMetadataContributionKey, Map<string, string[]>> = {
+    channels: new Map(),
+    channelConfigs: new Map(),
+    providers: new Map(),
+    modelCatalogProviders: new Map(),
+    cliBackends: new Map(),
+    setupProviders: new Map(),
+    commandAliases: new Map(),
+    contracts: new Map(),
+  };
 
   for (const plugin of plugins) {
-    for (const channelId of plugin.channels ?? []) {
-      appendOwner(channels, channelId, plugin.id);
-    }
-    for (const channelId of Object.keys(plugin.channelConfigs ?? {})) {
-      appendOwner(channelConfigs, channelId, plugin.id);
-    }
-    for (const providerId of plugin.providers ?? []) {
-      appendOwner(providers, providerId, plugin.id);
+    for (const contribution of PLUGIN_METADATA_CONTRIBUTION_KEYS) {
+      for (const id of listPluginManifestContributionIds(plugin, contribution)) {
+        appendOwner(
+          owners[contribution],
+          contribution === "cliBackends" ? normalizeProviderId(id) : id,
+          plugin.id,
+        );
+      }
     }
     for (const [rawAlias, target] of Object.entries(plugin.providerAuthAliases ?? {})) {
       const alias = normalizeProviderId(rawAlias);
@@ -217,44 +219,27 @@ function buildPluginMetadataOwnerMaps(
           (providerId) => normalizeProviderId(providerId) === targetProvider,
         )
       ) {
-        appendOwner(providers, alias, plugin.id);
-      }
-    }
-    for (const providerId of Object.keys(plugin.modelCatalog?.providers ?? {})) {
-      appendOwner(modelCatalogProviders, providerId, plugin.id);
-    }
-    for (const providerId of Object.keys(plugin.modelCatalog?.aliases ?? {})) {
-      appendOwner(modelCatalogProviders, providerId, plugin.id);
-    }
-    for (const cliBackendId of plugin.cliBackends ?? []) {
-      appendOwner(cliBackends, normalizeProviderId(cliBackendId), plugin.id);
-    }
-    for (const cliBackendId of plugin.setup?.cliBackends ?? []) {
-      appendOwner(cliBackends, normalizeProviderId(cliBackendId), plugin.id);
-    }
-    for (const setupProvider of plugin.setup?.providers ?? []) {
-      appendOwner(setupProviders, setupProvider.id, plugin.id);
-    }
-    for (const commandAlias of plugin.commandAliases ?? []) {
-      appendOwner(commandAliases, commandAlias.name, plugin.id);
-    }
-    for (const [contract, values] of Object.entries(plugin.contracts ?? {})) {
-      if (Array.isArray(values) && values.length > 0) {
-        appendOwner(contracts, contract, plugin.id);
+        appendOwner(owners.providers, alias, plugin.id);
       }
     }
   }
 
+  // These maps and arrays are private until this transfer to the snapshot.
+  for (const map of Object.values(owners)) {
+    map.forEach((pluginIds) => Object.freeze(pluginIds));
+  }
+  return { ...owners, ...buildPluginMetadataProviderFacts(plugins) };
+}
+
+function buildPluginMetadataManifestFacts(manifestRegistry: PluginManifestRegistry) {
+  const plugins = manifestRegistry.plugins;
   return {
-    channels: freezeOwnerMap(channels),
-    channelConfigs: freezeOwnerMap(channelConfigs),
-    providers: freezeOwnerMap(providers),
-    modelCatalogProviders: freezeOwnerMap(modelCatalogProviders),
-    cliBackends: freezeOwnerMap(cliBackends),
-    setupProviders: freezeOwnerMap(setupProviders),
-    commandAliases: freezeOwnerMap(commandAliases),
-    contracts: freezeOwnerMap(contracts),
-    ...buildPluginMetadataProviderFacts(plugins),
+    manifestRegistry,
+    plugins,
+    diagnostics: manifestRegistry.diagnostics,
+    byPluginId: new Map(plugins.map((plugin) => [plugin.id, plugin])),
+    owners: buildPluginMetadataOwnerMaps(plugins),
+    declaredProviderOwners: buildDeclaredProviderOwnerIndex(plugins),
   };
 }
 
@@ -268,23 +253,23 @@ export function listPluginOriginsFromMetadataSnapshot(
 export function rebasePluginMetadataSnapshotManifestRegistry(
   snapshot: Omit<
     PluginMetadataSnapshot,
-    "manifestRegistry" | "plugins" | "diagnostics" | "byPluginId" | "owners"
+    | "manifestRegistry"
+    | "plugins"
+    | "diagnostics"
+    | "byPluginId"
+    | "owners"
+    | "declaredProviderOwners"
   >,
   manifestRegistry: PluginManifestRegistry,
 ): PluginMetadataSnapshot {
-  const plugins = manifestRegistry.plugins;
   const rebased = {
     ...snapshot,
-    manifestRegistry,
-    plugins,
-    diagnostics: manifestRegistry.diagnostics,
-    byPluginId: new Map(plugins.map((plugin) => [plugin.id, plugin])),
+    ...buildPluginMetadataManifestFacts(manifestRegistry),
     normalizePluginId: snapshot.index
       ? createPluginRegistryIdNormalizer(snapshot.index, { manifestRegistry })
       : snapshot.normalizePluginId,
-    owners: buildPluginMetadataOwnerMaps(plugins),
     ...(snapshot.metrics
-      ? { metrics: { ...snapshot.metrics, manifestPluginCount: plugins.length } }
+      ? { metrics: { ...snapshot.metrics, manifestPluginCount: manifestRegistry.plugins.length } }
       : {}),
   };
   // Rebuilt views retain the original generation even when consumed in another scope.
@@ -590,9 +575,8 @@ function loadPluginMetadataSnapshotImpl(
     includeDisabled: true,
   });
   const manifestRegistryMs = performance.now() - manifestStartedAt;
-  const byPluginId = new Map(manifestRegistry.plugins.map((plugin) => [plugin.id, plugin]));
   const ownerMapsStartedAt = performance.now();
-  const owners = buildPluginMetadataOwnerMaps(manifestRegistry.plugins);
+  const manifestFacts = buildPluginMetadataManifestFacts(manifestRegistry);
   const ownerMapsMs = performance.now() - ownerMapsStartedAt;
   const totalMs = performance.now() - totalStartedAt;
 
@@ -606,15 +590,11 @@ function loadPluginMetadataSnapshotImpl(
       policyHash: index.policyHash,
       workspaceDir: params.workspaceDir,
     }),
-    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+    workspaceDir: params.workspaceDir,
     index,
     registryIndex: index,
     registryDiagnostics: registryResult.diagnostics,
-    manifestRegistry,
-    plugins: manifestRegistry.plugins,
-    diagnostics: manifestRegistry.diagnostics,
-    byPluginId,
-    owners,
+    ...manifestFacts,
     metrics: {
       registrySnapshotMs,
       manifestRegistryMs,

@@ -24,9 +24,16 @@ import { t } from "../../i18n/index.ts";
 import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
 import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { projectPresencePayload } from "../../lib/presence-users.ts";
+import { readSessionChangedEvent } from "../../lib/sessions/reconcile.ts";
+import {
+  isUiGlobalScopeConfigured,
+  resolveUiConfiguredMainKey,
+  resolveUiDefaultAgentId,
+} from "../../lib/sessions/session-key.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { StreamAutoFollowController } from "../../lit/stream-auto-follow-controller.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
+import { renderCurrentWork } from "./current-work-view.ts";
 import type { LiveActivity } from "./live-activity.ts";
 import {
   activityRunInspectorSearch,
@@ -94,6 +101,7 @@ class ActivityPage extends OpenClawLightDomElement {
   private liveActivitySource: LiveActivity | null = null;
   private liveActivityRevision = -1;
   private readonly sessionActivity = new SessionActivityController(this);
+  private sessionActivityRevision = -1;
   private inspectorAbort: AbortController | null = null;
   private inspectorClient: GatewayBrowserClient | null = null;
   private inspectorEpoch = 0;
@@ -104,6 +112,10 @@ class ActivityPage extends OpenClawLightDomElement {
     isEnabled: () => this.autoFollow,
   });
   private readonly subscriptions = new SubscriptionsController(this)
+    .watch(
+      () => this.context?.agents,
+      (agents, notify) => agents.subscribe(notify),
+    )
     .watch(
       () => this.context?.liveActivity,
       (activity, notify) => activity.subscribe(notify),
@@ -143,13 +155,13 @@ class ActivityPage extends OpenClawLightDomElement {
         this.routeLocation.search,
         activityPersonFromPath(this.routeLocation.pathname, this.context?.basePath),
       );
+      this.syncSessionActivity();
     }
   }
 
   override updated(changed: PropertyValues) {
     if (changed.has("routeLocation")) {
       this.bindInspectorRoute();
-      this.syncSessionActivity();
     }
     const canonical = this.sessionActivity.canonicalLocation(
       this.routeLocation,
@@ -179,6 +191,10 @@ class ActivityPage extends OpenClawLightDomElement {
     snapshot: ApplicationGatewaySnapshot,
     sourceChanged: boolean,
   ) {
+    if (sourceChanged || gateway.eventLogRevision !== this.sessionActivityRevision) {
+      this.sessionActivityRevision = gateway.eventLogRevision;
+      this.sessionActivity.load(null, null);
+    }
     if (sourceChanged || snapshot.client !== this.presenceClient) {
       this.presenceClient = snapshot.client;
       const presence =
@@ -195,7 +211,11 @@ class ActivityPage extends OpenClawLightDomElement {
     const snapshot = this.context?.gateway.snapshot;
     this.sessionActivity.load(
       snapshot?.phase === "connected" ? snapshot.client : null,
-      this.routeData.mode === "sessions" ? this.routeData.filters : null,
+      this.routeData.mode === "sessions"
+        ? this.routeData.filters
+        : this.routeData.mode === "live"
+          ? "current"
+          : null,
       reason,
     );
   }
@@ -484,8 +504,14 @@ class ActivityPage extends OpenClawLightDomElement {
     if (this.context.gateway !== gateway) {
       return;
     }
-    if (event.event === "sessions.changed") {
-      this.sessionActivity.invalidate();
+    const change =
+      event.event === "session.message" ? readSessionChangedEvent(event.payload) : null;
+    const terminalMessage =
+      change &&
+      (change.hasActiveRun === false ||
+        (change.status !== null && change.status !== "running" && change.status !== "queued"));
+    if (event.event === "sessions.changed" || (this.routeData.mode === "live" && terminalMessage)) {
+      this.sessionActivity.invalidate(event.payload);
     }
     if (event.event === "presence") {
       const presence = readPresenceEntries(event.payload);
@@ -553,7 +579,24 @@ class ActivityPage extends OpenClawLightDomElement {
             this.syncRunInspector(this.context.gateway, this.context.gateway.snapshot, true),
         })}`;
     }
+    const sessionHost = {
+      agentsList: this.context.agents.state.agentsList,
+      hello: this.context.gateway.snapshot.hello,
+    };
     return html`<div id="activity-live-panel">
+      ${renderCurrentWork({
+        basePath: this.context.basePath,
+        fallbackAgentId: resolveUiDefaultAgentId(sessionHost),
+        mainKey: resolveUiConfiguredMainKey(sessionHost),
+        globalScope: isUiGlobalScopeConfigured(sessionHost),
+        navigate: this.context.navigate,
+        connected: this.context.gateway.snapshot.phase === "connected",
+        result: this.sessionActivity.result,
+        loading: this.sessionActivity.loading,
+        incomplete: this.sessionActivity.incomplete,
+        error: this.sessionActivity.error,
+        onRetry: () => this.syncSessionActivity("retry"),
+      })}
       ${renderActivity({
         basePath: this.context.basePath,
         entries: this.entries,

@@ -7,7 +7,9 @@ import {
 import { createDeferredCore } from "../../shared/deferred.js";
 import { coordinateWorkerPlacementDispatch } from "./placement-dispatch-coordinator.js";
 import {
+  ACTIVE_PLACEMENT,
   admittedRecovery,
+  createCoordinatorTestService,
   MOVE_REQUEST,
   preparedReclaim,
   REQUEST,
@@ -511,22 +513,25 @@ describe("worker placement dispatch coordinator", () => {
     expect(dispatch).toHaveBeenCalledOnce();
   });
 
-  it("serializes reclaim behind an in-flight dispatch", async () => {
+  it("waits for same-session preparation before reclaim", async () => {
     const dispatchStarted = createDeferredCore();
     const releaseDispatch = createDeferredCore();
     const dispatch = vi.fn(async () => {
       dispatchStarted.resolve();
       await releaseDispatch.promise;
-      return { state: "active" };
+      return ACTIVE_PLACEMENT;
     });
-    const reclaim = vi.fn().mockResolvedValue({ state: "reclaimed" });
-    const service = {
+    const reclaim = vi.fn(async () => ({ ...ACTIVE_PLACEMENT, state: "reclaimed" as const }));
+    const service = createCoordinatorTestService({
       dispatch,
-      forceDestroyEnvironment: vi.fn(),
-      reclaim: preparedReclaim(reclaim),
-      reconcile: vi.fn(),
-      reconcileActive: vi.fn(),
-    } as unknown as DispatchService;
+      reclaim: async (_request, _authorize, _beforeDrain, serialize, pendingOperations) => {
+        await pendingOperations?.settled;
+        if (!serialize) {
+          throw new Error("Reclaim fixture requires the placement fence");
+        }
+        return await serialize(reclaim);
+      },
+    });
     const coordinated = coordinateWorkerPlacementDispatch(service, (_request, run) => run());
 
     const dispatching = coordinated.dispatch(REQUEST);
@@ -537,10 +542,13 @@ describe("worker placement dispatch coordinator", () => {
       agentId: REQUEST.agentId,
     });
 
-    expect(reclaim).not.toHaveBeenCalled();
-    releaseDispatch.resolve();
-    await dispatching;
-    await reclaiming;
+    try {
+      await setImmediatePromise();
+      expect(reclaim).not.toHaveBeenCalled();
+    } finally {
+      releaseDispatch.resolve();
+      await Promise.all([dispatching, reclaiming]);
+    }
     expect(reclaim).toHaveBeenCalledOnce();
   });
 

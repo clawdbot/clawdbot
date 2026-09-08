@@ -1,6 +1,7 @@
 /**
  * Builds runtime context prompt fragments and custom session messages.
  */
+import type { Context, UserMessage } from "../../../llm/types.js";
 import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
@@ -130,4 +131,53 @@ export function buildRuntimeContextCustomMessage(
     },
     timestamp: Date.now(),
   };
+}
+
+/** Project per-request instructions into the transient carrier without changing history. */
+export function prependRuntimeContextForModel(
+  messages: Context["messages"],
+  runtimeContext: string,
+): Context["messages"] {
+  if (!runtimeContext.trim()) {
+    return messages;
+  }
+  const carrierIndex = messages.findIndex(
+    (message) => message.role === "user" && message.runtimeContextCarrier === true,
+  );
+  const carrier = messages[carrierIndex];
+  const prepend = (text: string) =>
+    text.startsWith(`${INTERNAL_RUNTIME_CONTEXT_BEGIN}\n`)
+      ? `${INTERNAL_RUNTIME_CONTEXT_BEGIN}\n${runtimeContext}\n\n${text.slice(INTERNAL_RUNTIME_CONTEXT_BEGIN.length + 1)}`
+      : buildRuntimeContextMessageContent({
+          runtimeContext: [runtimeContext, text].filter(Boolean).join("\n\n"),
+          kind: "next-turn",
+        });
+  if (carrier?.role !== "user") {
+    return [
+      ...messages,
+      {
+        role: "user",
+        content: prepend(""),
+        runtimeContextCarrier: true,
+        timestamp: messages.at(-1)?.timestamp ?? 0,
+      },
+    ];
+  }
+  const content = carrier.content;
+  const firstTextIndex =
+    typeof content === "string" ? -1 : content.findIndex((part) => part.type === "text");
+  const updated: UserMessage = {
+    ...carrier,
+    content:
+      typeof content === "string"
+        ? prepend(content)
+        : firstTextIndex < 0
+          ? [{ type: "text", text: prepend("") }, ...content]
+          : content.map((part, index) =>
+              index === firstTextIndex && part.type === "text"
+                ? Object.assign({}, part, { text: prepend(part.text) })
+                : part,
+            ),
+  };
+  return messages.map((message, index) => (index === carrierIndex ? updated : message));
 }

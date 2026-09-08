@@ -5,6 +5,10 @@ import {
   requestHeartbeatAndWait,
   setHeartbeatWakeHandler,
 } from "./heartbeat-wake.js";
+import {
+  requestSessionEventWakeAndWait,
+  setSessionEventWakeHandler,
+} from "./session-event-wake.js";
 
 describe("heartbeat wake settlement", () => {
   let disposeHandler: (() => void) | undefined;
@@ -27,6 +31,31 @@ describe("heartbeat wake settlement", () => {
   function setHandler(handler: Parameters<typeof setHeartbeatWakeHandler>[0]) {
     disposeHandler = setHeartbeatWakeHandler(handler);
   }
+
+  it("shares one turn between the public heartbeat and session wake entry points", async () => {
+    vi.useFakeTimers();
+    const handler = vi.fn().mockResolvedValue({ status: "ran", durationMs: 7 });
+    const dispose = setSessionEventWakeHandler(handler);
+    const wake = {
+      source: "cron" as const,
+      intent: "event" as const,
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      coalesceMs: 100,
+    };
+    const settled = vi.fn();
+    try {
+      void requestHeartbeatAndWait(wake).then(settled);
+      void requestSessionEventWakeAndWait(wake).then(settled);
+      await vi.advanceTimersByTimeAsync(100);
+      expect(handler).toHaveBeenCalledOnce();
+      expect(settled).toHaveBeenCalledTimes(2);
+      expect(settled).toHaveBeenNthCalledWith(1, { status: "ran", durationMs: 7 });
+      expect(settled).toHaveBeenNthCalledWith(2, { status: "ran", durationMs: 7 });
+    } finally {
+      dispose();
+    }
+  });
 
   it("settles every caller represented by one coalesced wake", async () => {
     vi.useFakeTimers();

@@ -278,6 +278,8 @@ the snapshot is being built. Reconcile those events with the response and issue
 a trailing `sessions.list` refresh when needed, including when an event only
 invalidates the cached list. Reconnects require a new subscription and snapshot.
 
+Both methods accept `activeOnly: true` to select currently running or queued sessions before pagination. Activity comes from the live runtime owners, not a stored status flag. Ordinary listing behavior is unchanged when the option is omitted or false. Active-only results include each visible agent-owned `global` and `unknown` session with its raw key and captured `agentId`; callers identify rows by agent, key, and `sessionId` together. Literal `agent:<id>:global` and `agent:<id>:unknown` sessions remain different rows. Active-only raw sentinel rows omit the optional `childSessions` and `hasActiveSubagentRun` fields; use `hasActiveRun` for direct activity. Normal permissions, archive/inclusion filters, and page limits still apply. Sessionless/internal runs are outside the session index.
+
 Both methods accept `ownerFirst: true` to prepend up to 60 matching viewer-owned
 rows (or `limit`, when smaller) to the normal first page, deduplicated by session key. This applies only
 when `offset` is zero or omitted; later pages use normal pagination. Owned rows

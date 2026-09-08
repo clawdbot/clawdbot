@@ -1,5 +1,6 @@
 import { formatErrorMessage } from "../infra/errors.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import { findStartupMaintenanceRequiredError } from "../infra/startup-maintenance-required.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 // Stores config health fingerprints in shared SQLite state.
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
@@ -155,7 +156,10 @@ export function writeConfigHealthStateToStore(
     );
     loggedHealthWriteFailures.delete(databasePath);
   } catch (error) {
-    if (error instanceof OpenClawStateOwnershipError) {
+    if (
+      error instanceof OpenClawStateOwnershipError ||
+      findStartupMaintenanceRequiredError(error)
+    ) {
       throw error;
     }
     const message = formatErrorMessage(error);

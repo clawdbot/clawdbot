@@ -1,20 +1,15 @@
-// Runs the complete lint pipeline after preparing a linked-worktree toolchain.
+// Runs the complete lint pipeline with the selected installed toolchain.
 import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { runWithFailedTrailer } from "./lib/failed-trailer.mts";
-import {
-  ensureRepoToolNodeModulesLink,
-  resolveRepoToolBinPath,
-} from "./lib/local-check-runtime.mts";
+import { resolveRepoToolBinPath } from "./lib/local-check-runtime.mts";
 import { runManagedCommand } from "./lib/managed-child-process.mts";
 import { main as runOxlintShards } from "./run-oxlint-shards.mts";
 import { runStylelint } from "./run-stylelint.mts";
 
 await runWithFailedTrailer("lint", async () => {
-  const oxlintPath = resolveRepoToolBinPath("oxlint");
   const tsxPath = resolveRepoToolBinPath("tsx");
-  ensureRepoToolNodeModulesLink(oxlintPath);
   const tsxImportSpecifier = pathToFileURL(createRequire(tsxPath).resolve("tsx")).href;
 
   // Invoke directly: pnpm through a linked node_modules can reconcile its owner's install.

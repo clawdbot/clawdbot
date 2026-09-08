@@ -1,10 +1,10 @@
 import path from "node:path";
+import { persistTranscriptSummary } from "./capture-summary.js";
 import {
   activeSessions,
   finalizeTranscriptCapture,
   isTranscriptSelectionCurrent,
   isTranscriptSessionStarting,
-  persistTranscriptSummary,
   revokeTranscriptStartRetries,
   stopTranscriptProviderCapture,
   type TranscriptCaptureSelection,

@@ -109,16 +109,20 @@ described [above](/start/wizard-cli-reference#what-the-wizard-does).
 
   </Step>
   <Step title="Gateway">
-    - Prompts for port, bind, auth mode, and Tailscale exposure.
-    - Recommended: keep token auth enabled even for loopback so local WS clients must authenticate.
-    - In token mode, interactive setup offers:
-      - **Generate/store plaintext token** (default)
+    - Prompts for port, bind, secret storage, and Tailscale exposure.
+    - Generates a Gateway secret by default in token mode, without asking you
+      to choose token or password. Existing password-mode configs are preserved.
+      Use `--gateway-auth password` or `--gateway-password <value>` to choose
+      a password explicitly. Tailscale Funnel still requires password mode.
+    - Keep shared-secret auth enabled even for loopback so local WS clients must authenticate.
+    - For the generated secret, interactive setup offers:
+      - **Generate/store plaintext secret** (default)
       - **Use SecretRef** (opt-in)
       - QuickStart reuses an existing `gateway.auth.token` SecretRef from an
         `env`, `file`, `exec`, or `store` provider for its probe and dashboard
         handoff. An unresolved configured ref stops onboarding with remediation
         guidance instead of silently weakening Gateway auth.
-    - In password mode, interactive setup also supports plaintext or SecretRef storage.
+    - Explicit or existing password mode also supports plaintext or SecretRef storage.
     - Non-interactive token SecretRef path: `--gateway-token-ref-env <ENV_VAR>`.
       - Requires a non-empty env var in the onboarding process environment.
       - Cannot be combined with `--gateway-token`.
@@ -198,7 +202,8 @@ not install or modify anything on the remote host.
 What you set:
 
 - Remote gateway URL (`ws://...` or `wss://...`)
-- Token, password, or no auth, matching the remote Gateway's configuration
+- One Gateway secret (token or password), or explicit confirmation to connect
+  without a shared secret
 
 <Steps>
   <Step title="Discovery (optional)">
@@ -215,8 +220,12 @@ What you set:
       command to run first, then connects to the local tunnel endpoint.
   </Step>
   <Step title="Auth">
-    Choose token (recommended), password, or no auth, then optionally store it
-    as a SecretRef instead of plaintext.
+    Enter the configured token or password in **Gateway secret**. The Gateway
+    accepts either wire field; interactive setup stores the secret as
+    `gateway.remote.token`, optionally as a SecretRef instead of plaintext.
+    To connect without a shared secret, leave it blank, decline keeping an
+    existing credential if offered, and confirm **Continue without a Gateway secret?**.
+    Reference storage offers that confirmation before asking for the reference.
   </Step>
 </Steps>
 
@@ -383,9 +392,10 @@ Credential storage mode:
   - For new custom-provider credentials, non-interactive `ref` mode stores `models.providers.<id>.apiKey` as `{ source: "env", provider: "default", id: "CUSTOM_API_KEY" }`.
   - In that custom-provider case, `--custom-api-key` requires `CUSTOM_API_KEY` to be set; otherwise onboarding fails fast.
   - Existing plaintext profile credentials remain unchanged; reference mode does not migrate them. Run `openclaw secrets configure --apply`, then `openclaw secrets audit --check`. See [Secrets management](/gateway/secrets).
-- Gateway auth credentials support plaintext and SecretRef choices in interactive setup:
-  - Token mode: **Generate/store plaintext token** (default) or **Use SecretRef**.
-  - Password mode: plaintext or SecretRef.
+- Gateway setup generates a secret in token mode by default. Interactive storage
+  choices are **Generate/store plaintext secret** (default) or **Use SecretRef**.
+  Existing password mode, `--gateway-auth password`, or `--gateway-password <value>`
+  uses password storage, with plaintext or SecretRef support.
 - Non-interactive token SecretRef path: `--gateway-token-ref-env <ENV_VAR>`.
 - The named environment variable must be non-empty in the onboarding process.
   `--gateway-token` and `--gateway-token-ref-env` are mutually exclusive.

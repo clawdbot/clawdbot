@@ -6,6 +6,7 @@ import {
 } from "./io.observe-recovery.js";
 import { recoverConfigFromJsonRootSuffixWithContext } from "./io.recovery.js";
 import {
+  prepareConfigRecoveryFromContext,
   readBestEffortConfigSnapshotFromContext,
   readConfigFileSnapshotForWriteFromContext,
   readConfigFileSnapshotFromContext,
@@ -35,6 +36,8 @@ export function createConfigIO(options: ConfigIoFactoryOptions = {}) {
     readConfigFileSnapshotWithPluginMetadata: (readOptions: ConfigSnapshotReadOptions = {}) =>
       readConfigFileSnapshotWithPluginMetadataFromContext(context, readOptions),
     readConfigFileSnapshotForWrite: () => readConfigFileSnapshotForWriteFromContext(context),
+    prepareConfigRecovery: (current: ConfigFileSnapshot) =>
+      prepareConfigRecoveryFromContext(context, current),
     promoteConfigSnapshotToLastKnownGood: (snapshot: ConfigFileSnapshot) =>
       promoteConfigSnapshotToLastKnownGoodCore({
         deps: context.deps,

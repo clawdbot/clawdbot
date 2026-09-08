@@ -1,4 +1,3 @@
-// Memory Host SDK module implements remote http behavior.
 import {
   fetchWithSsrFGuard,
   shouldUseEnvHttpProxyForUrl,

@@ -539,7 +539,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     expect(payload.includePatterns).toBeGreaterThan(0);
   });
 
-  it("bundles split shards deterministically without changing coverage", () => {
+  it("bundles split shards with deterministic unique identities and unchanged coverage", () => {
     const base = createNodeTestShards({ includeReleaseOnlyPluginShards: false });
     const bundled = createNodeTestShardBundles({ includeReleaseOnlyPluginShards: false });
     const basePatterns = base
@@ -550,6 +550,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       .toSorted((a, b) => a.localeCompare(b));
 
     expect(bundled.length).toBeLessThan(base.length);
+    expect(new Set(bundled.map((shard) => shard.checkName)).size).toBe(bundled.length);
     expect(bundledPatterns).toEqual(basePatterns);
     expect(
       bundled
@@ -1752,6 +1753,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       "src/commands/doctor-heartbeat-cadence-migration.test.ts",
       "src/commands/doctor-heartbeat-scratch-migration.test.ts",
       "src/commands/doctor-heartbeat-session-target.test.ts",
+      "src/commands/doctor-heartbeat-source-archive.test.ts",
       "src/commands/doctor-heartbeat-task-migration.test.ts",
       "src/commands/doctor-session-canonical-keys.memory.test.ts",
       "src/commands/doctor-session-canonical-keys.retention.test.ts",
@@ -2195,6 +2197,11 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
   });
 
   it("keeps hosted tooling within the GitHub job cap when its inventory grows", async () => {
+    // The checkout is fixed; keep real discovery caches while rebuilding each planner snapshot.
+    const unitFastPaths = await vi.importActual<
+      typeof import("../vitest/vitest.unit-fast-paths.mjs")
+    >("../vitest/vitest.unit-fast-paths.mjs");
+    const trackedTestFiles = new Map<string, readonly string[]>();
     const options = {
       compactMode: "pull-request" as const,
       runnerBackend: "github",
@@ -2219,15 +2226,20 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       extraFiles: string[] = [],
     ) => {
       vi.resetModules();
+      vi.doMock("../vitest/vitest.unit-fast-paths.mjs", () => unitFastPaths);
       vi.doMock("../../scripts/lib/list-test-files.mts", async (importOriginal) => {
         const actual =
           await importOriginal<typeof import("../../scripts/lib/list-test-files.mts")>();
         return {
           ...actual,
-          listTrackedTestFiles(rootDir: string, suffix?: string) {
-            const files = actual
-              .listTrackedTestFiles(rootDir, suffix)
-              .filter((file) => !growthFiles.has(file));
+          listTrackedTestFiles(rootDir: string, suffix = ".test.ts") {
+            const key = JSON.stringify([rootDir, suffix]);
+            let rawFiles = trackedTestFiles.get(key);
+            if (rawFiles === undefined) {
+              rawFiles = actual.listTrackedTestFiles(rootDir, suffix);
+              trackedTestFiles.set(key, rawFiles);
+            }
+            const files = rawFiles.filter((file) => !growthFiles.has(file));
             return rootDir === "test" && (includeGrowthFile || extraFiles.length > 0)
               ? [
                   ...new Set([
@@ -2246,6 +2258,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         return createPlan(options);
       } finally {
         vi.doUnmock("../../scripts/lib/list-test-files.mts");
+        vi.doUnmock("../vitest/vitest.unit-fast-paths.mjs");
         vi.resetModules();
       }
     };
@@ -3281,20 +3294,27 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           // Allocation may change, but every file must retain its complete execution policy.
           tooling: nonPlugin
             .filter(isRepartitionableTooling)
-            .flatMap((group) =>
-              expectDefined(group.includePatterns, "repartitionable tooling membership").map(
-                (file) => ({
-                  parent: toolingParent(group),
-                  file,
-                  configs: group.configs,
-                  env: group.env,
-                  pretestBuildMode: group.pretestBuildMode,
-                  requiresDist: group.requiresDist,
-                  runner: group.runner,
-                  exclusive: isExclusiveCompactShardName(group.shard_name),
-                }),
-              ),
-            )
+            .flatMap((group) => {
+              const files = expectDefined(
+                group.includePatterns,
+                "repartitionable tooling membership",
+              );
+              // A split can move tests out of the compiler's larger runner group.
+              expect(group.runner).toBe(
+                files.includes("test/scripts/write-unified-entry-dts.test.ts")
+                  ? DEFAULT_NODE_TEST_RUNNER
+                  : BUNDLED_NODE_TEST_RUNNER,
+              );
+              return files.map((file) => ({
+                parent: toolingParent(group),
+                file,
+                configs: group.configs,
+                env: group.env,
+                pretestBuildMode: group.pretestBuildMode,
+                requiresDist: group.requiresDist,
+                exclusive: isExclusiveCompactShardName(group.shard_name),
+              }));
+            })
             .toSorted((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b))),
         };
       };
@@ -3351,7 +3371,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           expectTimingFamilies(mutated);
           expect(
             () => expect(policies(mutated)).toEqual(policies(before)),
-            `${mutation} must fail policy equality even with valid timing keys`,
+            `${mutation} must fail policy validation even with valid timing keys`,
           ).toThrow();
         }
         for (const identity of ["parent", "part"] as const) {

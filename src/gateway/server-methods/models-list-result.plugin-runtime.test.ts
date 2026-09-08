@@ -14,6 +14,7 @@ import { registerGatewayModelCatalogPrivateAccess } from "../server-model-catalo
 import {
   buildModelsListResult,
   createGatewayAgentModelCatalogProjector,
+  prepareModelsListResult,
 } from "./models-list-result.js";
 import { modelsHandlers } from "./models.js";
 import type { GatewayRequestContext } from "./types.js";
@@ -95,12 +96,13 @@ describe("models.list plugin metadata handoff", () => {
         });
         await projector.projectCatalog();
 
+        let currentConfig = cfg;
         const context = {
-          getRuntimeConfig: () => cfg,
+          getRuntimeConfig: () => currentConfig,
           loadGatewayModelCatalogSnapshot: vi.fn(),
           logGateway: { debug: vi.fn() },
         } as unknown as GatewayRequestContext;
-        await buildModelsListResult({
+        const prepared = await prepareModelsListResult({
           context,
           agentId: "main",
           params: { view: "configured" },
@@ -108,9 +110,13 @@ describe("models.list plugin metadata handoff", () => {
           preloadedOnly: true,
           catalogProjector: projector,
         });
+        prepared.read();
         expect(mocks.prepareHarnessCatalog).toHaveBeenCalledWith(
           expect.objectContaining({ allowHarnessDiscovery: false }),
         );
+        expect(prepared.isCurrent()).toBe(true);
+        currentConfig = { ...cfg };
+        expect(prepared.isCurrent()).toBe(false);
       },
     );
   });

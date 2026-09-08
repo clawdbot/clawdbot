@@ -97,9 +97,13 @@ class UsagePage extends OpenClawLightDomElement {
   private routeDataEnabled = true;
   private readonly refreshPolicy = new UsageRefreshPolicy({
     isLoading: () => this.usageLoading,
-    reload: () => {
+    reload: (reason) => {
       this.clearDateDebounce();
-      return this.loadUsage();
+      const sessionKey =
+        reason === "manual" && this.usageSelectedSessions.length === 1
+          ? this.usageSelectedSessions[0]
+          : undefined;
+      return this.loadUsage(sessionKey);
     },
     onIncompleteUsageExhausted: () => this.requestUpdate(),
   });
@@ -129,11 +133,15 @@ class UsagePage extends OpenClawLightDomElement {
   });
 
   private readonly usageRequest = createUsageRequest(this, {
-    task: async (client: GatewayBrowserClient, { signal }) => {
+    task: async (
+      [client, refreshSessionKey]: readonly [GatewayBrowserClient, string | undefined],
+      { signal },
+    ) => {
       this.refreshPolicy.beginLoad();
       const epoch = this.connectionEpoch;
       return {
         epoch,
+        refreshSessionKey,
         snapshot: await requestUsageSnapshot(
           client,
           {
@@ -156,7 +164,12 @@ class UsagePage extends OpenClawLightDomElement {
         const sessionKey =
           this.usageSelectedSessions.length === 1 ? this.usageSelectedSessions[0] : undefined;
         if (sessionKey) {
-          void this.details.contextWeight.load(sessionKey);
+          // Manual intent belongs to this request's selection, never a later poll or selection.
+          if (value.refreshSessionKey === sessionKey) {
+            this.details.load(sessionKey);
+          } else {
+            void this.details.contextWeight.load(sessionKey);
+          }
         }
       } else {
         this.applyUsageError(snapshot.error.cause);
@@ -339,7 +352,7 @@ class UsagePage extends OpenClawLightDomElement {
     return !this.routeDataInitialized || this.usageRequest.pending;
   }
 
-  private loadUsage(): Promise<void> {
+  private loadUsage(refreshSessionKey?: string): Promise<void> {
     const client = this.gateway.client;
     if (!client || !this.gateway.connected) {
       this.refreshPolicy.markLoadDeferred();
@@ -351,7 +364,7 @@ class UsagePage extends OpenClawLightDomElement {
     this.usageLoadStartDate = this.usageStartDate;
     this.usageLoadEndDate = this.usageEndDate;
     this.usageError = null;
-    return this.usageRequest.run(client);
+    return this.usageRequest.run([client, refreshSessionKey]);
   }
 
   private clearSelections() {

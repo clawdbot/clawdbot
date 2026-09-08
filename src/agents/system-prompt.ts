@@ -776,7 +776,6 @@ export function buildAgentSystemPrompt(params: {
   toolNames?: string[];
   /** Callable tool names used for capability guidance without listing them as visible tools. */
   capabilityToolNames?: string[];
-  toolSummaries?: Record<string, string>;
   modelAliasLines?: string[];
   userTimezone?: string;
   userDate?: string;
@@ -843,8 +842,17 @@ export function buildAgentSystemPrompt(params: {
   const promptSurface = params.promptSurface ?? "openclaw_main";
   const sandboxedRuntime = params.sandboxInfo?.enabled === true;
   const acpSpawnRuntimeEnabled = acpEnabled && !sandboxedRuntime;
+  // Preserve first caller casing; sparse tool arrays skip absent entries.
+  const visibleTools = new Map<string, string>();
+  (params.toolNames ?? []).forEach((tool) => {
+    const name = tool.trim();
+    const normalized = name.toLowerCase();
+    if (normalized && !visibleTools.has(normalized)) {
+      visibleTools.set(normalized, name);
+    }
+  });
   const availableTools = new Set([
-    ...normalizeStringEntriesLower(params.toolNames),
+    ...visibleTools.keys(),
     ...normalizeStringEntriesLower(params.capabilityToolNames),
   ]);
   const coreToolSummaries: Record<string, string> = {
@@ -938,21 +946,7 @@ export function buildAgentSystemPrompt(params: {
     "image_generate",
   ];
 
-  const rawToolNames = (params.toolNames ?? []).map((tool) => tool.trim());
-  const canonicalToolNames = rawToolNames.filter(Boolean);
-  // Preserve caller casing while deduping tool names by lowercase.
-  const canonicalByNormalized = new Map<string, string>();
-  for (const name of canonicalToolNames) {
-    const normalized = name.toLowerCase();
-    if (!canonicalByNormalized.has(normalized)) {
-      canonicalByNormalized.set(normalized, name);
-    }
-  }
-  const resolveToolName = (normalized: string) =>
-    canonicalByNormalized.get(normalized) ?? normalized;
-
-  const normalizedTools = canonicalToolNames.map((tool) => tool.toLowerCase());
-  const visibleTools = new Set(normalizedTools);
+  const resolveToolName = (normalized: string) => visibleTools.get(normalized) ?? normalized;
   const hasSessionsSpawn = availableTools.has("sessions_spawn");
   const subagentStatusTools = ["subagents", "sessions_list"].filter((name) =>
     availableTools.has(name),
@@ -964,25 +958,15 @@ export function buildAgentSystemPrompt(params: {
   const nativeCommandGuidanceLines = normalizeUniqueStringEntries(
     params.nativeCommandGuidanceLines,
   );
-  const externalToolSummaries = new Map<string, string>();
-  for (const [key, value] of Object.entries(params.toolSummaries ?? {})) {
-    const normalized = key.trim().toLowerCase();
-    if (!normalized || !value?.trim()) {
-      continue;
-    }
-    externalToolSummaries.set(normalized, value.trim());
-  }
-  const extraTools = Array.from(
-    new Set(normalizedTools.filter((tool) => !toolOrder.includes(tool))),
-  );
+  const extraTools = [...visibleTools.keys()].filter((tool) => !toolOrder.includes(tool));
   const enabledTools = toolOrder.filter((tool) => visibleTools.has(tool));
   const toolLines = enabledTools.map((tool) => {
-    const summary = coreToolSummaries[tool] ?? externalToolSummaries.get(tool);
+    const summary = coreToolSummaries[tool];
     const name = resolveToolName(tool);
     return summary ? `- ${name}: ${summary}` : `- ${name}`;
   });
   for (const tool of extraTools.toSorted()) {
-    const summary = coreToolSummaries[tool] ?? externalToolSummaries.get(tool);
+    const summary = coreToolSummaries[tool];
     const name = resolveToolName(tool);
     toolLines.push(summary ? `- ${name}: ${summary}` : `- ${name}`);
   }

@@ -21,6 +21,11 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 const SCRIPT = resolve("scripts/full-release-candidate-contract.mjs");
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
+// Golden v2 request bytes bind the complete effective reported-issues inventory.
+const CANONICAL_REQUEST_JSON =
+  '{"allowFrozenTargetScenarioOmissions":false,"allowUnreleasedChangelog":false,"contractVersions":{"package":1,"prepublishPluginRegistry":1,"sharedImage":1},"packagePublished":false,"releaseProfile":"stable","releaseSoak":true,"repository":"openclaw/openclaw","schema":"openclaw.full-release-candidate-request/v2","sharedImagePolicy":"no-push-artifact","targetSha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","toolingSha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","upgradeSurvivorBaselines":["openclaw@latest"],"upgradeSurvivorScenarios":["acpx-openclaw-tools-bridge","base","bootstrap-persona","channel-post-core-restore","configured-plugin-installs","cron-scheduled-authority","feishu-channel","legacy-operator-state","meeting-transcripts-sqlite","plugin-deps-cleanup","stale-source-plugin-shadow","tilde-log-path","versioned-runtime-deps"]}\n';
+const CANONICAL_REQUEST_SHA256 = "eb44f56c41111dfe83d087148eb5f61cc7823525e9d9d434443872d2b42462c4";
+
 function manifest(overrides: Record<string, unknown> = {}) {
   return {
     ...fullReleaseCandidateManifestFixture(),
@@ -78,9 +83,8 @@ describe("full release candidate contract", () => {
     expect(request.packagePublished).toBe(false);
     expect(canonicalTestJson(request)).toBe(canonicalTestJson(reorderedRequest));
     expect(canonicalTestSha256(request)).toBe(canonicalTestSha256(reorderedRequest));
-    expect(canonicalTestSha256(request)).toBe(
-      "9410dbc917e769b2a7719a4d2e7a52f654535a91d239911ad0461b55234b29b2",
-    );
+    expect(canonicalTestJson(request)).toBe(CANONICAL_REQUEST_JSON);
+    expect(canonicalTestSha256(request)).toBe(CANONICAL_REQUEST_SHA256);
   });
 
   it("canonicalizes equivalent baseline and scenario set ordering", () => {
@@ -177,10 +181,10 @@ describe("full release candidate contract", () => {
       requestOutputPath,
     ]);
     expect(requestResult.status, requestResult.stderr).toBe(0);
-    const requestValue = JSON.parse(readFileSync(requestOutputPath, "utf8"));
+    expect(readFileSync(requestOutputPath, "utf8")).toBe(CANONICAL_REQUEST_JSON);
     expect(JSON.parse(requestResult.stdout)).toEqual({
-      requestJson: canonicalTestJson(requestValue).trimEnd(),
-      requestSha256: "9410dbc917e769b2a7719a4d2e7a52f654535a91d239911ad0461b55234b29b2",
+      requestJson: CANONICAL_REQUEST_JSON.trimEnd(),
+      requestSha256: CANONICAL_REQUEST_SHA256,
     });
 
     const manifestInputPath = join(root, "manifest-input.json");

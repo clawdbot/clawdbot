@@ -14,6 +14,7 @@ import {
   sendMinimalGatewayConnectChallenge,
   sendMinimalGatewayResponse,
 } from "../gateway/minimal-gateway.test-helpers.js";
+import { createUnreachableGatewayProbe } from "./gateway-status/test-support.js";
 import {
   buildTailscaleHttpsUrl,
   resolveGatewayProbeSnapshot as resolveGatewayProbeSnapshotOwner,
@@ -267,22 +268,9 @@ describe("resolveGatewayProbeSnapshot", () => {
       gatewayMode: "local",
       remoteUrlMissing: false,
     });
-    mocks.probeGateway.mockResolvedValue({
-      ok: false,
-      url: "ws://127.0.0.1:18789",
-      connectLatencyMs: null,
-      error: "timeout",
-      close: null,
-      auth: {
-        role: null,
-        scopes: [],
-        capability: "unknown",
-      },
-      health: null,
-      status: null,
-      presence: null,
-      configSnapshot: null,
-    });
+    mocks.probeGateway.mockResolvedValue(
+      createUnreachableGatewayProbe("ws://127.0.0.1:18789", "timeout"),
+    );
     mocks.callGateway.mockResolvedValue({ sessions: 1 });
 
     const result = await resolveGatewayProbeSnapshot({
@@ -320,22 +308,9 @@ describe("resolveGatewayProbeSnapshot", () => {
       gatewayMode: "local",
       remoteUrlMissing: false,
     });
-    mocks.probeGateway.mockResolvedValue({
-      ok: false,
-      url: "ws://localhost.:18789",
-      connectLatencyMs: null,
-      error: "timeout",
-      close: null,
-      auth: {
-        role: null,
-        scopes: [],
-        capability: "unknown",
-      },
-      health: null,
-      status: null,
-      presence: null,
-      configSnapshot: null,
-    });
+    mocks.probeGateway.mockResolvedValue(
+      createUnreachableGatewayProbe("ws://localhost.:18789", "timeout"),
+    );
 
     const result = await resolveGatewayProbeSnapshot({
       cfg: {},
@@ -352,22 +327,9 @@ describe("resolveGatewayProbeSnapshot", () => {
       gatewayMode: "local",
       remoteUrlMissing: false,
     });
-    mocks.probeGateway.mockResolvedValue({
-      ok: false,
-      url: "ws://127.0.0.1:18789",
-      connectLatencyMs: null,
-      error: "timeout",
-      close: null,
-      auth: {
-        role: null,
-        scopes: [],
-        capability: "unknown",
-      },
-      health: null,
-      status: null,
-      presence: null,
-      configSnapshot: null,
-    });
+    mocks.probeGateway.mockResolvedValue(
+      createUnreachableGatewayProbe("ws://127.0.0.1:18789", "timeout"),
+    );
     mocks.callGateway.mockResolvedValue({ sessions: 1 });
 
     await resolveGatewayProbeSnapshot({
@@ -391,22 +353,9 @@ describe("resolveGatewayProbeSnapshot", () => {
         gatewayMode: "local",
         remoteUrlMissing: false,
       });
-      mocks.probeGateway.mockResolvedValue({
-        ok: false,
-        url: "ws://127.0.0.1:18789",
-        connectLatencyMs: null,
-        error: "timeout",
-        close: null,
-        auth: {
-          role: null,
-          scopes: [],
-          capability: "unknown",
-        },
-        health: null,
-        status: null,
-        presence: null,
-        configSnapshot: null,
-      });
+      mocks.probeGateway.mockResolvedValue(
+        createUnreachableGatewayProbe("ws://127.0.0.1:18789", "timeout"),
+      );
       mocks.callGateway.mockResolvedValue({ sessions: 1 });
 
       await resolveGatewayProbeSnapshot({
@@ -547,22 +496,9 @@ describe("resolveGatewayProbeSnapshot", () => {
       gatewayMode: "remote",
       remoteUrlMissing: false,
     });
-    mocks.probeGateway.mockResolvedValue({
-      ok: false,
-      url: "wss://gateway.example/ws",
-      connectLatencyMs: null,
-      error: "timeout",
-      close: null,
-      auth: {
-        role: null,
-        scopes: [],
-        capability: "unknown",
-      },
-      health: null,
-      status: null,
-      presence: null,
-      configSnapshot: null,
-    });
+    mocks.probeGateway.mockResolvedValue(
+      createUnreachableGatewayProbe("wss://gateway.example/ws", "timeout"),
+    );
 
     const result = await resolveGatewayProbeSnapshot({
       cfg: { gateway: { mode: "remote", remote: { url: "wss://gateway.example/ws" } } },

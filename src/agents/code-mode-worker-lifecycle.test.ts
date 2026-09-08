@@ -41,16 +41,17 @@ function parkExpiringRun(method: "callValue" | "agentWait") {
   registerHeadlessToolSearchCatalog({ catalogRef, tools: [] });
   const ctx = { config: rawConfig, runtimeConfig: rawConfig, catalogRef };
   const runtime = new ToolSearchRuntime(ctx, toToolSearchConfig(config));
+  const owner = createCodeModeRunOwner(ctx, config);
   const cancel = vi.fn();
   const pending: PendingBridgeState = {
     id: `bridge:${method}:1`,
     method,
     args: method === "agentWait" ? ["collector-1"] : ["openclaw:core:slow", {}],
     promise: new Promise(() => {}),
+    reply: owner.inbox.createReply(`bridge:${method}:1`),
     cancel,
   };
 
-  const owner = createCodeModeRunOwner(ctx);
   storeSnapshotState({
     owner,
     replayId: "cm_replay_lifecycle",
@@ -122,7 +123,7 @@ describe("Code Mode worker lifecycle", () => {
         kind: "resume",
         snapshot,
         config,
-        settledRequests: [{ id: "bridge:yield:1", ok: true, value: null }],
+        settledRequests: [{ id: "bridge:yield:1", ok: true, json: "null" }],
       },
       10000,
     );
@@ -201,7 +202,7 @@ describe("Code Mode worker lifecycle", () => {
       let settlements = [];
       parentPort.on("message", ({ input }) => {
         if (input.kind === "resume") {
-          settlements = input.settledRequests.map(({ value }) => new WeakRef(value));
+          settlements = input.settledRequests.map((reply) => new WeakRef(reply));
         }
       });
       const restore = QuickJS.restore;
@@ -293,7 +294,7 @@ describe("Code Mode worker lifecycle", () => {
           pendingRequests,
           settledRequests: result.pendingRequests
             .filter((request) => !pendingRequests.includes(request))
-            .map(({ id }) => ({ id, ok: true, value: { leg } })),
+            .map(({ id }) => ({ id, ok: true, json: JSON.stringify({ leg }) })),
         },
         10_000,
         workerUrl,
@@ -443,7 +444,7 @@ describe("Code Mode worker lifecycle", () => {
           settledRequests: suspended.pendingRequests.map(({ id }) => ({
             id,
             ok: true,
-            value: null,
+            json: "null",
           })),
         };
       }

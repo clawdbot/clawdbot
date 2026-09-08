@@ -205,13 +205,6 @@ extension OnboardingView {
                 case .none:
                     break
                 }
-                // A configured label is a display fact, not permission for a live
-                // completion. Existing routes appear in the same explicit picker.
-                if intent != .inspectOnly,
-                   knownAISetupPage || self.activePageIndex == self.aiPageIndex
-                {
-                    self.aiSetup.startIfNeeded()
-                }
             case .missing:
                 // A route-bound activation/verification can complete while the
                 // earlier agents.list request is suspended. Never let that
@@ -239,15 +232,18 @@ extension OnboardingView {
                 case .none:
                     break
                 }
-                if intent != .inspectOnly,
-                   knownAISetupPage || self.activePageIndex == self.aiPageIndex
-                {
-                    self.aiSetup.startIfNeeded()
-                }
             case .unavailable, .authIssue:
                 self.showConfiguredGatewayProbeBlocker(outcome)
+                return
             case .superseded:
-                break
+                return
+            }
+            // Both configured and empty Gateways enter the picker only after
+            // native receipt recovery. A configured label never authorizes a live test.
+            if intent != .inspectOnly,
+               knownAISetupPage || self.activePageIndex == self.aiPageIndex
+            {
+                self.aiSetup.startIfNeeded()
             }
         }
     }
