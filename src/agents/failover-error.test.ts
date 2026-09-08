@@ -920,6 +920,13 @@ describe("failover-error", () => {
       expect(resolveFailoverReasonFromError(new Error(missingToolResultMessage))).toBeNull();
     });
 
+    it("classifies a generic unrecognized error as unknown", () => {
+      const error = new Error("bad request");
+      expect(
+        resolveModelFallbackError(error, { provider: "openai", model: "gpt-4.1-mini" }),
+      ).toEqual({ kind: "unknown", error });
+    });
+
     it("returns false for plain timeouts and provider errors", () => {
       const timeoutErr = Object.assign(new Error("operation timed out"), { name: "TimeoutError" });
       expect(isNonProviderRuntimeCoordinationError(timeoutErr)).toBe(false);

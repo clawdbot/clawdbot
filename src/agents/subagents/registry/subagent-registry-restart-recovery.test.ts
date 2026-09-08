@@ -930,4 +930,37 @@ describe("subagent registry restart recovery", () => {
       },
     });
   });
+
+  it("keeps a shipped timeout row terminal when recovery is blocked", async () => {
+    mocks.entries[childSessionKey]!.subagentRecovery = {
+      automaticAttempts: 2,
+      lastAttemptAt: Date.now(),
+      lastRunId: "prior-run",
+    };
+    const endedAt = Date.now() - 1_000;
+    const entry = run({
+      endedReason: "subagent-error",
+      execution: {
+        status: "terminal",
+        endedAt,
+        outcome: { status: "timeout" },
+      },
+    });
+
+    await expect(recover(entry)).resolves.toEqual({ status: "handled" });
+    expect(dispatchAgent).not.toHaveBeenCalled();
+    expect(entry.execution).toMatchObject({
+      status: "terminal",
+      endedAt,
+      outcome: { status: "timeout" },
+    });
+    expect(entry.endedReason).toBe("subagent-error");
+    expect(mocks.entries[childSessionKey]).toMatchObject({
+      abortedLastRun: false,
+      subagentRecovery: {
+        automaticAttempts: 2,
+        wedgedAt: expect.any(Number),
+      },
+    });
+  });
 });
