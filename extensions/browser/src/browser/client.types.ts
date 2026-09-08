@@ -125,6 +125,8 @@ export type BrowserTab = {
   targetId: string;
   /** Stable, human-friendly tab handle for this profile runtime (for example t1). */
   tabId?: string;
+  /** Runtime-scoped native Chrome tab id exposed only by the browser-extension driver. */
+  webExtensionTabId?: number;
   /** Optional user-assigned tab label. */
   label?: string;
   title: string;

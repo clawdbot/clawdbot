@@ -282,6 +282,7 @@ export const BrowserToolOutputSchema = Type.Object(
           {
             suggestedTargetId: Type.Optional(Type.String()),
             tabId: Type.Optional(Type.String()),
+            webExtensionTabId: Type.Optional(Type.Integer({ minimum: 0 })),
             label: Type.Optional(Type.String()),
             targetId: Type.Optional(Type.String()),
             title: Type.Optional(Type.String()),

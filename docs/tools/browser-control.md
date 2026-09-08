@@ -51,6 +51,14 @@ target-id prefixes still work, but they are volatile diagnostic handles.
 Tab handles are scoped to a browser host or node and profile; keep that route
 with the handle when making follow-up requests.
 
+For profiles configured with `driver: "extension"`, `GET /tabs` and the browser
+tool can also return `webExtensionTabId`, the runtime-scoped numeric Chrome
+WebExtensions tab ID for the same tab. This field is omitted for other drivers
+or when extension metadata is unavailable. Use it only when calling a
+WebExtensions API; continue to use `suggestedTargetId` or `tabId` for OpenClaw
+browser actions because a `webExtensionTabId` can change after the browser or
+extension reconnects.
+
 The Control UI's `browser.request` Gateway method accepts `target: "host"` to
 pin the Gateway host or `target: "node"` with `node: "<node-id>"` to pin a browser
 node. Pass the profile in `query.profile`. Explicit routes do not fall back to

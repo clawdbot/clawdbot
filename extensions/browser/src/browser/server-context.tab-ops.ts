@@ -82,6 +82,10 @@ type CdpTarget = {
   type?: string;
 };
 
+type ExtensionCdpTarget = CdpTarget & {
+  tabId?: unknown;
+};
+
 /** Normalize a reported CDP WebSocket URL against the configured endpoint. */
 function normalizeWsUrl(raw: string | undefined, cdpBaseUrl: string): string | undefined {
   if (!raw) {
@@ -149,12 +153,47 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
             : {}),
           ...(options?.signal ? { signal: options.signal } : {}),
         });
-        return pages.filter(isSelectableCdpBrowserTarget).map((p) => ({
-          targetId: p.targetId,
-          title: p.title,
-          url: p.url,
-          type: p.type,
-        }));
+        const webExtensionTabIds =
+          profile.driver === "extension"
+            ? await fetchJson<ExtensionCdpTarget[]>(
+                appendCdpPath(cdpHttpBase, "/json/list"),
+                Math.min(timeoutMs, resolved.remoteCdpTimeoutMs),
+                options?.signal ? { signal: options.signal } : undefined,
+                ssrfPolicy,
+              )
+                .then(
+                  (targets) =>
+                    new Map(
+                      targets.flatMap((target) =>
+                        typeof target.id === "string" &&
+                        typeof target.tabId === "number" &&
+                        Number.isSafeInteger(target.tabId) &&
+                        target.tabId >= 0
+                          ? [[target.id, target.tabId] as const]
+                          : [],
+                      ),
+                    ),
+                )
+                .catch(() => {
+                  options?.signal?.throwIfAborted();
+                  return new Map<string, number>();
+                })
+            : undefined;
+        return pages.filter(isSelectableCdpBrowserTarget).map((p) => {
+          // Correlate only by the relay's exact CDP target id. The native Chrome
+          // tab id is runtime-scoped and must not replace OpenClaw's stable tN alias.
+          const webExtensionTabId = webExtensionTabIds?.get(p.targetId);
+          const tab: BrowserTab = {
+            targetId: p.targetId,
+            title: p.title,
+            url: p.url,
+            type: p.type,
+          };
+          if (webExtensionTabId !== undefined) {
+            tab.webExtensionTabId = webExtensionTabId;
+          }
+          return tab;
+        });
       }
     }
 
