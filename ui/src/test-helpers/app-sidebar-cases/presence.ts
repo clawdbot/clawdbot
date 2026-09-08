@@ -13,13 +13,16 @@ import "../../components/app-sidebar.ts";
 await import("../../components/viewer-facepile.ts");
 
 describe("AppSidebar viewer presence", () => {
-  it("shows person header presence as online, idle, then absent while excluding self", async () => {
+  it.each([
+    ["profile-bob", "bob"],
+    ["gateway-owner", "Shared owner"],
+  ])("shows presence and offline owner %s while excluding self", async (ownerId, ownerName) => {
     const client = { instanceId: "self-instance" } as GatewayBrowserClient;
     const gateway = createGatewayHarness(client);
     const owners = ["self", "ada", "bob"].map((name) => ({
       type: "human" as const,
-      id: `profile-${name}`,
-      identity: { type: "profile" as const, id: `profile-${name}` },
+      id: name === "bob" ? ownerId : `profile-${name}`,
+      identity: { type: "profile" as const, id: name === "bob" ? ownerId : `profile-${name}` },
       label: name,
     }));
     const sessions = createSessionsHarness(
@@ -36,10 +39,18 @@ describe("AppSidebar viewer presence", () => {
     sidebar.connected = true;
     await selectSessionMenuValue(sidebar, "grouping:person");
     const section = (id: string) =>
-      sidebar.querySelector(`[data-session-section="person:profile:profile-${id}"]`)!;
+      sidebar.querySelector(
+        `[data-session-section="person:profile:${id === "bob" ? ownerId : `profile-${id}`}"]`,
+      )!;
     for (const id of ["self", "ada", "bob"]) {
       expect(section(id)).not.toBeNull();
     }
+    expect(section("bob").querySelector(".sidebar-recent-sessions__label-text")?.textContent).toBe(
+      ownerName,
+    );
+    expect(section("bob").querySelector("[data-person-card]")?.getAttribute("aria-label")).toBe(
+      `Details for ${ownerName}`,
+    );
     const self = {
       instanceId: client.instanceId,
       user: { id: "profile-self", identity: owners[0]!.identity, name: "Self" },
@@ -106,7 +117,7 @@ describe("AppSidebar viewer presence", () => {
     bobButton.click();
     await vi.dynamicImportSettled();
     await vi.waitFor(() =>
-      expect(document.querySelector(".person-activity-hovercard h2")?.textContent).toBe("bob"),
+      expect(document.querySelector(".person-activity-hovercard h2")?.textContent).toBe(ownerName),
     );
     const offlineCard = document.querySelector<HTMLElement>(".person-activity-hovercard")!;
     expect(
@@ -115,15 +126,15 @@ describe("AppSidebar viewer presence", () => {
     expect(offlineCard.querySelector("dl")).toBeNull();
     const recent = offlineCard.querySelector("section")!;
     expect(recent.querySelector("h3")?.textContent).toBe("Recent sessions");
-    expect(recent.querySelector("a")?.getAttribute("href")).toBe("/chat/main/profile-bob");
+    expect(recent.querySelector("a")?.getAttribute("href")).toBe(`/chat/main/${ownerId}`);
     expect(offlineCard.querySelector("footer a")?.getAttribute("href")).toBe(
-      "/activity/profile-bob",
+      `/activity/${ownerId}`,
     );
     bobButton.click();
     expect(document.querySelector(".person-activity-hovercard")).toBeNull();
     bobButton.focus();
     await vi.waitFor(() =>
-      expect(document.querySelector(".person-activity-hovercard h2")?.textContent).toBe("bob"),
+      expect(document.querySelector(".person-activity-hovercard h2")?.textContent).toBe(ownerName),
     );
     document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
 
