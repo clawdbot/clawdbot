@@ -62,6 +62,7 @@ import type {
   SignalReactionMessage,
   SignalReactionTarget,
 } from "./monitor/event-handler.types.js";
+import { createSignalMonitorTaskRunner } from "./monitor/task-runner.js";
 import { createSignalNativeReplyIdResolver } from "./native-reply.js";
 import { materializeSignalPresentationFallback } from "./presentation-fallback.js";
 import { registerSignalReactionTargetsForDeliveredPayload } from "./reaction-targets.js";
@@ -99,26 +100,6 @@ export type MonitorSignalOpts = {
   waitForTransportReady?: typeof waitForTransportReady;
   statusSink?: SignalStatusSink;
 };
-
-function createSignalMonitorTaskRunner(runtime: RuntimeEnv) {
-  const inFlight = new Set<Promise<void>>();
-  return {
-    runTask(task: () => Promise<void>): Promise<void> {
-      const trackedTask = Promise.resolve().then(task);
-      inFlight.add(trackedTask);
-      void trackedTask.catch((err: unknown) =>
-        runtime.error?.(`signal monitor task failed: ${String(err)}`),
-      );
-      void trackedTask.finally(() => inFlight.delete(trackedTask)).catch(() => undefined);
-      return trackedTask;
-    },
-    async waitForIdle(): Promise<void> {
-      while (inFlight.size > 0) {
-        await Promise.allSettled(inFlight);
-      }
-    },
-  };
-}
 
 function resolveSignalReactionTargets(reaction: SignalReactionMessage): SignalReactionTarget[] {
   const targets: SignalReactionTarget[] = [];
