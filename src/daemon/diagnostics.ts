@@ -1,5 +1,6 @@
 /** Reads recent gateway service logs for actionable daemon restart diagnostics. */
 import fs, { type FileHandle } from "node:fs/promises";
+import { resolveAdvertisedLaunchdStderr, readPersistedLaunchdStderrPath } from "./launchd-stdio.js";
 import { resolveGatewayLogPaths, resolveGatewaySupervisorLogPaths } from "./restart-logs.js";
 
 // Error patterns worth surfacing from gateway service logs after failed starts.
@@ -88,18 +89,24 @@ export async function readLastGatewayErrorLine(
   options?: { platform?: NodeJS.Platform; requirePatternMatch?: boolean },
 ): Promise<string | null> {
   const platform = options?.platform ?? process.platform;
-  const readStderr = platform !== "darwin";
-  // launchd supervisor mode combines child stderr into stdout; other platforms
-  // keep stderr as the strongest failure signal.
+  // launchd writes wrapper/process stderr to gateway.err.log; treat it as the
+  // strongest failure signal on every supervisor.
   const { stdoutPath, stderrPath } =
     platform === "darwin"
       ? resolveGatewaySupervisorLogPaths(env, { platform })
       : resolveGatewayLogPaths(env);
-  const stderrLines = readStderr ? await readGatewayLogTailLines(stderrPath).catch(() => []) : [];
+  const advertisedStderr =
+    platform === "darwin"
+      ? resolveAdvertisedLaunchdStderr(readPersistedLaunchdStderrPath(env))
+      : { kind: "file" as const, path: stderrPath };
+  const stderrLines =
+    advertisedStderr.kind === "file"
+      ? await readGatewayLogTailLines(advertisedStderr.path).catch(() => [])
+      : [];
   const stdoutLines = await readGatewayLogTailLines(stdoutPath).catch(() => []);
-  // stderr is the strongest failure signal on non-darwin platforms, so place it
-  // last and scan from the end: the most recent stderr error line then wins over
-  // any (possibly stale) stdout match, matching the stderr-first fallback below.
+  // stderr is the strongest failure signal, so place it last and scan from the
+  // end: the most recent stderr error line then wins over any (possibly stale)
+  // stdout match, matching the stderr-first fallback below.
   const lines = [...stdoutLines, ...stderrLines].map((line) => line.trim());
   for (let i = lines.length - 1; i >= 0; i -= 1) {
     const line = lines[i];
@@ -113,7 +120,5 @@ export async function readLastGatewayErrorLine(
   if (options?.requirePatternMatch) {
     return null;
   }
-  return readStderr
-    ? (findLastNonEmptyLine(stderrLines) ?? findLastNonEmptyLine(stdoutLines))
-    : findLastNonEmptyLine(stdoutLines);
+  return findLastNonEmptyLine(stderrLines) ?? findLastNonEmptyLine(stdoutLines);
 }

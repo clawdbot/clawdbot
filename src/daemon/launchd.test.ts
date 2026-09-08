@@ -2540,6 +2540,8 @@ describe("launchd install", () => {
     expect(plist).toContain("<string>/dev/null</string>");
     expect(plist).toContain("<key>StandardOutPath</key>");
     expect(plist).toContain("<string>/Users/test/Library/Logs/openclaw/gateway.log</string>");
+    expect(plist).toContain("<key>StandardErrorPath</key>");
+    expect(plist).toContain("<string>/Users/test/Library/Logs/openclaw/gateway.err.log</string>");
     expect(plist).not.toContain("<key>SuccessfulExit</key>");
     expect(plist).toContain("<key>ExitTimeOut</key>");
     expect(plist).toContain(`<integer>${LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS}</integer>`);
@@ -2572,7 +2574,7 @@ describe("launchd install", () => {
     expect(plist).toContain("<key>StandardOutPath</key>");
     expect(plist).toContain("<string>/Users/test/Library/Logs/openclaw/gateway.log</string>");
     expect(plist).toContain("<key>StandardErrorPath</key>");
-    expect(plist).toContain("<string>/dev/null</string>");
+    expect(plist).toContain("<string>/Users/test/Library/Logs/openclaw/gateway.err.log</string>");
     expect(plist).toContain("<key>KeepAlive</key>");
     expect(plist).toContain("<string>node</string>");
     expect(plist).not.toContain("OPENCLAW_SERVICE_VERSION");

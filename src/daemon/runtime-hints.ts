@@ -1,5 +1,11 @@
 /** Builds platform-specific log and start hints for daemon status output. */
 import { resolveGatewaySystemdServiceName, resolveGatewayWindowsTaskName } from "./constants.js";
+import {
+  formatLaunchdStderrRewriteGuidance,
+  readPersistedLaunchdStderrPath,
+  resolveAdvertisedLaunchdStderr,
+  type LaunchdStderrRewriteCommands,
+} from "./launchd-stdio.js";
 import { resolveGatewayRestartLogPath, resolveGatewaySupervisorLogPaths } from "./restart-logs.js";
 
 export function buildPlatformRuntimeLogHints(params: {
@@ -7,15 +13,21 @@ export function buildPlatformRuntimeLogHints(params: {
   env?: NodeJS.ProcessEnv;
   systemdServiceName: string;
   windowsTaskName: string;
+  rewriteCommands?: LaunchdStderrRewriteCommands;
 }): string[] {
   const platform = params.platform ?? process.platform;
   const env = { ...process.env, ...params.env };
   if (platform === "darwin") {
     const logs = resolveGatewaySupervisorLogPaths(env, { platform });
+    const advertisedStderr = resolveAdvertisedLaunchdStderr(readPersistedLaunchdStderrPath(env));
+    const stderrHint =
+      advertisedStderr.kind === "file"
+        ? `Launchd stderr (if installed): ${advertisedStderr.path}`
+        : `Launchd stderr (if installed): suppressed (/dev/null). ${formatLaunchdStderrRewriteGuidance(env, params.rewriteCommands)}`;
     // Preserve the writer's path bytes; backslashes can be literal POSIX filename characters.
     return [
       `Launchd stdout (if installed): ${logs.stdoutPath}`,
-      "Launchd stderr (if installed): suppressed",
+      stderrHint,
       `Restart attempts: ${resolveGatewayRestartLogPath(env)}`,
     ];
   }
@@ -41,6 +53,7 @@ export function buildGatewayRuntimeRecoveryHints(params: {
   logFile?: string | null;
   platform?: NodeJS.Platform;
   env: NodeJS.ProcessEnv;
+  rewriteCommands?: LaunchdStderrRewriteCommands;
 }): string[] {
   const hints =
     params.kind === "gui-session"
@@ -60,6 +73,7 @@ export function buildGatewayRuntimeRecoveryHints(params: {
         env: params.env,
         systemdServiceName: resolveGatewaySystemdServiceName(params.env.OPENCLAW_PROFILE),
         windowsTaskName: resolveGatewayWindowsTaskName(params.env.OPENCLAW_PROFILE),
+        rewriteCommands: params.rewriteCommands,
       }),
     );
   }
