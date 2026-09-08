@@ -500,7 +500,10 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
         operation.staleExpiryReason === "stuck_recovery");
     const queuedFinal = droppedBeforeOutput
       ? dispatcher.sendFinalReply({
-          text: "⚠️ This turn was interrupted because it stopped making progress. Please try again.",
+          text:
+            operation.staleExpiryReason === "stuck_recovery"
+              ? "⚠️ Your reply was dropped: the run made no progress and was reclaimed by stuck-session recovery. The session is intact — please retry."
+              : "⚠️ Your reply was dropped: the run showed no activity past the stale threshold and was reclaimed. The session is intact — please retry.",
           isError: true,
         })
       : false;
