@@ -44,6 +44,7 @@ function createPayload(params: {
   databasePath: string;
   sequence: number;
   sessionId: string;
+  messages?: ContextEngineTurnOutboxPayload["messages"];
 }): ContextEngineTurnOutboxPayload {
   const anchor = {
     agentId: "main",
@@ -73,7 +74,7 @@ function createPayload(params: {
   return {
     boundary,
     isHeartbeat: false,
-    messages: [],
+    messages: params.messages ?? [],
   };
 }
 
@@ -712,6 +713,349 @@ describe("context-engine turn outbox", () => {
 
     expect(degradeBeforeStart).toHaveBeenCalledWith(
       "pending durable turn advancement could not be completed before the next turn",
+    );
+  });
+
+  it("throws a descriptive error when existing outbox payload JSON is malformed", () => {
+    const stateDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "openclaw-context-outbox-malformed-write-"),
+    );
+    tempDirs.push(stateDir);
+    const database = openOpenClawAgentDatabase({
+      agentId: "main",
+      env: { OPENCLAW_STATE_DIR: stateDir },
+    });
+    const payload = createPayload({
+      advancementKey: "session-a:malformed-write",
+      databasePath: database.path,
+      sequence: 1,
+      sessionId: "session-a",
+    });
+    enqueueContextEngineTurnCommit({ database, engineId: "test", payload });
+
+    // Corrupt the stored payload_json so the next write hits the JSON.parse path.
+    database.db
+      .prepare(
+        "UPDATE context_engine_turn_outbox SET payload_json = '{not-valid-json' WHERE advancement_key = ?",
+      )
+      .run(payload.boundary.admission.logicalTurnId);
+
+    expect(() => enqueueContextEngineTurnCommit({ database, engineId: "test", payload })).toThrow(
+      /Failed to parse existing outbox payload JSON/,
+    );
+  });
+
+  it("skips outbox rows with malformed payload JSON during recovery", () => {
+    const stateDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "openclaw-context-outbox-malformed-recover-"),
+    );
+    tempDirs.push(stateDir);
+    const database = openOpenClawAgentDatabase({
+      agentId: "main",
+      env: { OPENCLAW_STATE_DIR: stateDir },
+    });
+    const payload = createPayload({
+      advancementKey: "session-a:malformed-recover",
+      databasePath: database.path,
+      sequence: 1,
+      sessionId: "session-a",
+    });
+    enqueueContextEngineTurnCommit({ database, engineId: "test", payload });
+
+    // Corrupt the stored payload_json so recovery hits the JSON.parse path.
+    database.db
+      .prepare(
+        "UPDATE context_engine_turn_outbox SET payload_json = '{not-valid-json' WHERE advancement_key = ?",
+      )
+      .run(payload.boundary.admission.logicalTurnId);
+
+    const warn = vi.fn();
+    recoverContextEngineTurnOutbox({
+      database,
+      engineId: "test",
+      sessionId: payload.boundary.admission.sessionId,
+      warn,
+    });
+
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "skipping outbox row with malformed payload JSON: session-a:malformed-recover",
+      ),
+    );
+  });
+
+  it("persists real turn messages through a durable plugin and reassembles them after a reopen past a malformed row", async () => {
+    const stateDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "openclaw-context-outbox-durable-plugin-"),
+    );
+    tempDirs.push(stateDir);
+    const database = openOpenClawAgentDatabase({
+      agentId: "main",
+      env: { OPENCLAW_STATE_DIR: stateDir },
+    });
+    const databasePath = database.path;
+    // Turn messages shaped exactly like the entries the transcript hands to
+    // commitTurn in production: plain { role, content } records.
+    const turnMessages = (user: string, assistant: string) =>
+      [
+        { role: "user", content: user },
+        { role: "assistant", content: assistant },
+      ] as unknown as ContextEngineTurnOutboxPayload["messages"];
+    // A real (minimal) durable context plugin. commitTurn persists each accepted
+    // turn's messages to the plugin's own on-disk context store and honours the
+    // atomic-idempotent contract, so a host retry of an already-committed key
+    // reports "duplicate" instead of storing the same messages twice.
+    const pluginStorePath = path.join(stateDir, "plugin-context-store.jsonl");
+    type PluginTurn = {
+      advancementKey: string;
+      sessionId: string;
+      messages: ContextEngineTurnOutboxPayload["messages"];
+    };
+    const readPluginStore = (): PluginTurn[] =>
+      fs.existsSync(pluginStorePath)
+        ? fs
+            .readFileSync(pluginStorePath, "utf8")
+            .split("\n")
+            .filter(Boolean)
+            .map((line) => JSON.parse(line) as PluginTurn)
+        : [];
+    const commitTurn: NonNullable<ContextEngine["commitTurn"]> = async (params) => {
+      const alreadyCommitted = readPluginStore().some(
+        (turn) => turn.advancementKey === params.advancementKey,
+      );
+      if (alreadyCommitted) {
+        return { status: "duplicate" };
+      }
+      fs.appendFileSync(
+        pluginStorePath,
+        `${JSON.stringify({
+          advancementKey: params.advancementKey,
+          sessionId: params.sessionId,
+          messages: params.messages,
+        })}\n`,
+      );
+      return { status: "committed" };
+    };
+    const engine = {
+      info: {
+        id: "test",
+        name: "Test",
+        transcriptSemantics: {
+          currentTurnFence: "before-current-turn-entry-v1",
+          turnAdvancementIdempotency: "atomic-idempotent-v1",
+        },
+      },
+      ingest: async () => ({ ingested: true }),
+      assemble: async ({ sessionId, messages }) => {
+        // Reconstitute the persisted turns for this session, then append the
+        // incoming run's messages, so a later run continues from committed context.
+        const persisted = readPluginStore()
+          .filter((turn) => turn.sessionId === sessionId)
+          .flatMap((turn) => turn.messages);
+        const assembled = [...persisted, ...messages];
+        return { messages: assembled, estimatedTokens: assembled.length };
+      },
+      compact: async () => ({ ok: true, compacted: false }),
+      commitTurn,
+    } satisfies ContextEngine;
+    const createLease = () => {
+      const degradeBeforeStart = vi.fn();
+      const lease = {
+        engine,
+        effectiveEngine: engine,
+        effectiveEngineId: "test",
+        effectiveEnginePluginId: undefined,
+        degraded: false,
+        degradedReason: undefined,
+        selectForHost: vi.fn(),
+        degradeBeforeStart,
+        begin: vi.fn(),
+        deferDisposalUntil: vi.fn(),
+        dispose: vi.fn(async () => undefined),
+      } satisfies ContextEngineLogicalTurnLease;
+      return { degradeBeforeStart, lease };
+    };
+    const admissionFor = (advancementKey: string, sequence: number) =>
+      createPayload({ advancementKey, databasePath, sequence, sessionId: "session-a" }).boundary
+        .admission;
+    const outboxKeys = (target: typeof database) =>
+      (
+        target.db
+          .prepare(
+            "SELECT advancement_key FROM context_engine_turn_outbox ORDER BY advancement_key",
+          )
+          .all() as Array<{ advancement_key: string }>
+      ).map((row) => row.advancement_key);
+
+    enqueueContextEngineTurnCommit({
+      database,
+      engineId: "test",
+      payload: createPayload({
+        advancementKey: "session-a:malformed",
+        databasePath,
+        sequence: 1,
+        sessionId: "session-a",
+      }),
+    });
+    // Corrupt the first stored payload so recovery and every pending-work JSON
+    // projection meet invalid JSON before the later valid row.
+    database.db
+      .prepare(
+        "UPDATE context_engine_turn_outbox SET payload_json = '{not-valid-json' WHERE advancement_key = ?",
+      )
+      .run("session-a:malformed");
+    enqueueContextEngineTurnCommit({
+      database,
+      engineId: "test",
+      payload: createPayload({
+        advancementKey: "session-a:later-valid",
+        databasePath,
+        sequence: 3,
+        sessionId: "session-a",
+        messages: turnMessages("later valid user turn", "later valid assistant turn"),
+      }),
+    });
+
+    const warn = vi.fn();
+    const firstRun = createLease();
+    await drainPendingContextEngineTurnsBeforeRun({
+      admission: admissionFor("session-a:current-1", 5),
+      lease: firstRun.lease,
+      warn,
+    });
+
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "skipping outbox row with malformed payload JSON: session-a:malformed",
+      ),
+    );
+    // Before the json_valid guard the pending-work projection faulted on the
+    // corrupted row, so the pre-run owner reported a retry failure and degraded.
+    expect(warn).not.toHaveBeenCalledWith(
+      expect.stringContaining("failed to retry pending turn advancement"),
+    );
+    expect(firstRun.degradeBeforeStart).not.toHaveBeenCalled();
+    expect(readPluginStore()).toEqual([
+      {
+        advancementKey: "session-a:later-valid",
+        sessionId: "session-a",
+        messages: turnMessages("later valid user turn", "later valid assistant turn"),
+      },
+    ]);
+
+    // The pre-run owner admits the current turn after draining; drop that intent so
+    // the reopened run starts from the state the corrupted row actually produced.
+    database.db
+      .prepare("DELETE FROM context_engine_turn_outbox WHERE advancement_key = ?")
+      .run("session-a:current-1");
+
+    // Reopen the existing database so the next run sees durable state only.
+    closeOpenClawAgentDatabasesForTest();
+    const reopened = openOpenClawAgentDatabase({ agentId: "main", path: databasePath });
+    const reopenedWarn = vi.fn();
+    recoverContextEngineTurnOutbox({
+      database: reopened,
+      engineId: "test",
+      sessionId: "session-a",
+      warn: reopenedWarn,
+    });
+    expect(reopenedWarn).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "skipping outbox row with malformed payload JSON: session-a:malformed",
+      ),
+    );
+
+    // Continuation on the reopened database: a later accepted turn advances while a
+    // host retry of the already-committed turn stays idempotent.
+    enqueueContextEngineTurnCommit({
+      database: reopened,
+      engineId: "test",
+      payload: createPayload({
+        advancementKey: "session-a:after-reopen",
+        databasePath,
+        sequence: 9,
+        sessionId: "session-a",
+        messages: turnMessages("after reopen user turn", "after reopen assistant turn"),
+      }),
+    });
+    enqueueContextEngineTurnCommit({
+      database: reopened,
+      engineId: "test",
+      payload: createPayload({
+        advancementKey: "session-a:later-valid",
+        databasePath,
+        sequence: 3,
+        sessionId: "session-a",
+        messages: turnMessages("later valid user turn", "later valid assistant turn"),
+      }),
+    });
+    const drained = await drainContextEngineTurnOutbox({
+      database: reopened,
+      engine,
+      engineId: "test",
+      warn: reopenedWarn,
+    });
+
+    // The corrupted row is excluded from pending work, so the reopened database
+    // reports nothing outstanding and the next run keeps its full context path.
+    expect(drained.pending).toBe(false);
+    expect(readPluginStore()).toEqual([
+      {
+        advancementKey: "session-a:later-valid",
+        sessionId: "session-a",
+        messages: turnMessages("later valid user turn", "later valid assistant turn"),
+      },
+      {
+        advancementKey: "session-a:after-reopen",
+        sessionId: "session-a",
+        messages: turnMessages("after reopen user turn", "after reopen assistant turn"),
+      },
+    ]);
+    expect(outboxKeys(reopened)).toEqual(["session-a:malformed"]);
+    const retainedOutboxRows = outboxKeys(reopened);
+
+    const continuationRun = createLease();
+    await drainPendingContextEngineTurnsBeforeRun({
+      admission: admissionFor("session-a:current-2", 11),
+      lease: continuationRun.lease,
+      warn: reopenedWarn,
+    });
+    expect(continuationRun.degradeBeforeStart).not.toHaveBeenCalled();
+    expect(reopenedWarn).not.toHaveBeenCalledWith(
+      expect.stringContaining("failed to retry pending turn advancement"),
+    );
+
+    // A subsequent run reassembles context straight from the plugin's durable
+    // store: the messages committed before the reopen come back and the incoming
+    // prompt is appended, proving persisted turn content is reused, not dropped.
+    const persistedTurns = readPluginStore();
+    const assembled = await engine.assemble({
+      sessionId: "session-a",
+      messages: turnMessages("next run user prompt", "next run assistant reply"),
+    });
+    expect(assembled.messages).toEqual([
+      ...turnMessages("later valid user turn", "later valid assistant turn"),
+      ...turnMessages("after reopen user turn", "after reopen assistant turn"),
+      ...turnMessages("next run user prompt", "next run assistant reply"),
+    ]);
+
+    // Terminal trace of the persisted production state, so the after-fix behaviour
+    // is visible in CI output without attaching a debugger.
+    console.log(
+      JSON.stringify({
+        scenario: "durable-plugin-message-persistence-and-reassembly",
+        database: path.basename(databasePath),
+        persistedTurns: persistedTurns.map((turn) => ({
+          advancementKey: turn.advancementKey,
+          messages: turn.messages,
+        })),
+        assembledContext: assembled.messages,
+        assembledTokenEstimate: assembled.estimatedTokens,
+        retainedOutboxRows,
+        leaseDegradations:
+          firstRun.degradeBeforeStart.mock.calls.length +
+          continuationRun.degradeBeforeStart.mock.calls.length,
+      }),
     );
   });
 });
