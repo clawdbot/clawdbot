@@ -10,7 +10,7 @@ import { resolveReplayInvalidFlag, resolveRunLivenessState } from "./incomplete-
 import type { EmbeddedRunAttemptResult } from "./types.js";
 
 const SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION =
-  "The previous assistant turn completed its tool calls but did not produce a user-visible answer. Continue from the current transcript and produce the final user-visible answer now. Do not repeat completed tool calls or restart from scratch.";
+  "The previous assistant turn completed its tool calls but did not produce a user-visible answer. Continue from the current transcript and produce the final user-visible answer now. Do not repeat completed tool calls or restart from scratch. Tools are unavailable in this step: it is a text-only pass, so reply with plain text and do not attempt any tool call.";
 
 type LastAssistant = NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
 
@@ -151,6 +151,21 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     );
 
     expect(instruction).toBe(SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION);
+  });
+
+  it("tells the finalizer that tools are unavailable", () => {
+    // The settled-turn finalization pass runs with disableTools: true. If the instruction
+    // does not say so, the model reaches for a tool, the denied call registers as capability
+    // activity, and projectSettledTurnFinalizationAttemptResult throws away the whole result
+    // -- including a perfectly good answer produced in the same completion.
+    const instruction = resolveSettledToolTerminalContinuationInstruction(
+      makeSettledContinuationParams(makeSettledIdleWriteAttempt(), {
+        timedOut: true,
+      }),
+    );
+
+    expect(instruction).toContain("Tools are unavailable in this step");
+    expect(instruction).toContain("do not attempt any tool call");
   });
 
   it("suppresses continuation for an exactly matched all-terminal current batch", () => {
