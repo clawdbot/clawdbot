@@ -39,6 +39,9 @@ const repositoryScriptEntries = [
   // Invoked by the documented macOS Computer Use live-proof shell rig.
   "scripts/dev/computer-use-macos-live-proof.ts!",
   "scripts/dev/ios-node-e2e.ts!",
+  // Maintainer prompt proofs are invoked directly rather than imported.
+  "scripts/dev/message-tool-only-codex-app-server-proof.ts!",
+  "scripts/dev/message-tool-only-prompt-live-proof.ts!",
   "scripts/diffs-shiki-curated.ts!",
   // Reusable Docker workflows invoke this from the downloaded .release-harness tree.
   "scripts/docker-e2e.mts!",
