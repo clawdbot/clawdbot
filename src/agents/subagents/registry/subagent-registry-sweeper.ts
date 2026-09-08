@@ -557,7 +557,9 @@ export function createSubagentRegistrySweeper(params: {
         runs.delete(runId);
         mutatedRunIds.add(runId);
         await safeRemoveAttachmentsDir(entry);
-        if (!suppressSessionEffects && !sessionOwnershipChanged) {
+        // Completed deletes already notified the engine at settlement. Expiry
+        // must not replay that key-based effect against a same-key successor.
+        if (shouldDeleteSession && !sessionOwnershipChanged) {
           runCleanupTail(runId, "context-engine cleanup", async () => {
             await params.notifyContextEngineSubagentEnded(sweptContext(entry));
           });

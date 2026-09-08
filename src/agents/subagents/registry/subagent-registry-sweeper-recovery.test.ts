@@ -672,12 +672,7 @@ describe("subagent registry recovery scheduling", () => {
     await sweeper.sweepOnce();
 
     expect(callGateway).not.toHaveBeenCalled();
-    expect(notifyContextEngineSubagentEnded).toHaveBeenCalledWith({
-      agentDir: undefined,
-      childSessionKey: entry.childSessionKey,
-      reason: "swept",
-      workspaceDir: undefined,
-    });
+    expect(notifyContextEngineSubagentEnded).not.toHaveBeenCalled();
     expect(runs.has(entry.runId)).toBe(false);
   });
 

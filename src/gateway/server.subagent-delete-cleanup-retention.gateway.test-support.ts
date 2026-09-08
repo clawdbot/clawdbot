@@ -22,7 +22,10 @@ import {
 } from "../agents/subagents/registry/subagent-registry.test-helpers.js";
 import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
 import { shouldKeepSubagentRunChildLink } from "../agents/subagents/registry/subagent-run-liveness.js";
+import { LegacyContextEngine } from "../context-engine/legacy.js";
+import type { ContextEngine } from "../context-engine/types.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
+import { getActiveGatewayRootWorkHolders } from "../process/gateway-work-admission.js";
 import type { callGateway } from "./call.js";
 import { installConnectedSessionStoreGatewaySuite } from "./test-helpers.connected-session-store.js";
 import { installGatewayTestHooks, rpcReq, testState, writeSessionStore } from "./test-helpers.js";
@@ -42,7 +45,7 @@ afterEach(() => {
 });
 
 /** Route registry gateway calls at the live ephemeral gateway so cleanup really deletes. */
-function useLiveGatewayForRegistryCleanup(): void {
+function useLiveGatewayForRegistryCleanup(engine?: ContextEngine): void {
   const callLiveGateway = async (options: { method: string; params?: unknown }) => {
     const res = await rpcReq<Record<string, unknown>>(
       gatewaySuite.ws,
@@ -56,13 +59,25 @@ function useLiveGatewayForRegistryCleanup(): void {
   };
   subagentRegistryTesting.setDepsForTest({
     callGateway: callLiveGateway as unknown as typeof callGateway,
+    ...(engine ? { resolveContextEngine: async () => engine } : {}),
   });
 }
 
 describe("delete-cleanup archive retention through a real gateway", () => {
   test("cleanup, retained listing, restart recovery, and expiry", async () => {
     testState.sessionStorePath = gatewaySuite.sessionStorePath;
-    useLiveGatewayForRegistryCleanup();
+    const managedContext = new Map([[CHILD_SESSION_KEY, "original context"]]);
+    const cleanupReasons: string[] = [];
+    const engine = Object.assign(new LegacyContextEngine(), {
+      onSubagentEnded: async ({
+        childSessionKey,
+        reason,
+      }: Parameters<NonNullable<ContextEngine["onSubagentEnded"]>>[0]) => {
+        cleanupReasons.push(reason);
+        managedContext.delete(childSessionKey);
+      },
+    });
+    useLiveGatewayForRegistryCleanup(engine);
     await writeSessionStore({
       entries: {
         [REQUESTER_SESSION_KEY]: {
@@ -146,6 +161,8 @@ describe("delete-cleanup archive retention through a real gateway", () => {
     expect(afterRestart?.archiveAtMs).toBe(retained.archiveAtMs);
     expect(afterRestart?.cleanupCompletedAt).toBe(cleanupCompletedAt);
     expect(afterRestart?.deleteCleanupDispatchedAt).toBeTypeOf("number");
+    await vi.waitFor(() => expect(managedContext.has(CHILD_SESSION_KEY)).toBe(false));
+    expect(cleanupReasons).toEqual(["deleted"]);
 
     // Interrupted handoff: the process can stop after the live gateway accepted
     // sessions.delete and before cleanup bookkeeping lands. Rebuild exactly that
@@ -160,7 +177,7 @@ describe("delete-cleanup archive retention through a real gateway", () => {
     saveSubagentRegistryToSqlite(interrupted);
 
     resetSubagentRegistryForTests({ persist: false });
-    useLiveGatewayForRegistryCleanup();
+    useLiveGatewayForRegistryCleanup(engine);
     initSubagentRegistry();
     expect(getSubagentRunByRunId(RUN_ID)?.cleanupCompletedAt).toBeUndefined();
     activateSubagentRegistry(
@@ -193,6 +210,31 @@ describe("delete-cleanup archive retention through a real gateway", () => {
     expect(interruptedProjection).toBeDefined();
     expect(shouldKeepSubagentRunChildLink(interruptedProjection!)).toBe(false);
 
+    // Wait for the recovered owner's cleanup before a same-key successor starts.
+    // The stateful engine fixture exposes the final effect of the real registry
+    // callback, rather than substituting the notification owner with a mock.
+    await vi.waitFor(() =>
+      expect(
+        getActiveGatewayRootWorkHolders().filter((holder) => holder.startsWith("subagents:")),
+      ).toEqual([]),
+    );
+    const completedCleanupReasons = [...cleanupReasons];
+    managedContext.set(CHILD_SESSION_KEY, "successor context");
+    await writeSessionStore({
+      entries: {
+        [REQUESTER_SESSION_KEY]: {
+          sessionId: "sess-gw-delete-retention-parent",
+          updatedAt: Date.now(),
+        },
+        [CHILD_SESSION_KEY]: {
+          sessionId: "sess-gw-delete-retention-successor",
+          lifecycleRevision: "rev-gw-delete-retention-successor",
+          spawnedBy: REQUESTER_SESSION_KEY,
+          updatedAt: Date.now(),
+        },
+      },
+    });
+
     // Expire the live map row the sweeper reads. Listing snapshots are clones.
     const live = getSubagentRunByRunId(RUN_ID);
     expect(live).toBeDefined();
@@ -211,6 +253,20 @@ describe("delete-cleanup archive retention through a real gateway", () => {
         listSubagentRunsForRequester(REQUESTER_SESSION_KEY).some((row) => row.runId === RUN_ID),
       ).toBe(false);
     });
+    await vi.waitFor(() =>
+      expect(
+        getActiveGatewayRootWorkHolders().filter((holder) => holder.startsWith("subagents:")),
+      ).toEqual([]),
+    );
+    expect(managedContext.get(CHILD_SESSION_KEY)).toBe("successor context");
+    expect(cleanupReasons).toEqual(completedCleanupReasons);
+    const successorList = await rpcReq<{ sessions: Array<{ key: string }> }>(
+      gatewaySuite.ws,
+      "sessions.list",
+      { includeUnknown: true },
+    );
+    expect(successorList.ok).toBe(true);
+    expect(successorList.payload?.sessions.map((row) => row.key)).toContain(CHILD_SESSION_KEY);
 
     const verdict = {
       surface: "isolated-gateway",
@@ -231,7 +287,12 @@ describe("delete-cleanup archive retention through a real gateway", () => {
         finalizedByRestoreActivation: recovered.cleanupCompletedAt !== dispatchedAt,
         childLinkAfterRestore: false,
       },
-      expiry: { presentAfterSweep: false },
+      expiry: {
+        presentAfterSweep: false,
+        successorSessionListed: true,
+        successorContext: managedContext.get(CHILD_SESSION_KEY),
+        staleContextCleanupCalls: cleanupReasons.length - completedCleanupReasons.length,
+      },
     };
     // Printed so the exact-head PR body can cite the isolated-gateway output.
     console.log(`OPENCLAW_ISOLATED_GATEWAY_VERDICT ${JSON.stringify(verdict)}`);
