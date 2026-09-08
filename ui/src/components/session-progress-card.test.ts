@@ -221,6 +221,86 @@ describe("renderSessionProgressCard", () => {
     expect(pausedStep?.querySelector("polyline")).not.toBeNull();
   });
 
+  it.each([
+    ["stale", RUN_STARTED_MS - 1, "paused", false],
+    ["current", RUN_STARTED_MS, "in_progress", true],
+  ] as const)(
+    "treats %s progress as current only after the active run starts",
+    (_name, updatedAt, expectedStatus, expectedLive) => {
+      const container = document.createElement("div");
+      render(
+        renderSessionProgressCard(
+          { ...progressCard, updatedAt },
+          "composer",
+          undefined,
+          "running",
+          RUN_STARTED_MS,
+          undefined,
+          true,
+        ),
+        container,
+      );
+
+      expect(
+        container.querySelector(
+          `.session-progress-card__current-marker[data-status="${expectedStatus}"]`,
+        ),
+      ).not.toBeNull();
+      expect(container.querySelector(".session-run-spinner") !== null).toBe(expectedLive);
+    },
+  );
+
+  it("pauses timestamped progress while a later active run is still queued", () => {
+    const container = document.createElement("div");
+    render(
+      renderSessionProgressCard(
+        { ...progressCard, updatedAt: RUN_STARTED_MS - 1 },
+        "composer",
+        undefined,
+        "queued",
+        undefined,
+        undefined,
+        true,
+      ),
+      container,
+    );
+
+    expect(
+      container.querySelector('.session-progress-card__current-marker[data-status="paused"]'),
+    ).not.toBeNull();
+    expect(container.querySelector(".session-progress-card__step--paused")).not.toBeNull();
+    expect(container.querySelector(".session-run-spinner")).toBeNull();
+  });
+
+  it.each([
+    ["stale", RUN_STARTED_MS - 1, "paused", false],
+    ["current", RUN_STARTED_MS, "in_progress", true],
+  ] as const)(
+    "treats %s status-less progress as current only after the active run starts",
+    (_name, updatedAt, expectedStatus, expectedLive) => {
+      const container = document.createElement("div");
+      render(
+        renderSessionProgressCard(
+          { ...progressCard, updatedAt },
+          "composer",
+          undefined,
+          undefined,
+          RUN_STARTED_MS,
+          undefined,
+          true,
+        ),
+        container,
+      );
+
+      expect(
+        container.querySelector(
+          `.session-progress-card__current-marker[data-status="${expectedStatus}"]`,
+        ),
+      ).not.toBeNull();
+      expect(container.querySelector(".session-run-spinner") !== null).toBe(expectedLive);
+    },
+  );
+
   it("keeps a disclosure affordance beside a completed dismissible composer card", () => {
     const container = document.createElement("div");
     const completed = {

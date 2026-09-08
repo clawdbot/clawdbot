@@ -11,6 +11,7 @@ import { SubscriptionsController } from "../../../lit/subscriptions-controller.t
 import { resolveSessionProgressCardTarget } from "../../session-progress-cards.ts";
 import { isSessionRunActive } from "../../session-run-state.ts";
 import { parseAgentSessionKey } from "../../sessions/session-key.ts";
+import { sessionProgressTargetQuery } from "../../sessions/session-requests.ts";
 import type { BoardWidget } from "../types.ts";
 
 function resolveSessionTarget(
@@ -33,6 +34,10 @@ class OpenClawSessionProgressWidget extends OpenClawLightDomElement {
   @property({ attribute: false }) session: BoardGetParams = { sessionKey: "" };
   @property({ attribute: false }) active = true;
 
+  private observedSessions?: ApplicationContext["sessions"];
+  private observedScopeId?: string | null;
+  private unsubscribeList?: () => void;
+
   private readonly progressCard = new SessionProgressCardController(this, {
     gateway: () =>
       this.active && resolveSessionTarget(this.widget, this.session).sessionKey
@@ -40,15 +45,30 @@ class OpenClawSessionProgressWidget extends OpenClawLightDomElement {
         : undefined,
     target: () => resolveSessionTarget(this.widget, this.session),
   });
+
   constructor() {
     super();
-    void new SubscriptionsController(this).watch(
-      () =>
-        this.active && resolveSessionTarget(this.widget, this.session).sessionKey
-          ? this.context?.sessions
-          : undefined,
-      (sessions, notify) => sessions.subscribe(notify),
+    void new SubscriptionsController(this).effect(
+      () => this.context?.agentSelection,
+      (agentSelection) => {
+        this.bindSessionList();
+        return agentSelection.subscribe(() => this.bindSessionList());
+      },
     );
+  }
+
+  override connectedCallback(): void {
+    super.connectedCallback();
+    this.bindSessionList();
+  }
+
+  override disconnectedCallback(): void {
+    this.releaseSessionList();
+    super.disconnectedCallback();
+  }
+
+  override willUpdate(): void {
+    this.bindSessionList();
   }
 
   override render() {
@@ -93,11 +113,14 @@ class OpenClawSessionProgressWidget extends OpenClawLightDomElement {
       this.context?.gateway.snapshot ?? {},
       resolveSessionTarget(this.widget, this.session),
     );
-    const row = this.context?.sessions?.state.result?.sessions.find(
-      (entry) =>
-        entry.key === identity.sessionKey &&
-        (entry.agentId ?? parseAgentSessionKey(entry.key)?.agentId) === identity.agentId,
-    );
+    const scopeId = this.context?.agentSelection.state.scopeId ?? null;
+    const row = this.context?.sessions
+      .listSnapshot(sessionProgressTargetQuery(scopeId))
+      .result?.sessions.find(
+        (entry) =>
+          entry.key === identity.sessionKey &&
+          (entry.agentId ?? parseAgentSessionKey(entry.key)?.agentId) === identity.agentId,
+      );
     return html`${errorNotice}${renderSessionProgressCard(
       card,
       "board",
@@ -107,6 +130,46 @@ class OpenClawSessionProgressWidget extends OpenClawLightDomElement {
       row?.endedAt,
       isSessionRunActive(row ?? {}),
     )}`;
+  }
+
+  private bindSessionList(): void {
+    const context = this.context;
+    if (!context) {
+      return;
+    }
+    const sessions = context.sessions;
+    const scopeId = context.agentSelection.state.scopeId?.trim() || null;
+    const shouldObserve =
+      this.active && Boolean(resolveSessionTarget(this.widget, this.session).sessionKey);
+    if (!shouldObserve) {
+      this.releaseSessionList();
+      return;
+    }
+    if (sessions === this.observedSessions && scopeId === this.observedScopeId) {
+      return;
+    }
+    this.releaseSessionList();
+    this.observedSessions = sessions;
+    this.observedScopeId = scopeId;
+    const query = sessionProgressTargetQuery(scopeId);
+    this.unsubscribeList = sessions.subscribeList(query, () => this.requestUpdate());
+    const snapshot = sessions.listSnapshot(query);
+    this.requestUpdate();
+    if (
+      !snapshot.result &&
+      !snapshot.loading &&
+      !snapshot.error &&
+      context.gateway.snapshot.phase === "connected"
+    ) {
+      void sessions.refreshList({ ...query, force: true });
+    }
+  }
+
+  private releaseSessionList(): void {
+    this.unsubscribeList?.();
+    this.unsubscribeList = undefined;
+    this.observedSessions = undefined;
+    this.observedScopeId = undefined;
   }
 }
 
