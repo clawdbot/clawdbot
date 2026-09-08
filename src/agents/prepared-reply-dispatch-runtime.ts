@@ -33,6 +33,7 @@ function createReplyDispatchRuntime(
     workspaceDir: owner.workspaceDir,
     config: owner.config,
     modelCatalog: owner.modelCatalog,
+    readFullModelCatalog: snapshot.readFullModelCatalog,
     inboundPluginRegistry,
     pluginGeneration,
   });

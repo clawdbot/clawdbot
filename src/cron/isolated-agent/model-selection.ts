@@ -2,6 +2,7 @@ import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
 import { resolveConfiguredModelPolicyAllow } from "../../agents/model-selection-shared.js";
 import { resolveConfiguredThinkingDefault } from "../../agents/model-thinking-default.js";
+import type { PreparedReplyDispatchRuntime } from "../../agents/prepared-model-runtime.types.js";
 import {
   hasResolvedThinkingCatalogEntry,
   normalizeThinkingCatalogProviders,
@@ -36,9 +37,14 @@ type CronSessionModelOverrides = {
 
 type CronModelSelectionSource = "default" | "subagent" | "agent" | "hook" | "payload" | "session";
 
+type CronModelSelectionOwner = Pick<
+  ResolvedPublishedModelCatalogOwner,
+  "agentId" | "agentDir" | "workspaceDir" | "config" | "metadataSnapshot" | "modelCatalog"
+>;
+
 type ResolveCronModelSelectionParams = {
   cfg: OpenClawConfig;
-  owner?: ResolvedPublishedModelCatalogOwner;
+  owner?: CronModelSelectionOwner;
   agentConfigOverride?: Pick<AgentConfig, "model" | "subagents">;
   sessionEntry: CronSessionModelOverrides;
   payload: CronJob["payload"];
@@ -57,7 +63,7 @@ type ResolveCronModelSelectionResult =
       modelSource: CronModelSelectionSource;
       configuredProfileId?: string;
       cfgWithAgentDefaults: OpenClawConfig;
-      owner: ResolvedPublishedModelCatalogOwner;
+      owner: CronModelSelectionOwner;
     }
   | {
       ok: false;
@@ -94,15 +100,23 @@ export async function resolveCronModelSelectionOwner(params: {
   requiredAgentId?: string;
   agentDir?: string;
   workspaceDir?: string;
-}): Promise<ResolvedPublishedModelCatalogOwner> {
-  const owner = await loadResolvedPublishedModelCatalogOwner({
-    config: params.cfg,
-    ...(params.agentId ? { agentId: params.agentId } : {}),
-    ...(params.agentDir ? { agentDir: params.agentDir } : {}),
-    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
-    readOnly: true,
-    allowGatewaySubagentBinding: true,
-  });
+  publishedRuntime?: PreparedReplyDispatchRuntime;
+}): Promise<CronModelSelectionOwner> {
+  const owner = params.publishedRuntime
+    ? Object.freeze({
+        ...params.publishedRuntime,
+        metadataSnapshot: params.publishedRuntime.pluginGeneration.pluginMetadataSnapshot,
+        modelCatalog:
+          params.publishedRuntime.readFullModelCatalog?.() ?? params.publishedRuntime.modelCatalog,
+      })
+    : await loadResolvedPublishedModelCatalogOwner({
+        config: params.cfg,
+        ...(params.agentId ? { agentId: params.agentId } : {}),
+        ...(params.agentDir ? { agentDir: params.agentDir } : {}),
+        ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+        readOnly: true,
+        allowGatewaySubagentBinding: true,
+      });
   if (
     params.requiredAgentId &&
     !publishedModelCatalogOwnerMatchesAgent(owner, params.requiredAgentId)
@@ -115,7 +129,7 @@ export async function resolveCronModelSelectionOwner(params: {
 }
 
 async function resolveCronThinkingCatalog(params: {
-  owner: ResolvedPublishedModelCatalogOwner;
+  owner: CronModelSelectionOwner;
   provider: string;
   model: string;
 }): Promise<ModelCatalogEntry[]> {
@@ -144,7 +158,7 @@ async function resolveCronThinkingCatalog(params: {
 
 export async function resolveCronThinkingSelection(params: {
   cfg: OpenClawConfig;
-  owner: ResolvedPublishedModelCatalogOwner;
+  owner: CronModelSelectionOwner;
   provider: string;
   model: string;
   jobThinking?: string;
