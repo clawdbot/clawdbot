@@ -46,22 +46,64 @@ Bare `openclaw models` is equivalent to `openclaw models status`.
 
 `openclaw models status` shows the resolved default/fallbacks plus an auth overview. Active profile cooldowns appear under **Unavailable auth profiles** with the stored reason and recovery action; JSON output exposes the same data in `auth.unusableProfiles`. For plugin-owned agent runtimes such as Codex, status also checks whether the owning plugin is enabled and passed startup payload verification. A route with valid credentials but an unavailable runtime reports `status: unavailable` instead of `usable`; JSON output includes separate `authStatus`, `runtimeStatus`, and bounded runtime diagnostics. When provider usage snapshots are available, the OAuth/API-key status section includes provider usage windows and quota snapshots. Current usage-window providers: Anthropic, GitHub Copilot, OpenAI, MiniMax, SuperGrok via xAI OAuth, Xiaomi, and z.ai. Usage auth comes from provider-specific hooks when available; otherwise OpenClaw falls back to matching OAuth/API-key credentials from auth profiles, env, or config.
 
-In `--json` output, `auth.providers` is the env/config/store-aware provider overview, while `auth.oauth` is auth-store profile health only.
+Use an explicit agent when diagnosing that agent's selection:
+
+```bash
+openclaw models list --agent <agentId>
+openclaw models status --agent <agentId>
+openclaw models status --agent <agentId> --json --check
+```
+
+The list shows model inventory. Status explains the configured default, fallbacks,
+and authentication for their routes. It does not inspect a chat session's model
+override; use [`/model status`](/concepts/models#model-in-chat) in that session.
+
+#### Read status correctly
+
+These sections answer different questions:
+
+| Output                                           | Meaning                                                                                   |
+| ------------------------------------------------ | ----------------------------------------------------------------------------------------- |
+| **Auth overview** / `auth.providers`             | Credential sources found in the environment, provider config, or auth store.              |
+| **OAuth/token status** / `auth.oauth`            | Stored profile health and expiry. The JSON object also includes API-key profiles.         |
+| **Model route issues** / `auth.modelRouteIssues` | Incompatible routes, missing route credentials, or readiness that could not be confirmed. |
+| **Runtime auth** / `auth.runtimeAuthRoutes`      | Authentication and runtime availability for routes that use a separate agent runtime.     |
+
+A stored profile or `static` health entry does not prove that its credential can
+be used now. For example, a stored `file` or `exec` SecretRef (a reference to a
+secret) can appear in the overview while its route remains `indeterminate`.
+That means readiness could not be confirmed in this command path; it does not
+mean the provider rejected the credential. Inspect the route diagnostic and the
+configured secret source before replacing credentials.
+
+Status without `--probe` is not a model-call test. It can still resolve targeted
+config secrets and inspect provider-owned auth state. Use `--probe` only when you
+intend to make the live requests described below.
+
+With `--check`, exit codes are:
+
+- `0`: no configured-route auth or runtime issue was found, and no selected credential is expiring. This does not prove that a model request will succeed.
+- `1`: a route has missing or expired auth, an incompatible route, an unavailable runtime, or indeterminate readiness.
+- `2`: a selected credential is expiring, with no condition that requires exit code `1`.
+
+Command failures, such as failure to resolve a required config secret, also exit
+nonzero. In JSON mode, these can return a command error instead of the status
+object; check the process exit code as well as the output.
 
 Options:
 
-| Flag                      | Effect                                                                                                                                   |
-| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| `--json`                  | JSON output; auth-profile, provider, and startup diagnostics go to stderr so stdout stays pipeable into `jq`.                            |
-| `--plain`                 | Plain text output.                                                                                                                       |
-| `--check`                 | Exit non-zero if auth is expiring/expired or a selected agent runtime is unavailable: `1` = unavailable/expired/missing, `2` = expiring. |
-| `--probe`                 | Live probe of configured auth profiles. Real requests; may consume tokens and trigger rate limits.                                       |
-| `--probe-provider <name>` | Probe one provider only.                                                                                                                 |
-| `--probe-profile <id>`    | Probe specific auth profile ids (repeat or comma-separated).                                                                             |
-| `--probe-timeout <ms>`    | Per-probe timeout.                                                                                                                       |
-| `--probe-concurrency <n>` | Concurrent probes.                                                                                                                       |
-| `--probe-max-tokens <n>`  | Probe max tokens (best effort).                                                                                                          |
-| `--agent <id>`            | Configured agent id; overrides `OPENCLAW_AGENT_DIR`.                                                                                     |
+| Flag                      | Effect                                                                                                        |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `--json`                  | JSON output; auth-profile, provider, and startup diagnostics go to stderr so stdout stays pipeable into `jq`. |
+| `--plain`                 | Plain text output.                                                                                            |
+| `--check`                 | Return the auth/runtime check exit code described above, including `1` for indeterminate readiness.           |
+| `--probe`                 | Live probe of configured auth profiles. Real requests; may consume tokens and trigger rate limits.            |
+| `--probe-provider <name>` | Probe one provider only.                                                                                      |
+| `--probe-profile <id>`    | Probe specific auth profile ids (repeat or comma-separated).                                                  |
+| `--probe-timeout <ms>`    | Per-probe timeout.                                                                                            |
+| `--probe-concurrency <n>` | Concurrent probes.                                                                                            |
+| `--probe-max-tokens <n>`  | Probe max tokens (best effort).                                                                               |
+| `--agent <id>`            | Configured agent id; overrides `OPENCLAW_AGENT_DIR`.                                                          |
 
 `--probe-timeout` requires a positive number; `--probe-concurrency` and `--probe-max-tokens` require positive integers. Omit these options to use their defaults (`8000`, `2`, and `8`, respectively); explicitly empty values are rejected.
 
@@ -82,13 +124,6 @@ For OpenAI ChatGPT/Codex OAuth troubleshooting, `openclaw models status`, `openc
 
 `openclaw models list` is read-only: it reads config, auth profiles, existing catalog state, and provider-owned catalog rows, but never rewrites `models.json`.
 
-`openclaw models refresh [--json]` forces an immediate hosted catalog check. Like `scan`, it rejects `--agent` because the hosted catalog is global, not agent-scoped.
-Updated rows apply to a running Gateway after its next restart. The command
-prints a clear disabled result when `models.catalogRefresh.enabled` is `false`.
-The catalog's public change history lives in
-[`openclaw/catalog`](https://github.com/openclaw/catalog), where each content
-update is committed by the scheduled publisher.
-
 Options: `--all` (full catalog), `--local` (filter to local models), `--provider <id>`, `--agent <id>`, `--json`, `--plain`. `--agent` selects that agent's auth store, workspace, and provider catalog context; explicit multi-agent fleets do not need a default owner when it is present.
 
 Notes:
@@ -105,6 +140,22 @@ Notes:
 - Model refs are parsed by splitting on the **first** `/`. If the model ID includes `/` (OpenRouter-style), include the provider prefix (example: `openrouter/moonshotai/kimi-k2`).
 - If you omit the provider, OpenClaw resolves the input as an alias first, then as a unique configured-provider match for that exact model id, and only then falls back to the configured default provider with a deprecation warning. If that provider no longer exposes the configured default model, OpenClaw falls back to the first configured provider/model instead of surfacing a stale removed-provider default.
 - `models status` may show `marker(<value>)` in auth output for non-secret placeholders (for example `OPENAI_API_KEY`, `secretref-managed`, `minimax-oauth`, `oauth:chutes`, `ollama-local`) instead of masking them as secrets.
+
+### Refresh the hosted catalog
+
+`openclaw models refresh [--json]` checks the hosted metadata catalog. It does
+not sign in to providers, test credentials, or activate downloaded rows in a
+running Gateway. It rejects `--agent` because the hosted catalog is global.
+
+Restart the Gateway to use downloaded updates. The Gateway reports when a
+checked catalog needs a restart, including an update downloaded by another
+process. A successful refresh result describes the download, not live activation.
+If `models.catalogRefresh.enabled` is `false`, the command reports that refresh
+is disabled.
+
+See [Hosted catalog updates](/concepts/models#hosted-catalog-updates) for the
+update lifecycle. The public change history is in
+[`openclaw/catalog`](https://github.com/openclaw/catalog).
 
 ### Set default / image model
 
