@@ -180,9 +180,6 @@
             "maxTokens": 65536,
             "thinkingLevelMap": {
               "minimal": null
-            },
-            "compat": {
-              "codeMode": "preferred"
             }
           },
           {

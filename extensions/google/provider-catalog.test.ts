@@ -36,7 +36,6 @@ describe("google provider catalog", () => {
       reasoning: true,
       input: ["text", "image"],
       thinkingLevelMap: { minimal: null },
-      compat: { codeMode: "preferred" },
     });
     expect(provider.models.find((model) => model.id === "gemini-3.7-flash")).toMatchObject({
       contextWindow: 1_048_576,
@@ -172,7 +171,6 @@ describe("google provider catalog", () => {
         contextWindow: 1_048_576,
         maxTokens: 65_536,
         input: ["text", "image", "video"],
-        compat: { codeMode: "preferred" },
         thinkingLevelMap: { minimal: null },
       }),
       expect.objectContaining({
