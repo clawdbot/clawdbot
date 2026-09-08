@@ -28,7 +28,7 @@ import { getScopedChannelsCommandSecretTargets } from "./command-secret-targets.
 import { formatHelpExamples } from "./help-format.js";
 
 function parseLimit(value: unknown): number | null {
-  if (value === undefined || value === null || value === "") {
+  if (value === undefined || value === null) {
     return null;
   }
   const parsed = parseStrictPositiveInteger(value);

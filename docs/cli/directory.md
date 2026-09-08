@@ -17,6 +17,10 @@ Results are meant to be pasted into other commands, especially `openclaw message
 - `--channel <name>`: channel id/alias (required when multiple channels are configured; auto-selected when only one is configured)
 - `--account <id>`: account id (default: channel default)
 - `--json`: output JSON
+- `--limit <n>`: positive integer cap for peers/groups/members listings
+
+`--limit` requires a positive integer. Omit `--limit` for an unbounded listing; explicitly empty
+values are rejected.
 
 Default output renders IDs and names in a table. Empty list results name the channel and account
 that were queried; JSON list output uses an empty array (`[]`). Failures exit nonzero and use the

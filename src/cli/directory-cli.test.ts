@@ -749,10 +749,14 @@ describe("registerDirectoryCli", () => {
   });
 
   it.each([
-    ["peers list", ["directory", "peers", "list", "--channel", "slack", "--limit", "5x"]],
-    ["groups list", ["directory", "groups", "list", "--channel", "slack", "--limit", "5x"]],
+    ["peers list", "5x", ["directory", "peers", "list", "--channel", "slack", "--limit", "5x"]],
+    ["peers list", "", ["directory", "peers", "list", "--channel", "slack", "--limit", ""]],
+    ["peers list", "   ", ["directory", "peers", "list", "--channel", "slack", "--limit", "   "]],
+    ["groups list", "5x", ["directory", "groups", "list", "--channel", "slack", "--limit", "5x"]],
+    ["groups list", "", ["directory", "groups", "list", "--channel", "slack", "--limit", ""]],
     [
       "group members",
+      "5x",
       [
         "directory",
         "groups",
@@ -765,7 +769,22 @@ describe("registerDirectoryCli", () => {
         "5x",
       ],
     ],
-  ])("rejects partial directory limit for %s", async (_label, args) => {
+    [
+      "group members",
+      "",
+      [
+        "directory",
+        "groups",
+        "members",
+        "--channel",
+        "slack",
+        "--group-id",
+        "group-1",
+        "--limit",
+        "",
+      ],
+    ],
+  ])("rejects invalid directory limit %s %j", async (_label, _limit, args) => {
     mocks.resolveInstallableChannelPlugin.mockResolvedValue({
       cfg: { channels: { slack: {} } },
       channelId: "slack",
