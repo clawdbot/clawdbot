@@ -256,15 +256,31 @@ describe("Bun SQLite library selection", () => {
       const libraryPath = "/missing/sqlite.dylib";
       const f = fixture({
         exists: vi.fn(() => false),
+        probe: vi.fn(() => {
+          throw new Error("dlopen failed");
+        }),
         env: source === "env" ? { OPENCLAW_SQLITE_LIBRARY: libraryPath } : {},
       });
       expect(() => f.ensure(source === "explicit" ? { explicitPath: libraryPath } : {})).toThrow(
         `Cannot use SQLite library ${libraryPath}: missing file. Fix or unset OPENCLAW_SQLITE_LIBRARY; install a supported library with brew install sqlite.`,
       );
-      expect(f.probe).not.toHaveBeenCalled();
+      expect(f.probe).toHaveBeenCalledExactlyOnceWith(libraryPath);
       expect(f.select).not.toHaveBeenCalled();
     },
   );
+
+  it("reports the real defect of a loadable library that has no file on disk", () => {
+    // Apple's SQLite is served from the dyld shared cache: dlopen succeeds, stat does not.
+    const f = fixture({
+      exists: vi.fn(() => false),
+      probe: vi.fn(() => ({ ...safeProbe, extensionLoadingSupported: false })),
+      env: { OPENCLAW_SQLITE_LIBRARY: "/usr/lib/libsqlite3.dylib" },
+    });
+    expect(() => f.ensure()).toThrow(
+      "Cannot use SQLite library /usr/lib/libsqlite3.dylib: built with SQLITE_OMIT_LOAD_EXTENSION",
+    );
+    expect(f.select).not.toHaveBeenCalled();
+  });
 
   it.each([
     {
@@ -333,12 +349,18 @@ describe("Bun SQLite library selection", () => {
   });
 
   it("keeps the runtime default when no library exists, including a blank override", () => {
-    const f = fixture({ exists: vi.fn(() => false), env: { OPENCLAW_SQLITE_LIBRARY: "  " } });
+    const f = fixture({
+      exists: vi.fn(() => false),
+      probe: vi.fn(() => {
+        throw new Error("dlopen failed");
+      }),
+      env: { OPENCLAW_SQLITE_LIBRARY: "  " },
+    });
     const selection = f.ensure();
     expect(selection).toEqual({ source: "runtime" });
     expect(f.ensure()).toBe(selection);
     expect(f.exists).toHaveBeenCalledTimes(3);
-    expect(f.probe).not.toHaveBeenCalled();
+    expect(f.probe).toHaveBeenCalledTimes(3);
     expect(f.select).not.toHaveBeenCalled();
   });
 
