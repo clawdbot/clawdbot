@@ -61,6 +61,12 @@ The selection source controls whether the fallback chain is allowed:
 - **Legacy session override**: older session entries may have `modelOverride` without `modelOverrideSource`. OpenClaw treats those as user overrides so an explicit old selection is not silently converted into fallback behavior.
 - **Cron payload model**: a cron job `payload.model` / `--model` is a job primary, not a user session override. It uses configured fallbacks unless the job provides `payload.fallbacks`; `payload.fallbacks: []` makes the cron run strict.
 
+An agent can override only its fallback chain with `model: { fallbacks: [...] }`
+and keep inheriting the shared primary. Setting `fallbacks: []` explicitly disables
+fallbacks without pinning that primary. In **Settings → Agents → Overview**, editing
+fallback chips preserves primary inheritance; removing every chip saves an empty
+chain instead of restoring the shared fallbacks.
+
 Outside group and channel conversations, OpenClaw sends a visible notice when a turn moves onto fallback and another notice when a later turn succeeds on the selected primary. Group and channel conversations keep the same fallback state and lifecycle events without posting these notices. Persisted notice state prevents repeated notices when consecutive turns use the same selected/active pair, while model selection itself remains unchanged.
 
 ## Auth failure skip cache
