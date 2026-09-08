@@ -20,21 +20,18 @@ function buildOAuthRefreshSecretDigest(params: {
   kind: "access" | "refresh";
   secret: string;
 }): string {
+  const generationInput = JSON.stringify([
+    "openclaw.oauth-refresh-generation",
+    1,
+    params.profileId,
+    params.provider,
+    params.kind,
+    params.secret,
+  ]);
   // Refresh markers correlate provider-issued high-entropy OAuth token generations;
   // they are not used for password storage or credential verification.
-  return createHash("sha256")
-    .update(
-      // codeql[js/insufficient-password-hash]
-      JSON.stringify([
-        "openclaw.oauth-refresh-generation",
-        1,
-        params.profileId,
-        params.provider,
-        params.kind,
-        params.secret,
-      ]),
-    )
-    .digest("hex");
+  // codeql[js/insufficient-password-hash]
+  return createHash("sha256").update(generationInput).digest("hex");
 }
 
 function parseOAuthRefreshFence(credential: OAuthRefreshFenceCredential | undefined):
