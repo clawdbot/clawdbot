@@ -1,5 +1,5 @@
 // Model auth-list tests cover provider auth listing and output formatting.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../../agents/auth-profiles.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { OutputRuntimeEnv } from "../../runtime.js";
@@ -37,6 +37,8 @@ vi.mock("./shared.js", () => ({
   resolveModelsTargetAgent: mocks.resolveModelsTargetAgent,
 }));
 
+const NOW = Date.parse("2026-08-30T00:00:00.000Z");
+
 function createRuntime(): OutputRuntimeEnv & { logs: string[]; jsonPayloads: unknown[] } {
   const logs: string[] = [];
   const jsonPayloads: unknown[] = [];
@@ -67,6 +69,10 @@ describe("modelsAuthListCommand", () => {
       .mockReset()
       .mockImplementation((agentDir: string) => `${agentDir}/openclaw-agent.sqlite`);
     mocks.resolveModelsTargetAgent.mockClear();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   it("filters profiles by provider and redacts credential material in JSON output", async () => {
@@ -204,6 +210,113 @@ describe("modelsAuthListCommand", () => {
         }),
       ],
     });
+  });
+
+  it("projects only active subscription blocks in text and JSON", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(NOW);
+    const profile = { type: "api_key", provider: "openai", key: "credential-secret" } as const;
+    mocks.ensureAuthProfileStore.mockReturnValue({
+      version: 1,
+      profiles: {
+        "openai:profile-wide": profile,
+        "openai:model-scoped": profile,
+        "openai:model-scope-without-model": profile,
+        "openai:expired": profile,
+        "openai:invalid": profile,
+      },
+      usageStats: {
+        "openai:profile-wide": {
+          blockedUntil: NOW + 60_000,
+          blockedReason: "subscription_limit",
+          blockedSource: "codex_rate_limits",
+          blockedModel: "legacy-model-must-not-leak",
+        },
+        "openai:model-scoped": {
+          blockedUntil: NOW + 120_000,
+          blockedReason: "subscription_limit",
+          blockedSource: "wham",
+          blockedScope: "model",
+          blockedModel: "gpt-5.5",
+        },
+        "openai:model-scope-without-model": {
+          blockedUntil: NOW + 180_000,
+          blockedReason: "subscription_limit",
+          blockedSource: "wham",
+          blockedScope: "model",
+        },
+        "openai:expired": {
+          blockedUntil: NOW - 1,
+          blockedReason: "subscription_limit",
+          blockedSource: "codex_rate_limits",
+          blockedScope: "model",
+          blockedModel: "gpt-expired",
+        },
+        "openai:invalid": {
+          blockedUntil: 8_700_000_000_000_000,
+          blockedReason: "subscription_limit",
+          blockedSource: "wham",
+          blockedScope: "model",
+          blockedModel: "gpt-invalid",
+        },
+      },
+    } satisfies AuthProfileStore);
+
+    const textRuntime = createRuntime();
+    await modelsAuthListCommand({}, textRuntime);
+    expect(textRuntime.logs.find((line) => line.includes("openai:profile-wide"))).toContain(
+      "blocked:subscription_limit via codex_rate_limits for profile until 2026-08-30T00:01:00.000Z",
+    );
+    expect(textRuntime.logs.find((line) => line.includes("openai:model-scoped"))).toContain(
+      "blocked:subscription_limit via wham for model gpt-5.5 until 2026-08-30T00:02:00.000Z",
+    );
+    expect(
+      textRuntime.logs.find((line) => line.includes("openai:model-scope-without-model")),
+    ).toContain("blocked:subscription_limit via wham for profile until 2026-08-30T00:03:00.000Z");
+    for (const id of ["openai:expired", "openai:invalid"]) {
+      expect(textRuntime.logs.find((line) => line.includes(id))).not.toContain("blocked:");
+    }
+
+    const jsonRuntime = createRuntime();
+    await modelsAuthListCommand({ json: true }, jsonRuntime);
+    const profiles = (
+      jsonRuntime.jsonPayloads[0] as {
+        profiles: Array<Record<string, unknown> & { id: string }>;
+      }
+    ).profiles;
+    const byId = Object.fromEntries(profiles.map((entry) => [entry.id, entry]));
+    expect(byId["openai:model-scoped"]).toMatchObject({
+      blockedUntil: "2026-08-30T00:02:00.000Z",
+      blockedReason: "subscription_limit",
+      blockedSource: "wham",
+      blockedScope: "model",
+      blockedModel: "gpt-5.5",
+    });
+    expect(byId["openai:profile-wide"]).toMatchObject({
+      blockedUntil: "2026-08-30T00:01:00.000Z",
+      blockedReason: "subscription_limit",
+      blockedSource: "codex_rate_limits",
+      blockedScope: "profile",
+    });
+    expect(byId["openai:profile-wide"]).not.toHaveProperty("blockedModel");
+    expect(byId["openai:model-scope-without-model"]).toMatchObject({
+      blockedUntil: "2026-08-30T00:03:00.000Z",
+      blockedReason: "subscription_limit",
+      blockedSource: "wham",
+      blockedScope: "profile",
+    });
+    expect(byId["openai:model-scope-without-model"]).not.toHaveProperty("blockedModel");
+    for (const id of ["openai:expired", "openai:invalid"]) {
+      const profileEntry = byId[id];
+      expect(profileEntry).toBeDefined();
+      expect(profileEntry).not.toHaveProperty("blockedUntil");
+      expect(profileEntry).not.toHaveProperty("blockedReason");
+      expect(profileEntry).not.toHaveProperty("blockedSource");
+      expect(profileEntry).not.toHaveProperty("blockedScope");
+      expect(profileEntry).not.toHaveProperty("blockedModel");
+    }
+    expect(JSON.stringify(jsonRuntime.jsonPayloads[0])).not.toMatch(
+      /secret|legacy-model-must-not-leak/u,
+    );
   });
 
   it("routes legacy Gemini CLI cooldowns to supported Google API-key setup", async () => {
