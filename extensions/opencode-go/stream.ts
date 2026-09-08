@@ -4,13 +4,46 @@ import {
   createDeepSeekV4OpenAICompatibleThinkingWrapper,
   streamWithPayloadPatch,
 } from "openclaw/plugin-sdk/provider-stream-shared";
-import { isOpencodeGoKimiNoReasoningModelId } from "./provider-catalog.js";
+import {
+  isOpencodeGoKimiNoReasoningModelId,
+  normalizeOpencodeGoBaseUrl,
+} from "./provider-catalog.js";
 import { stripOpencodeGoKimiReasoningPayload } from "./reasoning-sanitizer.js";
 import {
   createOpencodeGoStalledStreamWrapper,
   OPENCODE_GO_STREAM_FIRST_EVENT_TIMEOUT_MS_DEFAULT,
   OPENCODE_GO_STREAM_IDLE_TIMEOUT_MS_DEFAULT,
 } from "./stream-termination.js";
+
+const OPENCODE_SESSION_HEADER = "x-opencode-session";
+
+function hasOpencodeSessionHeader(headers: Record<string, string> | undefined): boolean {
+  return Object.keys(headers ?? {}).some((name) => name.toLowerCase() === OPENCODE_SESSION_HEADER);
+}
+
+export function createOpencodeGoSessionHeaderWrapper(
+  baseStreamFn: ProviderWrapStreamFnContext["streamFn"],
+): ProviderWrapStreamFnContext["streamFn"] {
+  if (!baseStreamFn) {
+    return undefined;
+  }
+  return (model, context, options) => {
+    const sessionId = options?.sessionId?.trim();
+    if (
+      model.provider !== "opencode-go" ||
+      !normalizeOpencodeGoBaseUrl({ api: model.api, baseUrl: model.baseUrl }) ||
+      !sessionId ||
+      hasOpencodeSessionHeader(model.headers) ||
+      hasOpencodeSessionHeader(options?.headers)
+    ) {
+      return baseStreamFn(model, context, options);
+    }
+    return baseStreamFn(model, context, {
+      ...options,
+      headers: { ...options?.headers, [OPENCODE_SESSION_HEADER]: sessionId },
+    });
+  };
+}
 
 function isOpencodeGoDeepSeekV4ModelId(modelId: unknown): boolean {
   return modelId === "deepseek-v4-flash" || modelId === "deepseek-v4-pro";
@@ -60,9 +93,10 @@ export function createOpencodeGoWrapper(
   // Outermost layer: provider-owned stalled SSE termination so the underlying
   // OpenAI SDK request is aborted at the raw opencode-go boundary instead of
   // waiting for the shared runtime stuck-session recovery.
-  return createOpencodeGoStalledStreamWrapper(deepSeekWrapped, {
+  const stalledWrapped = createOpencodeGoStalledStreamWrapper(deepSeekWrapped, {
     provider: "opencode-go",
     idleTimeoutMs: OPENCODE_GO_STREAM_IDLE_TIMEOUT_MS_DEFAULT,
     firstEventTimeoutMs: OPENCODE_GO_STREAM_FIRST_EVENT_TIMEOUT_MS_DEFAULT,
   });
+  return createOpencodeGoSessionHeaderWrapper(stalledWrapped);
 }
