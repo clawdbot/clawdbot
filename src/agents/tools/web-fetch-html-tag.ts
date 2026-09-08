@@ -83,7 +83,9 @@ export function readRawTextOpenTagName(html: string, start: number): string | un
 }
 
 export function findRawTextOpenTagStart(html: string, start: number, end: number): number {
-  for (let i = html.indexOf("<", start); i !== -1 && i < end; i = html.indexOf("<", i + 1)) {
+  const span = html.slice(start, end);
+  for (let offset = span.indexOf("<"); offset !== -1; offset = span.indexOf("<", offset + 1)) {
+    const i = start + offset;
     if (readRawTextOpenTagName(html, i)) {
       return i;
     }
