@@ -58,6 +58,7 @@ afterEach(() => {
 
 async function installedFixture(
   options: {
+    agentProfile?: Pick<ClawOpenClawProfile["agent"], "model" | "subagents">;
     avatar?: string;
     extraWorkspaceFileContent?: Buffer;
     extraWorkspaceFiles?: string[];
@@ -117,6 +118,7 @@ async function installedFixture(
   const openClawProfile: ClawOpenClawProfile = {
     schemaVersion: 1,
     agent: {
+      ...options.agentProfile,
       tools: {
         profile: "minimal",
         alsoAllow: ["cron"],
@@ -289,7 +291,12 @@ describe("exportClawAgent", () => {
   });
 
   it("writes a grouped package from one installed agent", async () => {
-    const fixture = await installedFixture({ withPackage: true });
+    const agentProfile: ClawOpenClawProfile["agent"] = {
+      model: { primary: "acme/primary", fallbacks: ["acme/fallback"] },
+      subagents: { allowAgents: ["researcher", "reviewer"], delegationMode: "prefer" },
+    };
+    const fixture = await installedFixture({ withPackage: true, agentProfile });
+    expect(fixture.config.agents?.entries?.worker).toMatchObject(agentProfile);
     expect(fixture.plan.agent.config.memory?.search).toEqual({
       enabled: true,
       rememberAcrossConversations: true,
@@ -356,6 +363,7 @@ describe("exportClawAgent", () => {
       openClawProfile: {
         schemaVersion: 1,
         agent: {
+          ...agentProfile,
           tools: {
             ...fixture.plan.agent.config.tools,
           },
@@ -387,7 +395,7 @@ describe("exportClawAgent", () => {
     expect(exported.manifest.metadata).toEqual({});
     expect(exported.openClawProfile).toMatchObject({
       schemaVersion: 1,
-      agent: { tools: fixture.plan.agent.config.tools },
+      agent: { ...agentProfile, tools: fixture.plan.agent.config.tools },
     });
     expect(exported.openClawProfile?.agent.tools).not.toHaveProperty("alsoAllow");
     expect(exported.manifest.workspace.bootstrapFiles).not.toHaveProperty("SOUL.md");
@@ -395,7 +403,49 @@ describe("exportClawAgent", () => {
       "profile: full",
     );
     await expect(readFile(join(out, "workspace", "SOUL.md"), "utf8")).rejects.toThrow();
+    const replanned = await buildClawAddPlan({
+      ...exported,
+      context: {
+        workspace: join(fixture.root, "reimported"),
+        packagePreflight: async () => ({
+          ok: true,
+          action: "install",
+          integrity: `sha256:${"a".repeat(64)}`,
+        }),
+      },
+    });
+    expect(replanned.blockers).toEqual([]);
+    expect(replanned.agent.config).toMatchObject(agentProfile);
   });
+
+  it.each([
+    {},
+    {
+      model: { primary: "acme/primary", fallbacks: [] },
+      subagents: { allowAgents: [], delegationMode: "suggest" as const },
+    },
+  ])(
+    "preserves explicit empty selections without exporting inherited defaults: %j",
+    async (agentProfile) => {
+      const fixture = await installedFixture({ agentProfile });
+      fixture.config.agents!.defaults = {
+        model: { primary: "acme/inherited", fallbacks: ["acme/inherited-fallback"] },
+        subagents: { allowAgents: ["inherited-worker"], delegationMode: "prefer" },
+      };
+      const out = join(fixture.root, "selections");
+      await exportClawAgent("worker", out, {
+        env: fixture.env,
+        config: fixture.config,
+        sourceMcpServers: fixture.sourceMcpServers,
+      });
+      const exported = await readClawManifestFile(out);
+      if (!exported.ok) {
+        throw new Error(JSON.stringify(exported.diagnostics));
+      }
+      expect(exported.openClawProfile?.agent.model).toEqual(agentProfile.model);
+      expect(exported.openClawProfile?.agent.subagents).toEqual(agentProfile.subagents);
+    },
+  );
 
   it("exports extension plugins into profile v1 without duplicating manifest packages", async () => {
     const fixture = await installedFixture();

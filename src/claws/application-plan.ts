@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
 import { stableStringify } from "@openclaw/normalization-core";
+import { inspectModelReference } from "../commands/models/model-reference-validation.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
   ClawAddCapabilityChange,
   ClawAddPlanAction,
@@ -12,6 +14,87 @@ import type {
   ClawPackagePreflight,
   ClawPackagePreflightResult,
 } from "./types.js";
+
+export function clawAddCapabilityChange(
+  change: Omit<ClawAddCapabilityChange, "classification" | "requiresDistinctConsent" | "digest">,
+): ClawAddCapabilityChange {
+  return {
+    ...change,
+    classification: "escalation",
+    requiresDistinctConsent: true,
+    digest: `sha256:${createHash("sha256").update(stableStringify(change.effect)).digest("hex")}`,
+  };
+}
+
+export function clawAgentCapabilityChange(
+  agentId: string,
+  settings: ClawOpenClawProfile["agent"],
+): ClawAddCapabilityChange | undefined {
+  const effect = {
+    ...(settings.model ? { model: settings.model } : {}),
+    ...(settings.subagents ? { subagents: settings.subagents } : {}),
+    ...(settings.sandbox ? { sandbox: settings.sandbox } : {}),
+    ...(settings.tools ? { tools: settings.tools } : {}),
+    ...(settings.memory ? { memory: settings.memory } : {}),
+    ...(settings.heartbeat ? { heartbeat: settings.heartbeat } : {}),
+  };
+  if (Object.keys(effect).length === 0) {
+    return undefined;
+  }
+  return clawAddCapabilityChange({
+    kind: "agent",
+    id: agentId,
+    path: "agent",
+    action: "create",
+    reason:
+      settings.model || settings.subagents
+        ? "The new agent declares model, delegation, sandbox, tool, memory-search, or recurring heartbeat configuration."
+        : "The new agent declares sandbox, tool, memory-search, or recurring heartbeat capabilities.",
+    effect,
+  });
+}
+
+export function clawAgentConfigurationNotices(
+  agent: ClawOpenClawProfile["agent"],
+  config: OpenClawConfig,
+  agentIds: ReadonlySet<string>,
+): ClawDiagnostic[] {
+  const notices: ClawDiagnostic[] = [];
+  const notice = (code: string, path: string, message: string) => {
+    notices.push({
+      level: "warning",
+      phase: "plan",
+      code,
+      path: `$.profiles.openclaw.agent.${path}`,
+      message,
+    });
+  };
+  for (const [index, target] of (agent.subagents?.allowAgents ?? []).entries()) {
+    if (!agentIds.has(target)) {
+      notice(
+        "delegation_target_unresolved",
+        `subagents.allowAgents[${index}]`,
+        `Delegation target ${JSON.stringify(target)} is not in the local agent roster; it will be applied as declared. Install that agent before delegating to it.`,
+      );
+    }
+  }
+  const refs = agent.model ? [agent.model.primary, ...(agent.model.fallbacks ?? [])] : [];
+  for (const [index, ref] of refs.entries()) {
+    const slash = ref.indexOf("/");
+    const inspection = inspectModelReference({
+      cfg: config,
+      ref: { provider: ref.slice(0, slash), model: ref.slice(slash + 1) },
+    });
+    if (inspection.status !== "known") {
+      notice(
+        "model_not_in_catalog",
+        index === 0 ? "model.primary" : `model.fallbacks[${index - 1}]`,
+        `Model ${JSON.stringify(ref)} is not in the local model catalog; it will be applied as declared. Configure it before running the agent.`,
+      );
+    }
+  }
+  return notices;
+}
 
 export function clawProfileExtensionPackages(
   profile: ClawOpenClawProfile | undefined,
@@ -83,12 +166,7 @@ function extensionCapabilityChange(params: {
         : "The OpenClaw profile requires installation of native extension content or executable code.",
     effect,
   };
-  return {
-    ...change,
-    classification: "escalation",
-    requiresDistinctConsent: true,
-    digest: `sha256:${createHash("sha256").update(stableStringify(effect)).digest("hex")}`,
-  };
+  return clawAddCapabilityChange(change);
 }
 
 export async function planClawExtensions(params: {

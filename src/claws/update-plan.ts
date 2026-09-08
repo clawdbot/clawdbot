@@ -2,6 +2,7 @@
 import { createHash } from "node:crypto";
 import { lstat } from "node:fs/promises";
 import { stableStringify } from "@openclaw/normalization-core";
+import { listAgentIds } from "../agents/agent-scope-config.js";
 import { normalizeConfiguredMcpServers } from "../config/mcp-config-normalize.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { root as fsSafeRoot } from "../infra/fs-safe.js";
@@ -200,6 +201,8 @@ export async function buildClawUpdatePlan(params: {
       source: params.targetSource,
       diagnostics: params.diagnostics,
       context: {
+        config: params.config,
+        existingAgentIds: listAgentIds(params.config).filter((id) => id !== agentId),
         agentId,
         workspace: record.install.workspace,
         packagePreflight: recordingClawPackagePreflight(
@@ -677,7 +680,7 @@ export async function buildClawUpdatePlan(params: {
       capabilityChanges,
       readiness: targetPlan.readiness,
       blockers,
-      diagnostics: params.diagnostics ?? [],
+      diagnostics: targetPlan.diagnostics,
     };
     return { ...plan, planIntegrity: digest(plan) };
   } finally {

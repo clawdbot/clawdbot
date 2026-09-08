@@ -40,6 +40,11 @@ const nonEmptyString = z
     "Value must not have leading or trailing whitespace.",
   );
 const optionalString = nonEmptyString.optional();
+// Check reference shape here; the add planner reports local catalog availability.
+const modelRef = nonEmptyString.regex(
+  /^[^\s/]+\/[^\s/]+(?:\/[^\s/]+)*$/,
+  "Model must use provider/model form.",
+);
 
 function isBoundedClawToolGrant(value: string): boolean {
   const normalized = normalizeToolPolicyName(value);
@@ -128,6 +133,17 @@ const openClawProfileSchema = z
     schemaVersion: z.literal(1),
     agent: z
       .object({
+        model: z
+          .object({ primary: modelRef, fallbacks: z.array(modelRef).optional() })
+          .strict()
+          .optional(),
+        subagents: z
+          .object({
+            allowAgents: z.array(agentId).optional(),
+            delegationMode: z.enum(["suggest", "prefer"]).optional(),
+          })
+          .strict()
+          .optional(),
         groupChat: z
           .object({ mentionPatterns: z.array(nonEmptyString).min(1).optional() })
           .strict()

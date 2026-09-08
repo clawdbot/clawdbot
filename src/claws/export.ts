@@ -106,6 +106,21 @@ function portableOpenClawProfile(
     }
   }
   const settings = {
+    ...(agent.model !== undefined
+      ? { model: typeof agent.model === "string" ? { primary: agent.model } : agent.model }
+      : {}),
+    ...(agent.subagents
+      ? {
+          subagents: {
+            ...(agent.subagents.allowAgents !== undefined
+              ? { allowAgents: agent.subagents.allowAgents }
+              : {}),
+            ...(agent.subagents.delegationMode !== undefined
+              ? { delegationMode: agent.subagents.delegationMode }
+              : {}),
+          },
+        }
+      : {}),
     ...(agent.groupChat?.mentionPatterns?.length
       ? { groupChat: { mentionPatterns: agent.groupChat.mentionPatterns } }
       : {}),
@@ -181,9 +196,17 @@ function portableOpenClawProfile(
         }
       : {}),
   };
-  return extensions.length > 0 || Object.keys(settings).length > 0
-    ? { schemaVersion: 1, agent: settings, extensions }
-    : undefined;
+  if (extensions.length === 0 && Object.keys(settings).length === 0) {
+    return undefined;
+  }
+  const parsed = parseClawOpenClawProfile({ schemaVersion: 1, agent: settings, extensions });
+  if (!parsed.ok) {
+    throw new ClawExportError(
+      "export_openclaw_profile_invalid",
+      parsed.diagnostics.map((diagnostic) => diagnostic.message).join("; "),
+    );
+  }
+  return parsed.profile;
 }
 
 function normalizedRelativePath(value: string): string {
@@ -547,15 +570,6 @@ export async function exportClawAgent(
       "export_manifest_invalid",
       parsed.diagnostics.map((diagnostic) => diagnostic.message).join("; "),
     );
-  }
-  if (openClawProfile) {
-    const parsedProfile = parseClawOpenClawProfile(openClawProfile);
-    if (!parsedProfile.ok) {
-      throw new ClawExportError(
-        "export_openclaw_profile_invalid",
-        parsedProfile.diagnostics.map((diagnostic) => diagnostic.message).join("; "),
-      );
-    }
   }
   const target = resolve(resolveUserPath(outputDirectory));
   await mkdir(dirname(target), { recursive: true });

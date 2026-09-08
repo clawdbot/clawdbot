@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { clawProfileExtensionPackages } from "./application-plan.js";
-import { buildClawAddPlan } from "./lifecycle.js";
+import { buildClawAddPlan, type ClawAddPlanContext } from "./lifecycle.js";
 import { parseClawManifest, parseClawOpenClawProfile } from "./schema.js";
 import type { ClawManifest, ClawSourceIdentity } from "./types.js";
 
@@ -75,6 +75,72 @@ describe("Claw application schema v1", () => {
 });
 
 describe("Claw application planning v1", () => {
+  it("discloses model and delegation effects with nonblocking local availability notices", async () => {
+    const { source, workspace } = await createPlanSource();
+    const agent = {
+      model: { primary: "acme/primary", fallbacks: ["acme/missing"] },
+      subagents: { allowAgents: ["researcher", "writer"], delegationMode: "prefer" as const },
+    };
+    const params = {
+      manifest: requireManifest({ schemaVersion: 1, agent: { id: "analyst" } }),
+      openClawProfile: { schemaVersion: 1 as const, agent },
+      source,
+    };
+    const context: ClawAddPlanContext = {
+      workspace,
+      existingAgentIds: ["researcher"],
+      config: {
+        models: {
+          providers: {
+            acme: {
+              baseUrl: "https://models.example.test",
+              models: [
+                {
+                  id: "primary",
+                  name: "Primary",
+                  reasoning: false,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  maxTokens: 4096,
+                },
+              ],
+            },
+          },
+        },
+      },
+    };
+    const plan = await buildClawAddPlan({ ...params, context });
+    expect(plan.agent.config).toMatchObject(agent);
+    expect(plan.capabilityChanges).toContainEqual(
+      expect.objectContaining({ kind: "agent", effect: agent }),
+    );
+    expect(plan.blockers).toEqual([]);
+    expect(plan.readiness).toEqual({ ready: true, requirements: [] });
+    expect(plan.diagnostics).toMatchObject([
+      {
+        level: "warning",
+        phase: "plan",
+        code: "delegation_target_unresolved",
+        path: "$.profiles.openclaw.agent.subagents.allowAgents[1]",
+      },
+      {
+        level: "warning",
+        phase: "plan",
+        code: "model_not_in_catalog",
+        path: "$.profiles.openclaw.agent.model.fallbacks[0]",
+      },
+    ]);
+    const unavailable = await buildClawAddPlan({ ...params, context: { workspace } });
+    expect(unavailable.diagnostics).toContainEqual(
+      expect.objectContaining({
+        code: "model_not_in_catalog",
+        path: "$.profiles.openclaw.agent.model.primary",
+      }),
+    );
+    expect(unavailable.blockers).toEqual([]);
+    expect(unavailable.planIntegrity).not.toBe(plan.planIntegrity);
+  });
+
   it("projects profile extensions onto canonical plugin package identities", () => {
     expect(
       clawProfileExtensionPackages({ schemaVersion: 1, agent: {}, extensions: [extension] }),
@@ -289,5 +355,43 @@ describe("Claw application planning v1", () => {
         path: "$.profiles.openclaw.extensions[0].format",
       }),
     );
+  });
+});
+
+describe("parseClawOpenClawProfile model and delegation", () => {
+  it.each([
+    {
+      model: { primary: "acme/model", fallbacks: ["acme/team/fallback"] },
+      subagents: { allowAgents: ["researcher", "writer_2"], delegationMode: "prefer" },
+    },
+    {
+      model: { primary: "acme/model", fallbacks: [] },
+      subagents: { allowAgents: [], delegationMode: "suggest" },
+    },
+    { model: { primary: "acme/model" }, subagents: {} },
+  ])("preserves declared selections: %j", (agent) => {
+    expect(parseClawOpenClawProfile({ schemaVersion: 1, agent })).toMatchObject({
+      ok: true,
+      profile: { agent },
+    });
+  });
+
+  it.each([
+    { model: {} },
+    { model: "acme/model" },
+    { model: { primary: "model" } },
+    { model: { primary: "/model" } },
+    { model: { primary: "acme/" } },
+    { model: { primary: "acme/has space" } },
+    { model: { primary: "acme/model", fallbacks: [""] } },
+    { model: { primary: "acme/model", fallbacks: ["invalid"] } },
+    { model: { primary: "acme/model", extra: true } },
+    { subagents: { delegationMode: "required" } },
+    { subagents: { allowAgents: ["Invalid"] } },
+    { subagents: { allowAgents: ["*"] } },
+    { subagents: { allowAgents: [""] } },
+    { subagents: { extra: true } },
+  ])("rejects invalid profile selections: %j", (agent) => {
+    expect(parseClawOpenClawProfile({ schemaVersion: 1, agent }).ok).toBe(false);
   });
 });
