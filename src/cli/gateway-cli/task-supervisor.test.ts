@@ -1,10 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SpawnInput } from "../../process/supervisor/types.js";
 
-const { spawn, log, flushLogger } = vi.hoisted(() => ({
+const { spawn, log, flushLogger, bindWindowsTaskLauncher } = vi.hoisted(() => ({
   spawn: vi.fn(),
   log: { info: vi.fn(), error: vi.fn() },
   flushLogger: vi.fn(async () => {}),
+  bindWindowsTaskLauncher: vi.fn(),
+}));
+
+vi.mock("koffi", () => ({ default: {} }));
+vi.mock("../../process/supervisor/service-child-windows-task-launcher.js", () => ({
+  bindWindowsTaskLauncher,
 }));
 
 vi.mock("../../logging/subsystem.js", () => ({
@@ -21,6 +27,7 @@ describe("Windows Gateway task supervisor", () => {
   const argv = [...process.argv];
   const execArgv = [...process.execArgv];
   const exitCode = process.exitCode;
+  const launcherMarker = process.env.OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER;
 
   beforeEach(() => {
     process.argv = [
@@ -31,6 +38,7 @@ describe("Windows Gateway task supervisor", () => {
     ];
     process.execArgv = ["--import", "tsx"];
     process.exitCode = undefined;
+    delete process.env.OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER;
     vi.spyOn(process, "platform", "get").mockReturnValue("win32");
   });
 
@@ -38,12 +46,54 @@ describe("Windows Gateway task supervisor", () => {
     process.argv = [...argv];
     process.execArgv = [...execArgv];
     process.exitCode = exitCode;
+    if (launcherMarker === undefined) {
+      delete process.env.OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER;
+    } else {
+      process.env.OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER = launcherMarker;
+    }
     vi.restoreAllMocks();
     vi.clearAllMocks();
     spawn.mockReset();
+    bindWindowsTaskLauncher.mockReset();
+  });
+
+  it("binds launcher ownership before admitting a child and consumes the launcher marker", async () => {
+    process.env.OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER = "wscript";
+    bindWindowsTaskLauncher.mockImplementation(() => {
+      expect(spawn).not.toHaveBeenCalled();
+      expect(process.env.OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER).toBeUndefined();
+    });
+    spawn.mockImplementation(async () => {
+      expect(bindWindowsTaskLauncher).toHaveBeenCalledOnce();
+      expect(process.env.OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER).toBeUndefined();
+      return { cancel: vi.fn(), wait: async () => ({ exitCode: 0, exitSignal: null }) };
+    });
+    const { runWindowsGatewayTaskSupervisor } = await import("./task-supervisor.js");
+    await runWindowsGatewayTaskSupervisor();
+    expect(spawn).toHaveBeenCalledOnce();
+    expect(bindWindowsTaskLauncher).toHaveBeenCalledOnce();
+  });
+
+  it("does not admit a Gateway after its task launcher has exited", async () => {
+    process.env.OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER = "wscript";
+    spawn.mockResolvedValue({
+      cancel: vi.fn(),
+      wait: async () => ({ exitCode: 0, exitSignal: null }),
+    });
+    bindWindowsTaskLauncher.mockImplementation(() => {
+      throw new Error("Windows task WScript launcher is no longer live");
+    });
+    const { runWindowsGatewayTaskSupervisor } = await import("./task-supervisor.js");
+    await runWindowsGatewayTaskSupervisor();
+    expect(spawn).not.toHaveBeenCalled();
+    expect(process.exitCode).toBe(1);
+    expect(JSON.stringify(log.error.mock.calls)).toContain("WScript launcher is no longer live");
+    expect(process.env.OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER).toBeUndefined();
   });
 
   it("runs the Gateway child through the anchored Job Object and waits for its tree", async () => {
+    // A direct Startup fallback inherits the install preference, without a live WScript owner.
+    process.env.OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER = "1";
     const waitForExtinction = vi.fn(async () => {});
     spawn.mockResolvedValue({
       cancel: vi.fn(),
@@ -53,6 +103,7 @@ describe("Windows Gateway task supervisor", () => {
     const { runWindowsGatewayTaskSupervisor } = await import("./task-supervisor.js");
     await runWindowsGatewayTaskSupervisor();
 
+    expect(bindWindowsTaskLauncher).not.toHaveBeenCalled();
     expect(spawn).toHaveBeenCalledWith(
       expect.objectContaining({
         mode: "anchored-shell",

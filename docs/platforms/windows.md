@@ -137,6 +137,12 @@ through a generated `gateway.vbs` WScript wrapper, so the background Gateway
 does not open a visible console window. If task creation is denied, OpenClaw
 falls back to a per-user Startup-folder login item.
 
+The hidden launcher owns the supervised Gateway process tree. Ending the task
+with `schtasks /end /tn "OpenClaw Gateway"`, `Stop-ScheduledTask`, or Task
+Scheduler's **End** action terminates the Gateway and its descendants. After
+updating an older installation, run `openclaw gateway install --force` to
+regenerate the launcher if the update did not refresh it.
+
 Gateway status and Doctor read the Scheduled Task's numeric current state, independently of the Windows display language or console code page. A previous task exit result does not prove whether it is running now. Queued or unknown tasks do not count as safely stopped for Doctor maintenance. Stop a queued task through its service owner; if inspection is inaccessible, restore Task Scheduler inspection permissions before retrying.
 
 Gateway startup creates private SQLite staging directories through Windows APIs,

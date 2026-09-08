@@ -1,6 +1,10 @@
 // Windows Task Scheduler bridge: retain the Job Object owner until the Gateway exits.
 import { quoteCmdScriptArg } from "../../daemon/cmd-argv.js";
-import { WINDOWS_TASK_SUPERVISOR_FLAG } from "../../daemon/windows-task-supervisor-contract.js";
+import {
+  WINDOWS_TASK_LAUNCHER_ACTIVE,
+  WINDOWS_TASK_LAUNCHER_ENV,
+  WINDOWS_TASK_SUPERVISOR_FLAG,
+} from "../../daemon/windows-task-supervisor-contract.js";
 import { flushLogger } from "../../logging/logger.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getProcessSupervisor } from "../../process/supervisor/index.js";
@@ -20,8 +24,8 @@ function renderGatewayTaskCommand(): string {
 
 /**
  * Runs the real Gateway inside the Windows Job Object owned by ProcessSupervisor.
- * The Task Scheduler action waits on this process; parent loss closes the Job and
- * its entire child tree, so a detached launcher cannot leave a stale Gateway behind.
+ * The hidden task launcher owns an outer Job containing this supervisor. The
+ * command anchor owns the inner Job used for cancellation and extinction joins.
  */
 export async function runWindowsGatewayTaskSupervisor(): Promise<void> {
   if (process.platform !== "win32") {
@@ -29,6 +33,15 @@ export async function runWindowsGatewayTaskSupervisor(): Promise<void> {
   }
   let stderr = "";
   try {
+    const launcher = process.env[WINDOWS_TASK_LAUNCHER_ENV];
+    delete process.env[WINDOWS_TASK_LAUNCHER_ENV];
+    if (launcher === WINDOWS_TASK_LAUNCHER_ACTIVE) {
+      const [{ default: koffi }, { bindWindowsTaskLauncher }] = await Promise.all([
+        import("koffi"),
+        import("../../process/supervisor/service-child-windows-task-launcher.js"),
+      ]);
+      bindWindowsTaskLauncher(koffi);
+    }
     const managed = await getProcessSupervisor().spawn({
       mode: "anchored-shell",
       command: renderGatewayTaskCommand(),
