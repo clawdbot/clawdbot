@@ -164,6 +164,9 @@ output warns that matches may be incomplete. With `--json`, the response adds
 `stale: true`, plus `warning` and `action` fields. Treat an empty `results`
 array as authoritative only when `stale` is absent.
 
+The Control UI's Memories tab shows the same warning and recovery guidance
+alongside stale search results, and clears them after a fresh search.
+
 ## `memory forget`
 
 Remove identifiable memory artifacts derived from selected sessions and record

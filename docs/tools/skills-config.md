@@ -363,9 +363,10 @@ different visible skill set per agent.
 <ParamField path="skills.workshop.autonomous.mode" type='"off" | "propose" | "auto"' default='"auto"'>
   `off` disables autonomous capture while keeping the durable-instruction
   suggestion nudge. `propose` creates pending proposals from corrections and
-  substantial completed work. `auto` sends the same captures through the normal
-  scanner-gated Workshop apply path and runs weekly collection cleanup that can
-  rewrite or drop eligible writable skills. User-prompted skill creation,
+  substantial completed work. `auto` uses normal agent tools for direct per-turn
+  and weekly Workshop maintenance, without proposal scanning or automatic rollback
+  snapshots. Immediate foreground repairs still use scanner-gated proposal apply.
+  User-prompted skill creation,
   `/learn`, and manual history scan continue to work in every mode.
 </ParamField>
 

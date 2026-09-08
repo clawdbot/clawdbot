@@ -33,6 +33,7 @@ import androidx.compose.ui.platform.PlatformTextInputInterceptor
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
+import androidx.compose.ui.test.ComposeTimeoutException
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.SemanticsNodeInteraction
 import androidx.compose.ui.test.assertIsDisplayed
@@ -291,7 +292,23 @@ class ChatQuestionDraftLayoutTest {
       }
     }
     // ViewModel bridge updates need the Android main queue, not just Compose clock advancement.
-    composeRule.waitUntil { composeRule.runOnIdle { viewModel.chatMessages.value.size >= 24 } }
+    try {
+      composeRule.waitUntil { composeRule.runOnIdle { viewModel.chatMessages.value.size >= 24 } }
+    } catch (timeout: ComposeTimeoutException) {
+      // Diagnostics must not replace the original timeout.
+      runCatching {
+        println(
+          "QUESTION_HISTORY_TIMEOUT " +
+            "controllerRows=${controller.messages.value.size} modelRows=${viewModel.chatMessages.value.size} " +
+            "controllerLoading=${controller.historyLoading.value} modelLoading=${viewModel.chatHistoryLoading.value} " +
+            "controllerHealthy=${controller.healthOk.value} modelHealthy=${viewModel.chatHealthOk.value} " +
+            "controllerErrorPresent=${controller.errorText.value != null} modelErrorPresent=${viewModel.chatError.value != null} " +
+            "sameSession=${controller.sessionKey.value == viewModel.chatSessionKey.value} " +
+            "appRuntimeMatches=${app.peekRuntime() === runtime}",
+        )
+      }
+      throw timeout
+    }
     composeRule.waitForIdle()
     assertTrue(viewModel.chatQuestions.value.isEmpty())
     composeRule.onNodeWithText("Draft a short status update for the team.").assertIsDisplayed()

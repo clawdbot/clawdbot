@@ -182,6 +182,7 @@ private fun ChatLinkPreview(
   }
   val uriHandler = LocalUriHandler.current
   val cardShape = RoundedCornerShape(ClawTheme.radii.sheet)
+  val metadataAnchor = rememberChatReaderAnchor(result)
   Surface(
     onClick = { uriHandler.openUri(url) },
     shape = cardShape,
@@ -190,15 +191,21 @@ private fun ChatLinkPreview(
   ) {
     Column(modifier = Modifier.fillMaxWidth()) {
       previewImage?.let { image ->
+        val imageAnchor = rememberChatReaderAnchor(imageUrl)
         Image(
           bitmap = image,
           contentDescription = null,
           contentScale = ContentScale.Crop,
-          modifier = Modifier.fillMaxWidth().heightIn(max = 120.dp).clip(cardShape),
+          modifier =
+            Modifier
+              .fillMaxWidth()
+              .heightIn(max = 120.dp)
+              .clip(cardShape)
+              .then(imageAnchor?.modifier ?: Modifier),
         )
       }
       Column(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 8.dp),
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 8.dp).then(metadataAnchor?.modifier ?: Modifier),
         verticalArrangement = Arrangement.spacedBy(3.dp),
       ) {
         Text(domain, style = ClawTheme.type.captionSmall, color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -458,6 +465,7 @@ private fun ChatImagePreview(
   description: String,
   stateKey: String,
 ) {
+  val anchor = rememberChatReaderAnchor(stateKey)
   var previewVisible by rememberSaveable(stateKey) { mutableStateOf(false) }
   Surface(
     onClick = { previewVisible = true },
@@ -471,7 +479,7 @@ private fun ChatImagePreview(
         bitmap = image,
         contentDescription = description,
         contentScale = ContentScale.Fit,
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.fillMaxWidth().then(anchor?.modifier ?: Modifier),
       )
       Surface(
         modifier = Modifier.align(Alignment.BottomEnd).padding(8.dp).size(32.dp),
@@ -563,12 +571,13 @@ fun ChatCodeBlock(
       }
       if (ranges.size == 1) {
         SelectionContainer {
-          ChatCodeText(highlighted)
+          ChatCodeText(highlighted, rememberChatReaderAnchor())
         }
       } else {
         val scroll = rememberLazyListState()
         val action = key(display) { rememberChatReaderAction() }
         val requester = remember { BringIntoViewRequester() }
+        val viewportAnchor = rememberChatReaderAnchor(display)
         val context = LocalContext.current
         LaunchedEffect(scroll, action) {
           scroll.interactionSource.interactions.collect { interaction ->
@@ -598,7 +607,15 @@ fun ChatCodeBlock(
         TextButton(onClick = { copyChatText(context, code) }) { Text(nativeString("Copy code")) }
         // Quoted Markdown asks for intrinsic height; the fixed viewport answers that
         // without forwarding an unsupported intrinsic query into the lazy layout.
-        LazyColumn(state = scroll, modifier = Modifier.fillMaxWidth().height(400.dp).bringIntoViewRequester(requester)) {
+        LazyColumn(
+          state = scroll,
+          modifier =
+            Modifier
+              .fillMaxWidth()
+              .height(400.dp)
+              .bringIntoViewRequester(requester)
+              .then(viewportAnchor?.modifier ?: Modifier),
+        ) {
           items(ranges.size) { index ->
             val range = ranges[index]
             val end = range.last + 1
@@ -637,7 +654,10 @@ fun ChatCodeBlock(
 }
 
 @Composable
-private fun ChatCodeText(text: AnnotatedString) {
+private fun ChatCodeText(
+  text: AnnotatedString,
+  anchor: ChatReaderAnchor? = null,
+) {
   Text(
     text = text,
     fontFamily = FontFamily.Monospace,
@@ -645,5 +665,7 @@ private fun ChatCodeText(text: AnnotatedString) {
     // and last line would change spacing at otherwise invisible boundaries.
     style = ClawTheme.type.body.copy(lineHeightStyle = LineHeightStyle(LineHeightStyle.Alignment.Proportional, LineHeightStyle.Trim.None)),
     color = ClawTheme.colors.codeText,
+    modifier = anchor?.modifier ?: Modifier,
+    onTextLayout = anchor?.onTextLayout ?: {},
   )
 }

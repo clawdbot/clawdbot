@@ -22,27 +22,6 @@ afterEach(() => {
   resetProcessRegistryForTests();
 });
 
-function runtimeManagedRun(input: SpawnInput): ManagedRun {
-  return {
-    activity: { resultSettled: true, lastOutputAtMs: Date.now() },
-    runId: input.runId ?? "test-run",
-    pid: 1234,
-    startedAtMs: Date.now(),
-    stdin: { write: vi.fn(), end: vi.fn(), destroy: vi.fn() },
-    cancel: vi.fn(),
-    wait: vi.fn(async () => ({
-      reason: "exit" as const,
-      exitCode: 0,
-      exitSignal: null,
-      durationMs: 1,
-      stdout: "",
-      stderr: "",
-      timedOut: false,
-      noOutputTimedOut: false,
-    })),
-  };
-}
-
 it.each([
   { fails: false, beforeJoin: false, commandCode: 0 },
   { fails: true, beforeJoin: false, commandCode: 0 },
@@ -55,13 +34,24 @@ it.each([
     const entered = createDeferred();
     const cleanupScope = createAgentCleanupScope();
     const scopeKey = "scope:sandbox-artifact-cleanup";
-    supervisorMock.spawn.mockImplementationOnce(async (input: SpawnInput) => {
-      const managed = runtimeManagedRun(input);
-      return {
-        ...managed,
-        wait: async () => ({ ...(await managed.wait()), exitCode: commandCode }),
-      };
-    });
+    supervisorMock.spawn.mockImplementationOnce(async (input: SpawnInput): Promise<ManagedRun> => ({
+      activity: { resultSettled: true, lastOutputAtMs: Date.now() },
+      runId: input.runId ?? "test-run",
+      pid: 1234,
+      startedAtMs: Date.now(),
+      stdin: { write: vi.fn(), end: vi.fn(), destroy: vi.fn() },
+      cancel: vi.fn(),
+      wait: async () => ({
+        reason: "exit",
+        exitCode: commandCode,
+        exitSignal: null,
+        durationMs: 1,
+        stdout: "",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    }));
     let run: Awaited<ReturnType<typeof runExecProcess>> | undefined;
     const finalizeExec = vi.fn(async () => {
       entered.resolve();

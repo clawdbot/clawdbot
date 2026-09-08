@@ -495,6 +495,8 @@ export async function startTranscripts(params: {
   configuredLifecycle?: true;
   lifecycleToken?: symbol;
   existingSession?: TranscriptSessionDescriptor;
+  /** Configured capture retains the original choice before supplying its selected ID. */
+  sessionIdOrigin?: "generated" | "supplied";
   onCaptureEnded?: () => void;
 }) {
   if (params.abortSignal?.aborted) {
@@ -545,11 +547,12 @@ export async function startTranscripts(params: {
       source: providerSource,
     });
   }
+  const requestedSessionId = readTranscriptStringParam(params.rawParams, "sessionId", {
+    trim: true,
+  });
   const session: TranscriptSessionDescriptor = {
     sessionId:
-      params.existingSession?.sessionId ??
-      readTranscriptStringParam(params.rawParams, "sessionId", { trim: true }) ??
-      createTranscriptSessionId(),
+      params.existingSession?.sessionId ?? requestedSessionId ?? createTranscriptSessionId(),
     title: params.existingSession
       ? params.existingSession.title
       : readTranscriptStringParam(params.rawParams, "title", { trim: true }),
@@ -557,9 +560,11 @@ export async function startTranscripts(params: {
     startedAt: params.existingSession?.startedAt ?? new Date().toISOString(),
     metadata: params.existingSession
       ? params.existingSession.metadata
-      : agentId
-        ? { agentId }
-        : undefined,
+      : {
+          ...(agentId ? { agentId } : {}),
+          sessionIdOrigin:
+            params.sessionIdOrigin ?? (requestedSessionId ? "supplied" : "generated"),
+        },
   };
   if (activeSessions.has(session.sessionId) || startingSessionIds.has(session.sessionId)) {
     throw new TranscriptStartError(

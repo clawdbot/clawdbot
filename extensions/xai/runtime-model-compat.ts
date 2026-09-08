@@ -38,37 +38,13 @@ function isGrok43Model(id: string): boolean {
   return id === "grok-latest" || id === "grok-4.3" || id.startsWith("grok-4.3-");
 }
 
-function normalizeXaiCompatModelId(id: unknown): string {
-  return typeof id === "string" ? id.trim().toLowerCase() : "";
-}
-
-function supportsConfigurableXaiReasoningEffort(model: XaiRuntimeModelCompat): boolean {
-  const id = normalizeXaiCompatModelId(model.id);
-  const isConfigurableModel = isGrok43Model(id) || isXaiFrontierModelId(id);
-  return model.reasoning === true && isConfigurableModel;
-}
-
-function resolveXaiReasoningEffortCompat(model: XaiRuntimeModelCompat): Record<string, unknown> {
-  if (supportsConfigurableXaiReasoningEffort(model)) {
-    const id = normalizeXaiCompatModelId(model.id);
-    return {
-      supportsReasoningEffort: true,
-      supportedReasoningEfforts: [
-        ...(isGrok43Model(id) ? ["none"] : []),
-        ...XAI_SUPPORTED_REASONING_EFFORTS,
-        ...(isXaiGrok46ModelId(id) ? ["xhigh"] : []),
-      ],
-    };
-  }
-  return { supportsReasoningEffort: false };
-}
-
 export function applyXaiRuntimeModelCompat<T extends XaiRuntimeModelCompat>(
   model: T,
 ): T & { compat: Record<string, unknown>; thinkingLevelMap: XaiThinkingLevelMap } {
   const withCompat = applyXaiModelCompat(model);
-  const supportsReasoningEffort = supportsConfigurableXaiReasoningEffort(withCompat);
-  const id = normalizeXaiCompatModelId(withCompat.id);
+  const id = typeof withCompat.id === "string" ? withCompat.id.trim().toLowerCase() : "";
+  const supportsReasoningEffort =
+    withCompat.reasoning === true && (isGrok43Model(id) || isXaiFrontierModelId(id));
   const existingCompat =
     withCompat.compat && typeof withCompat.compat === "object"
       ? (withCompat.compat as Record<string, unknown>)
@@ -77,7 +53,16 @@ export function applyXaiRuntimeModelCompat<T extends XaiRuntimeModelCompat>(
     ...withCompat,
     compat: {
       ...existingCompat,
-      ...resolveXaiReasoningEffortCompat(withCompat),
+      supportsReasoningEffort,
+      ...(supportsReasoningEffort
+        ? {
+            supportedReasoningEfforts: [
+              ...(isGrok43Model(id) ? ["none"] : []),
+              ...XAI_SUPPORTED_REASONING_EFFORTS,
+              ...(isXaiGrok46ModelId(id) ? ["xhigh"] : []),
+            ],
+          }
+        : {}),
     },
     thinkingLevelMap: {
       ...withCompat.thinkingLevelMap,

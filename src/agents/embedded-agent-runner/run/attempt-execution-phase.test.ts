@@ -144,6 +144,7 @@ async function createFixture(
     anthropicPayloadLogger: {},
     boundary: { orphanRepair: { removeLeaf: true } },
     cacheTrace: {},
+    contextGuards: { recordCacheTouch: vi.fn() },
     isOpenAIResponsesApi: true,
     sessionManager,
     settleTracker: { abortActiveSession, trackPromptSettlePromise },

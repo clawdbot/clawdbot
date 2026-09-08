@@ -36,13 +36,12 @@ const ROOT_TEST_SOURCE_PATH_RE = /^test\/(?!fixtures\/).*\.[cm]?tsx?$/u;
 /**
  * Normalizes a changed file path into repo-relative POSIX form.
  * @param {unknown} inputPath
+ * @param {NodeJS.Platform} [platform]
  * @returns {string}
  */
-export function normalizeChangedPath(inputPath) {
-  return (typeof inputPath === "string" ? inputPath : "")
-    .trim()
-    .replaceAll("\\", "/")
-    .replace(/^\.\/+/u, "");
+export function normalizeChangedPath(inputPath, platform = process.platform) {
+  const path = (typeof inputPath === "string" ? inputPath : "").trim();
+  return (platform === "win32" ? path.replaceAll("\\", "/") : path).replace(/^\.\/+/u, "");
 }
 
 /**
@@ -51,7 +50,7 @@ export function normalizeChangedPath(inputPath) {
  * @returns {{ path: string; surface: ChangedPathSurface; isChangedLaneTest: boolean; isRootTestSource: boolean; isTestOnly: boolean; isNativeOnly: boolean }}
  */
 export function getChangedPathFacts(inputPath) {
-  const path = typeof inputPath === "string" ? inputPath.trim() : "";
+  const path = typeof inputPath === "string" ? inputPath : "";
   const surface = SURFACE_PATTERNS.find(([, pattern]) => pattern.test(path))?.[0] ?? "unknown";
 
   return {

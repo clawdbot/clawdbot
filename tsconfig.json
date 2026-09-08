@@ -167,6 +167,9 @@
       "@openclaw/normalization-core/cjk-chars": [
         "./packages/normalization-core/src/cjk-chars.ts"
       ],
+      "@openclaw/normalization-core/code-points": [
+        "./packages/normalization-core/src/code-points.ts"
+      ],
       "@openclaw/normalization-core/error-coercion": [
         "./packages/normalization-core/src/error-coercion.ts"
       ],

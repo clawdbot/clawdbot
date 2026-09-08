@@ -70,7 +70,11 @@ const cache = resolveGlobalSingleton<AgentDatabaseLifecycle>(
 );
 
 /** Each physical-open generator owns these checkpoints across any integrity await. */
-export function startAgentDatabaseOpenTiming(agentId: string, pathname: string) {
+export function startAgentDatabaseOpenTiming(
+  agentId: string,
+  pathname: string,
+  admissionMode: "sync" | "async",
+) {
   const startedAt = performance.now();
   let elapsedMs = 0;
   const phaseDurationsMs = { open: 0, validation: 0, configuration: 0, schema: 0, registration: 0 };
@@ -87,6 +91,7 @@ export function startAgentDatabaseOpenTiming(agentId: string, pathname: string) 
         pid: process.pid,
         threadId,
         isMainThread,
+        admissionMode,
         phaseDurationsMs,
         thresholdMs: OPENCLAW_AGENT_DB_SLOW_OPEN_MS,
       });

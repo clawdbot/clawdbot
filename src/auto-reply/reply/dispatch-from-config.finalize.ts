@@ -438,10 +438,12 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
       replyAdmission.reason === "question-response-refused")
       ? replyAdmission.reason
       : undefined;
+  const preRunRejection =
+    agentRunTerminalOutcome === "failed" ? undefined : state.replyOperationRunState.preRunRejection;
   const dispatchOutcome =
     agentRunTerminalOutcome === "failed" || questionFailure
       ? "error"
-      : queueCapRejected || messageInjectionAborted
+      : queueCapRejected || messageInjectionAborted || preRunRejection
         ? "skipped"
         : "completed";
   const dispatchReason =
@@ -450,11 +452,13 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
       ? "queue-cap"
       : messageInjectionAborted
         ? "reply_operation_aborted"
-        : replyAdmission?.status === "accepted" && replyAdmission.mode === "steer"
-          ? "active_run_injected"
-          : channelTransformSuppressed
-            ? "channel_transform"
-            : state.bindingState.pluginFallbackReason);
+        : preRunRejection
+          ? preRunRejection
+          : replyAdmission?.status === "accepted" && replyAdmission.mode === "steer"
+            ? "active_run_injected"
+            : channelTransformSuppressed
+              ? "channel_transform"
+              : state.bindingState.pluginFallbackReason);
   state.recordAgentDispatchCompleted(
     dispatchOutcome,
     dispatchReason ? { reason: dispatchReason } : undefined,

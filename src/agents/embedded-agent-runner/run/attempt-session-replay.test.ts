@@ -717,3 +717,48 @@ describe("interrupted canonical user replay", () => {
     },
   );
 });
+
+it.each([
+  { kind: "source snapshot", detached: true, fresh: false, explicit: undefined },
+  { kind: "fresh helper", detached: true, fresh: true, explicit: undefined },
+  { kind: "explicit override", detached: true, fresh: false, explicit: "caller-cache-key" },
+  { kind: "durable sibling", detached: false, fresh: false, explicit: undefined },
+])(
+  "derives boundary cache affinity from the prompt owner ($kind)",
+  async ({ detached, fresh, explicit }) => {
+    await withInterruptedTurn(
+      false,
+      async ({ attempt, target, prepare }) => {
+        const durable = SessionManager.open(target, attempt.workspaceDir);
+        const manager = !detached
+          ? durable
+          : fresh
+            ? SessionManager.inMemory(attempt.workspaceDir)
+            : SessionManager.fromEntries(
+                [durable.getHeader(), ...durable.getBranch()],
+                attempt.workspaceDir,
+              );
+        attempt.sessionManager = manager;
+        attempt.userTurnTranscriptRecorder = undefined;
+        attempt.sessionPersistence = detached ? "detached" : "durable";
+        attempt.promptCacheKey = explicit;
+        if (detached) {
+          attempt.sessionId = "private-helper-routing-identity";
+          attempt.sessionKey = "agent:main:internal-session-effects:cache-fixture";
+          attempt.sessionTarget = {
+            ...target,
+            sessionId: attempt.sessionId,
+            sessionKey: attempt.sessionKey,
+          };
+          attempt.sessionFile = attempt.sessionKey;
+        }
+        const expected = explicit ?? `${manager.getSessionId()}:${manager.getBoundaryCount()}`;
+        const before = loadTranscriptEventsSync(target);
+        await prepare();
+        expect(attempt.promptCacheKey).toBe(expected);
+        expect(loadTranscriptEventsSync(target)).toEqual(before);
+      },
+      false,
+    );
+  },
+);

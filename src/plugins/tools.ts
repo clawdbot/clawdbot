@@ -6,6 +6,7 @@ import { normalizeToolPolicyName } from "../agents/tool-policy.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { normalizeConversationReadInvocationOrigin } from "../channels/plugins/conversation-read-origin.js";
 import { isInvalidConfigError } from "../config/io.invalid-config.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   getLoadedRuntimePluginRegistry,
@@ -368,7 +369,7 @@ function resolvePluginToolFactoryEntry(params: {
     // sets diagnosticEmitted). Directly-created or wrapped tagged errors have
     // no prior log, so they still need the resolver diagnostic here.
     if (!(isInvalidConfigError(err) && err.diagnosticEmitted)) {
-      params.logError(`plugin tool failed (${params.entry.pluginId}): ${String(err)}`);
+      params.logError(`plugin tool failed (${params.entry.pluginId}): ${formatErrorMessage(err)}`);
     }
   }
 

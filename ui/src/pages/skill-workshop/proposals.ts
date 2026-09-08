@@ -5,7 +5,6 @@ import type { AgentSelectionCapability } from "../../app/agent-selection.ts";
 import type { ApplicationGateway } from "../../app/context.ts";
 import type { SkillWorkshopRevisionAdmissionOutcome } from "../../app/skill-workshop-revision-admissions.ts";
 import { t } from "../../i18n/index.ts";
-import { computeLineDiff } from "../../lib/chat/tool-call-diff.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import {
@@ -13,6 +12,7 @@ import {
   parseAgentSessionKey,
   resolveUiSelectedGlobalAgentId,
 } from "../../lib/sessions/session-key.ts";
+import { compareSkillWorkshopInstructions } from "../../lib/skill-workshop/diff-worker.ts";
 import {
   filterSkillWorkshopProposals,
   changedSkillWorkshopVersion,
@@ -40,6 +40,7 @@ export {
 } from "./state.ts";
 
 const SKILL_WORKSHOP_NOTICE_MS = 2800;
+type SkillWorkshopLoadOptions = { force?: boolean; onProgress?: () => void };
 
 export type SkillWorkshopContext = {
   gateway: ApplicationGateway;
@@ -140,7 +141,7 @@ export async function selectSkillWorkshopInstalledSkill(
   state: SkillWorkshopState,
   context: SkillWorkshopContext,
   name: string,
-  options?: { force?: boolean },
+  options?: SkillWorkshopLoadOptions,
 ): Promise<void> {
   const skill = state.skillWorkshopInstalledSkills.find((entry) => entry.name === name);
   if (!skill) {
@@ -154,7 +155,7 @@ async function loadInstalledSkill(
   state: SkillWorkshopState,
   context: SkillWorkshopContext,
   skill: SkillWorkshopInstalledSkill,
-  options?: { force?: boolean },
+  options?: SkillWorkshopLoadOptions,
 ): Promise<void> {
   const { client, phase } = context.gateway.snapshot;
   const agentId = loadedSkillWorkshopAgentParams(state, context).agentId;
@@ -162,21 +163,30 @@ async function loadInstalledSkill(
     return;
   }
   // Each inventory row owns its read. Replacing inventory or retrying revokes old results.
-  const loading = { status: "loading", name: skill.name } as const;
+  const loading: Extract<SkillWorkshopInstalledSelection, { status: "loading" }> = {
+    status: "loading",
+    name: skill.name,
+  };
   skill.read = loading;
+  const isCurrentRead = () =>
+    state.skillWorkshopInstalledSkills.includes(skill) &&
+    skill.read === loading &&
+    state.skillWorkshopAgentId === agentId &&
+    skillWorkshopAgentParams(context).agentId === agentId &&
+    context.gateway.snapshot.client === client;
   const read = await readSkillWorkshopInstalledSkill(
     client,
     agentId,
     skill.name,
     state.skillWorkshopProposals,
+    (content) => {
+      if (isCurrentRead()) {
+        loading.content = content;
+        options?.onProgress?.();
+      }
+    },
   );
-  if (
-    state.skillWorkshopInstalledSkills.includes(skill) &&
-    skill.read === loading &&
-    state.skillWorkshopAgentId === agentId &&
-    skillWorkshopAgentParams(context).agentId === agentId &&
-    context.gateway.snapshot.client === client
-  ) {
+  if (isCurrentRead()) {
     skill.read = read;
   }
 }
@@ -186,50 +196,51 @@ async function readSkillWorkshopInstalledSkill(
   agentId: string,
   name: string,
   proposals: SkillWorkshopProposal[],
+  onContent: (content: string) => void,
 ): Promise<SkillWorkshopInstalledSelection> {
   try {
     const result = await client.request<SkillWorkshopInstalledSkill & { content: string }>(
       "skills.workshop.read",
       { agentId, name },
     );
+    onContent(result.content);
     const saved = await Promise.allSettled(
       proposals
         .filter((proposal) => proposal.status === "applied" && proposal.slug === result.skillKey)
-        .map((proposal) =>
-          client.request<SkillProposalInspectResult>("skills.proposals.inspect", {
-            agentId,
-            proposalId: proposal.key,
-          }),
-        ),
+        .map(async (proposal) => {
+          const { record, content } = await client.request<SkillProposalInspectResult>(
+            "skills.proposals.inspect",
+            {
+              agentId,
+              proposalId: proposal.key,
+            },
+          );
+          // Same-named workspace proposals are not versions of this agent's installed skill.
+          return record.status === "applied" &&
+            record.target.source === "openclaw-workshop" &&
+            record.target.skillKey === result.skillKey &&
+            (record.kind === "create" ? record.target.skillKey : record.target.skillName) ===
+              result.name
+            ? {
+                key: record.id,
+                appliedAt: record.appliedAt,
+                // Draft lifecycle headers are not skill instructions.
+                diff: await compareSkillWorkshopInstructions(
+                  stripFrontmatterBlock(content),
+                  stripFrontmatterBlock(result.content),
+                ),
+              }
+            : null;
+        }),
     );
     let savedVersionsError: string | undefined;
-    // Same-named workspace proposals are not versions of this agent's installed skill.
-    // Only compare retained, applied Workshop bodies; never infer intermediate edits.
     const savedVersions = saved
       .flatMap((read) => {
         if (read.status === "rejected") {
           savedVersionsError = formatUiError(read.reason);
           return [];
         }
-        const { record, content } = read.value;
-        return record.status === "applied" &&
-          record.target.source === "openclaw-workshop" &&
-          record.target.skillKey === result.skillKey &&
-          (record.kind === "create" ? record.target.skillKey : record.target.skillName) ===
-            result.name
-          ? [
-              {
-                key: record.id,
-                appliedAt: record.appliedAt,
-                // Draft headers include lifecycle fields that are not skill instructions.
-                diff: computeLineDiff(
-                  stripFrontmatterBlock(content),
-                  stripFrontmatterBlock(result.content),
-                  { compactUnchanged: true },
-                ),
-              },
-            ]
-          : [];
+        return read.value ? [read.value] : [];
       })
       .toSorted((left, right) => (right.appliedAt ?? "").localeCompare(left.appliedAt ?? ""));
     return {
@@ -251,7 +262,7 @@ async function readSkillWorkshopInstalledSkill(
 export async function loadSkillWorkshopProposals(
   state: SkillWorkshopState,
   context: SkillWorkshopContext,
-  options?: { force?: boolean },
+  options?: SkillWorkshopLoadOptions,
 ): Promise<void> {
   const snapshot = context.gateway.snapshot;
   const client = snapshot.client;
@@ -291,7 +302,11 @@ export async function loadSkillWorkshopProposals(
     state.skillWorkshopLoaded = true;
     if (state.skillWorkshopMode === "skills") {
       const installed = state.skillWorkshopInstalledSkills;
-      await Promise.all(installed.map((skill) => loadInstalledSkill(state, context, skill)));
+      await Promise.all(
+        installed.map((skill) =>
+          loadInstalledSkill(state, context, skill, { onProgress: options?.onProgress }),
+        ),
+      );
       if (state.skillWorkshopInstalledSkills === installed) {
         state.skillWorkshopInstalledName ??=
           (installed.find((skill) => changedSkillWorkshopVersion(skill.read)) ?? installed[0])

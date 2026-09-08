@@ -25,6 +25,7 @@ import {
   OPENAI_GPT_56_MODEL_ID,
   OPENAI_GPT_56_SOL_MODEL_ID,
 } from "./model-route-contract.js";
+import { isOpenAIGptLiveModel, isSupportedOpenAIGptLiveModel } from "./realtime-quicksilver.js";
 import { resolveUnifiedOpenAIThinkingProfile } from "./thinking-policy.js";
 
 const OPENAI_RESPONSES_API = "openai-responses";
@@ -116,6 +117,28 @@ export function projectConfiguredModelRow(ctx: ProviderNormalizeResolvedModelCon
     return undefined;
   }
   return null;
+}
+
+export function projectRealtimeVoicePublicProjection(ctx: {
+  providerConfig: Record<string, unknown>;
+  config: Record<string, unknown>;
+}): {
+  config: Record<string, unknown>;
+  clientHints?: { modelSource: "gateway"; gatewayRelaySupported: false };
+} {
+  const model = normalizeOptionalString(ctx.config.model) ?? ctx.providerConfig.model;
+  const modelId = typeof model === "string" ? model : undefined;
+  if (!isOpenAIGptLiveModel(modelId) || isSupportedOpenAIGptLiveModel(modelId)) {
+    return { config: ctx.config };
+  }
+  const { model: _model, ...publicConfig } = ctx.config;
+  return {
+    config: publicConfig,
+    clientHints: {
+      modelSource: "gateway",
+      gatewayRelaySupported: false,
+    },
+  };
 }
 
 function firstRouteBaseUrl(...values: unknown[]): unknown {

@@ -210,7 +210,7 @@ export async function beginDoctorMaintenance(params: {
   } catch (error) {
     await release();
     throw new Error(
-      `Doctor could not enter maintenance. Stop the Gateway through its service owner, then run ${formatCliCommand("openclaw doctor --fix", env)}. ${String(error)}`,
+      `Doctor could not enter maintenance. ${String(error)} Stop-requiring repair must run from a shell outside the Gateway and automatic triage; use ${formatCliCommand("openclaw doctor --fix", env)} there.`,
       { cause: error },
     );
   }

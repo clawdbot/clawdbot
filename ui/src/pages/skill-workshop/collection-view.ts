@@ -181,9 +181,16 @@ function renderReader(props: SkillWorkshopProps) {
     });
   }
   if (selection.status === "loading") {
-    return html`<p class="sw-collection__state sw-muted" aria-busy="true">
-      ${t("skillWorkshop.collection.loadingSkill", { name: selection.name })}
-    </p>`;
+    return html`<div class="sw-collection__reader-body">
+      ${selection.content === undefined ? nothing : renderSkillDocument(selection.content)}
+      <p class="sw-collection__state sw-muted" aria-busy="true">
+        ${
+          selection.content === undefined
+            ? t("skillWorkshop.collection.loadingSkill", { name: selection.name })
+            : t("skillWorkshop.collection.comparing")
+        }
+      </p>
+    </div>`;
   }
   if (selection.status === "error") {
     return html`
@@ -201,19 +208,7 @@ function renderReader(props: SkillWorkshopProps) {
 
   const skill = props.installedSkills.find((entry) => entry.name === selection.name);
   const changed = changedSkillWorkshopVersion(selection);
-  const incompleteVersions = new Set(
-    selection.savedVersions.filter(
-      ({ diff }) =>
-        diff.kind === "truncated" ||
-        diff.stat.added + diff.stat.removed >
-          diff.lines.filter((line) => line.kind === "add" || line.kind === "del").length,
-    ),
-  );
-  const unchanged =
-    !selection.savedVersionsError &&
-    selection.savedVersions.length > 0 &&
-    selection.savedVersions.every((version) => version.diff.kind === "complete") &&
-    !changed;
+  const unchanged = !selection.savedVersionsError && selection.savedVersions.length > 0 && !changed;
   return html`
     <div class="sw-collection__reader-head">
       <div class="sw-collection__reader-identity">
@@ -262,36 +257,22 @@ function renderReader(props: SkillWorkshopProps) {
                                   })
                                 : t("skillWorkshop.collection.savedVersion")
                           }
-                          ${diff.kind === "complete" && (diff.stat.added > 0 || diff.stat.removed > 0) ? renderDiffStatChips(diff.stat) : nothing}
+                          ${diff.stat.added > 0 || diff.stat.removed > 0 ? renderDiffStatChips(diff.stat) : nothing}
                         </summary>
                         ${
-                          diff.kind === "complete" &&
-                          diff.stat.added === 0 &&
-                          diff.stat.removed === 0
+                          diff.stat.added === 0 && diff.stat.removed === 0
                             ? html`<p class="sw-muted">
                                 ${t("skillWorkshop.collection.unchanged")}
                               </p>`
-                            : html`
-                                ${
-                                  incompleteVersions.has(version)
-                                    ? html`<p class="sw-muted">
-                                        ${t("skillWorkshop.collection.diffTruncated")}
-                                      </p>`
-                                    : nothing
-                                }
-                                ${renderDiffBlock(diff.lines, "succeeded", undefined, { path: "SKILL.md" })}
-                              `
+                            : renderDiffBlock(diff.lines, "succeeded", undefined, {
+                                path: "SKILL.md",
+                              })
                         }
                       </details>`;
                     })}
                   `
             }
           </div>
-          ${
-            changed && incompleteVersions.size > 0
-              ? renderSkillDocument(selection.content)
-              : nothing
-          }
         `,
       )}
     </div>

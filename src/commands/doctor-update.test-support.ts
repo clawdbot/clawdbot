@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, vi } from "vitest";
 import type { PreManagedServiceStop } from "../cli/update-cli/update-command-service-maintenance.js";
+import { asResolvedSourceConfig, asRuntimeConfig } from "../config/materialize.js";
 import { mockSystemAccountHome } from "../daemon/service.test-helpers.js";
 import type { UpdateRunResult } from "../infra/update-runner-types.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
@@ -11,6 +12,23 @@ import { maybeOfferUpdateBeforeDoctor } from "./doctor-update.js";
 
 const mocks = vi.hoisted(() => ({
   createUpdateProgress: vi.fn(),
+  admitUpdateCommandRun:
+    vi.fn<typeof import("../cli/update-cli/update-command-run.js").admitUpdateCommandRun>(),
+  completeUpdateCommandRun:
+    vi.fn<typeof import("../cli/update-cli/update-command-run.js").completeUpdateCommandRun>(),
+  failUpdateCommandRun:
+    vi.fn<typeof import("../cli/update-cli/update-command-run.js").failUpdateCommandRun>(),
+  inspectActivatedUpdateState:
+    vi.fn<
+      typeof import("../cli/update-cli/update-command-migrated.js").inspectActivatedUpdateState
+    >(),
+  continueMigratedUpdateInFreshProcess:
+    vi.fn<
+      typeof import("../cli/update-cli/update-command-migrated.js").continueMigratedUpdateInFreshProcess
+    >(),
+  readUpdateStateSchemaVersions:
+    vi.fn<typeof import("../infra/update-candidate-state.js").readUpdateStateSchemaVersions>(),
+  readConfigFileSnapshot: vi.fn<typeof import("../config/config.js").readConfigFileSnapshot>(),
   gitMutationPolicy: vi.fn(),
   maybeRestartServiceAfterFailedMutableUpdate: vi.fn(),
   maybeStopManagedServiceBeforeMutableUpdate: vi.fn(),
@@ -22,8 +40,8 @@ const mocks = vi.hoisted(() => ({
   waitForHealthyRestart: vi.fn(),
   waitForHttpReadiness:
     vi.fn<typeof import("../cli/daemon-cli/restart-health.js").waitForGatewayHttpReadiness>(),
-  runUpdateInferenceProbe:
-    vi.fn<typeof import("../cli/update-cli/update-command-inference.js").runUpdateInferenceProbe>(),
+  verifyUpdateServing:
+    vi.fn<typeof import("../infra/update-serving-verification.js").verifyUpdateServing>(),
   doctorCommand: vi.fn(),
   createUpdateConfigSnapshot: vi.fn(),
   createServiceConfigIO: vi.fn(),
@@ -77,8 +95,35 @@ vi.mock("../cli/daemon-cli/restart-health.js", () => ({
   renderRestartDiagnostics: () => ["gateway not ready"],
   terminateStaleGatewayPids: vi.fn(),
 }));
-vi.mock("../cli/update-cli/update-command-inference.js", () => ({
-  runUpdateInferenceProbe: mocks.runUpdateInferenceProbe,
+vi.mock("../infra/update-serving-verification.js", () => ({
+  verifyUpdateServing: mocks.verifyUpdateServing,
+}));
+vi.mock("../cli/update-cli/update-command-migrated.js", () => ({
+  inspectActivatedUpdateState: mocks.inspectActivatedUpdateState,
+  continueMigratedUpdateInFreshProcess: mocks.continueMigratedUpdateInFreshProcess,
+}));
+vi.mock("../infra/update-candidate-state.js", () => ({
+  readUpdateStateSchemaVersions: mocks.readUpdateStateSchemaVersions,
+}));
+vi.mock("../plugins/installed-plugin-index-records.js", () => ({
+  loadInstalledPluginIndexInstallRecords: async () => ({}),
+}));
+vi.mock("../config/config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/config.js")>()),
+  readConfigFileSnapshot: mocks.readConfigFileSnapshot,
+}));
+vi.mock("../cli/update-cli/update-command-run.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../cli/update-cli/update-command-run.js")>()),
+  admitUpdateCommandRun: mocks.admitUpdateCommandRun,
+  completeUpdateCommandRun: mocks.completeUpdateCommandRun,
+  failUpdateCommandRun: mocks.failUpdateCommandRun,
+}));
+vi.mock("../infra/update-run-ledger.js", () => ({
+  recordUpdateRunPhase: vi.fn(),
+  recordUpdateRunStep: vi.fn(),
+  recordUpdateRunVerification: vi.fn(),
+  getUpdateRun: vi.fn(),
+  recordUpdateRunRepairAttempt: vi.fn(),
 }));
 vi.mock("../cli/update-cli/update-command-launch-agent-recovery.js", () => ({
   recoverInstalledLaunchAgentAfterUpdate: async () => ({ attempted: false, recovered: false }),
@@ -179,7 +224,12 @@ export function mockUpdateResult(result: Omit<UpdateRunResult, "steps" | "durati
   mocks.runGatewayUpdate.mockImplementation(
     async ({ beforeGitMutation }: { beforeGitMutation?: (target: object) => Promise<unknown> }) => {
       mocks.gitMutationPolicy(await beforeGitMutation?.({}));
-      return { ...result, steps: [], durationMs: 0 } satisfies UpdateRunResult;
+      return {
+        after: { version: "2026.4.24" },
+        ...result,
+        steps: [],
+        durationMs: 0,
+      } satisfies UpdateRunResult;
     },
   );
 }
@@ -190,8 +240,48 @@ export function installDoctorUpdateTestHooks(): void {
   const originalServiceRepairPolicy = process.env.OPENCLAW_SERVICE_REPAIR_POLICY;
 
   beforeEach(async () => {
+    // These controls exercise the canonical host install, not the test launcher's profile.
+    for (const key of [
+      "OPENCLAW_HOME",
+      "OPENCLAW_PROFILE",
+      "OPENCLAW_STATE_DIR",
+      "OPENCLAW_CONFIG_PATH",
+      "OPENCLAW_SUPERVISOR_MODE",
+      "OPENCLAW_SERVICE_REPAIR_POLICY",
+    ]) {
+      vi.stubEnv(key, undefined);
+    }
+    mocks.admitUpdateCommandRun.mockReset().mockResolvedValue({
+      runId: "3d065cd3-ffde-4163-970c-5e0c0f1d8251",
+      env: createManagedDoctorEnvironment(),
+    });
+    mocks.completeUpdateCommandRun.mockReset().mockImplementation((result, run) => ({
+      ...result,
+      runId: run?.runId,
+    }));
+    mocks.failUpdateCommandRun.mockReset();
     mocks.createUpdateProgress.mockReset();
     mocks.createUpdateProgress.mockReturnValue({ progress: {}, stop: vi.fn() });
+    mocks.inspectActivatedUpdateState.mockReset().mockResolvedValue(undefined);
+    mocks.continueMigratedUpdateInFreshProcess.mockReset().mockImplementation(async (params) => ({
+      result: { ...params.result, runId: params.opts.run?.runId },
+      exitCode: 0,
+    }));
+    mocks.readUpdateStateSchemaVersions.mockReset().mockResolvedValue([]);
+    mocks.readConfigFileSnapshot.mockReset().mockResolvedValue({
+      path: createManagedDoctorEnvironment().OPENCLAW_CONFIG_PATH!,
+      exists: true,
+      raw: "{}",
+      parsed: {},
+      sourceConfig: asResolvedSourceConfig({}),
+      resolved: asResolvedSourceConfig({}),
+      config: asRuntimeConfig({}),
+      runtimeConfig: asRuntimeConfig({}),
+      valid: true,
+      issues: [],
+      warnings: [],
+      legacyIssues: [],
+    });
     mocks.gitMutationPolicy.mockReset();
     mockSystemAccountHome();
     mocks.maybeRestartServiceAfterFailedMutableUpdate.mockReset();
@@ -219,9 +309,31 @@ export function installDoctorUpdateTestHooks(): void {
       runtime: { status: "running" },
       staleGatewayPids: [],
       gatewayVersion: "2026.4.24",
+      gatewayBootId: "doctor-boot",
     });
     mocks.waitForHttpReadiness.mockReset().mockResolvedValue({ healthz: 200, readyz: 200 });
-    mocks.runUpdateInferenceProbe.mockReset().mockResolvedValue(false);
+    mocks.verifyUpdateServing.mockReset().mockImplementation(async (params) => ({
+      status: "verified",
+      receipt: {
+        runId: params.runId,
+        gateway: {
+          bootId: "doctor-boot",
+          version: params.expectedVersion,
+          buildId: params.expectedBuildId ?? null,
+        },
+        agentId: "main",
+        sessionKey: "doctor-session",
+        sessionId: "doctor-session-id",
+        agentRunId: "dc114b46-9c65-4b0d-9a88-14772c02983a",
+        verifiedAtMs: 1000,
+        transcript: {
+          generation: "doctor-generation",
+          maxSeq: 2,
+          user: { entryId: "doctor-user", seq: 1 },
+          assistant: { entryId: "doctor-assistant", seq: 2 },
+        },
+      },
+    }));
     mocks.doctorCommand.mockReset();
     mocks.createUpdateConfigSnapshot.mockReset().mockResolvedValue(undefined);
     mocks.createServiceConfigIO

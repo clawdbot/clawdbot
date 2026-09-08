@@ -1555,7 +1555,6 @@ openclaw-chat-video-player {
   width: 36px;
   height: 36px;
   border: 0;
-  border-radius: 50%;
   box-shadow: none;
   margin-bottom: 0;
 }
@@ -1568,7 +1567,6 @@ openclaw-chat-video-player {
 
 .agent-chat__typing-avatars > :is(.chat-avatar, .chat-avatar-slot) {
   box-shadow: 0 0 0 2px var(--bg);
-  border-radius: 50%;
 }
 
 @media (max-width: 640px) {

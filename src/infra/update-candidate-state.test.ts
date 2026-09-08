@@ -192,8 +192,18 @@ it("keeps absent stores explicit and observes newly created databases for rollba
   await createDatabase(main);
   const after = await readUpdateStateSchemaVersions({ stateDir, config: {} });
   expect(after.find((entry) => entry.path === main)?.userVersion).toBe(3);
-  expect(updateStateSchemaVersionsMatch(before, after)).toBe(false);
-  expect(updateStateSchemaVersionsMatch(after, after.toReversed())).toBe(true);
+  const sharedPath = path.join(stateDir, "state", "openclaw.sqlite");
+  expect(updateStateSchemaVersionsMatch(before, after, { sharedPath })).toBe(false);
+  const candidate = { sharedPath, candidateSchemaVersions: { state: 7, agent: 3 } };
+  expect(updateStateSchemaVersionsMatch(before, after, candidate)).toBe(true);
+  expect(
+    updateStateSchemaVersionsMatch(before, after, {
+      sharedPath,
+      candidateSchemaVersions: { state: 3, agent: 4 },
+    }),
+  ).toBe(false);
+  expect(updateStateSchemaVersionsMatch(after, before, candidate)).toBe(false);
+  expect(updateStateSchemaVersionsMatch(after, after.toReversed(), candidate)).toBe(true);
 });
 
 it("inspects with the installed candidate and selected Node after the old package is removed", async () => {

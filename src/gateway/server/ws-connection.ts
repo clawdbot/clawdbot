@@ -463,11 +463,13 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       if (client && isWebchatClient(client.connect.client)) {
         logWsControl.info(
           `webchat disconnected code=${code} reason=${logReason || "n/a"} conn=${connId}`,
+          { cause: closeCause, durationMs },
         );
       }
       if (client?.authenticatedUserId) {
         logWsControl.info(
           `authenticated user disconnected code=${code} reason=${logReason || "n/a"} conn=${connId} user=${formatForLog(client.authenticatedUserId)}`,
+          { cause: closeCause, durationMs },
         );
       }
       if (connectionKind === "gateway") {

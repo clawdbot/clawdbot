@@ -27,11 +27,6 @@ export const runtimeProcessEntrypoints = {
     sourceWorkerName: "update-repair.worker",
     distWorkerPath: "infra/update-repair.worker.js",
   },
-  updateInferenceProbe: {
-    currentModuleUrl,
-    sourceWorkerName: "update-inference-probe.worker",
-    distWorkerPath: "infra/update-inference-probe.worker.js",
-  },
   updateMigratedFinalize: {
     currentModuleUrl,
     sourceWorkerName: "update-migrated-finalize.worker",

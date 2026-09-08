@@ -131,6 +131,8 @@ Options:
 - `--set-image`
 - `--json`
 
+Numeric scan options reject empty and whitespace-only values. Omit a flag to retain its default behavior.
+
 `--set-default` and `--set-image` require live probes; metadata-only scan results are informational and are not applied to config.
 
 ## Aliases

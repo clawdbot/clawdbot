@@ -772,7 +772,7 @@ Every request must include the hook token via one of these headers:
 
 Query-string `?token=...` authentication is rejected. Send JSON with
 `Content-Type: application/json`. All hook endpoints accept `POST` only. The
-[Hooks reference](/gateway/configuration-reference#hooks) lists payload fields,
+[Hooks reference](/gateway/config-hooks#hooks) lists payload fields,
 limits, routing policy, and error responses.
 
 <AccordionGroup>
@@ -794,7 +794,7 @@ limits, routing policy, and error responses.
 
   </Accordion>
   <Accordion title="POST /hooks/agent">
-    Submit an agent turn with a required `message`. Optional routing, model, thinking, timeout, and idempotency fields are documented in the [payload reference](/gateway/configuration-reference#hook-agent-payload).
+    Submit an agent turn with a required `message`. Optional routing, model, thinking, timeout, and idempotency fields are documented in the [payload reference](/gateway/config-hooks#hook-agent-payload).
 
     Keep `sessionMode: "isolated"` for fresh context. Set `"persistent"` only when repeated events should reuse prior context: direct requests then require an explicit `sessionKey`, `hooks.allowRequestSessionKey: true`, and nonempty `hooks.allowedSessionKeyPrefixes`.
 
@@ -804,7 +804,7 @@ limits, routing policy, and error responses.
 
   </Accordion>
   <Accordion title="Mapped hooks (POST /hooks/<name>)">
-    Custom paths resolve through `hooks.mappings`. The first matching mapping wins, ahead of presets. Templates or trusted local JS/TS transforms turn the payload into `wake` or `agent` actions; a transform returning `null` produces HTTP `204` without a run. See [Mapping details](/gateway/configuration-reference#mapping-details).
+    Custom paths resolve through `hooks.mappings`. The first matching mapping wins, ahead of presets. Templates or trusted local JS/TS transforms turn the payload into `wake` or `agent` actions; a transform returning `null` produces HTTP `204` without a run. See [Mapping details](/gateway/config-hooks#mapping-details).
 
     Persistent mapped hooks require a stable mapping `sessionKey` or `hooks.defaultSessionKey`. Template-derived keys require the same caller-key opt-in and prefix policy as request keys.
 
@@ -835,7 +835,7 @@ message-tool delivery can already satisfy the runner's delivery handling;
 missing delivery flags remain unknown.
 
 For retried agent requests, reuse an `Idempotency-Key` and the same payload. The
-[reference](/gateway/configuration-reference#hook-retries-and-fan-out) explains its
+[reference](/gateway/config-hooks#hook-retries-and-fan-out) explains its
 scope and lifetime. Use a new key for a new test; a replayed `200` does not run the
 agent again.
 
@@ -974,7 +974,7 @@ Check forwarding and completion separately. A watcher success only acknowledges 
 
 When `hooks.enabled=true` and `hooks.gmail.account` is set, the Gateway starts `gog gmail watch serve` on boot and auto-renews the watch. Set `OPENCLAW_SKIP_GMAIL_WATCHER=1` to opt out.
 
-With `forEach: "messages"`, the Gateway prepares one action per email, up to the 200-item fan-out cap. Gmail-path mappings receive a larger request-body allowance derived from `hooks.gmail.maxBytes`, capped at 32 MiB. The upstream history page size is not a strict email count, so oversized batches can still hit limits. See the [Gmail reference](/gateway/configuration-reference#gmail-integration) for the exact allowance and [fan-out retry behavior](/gateway/configuration-reference#hook-retries-and-fan-out).
+With `forEach: "messages"`, the Gateway prepares one action per email, up to the 200-item fan-out cap. Gmail-path mappings receive a larger request-body allowance derived from `hooks.gmail.maxBytes`, capped at 32 MiB. The upstream history page size is not a strict email count, so oversized batches can still hit limits. See the [Gmail reference](/gateway/config-hooks#gmail-integration) for the exact allowance and [fan-out retry behavior](/gateway/config-hooks#hook-retries-and-fan-out).
 
 Do not run `openclaw webhooks gmail run` or another `gog gmail watch serve` on the same listener while the Gateway-managed watcher is running. Check logs for watch-registration failures, forwarding failures, and bind conflicts; starting the serve process alone does not prove Gmail registration succeeded.
 

@@ -17,9 +17,10 @@ import {
   buildColdStartStatusSummary,
   createStatusScanCoreBootstrap,
 } from "./status.scan.bootstrap-shared.js";
-import type { GatewayProbeSnapshot } from "./status.scan.shared.js";
-
-type StatusGatewayProbeTimeoutResolver = (cfg: OpenClawConfig) => number | undefined;
+import {
+  resolveStatusGatewayProbeTimeoutMs,
+  type GatewayProbeSnapshot,
+} from "./status.scan.shared.js";
 
 const statusScanDepsRuntimeModuleLoader = createLazyImportLoader(
   () => import("./status.scan.deps.runtime.js"),
@@ -68,7 +69,10 @@ async function resolveStatusChannelsStatus(params: {
       probe: false,
       timeoutMs: Math.min(8000, params.opts.timeoutMs ?? 10_000),
     },
-    timeoutMs: Math.min(params.opts.all ? 5000 : 2500, params.opts.timeoutMs ?? 10_000),
+    timeoutMs: Math.min(
+      resolveStatusGatewayProbeTimeoutMs({ all: params.opts.all }),
+      params.opts.timeoutMs ?? 10_000,
+    ),
     ...(params.useGatewayCallOverrides === true ? (params.gatewayCallOverrides ?? {}) : {}),
   }).catch(() => null);
 }
@@ -128,11 +132,9 @@ export async function collectStatusScanOverview(params: {
   includeChannelsData?: boolean;
   includeLiveChannelStatus?: boolean;
   includeLocalStatusRpcFallback?: boolean;
-  gatewayProbeTimeoutMs?: number | StatusGatewayProbeTimeoutResolver;
+  gatewayProbeTimeoutMs?: number;
   includeChannelSetupRuntimeFallback?: boolean;
-  channelCredentialResolutionSkipped?: boolean;
   useGatewayCallOverridesForChannelsStatus?: boolean;
-  includeChannelSecretTargets?: boolean;
   includeAdvertisedControlUiLinks?: boolean;
   progress?: {
     setLabel(label: string): void;
@@ -163,6 +165,9 @@ export async function collectStatusScanOverview(params: {
   const loadedConfig = skipMissingConfig ? {} : snapshot.runtimeConfig;
   const configDiagnostics =
     skipMissingConfig || snapshot.valid ? null : { path: snapshot.path, issues: snapshot.issues };
+  // Secret resolution precedes probing, and each request uses the scan's existing budget.
+  const gatewayProbeTimeoutMs =
+    params.gatewayProbeTimeoutMs ?? resolveStatusGatewayProbeTimeoutMs(params.opts);
   const { resolvedConfig: cfg, diagnostics } = skipMissingConfig
     ? { resolvedConfig: loadedConfig, diagnostics: [] }
     : await commandConfigResolutionModuleLoader
@@ -173,10 +178,9 @@ export async function collectStatusScanOverview(params: {
             commandName: params.commandName,
             targetIds: (
               await commandSecretTargetsModuleLoader.load()
-            ).getStatusCommandSecretTargetIds(loadedConfig, env, {
-              includeChannelTargets: params.includeChannelSecretTargets,
-            }),
+            ).getStatusCommandSecretTargetIds(loadedConfig, env),
             mode: "read_only_status",
+            gatewaySecretResolveTimeoutMs: gatewayProbeTimeoutMs,
             ...(params.runtime ? { runtime: params.runtime } : {}),
           }),
         );
@@ -195,10 +199,6 @@ export async function collectStatusScanOverview(params: {
         }),
       );
   const osSummary = resolveOsSummary();
-  const gatewayProbeTimeoutMs =
-    typeof params.gatewayProbeTimeoutMs === "function"
-      ? params.gatewayProbeTimeoutMs(cfg)
-      : params.gatewayProbeTimeoutMs;
   const bootstrap = await createStatusScanCoreBootstrap<
     Awaited<ReturnType<typeof getAgentLocalStatusesFn>>
   >({
@@ -317,9 +317,6 @@ export async function collectStatusScanOverview(params: {
           sourceConfig,
           includeSetupFallbackPlugins: params.includeChannelSetupRuntimeFallback !== false,
           liveChannelStatus: channelsStatusLocal,
-          ...(params.channelCredentialResolutionSkipped === true
-            ? { credentialResolutionSkipped: true }
-            : {}),
         });
         params.progress?.tick();
         return {

@@ -1,5 +1,4 @@
 import type {
-  AssistantMessage,
   AssistantMessageEvent,
   Context,
   Model,
@@ -64,14 +63,15 @@ import {
   resolveAnthropicPayloadPolicy,
 } from "./anthropic-payload-policy.js";
 import { consumeAnthropicStream, type AnthropicStreamBlock } from "./anthropic-stream-reducer.js";
+import { createAssistantOutput } from "./assistant-output.js";
 import {
   buildGuardedModelFetch,
   resolveProviderEndpoint,
   transformTransportMessages,
 } from "./host-policy.js";
+import { resolveOpencodeSessionHeaders } from "./session-affinity.js";
 import {
   copyProviderAcceptanceObserver,
-  createEmptyTransportUsage,
   createWritableTransportEventStream,
   failTransportStream,
   finalizeTransportStream,
@@ -440,6 +440,7 @@ function createAnthropicTransportClient(params: {
   options: AnthropicTransportOptions | undefined;
 }) {
   const { model, context, apiKey, options } = params;
+  const optionHeaders = resolveOpencodeSessionHeaders(model, options);
   const needsInterleavedBeta =
     (options?.interleavedThinking ?? true) && !supportsClaudeAdaptiveThinking(model);
   // Kimi's Anthropic thinking SSE is already well-formed for this parser, but
@@ -463,7 +464,7 @@ function createAnthropicTransportClient(params: {
           },
           model.headers,
           getAiTransportHost().buildCopilotDynamicHeaders(context.messages),
-          options?.headers,
+          optionHeaders,
         ),
         fetch,
       }),
@@ -484,7 +485,7 @@ function createAnthropicTransportClient(params: {
             ...(betaFeatures.length > 0 ? { "anthropic-beta": betaFeatures.join(",") } : {}),
           },
           omitFoundryBearerCredentialHeaders(model.headers),
-          options?.headers,
+          optionHeaders,
         ),
         fetch,
       }),
@@ -511,7 +512,7 @@ function createAnthropicTransportClient(params: {
             "x-app": "cli",
           },
           model.headers,
-          options?.headers,
+          optionHeaders,
         ),
         fetch,
       }),
@@ -529,7 +530,7 @@ function createAnthropicTransportClient(params: {
       ...(betaHeader ? { "anthropic-beta": betaHeader } : {}),
     },
     model.headers,
-    options?.headers,
+    optionHeaders,
   );
   return {
     client: createAnthropicMessagesClient({
@@ -738,16 +739,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
     const options = rawOptions as AnthropicTransportOptions | undefined;
     const { eventStream, stream } = createWritableTransportEventStream();
     void (async () => {
-      const output: AssistantMessage = {
-        role: "assistant",
-        content: [],
-        api: "anthropic-messages",
-        provider: model.provider,
-        model: model.id,
-        usage: createEmptyTransportUsage(),
-        stopReason: "stop",
-        timestamp: Date.now(),
-      };
+      const output = createAssistantOutput(model, "anthropic-messages");
       // Classifier refusals can invalidate partial output, so no event is safe
       // to expose until the terminal stop reason is known.
       const refusalBuffer = usesClaudeStreamingRefusalContract(model)

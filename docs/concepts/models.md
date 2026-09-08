@@ -334,7 +334,7 @@ The hosted file is published from the public
 [`openclaw/catalog`](https://github.com/openclaw/catalog) GitHub repository.
 At publish time, it also hydrates model ids and metadata from models.dev for
 providers whose owning plugin explicitly opts in with
-[`modelCatalog.modelsDev`](/plugins/manifest#modelcatalog-reference). Each mapping
+[`modelCatalog.modelsDev`](/plugins/manifest/models#modelcatalog-reference). Each mapping
 names the upstream provider once, rather than mapping individual models; there
 is no central provider fallback. Manifest values remain authoritative, so
 hydration only fills undefined metadata and never supplies transport settings
@@ -363,7 +363,7 @@ disable every hosted catalog request with `models.catalogRefresh.enabled:
 false`. When disabled, pricing stays at bundled and explicitly configured
 values. A self-hosted mirror can be selected with an HTTPS
 `models.catalogRefresh.url` (or localhost HTTP for testing); see
-[configuration reference](/gateway/configuration-reference#models).
+[configuration reference](/gateway/config-runtime#models).
 
 Custom providers configured under `models.providers` are written into `models.json` under the agent directory (default `~/.openclaw/agents/<agentId>/agent/models.json`). Provider-plugin catalogs are stored separately as generated plugin-owned catalog shards and load automatically. This file is merged with config by default; set `models.mode: "replace"` to use only your configured providers.
 

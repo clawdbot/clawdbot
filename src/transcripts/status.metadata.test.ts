@@ -2,7 +2,7 @@ import fs from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import { createPluginMetadataSnapshot } from "../config/plugin-auto-enable.test-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { installTemporaryCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
+import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
 import * as discovery from "../plugins/discovery.js";
 import * as loader from "../plugins/loader.js";
 import { loadPluginManifestRegistryForInstalledIndex } from "../plugins/manifest-registry-installed.js";
@@ -83,7 +83,6 @@ describe("transcript setup metadata boundary", () => {
       const previous = captureActivePluginRegistrySnapshot();
       const active = createEmptyPluginRegistry();
       setActivePluginRegistry(active);
-      const lease = installTemporaryCurrentPluginMetadataSnapshot(metadata, { config: cfg });
       const store = new TranscriptsStore(state.statePath("transcripts"));
       const readStatus = async () => {
         const discover = vi.spyOn(discovery, "discoverOpenClawPlugins").mockImplementation(() => {
@@ -94,7 +93,11 @@ describe("transcript setup metadata boundary", () => {
         });
         const read = vi.spyOn(fs, "readFileSync");
         try {
-          const result = await readTranscriptLibraryStatus(store, cfg);
+          const result = await withPluginMetadataSnapshotScope(
+            metadata,
+            () => readTranscriptLibraryStatus(store, cfg),
+            { config: cfg },
+          );
           expect(discover).not.toHaveBeenCalled();
           expect(resolve).not.toHaveBeenCalled();
           expect(
@@ -138,7 +141,6 @@ describe("transcript setup metadata boundary", () => {
           });
         }
       } finally {
-        lease.release();
         restoreActivePluginRegistrySnapshot(previous);
       }
     });

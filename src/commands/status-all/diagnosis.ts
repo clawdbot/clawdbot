@@ -26,6 +26,7 @@ import {
   formatPluginCompatibilityNotice,
   type PluginCompatibilityNotice,
 } from "../../plugins/status.js";
+import { dedupeByKey } from "../../shared/dedupe-by-key.js";
 import { formatDeliveryQueueHealthLine } from "../health-format.js";
 import type {
   resolveStatusGatewayHealthSafe,
@@ -202,11 +203,10 @@ export async function appendStatusAllDiagnosis(params: {
   if (params.snap) {
     const status = !params.snap.exists ? "fail" : params.snap.valid ? "ok" : "warn";
     emitCheck(`Config: ${params.snap.path ?? "(unknown)"}`, status);
-    const issues = [...(params.snap.legacyIssues ?? []), ...(params.snap.issues ?? [])];
-    // Legacy and current schema checks can report the same path/message pair.
-    const uniqueIssues = issues.filter(
-      (issue, index) =>
-        issues.findIndex((x) => x.path === issue.path && x.message === issue.message) === index,
+    // Length-prefix the path to keep arbitrary path/message pairs distinct.
+    const uniqueIssues = dedupeByKey(
+      [...(params.snap.legacyIssues ?? []), ...(params.snap.issues ?? [])],
+      (issue) => `${issue.path.length}:${issue.path}${issue.message}`,
     );
     for (const issue of uniqueIssues.slice(0, 12)) {
       lines.push(`  ${formatConfigIssueLine(issue, "-")}`);

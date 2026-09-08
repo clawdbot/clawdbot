@@ -211,16 +211,7 @@ async function withDiagnosticsEnabled<T>(run: () => Promise<T>): Promise<T> {
 function holdSupervisorRun() {
   const entered = createDeferred();
   const release = createDeferred();
-  const exit = {
-    reason: "exit" as const,
-    exitCode: 0,
-    exitSignal: null,
-    durationMs: 50,
-    stdout: "",
-    stderr: "",
-    timedOut: false,
-    noOutputTimedOut: false,
-  };
+  const exit = createSuccessfulProcessExit();
   const managedRun = createManagedRun(exit);
   managedRun.wait.mockImplementation(async () => {
     entered.resolve();

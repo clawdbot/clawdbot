@@ -576,7 +576,7 @@ export function buildAfterTurnRuntimeContext(params: {
       ownerNumbers: params.attempt.ownerNumbers,
       activeProcessSessions: listActiveProcessSessionReferences({
         scopeKey: resolveProcessToolScopeKey({
-          sessionKey: params.attempt.sandboxSessionKey?.trim() || params.attempt.sessionKey,
+          sessionKey: params.attempt.sessionKey,
           sessionId: params.attempt.sessionId,
           agentId: params.activeAgentId,
         }),

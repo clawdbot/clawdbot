@@ -15,6 +15,8 @@ import {
 } from "../../agents/github-tool-identity.js";
 import { cleanupRetiredManagedGitHubProfiles } from "../../agents/github-tool-profile-cleanup.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveCommandEnv } from "../../process/exec-spawn.js";
+import * as secretsRuntime from "../../secrets/runtime-state.js";
 import {
   listSecretStoreEntries,
   readSecretStoreExecEnvironment,
@@ -218,6 +220,60 @@ afterEach(async () => {
 });
 
 describe("personal GitHub through authenticated Gateway RPC", () => {
+  it.each(["users.github.status", "tools.github.status"])(
+    "%s reports execution authentication instead of a resolved preview credential",
+    async (method) => {
+      const sourceConfig: OpenClawConfig = {
+        ...config,
+        gateway: {
+          controlUi: {
+            github: { token: { source: "env", provider: "default", id: "GH_TOKEN" } },
+          },
+        },
+      };
+      config = {
+        ...config,
+        gateway: { controlUi: { github: { token: "synthetic-preview" } } },
+      };
+      const snapshot = vi
+        .spyOn(secretsRuntime, "getActiveSecretsRuntimeConfigSnapshot")
+        .mockReturnValue({ config, sourceConfig, configRefsPrepared: true });
+      vi.stubEnv("GH_TOKEN", "synthetic-preview");
+      vi.stubEnv("GITHUB_TOKEN", "synthetic-native");
+      network.command.mockImplementation(
+        async (argv: string[], options: { env?: NodeJS.ProcessEnv }) => {
+          const env = resolveCommandEnv({ argv, env: options.env });
+          return {
+            code: argv[0] === "git" ? 1 : 0,
+            stdout: Buffer.from(
+              argv[0] === "gh" ? env.GH_TOKEN || env.GITHUB_TOKEN || "synthetic-native" : "",
+            ),
+            stderr: Buffer.alloc(0),
+          };
+        },
+      );
+      try {
+        const response = await rpc(
+          alice,
+          method,
+          method === "tools.github.status" ? { agentId: "main", selectedScope: "agent" } : {},
+        );
+        expect(response.mock.calls[0]?.[0]).toBe(true);
+        expect(response.mock.calls[0]?.[1]).toMatchObject({
+          [method === "users.github.status" ? "system" : "effective"]: {
+            source: "system-detected",
+            credentialState: "available",
+            account: { login: "system-bot" },
+          },
+        });
+        expect(network.refresh).not.toHaveBeenCalled();
+      } finally {
+        snapshot.mockRestore();
+        vi.unstubAllEnvs();
+      }
+    },
+  );
+
   it.each(["native", "managed"] as const)(
     "reads personal and %s system status without selecting an agent",
     async (systemKind) => {

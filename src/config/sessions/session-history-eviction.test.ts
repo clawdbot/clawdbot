@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   prepareSystemAgentRunAdmission,
@@ -41,9 +42,12 @@ import { measureSessionPhysicalDiskUsage } from "./disk-budget.js";
 import {
   appendTranscriptMessage,
   deleteSessionEntryLifecycle,
+  loadTranscriptEventsSync,
   replaceSessionEntry,
+  replaceSessionEntrySync,
   resetSessionEntryLifecycle,
 } from "./session-accessor.js";
+import { readReferencedSessionIds } from "./session-accessor.sqlite-lifecycle-state.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import {
   enforceSqliteSessionHistoryDiskBudget,
@@ -211,11 +215,13 @@ describe("SQLite historical session disk budget", () => {
   );
 
   it.each([
-    { oldestBytes: 64 * 1024, reclaimBytes: 1 },
-    { oldestBytes: 8 * 1024 * 1024, reclaimBytes: 4 * 1024 * 1024 },
+    { oldestBytes: 64 * 1024, reclaimBytes: 1, capArchive: false },
+    { oldestBytes: 64 * 1024, reclaimBytes: 1, capArchive: true },
+    { oldestBytes: 8 * 1024 * 1024, reclaimBytes: 4 * 1024 * 1024, capArchive: false },
+    { oldestBytes: 8 * 1024 * 1024, reclaimBytes: 4 * 1024 * 1024, capArchive: true },
   ])(
-    "evicts the oldest historical session and retains its archive after reclaiming $reclaimBytes bytes",
-    async ({ oldestBytes, reclaimBytes }) => {
+    "evicts oldest history before the entry tier and reclaims $reclaimBytes bytes (cap archive: $capArchive)",
+    async ({ oldestBytes, reclaimBytes, capArchive }) => {
       const sessionKey = "agent:main:history-order";
       await createHistoricalTranscript({
         content: "oldest " + "x".repeat(oldestBytes),
@@ -233,6 +239,20 @@ describe("SQLite historical session disk budget", () => {
         target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
         buildNextEntry: () => ({ sessionId: "live-history", updatedAt: 30 }),
       });
+      if (capArchive) {
+        replaceSessionEntrySync(
+          { sessionKey, storePath },
+          {
+            sessionId: "live-history",
+            updatedAt: 30,
+            archivedAt: 40,
+            archiveReason: "active-session-cap",
+          },
+        );
+        expect(readReferencedSessionIds(database(), undefined, ["oldest-history"])).toEqual(
+          new Set(["oldest-history"]),
+        );
+      }
       setSessionUpdatedAt("newer-history", 20);
       settlePhysicalUsage();
       database().db.exec("ANALYZE; PRAGMA analysis_limit = 37;");
@@ -567,48 +587,237 @@ describe("SQLite historical session disk budget", () => {
     }
   });
 
-  it("preserves every generation of a recently active session under physical pressure", async () => {
-    const now = Date.now();
-    const dayMs = 24 * 60 * 60 * 1000;
-    const recentKey = "agent:main:recent-history";
-    const staleKey = "agent:main:stale-history";
-    await createHistoricalTranscript({
-      content: "recent history " + "r".repeat(64 * 1024),
-      nextSessionId: "recent-live",
-      sessionId: "recent-old",
-      sessionKey: recentKey,
-      updatedAt: now - 8 * dayMs,
-    });
-    await replaceSessionEntry(
-      { sessionKey: recentKey, storePath },
-      { sessionId: "recent-live", updatedAt: now },
-    );
-    await createHistoricalTranscript({
-      content: "stale history " + "s".repeat(64 * 1024),
-      nextSessionId: "stale-live",
-      sessionId: "stale-old",
-      sessionKey: staleKey,
-      updatedAt: now - 8 * dayMs,
-    });
-    settlePhysicalUsage();
-    const before = await measureSessionPhysicalDiskUsage(storePath);
+  it.each([
+    "recent",
+    "archived",
+    "pinned",
+    "manual",
+    "age-retention",
+    "stale-dashboard",
+    "restart-recovery",
+  ] as const)(
+    "preserves every generation of a %s session under physical pressure",
+    async (protection) => {
+      const now = Date.now();
+      const dayMs = 24 * 60 * 60 * 1000;
+      const recentKey = "agent:main:recent-history";
+      const staleKey = "agent:main:stale-history";
+      await createHistoricalTranscript({
+        content: "recent history " + "r".repeat(64 * 1024),
+        nextSessionId: "recent-middle",
+        sessionId: "recent-old",
+        sessionKey: recentKey,
+        updatedAt: now - 8 * dayMs,
+      });
+      await createHistoricalTranscript({
+        content: "middle history",
+        nextSessionId: "recent-live",
+        sessionId: "recent-middle",
+        sessionKey: recentKey,
+        updatedAt: now - 8 * dayMs + 1,
+      });
+      await replaceSessionEntry(
+        { sessionKey: recentKey, storePath },
+        {
+          sessionId: "recent-live",
+          updatedAt: protection === "recent" ? now : now - 8 * dayMs,
+          ...(protection !== "recent" && protection !== "pinned" ? { archivedAt: now } : {}),
+          ...(protection !== "recent" && protection !== "pinned" && protection !== "archived"
+            ? { archiveReason: protection }
+            : {}),
+          ...(protection === "pinned" ? { pinnedAt: now } : {}),
+        },
+      );
+      await createHistoricalTranscript({
+        content: "stale history " + "s".repeat(64 * 1024),
+        nextSessionId: "stale-live",
+        sessionId: "stale-old",
+        sessionKey: staleKey,
+        updatedAt: now - 8 * dayMs,
+      });
+      settlePhysicalUsage();
+      const before = await measureSessionPhysicalDiskUsage(storePath);
 
-    const result = await enforceSqliteSessionHistoryDiskBudget({
-      storePath,
-      mode: "enforce",
-      maintenance: {
-        maxDiskBytes: before.totalBytes - 1,
-        highWaterBytes: 0,
-        preserveRecentMs: 7 * dayMs,
-      },
-    });
+      const result = await enforceSqliteSessionHistoryDiskBudget({
+        storePath,
+        mode: "enforce",
+        maintenance: {
+          maxDiskBytes: before.totalBytes - 1,
+          highWaterBytes: 0,
+          preserveRecentMs: protection === "recent" ? 7 * dayMs : undefined,
+        },
+      });
 
-    expect(result?.removedEntries).toBe(1);
-    expect(sessionExists("recent-old")).toBe(true);
-    expect(sessionExists("recent-live")).toBe(true);
-    expect(sessionExists("stale-old")).toBe(false);
-    expect(sessionExists("stale-live")).toBe(true);
-  });
+      expect(result?.removedEntries).toBe(1);
+      expect(sessionExists("recent-old")).toBe(true);
+      expect(sessionExists("recent-middle")).toBe(true);
+      expect(sessionExists("recent-live")).toBe(true);
+      expect(sessionExists("stale-old")).toBe(false);
+      expect(sessionExists("stale-live")).toBe(true);
+      closeOpenClawAgentDatabasesForTest();
+      const repeated = {
+        storePath,
+        mode: "enforce" as const,
+        maintenance: {
+          maxDiskBytes: 1,
+          highWaterBytes: 1,
+          preserveRecentMs: protection === "recent" ? 7 * dayMs : undefined,
+        },
+      };
+      expect(await inspectSqliteSessionHistoryDiskBudget(repeated)).toMatchObject({
+        wouldMutate: false,
+      });
+      expect(await enforceSqliteSessionHistoryDiskBudget(repeated)).toMatchObject({
+        removedEntries: 0,
+      });
+      for (const sessionId of ["recent-old", "recent-middle"]) {
+        expect(
+          loadTranscriptEventsSync({ sessionId, sessionKey: recentKey, storePath }),
+        ).not.toEqual([]);
+        expect(readArchiveNames(sessionId)).toEqual([]);
+      }
+    },
+  );
+
+  it.each(["archivedAt", "pinnedAt", "age-retention", "manual", "recent"] as const)(
+    "rechecks %s on the logical owner before deleting an older generation",
+    async (field) => {
+      const sessionKey = "agent:main:archive-race";
+      await createHistoricalTranscript({
+        content: "keep this older generation",
+        nextSessionId: "race-live",
+        sessionId: "race-old",
+        sessionKey,
+        updatedAt: Date.now() - 8 * 24 * 60 * 60 * 1000,
+      });
+      replaceSessionEntrySync(
+        { sessionKey, storePath },
+        {
+          sessionId: "race-live",
+          updatedAt: Date.now() - 8 * 24 * 60 * 60 * 1000,
+          archivedAt: Date.now(),
+          archiveReason: "active-session-cap",
+        },
+      );
+      const reclamation = await import("./session-accessor.sqlite-reclamation.js");
+      const reclaim = reclamation.runSqliteSessionReclamation;
+      const dispatch = vi
+        .spyOn(reclamation, "runSqliteSessionReclamation")
+        .mockImplementationOnce(async (params) => {
+          replaceSessionEntrySync(
+            { sessionKey, storePath },
+            {
+              sessionId: "race-live",
+              updatedAt: Date.now(),
+              ...(field === "age-retention" || field === "manual"
+                ? { archivedAt: Date.now(), archiveReason: field }
+                : field === "recent"
+                  ? {}
+                  : { [field]: Date.now() }),
+            },
+          );
+          return await reclaim(params);
+        });
+      expect(
+        await enforceSqliteSessionHistoryDiskBudget({
+          storePath,
+          mode: "enforce",
+          maintenance: {
+            maxDiskBytes: 1,
+            highWaterBytes: 1,
+            ...(field === "recent" ? { preserveRecentMs: 7 * 24 * 60 * 60 * 1000 } : {}),
+          },
+        }),
+      ).toMatchObject({ removedEntries: 0 });
+      expect(dispatch).toHaveBeenCalledOnce();
+      expect(
+        loadTranscriptEventsSync({ sessionId: "race-old", sessionKey, storePath }),
+      ).not.toEqual([]);
+      expect(readArchiveNames("race-old")).toEqual([]);
+      // An explicit operator delete still owns every generation, even when pinned or archived.
+      expect(
+        await deleteSessionEntryLifecycle({
+          storePath,
+          target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
+          archiveTranscript: true,
+        }),
+      ).toMatchObject({ deleted: true });
+      expect(sessionExists("race-old")).toBe(false);
+    },
+  );
+
+  it.each(["same connection", "external connection"] as const)(
+    "rechecks cross-owner references written through a %s after materialization",
+    async (writerKind) => {
+      const sessionKey = "agent:main:reference-race";
+      const referringKey = "agent:main:reference-survivor";
+      await createHistoricalTranscript({
+        content: "retain cross-owner history",
+        nextSessionId: "reference-live",
+        sessionId: "reference-old",
+        sessionKey,
+        updatedAt: Date.now(),
+      });
+      const archive = await import("./session-accessor.sqlite-archive.js");
+      const materialize = archive.materializeSessionStateDeletePlans;
+      const materialization = vi
+        .spyOn(archive, "materializeSessionStateDeletePlans")
+        .mockImplementationOnce(async (plans) => {
+          const prepared = await materialize(plans);
+          const owner = database();
+          const writer =
+            writerKind === "external connection" ? new DatabaseSync(owner.path) : owner.db;
+          try {
+            writer
+              .prepare(
+                "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) VALUES (?, ?, ?, 1)",
+              )
+              .run(
+                referringKey,
+                "survivor-current",
+                JSON.stringify({
+                  sessionId: "survivor-current",
+                  updatedAt: 1,
+                  usageFamilySessionIds: ["reference-old"],
+                }),
+              );
+          } finally {
+            if (writer !== owner.db) {
+              writer.close();
+            }
+          }
+          return prepared;
+        });
+      expect(
+        await enforceSqliteSessionHistoryDiskBudget({
+          storePath,
+          mode: "enforce",
+          maintenance: { maxDiskBytes: 1, highWaterBytes: 1 },
+        }),
+      ).toMatchObject({ removedEntries: 0 });
+      expect(materialization).toHaveBeenCalledOnce();
+      expect(
+        loadTranscriptEventsSync({ sessionId: "reference-old", sessionKey, storePath }),
+      ).not.toEqual([]);
+      expect(readArchiveNames("reference-old")).toEqual([]);
+      // Excluding the deliberately deleted owner must not exclude a surviving reference.
+      expect(
+        await deleteSessionEntryLifecycle({
+          storePath,
+          target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
+          archiveTranscript: true,
+        }),
+      ).toMatchObject({ deleted: true });
+      expect(sessionExists("reference-old")).toBe(true);
+      expect(
+        loadTranscriptEventsSync({
+          sessionId: "reference-old",
+          sessionKey: referringKey,
+          storePath,
+        }),
+      ).not.toEqual([]);
+    },
+  );
 
   it("warns when a fire-and-forget budget sweep fails instead of swallowing it", async () => {
     evictionWarnSpy.mockClear();

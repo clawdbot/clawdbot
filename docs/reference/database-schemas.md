@@ -68,6 +68,17 @@ lookups.
 
 Reopening an occupancy-driven capture clears `stopped_at` without changing the
 primary key, so the same meeting retains its utterances.
+New transcript admissions record `sessionIdOrigin` (`generated` or `supplied`)
+in `metadata_json`. The store preserves that value, including its absence or
+invalidity in legacy rows, on later writes to the same primary key. Occupancy
+reopening requires an explicitly generated origin; an unknown origin starts a
+fresh capture and leaves the old record intact. The existing newest-candidate
+query and ten-minute window are unchanged.
+
+This adds no schema, index, version, or backfill. Doctor metadata restoration
+preserves an explicitly recorded origin and leaves unknown origins unknown.
+Older runtimes do not enforce this rule, so downgrading also removes the fixed-ID
+history protection. See the [accepted ID-origin decision](https://github.com/openclaw/openclaw/pull/130860).
 
 #### `meeting_transcript_utterances`
 
@@ -613,6 +624,8 @@ Background verification errors retain the original name and message and append b
 Agent database maintenance fences other writers with a 60-second lease in the shared state database. A dedicated worker renews that lease during synchronous integrity scans and migration phases. Maintenance still checks the exact persisted owner before mutations and commit, and stops if the heartbeat fails or ownership expires or changes. Finishing or cancelling maintenance stops renewal before releasing the lease; process death leaves at most the remaining lease duration.
 
 Maintenance schema admission runs its initial full-file integrity check in a read-only Worker when that check is outside a write transaction. The connection and maintenance lease remain held until the Worker exits. Schema changes, index repairs, and compaction retain their synchronous phases.
+
+Startup errors containing `state lease heartbeat did not become ready` include `phase=startup`, the settlement trigger (`timeout` or `message`), and the status observed before the parent marks failure. `status=starting` distinguishes readiness still pending from `status=lost`, where loss was already recorded. `elapsedMs` measures monotonic time since heartbeat startup began; `timeoutMs` is the startup wait budget, capped at five seconds or the remaining initial lease lifetime. These fields do not establish why startup stalled or ownership was lost.
 
 The heartbeat proves ownership, not migration progress. A live but stuck maintenance process can keep its lease; stop that process before retrying Doctor.
 

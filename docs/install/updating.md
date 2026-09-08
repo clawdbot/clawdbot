@@ -153,7 +153,9 @@ openclaw update cleanup --dry-run
 Use the same profile and state/config overrides as the update, and check the
 state directory printed in the report. The metadata-only preview can run while
 the Gateway is active. To apply, stop that Gateway yourself, wait for other
-SQLite maintenance to finish, then run `openclaw update cleanup`. Cleanup never
+SQLite maintenance to finish, and stop database readers such as session-listing
+watchers. Keep them stopped until `openclaw update cleanup` exits; read-only
+connections can change WAL/SHM sidecars and invalidate verification. Cleanup never
 stops or restarts the Gateway. Confirmation defaults to **No**; automation must
 explicitly pass `--yes`, including when using `--json`.
 
@@ -173,8 +175,9 @@ Installer-driven switches verify the replacement before the working owner is ret
 
 Candidate validation failures leave the old Gateway serving. After activation,
 package recovery can restore the retained previous package only when the shared
-and affected per-agent database schema versions and configuration content are
-unchanged. The restored
+and affected pre-existing per-agent database schema versions and configuration
+content are unchanged. A database first created by the candidate is neutral only
+at its supported schema version for that database kind. The restored
 Gateway must pass the same runtime checks before recovery is reported as
 complete. A schema migration prevents automatic package rollback; replacing
 code cannot undo migrated state. Incomplete file rollback retains its backups
@@ -592,7 +595,7 @@ campaigns, the CLI, and `update.run` API clients are unaffected.
 After confirmation, the dialog shows the live phase list, step details, and
 verification results. It stays open during restart and resumes from the Gateway's
 run record after reconnecting. Success and failure both leave a final report in
-the dialog and **Settings → Updates**. See [Control UI updates](/web/control-ui#updates).
+the dialog and **Settings → Updates**. See [Control UI updates](/web/control-ui/settings#updates).
 
 In the signed macOS app, a local app-owned Gateway changes that card to
 **Update Mac app + Gateway**. Sparkle updates the app first; after relaunch, the
@@ -660,12 +663,19 @@ made after the backup.
 If a newly activated package fails verification, `openclaw update` compares the
 shared and affected per-agent SQLite `user_version` values with their
 pre-activation values and checks that configuration content is unchanged.
+Databases first created during activation or serving verification are
+schema-neutral when their version matches the candidate's supported version for
+that database kind. A changed schema version or missing pre-existing database,
+or a new database at a foreign version, still blocks rollback. Before restoring
+code, the updater also checks that the previous package supports any new database;
+unknown or incompatible support refuses rollback with `rollback-state-unverified`.
 When both checks pass and the retained previous package was verified before the
 update, it stops the candidate and restores the previous generation: package,
 command shim, service definition, and config writer stamp. Owned, writable
 service metadata is refreshed; protected service definitions are preserved.
 The CLI verifies the restarted previous Gateway's service health, version/build
-identity, plugins, channels, and `/readyz` again.
+identity, plugins, channels, and `/readyz` again, then requires a new successful
+agent turn and fresh readback of its saved request and response.
 
 The candidate may have advanced the config writer stamp without changing config
 content. Rollback restores that stamp and uses the existing intentional-recovery
@@ -679,10 +689,21 @@ measured from service stop through verified recovery. The headline is
 verification failure. The command still exits nonzero; recovery does not turn a
 rejected candidate into a successful update.
 
-The bounded inference check is advisory:
-`inference: unavailable` by itself does not trigger rollback.
+Serving verification is required, not advisory. It uses configured inference and
+has a 60-second budget. The saved reply must include the run-specific verification
+token as a whole word; punctuation or a short sentence around it is accepted.
+Unavailable inference, timeout, an incomplete turn, a non-matching response, or
+missing saved messages fails verification. `response-mismatch` means the turn was
+saved but its reply did not contain the token; `persistence-missing` means no
+committed request/response pair was found. Use `openclaw update status` for the
+recorded reason and `openclaw triage` to diagnose a failed check. Recovery guidance
+reports whether the Gateway is running or stopped from the latest service
+observation, even when a running candidate did not pass verification.
+A restored Gateway must pass its own serving
+check before the run can finish as `rolled-back`; candidate proof cannot be reused
+after a restart or restoration.
 
-If configuration content or a schema version changed, rollback is refused with
+If configuration content changed or the databases are not schema-neutral, rollback is refused with
 `state-migrated-no-rollback`. The updater attempts
 [bounded unattended repair](/install/updating#unattended-repair-on-your-own-inference)
 on the installed candidate, preserving migrated state. The same repair slot can

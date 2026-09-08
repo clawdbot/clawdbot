@@ -1,5 +1,6 @@
 import { access, mkdir, mkdtemp, rm, stat } from "node:fs/promises";
 import path from "node:path";
+import { setImmediate } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WorkerDesktopEndpoint, WorkerSshEndpoint } from "../../plugins/types.js";
 import type { CommandOptions, SpawnResult } from "../../process/exec.js";
@@ -295,6 +296,226 @@ describe("worker desktop tunnels", () => {
     observers.forEach((observer) => observer?.release());
     await manager.stopAll();
   });
+
+  it("retains SSH resources after failed stop and releases them on late exit", async () => {
+    const fake = fakeRunner();
+    const manager = createWorkerDesktopTunnels({ runner: fake.runner });
+    const starting = acquire(manager, 1, { protocol: "rfb", port: 5900 });
+    await waitForStarts(fake.starts, 1);
+    const child = fake.starts[0]!.process;
+    child.becomeReady();
+    const { attachment } = await starting;
+    if (attachment.kind !== "unix-socket") {
+      throw new Error("expected an SSH desktop socket");
+    }
+    const directory = path.dirname(attachment.socketPath);
+    const failure = new Error("SSH child may still be running");
+    const stop = vi.spyOn(child, "stop").mockRejectedValue(failure);
+    try {
+      await expect(manager.stop("worker:one", 1)).rejects.toBe(failure);
+      await access(directory);
+      await expect(acquire(manager, 2)).rejects.toBe(failure);
+      expect(fake.starts).toHaveLength(1);
+      stop.mockRestore();
+      child.exit();
+      await vi.waitFor(async () => {
+        await expect(access(directory)).rejects.toMatchObject({ code: "ENOENT" });
+      });
+    } finally {
+      stop.mockRestore();
+      await child.stop();
+      await manager.stopAll();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("joins identity preparation when stopped before spawning", async () => {
+    const identity = deferred<Awaited<ReturnType<typeof resolveIdentity>>>();
+    const resolving = deferred<void>();
+    const fake = fakeRunner();
+    const manager = createWorkerDesktopTunnels({ runner: fake.runner });
+    const starting = manager.acquire({
+      environmentId: "worker:one",
+      ownerEpoch: 1,
+      ssh: SSH,
+      desktop: DESKTOP,
+      resolveIdentity: () => {
+        resolving.resolve();
+        return identity.promise;
+      },
+    });
+    const rejected = expect(starting).rejects.toThrow("stopped before connecting");
+    await resolving.promise;
+    let stopped = false;
+    const stopping = manager.stop("worker:one", 1).then(() => {
+      stopped = true;
+    });
+    try {
+      await rejected;
+      await setImmediate();
+      expect(stopped).toBe(false);
+      expect(fake.starts).toHaveLength(0);
+    } finally {
+      identity.resolve(await resolveIdentity());
+      await stopping;
+      await manager.stopAll();
+    }
+    expect(fake.starts).toHaveLength(0);
+  });
+
+  it("does not cancel a same-epoch retry when its retained predecessor exits", async () => {
+    const fake = fakeRunner();
+    const start = fake.runner.start.bind(fake.runner);
+    fake.runner.start = (argv, options) => {
+      const child = start(argv, options);
+      fake.starts.at(-1)!.process.becomeReady();
+      return child;
+    };
+    const manager = createWorkerDesktopTunnels({ runner: fake.runner });
+    await acquire(manager, 1, { protocol: "rfb", port: 5900 });
+    const failure = new Error("transport still running");
+    const stop = vi.spyOn(fake.starts[0]!.process, "stop").mockRejectedValueOnce(failure);
+    try {
+      await expect(manager.stop("worker:one", 1)).rejects.toBe(failure);
+      stop.mockRestore();
+      await expect(acquire(manager, 1, { protocol: "rfb", port: 5900 })).resolves.toMatchObject({
+        attachment: { kind: "unix-socket" },
+      });
+      expect(fake.starts).toHaveLength(2);
+    } finally {
+      stop.mockRestore();
+      await manager.stopAll();
+    }
+  });
+
+  it("aborts and joins stale app launches even when predecessor teardown fails", async () => {
+    const launchResult = deferred<SpawnResult>();
+    const fake = fakeRunner(() => launchResult.promise);
+    const manager = createWorkerDesktopTunnels({ runner: fake.runner });
+    const starting = acquire(manager, 1, { protocol: "rfb", port: 5900 });
+    await waitForStarts(fake.starts, 1);
+    fake.starts[0]!.process.becomeReady();
+    await starting;
+    const launching = launchApp(manager);
+    await vi.waitFor(() => expect(fake.runs).toHaveLength(1));
+    const failure = new Error("predecessor still running");
+    const stop = vi.spyOn(fake.starts[0]!.process, "stop").mockRejectedValue(failure);
+    let settled = false;
+    const replacing = acquire(manager, 2, { protocol: "rfb", port: 5900 }).finally(() => {
+      settled = true;
+    });
+    const rejected = expect(replacing).rejects.toBe(failure);
+    try {
+      await setImmediate();
+      expect(fake.runs[0]!.options.signal?.aborted).toBe(true);
+      expect(settled).toBe(false);
+    } finally {
+      launchResult.resolve(success());
+      await Promise.all([launching, rejected]);
+      stop.mockRestore();
+      await manager.stopAll();
+    }
+    expect(fake.starts).toHaveLength(1);
+  });
+
+  it("publishes a replacement before a stale launch abort can reenter Stop", async () => {
+    let reentrantStop: Promise<void> | undefined;
+    const fake = fakeRunner(
+      (_argv, options) =>
+        new Promise<SpawnResult>((resolve) => {
+          options.signal!.addEventListener(
+            "abort",
+            () => {
+              reentrantStop = manager.stop("worker:one", 2);
+              resolve(success());
+            },
+            { once: true },
+          );
+        }),
+    );
+    const manager = createWorkerDesktopTunnels({ runner: fake.runner });
+    const launching = launchApp(manager);
+    await vi.waitFor(() => expect(fake.runs).toHaveLength(1));
+    try {
+      await expect(acquire(manager, 2, { protocol: "rfb", port: 5900 })).rejects.toThrow(
+        "stopped before connecting",
+      );
+      await Promise.all([launching, reentrantStop]);
+      expect(reentrantStop).toBeDefined();
+      expect(fake.starts).toHaveLength(0);
+    } finally {
+      await manager.stopAll();
+    }
+  });
+
+  it("cancels a replacement while the previous desktop is stopping", async () => {
+    const fake = fakeRunner();
+    const start = fake.runner.start.bind(fake.runner);
+    fake.runner.start = (argv, options) => {
+      const child = start(argv, options);
+      fake.starts.at(-1)!.process.becomeReady();
+      return child;
+    };
+    const manager = createWorkerDesktopTunnels({ runner: fake.runner });
+    await acquire(manager, 1, { protocol: "rfb", port: 5900 });
+    const child = fake.starts[0]!.process;
+    const stop = child.stop.bind(child);
+    const entered = deferred<void>();
+    const release = deferred<void>();
+    const stoppingChild = vi.spyOn(child, "stop").mockImplementation(async () => {
+      entered.resolve();
+      await release.promise;
+      await stop();
+    });
+    const replacement = acquire(manager, 2, { protocol: "rfb", port: 5900 });
+    const outcome = replacement.then(
+      () => "ready",
+      () => "stopped",
+    );
+    await entered.promise;
+    const stopping = manager.stop("worker:one", 2);
+    release.resolve();
+    try {
+      await stopping;
+      expect(await outcome).toBe("stopped");
+      expect(fake.starts).toHaveLength(1);
+    } finally {
+      stoppingChild.mockRestore();
+      await manager.stopAll();
+    }
+  });
+
+  it.each(["readiness", "password"] as const)(
+    "joins %s before disposing a cancelled desktop",
+    async (phase) => {
+      const password = deferred<SpawnResult>();
+      const fake = fakeRunner(() => password.promise);
+      const manager = createWorkerDesktopTunnels({ runner: fake.runner });
+      const starting = acquire(manager);
+      const rejected = expect(starting).rejects.toThrow("stopped before connecting");
+      await waitForStarts(fake.starts, 1);
+      const started = fake.starts[0]!;
+      const socket = started.argv[started.argv.indexOf("-L") + 1]!.split(":127.0.0.1:")[0]!;
+      const directory = path.dirname(socket);
+      if (phase === "password") {
+        started.process.becomeReady();
+        await vi.waitFor(() => expect(fake.runs).toHaveLength(1));
+      }
+      const stopping = manager.stop("worker:one", 1);
+      try {
+        await rejected;
+        if (phase === "password") {
+          await setImmediate();
+          await access(directory);
+        }
+      } finally {
+        password.resolve(success("synthetic-password"));
+        await stopping;
+        await manager.stopAll();
+      }
+      await expect(access(directory)).rejects.toMatchObject({ code: "ENOENT" });
+    },
+  );
 
   it("lingers after the last observer and closes observers on child exit", async () => {
     vi.useFakeTimers();

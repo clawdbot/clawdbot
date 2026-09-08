@@ -261,7 +261,6 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
   const attemptContextEngine = nativeModelOwned ? undefined : contextEngine;
   const authProfileIdSource =
     runtime.lastProfileId && runtime.lastProfileId === lockedProfileId ? "user" : "auto";
-  const observeToolTerminal = createToolTerminalObserver(params.runId);
   const attemptAbortController = new AbortController();
   input.setPostCompactionAbortController(attemptAbortController);
   const preparedExecApprovalContinuation = prepareExecApprovalContinuationForAttempt({
@@ -514,7 +513,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
         }
       : {}),
     runtimePlan,
-    observeToolTerminal,
+    observeToolTerminal: createToolTerminalObserver(params.runId),
     model: applyAuthHeaderOverride(
       applyLocalNoAuthHeaderOverride(effectiveModel, runtime.apiKeyInfo),
       runtime.runtimeAuthState !== null ? null : runtime.apiKeyInfo,
@@ -580,6 +579,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     onExecutionPhase: params.onExecutionPhase,
     extraSystemPrompt,
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+    silentReplyPromptMode: params.silentReplyPromptMode,
     taskSuggestionDeliveryMode: params.taskSuggestionDeliveryMode,
     inputProvenance: params.inputProvenance,
     trustedInternalHandoff: params.trustedInternalHandoff,
@@ -609,6 +609,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     // The host loop settles all completed counts, including default/SDK runs.
     compactionCountOwner: "caller",
     onContextAccountingEvent: params.onContextAccountingEvent,
+    onCompactionRequestBudget: params.onCompactionRequestBudget,
     ...(params.systemAgentTool ? { systemAgentTool: params.systemAgentTool } : {}),
     cleanupBundleMcpOnRunEnd: params.cleanupBundleMcpOnRunEnd,
     oneShotCliRun: params.oneShotCliRun,

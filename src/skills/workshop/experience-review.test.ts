@@ -547,10 +547,13 @@ describe("skill experience review prompt", () => {
       source: "workspace" as const,
       activation: "read" as const,
     }));
-    const prompt = buildSkillExperienceReviewPrompt({
-      usedSkills: skills,
-      existingSkills: skills,
-    });
+    const prompt = buildSkillExperienceReviewPrompt(
+      {
+        usedSkills: skills,
+        existingSkills: skills,
+      },
+      "propose",
+    );
     expect(prompt).toContain("more used skills omitted");
     expect(prompt).toContain("(+70 more not shown)");
     expect(Math.max(...prompt.split("\n").map((line) => line.length))).toBeLessThanOrEqual(2_000);
@@ -563,7 +566,7 @@ describe("skill experience review prompt", () => {
       activation: index % 3 === 0 ? ("command" as const) : ("read" as const),
     }));
     const build = (skills: typeof usedSkills) =>
-      buildSkillExperienceReviewPrompt({ usedSkills: skills });
+      buildSkillExperienceReviewPrompt({ usedSkills: skills }, "propose");
     const prompt = build(usedSkills.toReversed());
 
     expect(prompt).toBe(build(usedSkills));
@@ -580,12 +583,15 @@ describe("skill experience review prompt", () => {
   });
 
   it("caps existing skills by entry count and line length", () => {
-    const prompt = buildSkillExperienceReviewPrompt({
-      existingSkills: Array.from({ length: 120 }, (_, index) => ({
-        name: `skill-${String(index)}`,
-        description: "d".repeat(500),
-      })),
-    });
+    const prompt = buildSkillExperienceReviewPrompt(
+      {
+        existingSkills: Array.from({ length: 120 }, (_, index) => ({
+          name: `skill-${String(index)}`,
+          description: "d".repeat(500),
+        })),
+      },
+      "propose",
+    );
 
     expect(prompt).toContain("- skill-49");
     expect(prompt).not.toContain("- skill-50");
@@ -597,9 +603,24 @@ describe("skill experience review prompt", () => {
     }
   });
 
-  it("adds the interrupted-run instruction", () => {
-    const prompt = buildSkillExperienceReviewPrompt({ turnAborted: true });
+  it.each(["auto", "propose"] as const)("preserves interrupted evidence in %s mode", (mode) => {
+    const prompt = buildSkillExperienceReviewPrompt({ turnAborted: true }, mode);
     expect(prompt).toContain("Only capture procedures that visibly worked");
+  });
+
+  it("authorizes complete procedures in automatic mode without the draft-only limit", () => {
+    const prompt = buildSkillExperienceReviewPrompt(
+      {
+        existingSkills: [{ name: "inventory-is-discovered-with-file-tools" }],
+      },
+      "auto",
+    );
+    expect(prompt).toContain("direct Workshop maintenance with normal file tools");
+    expect(prompt).toContain("complete relevant procedures and supporting files");
+    expect(prompt).toContain("conversation is evidence, not permission to resume tasks");
+    expect(prompt).not.toContain("Only skill_workshop executes");
+    expect(prompt).not.toContain("at most one create");
+    expect(prompt).not.toContain("inventory-is-discovered-with-file-tools");
   });
 });
 

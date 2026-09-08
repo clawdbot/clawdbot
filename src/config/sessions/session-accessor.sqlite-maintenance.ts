@@ -420,11 +420,17 @@ export function applySessionEntryMaintenance(
       archivedKeys.add(key);
     },
     preserveKeys,
+    preserveRecentMs: maintenance.preserveRecentMs,
   });
   remainingEntryCount -= archived;
   const pruned = pruneStaleEntries(store, maintenance.pruneAfterMs, {
     log: false,
     onPruned: rememberRemoval("pruned"),
+    onArchived: ({ key }) => {
+      archivedKeys.add(key);
+      archived += 1;
+      remainingEntryCount -= 1;
+    },
     preserveKeys,
     preserveRecentMs: maintenance.preserveRecentMs,
   });

@@ -1,3 +1,4 @@
+import { performance } from "node:perf_hooks";
 import { afterEach, expect, test, vi } from "vitest";
 import {
   markPreparedModelRuntimeSnapshotsStale,
@@ -11,12 +12,23 @@ import {
   patchSessionEntryCore,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import {
+  areDiagnosticsEnabledForProcess,
+  setDiagnosticsEnabledForProcess,
+} from "../../infra/diagnostic-events.js";
+import {
+  createDiagnosticTraceContext,
+  getActiveDiagnosticTraceContext,
+  runWithDiagnosticTraceContext,
+} from "../../infra/diagnostic-trace-context.js";
+import * as sessionLifecycle from "../../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import { loadGatewayModelCatalog as loadActualGatewayModelCatalog } from "../server-model-catalog.js";
 import { sessionMutationHandlers } from "./sessions-mutations.js";
+import { sessionLog } from "./sessions-shared.js";
 import type { GatewayRequestContext } from "./types.js";
 
 afterEach(() => {
@@ -73,7 +85,21 @@ test("catalog reload releases the agent writer while preserving same-session ord
     const metadataResponse = vi.fn();
     const successorResponse = vi.fn();
     const patch = patchRequest(context);
-    const catalogPatch = patch({ key: catalogKey, contextWindow: "extended" }, catalogResponse);
+    const previousDiagnostics = areDiagnosticsEnabledForProcess();
+    setDiagnosticsEnabledForProcess(true);
+    let clock = performance.now();
+    const clockSpy = vi.spyOn(performance, "now").mockImplementation(() => clock);
+    const catalogTrace = createDiagnosticTraceContext();
+    const successorTrace = createDiagnosticTraceContext();
+    const records: Array<{ traceId: string | undefined; metadata: unknown }> = [];
+    const logSpy = vi.spyOn(sessionLog, "info").mockImplementation((message, metadata) => {
+      if (message === "slow session patch") {
+        records.push({ traceId: getActiveDiagnosticTraceContext()?.traceId, metadata });
+      }
+    });
+    const catalogPatch = runWithDiagnosticTraceContext(catalogTrace, () =>
+      patch({ key: catalogKey, contextWindow: "extended" }, catalogResponse),
+    );
     let metadataPatch: ReturnType<typeof patch> | undefined;
     let successorPatch: ReturnType<typeof patch> | undefined;
     let blockedMetadata: Error | undefined;
@@ -81,7 +107,9 @@ test("catalog reload releases the agent writer while preserving same-session ord
       await Promise.race([entered.promise, catalogPatch]);
       expect(loadGatewayModelCatalog).toHaveBeenCalledOnce();
       expect(catalogResponse).not.toHaveBeenCalled();
-      successorPatch = patch({ key: catalogKey, pinned: true }, successorResponse);
+      successorPatch = runWithDiagnosticTraceContext(successorTrace, () =>
+        patch({ key: catalogKey, pinned: true }, successorResponse),
+      );
       metadataPatch = patch({ key: metadataKey, pinned: true }, metadataResponse);
       await vi
         .waitFor(() =>
@@ -97,11 +125,15 @@ test("catalog reload releases the agent writer while preserving same-session ord
       ).toBeUndefined();
       expect(loadGatewayModelCatalog).toHaveBeenCalledOnce();
     } finally {
+      clock += 1_500;
       rejectPendingPreparedModelRuntimeReplacement(
         replacement,
         new Error("Synthetic catalog reload failed"),
       );
       await Promise.allSettled([catalogPatch, metadataPatch, successorPatch]);
+      clockSpy.mockRestore();
+      logSpy.mockRestore();
+      setDiagnosticsEnabledForProcess(previousDiagnostics);
     }
     expect(catalogResponse).toHaveBeenCalledWith(false, undefined, {
       code: "UNAVAILABLE",
@@ -118,6 +150,20 @@ test("catalog reload releases the agent writer while preserving same-session ord
     );
     expect(loadSessionEntry({ agentId: "main", sessionKey: metadataKey })?.pinnedAt).toEqual(
       expect.any(Number),
+    );
+    expect(records).toHaveLength(2);
+    expect(records.find((record) => record.traceId === catalogTrace.traceId)?.metadata).toEqual(
+      expect.objectContaining({
+        method: "sessions.patch",
+        phaseDurationsMs: expect.objectContaining({ catalog: 1_500 }),
+        phaseCounts: expect.objectContaining({ catalog: 1 }),
+      }),
+    );
+    expect(records.find((record) => record.traceId === successorTrace.traceId)?.metadata).toEqual(
+      expect.objectContaining({
+        method: "sessions.patch",
+        phaseDurationsMs: expect.objectContaining({ lifecycleAdmission: 1_500 }),
+      }),
     );
     if (blockedMetadata) {
       throw blockedMetadata;
@@ -280,6 +326,16 @@ test("patchMany prepares singleton agent groups without blocking another session
       },
     });
     const respond = vi.fn();
+    const previousDiagnostics = areDiagnosticsEnabledForProcess();
+    setDiagnosticsEnabledForProcess(true);
+    let clock = performance.now();
+    const clockSpy = vi.spyOn(performance, "now").mockImplementation(() => clock);
+    const timingRecords: unknown[] = [];
+    const logSpy = vi.spyOn(sessionLog, "info").mockImplementation((message, metadata) => {
+      if (message === "slow session patch") {
+        timingRecords.push(metadata);
+      }
+    });
     const batch = sessionMutationHandlers["sessions.patchMany"]!({
       params: { targets, patch: { contextWindow: "extended" } },
       respond,
@@ -296,6 +352,7 @@ test("patchMany prepares singleton agent groups without blocking another session
       );
       expect(respond).not.toHaveBeenCalled();
     } finally {
+      clock += 1_500;
       catalog.resolve([
         {
           provider: "anthropic",
@@ -305,6 +362,9 @@ test("patchMany prepares singleton agent groups without blocking another session
         },
       ]);
       await Promise.allSettled([batch, metadataPatch]);
+      clockSpy.mockRestore();
+      logSpy.mockRestore();
+      setDiagnosticsEnabledForProcess(previousDiagnostics);
     }
     expect(loadGatewayModelCatalog).toHaveBeenCalledTimes(2);
     expect(loadGatewayModelCatalog).toHaveBeenCalledWith({ agentId: "main" });
@@ -323,6 +383,14 @@ test("patchMany prepares singleton agent groups without blocking another session
     expect(loadSessionEntry({ agentId: "main", sessionKey: metadataKey })?.pinnedAt).toEqual(
       expect.any(Number),
     );
+    expect(timingRecords).toEqual([
+      expect.objectContaining({
+        method: "sessions.patchMany",
+        elapsedMs: 1_500,
+        phaseDurationsMs: expect.objectContaining({ catalog: 3_000 }),
+        phaseCounts: expect.objectContaining({ catalog: 2 }),
+      }),
+    ]);
   });
 });
 
@@ -464,6 +532,60 @@ test("dispatched authorization rejects an instance replaced during catalog prepa
     } finally {
       release.resolve();
       await Promise.allSettled([request, replacement]);
+    }
+  });
+});
+
+test("patch timing covers preparation and lifecycle finalization before cleanup", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const key = "agent:main:phase-boundaries";
+    await upsertSessionEntryCore(
+      { agentId: "main", sessionKey: key },
+      { sessionId: "phase-boundaries", updatedAt: 1 },
+    );
+    const previousDiagnostics = areDiagnosticsEnabledForProcess();
+    setDiagnosticsEnabledForProcess(true);
+    let clock = performance.now();
+    const clockSpy = vi.spyOn(performance, "now").mockImplementation(() => clock);
+    const log = vi.spyOn(sessionLog, "info").mockImplementation(() => {});
+    const runMutation = sessionLifecycle.runExclusiveSessionLifecycleMutation;
+    const lifecycle = vi
+      .spyOn(sessionLifecycle, "runExclusiveSessionLifecycleMutation")
+      .mockImplementation((params) =>
+        runMutation({
+          ...params,
+          prepare: async (owner) => {
+            await params.prepare?.(owner);
+            clock += 700;
+          },
+          finalize: async () => {
+            await params.finalize?.();
+            clock += 500;
+          },
+        }),
+      );
+    const response = vi.fn();
+    try {
+      await patchRequest(patchContext(async () => []))({ key, pinned: true }, response);
+      expect(response).toHaveBeenCalledWith(true, expect.any(Object), undefined);
+      expect(log).toHaveBeenCalledWith(
+        "slow session patch",
+        expect.objectContaining({
+          elapsedMs: 1_200,
+          phaseDurationsMs: expect.objectContaining({
+            lifecycleAdmission: 700,
+            lifecycleFinalize: 500,
+            cleanup: 0,
+            snapshot: 0,
+            commit: 0,
+          }),
+        }),
+      );
+    } finally {
+      lifecycle.mockRestore();
+      log.mockRestore();
+      clockSpy.mockRestore();
+      setDiagnosticsEnabledForProcess(previousDiagnostics);
     }
   });
 });

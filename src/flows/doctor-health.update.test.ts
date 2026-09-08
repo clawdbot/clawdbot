@@ -63,6 +63,18 @@ vi.mock("../cli/daemon-cli/restart-health.js", async (importOriginal) => ({
   renderRestartDiagnostics: () => ["synthetic readiness failure"],
 }));
 
+vi.mock("../infra/update-candidate-state.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/update-candidate-state.js")>();
+  return {
+    ...actual,
+    // This flow controls update outcomes without installing an artifact. Keep the
+    // real child-process schema read, but resolve its worker from source on both sides.
+    readUpdateStateSchemaVersions: (
+      params: Parameters<typeof actual.readUpdateStateSchemaVersions>[0],
+    ) => actual.readUpdateStateSchemaVersions({ ...params, root: undefined }),
+  };
+});
+
 vi.mock("../infra/update-runner.js", () => ({
   runGatewayUpdate: mocks.runGatewayUpdate,
 }));
@@ -108,6 +120,8 @@ describe("runDoctorHealthFlow update outcomes", () => {
   afterEach(() => vi.unstubAllEnvs());
 
   beforeEach(() => {
+    // Exercise only the isolated fixture manager, independent of the host policy.
+    vi.stubEnv("OPENCLAW_SERVICE_REPAIR_POLICY", undefined);
     mocks.offerUpdate.mockReset().mockResolvedValue({ updated: false });
     mocks.runGatewayUpdate.mockReset();
     mocks.triageCommand.mockReset().mockResolvedValue(undefined);

@@ -56,6 +56,20 @@ describe("OpenAI Responses provider", () => {
     configureAiTransportHost({});
   });
 
+  it.each(["none", "short", "long"] as const)(
+    "identifies OpenCode conversations with %s cache retention",
+    async (cacheRetention) => {
+      await streamOpenAIResponses(model({ baseUrl: "https://opencode.ai/zen/v1" }), context, {
+        apiKey: "test",
+        sessionId: "conversation-123",
+        cacheRetention,
+      }).result();
+      expect(openAiMockState.configs[0]).toMatchObject({
+        defaultHeaders: { "x-opencode-session": "conversation-123" },
+      });
+    },
+  );
+
   it("constructs the SDK client with the host guarded fetch", async () => {
     const hostFetch: typeof fetch = async () => new Response(null, { status: 500 });
     configureAiTransportHost({ buildModelFetch: () => hostFetch });

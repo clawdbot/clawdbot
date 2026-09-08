@@ -26,6 +26,11 @@ import {
 } from "./talk.ts";
 
 type GatewayClient = NonNullable<ApplicationContext["gateway"]["snapshot"]["client"]>;
+type ConfigSnapshot = ApplicationContext["runtimeConfig"]["state"]["configSnapshot"];
+
+function configRevisionToken(snapshot: ConfigSnapshot): string | null {
+  return snapshot?.configRevisionHash ?? snapshot?.hash ?? null;
+}
 
 /**
  * One gateway connection phase; object identity is the request generation so a
@@ -45,6 +50,11 @@ type VoiceWakeWrite = {
   next: string | null;
 };
 
+type ModelDefaultResetIntent = {
+  gatewayUrl: string;
+  configRevision: string | null;
+};
+
 type TalkPageProps = {
   configObject: Record<string, unknown>;
   mutationDisabled: boolean;
@@ -62,6 +72,8 @@ function toProviderOption(
     aliases: provider.aliases ?? [],
     models: provider.models ?? [],
     voices: provider.voices ?? [],
+    activeVoices: provider.activeVoices,
+    activeVoiceSelectionPolicy: provider.activeVoiceSelectionPolicy,
     voicesByModel: provider.voicesByModel,
     transports: provider.transports ?? [],
     defaultModel: provider.defaultModel ?? null,
@@ -300,11 +312,12 @@ class TalkSettingsPage extends OpenClawLightDomElement {
   @property({ attribute: false }) buildEditor: TalkPageProps["buildEditor"] = () => html``;
 
   @state() private catalog: TalkCatalogState = { kind: "unavailable" };
+  @state() private modelDefaultResetIntent: ModelDefaultResetIntent | null = null;
 
   private connection: CatalogConnection | null = null;
   private catalogRequestId = 0;
-  /** `undefined` = baseline not yet observed; `null` = no snapshot hash. */
-  private lastCatalogConfigHash: string | null | undefined;
+  /** `undefined` = baseline not yet observed; `null` = no public revision token. */
+  private lastCatalogConfigRevision: string | null | undefined;
   private readonly subscriptions = new SubscriptionsController(this)
     .watch(
       () => (this.context?.gateway ? voiceWakeOwner(this.context.gateway) : undefined),
@@ -332,11 +345,8 @@ class TalkSettingsPage extends OpenClawLightDomElement {
       (runtimeConfig) => this.refreshCatalogOnConfigChange(runtimeConfig.state),
     );
 
-  /**
-   * The GPT-Live setup this page advertises runs `openclaw models auth login`
-   * in a terminal; that changes credential readiness without advancing the
-   * config hash, so returning focus to the window re-reads the catalog.
-   */
+  // Provider credential readiness can change outside the config editor without
+  // advancing the config hash, so window focus refreshes the catalog.
   private readonly refreshOnFocus = () => {
     const connection = this.connection;
     if (connection?.client && connection.connected) {
@@ -364,6 +374,9 @@ class TalkSettingsPage extends OpenClawLightDomElement {
     connected: boolean,
     voiceWake: boolean,
   ) {
+    if (this.modelDefaultResetIntent && this.modelDefaultResetIntent.gatewayUrl !== gatewayUrl) {
+      this.modelDefaultResetIntent = null;
+    }
     // connecting -> connected keeps the same client object; keying only on the
     // client would leave a page mounted mid-handshake without a catalog.
     if (
@@ -391,12 +404,15 @@ class TalkSettingsPage extends OpenClawLightDomElement {
     const requestId = ++this.catalogRequestId;
     try {
       const result = await client.request<TalkCatalogResult>("talk.catalog", {});
-      this.applyCatalog(connection, requestId, {
+      const applied = this.applyCatalog(connection, requestId, {
         kind: "ready",
         ready: result.realtime.ready === true,
         activeProvider: result.realtime.activeProvider ?? null,
         providers: result.realtime.providers.map(toProviderOption),
       });
+      if (applied) {
+        this.acknowledgeModelDefaultReset(connection);
+      }
     } catch {
       // The catalog only powers the pickers; the page still renders the raw
       // configured values when it cannot be read.
@@ -408,36 +424,48 @@ class TalkSettingsPage extends OpenClawLightDomElement {
     connection: CatalogConnection,
     requestId: number,
     catalog: TalkCatalogState,
-  ) {
+  ): boolean {
     if (
       !this.isConnected ||
       this.connection !== connection ||
       this.catalogRequestId !== requestId
     ) {
-      return;
+      return false;
     }
     this.catalog = catalog;
+    return true;
+  }
+
+  private acknowledgeModelDefaultReset(connection: CatalogConnection) {
+    const intent = this.modelDefaultResetIntent;
+    const configRevision = this.lastCatalogConfigRevision;
+    // Without a public revision token, a ready catalog cannot prove the reset
+    // was applied; retain provider-default metadata until an authoritative ack.
+    if (configRevision == null) {
+      return;
+    }
+    if (intent?.gatewayUrl === connection.gatewayUrl && intent.configRevision !== configRevision) {
+      this.modelDefaultResetIntent = null;
+    }
   }
 
   /**
    * Readiness can change on the same connection when a config write lands (the
    * gateway may hot-apply talk config without dropping the socket), so the
-   * catalog re-reads whenever the config snapshot hash advances. The hash is
-   * the durable ack signal; transient saving flags can be skipped entirely by
-   * a fast save.
+   * catalog re-reads whenever the public config revision advances. The revision
+   * is the durable ack signal; transient saving flags can be skipped entirely
+   * by a fast save.
    */
-  private refreshCatalogOnConfigChange(configState: {
-    configSnapshot?: { hash?: string | null } | null;
-  }) {
-    const hash = configState.configSnapshot?.hash ?? null;
-    if (this.lastCatalogConfigHash === undefined) {
-      this.lastCatalogConfigHash = hash;
+  private refreshCatalogOnConfigChange(configState: ApplicationContext["runtimeConfig"]["state"]) {
+    const configRevision = configRevisionToken(configState.configSnapshot);
+    if (this.lastCatalogConfigRevision === undefined) {
+      this.lastCatalogConfigRevision = configRevision;
       return;
     }
-    if (hash === null || hash === this.lastCatalogConfigHash) {
+    if (configRevision === null || configRevision === this.lastCatalogConfigRevision) {
       return;
     }
-    this.lastCatalogConfigHash = hash;
+    this.lastCatalogConfigRevision = configRevision;
     const connection = this.connection;
     if (connection?.client && connection.connected) {
       void this.loadCatalog(connection.client, connection);
@@ -457,6 +485,7 @@ class TalkSettingsPage extends OpenClawLightDomElement {
     }
     const runtimeConfig = this.context.runtimeConfig;
     if (model !== null) {
+      this.modelDefaultResetIntent = null;
       runtimeConfig.patchForm(["talk", "realtime", "model"], model);
       const selection = this.liveSelection();
       const transport = selection.transport;
@@ -479,6 +508,10 @@ class TalkSettingsPage extends OpenClawLightDomElement {
       }
       return;
     }
+    this.modelDefaultResetIntent = {
+      gatewayUrl: this.context.gateway.connection.gatewayUrl,
+      configRevision: configRevisionToken(runtimeConfig.state.configSnapshot),
+    };
     runtimeConfig.removeFormValue(["talk", "realtime", "model"]);
     for (const key of this.selectedProviderConfigKeys()) {
       runtimeConfig.removeFormValue(["talk", "realtime", "providers", key, "model"]);
@@ -530,6 +563,7 @@ class TalkSettingsPage extends OpenClawLightDomElement {
     if (this.mutationDisabled) {
       return;
     }
+    this.modelDefaultResetIntent = null;
     const runtimeConfig = this.context.runtimeConfig;
     const selection = this.liveSelection();
     for (const key of ["model", "speakerVoice", "speakerVoiceId"]) {
@@ -593,6 +627,7 @@ class TalkSettingsPage extends OpenClawLightDomElement {
       },
       selection: resolveTalkRealtimeSelection(this.configObject),
       catalog: this.catalog,
+      modelDefaultPending: this.modelDefaultResetIntent !== null,
       configBusy:
         this.mutationDisabled ||
         runtimeState.configLoading ||

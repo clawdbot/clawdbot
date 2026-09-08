@@ -804,6 +804,15 @@ describe("dispatch Stop before provider allocation", () => {
           request.onCancellationStarted?.();
         },
       );
+      if (mode === "late-sweep") {
+        // Recovery captures service methods when its runtime is created.
+        const reconcileOnce = environments.reconcileOnce.bind(environments);
+        vi.spyOn(environments, "reconcileOnce").mockImplementationOnce(async () => {
+          sweepEntered.resolve();
+          await enterSweep.promise;
+          await reconcileOnce();
+        });
+      }
       const runtime = createGatewayWorkerPlacementRuntime({
         placements,
         environments,
@@ -823,14 +832,6 @@ describe("dispatch Stop before provider allocation", () => {
       await environments.reconcileEnvironment(intent.environmentId);
       expect(provisionCalls).toBe(2);
       expect(placements.get(REQUEST.sessionId)?.state).toBe("provisioning");
-      if (mode === "late-sweep") {
-        const reconcileOnce = environments.reconcileOnce.bind(environments);
-        vi.spyOn(environments, "reconcileOnce").mockImplementationOnce(async () => {
-          sweepEntered.resolve();
-          await enterSweep.promise;
-          await reconcileOnce();
-        });
-      }
       const recovery =
         mode === "idle"
           ? Promise.resolve()

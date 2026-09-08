@@ -38,6 +38,7 @@ import {
 export function createHarness(
   placementStore: PlacementStore,
   options: {
+    environmentService?: WorkerEnvironmentService;
     runReclaimPreparation?: Parameters<
       typeof createWorkerPlacementDispatchService
     >[0]["runReclaimPreparation"];
@@ -356,7 +357,7 @@ export function createHarness(
     expiresAtMs: 10_000,
   };
   const environments: WorkerDispatchEnvironmentService &
-    Pick<WorkerEnvironmentService, "recordError"> = {
+    Pick<WorkerEnvironmentService, "recordError" | "requestDestroy"> = {
     recordError: vi.fn((record) => record),
     supportsProviderExecutionMode: vi.fn(() => true),
     create: vi.fn(async () => {
@@ -404,6 +405,7 @@ export function createHarness(
       await options.afterDestroy?.();
       return destroyed;
     }),
+    requestDestroy: (requestedEnvironmentId) => environments.destroy(requestedEnvironmentId),
     reconcileOnce: vi.fn(async () => {
       log.push("environment:reconcile");
     }),
@@ -411,6 +413,9 @@ export function createHarness(
       log.push("environment:reconcile");
     }),
   };
+  if (options.environmentService) {
+    Object.assign(environments, options.environmentService);
+  }
   const service = createWorkerPlacementDispatchService({
     placements,
     environments,

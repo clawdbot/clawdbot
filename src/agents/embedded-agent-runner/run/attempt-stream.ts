@@ -86,6 +86,7 @@ export function installEmbeddedAttemptStreamGuards(
     agentSession: { activeSession: session, allCustomTools, codeModeExecToolNames },
     anthropicPayloadLogger,
     cacheTrace,
+    contextGuards,
     isOpenAIResponsesApi,
     sessionManager,
     state: { systemPromptText },
@@ -360,6 +361,7 @@ export function installEmbeddedAttemptStreamGuards(
     contentCapture: resolveDiagnosticModelContentCapturePolicy(attempt.config),
     nextCallId: () => `${attempt.runId}:model:${(diagnosticModelCallSeq += 1)}`,
     ownerGeneration: callbacks.diagnosticOwner.generation,
+    onSucceeded: contextGuards.recordCacheTouch,
     onStarted: () => {
       attempt.onExecutionPhase?.({
         phase: "model_call_started",

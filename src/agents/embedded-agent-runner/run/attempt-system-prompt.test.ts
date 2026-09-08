@@ -3,6 +3,8 @@ import { prependSystemPromptAdditionAfterCacheBoundary } from "@openclaw/ai/inte
 import { Type } from "typebox";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import { addSession, deleteSession } from "../../bash-process-registry.js";
+import { createProcessSessionFixture } from "../../bash-process-registry.test-helpers.js";
 import { buildBootstrapBudgetState } from "../../bootstrap-budget.js";
 import type { AgentTool } from "../../runtime/index.js";
 import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
@@ -57,6 +59,7 @@ async function preparePermissionPrompt(
   isRawModelRun = false,
   thinkLevel?: EmbeddedRunAttemptParams["thinkLevel"],
   requireExplicitMessageTarget?: boolean,
+  session?: Pick<EmbeddedRunAttemptParams, "sessionKey" | "sandboxSessionKey">,
 ) {
   const tool = (name: string): AgentTool => ({
     name,
@@ -72,6 +75,7 @@ async function preparePermissionPrompt(
     read,
     write,
     exec,
+    ...(session ? [tool("process")] : []),
     ...(requireExplicitMessageTarget === undefined ? [] : [tool("message")]),
   ];
   const attempt = {
@@ -87,6 +91,7 @@ async function preparePermissionPrompt(
     promptMode: "full",
     sessionId: "permission-prompt",
     sessionKey: "agent:main:permission-prompt",
+    ...session,
     workspaceDir: "/tmp/openclaw",
     config: {},
     thinkLevel,
@@ -116,7 +121,7 @@ async function preparePermissionPrompt(
         modelId: attempt.modelId,
         prepared: true,
       }),
-      sandboxSessionKey: attempt.sessionKey!,
+      sandboxSessionKey: attempt.sandboxSessionKey ?? attempt.sessionKey ?? attempt.sessionId,
     }),
     isRawModelRun,
     modelToolsEnabled: true,
@@ -139,6 +144,29 @@ async function preparePermissionPrompt(
 }
 
 describe("buildAttemptSystemPrompt", () => {
+  it.each([undefined, "agent:main:execution"])(
+    "shows only execution-owned processes with sessionKey=%s and borrowed policy",
+    async (sessionKey) => {
+      const owned = createProcessSessionFixture({ id: "execution-owned", backgrounded: true });
+      owned.scopeKey = sessionKey ?? "permission-prompt";
+      const other = createProcessSessionFixture({ id: "policy-owned", backgrounded: true });
+      other.scopeKey = "agent:main:policy";
+      addSession(owned);
+      addSession(other);
+      try {
+        const { prepared } = await preparePermissionPrompt(false, undefined, undefined, {
+          sessionKey,
+          sandboxSessionKey: other.scopeKey,
+        });
+        expect(prepared.systemPromptText).toContain(owned.id);
+        expect(prepared.systemPromptText).not.toContain(other.id);
+      } finally {
+        deleteSession(owned.id);
+        deleteSession(other.id);
+      }
+    },
+  );
+
   it("keeps model instructions identical when only reasoning effort changes", async () => {
     const prompts = [];
     for (const effort of ["low", "high", "medium"] as const) {

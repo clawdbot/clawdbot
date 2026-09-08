@@ -1,22 +1,27 @@
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
 import { prepareSessionsPatchEntry, projectSessionsPatchEntry } from "../sessions-patch.js";
+import type { SessionPatchDiagnostics } from "./sessions-patch-diagnostics.js";
 
 export type SessionPatchCatalogResult = Result<ModelCatalogEntry[], unknown>;
 
 export function createSessionPatchCatalogPreparation(
   loadCatalog: (agentId: string) => Promise<ModelCatalogEntry[]>,
+  diagnostics?: SessionPatchDiagnostics,
 ) {
   const preparations = new Map<string, Promise<SessionPatchCatalogResult>>();
   const prepare = (agentId: string) => {
     let promise = preparations.get(agentId);
     if (!promise) {
       promise = (async () => {
+        const timing = diagnostics?.scope("catalog");
         try {
           const catalog = await loadCatalog(agentId);
           return ok(Array.isArray(catalog) ? catalog : []);
         } catch (error) {
           return err(error);
+        } finally {
+          timing?.finish();
         }
       })();
       preparations.set(agentId, promise);

@@ -1,6 +1,7 @@
 // Coverage for Google prompt-cache creation, reuse, and request rewriting.
 import crypto from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core";
+import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
 import { SessionTranscriptWriterClaimReboundError } from "../../config/sessions/transcript-write-context.js";
 import { isSecretValueRegisteredForRedaction } from "../../logging/secret-redaction-registry.js";
@@ -22,6 +23,103 @@ import {
 } from "./google-prompt-cache.test-support.js";
 
 describe("google prompt cache", () => {
+  it.each([200, 503])(
+    "preserves the final assembled prompt when cache creation returns %s",
+    async (statusCode) => {
+      const systemPrompt = "hook-before\nbase\nhook-after";
+      const fetchMock = vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              name: "cachedContents/final-prompt",
+              expireTime: new Date(4_600_000).toISOString(),
+            }),
+            { status: statusCode },
+          ),
+      );
+      const { streamFn, getCapturedPayload } = createCapturingStreamFn();
+      const wrapped = expectDefined(
+        await preparePromptCacheStream({
+          fetchMock,
+          now: 1_000_000,
+          sessionManager: makeSessionManager(),
+          streamFn,
+        }),
+        "managed cache wrapper",
+      );
+      const context = { systemPrompt, messages: [] };
+
+      await wrapped(makeGoogleModel(), context, {});
+
+      const body = fetchInit(fetchMock).body;
+      if (typeof body !== "string") {
+        throw new Error("Expected a JSON cache request body");
+      }
+      expect(JSON.parse(body).systemInstruction).toEqual({
+        parts: [{ text: systemPrompt }],
+      });
+      if (statusCode === 200) {
+        expect(streamContext(streamFn).systemPrompt).toBeUndefined();
+        expect(getCapturedPayload()?.cachedContent).toBe("cachedContents/final-prompt");
+      } else {
+        expect(streamContext(streamFn)).toBe(context);
+        expect(getCapturedPayload()).not.toHaveProperty("cachedContent");
+      }
+    },
+  );
+
+  it.each(["prompt", "tools"])(
+    "rebuilds the cache when final %s changes and reuses it after restart",
+    async (changed) => {
+      const entries: SessionCustomEntry[] = [];
+      const fetchMock = vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              name: `cachedContents/final-${fetchMock.mock.calls.length}`,
+              expireTime: new Date(4_600_000).toISOString(),
+            }),
+          ),
+      );
+      const { streamFn, getCapturedPayload } = createCapturingStreamFn();
+      const prepare = () =>
+        preparePromptCacheStream({
+          fetchMock,
+          now: 1_000_000,
+          sessionManager: makeSessionManager(entries),
+          streamFn,
+        });
+      const wrapped = expectDefined(await prepare(), "managed cache wrapper");
+      const tool = {
+        name: "lookup",
+        description: "Look up a value",
+        parameters: Type.Object({}),
+      };
+      const context = {
+        systemPrompt: "hook-before\nbase\nhook-after",
+        messages: [],
+        tools: [tool],
+      };
+      await wrapped(makeGoogleModel(), context, {});
+      expect(getCapturedPayload()?.cachedContent).toBe("cachedContents/final-1");
+
+      const changedContext = {
+        ...context,
+        ...(changed === "prompt"
+          ? { systemPrompt: `${context.systemPrompt}\nnew-hook-instruction` }
+          : { tools: [{ ...tool, description: "Look up the updated value" }] }),
+      };
+      await wrapped(makeGoogleModel(), changedContext, {});
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(getCapturedPayload()?.cachedContent).toBe("cachedContents/final-2");
+
+      const restarted = expectDefined(await prepare(), "restarted managed cache wrapper");
+      await restarted(makeGoogleModel(), changedContext, {});
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(getCapturedPayload()?.cachedContent).toBe("cachedContents/final-2");
+    },
+  );
+
   it("parses sentinel-backed OAuth JSON before guarded cache egress", async () => {
     const fetchMock = createCacheFetchMock({
       name: "cachedContents/oauth-cache",
@@ -535,7 +633,6 @@ describe("google prompt cache", () => {
         provider: "google",
         sessionManager: makeSessionManager(),
         streamFn: vi.fn(() => "stream" as never),
-        systemPrompt: "Follow policy.",
       },
       {
         buildGuardedFetch: () => fetchMock as typeof fetch,

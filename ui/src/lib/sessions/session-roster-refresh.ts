@@ -19,6 +19,7 @@ import type {
 import { normalizeAgentId } from "./session-key.ts";
 import {
   completeSessionRefreshWaiters,
+  findPublishedSession,
   isPrimarySessionListQuery,
   isSameSessionListQuery,
   prepareSessionRefreshOptions,
@@ -94,7 +95,8 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
   let inFlight: Promise<SessionsListResult | null> | null = null;
   let refreshOutcomeRevision = 0;
   let lastRefreshOutcome: SessionRefreshOutcome = { status: "stale" };
-  let queuedExplicitRefresh: QueuedSessionRefresh | null = null;
+  let queuedExplicitRefresh: (QueuedSessionRefresh & { isErrorCurrent?: () => boolean }) | null =
+    null;
   let eventRefreshQueued = false;
   let lastListOptions: SessionListOptions = {};
   let primaryList: { scope: SessionListScope } = { scope: {} };
@@ -297,6 +299,7 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
   const load = async (
     options: SessionRefreshOptions,
     bootstrap = false,
+    isErrorCurrent?: () => boolean,
   ): Promise<SessionsListResult | null> => {
     const scope = host.connection.capture();
     if (!scope) {
@@ -393,19 +396,21 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
       return result;
     } catch (error) {
       const message = formatUiError(error);
+      const ownsError = isErrorCurrent?.() !== false;
       if (isCurrent()) {
         const state = host.readState();
         host.publish(
           {
             ...state,
             loading: backgroundHydrate ? state.loading : false,
-            error: message,
+            error: ownsError ? message : state.error,
             deletedSessions: [],
           },
-          "operation",
+          ownsError ? "operation" : undefined,
         );
       }
-      lastRefreshOutcome = isCurrent() ? { status: "failed", error: message } : { status: "stale" };
+      lastRefreshOutcome =
+        isCurrent() && ownsError ? { status: "failed", error: message } : { status: "stale" };
       refreshOutcomeRevision += 1;
       return null;
     }
@@ -419,6 +424,7 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
   const startRefresh = (
     options: SessionRefreshOptions,
     bootstrap = false,
+    isErrorCurrent?: () => boolean,
   ): Promise<SessionsListResult | null> => {
     const scope = host.connection.capture();
     if (!scope) {
@@ -442,7 +448,9 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
         }
         const snapshot = host.snapshot();
         const nextOptions = prepareSessionRefreshOptions(queued.options, snapshot);
-        const next = host.connection.isCurrent(scope) ? startRefresh(nextOptions) : null;
+        const next = host.connection.isCurrent(scope)
+          ? startRefresh(nextOptions, false, queued.isErrorCurrent)
+          : null;
         completeSessionRefreshWaiters(queued, nextOptions, next, snapshot);
       } else if (eventRefreshQueued && pageActive && host.connection.isCurrent(scope)) {
         eventRefreshQueued = false;
@@ -450,13 +458,16 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
       }
     });
     inFlight = request;
-    settleRefresh(load(prepareSessionRefreshOptions(options, host.snapshot()), bootstrap));
+    settleRefresh(
+      load(prepareSessionRefreshOptions(options, host.snapshot()), bootstrap, isErrorCurrent),
+    );
     return request;
   };
 
   const refreshInternal = (
     options: SessionRefreshOptions,
     bootstrap: boolean,
+    isErrorCurrent?: () => boolean,
   ): Promise<SessionsListResult | null> => {
     if (!host.connection.capture()) {
       return Promise.resolve(null);
@@ -471,10 +482,11 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
           // Once queued, a foreground owner stays authoritative over weaker refreshes.
           if (foregroundReplacement || !isForegroundReplacement(queuedExplicitRefresh.options)) {
             queuedExplicitRefresh.options = options;
+            queuedExplicitRefresh.isErrorCurrent = isErrorCurrent;
           }
           queuedExplicitRefresh.completions.push({ options, complete });
         } else {
-          queuedExplicitRefresh = { options, completions: [{ options, complete }] };
+          queuedExplicitRefresh = { options, isErrorCurrent, completions: [{ options, complete }] };
         }
       });
     }
@@ -490,7 +502,7 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
     if (options.append !== true) {
       absorbPendingEventRefresh();
     }
-    return startRefresh(options, bootstrap);
+    return startRefresh(options, bootstrap, isErrorCurrent);
   };
 
   const refresh = async (options: SessionRefreshOptions = {}): Promise<void> => {
@@ -536,19 +548,28 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
     updatePageLifecycleListeners(true);
   }
 
-  const refreshReplacement = (agentId?: string | null): Promise<SessionsListResult | null> => {
+  const refreshReplacementOwned = (
+    agentId?: string | null,
+    isErrorCurrent?: () => boolean,
+  ): Promise<SessionsListResult | null> => {
     const options = { ...lastListOptions };
     if (agentId?.trim()) {
       options.agentId = agentId.trim();
     }
-    return refreshInternal({ ...options, force: true }, false);
+    return refreshInternal({ ...options, force: true }, false, isErrorCurrent);
   };
-  const refreshReplacementResult = (agentId?: string | null): Promise<SessionRefreshOutcome> => {
+  const refreshReplacement = (agentId?: string | null) => refreshReplacementOwned(agentId);
+  const refreshReplacementResult = (
+    agentId?: string | null,
+    isErrorCurrent?: () => boolean,
+  ): Promise<SessionRefreshOutcome> => {
     const previousOutcomeRevision = refreshOutcomeRevision;
-    return refreshReplacement(agentId).then(() =>
+    return refreshReplacementOwned(agentId, isErrorCurrent).then(() =>
       refreshOutcomeRevision > previousOutcomeRevision ? lastRefreshOutcome : { status: "stale" },
     );
   };
+  const publishedSession = (matches: Parameters<typeof findPublishedSession>[2]) =>
+    findPublishedSession(host.readState(), managedLists.values(), matches);
   return {
     primaryList: () => primaryList,
     get requestRevision() {
@@ -640,29 +661,9 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
     },
     refreshReplacement,
     refreshReplacementResult,
-    invalidateForegroundPublication: () => void ++foregroundPublicationGeneration,
-    /** The row as currently published. The archived/all sidebars render their
-     * own snapshot, so a displayed row can be absent from the primary state.
-     * Lists refresh independently, so when both hold the row the primary one
-     * wins rather than guessing which snapshot the caller was looking at. */
-    publishedRow(
-      matches: (row: GatewaySessionRow, agentId?: string | null) => boolean,
-    ): GatewaySessionRow | undefined {
-      const state = host.readState();
-      const primary = state.result?.sessions.find((row) => matches(row, state.agentId));
-      if (primary) {
-        return primary;
-      }
-      for (const entry of managedLists.values()) {
-        const row = entry.snapshot.result?.sessions.find((candidate) =>
-          matches(candidate, entry.scope.agentId),
-        );
-        if (row) {
-          return row;
-        }
-      }
-      return undefined;
-    },
+    publishedSession,
+    publishedRow: (matches: (row: GatewaySessionRow, agentId?: string | null) => boolean) =>
+      publishedSession(matches)?.row,
     /** Republishes every held list through `decorate` so a UI-owned overlay
      * reaches the archived/all snapshots too, not just the primary state. */
     redecorateLists() {

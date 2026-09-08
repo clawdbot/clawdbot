@@ -566,7 +566,7 @@ export function shouldRunNativeI18n(changedPaths) {
   return (
     !Array.isArray(changedPaths) ||
     changedPaths.length === 0 ||
-    changedPaths.some((path) => NATIVE_I18N_SCOPE_RE.test(path.trim()))
+    changedPaths.some((path) => NATIVE_I18N_SCOPE_RE.test(path))
   );
 }
 
@@ -670,15 +670,16 @@ export function listChangedPaths(
     cwd,
     preferFirstParent: preferMergeHeadFirstParent,
   });
-  const output = execFileSync("git", ["diff", "--no-renames", "--name-only", diffBase, head], {
-    cwd,
-    stdio: ["ignore", "pipe", "pipe"],
-    encoding: "utf8",
-  });
-  return output
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0);
+  const output = execFileSync(
+    "git",
+    ["diff", "--no-renames", "--name-only", "-z", diffBase, head],
+    {
+      cwd,
+      stdio: ["ignore", "pipe", "pipe"],
+      encoding: "utf8",
+    },
+  );
+  return output.split("\0").filter(Boolean);
 }
 
 /**

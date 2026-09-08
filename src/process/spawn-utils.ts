@@ -17,14 +17,6 @@ type SpawnWithFallbackParams = {
   spawnImpl?: (command: string, args: string[], options: SpawnOptions) => ChildProcess;
 };
 
-export function resolveCommandStdio(params: {
-  hasInput: boolean;
-  preferInherit: boolean;
-}): ["pipe" | "inherit" | "ignore", "pipe", "pipe"] {
-  const stdin = params.hasInput ? "pipe" : params.preferInherit ? "inherit" : "pipe";
-  return [stdin, "pipe", "pipe"];
-}
-
 function shouldRetry(err: unknown): boolean {
   const code =
     err && typeof err === "object" && "code" in err ? String((err as { code?: unknown }).code) : "";

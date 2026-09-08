@@ -2,6 +2,8 @@ import {
   asNullableRecord as asConfigRecord,
   isRecord,
 } from "@openclaw/normalization-core/record-coerce";
+import type { Result } from "@openclaw/normalization-core/result";
+import { createDeferredCore, type Deferred } from "../../../../src/shared/deferred.js";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
 import type { ConfigSnapshot, ConfigUiHints } from "../../api/types.ts";
 import type { ApplicationGatewayPhase } from "../../app/gateway.ts";
@@ -46,6 +48,40 @@ const requestVersionsByState = new WeakMap<
   { config: number; schema: number }
 >();
 const connectionEpochsByState = new WeakMap<object, number>();
+export type ConfigRead = {
+  version: number;
+  client: GatewayBrowserClient;
+  connectionEpoch: number;
+  completion: Deferred<Result<void, string>>;
+  invalidated: Deferred<Result<void, string>>;
+};
+const configReadsByState = new WeakMap<object, ConfigRead>();
+
+function invalidateConfigRead(state: object): void {
+  const read = configReadsByState.get(state);
+  configReadsByState.delete(state);
+  read?.invalidated.resolve({ ok: false, error: "The configuration refresh was superseded." });
+}
+
+export function currentConfigRead(state: RuntimeConfigState): ConfigRead | undefined {
+  return configReadsByState.get(state);
+}
+
+export function beginConfigRead(
+  state: RuntimeConfigState,
+  client: GatewayBrowserClient,
+): ConfigRead {
+  const read: ConfigRead = {
+    version: nextRequestVersion(state, "config"),
+    client,
+    connectionEpoch: currentConfigConnectionEpoch(state),
+    completion: createDeferredCore(),
+    invalidated: createDeferredCore(),
+  };
+  // Register before request dispatch can synchronously start a successor read.
+  configReadsByState.set(state, read);
+  return read;
+}
 
 type RuntimeConfigGatewaySnapshot = {
   client: GatewayBrowserClient | null;
@@ -108,6 +144,9 @@ export function createInitialConfigState(
 }
 
 export function nextRequestVersion(state: RuntimeConfigState, key: "config" | "schema"): number {
+  if (key === "config") {
+    invalidateConfigRead(state);
+  }
   const current = requestVersionsByState.get(state) ?? { config: 0, schema: 0 };
   const next = { ...current, [key]: current[key] + 1 };
   requestVersionsByState.set(state, next);
@@ -115,6 +154,7 @@ export function nextRequestVersion(state: RuntimeConfigState, key: "config" | "s
 }
 
 export function clearConfigRequestVersions(state: RuntimeConfigState): void {
+  invalidateConfigRead(state);
   requestVersionsByState.delete(state);
 }
 
@@ -123,6 +163,7 @@ export function currentConfigConnectionEpoch(state: object): number {
 }
 
 export function invalidateConfigConnection(state: object): void {
+  invalidateConfigRead(state);
   connectionEpochsByState.set(state, currentConfigConnectionEpoch(state) + 1);
 }
 

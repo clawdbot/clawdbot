@@ -50,6 +50,7 @@ import { mapTaskSummary, type TaskEventPayload } from "./server-methods/task-sum
 import { defaultSessionCompanionContextReader } from "./session-companion-context.js";
 import { createSessionCompanion } from "./session-companion.js";
 import { createSessionLifecyclePersistenceOwner } from "./session-lifecycle-persistence-owner.js";
+import { sessionObserverScopeKey } from "./session-observer-model.js";
 import { createSessionObserver } from "./session-observer.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "./session-request-agent.js";
 import { resolveTaskRequesterSessionTarget } from "./task-session-access.js";
@@ -521,6 +522,16 @@ export function startGatewayEventSubscriptions(params: {
     );
   });
   const unsubscribeLifecycle = onSessionLifecycleEvent((evt) => {
+    if (evt.reason === "progress-card-reset" && evt.agentId) {
+      // Card readers need not subscribe to session lists. Preserve the canonical
+      // owner tuple even when distinct global rows share a display key.
+      params.broadcast(
+        "progressCard.changed",
+        { sessionKey: sessionObserverScopeKey(evt.sessionKey, evt.agentId), revision: null },
+        { sessionKeys: [evt.sessionKey], agentId: evt.agentId },
+      );
+      return;
+    }
     void dispatchEventHandler({
       loadHandler: getLifecycleEventHandler,
       event: evt,

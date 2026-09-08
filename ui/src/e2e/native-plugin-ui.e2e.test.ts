@@ -602,9 +602,7 @@ suite.define(() => {
                 background: style.backgroundImage,
                 left: shellBounds.left + Number.parseFloat(style.left) - threadBounds.left,
                 right: threadBounds.right - (shellBounds.right - Number.parseFloat(style.right)),
-                scrollbar: Number.parseFloat(
-                  getComputedStyle(document.documentElement).getPropertyValue("--scrollbar-size"),
-                ),
+                scrollbar: (threadBounds.width - thread.clientWidth) / 2,
               };
             });
             const description = `${replacement || "Built-in"} at ${width}px`;

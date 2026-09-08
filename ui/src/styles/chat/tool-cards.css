@@ -364,6 +364,7 @@
   display: flex;
   align-items: baseline;
   min-width: max-content;
+  min-height: 1lh;
   padding-right: 12px;
 }
 

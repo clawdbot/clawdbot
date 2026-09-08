@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as codeModeExecution from "./code-mode-execution.js";
 import {
+  addClientToolsToCodeModeCatalog,
   applyCodeModeCatalog,
   CODE_MODE_EXEC_TOOL_NAME,
   CODE_MODE_WAIT_TOOL_NAME,
@@ -106,6 +107,36 @@ describe("Code Mode catalog and model-visible surface", () => {
       CODE_MODE_WAIT_TOOL_NAME,
     ]);
     expect(compacted.catalogToolCount).toBe(2);
+    expect(compacted.tools[0]?.description).toContain(
+      "Use the shell tool `exec` for heavier computation",
+    );
+  });
+
+  it("removes shell-computation guidance when a client shadows the shell tool", () => {
+    const { ctx, tools } = createCodeModeHarness();
+    const compacted = applyCodeModeCatalog({
+      ...ctx,
+      tools: [...tools, fakeTool("exec", "Run shell command")],
+    });
+    const execTool = expectDefined(compacted.tools[0], "exec tool test invariant");
+    expect(execTool.description).toContain("Use the shell tool `exec` for heavier computation");
+
+    addClientToolsToCodeModeCatalog({
+      ...ctx,
+      tools: [
+        {
+          name: "exec",
+          label: "Client request",
+          description: "Handle a client request",
+          parameters: Type.Object({ request: Type.String() }),
+          execute: async () => jsonResult({ accepted: true }),
+        },
+      ],
+    });
+
+    expect(execTool.description).toContain("- exec unknown -> ?");
+    expect(execTool.description).not.toContain("heavier computation");
+    expect(execTool.description).toContain("10000 ms wall-clock budget");
   });
 
   it("keeps direct-only tools model-visible and out of the guest catalog", () => {
@@ -350,33 +381,80 @@ describe("Code Mode catalog and model-visible surface", () => {
     expect(execTool.description).not.toContain("paired Gateway nodes");
   });
 
-  it("keeps code-mode exec guidance compact without advertising unavailable namespaces", () => {
-    const { config, catalogRef, tools } = createCodeModeHarness();
-    const compacted = applyCodeModeCatalog({
-      tools: [...tools, pluginTool("fake_noop", "Noop")],
-      config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
-    });
+  it.each([
+    {
+      name: "default budget",
+      config: { tools: { codeMode: true } },
+      expectedBudgetMs: 10_000,
+      pluginName: "fake_noop",
+    },
+    {
+      name: "configured budget with a plugin named exec",
+      config: { tools: { codeMode: { enabled: true, timeoutMs: 2_750 } } },
+      expectedBudgetMs: 2_750,
+      pluginName: "exec",
+    },
+    {
+      name: "agent budget override",
+      config: {
+        tools: { codeMode: { enabled: true, timeoutMs: 2_750 } },
+        agents: { entries: { ops: { tools: { codeMode: { timeoutMs: 4_250 } } } } },
+      },
+      expectedBudgetMs: 4_250,
+      pluginName: "fake_noop",
+    },
+    {
+      name: "clamped effective budget",
+      config: { tools: { codeMode: { enabled: true, timeoutMs: 90_000 } } },
+      expectedBudgetMs: 60_000,
+      pluginName: "fake_noop",
+    },
+  ] satisfies {
+    name: string;
+    config: OpenClawConfig;
+    expectedBudgetMs: number;
+    pluginName: string;
+  }[])(
+    "keeps exec guidance compact and scoped to $name",
+    ({ config, expectedBudgetMs, pluginName }) => {
+      const catalogRef = createToolSearchCatalogRef();
+      const ctx = {
+        config,
+        agentId: "ops",
+        sessionId: "session-code-mode",
+        sessionKey: "agent:ops:main",
+        runId: "run-code-mode",
+        catalogRef,
+      };
+      const tools = createCodeModeTools({ ...ctx, runtimeConfig: config });
+      const compacted = applyCodeModeCatalog({
+        ...ctx,
+        tools: [...tools, pluginTool(pluginName, "Noop")],
+      });
 
-    const execTool = expectDefined(compacted.tools[0], "exec tool test invariant");
-    const parameters = execTool.parameters as {
-      properties?: Record<string, Record<string, unknown>>;
-    };
-    const codeDescription = parameters.properties?.code?.description;
+      const execTool = expectDefined(compacted.tools[0], "exec tool test invariant");
+      const parameters = execTool.parameters as {
+        properties?: Record<string, Record<string, unknown>>;
+      };
+      const codeDescription = parameters.properties?.code?.description;
 
-    expect(execTool.description.length).toBeLessThan(2_400);
-    expect(execTool.description).toContain("independent calls may run with Promise.all");
-    expect(execTool.description).toContain("`setTimeout` and `clearTimeout`");
-    expect(execTool.description).toContain("65536 bytes");
-    expect(execTool.description).toContain("rerun with narrower args");
-    expect(codeDescription).toEqual(expect.any(String));
-    expect(String(codeDescription).length).toBeLessThan(620);
-    expect(codeDescription).not.toContain("MCP namespace globals");
-    expect(codeDescription).not.toContain("`API` virtual declaration files");
-  });
+      expect(execTool.description.length).toBeLessThan(2_400);
+      expect(execTool.description).toContain("independent calls may run with Promise.all");
+      expect(execTool.description).toContain("`setTimeout` and `clearTimeout`");
+      expect(execTool.description).toContain("65536 bytes");
+      expect(execTool.description).toContain("rerun with narrower args");
+      expect(execTool.description).toContain(`${expectedBudgetMs} ms wall-clock budget`);
+      expect(execTool.description).toContain("per `exec`/`wait`");
+      expect(execTool.description).toContain("approvals pause");
+      expect(execTool.description).toContain("Guest computation over this budget times out");
+      expect(execTool.description).toContain("`waiting` for `wait`");
+      expect(execTool.description).not.toContain("heavier computation");
+      expect(codeDescription).toEqual(expect.any(String));
+      expect(String(codeDescription).length).toBeLessThan(620);
+      expect(codeDescription).not.toContain("MCP namespace globals");
+      expect(codeDescription).not.toContain("`API` virtual declaration files");
+    },
+  );
 
   it("primes the exec schema with callable names and compact contracts", () => {
     const { config, catalogRef, tools } = createCodeModeHarness();

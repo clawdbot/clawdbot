@@ -518,6 +518,8 @@ export type EmbeddedForegroundPromptContext = Pick<
   | "githubPublicationAvailable"
   | "conversationRecall"
   | "toolOverrides"
+  | "permissionMode"
+  | "execOverrides"
   | "skillsSnapshot"
   | "currentInboundEventKind"
   | "clientTools"

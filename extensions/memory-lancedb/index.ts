@@ -62,7 +62,7 @@ type AutoCaptureSession = {
   completedTexts: Set<string>;
 };
 
-export { normalizeEmbeddingVector, testing } from "./embeddings.js";
+export { normalizeEmbeddingVector } from "./embeddings.js";
 export { parseMemoryCliFilter } from "./memory-cli.js";
 export {
   looksLikeEnvelopeSludge,

@@ -283,6 +283,7 @@ export function installEmbeddedAttemptContextGuards(input: {
   sandbox?: SandboxContext | null;
 }): {
   getAfterTurnCheckpoint: () => number | null;
+  recordCacheTouch: (startedAt: number) => void;
   remove: () => void;
   takePendingMidTurnPrecheckRequest: () => MidTurnPrecheckRequest | null;
 } {
@@ -468,6 +469,9 @@ export function installEmbeddedAttemptContextGuards(input: {
 
   return {
     getAfterTurnCheckpoint: () => afterTurnCheckpoint,
+    recordCacheTouch: (startedAt) => {
+      lastCacheTouchAt = startedAt;
+    },
     remove: () => {
       activeSession.agent.transformContext = previousComputerFrameTransform;
       removeHistoryImagePruneContextTransform();

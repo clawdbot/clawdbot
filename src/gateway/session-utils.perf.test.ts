@@ -9,6 +9,7 @@ import {
   readAcpSessionMetaForEntry,
   writeAcpSessionMetaForMigration,
 } from "../acp/runtime/session-meta.js";
+import * as modelCatalogLookup from "../agents/model-catalog-lookup.js";
 import * as thinking from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
@@ -114,7 +115,14 @@ describe("session list resolver cache", () => {
     ];
     const now = Date.now();
     const rowCount = 30;
+    const catalog = tuples.map(({ modelProvider, model }) => ({
+      provider: modelProvider,
+      id: model,
+      name: model,
+      reasoning: true,
+    }));
     const rowContext = buildSessionListRowMetadataContext({ now });
+    const catalogSpy = vi.spyOn(modelCatalogLookup, "findModelCatalogEntry");
     const thinkingSpy = vi
       .spyOn(thinking, "resolveThinkingProfile")
       .mockReturnValue({ levels: [{ id: "off", label: "Off", rank: 0 }], defaultLevel: "off" });
@@ -169,6 +177,7 @@ describe("session list resolver cache", () => {
             model: tuple.model,
             sessionKey,
             entry,
+            modelCatalog: catalog,
             rowContext,
           }).thinkingOptions,
         ).toEqual(["Off"]);
@@ -188,9 +197,11 @@ describe("session list resolver cache", () => {
 
       // Recorded prices bypass lookup; legacy fallback still scales by model, not row.
       expect(thinkingSpy).toHaveBeenCalledTimes(tuples.length);
+      expect(catalogSpy.mock.calls.length).toBeLessThanOrEqual(tuples.length);
       expect(costSpy).toHaveBeenCalledTimes(recorded !== undefined ? 0 : tuples.length);
     } finally {
       thinkingSpy.mockRestore();
+      catalogSpy.mockRestore();
       costSpy.mockRestore();
     }
   });

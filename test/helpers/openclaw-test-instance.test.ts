@@ -4,7 +4,7 @@ import { execFile, spawn } from "node:child_process";
 import { EventEmitter, once } from "node:events";
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
-import type { Socket } from "node:net";
+import net, { type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
@@ -309,7 +309,8 @@ if (kind === "near") { process.stderr.write(refusal.slice(0, -1) + " fixture\\n"
 if (kind === "stdout") { process.stdout.write(refusal + " fixture\\n"); process.exit(1); }
 if (kind === "status2") { process.stderr.write(refusal + " fixture\\n"); process.exit(2); }
 if (kind === "signal") { process.stderr.write(refusal + " fixture\\n"); process.kill(process.pid, "SIGTERM"); }
-if (kind === "unrelated") { process.stderr.write("unrelated startup failure\\n"); process.exit(1); }
+if (kind === "held-unrelated") await (await fetch(controlUrl + "/wait")).text();
+if (kind === "unrelated" || kind === "held-unrelated") { process.stderr.write("unrelated startup failure\\n"); process.exit(1); }
 const server = createServer(async (req, res) => {
   if (req.url === "/readyz" && kind === "held-ready") await (await fetch(controlUrl + "/wait")).text();
   res.writeHead(req.url === "/readyz" ? 200 : 404, { "content-type": "application/json" });
@@ -375,6 +376,28 @@ async function expectPathMissing(targetPath: string): Promise<void> {
   throw new Error(`Expected missing path: ${targetPath}`);
 }
 
+async function isPortReserved(port: number): Promise<boolean> {
+  const competitor = net.createServer();
+  try {
+    await new Promise<void>((resolve, reject) => {
+      competitor.once("error", reject);
+      competitor.listen(port, "127.0.0.1", resolve);
+    });
+    return false;
+  } catch (error) {
+    if (!hasErrnoCode(error, "EADDRINUSE")) {
+      throw error;
+    }
+    return true;
+  } finally {
+    if (competitor.listening) {
+      await new Promise<void>((resolve, reject) => {
+        competitor.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  }
+}
+
 function createGatewayProcessState(
   overrides: Partial<{ exitCode: number | null; signalCode: NodeJS.Signals | null }> = {},
 ) {
@@ -386,6 +409,111 @@ function createGatewayProcessState(
 }
 
 describe("openclaw test instance", () => {
+  it("reserves its idle port through refusal, CLI work, and stopped restarts", async () => {
+    const { instance, readAttempts } = await createFakeGateway("unrelated,cli,ready,ready");
+    const reserved = {
+      created: await isPortReserved(instance.port),
+      refused: false,
+      stopped: false,
+    };
+    await expect(instance.startGateway()).rejects.toThrow("unrelated startup failure");
+    expect(instance.child).toBeUndefined();
+    reserved.refused = await isPortReserved(instance.port);
+    await expect(instance.cli(["0"])).resolves.toMatchObject({ code: 0, signal: null });
+    await instance.startGateway();
+    await instance.stopGateway();
+    reserved.stopped = await isPortReserved(instance.port);
+    await instance.startGateway();
+    const attempts = await readAttempts();
+    expect(attempts).toHaveLength(4);
+    expect(
+      attempts.filter((attempt) => attempt.argv[0] === "gateway").map((attempt) => attempt.port),
+    ).toEqual([instance.port, instance.port, instance.port]);
+    await instance.cleanup();
+    await instance.cleanup();
+    await instance.stopGateway();
+    await expect(isPortReserved(instance.port)).resolves.toBe(false);
+    await expectPathMissing(instance.state.root);
+    expect(reserved).toEqual({ created: true, refused: true, stopped: true });
+  });
+
+  it("releases reservation probe connections before startup and terminal cleanup", async () => {
+    const { instance } = await createFakeGateway("ready");
+    const probe = net.connect(instance.port, "127.0.0.1");
+    try {
+      await withTestTimeout(once(probe, "close"), 1_000, "reservation retained a probe connection");
+      await instance.startGateway();
+      await instance.stopGateway();
+      await instance.cleanup();
+      await expect(isPortReserved(instance.port)).resolves.toBe(false);
+    } finally {
+      probe.destroy();
+    }
+  });
+
+  it("preserves the refusal when reacquiring the same port fails", async () => {
+    const control = await createGatewayControl();
+    const { instance } = await createFakeGateway("held-unrelated", 1_000, 1_500, control);
+    const competitor = net.createServer((socket) => socket.destroy());
+    const startup = trackOperation(instance.startGateway());
+    const outcome = startup.catch((error: unknown) => error);
+    try {
+      await Promise.race([control.reached, startup]);
+      await new Promise<void>((resolve, reject) => {
+        competitor.once("error", reject);
+        competitor.listen(instance.port, "127.0.0.1", resolve);
+      });
+      await control.release();
+      const error = await outcome;
+      expect(error).toBeInstanceOf(AggregateError);
+      expect((error as AggregateError).errors).toEqual([
+        expect.objectContaining({ message: expect.stringContaining("unrelated startup failure") }),
+        expect.objectContaining({ code: "EADDRINUSE" }),
+      ]);
+      expect(instance.child).toBeUndefined();
+      await instance.cleanup();
+      await instance.stopGateway();
+      expect(competitor.listening).toBe(true);
+      await expectPathMissing(instance.state.root);
+    } finally {
+      control.unblock();
+      await outcome;
+      if (competitor.listening) {
+        await new Promise<void>((resolve, reject) => {
+          competitor.close((error) => (error ? reject(error) : resolve()));
+        });
+      }
+    }
+  });
+
+  it("leaves explicitly supplied ports owned by the caller", async () => {
+    const caller = net.createServer();
+    await new Promise<void>((resolve, reject) => {
+      caller.once("error", reject);
+      caller.listen(0, "127.0.0.1", resolve);
+    });
+    const address = caller.address();
+    if (!address || typeof address === "string") {
+      throw new Error("caller has no port");
+    }
+    try {
+      const instance = await createOpenClawTestInstance({
+        name: "caller-owned-port",
+        port: address.port,
+      });
+      fakeInstances.push({ instance });
+      await instance.stopGateway();
+      await instance.cleanup();
+      expect(caller.listening).toBe(true);
+      await expect(isPortReserved(address.port)).resolves.toBe(true);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        caller.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+    await expect(isPortReserved(address.port)).resolves.toBe(false);
+  });
+
   it.each(["complete", "overflow", "overflow-close"] as const)(
     "owns complete CLI JSON and diagnostic tails (%s)",
     async (mode) => {
@@ -784,6 +912,7 @@ describe("openclaw test instance", () => {
       });
       const firstStart = trackOperation(instance.startGateway());
       await Promise.race([control.reached, firstStart]);
+      await expect(isPortReserved(instance.port)).resolves.toBe(true);
       let teardownSettled = false;
       let launchedAfterTeardown = false;
       control.observers.onLaunch = () => {
@@ -1251,6 +1380,9 @@ describe("openclaw test instance", () => {
         expect(firstChild.stderr.closed).toBe(false);
         expect(isProcessAlive(drainingPid)).toBe(true);
         expect(await readAttempts()).toHaveLength(1);
+        await expect(fs.stat(instance.state.root)).resolves.toBeDefined();
+        // A free socket is not evidence that the retained process owner has closed.
+        await expect(isPortReserved(instance.port)).resolves.toBe(false);
 
         // Register before release, but charge only post-release drain to the stop budget.
         const closed = trackOperation(once(firstChild, "close"));

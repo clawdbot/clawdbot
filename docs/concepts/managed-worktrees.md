@@ -28,7 +28,7 @@ Changing `worktreeRoot` affects new allocations. Existing registered worktrees k
 
 Outside the default state-owned worktree directory, cleanup acts only on registered worktrees. It leaves unrelated, unregistered folders in your custom location alone.
 
-See [Configuration reference](/gateway/configuration-reference#worktreeroot) for the option's default and scope.
+See [Configuration reference](/gateway/config-runtime#worktreeroot) for the option's default and scope.
 
 ## Layout and names
 

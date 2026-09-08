@@ -228,7 +228,7 @@ You can reference env vars directly in config string values using `${VAR_NAME}` 
 
 A missing or empty variable remains visible as `${VAR_NAME}` and emits a warning. Consumers that require the value treat it as unavailable. Use `$${VAR_NAME}` when the literal `${VAR_NAME}` text is intended.
 
-See [Configuration: Env var substitution](/gateway/configuration-reference#env-var-substitution) for full details.
+See [Configuration: Env var substitution](/gateway/config-secrets-env#env-var-substitution) for full details.
 
 This applies to string values in `openclaw.json` and in any file it pulls in through `$include`, because substitution runs over the config tree after includes resolve. OpenClaw's dotenv loader does not expand environment variable values. For example, `OPENCLAW_WORKSPACE_DIR=${XDG_CONFIG_HOME}/workspace` in a runtime `.env` file remains literal when OpenClaw loads it.
 

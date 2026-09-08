@@ -36,7 +36,6 @@ import {
 } from "./exec-result.js";
 import { COMMAND_PROCESS_TREE_KILL_GRACE_MS, spawnCommandWithInvocation } from "./exec-spawn.js";
 import { createCommandTerminationController } from "./exec-termination.js";
-import { resolveCommandStdio } from "./spawn-utils.js";
 
 const WINDOWS_CLOSE_STATE_SETTLE_TIMEOUT_MS = 250;
 const WINDOWS_CLOSE_STATE_POLL_MS = 10;
@@ -108,7 +107,6 @@ async function runCommandWithOutputEncoding(
   const resolvedTimeoutMs =
     typeof timeoutMs === "number" ? resolveTimerTimeoutMs(timeoutMs, 1) : undefined;
   const hasInput = input !== undefined;
-  const stdio = resolveCommandStdio({ hasInput, preferInherit: true });
   const resolvedKillGraceMs = resolveTimerTimeoutMs(
     killGraceMs,
     COMMAND_PROCESS_TREE_KILL_GRACE_MS,
@@ -180,7 +178,7 @@ async function runCommandWithOutputEncoding(
     killSignal,
     ...(hasInput ? { input } : {}),
     reject: false,
-    stdio,
+    stdio: [hasInput ? "pipe" : "inherit", "pipe", "pipe"],
     stripFinalNewline: false,
     windowsVerbatimArguments: options.windowsVerbatimArguments,
   });

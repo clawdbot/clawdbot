@@ -505,6 +505,8 @@ async function executeAgentTurnInternalLoop(
 
   return {
     kind: "completed",
+    maintenanceAuthProfile: fallbackCycleState.maintenanceAuthProfile,
+    compactionRequestBudget: fallbackCycleState.compactionRequestBudget,
     result: runResult,
     fallbackProvider,
     fallbackModel,
@@ -670,6 +672,8 @@ async function executeAgentTurnOutcome(params: AgentTurnParams): Promise<AgentTu
       runId,
       outcome: {
         kind: "settled",
+        maintenanceAuthProfile: internal.maintenanceAuthProfile,
+        compactionRequestBudget: internal.compactionRequestBudget,
         ...terminalStatus,
         result: internal.result,
         resolved: { provider, model },

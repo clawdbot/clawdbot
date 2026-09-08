@@ -748,6 +748,14 @@ surprising, see
 
 ## Routing and model selection
 
+`openai/gpt-6-astra` defaults to `low` reasoning effort through the shared
+OpenAI provider policy. This limits routine reasoning cost and subscription
+budget use. For OpenClaw-managed turns, the resolved effort is sent in Codex `turn/start` requests,
+including `collaborationMode.settings.reasoning_effort`, so the native thread
+uses the same default as Control UI. Explicit thinking settings still win;
+an existing session or agent configured for `high` stays at `high`. Threads
+attached with native settings preserved retain their native effort.
+
 Keep provider refs and runtime policy separate:
 
 - Use `openai/gpt-*` for canonical OpenAI model selection. The prefix alone

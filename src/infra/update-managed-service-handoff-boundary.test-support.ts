@@ -155,6 +155,7 @@ export function createManagedServiceManagerBoundary({
         parentPid,
         statePath,
         commandsPath,
+        configPath: path.join(root, "openclaw.json"),
         options,
       }),
       {
@@ -438,9 +439,10 @@ export function createManagedServiceManagerBoundary({
         }
       };
       expect(readLease()).toEqual({
-        version: 1,
-        pid: runningHelper.pid,
-        startIdentity: expect.any(String),
+        version: 2,
+        executor: { pid: runningHelper.pid, startIdentity: expect.any(String) },
+        helper: { pid: runningHelper.pid, startIdentity: expect.any(String) },
+        action: { kind: "update" },
       });
       await expect(pathExists(commandsPath)).resolves.toBe(false);
       if (options?.controlDisconnect) {

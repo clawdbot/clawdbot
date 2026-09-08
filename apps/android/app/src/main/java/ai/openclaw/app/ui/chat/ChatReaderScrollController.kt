@@ -1,8 +1,8 @@
 package ai.openclaw.app.ui.chat
 
-import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.gestures.stopScroll
 import androidx.compose.foundation.interaction.DragInteraction
+import androidx.compose.foundation.lazy.LazyListLayoutInfo
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
@@ -24,7 +24,6 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
@@ -102,9 +101,10 @@ private data class ChatReaderViewport(
   val scrolling: Boolean,
   val index: Int,
   val offset: Int,
-  val size: IntSize,
-  val itemKey: Any?,
-  val itemSize: Int,
+  val placementRevision: Int,
+  val layout: LazyListLayoutInfo,
+  val canScroll: Boolean,
+  val navigating: Boolean,
 )
 
 internal class ChatReaderNavigation(
@@ -112,6 +112,8 @@ internal class ChatReaderNavigation(
   private val listState: LazyListState? = null,
   private val pauseFollowing: () -> Unit = {},
 ) {
+  val anchors = ChatReaderAnchors(listState)
+
   private data class Request(
     val job: Job,
     val automatic: Boolean,
@@ -130,7 +132,10 @@ internal class ChatReaderNavigation(
       // return a cancelled job without retiring current work or skipping its cleanup.
       ensureActive()
       scope.ensureActive()
-      if (!automatic) pauseFollowing()
+      if (!automatic) {
+        anchors.invalidate()
+        pauseFollowing()
+      }
       retire()
       val request = coroutineContext.job
       active = Request(request, automatic)
@@ -214,12 +219,18 @@ internal fun rememberChatReaderScrollController(
     remember(scope) {
       ChatReaderNavigation(scope, listState) {
         // Explicit reading replaces the gesture; its idle must not restore following.
+        // The viewport still hides Jump while the latest content remains visible.
         isUserScrolling = false
-        readerState = readerState.copy(followTarget = null)
+        readerState = readerState.copy(followTarget = null, hasNewerContent = true)
       }
     }
 
-  DisposableEffect(navigation) { onDispose { navigation.retire() } }
+  DisposableEffect(navigation) {
+    onDispose {
+      navigation.retire()
+      navigation.anchors.clearReading()
+    }
+  }
   LaunchedEffect(navigation) {
     listState.interactionSource.interactions.collect { interaction ->
       if (interaction is DragInteraction.Start) navigation.pause()
@@ -236,6 +247,7 @@ internal fun rememberChatReaderScrollController(
           // A code viewport can consume the whole drag without scrolling the transcript.
           // Its reader intent must still retire follow, without consuming the gesture.
           if (source == NestedScrollSource.UserInput && available.y != 0f) {
+            navigation.anchors.invalidate()
             readerState = readerState.copy(followTarget = null)
             // Bring-into-view also emits UserInput; do not cancel its own reveal.
             navigation.cancelAutomatic()
@@ -248,6 +260,7 @@ internal fun rememberChatReaderScrollController(
   suspend fun applyTransition(transition: ChatReaderTransition) =
     coroutineScope {
       readerState = transition.state
+      if (transition.state.followTarget != null) navigation.anchors.clearReading()
       val index = transition.scrollIndex ?: return@coroutineScope
       navigation
         .launch(this, automatic = true) {
@@ -274,42 +287,43 @@ internal fun rememberChatReaderScrollController(
   LaunchedEffect(sessionKey) {
     var previousViewport: ChatReaderViewport? = null
     snapshotFlow {
-      if (navigation.isNavigating) {
-        null
-      } else {
-        val layout = listState.layoutInfo
-        val index = listState.firstVisibleItemIndex
-        val item = layout.visibleItemsInfo.firstOrNull { it.index == index }
-        ChatReaderViewport(
-          listState.isScrollInProgress,
-          index,
-          listState.firstVisibleItemScrollOffset,
-          layout.viewportSize,
-          item?.key,
-          item?.size ?: 0,
-        )
-      }
+      ChatReaderViewport(
+        listState.isScrollInProgress,
+        listState.firstVisibleItemIndex,
+        listState.firstVisibleItemScrollOffset,
+        navigation.anchors.revision,
+        listState.layoutInfo,
+        listState.canScrollBackward || listState.canScrollForward,
+        navigation.isNavigating,
+      )
     }.collect { viewport ->
+      // Observe geometry during navigation without replaying its suppressed resize later.
       val previous = previousViewport
       previousViewport = viewport
-      if (!readerState.initialized || viewport == null) return@collect
+      if (!readerState.initialized || viewport.navigating) return@collect
       val (scrolling, index, offset) = viewport
+      val resizedToFit =
+        previous != null && !previous.navigating && !previous.scrolling && previous.canScroll &&
+          !viewport.canScroll && viewport.layout.totalItemsCount > 0 &&
+          previous.layout.viewportSize != viewport.layout.viewportSize
       if (scrolling) {
+        navigation.anchors.clearReading()
         isUserScrolling = true
         readerState = readerState.copy(followTarget = null)
-      } else if (isUserScrolling) {
+        return@collect
+      } else if (isUserScrolling || resizedToFit) {
         isUserScrolling = false
         readerState = readerState.onViewportChanged(index, offset, currentTimeline, targetTolerancePx)
-      } else if (readerState.followTarget == null && previous != null && previous.size == viewport.size &&
-        viewport.itemKey != null && previous.itemKey == viewport.itemKey
-      ) {
-        // Reverse layout anchors this item's end; retain its reading origin as it
-        // grows. Other rows must not move that anchor. The navigation owner lets a
-        // new drag, jump, or session cancel the correction normally.
-        val growth = viewport.itemSize - previous.itemSize
-        if (growth != 0) {
-          navigation.launch(this, automatic = true) { listState.scrollBy(growth.toFloat()) }.join()
-        }
+      }
+      if (readerState.followTarget != null) {
+        navigation.anchors.clearReading()
+      } else if (navigation.anchors.needsCorrection()) {
+        navigation
+          .launch(this, automatic = true) {
+            listState.scroll {
+              if (readerState.followTarget == null) navigation.anchors.correct(::scrollBy)
+            }
+          }.join()
       }
     }
   }

@@ -19,6 +19,7 @@ A connected agent is a capable one: depending on your tool policy it can run com
 ## Prerequisites
 
 - OpenClaw installed and onboarded - see [Getting Started](/start/getting-started) if you haven't done this yet
+- The WhatsApp plugin installed, or WhatsApp chosen during onboarding. WhatsApp is an official plugin that installs on demand. See [WhatsApp](/channels/whatsapp)
 - A second phone number (SIM/eSIM/prepaid) for the assistant
 
 ## The two-phone setup (recommended)

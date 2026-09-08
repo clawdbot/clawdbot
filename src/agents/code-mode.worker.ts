@@ -294,8 +294,9 @@ function createHostCancelRequestHandler(params: {
 
 async function createVm(input: CodeModeWorkerPayload, bridge: BridgeState): Promise<VmRun> {
   const startedAt = performance.now();
+  const timeoutMs = input.config.timeoutMs;
   let timedOut = false;
-  const deadlineReached = () => performance.now() - startedAt >= input.config.timeoutMs;
+  const deadlineReached = () => performance.now() - startedAt >= timeoutMs;
   const options = {
     wasm: input.wasmModule,
     memoryLimit: input.config.memoryLimitBytes,
@@ -311,6 +312,10 @@ async function createVm(input: CodeModeWorkerPayload, bridge: BridgeState): Prom
       ? await QuickJS.restore(input.snapshot, options)
       : await QuickJS.create(options);
   try {
+    if (input.kind === "resume") {
+      // Restore owns an independent WASM heap; all incoming aliases share this snapshot.
+      input.snapshot.memory = new Uint8Array();
+    }
     const callbacks = [
       ["__openclawHostRequest", createHostRequestHandler({ vm, bridge, config: input.config })],
       ["__openclawHostCancelRequest", createHostCancelRequestHandler({ vm, bridge })],
@@ -595,6 +600,8 @@ async function run(input: CodeModeWorkerPayload): Promise<CodeModeWorkerResult> 
           }
         }
       });
+      // Guest promises now own the replayed JSON values; release every input-frame alias.
+      input.settledRequests.length = 0;
     },
   });
 }

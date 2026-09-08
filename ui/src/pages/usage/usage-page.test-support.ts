@@ -19,6 +19,7 @@ export type TestUsagePage = HTMLElement & {
   providerUsageSummary: { updatedAt: number; providers: unknown[] } | null;
   providerUsageUnavailable: boolean;
   loadUsage: () => Promise<void>;
+  requestUpdate: () => void;
   render: () => unknown;
   readonly updateComplete: Promise<boolean>;
 };

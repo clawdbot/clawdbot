@@ -988,4 +988,49 @@ describe("Gateway steer FIFO", () => {
     },
     TEST_TIMEOUT_MS,
   );
+
+  it(
+    "hands steered document attachments to the active run as extracted file context",
+    async () => {
+      const fixture = await createGatewayFixture("steer-document-context");
+      const first = await sendHeldTurn(fixture);
+
+      // Real gateway protocol send with a file attachment while the initial
+      // run is still live: admission must steer the active run instead of
+      // dispatching a reply, and the extracted document context must reach
+      // the prompt the run actually sends to the model.
+      const steer = await fixture.diagnosticsClient.request<{ runId?: unknown; status?: unknown }>(
+        "chat.send",
+        {
+          sessionKey: fixture.sessionKey,
+          message: "QUEUED_STEER_DOCUMENT",
+          deliver: false,
+          queueMode: "steer",
+          idempotencyKey: "run-steer-document",
+          attachments: [
+            {
+              type: "file",
+              mimeType: "text/plain",
+              fileName: "notes.txt",
+              content: Buffer.from("steered document body", "utf8").toString("base64"),
+              sizeBytes: "steered document body".length,
+            },
+          ],
+        },
+      );
+      expect(steer).toMatchObject({ status: "started" });
+
+      fixture.modelServer.releaseFirst("final");
+
+      await vi.waitFor(() => expect(fixture.modelServer.requests).toHaveLength(2), WAIT_OPTS);
+      const currentSteer = currentUserInput(fixture.modelServer.requests[1]);
+      expect(currentSteer).toContain("QUEUED_STEER_DOCUMENT");
+      // The media store persists uploads as `<original>---<mediaId><ext>`, so
+      // the extracted block carries the stored name, matching reply dispatch.
+      expect(currentSteer).toMatch(/<file name="notes---[0-9a-f-]+\.txt" mime="text\/plain">/);
+      expect(currentSteer).toContain("steered document body");
+      await waitForRunTerminal(fixture, first.runId);
+    },
+    TEST_TIMEOUT_MS,
+  );
 });

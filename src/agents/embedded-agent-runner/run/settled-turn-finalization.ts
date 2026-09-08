@@ -5,16 +5,23 @@ import {
 } from "../../../auto-reply/reply-payload.js";
 import {
   SessionTranscriptWriterClaimReboundError,
+  withOwnedSessionTranscriptWrites,
   type SessionTranscriptWriterFence,
 } from "../../../config/sessions/transcript-write-context.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { appendAssistantMirrorMessageByIdentity } from "../../../plugin-sdk/session-transcript-runtime.js";
+import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
 import { resolveSettledTurnFinalizationText } from "../../harness/settled-turn-finalization-result.js";
 import type {
   AgentHarness,
   AgentHarnessSettledTurnFinalizationResult,
 } from "../../harness/types.js";
+import { resolveAgentRunSessionTarget } from "../../run-session-target.js";
 import { resolveAgentTimeoutMs } from "../../timeout.js";
+import {
+  createAdmittedGatewayToolCallerIdentity,
+  withGatewayToolCallerIdentity,
+} from "../../tools/gateway-caller-context.js";
 import { log } from "../logger.js";
 import {
   mergeAttemptRunStatsIntoAccumulator,
@@ -113,6 +120,13 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
       finalizationOutcome: "not-attempted" as const,
     };
   }
+  const assertFinalizationActive = resolveAdmittedRunActiveAssertion(
+    input.finalization.preparedAttempt.admittedRunContext,
+    input.finalization.abortSignal,
+  );
+  if (!assertFinalizationActive) {
+    throw new Error("admitted run authority is no longer active");
+  }
   const settledFailureSignal = prepared.failureSignal;
   const settledTerminalToolFailure = prepared.terminalToolFailure;
   const committedSessionTarget = resolveCommittedSessionTarget({
@@ -142,14 +156,23 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
     let finalizationAttempt = 0;
     do {
       finalizationAttempt += 1;
+      assertFinalizationActive();
       finalization = await runPreparedSettledTurnFinalization({
-        attempt: input.finalization.preparedAttempt,
+        attempt: {
+          ...input.finalization.preparedAttempt,
+          // The first transcript append may have committed the writer after
+          // dispatch preparation. The summary must retain that original fence.
+          ...(committedSessionTarget ? { sessionTarget: committedSessionTarget } : {}),
+          sessionId: committedSessionTarget?.sessionId ?? initial.sessionIdUsed,
+          sessionFile: initial.sessionFileUsed ?? input.finalization.preparedAttempt.sessionFile,
+        },
         settledAttempt: initial.attempt,
         harness: input.finalization.harness,
         prompt,
         createAttemptControls: input.finalization.createAttemptControls,
         abortSignal: input.finalization.abortSignal,
       });
+      assertFinalizationActive();
       attempt = finalization.attempt;
       mergeUsageIntoAccumulator(input.terminalBase.usageAccumulator, attempt.attemptUsage);
       mergeAttemptRunStatsIntoAccumulator(input.terminalBase.usageAccumulator, attempt);
@@ -208,6 +231,7 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
     const transcriptIdempotencyKey = await persistSettledToolFallbackTranscript({
       attempt: input.finalization.preparedAttempt,
       abortSignal: input.finalization.abortSignal,
+      assertActive: assertFinalizationActive,
       sessionId: committedSessionTarget?.sessionId ?? initial.sessionIdUsed,
       sessionTarget: committedSessionTarget,
     });
@@ -345,23 +369,32 @@ async function runPreparedSettledTurnFinalization(input: {
     }),
   });
   try {
-    const finalization = await runEmbeddedSettledTurnFinalizationWithBackend(
-      {
-        ...input.attempt,
-        abortSignal: controls.abortSignal,
-        onAttemptDeadlineChanged: controls.onAttemptDeadlineChanged,
-        onAttemptTimeout: controls.onAttemptTimeout,
-        onAttemptAbort: controls.onAttemptAbort,
-        onAttemptTimeoutArmed: undefined,
-        operation: "settled-tool-finalization",
-        prompt: input.prompt,
-        disableTools: true,
-        skipPreparedUserTurnMessage: true,
-        suppressNextUserMessagePersistence: true,
-        initialReplayState: { replayInvalid: false, hadPotentialSideEffects: false },
-      },
-      input.settledAttempt,
-      input.harness,
+    // The original attempt scope has closed. Rebind this same admitted child,
+    // rather than retaining the launching parent's expired tool registration.
+    const callerIdentity = createAdmittedGatewayToolCallerIdentity({
+      admittedRunContext: input.attempt.admittedRunContext,
+      agentId: input.attempt.agentId,
+      sessionKey: input.attempt.sessionKey,
+    });
+    const finalization = await withGatewayToolCallerIdentity(callerIdentity, () =>
+      runEmbeddedSettledTurnFinalizationWithBackend(
+        {
+          ...input.attempt,
+          abortSignal: controls.abortSignal,
+          onAttemptDeadlineChanged: controls.onAttemptDeadlineChanged,
+          onAttemptTimeout: controls.onAttemptTimeout,
+          onAttemptAbort: controls.onAttemptAbort,
+          onAttemptTimeoutArmed: undefined,
+          operation: "settled-tool-finalization",
+          prompt: input.prompt,
+          disableTools: true,
+          skipPreparedUserTurnMessage: true,
+          suppressNextUserMessagePersistence: true,
+          initialReplayState: { replayInvalid: false, hadPotentialSideEffects: false },
+        },
+        input.settledAttempt,
+        input.harness,
+      ),
     );
     return {
       outcome: finalization.outcome,
@@ -483,9 +516,11 @@ function buildSettledToolFallbackAttemptResult(input: {
 async function persistSettledToolFallbackTranscript(input: {
   attempt: EmbeddedRunAttemptParams;
   abortSignal: AbortSignal;
+  assertActive: () => void;
   sessionId: string;
   sessionTarget?: EmbeddedRunAttemptParams["sessionTarget"];
 }): Promise<string | undefined> {
+  input.assertActive();
   const target = input.sessionTarget ?? input.attempt.sessionTarget;
   const sessionKey = target?.sessionKey ?? input.attempt.sessionKey;
   const hasWriterFence =
@@ -498,24 +533,45 @@ async function persistSettledToolFallbackTranscript(input: {
   }
   const idempotencyKey = `${input.attempt.runId}:settled-finalization-fallback`;
   try {
-    const result = await appendAssistantMirrorMessageByIdentity({
-      ...(target?.agentId || input.attempt.agentId
-        ? { agentId: target?.agentId ?? input.attempt.agentId }
-        : {}),
+    const resolvedTarget = await resolveAgentRunSessionTarget({
+      agentId: target?.agentId ?? input.attempt.agentId,
+      config: input.attempt.config,
+      missingSessionKey: "resolve-existing",
       sessionId: input.sessionId,
       sessionKey,
-      ...(target?.storePath ? { storePath: target.storePath } : {}),
-      ...(target?.expectedLifecycleRevision !== undefined
-        ? { expectedLifecycleRevision: target.expectedLifecycleRevision }
-        : {}),
-      ...(target?.expectedWriterRunId !== undefined
-        ? { expectedWriterRunId: target.expectedWriterRunId }
-        : {}),
-      config: input.attempt.config,
-      idempotencyKey,
-      signal: input.abortSignal,
-      text: SETTLED_TOOL_FINALIZATION_FALLBACK_TEXT,
+      sessionTarget: target,
     });
+    if (input.abortSignal.aborted) {
+      return undefined;
+    }
+    input.assertActive();
+    const fencedTarget = {
+      ...resolvedTarget,
+      sessionId: input.sessionId,
+      expectedLifecycleRevision: target?.expectedLifecycleRevision,
+      expectedWriterRunId: target?.expectedWriterRunId,
+    };
+    // A completed parent is irrelevant, but this child must still own the
+    // fallback at the synchronous commit edge, including after queued writes.
+    const result = await withOwnedSessionTranscriptWrites(
+      {
+        sessionTarget: fencedTarget,
+        assertCommitAllowed: input.assertActive,
+        withTranscriptWrite: async (write) => await write(),
+      },
+      () =>
+        appendAssistantMirrorMessageByIdentity({
+          ...fencedTarget,
+          config: input.attempt.config,
+          idempotencyKey,
+          signal: input.abortSignal,
+          text: SETTLED_TOOL_FINALIZATION_FALLBACK_TEXT,
+        }),
+    );
+    if (input.abortSignal.aborted) {
+      return undefined;
+    }
+    input.assertActive();
     if (!result.ok) {
       if (hasWriterFence || result.code === "session-rebound") {
         throw new SessionTranscriptWriterClaimReboundError();
@@ -527,6 +583,11 @@ async function persistSettledToolFallbackTranscript(input: {
     }
     return idempotencyKey;
   } catch (error) {
+    // The caller preserves queue cancellation instead of synthesizing a reply.
+    if (input.abortSignal.aborted) {
+      return undefined;
+    }
+    input.assertActive();
     if (error instanceof SessionTranscriptWriterClaimReboundError) {
       throw error;
     }

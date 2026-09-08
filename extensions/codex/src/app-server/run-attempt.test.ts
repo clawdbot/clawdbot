@@ -3405,7 +3405,12 @@ describe("runCodexAppServerAttempt", () => {
     const sessionManager = openRunSession(sessionFile);
     sessionManager.appendMessage(assistantMessage("previous turn", Date.now()));
     const harness = createStartedThreadHarness();
-    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
+    const params = createParams(sessionFile, workspaceDir, { provider: "openai" });
+    params.config = {
+      ...params.config,
+      agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
+    };
+    const run = runCodexAppServerAttempt(params);
     await harness.waitForMethod("turn/start");
     await new Promise<void>((resolve) => {
       setImmediate(resolve);
@@ -3429,6 +3434,10 @@ describe("runCodexAppServerAttempt", () => {
     ]);
     expect(hookContext.runId).toBe("run-1");
     expect(hookContext.sessionId).toBe("session-1");
+    expect(hookContext).toMatchObject({
+      modelProviderId: params.provider,
+      modelId: params.modelId,
+    });
     const threadStart = harness.requests.find((request) => request.method === "thread/start");
     const threadStartParams = threadStart?.params as { developerInstructions?: string } | undefined;
     const wrappedPluginSystemContext = (text: string) =>
@@ -7346,12 +7355,16 @@ describe("runCodexAppServerAttempt", () => {
   it("retains the prepared execution model across native resume without exposing it in lifecycle events", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();
     const runtimeModelId = "test-runtime-model";
+    const beforePromptBuild = vi.fn(() => undefined);
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "before_prompt_build", handler: beforePromptBuild }]),
+    );
     const freshHarness = createStartedThreadHarness(
       async (method) =>
         method === "thread/start" ? { ...threadStartResult(), model: runtimeModelId } : undefined,
       { persistedThreads: [] },
     );
-    const params = createParams(sessionFile, workspaceDir);
+    const params = createParams(sessionFile, workspaceDir, { provider: "openai" });
     params.modelId = "gpt-5.6-sol";
     params.model = {
       ...params.model,
@@ -7366,6 +7379,10 @@ describe("runCodexAppServerAttempt", () => {
 
     const freshRun = runCodexAppServerAttempt(params, { runtimeModelId });
     await completeStartedRun(freshRun, freshHarness.waitForMethod, freshHarness.completeTurn);
+    expect(mockCall(beforePromptBuild, "before_prompt_build", -1)[1]).toMatchObject({
+      modelProviderId: params.provider,
+      modelId: params.modelId,
+    });
 
     for (const method of ["thread/start", "turn/start"]) {
       expect(freshHarness.requests.find((entry) => entry.method === method)).toMatchObject({
@@ -7391,6 +7408,10 @@ describe("runCodexAppServerAttempt", () => {
       { runtimeModelId },
     );
     await completeStartedRun(resumedRun, resumedHarness.waitForMethod, resumedHarness.completeTurn);
+    expect(mockCall(beforePromptBuild, "before_prompt_build", -1)[1]).toMatchObject({
+      modelProviderId: params.provider,
+      modelId: params.modelId,
+    });
 
     expectResumeRequest(resumedHarness.requests, {
       threadId: "thread-1",
@@ -7676,6 +7697,10 @@ describe("runCodexAppServerAttempt", () => {
   it("rejects a newly observed native model before inference with stale prepared host auth", async () => {
     const { sessionFile, workspaceDir, agentDir } = createRunPaths();
     const modelRef = { provider: "openai", model: "gpt-5.5" };
+    const beforePromptBuild = vi.fn(() => undefined);
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "before_prompt_build", handler: beforePromptBuild }]),
+    );
     await writeExistingBinding(sessionFile, workspaceDir, {
       preserveNativeModel: true,
       authProfileId: "openai:host",
@@ -7719,6 +7744,10 @@ describe("runCodexAppServerAttempt", () => {
       }
       return error;
     });
+    expect(beforePromptBuild).toHaveBeenCalled();
+    const hookContext = mockCall(beforePromptBuild, "before_prompt_build")[1];
+    expect(hookContext).not.toHaveProperty("modelProviderId");
+    expect(hookContext).not.toHaveProperty("modelId");
     expect(harness.requests.some(({ method }) => method === "thread/resume")).toBe(true);
     expect(harness.requests.some(({ method }) => method === "turn/start")).toBe(false);
     expect(result instanceof Error || Boolean(readAttemptTerminal(result).promptError)).toBe(true);
@@ -7741,6 +7770,10 @@ describe("runCodexAppServerAttempt", () => {
     "preserves supervised native model and transport/home guards over $transport (answer: $hasAnswer)",
     async ({ transport, hasAnswer }) => {
       const { sessionFile, workspaceDir, agentDir } = createRunPaths();
+      const beforePromptBuild = vi.fn(() => undefined);
+      initializeGlobalHookRunner(
+        createMockPluginRegistry([{ hookName: "before_prompt_build", handler: beforePromptBuild }]),
+      );
       const codexHome = path.join(tempDir, "review-codex-home");
       vi.stubEnv("CODEX_HOME", codexHome);
       const rolloutPath = path.join(codexHome, "sessions", "thread-existing.jsonl");
@@ -7906,6 +7939,12 @@ describe("runCodexAppServerAttempt", () => {
         });
         const result = await run;
         expect(result.terminal).toEqual({ kind: "ok" });
+        expect(beforePromptBuild).toHaveBeenCalled();
+        for (let index = 0; index < beforePromptBuild.mock.calls.length; index += 1) {
+          const context = mockCall(beforePromptBuild, "before_prompt_build", index)[1];
+          expect(context).not.toHaveProperty("modelProviderId");
+          expect(context).not.toHaveProperty("modelId");
+        }
         expect(result.runtimeModelSelection).toEqual({
           provider: "openai",
           model: "gpt-5.6-luna",

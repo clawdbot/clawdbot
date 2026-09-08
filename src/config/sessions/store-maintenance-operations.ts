@@ -124,7 +124,8 @@ async function applyWarnOnlyMaintenance(params: {
       preserveRecentMs: params.maintenance.preserveRecentMs,
     });
     if (warning) {
-      const outcome = warning.wouldPrune || warning.capOutcome === "remove" ? "remove" : "archive";
+      const outcome =
+        warning.pruneOutcome === "remove" || warning.capOutcome === "remove" ? "remove" : "archive";
       params.operation.log.warn(
         `session maintenance would ${outcome} active session; skipping enforcement`,
         {
@@ -234,9 +235,15 @@ async function applyEnforcedMaintenance(params: {
   let archived = archiveStaleDashboardEntries(
     params.operation.store,
     params.maintenance.archiveDashboardAfterMs,
-    { preserveKeys: params.preserveSessionKeys },
+    {
+      preserveKeys: params.preserveSessionKeys,
+      preserveRecentMs: params.maintenance.preserveRecentMs,
+    },
   );
   const pruned = pruneStaleEntries(params.operation.store, params.maintenance.pruneAfterMs, {
+    onArchived: () => {
+      archived += 1;
+    },
     onPruned: ({ entry }) => {
       rememberRemovedSessionFile(removedSessionFiles, entry);
     },

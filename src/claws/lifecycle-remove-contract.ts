@@ -4,7 +4,6 @@ import type { purgeAgentSessionStoreEntries } from "../config/sessions/cleanup-s
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import type { ClawCronGateway } from "./cron.js";
-import type { ConfigCommit } from "./lifecycle-config-removal.js";
 import type { ClawTrashPath, RemovedWorkspaceFile } from "./lifecycle-delete-support.js";
 import type { ClawMonitorCleanupGateway } from "./monitor-cleanup-contract.js";
 import type {
@@ -75,7 +74,6 @@ export type ClawRemovePlanOptions = OpenClawStateDatabaseOptions & {
 };
 
 export type ClawRemoveApplyOptions = ClawRemovePlanOptions & {
-  commitConfig?: ConfigCommit;
   purgeSessions?: (
     ...args: Parameters<typeof purgeAgentSessionStoreEntries>
   ) => Promise<boolean | void>;

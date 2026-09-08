@@ -161,22 +161,27 @@ function createCodeModeExecDescription(
   const skillsGuidance = ctx.codeModeSkills?.length
     ? " Skills are available through the async `skills` global: use `await skills.list()` and `await skills.read(name)`."
     : "";
-  const { maxOutputBytes } = config;
+  const { maxOutputBytes, timeoutMs } = config;
   // The catalog already reserves built-in namespace globals without constructing their runtimes.
   const bindings = catalog
     ? createCodeModeCatalogBindings(catalog.map((entry) => compactToolSearchCatalogEntry(entry)))
     : undefined;
   const catalogIndex = bindings ? formatCodeModeCatalogIndex(bindings) : "";
+  // Only the effective core binding proves shell capability after client overrides.
+  const shellTool = bindings?.find((entry) => entry.id === "openclaw:core:exec");
+  const shellGuidance = shellTool
+    ? ` Use the shell tool \`${shellTool.callableName}\` for heavier computation.`
+    : "";
   return (
-    `Run JavaScript or TypeScript in OpenClaw code mode. Enabled tools are async global functions listed in the quick index. Await dependent calls in order; independent calls may run with Promise.all. Declared output fields may feed later calls in the same program; do not spend another \`exec\` merely inspecting them. Emit output with \`text(value)\` or \`json(value)\`. Return the final value; otherwise the result is \`null\`. \`-> ?\` means unknown output: do not feed it into guessed field-dependent logic in the same program. Return the raw value first, observe it, then use a later \`exec\` for dependent composition. If a tool is omitted from the bounded index, use \`catalog.search(query)\`; results are callable: \`const [tool] = await catalog.search("..."); return await tool({...});\`. Handles expose \`describe()\` when a schema is needed. \`setTimeout\` and \`clearTimeout\` work. Nested calls enforce normal tool policy and approvals. Tool failures are catchable JavaScript errors; otherwise, use the failed result to correct your code or choose another tool. If an action may have started, inspect its outcome without repeating mutations. Never replay actions that already ran. Each nested result is bounded separately to ${maxOutputBytes} bytes. Cumulative output and the final value or error share ${maxOutputBytes} bytes across waits. Model-facing results may use a smaller allowance to preserve complete status and continuation within model context limits. Output/value truncation reports a prefix and omitted bytes of the original normalized JSON; rerun with narrower args. Ordinary output is incremental; unchanged summaries are suppressed, changed cumulative summaries replace earlier ones. Node.js modules and \`require\`/\`import\` are NOT available; use enabled globals for shell, file, network, or external actions.` +
+    `Run JavaScript or TypeScript in OpenClaw code mode. Guest work and inline tool waits share a ${timeoutMs} ms wall-clock budget per \`exec\`/\`wait\`; approvals pause it. Guest computation over this budget times out; pending tools may return \`waiting\` for \`wait\`.` +
+    shellGuidance +
+    ` Enabled tools are async global functions listed in the quick index. Await dependent calls in order; independent calls may run with Promise.all. Declared output fields may feed later calls in the same program; do not spend another \`exec\` merely inspecting them. Emit output with \`text(value)\` or \`json(value)\`. Return the final value; otherwise the result is \`null\`. \`-> ?\` means unknown output: do not feed it into guessed field-dependent logic in the same program. Return the raw value first, observe it, then use a later \`exec\` for dependent composition. If a tool is omitted from the bounded index, use \`catalog.search(query)\`; results are callable: \`const [tool] = await catalog.search("..."); return await tool({...});\`. Handles expose \`describe()\` when a schema is needed. \`setTimeout\` and \`clearTimeout\` work. Nested calls enforce normal tool policy and approvals. Tool failures are catchable JavaScript errors; correct your code or choose another tool. If an action may have started, inspect its outcome without replaying it. Each nested result is bounded separately to ${maxOutputBytes} bytes. Cumulative output and the final value or error share ${maxOutputBytes} bytes across waits. Model context may further limit results while preserving complete status and continuation. Output/value truncation reports a prefix and omitted bytes of the original normalized JSON; rerun with narrower args. Ordinary output is incremental; unchanged summaries are suppressed, changed cumulative summaries replace earlier ones. Node.js modules and \`require\`/\`import\` are NOT available; use enabled globals for shell, file, network, or external actions.` +
     apiGuidance +
     mcpGuidance +
     swarmGuidance +
     nodesGuidance +
     skillsGuidance +
-    ' The `language` field accepts only "javascript" or "typescript"; do not pass "bash", "shell", or other values.' +
-    " The `code` field contains JavaScript or TypeScript, never a shell command. " +
-    "For shell or file operations, call an enabled global from guest JavaScript; do not retry failed shell source." +
+    ' `language` must be "javascript" or "typescript"; `code` is JS/TS, never a shell command; do not retry failed shell source.' +
     (namespacePrompt ? `\n\n${namespacePrompt}` : "") +
     (catalogIndex ? `\n\n${catalogIndex}` : "")
   );

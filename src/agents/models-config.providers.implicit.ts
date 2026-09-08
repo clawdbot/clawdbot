@@ -381,7 +381,10 @@ async function runProviderCatalogWithTimeout(
     if (!active) {
       return undefined;
     }
-    const result = await runProviderCatalog(prepared);
+    const result = await runProviderCatalog({ ...prepared, isActive: catalogParams.isActive });
+    if (!active) {
+      return undefined;
+    }
     return prepared.finalizeCatalogResult ? prepared.finalizeCatalogResult(result) : result;
   };
   try {

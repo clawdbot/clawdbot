@@ -105,6 +105,16 @@ gateway stops accepting new work, then waits for active agent turns and
 background tasks to finish, up to a drain budget (5 minutes by default). Most
 restarts therefore interrupt nothing at all.
 
+On Linux, the systemd unit must use `KillMode=mixed` so the initial stop signal
+reaches only the Gateway. Systemd still kills remaining child processes when the
+Gateway exits or its stop deadline expires. Older `KillMode=control-group` units
+signal child runtimes immediately, which can interrupt a turn before drain finishes.
+After upgrading, run `openclaw gateway install --force` for the same profile to
+rewrite and restart the managed unit. Ordinary updates leave existing Linux
+service definitions unchanged. Doctor reports incompatible effective settings;
+operator-owned drop-ins must be inspected and updated separately because reinstalling
+the base unit preserves them. See [Linux services](/platforms/linux).
+
 Replies to pending node commands remain accepted during the drain, including
 worker cleanup started by shutdown. Each reply must still match its live
 invocation, node connection, pairing generation, and owning lifecycle. This

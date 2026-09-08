@@ -22,6 +22,7 @@ import type {
   DeleteSessionEntryLifecycleParams,
   DeleteSessionEntryLifecycleResult,
   SessionLifecycleArchivedTranscript,
+  SqliteSessionReclamationDiagnostics,
 } from "./session-accessor.sqlite-contract.js";
 import { runSqliteSessionDeletionTransaction } from "./session-accessor.sqlite-deletion.js";
 import {
@@ -41,6 +42,7 @@ import {
 import type { SessionEntryRemovalPlan } from "./session-accessor.sqlite-lifecycle-types.js";
 import { deleteSessionDeliveryArtifacts } from "./session-accessor.sqlite-node-artifacts.js";
 import { withSqliteReclamationAuthorization } from "./session-accessor.sqlite-reclamation-commit.js";
+import { isRecentHistoricalSessionId } from "./session-accessor.sqlite-references.js";
 import { cloneSessionEntry, getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
@@ -74,6 +76,7 @@ export type SqliteSessionReclamationPlan =
       kind: "lifecycle-artifacts";
     })
   | (SessionReclamationPlanBase & {
+      diskBudget: { preserveRecentMs?: number | null };
       kind: "history-eviction";
       protectedSessionIds: string[];
       sessionId: string;
@@ -290,6 +293,9 @@ export function reclaimSqliteSessionInTransaction(
 
   const value = runOpenClawAgentWriteTransaction((transactionDb) => {
     callbacks.beforeMutation?.();
+    const protectedSessionIds = new Set(plan.protectedSessionIds);
+    const diskBudget = plan.kind === "history-eviction" ? plan.diskBudget : undefined;
+    let excludedSessionKeys: ReadonlySet<string> | undefined;
     if (plan.kind === "historical-generation") {
       const snapshot = readLifecycleTargetSnapshot(transactionDb, plan.deleteParams.target);
       if (
@@ -302,11 +308,29 @@ export function reclaimSqliteSessionInTransaction(
       ) {
         return { archivedTranscripts: [], deleted: false, expectedEntryMismatch: true as const };
       }
+      // Explicit deletion excludes its validated owner; automatic pressure does not.
+      excludedSessionKeys = new Set([
+        plan.deleteParams.target.canonicalKey,
+        ...plan.deleteParams.target.storeKeys,
+        ...snapshot.map((row) => row.sessionKey),
+      ]);
+    } else if (
+      // Node activity can change after the parent dispatches the Worker.
+      isRecentHistoricalSessionId({
+        database: transactionDb,
+        ...plan.diskBudget,
+        sessionId: plan.sessionId,
+      })
+    ) {
+      protectedSessionIds.add(plan.sessionId);
     }
     const archivedTranscripts = deleteMaterializedSessionStatePlans(
       transactionDb,
       plan.materializedPlans,
-      new Set(plan.protectedSessionIds),
+      protectedSessionIds,
+      excludedSessionKeys,
+      undefined,
+      diskBudget,
     );
     const db = getSessionKysely(transactionDb.db);
     const deleted =
@@ -366,11 +390,15 @@ function prepareReclamationWorkerTransferList(plan: SqliteSessionReclamationPlan
 }
 
 export async function runSqliteSessionReclamation(params: {
+  diagnostics?: SqliteSessionReclamationDiagnostics;
   assertCommitAllowed?: () => void;
   forceInProcess: boolean;
   onInProcessCommit?: (database: OpenClawAgentDatabase) => void;
   plan: SqliteSessionReclamationPlan;
 }): Promise<SqliteSessionReclamationResult> {
+  if (params.diagnostics) {
+    params.diagnostics.kind = params.plan.kind;
+  }
   if (
     params.forceInProcess ||
     isIncognitoOpenClawAgentSqlitePath(params.plan.databaseOptions.path, {
@@ -390,6 +418,7 @@ export async function runSqliteSessionReclamation(params: {
   const recoveredCommitErrors: unknown[] = [];
   const runWorker = (authorize: () => unknown[]) =>
     runSqliteTranscriptArchiveWorkerOperation<SqliteSessionReclamationWorkerResult>({
+      diagnostics: params.diagnostics,
       expectedMessageType: "reclaimed",
       onCommitRequest: () => recoveredCommitErrors.push(...authorize()),
       transferList: prepareReclamationWorkerTransferList(params.plan),
@@ -471,12 +500,14 @@ export function createLifecycleArtifactReclamationPlan(params: {
 
 export function createHistoryEvictionReclamationPlan(params: {
   databaseOptions: OpenClawAgentDatabaseOptions;
+  diskBudget: { preserveRecentMs?: number | null };
   materializedPlans: MaterializedSessionStateDeletePlan[];
   protectedSessionIds: ReadonlySet<string>;
   sessionId: string;
 }): Extract<SqliteSessionReclamationPlan, { kind: "history-eviction" }> {
   return {
     databaseOptions: toWorkerDatabaseOptions(params.databaseOptions),
+    diskBudget: params.diskBudget,
     kind: "history-eviction",
     materializedPlans: params.materializedPlans,
     protectedSessionIds: [...params.protectedSessionIds],

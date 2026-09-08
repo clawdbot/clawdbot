@@ -178,7 +178,7 @@ describe("Code Mode worker lifecycle", () => {
     expect(result).toMatchObject({ status: "failed", error: "Error: prelude failure" });
   });
 
-  it("transfers snapshot heaps across resumes without storage codec copies", async () => {
+  it("transfers snapshot heaps and releases consumed copies across resumes", async () => {
     const tempDirs = useAutoCleanupTempDirTracker(onTestFinished);
     const dir = tempDirs.make("code-mode-snapshot-transfer-");
     const workerPath = path.join(dir, "snapshot-worker.ts");
@@ -189,8 +189,46 @@ describe("Code Mode worker lifecycle", () => {
     await writeFile(
       workerPath,
       `
+      import assert from "node:assert/strict";
+      import { setImmediate } from "node:timers/promises";
+      import { setFlagsFromString } from "node:v8";
+      import { runInNewContext } from "node:vm";
       import { parentPort } from "node:worker_threads";
       const { QuickJS } = await import(${JSON.stringify(quickJsUrl.href)});
+      setFlagsFromString("--expose-gc");
+      const gc = runInNewContext("gc");
+      let consumed;
+      let settlements = [];
+      parentPort.on("message", ({ input }) => {
+        if (input.kind === "resume") {
+          settlements = input.settledRequests.map(({ value }) => new WeakRef(value));
+        }
+      });
+      const restore = QuickJS.restore;
+      QuickJS.restore = async (snapshot, options) => {
+        consumed = {
+          memory: new WeakRef(snapshot.memory.buffer),
+          bytes: snapshot.memory.buffer.byteLength,
+          control: new WeakRef(new ArrayBuffer(1)),
+        };
+        const vm = await restore(snapshot, options);
+        // End the WeakRef creation job before production resumes and releases its input.
+        await setImmediate();
+        return vm;
+      };
+      const executePendingJobs = QuickJS.prototype.executePendingJobs;
+      QuickJS.prototype.executePendingJobs = function (...args) {
+        if (consumed) {
+          gc();
+          assert.equal(consumed.control.deref(), undefined, "unowned buffer must collect");
+          assert.equal(consumed.memory.deref()?.byteLength ?? 0, 0,
+            "resumed VM retained its consumed " + consumed.bytes + " byte snapshot");
+          assert.ok(settlements.every((reference) => reference.deref() === undefined),
+            "resumed VM retained delivered settlement values");
+          consumed = undefined;
+        }
+        return executePendingJobs.apply(this, args);
+      };
       const serialize = QuickJS.serializeSnapshot;
       QuickJS.serializeSnapshot = (snapshot) => {
         if (snapshot.memory.byteLength > 0) throw new Error("snapshot heap serialization copies memory");
@@ -215,16 +253,22 @@ describe("Code Mode worker lifecycle", () => {
         kind: "exec",
         source: `const bytes = new Uint8Array(1024 * 1024);
           bytes[0] = 7;
+          const sibling = new Promise(resolve => setTimeout(() => {
+            bytes[bytes.length - 1] += 2;
+            resolve("sibling");
+          }, 1));
           await yield_control();
-          bytes[bytes.length - 1] = bytes[0] + 2;
+          bytes[bytes.length - 1] = bytes[0];
           await yield_control();
-          return [bytes.length, bytes[0], bytes[bytes.length - 1]];`,
+          const siblingValue = await sibling;
+          return [bytes.length, bytes[0], bytes[bytes.length - 1], siblingValue];`,
         config,
         catalog: [],
       },
       10_000,
       workerUrl,
     );
+    let siblingId: string | undefined;
     for (let leg = 0; leg < 2; leg++) {
       expect(result, result.status === "failed" ? result.error : undefined).toMatchObject({
         status: "waiting",
@@ -233,12 +277,23 @@ describe("Code Mode worker lifecycle", () => {
         throw new Error("expected a suspended guest");
       }
       const memory = result.snapshot.memory.buffer;
+      const siblingRequests = result.pendingRequests.filter(({ method }) => method === "sleep");
+      expect(siblingRequests).toHaveLength(1);
+      if (leg === 0) {
+        siblingId = siblingRequests[0]?.id;
+      } else {
+        expect(siblingRequests[0]?.id).toBe(siblingId);
+      }
+      const pendingRequests = leg === 0 ? siblingRequests : [];
       result = await runCodeModeWorker(
         {
           kind: "resume",
           snapshot: result.snapshot,
           config,
-          settledRequests: result.pendingRequests.map(({ id }) => ({ id, ok: true, value: null })),
+          pendingRequests,
+          settledRequests: result.pendingRequests
+            .filter((request) => !pendingRequests.includes(request))
+            .map(({ id }) => ({ id, ok: true, value: { leg } })),
         },
         10_000,
         workerUrl,
@@ -247,7 +302,7 @@ describe("Code Mode worker lifecycle", () => {
     }
     expect(result).toMatchObject({
       status: "completed",
-      value: { kind: "complete", json: "[1048576,7,9]" },
+      value: { kind: "complete", json: '[1048576,7,9,"sibling"]' },
     });
   });
 

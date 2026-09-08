@@ -13,25 +13,147 @@ export async function dispatchOpenAiTalkEvent(page: Page, event: unknown) {
   }, event);
 }
 
-export async function installOpenAiTalkFixture(page: Page) {
-  await page.addInitScript(() => {
-    const getUserMedia = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
-    Object.defineProperty(navigator.mediaDevices, "getUserMedia", {
-      configurable: true,
-      value: async (constraints: MediaStreamConstraints) => {
-        const stream = await getUserMedia(constraints);
-        (
-          window as Window & {
-            openclawVideoTalkTracks?: MediaStreamTrack[];
-          }
-        ).openclawVideoTalkTracks = [
-          ...((window as Window & { openclawVideoTalkTracks?: MediaStreamTrack[] })
-            .openclawVideoTalkTracks ?? []),
-          ...stream.getTracks(),
-        ];
+type TalkMediaFixtureProfile = "talk" | "video-native" | "video-blocked";
+
+function installTalkMediaBrowserFixture(profile: TalkMediaFixtureProfile) {
+  type InputProcessor = {
+    onaudioprocess:
+      | ((event: { inputBuffer: { getChannelData: () => Float32Array } }) => void)
+      | null;
+  };
+  const state = {
+    audioContextsClosed: 0,
+    tracksStopped: 0,
+    constraints: [] as unknown[],
+    inputProcessor: null as InputProcessor | null,
+    meterLevel: 0,
+  };
+  const nativeGetUserMedia = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+  const trackWindow = window as Window & { openclawVideoTalkTracks?: MediaStreamTrack[] };
+  const recordTracks = (stream: MediaStream) => {
+    trackWindow.openclawVideoTalkTracks = [
+      ...(trackWindow.openclawVideoTalkTracks ?? []),
+      ...stream.getTracks(),
+    ];
+  };
+
+  class FakeAudioTrack extends EventTarget {
+    readonly kind = "audio";
+    enabled = true;
+    readonly muted = false;
+    readyState: MediaStreamTrackState = "live";
+
+    stop() {
+      if (this.readyState === "ended") {
+        return;
+      }
+      this.readyState = "ended";
+      state.tracksStopped += 1;
+    }
+  }
+
+  const createAudioStream = () => {
+    const track = new FakeAudioTrack() as MediaStreamTrack;
+    return {
+      getTracks: () => [track],
+      getAudioTracks: () => [track],
+      getVideoTracks: () => [],
+    } as unknown as MediaStream;
+  };
+
+  Object.defineProperty(navigator.mediaDevices, "getUserMedia", {
+    configurable: true,
+    value: async (constraints: MediaStreamConstraints) => {
+      state.constraints.push(constraints);
+      if (constraints.video) {
+        if (profile === "video-blocked") {
+          throw new DOMException("Permission denied", "NotAllowedError");
+        }
+        const stream = await nativeGetUserMedia(constraints);
+        recordTracks(stream);
         return stream;
-      },
+      }
+      if (constraints.audio) {
+        const stream = createAudioStream();
+        recordTracks(stream);
+        return stream;
+      }
+      return nativeGetUserMedia(constraints);
+    },
+  });
+  if (profile === "talk") {
+    Object.defineProperty(navigator.mediaDevices, "enumerateDevices", {
+      configurable: true,
+      value: async () => [
+        { kind: "audioinput", deviceId: "built-in", label: "Built-in Microphone" },
+        { kind: "audioinput", deviceId: "usb", label: "USB Audio Interface" },
+        { kind: "videoinput", deviceId: "camera", label: "Camera" },
+      ],
     });
+  }
+
+  class MockAudioContext {
+    readonly currentTime = 0;
+    readonly destination = {};
+    readonly sampleRate: number;
+
+    constructor(options?: { sampleRate?: number }) {
+      this.sampleRate = options?.sampleRate ?? 24_000;
+    }
+
+    createMediaStreamSource() {
+      return { connect() {}, disconnect() {} };
+    }
+
+    createAnalyser() {
+      return {
+        fftSize: 0,
+        smoothingTimeConstant: 0,
+        disconnect() {},
+        getFloatTimeDomainData(samples: Float32Array) {
+          samples.fill(state.meterLevel);
+        },
+      };
+    }
+
+    createScriptProcessor() {
+      const processor = { connect() {}, disconnect() {}, onaudioprocess: null };
+      state.inputProcessor = processor;
+      return processor;
+    }
+
+    createGain() {
+      return { gain: { value: 1 }, connect() {}, disconnect() {} };
+    }
+
+    async close() {
+      state.audioContextsClosed += 1;
+    }
+  }
+
+  Object.defineProperty(window, "AudioContext", {
+    configurable: true,
+    value: MockAudioContext,
+  });
+  Object.defineProperty(window, "openclawTalkE2eState", {
+    configurable: true,
+    value: state,
+  });
+}
+
+export async function installVideoTalkMediaFixture(
+  page: Page,
+  options: { camera: "native" | "blocked" },
+) {
+  await page.addInitScript<TalkMediaFixtureProfile>(
+    installTalkMediaBrowserFixture,
+    `video-${options.camera}` satisfies TalkMediaFixtureProfile,
+  );
+}
+
+export async function installOpenAiTalkFixture(page: Page) {
+  await installVideoTalkMediaFixture(page, { camera: "native" });
+  await page.addInitScript(() => {
     class FakeDataChannel extends EventTarget {
       readyState = "open";
       sent: unknown[] = [];
@@ -232,86 +354,7 @@ export function videoTalkCatalog(activeProvider: "google" | "openai") {
 }
 
 export async function installTalkBrowserFixtures(page: Page) {
-  await page.addInitScript(() => {
-    type InputProcessor = {
-      onaudioprocess:
-        | ((event: { inputBuffer: { getChannelData: () => Float32Array } }) => void)
-        | null;
-    };
-    const state = {
-      audioContextsClosed: 0,
-      tracksStopped: 0,
-      constraints: [] as unknown[],
-      inputProcessor: null as InputProcessor | null,
-      meterLevel: 0,
-    };
-    const track = Object.assign(new EventTarget(), { stop: () => (state.tracksStopped += 1) });
-    Object.defineProperty(navigator, "mediaDevices", {
-      configurable: true,
-      value: {
-        enumerateDevices: async () => [
-          { kind: "audioinput", deviceId: "built-in", label: "Built-in Microphone" },
-          { kind: "audioinput", deviceId: "usb", label: "USB Audio Interface" },
-          { kind: "videoinput", deviceId: "camera", label: "Camera" },
-        ],
-        getUserMedia: async (constraints: unknown) => {
-          state.constraints.push(constraints);
-          return {
-            getAudioTracks: () => [track],
-            getTracks: () => [track],
-          };
-        },
-      },
-    });
-
-    class MockAudioContext {
-      readonly currentTime = 0;
-      readonly destination = {};
-      readonly sampleRate: number;
-
-      constructor(options?: { sampleRate?: number }) {
-        this.sampleRate = options?.sampleRate ?? 24_000;
-      }
-
-      createMediaStreamSource() {
-        return { connect() {}, disconnect() {} };
-      }
-
-      createGain() {
-        return { connect() {}, disconnect() {}, gain: { value: 1 } };
-      }
-
-      createScriptProcessor() {
-        const processor = { connect() {}, disconnect() {}, onaudioprocess: null };
-        state.inputProcessor = processor;
-        return processor;
-      }
-
-      createAnalyser() {
-        return {
-          fftSize: 0,
-          smoothingTimeConstant: 0,
-          disconnect() {},
-          getFloatTimeDomainData(samples: Float32Array) {
-            samples.fill(state.meterLevel);
-          },
-        };
-      }
-
-      async close() {
-        state.audioContextsClosed += 1;
-      }
-    }
-
-    Object.defineProperty(window, "AudioContext", {
-      configurable: true,
-      value: MockAudioContext,
-    });
-    Object.defineProperty(window, "openclawTalkE2eState", {
-      configurable: true,
-      value: state,
-    });
-  });
+  await page.addInitScript<TalkMediaFixtureProfile>(installTalkMediaBrowserFixture, "talk");
 }
 
 async function installWebRtcSdpResponseFixture(page: Page, fixture: WebRtcSdpResponseFixture) {
@@ -471,33 +514,6 @@ export async function installBlockedMicrophoneFixture(page: Page) {
           throw new DOMException("Permission denied", "NotAllowedError");
         },
       },
-    });
-  });
-}
-
-export async function installBlockedVideoTalkFixture(page: Page) {
-  await page.addInitScript(() => {
-    const getUserMedia = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
-    Object.defineProperty(navigator, "mediaDevices", {
-      configurable: true,
-      value: {
-        getUserMedia: async (constraints: MediaStreamConstraints) => {
-          if (constraints.video) {
-            throw new DOMException("Permission denied", "NotAllowedError");
-          }
-          return getUserMedia(constraints);
-        },
-      },
-    });
-    class FakePeerConnection extends EventTarget {
-      connectionState = "new";
-      close() {
-        this.connectionState = "closed";
-      }
-    }
-    Object.defineProperty(window, "RTCPeerConnection", {
-      configurable: true,
-      value: FakePeerConnection,
     });
   });
 }

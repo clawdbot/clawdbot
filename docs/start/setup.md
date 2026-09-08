@@ -113,21 +113,25 @@ pnpm openclaw setup
 pnpm gateway:watch
 ```
 
-`gateway:watch` starts or restarts the Gateway watch process in a named tmux
-session (`openclaw-gateway-watch-main`) and auto-attaches from interactive
-terminals. Non-interactive shells stay detached and print
-`tmux attach -t openclaw-gateway-watch-main`; use
-`OPENCLAW_GATEWAY_WATCH_ATTACH=0 pnpm gateway:watch` to keep an interactive run
-detached, or `pnpm gateway:watch:raw` for foreground watch mode. The watcher
-stops the active profile's installed Gateway service before taking over its
-configured/default port, preventing the service supervisor from replacing the
-source process. The service stays installed; run `pnpm openclaw gateway start`
-when you finish watching. The tmux pane remains available after startup failure
-so another terminal or agent can attach or capture its logs. The watcher
-reloads on relevant source, config, and bundled-plugin metadata changes. If the
-watched Gateway exits during startup, `gateway:watch` runs
-`openclaw doctor --fix --non-interactive` once and retries; set
-`OPENCLAW_GATEWAY_WATCH_AUTO_DOCTOR=0` to disable that dev-only repair pass.
+What `gateway:watch` does:
+
+- It starts or restarts the Gateway watch process in a named tmux session,
+  `openclaw-gateway-watch-main`, and auto-attaches from interactive terminals.
+- Non-interactive shells stay detached and print
+  `tmux attach -t openclaw-gateway-watch-main`. Run
+  `OPENCLAW_GATEWAY_WATCH_ATTACH=0 pnpm gateway:watch` to keep an interactive
+  run detached, or `pnpm gateway:watch:raw` for foreground watch mode.
+- It stops the active profile's installed Gateway service before it takes over
+  that service's configured or default port. This prevents the service
+  supervisor from replacing the source process. The service stays installed.
+  Run `pnpm openclaw gateway start` when you finish watching.
+- The tmux pane remains available after a startup failure, so another terminal
+  or agent can attach to it or capture its logs.
+- It reloads on relevant source, config, and bundled-plugin metadata changes.
+- If the watched Gateway exits during startup, `gateway:watch` runs
+  `openclaw doctor --fix --non-interactive` once and retries. Set
+  `OPENCLAW_GATEWAY_WATCH_AUTO_DOCTOR=0` to disable that dev-only repair pass.
+
 TypeScript rebuilds triggered by `pnpm openclaw ...` or `pnpm gateway:watch` preserve existing `dist/control-ui` assets. When the Gateway starts, it rebuilds missing, incomplete, or stale bundled UI assets before serving them. Headless commands do not rebuild the UI. Run `pnpm ui:build` after `ui/` changes, or use `pnpm ui:dev` while developing the Control UI.
 
 ### 2) Point the macOS app at your running Gateway

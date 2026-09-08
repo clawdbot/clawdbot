@@ -107,7 +107,7 @@ fn is_active_onboarding_url(url: &Url) -> bool {
         .find(|(key, _)| key == query_key)
         .is_some_and(|(_, value)| {
             if query_key == "firstRun" {
-                return value == "1";
+                return value == "1" || value == "explicit";
             }
             matches!(
                 value.trim().to_ascii_lowercase().as_str(),
@@ -344,11 +344,20 @@ impl NavigationState {
             Url::parse(target).map_err(|_| "Dashboard returned an invalid URL.".to_string())?;
         if self.onboarding_pending {
             // Setup owns inference before chat; preserve Gateway base paths and fragment auth.
+            // Saved first-run links may use either marker; new links use explicit.
             url.path_segments_mut()
                 .map_err(|_| "Dashboard returned an invalid URL.".to_string())?
                 .pop_if_empty()
                 .extend(["settings", "model-setup"]);
-            url.query_pairs_mut().append_pair("firstRun", "1");
+            let existing_query = url
+                .query_pairs()
+                .filter(|(key, _)| key != "firstRun")
+                .map(|(key, value)| (key.into_owned(), value.into_owned()))
+                .collect::<Vec<_>>();
+            url.query_pairs_mut()
+                .clear()
+                .extend_pairs(existing_query)
+                .append_pair("firstRun", "explicit");
             self.onboarding_pending = false;
         }
         Ok(url)
@@ -1028,6 +1037,10 @@ mod navigation_tests {
         for (url, preserve) in [
             ("http://127.0.0.1/settings/model-setup?firstRun=1", true),
             (
+                "http://127.0.0.1/settings/model-setup?firstRun=explicit",
+                true,
+            ),
+            (
                 "http://127.0.0.1/openclaw/settings/model-setup/?tab=ai&firstRun=1#token=redacted",
                 true,
             ),
@@ -1120,11 +1133,13 @@ mod navigation_tests {
         navigation.mark_onboarding_pending();
 
         let url = navigation
-            .prepare_dashboard_url("http://127.0.0.1:18789/openclaw/?foo=bar#token=secret")
+            .prepare_dashboard_url(
+                "http://127.0.0.1:18789/openclaw/?foo=bar&firstRun=1#token=secret",
+            )
             .expect("dashboard URL");
 
         assert_eq!(url.path(), "/openclaw/settings/model-setup");
-        assert_eq!(url.query(), Some("foo=bar&firstRun=1"));
+        assert_eq!(url.query(), Some("foo=bar&firstRun=explicit"));
         assert_eq!(url.fragment(), Some("token=secret"));
     }
 
@@ -1141,7 +1156,7 @@ mod navigation_tests {
             .expect("second dashboard URL");
 
         assert_eq!(first.path(), "/settings/model-setup");
-        assert_eq!(first.query(), Some("firstRun=1"));
+        assert_eq!(first.query(), Some("firstRun=explicit"));
         assert!(is_active_onboarding_url(&first));
         assert_eq!(second.path(), "/");
         assert_eq!(second.query(), None);

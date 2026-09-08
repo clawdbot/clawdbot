@@ -83,8 +83,13 @@ import {
 import { getPreparedReplyDispatchRuntime } from "./prepared-reply-dispatch-context.js";
 import { attachProgressNarratorToReplyOptions } from "./progress-narrator.js";
 import { prepareReplyConversation } from "./prompt-session-context.js";
+import {
+  recordReplyPreRunRejection,
+  resolveReplyOperationRunState,
+} from "./reply-operation-run-state.js";
 import { createReplyTimingTracker, isReplyProfilerEnabled } from "./reply-timing-tracker.js";
 import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
+import { SessionResetCleanupError } from "./session-reset-cleanup.js";
 import { initSessionState, resolveReplySessionPreprocessingState } from "./session.js";
 import { mergeSkillFilters } from "./skill-filter.js";
 import { stageRemoteInboundMediaIfNeeded } from "./stage-remote-inbound-media.js";
@@ -632,8 +637,14 @@ export async function getReplyFromConfig(
           }),
         );
   } catch (error) {
-    if (error instanceof ModelSelectionLockedError) {
+    if (error instanceof ModelSelectionLockedError || error instanceof SessionResetCleanupError) {
       typing.cleanup();
+      recordReplyPreRunRejection(
+        resolveReplyOperationRunState(opts),
+        error instanceof SessionResetCleanupError
+          ? "session-directive-rejected"
+          : "model-selection-locked",
+      );
       return { text: error.message };
     }
     throw error;
@@ -776,6 +787,7 @@ export async function getReplyFromConfig(
     } catch (error) {
       if (error instanceof ModelSelectionLockedError) {
         typing.cleanup();
+        recordReplyPreRunRejection(resolveReplyOperationRunState(opts), "model-selection-locked");
         return { text: error.message };
       }
       if (!isSessionWorkStartInvalidatedError(error)) {
@@ -1105,6 +1117,9 @@ export async function getReplyFromConfig(
         throw error;
       }
       typing.cleanup();
+      if (error instanceof ModelSelectionLockedError) {
+        recordReplyPreRunRejection(resolveReplyOperationRunState(opts), "model-selection-locked");
+      }
       return { text: error.message };
     }
     const thinkingLevelOverride = normalizeThinkLevel(resolvedOpts?.thinkingLevelOverride);

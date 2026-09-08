@@ -707,7 +707,12 @@ extension OpenClawChatViewModel {
                 continue
             }
 
-            let insertIndex = reconciled.firstIndex { existing in
+            // Reconciled IDs retain known transcript predecessors. Clock skew must
+            // not move an echo before those anchors and out of the next refresh's tail.
+            let precedingMessageIDs = Set(previous.prefix { $0.id != message.id }.map(\.id))
+            let insertionStart = reconciled.lastIndex(where: { precedingMessageIDs.contains($0.id) })
+                .map { reconciled.index(after: $0) } ?? reconciled.startIndex
+            let insertIndex = reconciled[insertionStart...].firstIndex { existing in
                 guard let existingTimestamp = existing.timestamp else { return false }
                 return existingTimestamp > messageTimestamp
             } ?? reconciled.endIndex

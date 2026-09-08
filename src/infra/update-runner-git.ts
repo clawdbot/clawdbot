@@ -197,6 +197,10 @@ export async function updateGitCheckout(params: {
         "-fd",
         "-e",
         "dist/control-ui/",
+        ...(runtimePromotion?.sourceTreeStagingPaths.flatMap((relative) => [
+          "-e",
+          `/${relative}/`,
+        ]) ?? []),
       ])) && restored;
     if (branch && branch !== "HEAD") {
       const checkedOut = await appendRecoveryStep("git rollback checkout", [
@@ -300,7 +304,10 @@ export async function updateGitCheckout(params: {
       cwd: gitRoot,
       timeoutMs,
     });
-    const currentStatus = await runCommand(gitCleanCheckArgs(gitRoot), { cwd: gitRoot, timeoutMs });
+    const currentStatus = await runCommand(
+      gitCleanCheckArgs(gitRoot, runtimePromotion?.sourceTreeStagingPaths),
+      { cwd: gitRoot, timeoutMs },
+    );
     if (currentHead.code !== 0 || currentStatus.code !== 0) {
       return { status: "error" as const, reason: "clean-check-failed" as const };
     }

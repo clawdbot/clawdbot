@@ -112,6 +112,15 @@ export function readSessionProgressCard(
   });
 }
 
+/** Retain revision tombstones, but keep never-used lazy storage dormant during reset. */
+export function clearSessionProgressCardForReset(db: DatabaseSync, sessionKey: string): boolean {
+  if (!progressCardTablePresent(db) || !selectProgressCard(db, sessionKey)) {
+    return false;
+  }
+  writeSessionProgressCard(db, sessionKey, {});
+  return true;
+}
+
 export function writeSessionProgressCard(
   dbPathOrDb: ProgressCardDatabaseInput,
   sessionKey: string,

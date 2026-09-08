@@ -5,7 +5,7 @@ import {
   loadTranscriptEventsSync,
   upsertSessionEntryCore,
 } from "../../../config/sessions/session-accessor.js";
-import type { Context, ImageContent } from "../../../llm/types.js";
+import type { Context, ImageContent, Model } from "../../../llm/types.js";
 import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
@@ -19,12 +19,18 @@ import {
   createTestSession,
   registerAgentSessionLoopTestLifecycle,
   streamMocks,
+  testModel,
 } from "../../sessions/agent-session-loop-correctness.test-support.js";
 import {
   createCompactionHandlers,
   createResourceLoader,
 } from "../../sessions/agent-session-loop-resource-loader.test-support.js";
 import { agentSessionQueuePromptContext } from "../../sessions/agent-session-prompting.js";
+import {
+  createCompactionRequestBudget,
+  estimateCompactedRequestTokens,
+  withCompactionQueuedContext,
+} from "../../sessions/compaction/request-budget.js";
 import { SessionManager } from "../../sessions/session-manager.js";
 import { SettingsManager } from "../../sessions/settings-manager.js";
 import {
@@ -109,6 +115,202 @@ afterEach(() => {
 });
 
 describe("submitEmbeddedAttemptPrompt", () => {
+  it("replaces queued context without charging it twice or changing user overlap credit", () => {
+    const user = {
+      role: "user" as const,
+      content: "Recorded user material. ".repeat(100),
+      timestamp: 1,
+      idempotencyKey: "current:user",
+    };
+    const transient = buildRuntimeContextCustomMessage("Live transient context. ".repeat(100));
+    const queued = {
+      role: "custom" as const,
+      customType: "test.queued",
+      content: "Queued context. ".repeat(100),
+      display: false,
+      timestamp: 1,
+    };
+    if (!transient) {
+      throw new Error("Expected transient context");
+    }
+    const inputs = {
+      contextWindow: 32_768,
+      reserveTokens: 8_192,
+      systemPrompt: "Prepared system",
+      pendingPrompt: "Additional instructions.\n\nhello",
+      pendingAdditivePrompt: "Additional instructions.",
+      pendingImageCount: 1,
+      pendingUserIdempotencyKey: user.idempotencyKey,
+      pendingContextMessages: [transient],
+    };
+    const prepared = createCompactionRequestBudget({
+      ...inputs,
+      pendingQueuedContextMessages: [queued],
+    });
+    const unchanged = withCompactionQueuedContext(prepared, [queued]);
+    expect(estimateCompactedRequestTokens([user], unchanged)).toBe(
+      estimateCompactedRequestTokens([user], prepared),
+    );
+    const extra = { ...queued, content: "Additional queued facts." };
+    const expanded = withCompactionQueuedContext(prepared, [queued, extra]);
+    const rebuilt = createCompactionRequestBudget({
+      ...inputs,
+      pendingQueuedContextMessages: [queued, extra],
+    });
+    expect(estimateCompactedRequestTokens([user], expanded)).toBe(
+      estimateCompactedRequestTokens([user], rebuilt),
+    );
+    const removed = withCompactionQueuedContext(prepared, []);
+    const withoutQueue = createCompactionRequestBudget(inputs);
+    expect(estimateCompactedRequestTokens([user], removed)).toBe(
+      estimateCompactedRequestTokens([user], withoutQueue),
+    );
+    expect(removed.pendingUserTokens).toBe(prepared.pendingUserTokens);
+    const userOnly = createCompactionRequestBudget({
+      contextWindow: 32_768,
+      reserveTokens: 8_192,
+      pendingPrompt: "hello",
+      pendingUserIdempotencyKey: user.idempotencyKey,
+    });
+    const added = withCompactionQueuedContext(userOnly, [queued]);
+    expect(added.pendingUserTokens).toBe(userOnly.pendingTokens);
+    expect(added.pendingTokens).toBeGreaterThan(userOnly.pendingTokens);
+  });
+
+  it.each([false, true])(
+    "fits pre-prompt compaction around prepared model context (runtimeOnly=%s)",
+    async (runtimeOnly) => {
+      const model = { ...testModel, contextWindow: 4_096, maxTokens: 1_024 };
+      const settingsManager = SettingsManager.inMemory({
+        compaction: { enabled: true, reserveTokens: 1_024, keepRecentTokens: 20_000 },
+        retry: { enabled: false },
+      });
+      const systemPrompt = "Preserve the project requirements.";
+      const sessionManager = SessionManager.inMemory();
+      sessionManager.appendMessage({
+        role: "user",
+        content: "Earlier archive decision: blue buttons. ".repeat(270),
+        timestamp: 1,
+      });
+      sessionManager.appendMessage(
+        createAssistant(model, [{ type: "text", text: "Archived the decision." }]),
+      );
+      sessionManager.appendMessage({
+        role: "user",
+        content: "Current project detail. ".repeat(140),
+        timestamp: 3,
+      });
+      const priorInputTokens = Math.ceil(
+        JSON.stringify({
+          system: systemPrompt,
+          messages: sessionManager.buildSessionContext().messages,
+        }).length / 4,
+      );
+      expect(priorInputTokens).toBeGreaterThan(3_072);
+      expect(priorInputTokens).toBeLessThan(model.contextWindow);
+      sessionManager.appendMessage(
+        createAssistant(
+          model,
+          [{ type: "text", text: "Details recorded." }],
+          "stop",
+          priorInputTokens,
+        ),
+      );
+      const { session } = await createTestSession({
+        model,
+        settingsManager,
+        sessionManager,
+        resourceLoader: { ...createResourceLoader(), getSystemPrompt: () => systemPrompt },
+      });
+      const transcriptPrompt = "Answer the new request with ACK.";
+      const prependContext = "Prepared hook context. ".repeat(210);
+      const appendContext = "End of prepared hook context.";
+      const runtimeContextMessage = runtimeOnly
+        ? undefined
+        : buildRuntimeContextCustomMessage("Prepared runtime context.");
+      const pendingPrompt = [prependContext, transcriptPrompt, appendContext].join("\n\n");
+      const compactionRequestBudget = createCompactionRequestBudget({
+        contextWindow: model.contextWindow,
+        reserveTokens: settingsManager.getCompactionReserveTokens(),
+        systemPrompt,
+        tools: session.state.tools,
+        pendingPrompt,
+        pendingAdditivePrompt: [prependContext, appendContext].join("\n\n"),
+        pendingQueuedContextMessages: runtimeContextMessage ? [runtimeContextMessage] : [],
+      });
+      const requests: Array<{ text: string; tokens: number; committedBefore: number }> = [];
+      streamMocks.streamSimple.mockImplementation((activeModel: Model, context: Context) => {
+        const text =
+          context.messages
+            .filter((message) => message.role === "user")
+            .map((message) =>
+              typeof message.content === "string"
+                ? message.content
+                : message.content
+                    .map((block) => (block.type === "text" ? block.text : ""))
+                    .join(""),
+            )
+            .find((content) => content.includes(transcriptPrompt)) ?? "";
+        const tokens = Math.ceil(
+          JSON.stringify({
+            system: context.systemPrompt,
+            tools: context.tools,
+            messages: context.messages.map(({ role, content }) => ({ role, content })),
+          }).length / 4,
+        );
+        const foreground = !session.isCompacting;
+        if (foreground) {
+          requests.push({
+            text,
+            tokens,
+            committedBefore: sessionManager
+              .getEntries()
+              .filter((entry) => entry.type === "compaction").length,
+          });
+        }
+        return createAssistantResultStream(
+          createAssistant(
+            activeModel,
+            [
+              {
+                type: "text",
+                text: foreground
+                  ? "ACK"
+                  : "The project retains accessible blue buttons. ".repeat(220),
+              },
+            ],
+            "stop",
+            tokens,
+          ),
+        );
+      });
+      const submission = {
+        ...createBaseInput(),
+        activeSession: session,
+        contextTokenBudget: model.contextWindow,
+        compactionRequestBudget,
+        appendOnlyRuntimeContext: true,
+        runtimeOnly,
+        runtimeContextMessage,
+        systemPrompt,
+        transcriptPrompt,
+        modelPrompt: pendingPrompt,
+        prependContext,
+        appendContext,
+        promptActiveSession: (prompt: string, options: PromptOptions) =>
+          session.prompt(prompt, options),
+      };
+
+      await submitEmbeddedAttemptPrompt(submission);
+
+      expect(requests).toHaveLength(1);
+      expect(requests[0]?.text).toBe(pendingPrompt);
+      expect(requests[0]?.committedBefore).toBeGreaterThan(0);
+      expect(requests[0]?.tokens).toBeLessThanOrEqual(3_072);
+      expect(session.messages.at(-1)).toMatchObject({ content: [{ type: "text", text: "ACK" }] });
+    },
+  );
+
   it.each(["handled", "rejected"] as const)(
     "retires queued context when prompt preflight is %s",
     async (outcome) => {
@@ -143,6 +345,12 @@ describe("submitEmbeddedAttemptPrompt", () => {
           appendOnlyRuntimeContext: true,
           transcriptPrompt: text,
           modelPrompt: text,
+          compactionRequestBudget: createCompactionRequestBudget({
+            contextWindow: 32_768,
+            reserveTokens: 8_192,
+            systemPrompt: session.systemPrompt,
+            pendingPrompt: text,
+          }),
           runtimeContextMessage: buildRuntimeContextCustomMessage(`context for ${text}`),
           promptActiveSession: (prompt, options) => session.prompt(prompt, options),
         });

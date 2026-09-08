@@ -2020,27 +2020,33 @@ describe("resolveModel", () => {
     });
   });
 
-  it("marks a provider-level maxTokens override as configured", async () => {
-    mockDiscoveredGroqModel();
-    const cfg = makeProviderConfig("groq", {
-      baseUrl: "https://api.groq.com/openai/v1",
-      api: "openai-completions",
-      maxTokens: 2_048,
-    });
+  it.each([
+    { maxTokens: 2_048, expectedMaxTokens: 2_048 },
+    { maxTokens: 262_144, expectedMaxTokens: 131_072 },
+  ])(
+    "bounds provider maxTokens overrides by the discovered context window ($maxTokens)",
+    async ({ maxTokens, expectedMaxTokens }) => {
+      mockDiscoveredGroqModel();
+      const cfg = makeProviderConfig("groq", {
+        baseUrl: "https://api.groq.com/openai/v1",
+        api: "openai-completions",
+        maxTokens,
+      });
 
-    const result = await resolveModelForTest(
-      "groq",
-      "llama-3.3-70b-versatile",
-      state.agentDir(),
-      cfg,
-    );
-    const model = expectResolvedModel(result);
+      const result = await resolveModelForTest(
+        "groq",
+        "llama-3.3-70b-versatile",
+        state.agentDir(),
+        cfg,
+      );
 
-    expectRecordFields(model, {
-      maxTokens: 2_048,
-      maxTokensSource: "configured",
-    });
-  });
+      expectRecordFields(expectResolvedModel(result), {
+        contextWindow: 131_072,
+        maxTokens: expectedMaxTokens,
+        maxTokensSource: "configured",
+      });
+    },
+  );
 
   it("marks a configured-model top-level maxTokens override as configured", async () => {
     mockDiscoveredGroqModel();

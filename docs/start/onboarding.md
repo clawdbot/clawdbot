@@ -1,8 +1,9 @@
 ---
 summary: "First-run setup flow for OpenClaw (macOS app)"
 read_when:
-  - Designing the macOS onboarding assistant
-  - Implementing auth or identity setup
+  - Setting up the macOS app for the first time
+  - Choosing between a local and a remote Gateway during macOS setup
+  - Connecting an AI provider from the macOS app
 title: "Onboarding (macOS app)"
 sidebarTitle: "Onboarding: macOS App"
 ---
@@ -20,18 +21,27 @@ then return here for first-run setup.
 
 <Steps>
 <Step title="Approve macOS warning">
+The first time you open OpenClaw.app, macOS asks you to approve a downloaded
+app. Click **Open** to continue.
+
 <Frame>
-<img src="/assets/macos-onboarding/01-macos-warning.jpeg" alt="" />
+<img src="/assets/macos-onboarding/01-macos-warning.jpeg" alt="macOS dialog that asks whether to open the downloaded OpenClaw app" />
 </Frame>
 </Step>
 <Step title="Approve find local networks">
+macOS then asks whether OpenClaw may find devices on your local network.
+Click **Allow**. The app uses this to reach a Gateway on another machine.
+
 <Frame>
-<img src="/assets/macos-onboarding/02-local-networks.jpeg" alt="" />
+<img src="/assets/macos-onboarding/02-local-networks.jpeg" alt="macOS dialog that asks whether OpenClaw may find devices on the local network" />
 </Frame>
 </Step>
 <Step title="Welcome and security notice">
+The app opens on its welcome screen with the security notice. Read the notice,
+then continue when you accept the trust model below.
+
 <Frame caption="Read the security notice displayed and decide accordingly">
-<img src="/assets/macos-onboarding/03-security-notice.png" alt="" />
+<img src="/assets/macos-onboarding/03-security-notice.png" alt="OpenClaw welcome screen with the security notice" />
 </Frame>
 
 Security trust model:

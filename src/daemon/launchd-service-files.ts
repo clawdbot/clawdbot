@@ -20,7 +20,7 @@ import type { GatewayServiceEnv, GatewayServiceInstallArgs } from "./service-typ
 const LAUNCH_AGENT_DIR_MODE = 0o755;
 // launchd rejects user LaunchAgent plists without group/other read access on
 // current macOS. Secrets stay in the separate 0600 environment file.
-export const LAUNCH_AGENT_PLIST_MODE = 0o644;
+const LAUNCH_AGENT_PLIST_MODE = 0o644;
 const LAUNCH_AGENT_PRIVATE_DIR_MODE = 0o700;
 export const LAUNCH_AGENT_ENV_FILE_MODE = 0o600;
 export const LAUNCH_AGENT_ENV_WRAPPER_MODE = 0o700;

@@ -38,6 +38,7 @@ import {
   createGatewayControlUiReloadOptions,
   isSameOriginGateway,
 } from "./gateway-control-ui-reload.ts";
+import { createGatewayEventLog, notifyGatewayObservers } from "./gateway-observers.ts";
 import {
   loadGatewaySessionSelection,
   loadSettings,
@@ -64,25 +65,6 @@ function readSuspensionPhase(payload: unknown): ApplicationGatewaySnapshot["susp
     phase === "prepared"
     ? phase
     : undefined;
-}
-
-function notifyGatewayObservers<T>(
-  listeners: ReadonlySet<(value: T) => void>,
-  value: T,
-  errorLabel: string,
-  isCurrent?: (value: T) => boolean,
-): void {
-  // Snapshot membership because callbacks may mutate subscriptions or replace their owner.
-  for (const listener of Array.from(listeners)) {
-    if (isCurrent && !isCurrent(value)) {
-      return;
-    }
-    try {
-      listener(value);
-    } catch (error) {
-      console.error(`[gateway] ${errorLabel} handler error:`, error);
-    }
-  }
 }
 
 function sameSelfUser(
@@ -155,7 +137,16 @@ export function createApplicationGateway(
   const listeners = new Set<(next: ApplicationGatewaySnapshot) => void>();
   const eventListeners = new Set<GatewayEventListener>();
   const eventLogListeners = new Set<(events: readonly EventLogEntry[]) => void>();
-  let eventLog: EventLogEntry[] = [];
+  const eventLog = createGatewayEventLog();
+  const publishEventLogRetirement = (events: readonly EventLogEntry[]) => {
+    // Retirement remains valid after a reentrant stop or same-account client replacement.
+    notifyGatewayObservers(
+      eventLogListeners,
+      events,
+      "event",
+      (current) => current === eventLog.entries,
+    );
+  };
   const clearOfflineIndicatorTimer = () => {
     if (offlineIndicatorTimer !== null) {
       globalThis.clearTimeout(offlineIndicatorTimer);
@@ -345,13 +336,10 @@ export function createApplicationGateway(
         }
       }
     }
-    eventLog = [{ ts: Date.now(), event: event.event, payload: event.payload }, ...eventLog].slice(
-      0,
-      250,
-    );
+    const entries = eventLog.record(event);
     const ownsEventLog = (current: readonly EventLogEntry[]) =>
-      current === eventLog && isCurrentClient(eventClient);
-    notifyGatewayObservers(eventLogListeners, eventLog, "event", ownsEventLog);
+      current === eventLog.entries && isCurrentClient(eventClient);
+    notifyGatewayObservers(eventLogListeners, entries, "event", ownsEventLog);
   };
 
   const connect = (overrides: ApplicationGatewayConnectOptions = {}) => {
@@ -388,6 +376,7 @@ export function createApplicationGateway(
       nextConnection.password !== connection.password ||
       nextConnection.bootstrapToken !== connection.bootstrapToken ||
       nextConnection.bootstrapProfile !== connection.bootstrapProfile;
+    const retiredEventLog = credentialsChanged ? eventLog.resetConnection() : null;
     if (credentialsChanged) {
       connectionRevision += 1;
       void clearStoredChatSnapshots();
@@ -466,6 +455,13 @@ export function createApplicationGateway(
         }
         // A successful hello retires bootstrap; the client has processed any issued device grant.
         connection = { ...connection, bootstrapToken: "", bootstrapProfile: undefined };
+        const retiredAuthLog = eventLog.bindRecoveryScope(hello.auth?.recoveryScope);
+        if (retiredAuthLog) {
+          publishEventLogRetirement(retiredAuthLog);
+          if (!isCurrentClient(nextClient)) {
+            return;
+          }
+        }
         const exactBuildIdentityAvailable = Boolean(hello.server?.buildId?.trim());
         const controlUiBuildFresh = !(
           isSameOriginGateway(nextConnection.gatewayUrl) &&
@@ -660,6 +656,9 @@ export function createApplicationGateway(
       lastErrorCode: null,
       lastErrorAuthReason: null,
     });
+    if (retiredEventLog) {
+      publishEventLogRetirement(retiredEventLog);
+    }
     if (isCurrentClient(nextClient)) {
       nextClient.start();
     }
@@ -676,7 +675,10 @@ export function createApplicationGateway(
       return connectionRevision;
     },
     get eventLog() {
-      return eventLog;
+      return eventLog.entries;
+    },
+    get eventLogRevision() {
+      return eventLog.revision;
     },
     connect,
     setSessionKey: (sessionKey) => {

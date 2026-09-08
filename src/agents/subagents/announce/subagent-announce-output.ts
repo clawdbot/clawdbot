@@ -15,7 +15,7 @@ import { wrapPromptDataBlock } from "../../sanitize-for-prompt.js";
 import { extractStoredAssistantText } from "../../tools/chat-history-text.js";
 import { isAnnounceSkip } from "../../tools/sessions-send-tokens.js";
 import { resolveSubagentCompletionResultText } from "../completion/subagent-completion-result.js";
-import { compareSubagentRunGeneration } from "../registry/subagent-run-generation.js";
+import { recordLatestSubagentRun } from "../registry/subagent-run-generation.js";
 import { classifySubagentTerminalOutcome } from "../subagent-terminal-outcome.js";
 import {
   captureSubagentCompletionReplyUsing,
@@ -553,10 +553,7 @@ export function dedupeLatestChildCompletionRows(
 ) {
   const latestByChildSessionKey = new Map<string, (typeof children)[number]>();
   for (const child of children) {
-    const existing = latestByChildSessionKey.get(child.childSessionKey);
-    if (!existing || compareSubagentRunGeneration(child, existing) > 0) {
-      latestByChildSessionKey.set(child.childSessionKey, child);
-    }
+    recordLatestSubagentRun(latestByChildSessionKey, child.childSessionKey, child);
   }
   return [...latestByChildSessionKey.values()];
 }

@@ -51,7 +51,8 @@ import {
 } from "./tool-activity.ts";
 import { renderActivity } from "./view.ts";
 
-let activityClearBoundary: EventLogEntry | undefined;
+// Clear survives navigation without retaining an evicted or retired payload.
+let activityClearBoundary: WeakRef<EventLogEntry> | undefined;
 
 function selectorKey(selector: RunInspectorSelector | null): string | null {
   return selector ? `${selector.kind}:${selector.id}` : null;
@@ -115,7 +116,18 @@ class ActivityPage extends OpenClawLightDomElement {
   private readonly subscriptions = new SubscriptionsController(this).effect(
     () => this.context?.gateway,
     (gateway) => {
+      let eventLogRevision = gateway.eventLogRevision;
       this.applyGatewaySnapshot(gateway, gateway.snapshot, true);
+      const stopEventLog = gateway.subscribeEventLog(() => {
+        const revision = gateway.eventLogRevision;
+        if (this.context.gateway !== gateway || revision === eventLogRevision) {
+          return;
+        }
+        eventLogRevision = revision;
+        activityClearBoundary = undefined;
+        // Log notification precedes event delivery; replay would apply the next event twice.
+        this.resetEntries();
+      });
       const stopEvents = gateway.subscribeEvents((event) => {
         this.applyGatewayEvent(gateway, event, Date.now());
       });
@@ -125,6 +137,7 @@ class ActivityPage extends OpenClawLightDomElement {
       return () => {
         stopGateway();
         stopEvents();
+        stopEventLog();
       };
     },
   );
@@ -483,7 +496,8 @@ class ActivityPage extends OpenClawLightDomElement {
   ) {
     let entries: ActivityEntry[] = [];
     const eventLog = gateway.eventLog;
-    const clearIndex = activityClearBoundary ? eventLog.indexOf(activityClearBoundary) : -1;
+    const clearBoundary = activityClearBoundary?.deref();
+    const clearIndex = clearBoundary ? eventLog.indexOf(clearBoundary) : -1;
     const visibleEvents = clearIndex < 0 ? eventLog : eventLog.slice(0, clearIndex);
     for (const event of visibleEvents.toReversed()) {
       entries = this.reduceGatewayEvent(entries, snapshot, event.event, event.payload, event.ts);
@@ -556,7 +570,12 @@ class ActivityPage extends OpenClawLightDomElement {
   }
 
   private clearEntries() {
-    activityClearBoundary = this.context.gateway.eventLog[0];
+    const boundary = this.context.gateway.eventLog[0];
+    activityClearBoundary = boundary ? new WeakRef(boundary) : undefined;
+    this.resetEntries();
+  }
+
+  private resetEntries() {
     this.entries = [];
     this.expandedIds = new Set();
     this.streamFollow.atBottom = true;

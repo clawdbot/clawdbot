@@ -384,9 +384,15 @@ enum TalkModeGatewayConfigParser {
         let realtimeProviderConfig = TalkConfigParsing.realtimeProviderConfig(
             providers: realtimeProviders,
             provider: realtimeProvider)
+        let realtimeClientHints = TalkConfigParsing.bridgeFoundationDictionary(
+            (config["clientHints"] as? [String: Any])?["realtime"] as? [String: Any])
+        let gatewayOwnsRealtimeModel =
+            TalkConfigParsing.firstNonEmptyString(realtimeClientHints, keys: ["modelSource"]) == "gateway"
         let realtimeModel = TalkConfigParsing.firstNonEmptyString(realtime, keys: ["model"])
             ?? TalkConfigParsing.firstNonEmptyString(realtimeProviderConfig, keys: ["model"])
-        let realtimeModelId = realtimeModel ?? defaultRealtimeModelIdFallback
+        let realtimeModelId = gatewayOwnsRealtimeModel
+            ? realtimeModel
+            : (realtimeModel ?? defaultRealtimeModelIdFallback)
         let realtimeVoiceId = TalkConfigParsing.firstNonEmptyString(realtime, keys: ["voice"])
             ?? TalkConfigParsing.firstNonEmptyString(realtimeProviderConfig, keys: ["voice"])
         let realtimeTransport = TalkConfigParsing.firstNonEmptyString(realtime, keys: ["transport"])?.lowercased()

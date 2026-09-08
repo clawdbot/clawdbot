@@ -51,6 +51,7 @@ type CapabilityPluginResolution = {
 
 function shouldMergeManifestProvidersWhenActive(key: CapabilityProviderRegistryKey): boolean {
   return (
+    key === "mediaUnderstandingProviders" ||
     key === "imageGenerationProviders" ||
     key === "videoGenerationProviders" ||
     key === "musicGenerationProviders"
@@ -290,26 +291,6 @@ function collectRequestedVoiceModelProviderIds(cfg: OpenClawConfig | undefined):
   return requested;
 }
 
-function addMediaModelProviders(target: Set<string>, value: unknown): void {
-  if (!Array.isArray(value)) {
-    return;
-  }
-  for (const entry of value) {
-    if (typeof entry === "object" && entry !== null) {
-      addStringValue(target, (entry as { provider?: unknown }).provider);
-    }
-  }
-}
-
-function collectRequestedMediaUnderstandingProviderIds(
-  cfg: OpenClawConfig | undefined,
-): Set<string> {
-  const requested = new Set<string>();
-  const media = cfg?.tools?.media;
-  addMediaModelProviders(requested, media?.models);
-  return requested;
-}
-
 function collectRequestedCapabilityProviderIds(params: {
   key: CapabilityProviderRegistryKey;
   cfg?: OpenClawConfig;
@@ -331,8 +312,6 @@ function collectRequestedCapabilityProviderIds(params: {
       addStringValue(requested, talk.resolveConfiguredTalkRealtimeProviderId(params.cfg ?? {}));
       return requested.size > 0 ? requested : undefined;
     }
-    case "mediaUnderstandingProviders":
-      return collectRequestedMediaUnderstandingProviderIds(params.cfg);
     default:
       return undefined;
   }
@@ -565,8 +544,8 @@ export function resolvePluginCapabilityProviders<K extends CapabilityProviderReg
       includeVoiceModel: activeProviders.length > 0,
     }) ?? new Set<string>();
   const mergeManifestProviders = shouldMergeManifestProvidersWhenActive(params.key);
-  // Broaden an existing scope; cold and generation catalogs already include all
-  // eligible owners. A caller's default config map must never narrow those catalogs.
+  // Media/generation catalogs include every eligible owner; their execution owners
+  // select models later. Additional ids must not narrow an unscoped catalog.
   if (requested.size > 0 || (activeProviders.length > 0 && !mergeManifestProviders)) {
     for (const providerId of params.additionalProviderIds ?? []) {
       addStringValue(requested, providerId);

@@ -61,6 +61,7 @@ import type { PreparedTalkSessionTarget } from "./talk-session-target.types.js";
 type AuthorizedSessionMutationTarget = SessionMutationTarget & {
   resolved: Omit<SessionSharingTarget, "entry" | "storeKeys"> | null;
   sessionId: string | null;
+  lifecycleRevision?: string;
 };
 
 const AGENT_RUN_START_METHODS = new Set([
@@ -117,10 +118,15 @@ export function resolveSessionMutationAuthorization(params: {
       params.requestParams !== null &&
       "action" in params.requestParams &&
       params.requestParams.action === "resume");
-  if (isGatewayAdmin(params.client) && !authorizesAgentRun) {
+  // Progress belongs to the current conversation, not merely its stable session ID.
+  // Capture this boundary for admins too so delayed writes cannot revive a reset card.
+  const bindsProgressLifecycle = params.method === "progressCard.put";
+  const adminBypass = isGatewayAdmin(params.client) && !authorizesAgentRun;
+  if (adminBypass && !bindsProgressLifecycle) {
     return { error: null };
   }
   if (
+    !adminBypass &&
     isGatewayClientProfilePending(params.client) &&
     isSessionProfileDependentMethod(params.method)
   ) {
@@ -188,6 +194,7 @@ export function resolveSessionMutationAuthorization(params: {
   const directTargets =
     talkTargets ?? resolveDirectSessionTargets(params.method, params.requestParams);
   const hidesForeignSessions =
+    !adminBypass &&
     directTargets.length > 0 &&
     gatewayClientSessionCreator(params.client) &&
     operatorSessionCap(params.client, getCfg()) === "none";
@@ -290,6 +297,7 @@ export function resolveSessionMutationAuthorization(params: {
           }
         : null,
       sessionId: target?.entry.sessionId?.trim() || null,
+      ...(bindsProgressLifecycle ? { lifecycleRevision: target?.entry.lifecycleRevision } : {}),
     });
   }
   return {
@@ -381,7 +389,9 @@ export function resolveSessionMutationAuthorization(params: {
               current.canonicalKey === expectedResolved.canonicalKey &&
               current.storeKey === expectedResolved.storeKey &&
               current.storePath === expectedResolved.storePath &&
-              (current.entry.sessionId?.trim() || null) === expectedSessionId);
+              (current.entry.sessionId?.trim() || null) === expectedSessionId &&
+              (!bindsProgressLifecycle ||
+                current.entry.lifecycleRevision === expected.lifecycleRevision));
         if (!sameResolvedTarget) {
           throw targetChanged(targetRef.sessionKey);
         }

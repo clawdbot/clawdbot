@@ -494,6 +494,7 @@ describe("MeetingDurableTranscriptBridge", () => {
     await expect(store.readSession(current.id)).resolves.toMatchObject({
       metadata: {
         finalCaptureError: "",
+        sessionIdOrigin: "supplied",
         finalCaptureFailedAt: expect.any(String),
       },
       stoppedAt: expect.any(String),

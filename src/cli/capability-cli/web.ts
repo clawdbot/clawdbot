@@ -19,9 +19,8 @@ import {
   getCapabilityWebSearchCommandSecretTargets,
 } from "../command-secret-targets.js";
 import type { CapabilityEnvelope } from "./metadata.js";
+import { emitJsonOrText, formatEnvelopeForText } from "./output.js";
 import {
-  emitJsonOrText,
-  formatEnvelopeForText,
   parseOptionalPositiveInteger,
   resolveCapabilityProviderAgentId,
   resolveLocalCapabilityRuntimeConfig,

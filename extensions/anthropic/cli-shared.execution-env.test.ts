@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveClaudeCliThinkingEnv } from "./cli-shared.js";
+import { resolveClaudeCliAutoCompactEnv, resolveClaudeCliThinkingEnv } from "./cli-shared.js";
 
 describe("Claude CLI execution environment", () => {
   it.each([
@@ -16,4 +16,16 @@ describe("Claude CLI execution environment", () => {
       expect(resolveClaudeCliThinkingEnv(level, "claude-fable-5")).toBeUndefined();
     },
   );
+});
+
+describe("resolveClaudeCliAutoCompactEnv", () => {
+  it("maps the effective OpenClaw context budget into Claude Code compaction", () => {
+    expect(resolveClaudeCliAutoCompactEnv(100_000.9)).toEqual({
+      CLAUDE_CODE_AUTO_COMPACT_WINDOW: "100000",
+    });
+  });
+
+  it.each([undefined, 0, 0.5, Number.NaN])("rejects an invalid context budget: %s", (budget) => {
+    expect(resolveClaudeCliAutoCompactEnv(budget)).toBeUndefined();
+  });
 });

@@ -1,6 +1,8 @@
 // Sanctioned low-level scope/Kysely entry point for doctor, migrations, and infrastructure.
 // Runtime feature code imports the session accessor barrel instead of this module.
 import path from "node:path";
+import { performance } from "node:perf_hooks";
+import { isMainThread, threadId } from "node:worker_threads";
 import { getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { getChildLogger } from "../../logging/logger.js";
 import {
@@ -10,7 +12,7 @@ import {
   resolveAgentIdFromSessionKey,
   toAgentStoreSessionKey,
 } from "../../routing/session-key.js";
-import { runQueuedStoreWrite } from "../../shared/store-writer-queue.js";
+import { runQueuedStoreWrite, type StoreWriterTiming } from "../../shared/store-writer-queue.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import {
@@ -24,6 +26,7 @@ import type {
   SessionAccessScope,
   SessionTranscriptReadScope,
   SessionTranscriptWriteScope,
+  SqliteSessionReclamationDiagnostics,
 } from "./session-accessor.sqlite-contract.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
@@ -99,22 +102,42 @@ export function getSessionKysely(database: import("node:sqlite").DatabaseSync) {
 export async function runExclusiveSqliteSessionWrite<T>(
   scope: Pick<ResolvedSqliteReadScope, "agentId" | "env" | "path">,
   fn: () => Promise<T>,
+  reclamation?: SqliteSessionReclamationDiagnostics,
 ): Promise<T> {
   const databaseOptions = toDatabaseOptions(scope);
   const storePath = resolveOpenClawAgentSqlitePath(databaseOptions);
-  const startedAt = Date.now();
+  const startedAt = performance.now();
+  const timing: StoreWriterTiming = {};
+  const timingFields = (completedAt: number) => ({
+    pid: process.pid,
+    threadId,
+    isMainThread,
+    ...(reclamation?.kind ? { reclamationKind: reclamation.kind } : {}),
+    ...(reclamation?.workerThreadId !== undefined
+      ? { workerThreadId: reclamation.workerThreadId }
+      : {}),
+    elapsedMs: Math.round(completedAt - startedAt),
+    ...(timing.startedAt !== undefined && timing.finishedAt !== undefined
+      ? {
+          queueWaitMs: Math.round(timing.startedAt - startedAt),
+          writerExecutionMs: Math.round(timing.finishedAt - timing.startedAt),
+          completionDelayMs: Math.round(completedAt - timing.finishedAt),
+        }
+      : {}),
+  });
   try {
     const result = await runQueuedStoreWrite({
       queues: SQLITE_SESSION_WRITER_QUEUES,
       storePath,
       label: "runExclusiveSqliteSessionWrite",
       fn,
+      timing,
     });
-    const elapsedMs = Date.now() - startedAt;
-    if (elapsedMs >= SQLITE_SESSION_SLOW_WRITE_MS) {
+    const completedAt = performance.now();
+    if (completedAt - startedAt >= SQLITE_SESSION_SLOW_WRITE_MS) {
       getChildLogger({ subsystem: "session-sqlite" }).warn("slow SQLite session write", {
         agentId: scope.agentId,
-        elapsedMs,
+        ...timingFields(completedAt),
         storePath,
       });
     }
@@ -122,7 +145,7 @@ export async function runExclusiveSqliteSessionWrite<T>(
   } catch (error) {
     getChildLogger({ subsystem: "session-sqlite" }).warn("SQLite session write failed", {
       agentId: scope.agentId,
-      elapsedMs: Date.now() - startedAt,
+      ...timingFields(performance.now()),
       error,
       storePath,
     });

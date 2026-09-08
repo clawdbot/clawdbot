@@ -2,6 +2,7 @@
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
+import type { MediaUnderstandingModelConfig } from "../config/types.tools.js";
 import { resolveMediaRuntimeTimeoutMs, resolveModelEntries, resolveTimeoutMs } from "./resolve.js";
 import type { MediaUnderstandingCapability } from "./types.js";
 
@@ -23,6 +24,43 @@ describe("media timeout resolution", () => {
 });
 
 describe("resolveModelEntries", () => {
+  it.each<{
+    name: string;
+    models: MediaUnderstandingModelConfig[];
+    expected: MediaUnderstandingModelConfig[];
+  }>([
+    {
+      name: "explicit provider",
+      models: [{ provider: "groq", model: "selected-audio", capabilities: ["audio"] }],
+      expected: [{ provider: "groq", model: "selected-audio", capabilities: ["audio"] }],
+    },
+    {
+      name: "explicit CLI",
+      models: [{ type: "cli", command: "fixture-transcribe", capabilities: ["audio"] }],
+      expected: [{ type: "cli", command: "fixture-transcribe", capabilities: ["audio"] }],
+    },
+    {
+      name: "image-only selection leaves audio automatic",
+      models: [{ provider: "openai", model: "selected-image", capabilities: ["image"] }],
+      expected: [],
+    },
+  ])("preserves $name with a complete provider catalog", ({ models, expected }) => {
+    const cfg: OpenClawConfig = {
+      tools: { media: { models } },
+    };
+    const completeRegistry = new Map<string, { capabilities: MediaUnderstandingCapability[] }>([
+      ...providerRegistry,
+      ["unselected-audio", { capabilities: ["audio"] }],
+      ["unselected-video", { capabilities: ["video"] }],
+    ]);
+    const entries = resolveModelEntries({
+      cfg,
+      capability: "audio",
+      providerRegistry: completeRegistry,
+    });
+    expect(entries.map(({ entry }) => entry)).toEqual(expected);
+  });
+
   it("uses provider capabilities for shared entries without explicit caps", () => {
     const cfg: OpenClawConfig = {
       tools: {

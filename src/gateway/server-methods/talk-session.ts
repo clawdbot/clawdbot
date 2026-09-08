@@ -18,6 +18,7 @@ import { REALTIME_VOICE_AGENT_CONSULT_TOOL } from "../../talk/agent-consult-tool
 import { REALTIME_VOICE_AGENT_CONTROL_TOOL } from "../../talk/agent-run-control-shared.js";
 import { controlRealtimeVoiceAgentRun } from "../../talk/agent-run-control.js";
 import { ensureClientVoiceAgentSessionEntry } from "../../talk/client-voice-session.js";
+import { projectInternalRealtimeVoicePublicConfig } from "../../talk/provider-internal.js";
 import {
   resolveConfiguredRealtimeVoiceProvider,
   resolveRealtimeVoiceProviderCapabilities,
@@ -351,8 +352,13 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           relaySessionId: session.relaySessionId,
           sessionTarget: target,
         });
+        const publicSession = projectInternalRealtimeVoicePublicConfig({
+          provider: resolution.provider,
+          providerConfig: relayLaunch.providerConfig,
+          config: session,
+        });
         return respondOk(respond, {
-          ...session,
+          ...publicSession,
           sessionId: session.relaySessionId,
           voiceSessionId: session.relaySessionId,
           mode,

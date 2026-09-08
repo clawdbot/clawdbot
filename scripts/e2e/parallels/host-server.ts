@@ -3,29 +3,77 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { rm } from "node:fs/promises";
 import { createServer } from "node:http";
-import { createConnection } from "node:net";
+import { createConnection, isIPv4 } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { Readable } from "node:stream";
 import { sleep as delay } from "../../lib/sleep.mjs";
-import { die, run, say, sh, warn } from "./host-command.ts";
+import { die, run, say, warn } from "./host-command.ts";
 import type { HostServer, NpmRegistryPackage, NpmRegistryServer } from "./types.ts";
 
 const HOST_SERVER_STDERR_LIMIT_BYTES = 64 * 1024;
 const HOST_SERVER_STDERR_DRAIN_MS = 5_000;
 type HostServerChild = ChildProcess & { stderr: Readable };
 
+function parseSharedAdapterIpv4(output: string): string {
+  let inParallelsAdapter = false;
+  for (const line of output.split(/\r?\n/)) {
+    const section = line.match(/^\s*([^:]+):\s*$/);
+    if (section) {
+      inParallelsAdapter = section[1]?.trim() === "Parallels adapter";
+      continue;
+    }
+    if (!inParallelsAdapter) {
+      continue;
+    }
+    const address = line.match(/^\s*IPv4 address:\s*(\S+)\s*$/)?.[1];
+    if (address) {
+      return isIPv4(address) ? address : "";
+    }
+  }
+  return "";
+}
+
+function resolveConfiguredSharedHostIp(): string {
+  try {
+    const result = run("prlsrvctl", ["net", "info", "Shared"], {
+      check: false,
+      env: { ...process.env, LC_ALL: "C" },
+      quiet: true,
+    });
+    return result.status === 0 ? parseSharedAdapterIpv4(result.stdout) : "";
+  } catch {
+    return "";
+  }
+}
+
+function resolveInterfaceHostIp(): string {
+  try {
+    const result = run("ifconfig", [], { check: false, quiet: true });
+    if (result.status !== 0) {
+      return "";
+    }
+    for (const line of result.stdout.split(/\r?\n/)) {
+      const address = line.match(/(?:^|\s)inet\s+(10\.211\.\d+\.\d+)(?:\s|$)/)?.[1];
+      if (address && isIPv4(address)) {
+        return address;
+      }
+    }
+  } catch {
+    // The configured network lookup above remains authoritative when interfaces are absent.
+  }
+  return "";
+}
+
 export function resolveHostIp(explicit = ""): string {
   if (explicit) {
     return explicit;
   }
-  const output = sh("ifconfig | awk '/inet 10\\.211\\./ { print $2; exit }'", {
-    quiet: true,
-  }).stdout.trim();
-  if (!output) {
+  const hostIp = resolveConfiguredSharedHostIp() || resolveInterfaceHostIp();
+  if (!hostIp) {
     die("failed to detect Parallels host IP; pass --host-ip");
   }
-  return output;
+  return hostIp;
 }
 
 function allocateHostPort(): number {

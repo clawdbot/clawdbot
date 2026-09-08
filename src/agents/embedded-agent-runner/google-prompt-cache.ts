@@ -88,7 +88,6 @@ type PrepareGooglePromptCacheStreamFnParams = {
   sessionManager: GooglePromptCacheSessionManager;
   signal?: AbortSignal;
   streamFn: StreamFn | undefined;
-  systemPrompt?: string;
 };
 
 type GooglePromptCacheDeps = {
@@ -586,14 +585,17 @@ export async function prepareGooglePromptCacheStreamFn(
   if (resolvedRetention !== "short" && resolvedRetention !== "long") {
     return undefined;
   }
-  const systemPrompt = resolveManagedSystemPrompt(params.systemPrompt);
   const apiKey = params.apiKey?.trim();
-  if (!systemPrompt || !apiKey) {
+  if (!apiKey) {
     return undefined;
   }
 
   const inner = params.streamFn;
   return async (model, context, options) => {
+    const systemPrompt = resolveManagedSystemPrompt(context.systemPrompt);
+    if (!systemPrompt) {
+      return inner(model, context, options);
+    }
     const cacheConfig = buildManagedGooglePromptCacheConfig(context, options);
     const cachedContent = await ensureGooglePromptCache(
       {

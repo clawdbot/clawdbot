@@ -331,7 +331,7 @@ describe("xai provider plugin", () => {
       modelId: "auto",
       model: { ...auto, provider: "xai" },
     } as never);
-    expect(normalizedAuto?.id).toBe("grok-build");
+    expect(normalizedAuto?.id).toBe("auto");
     const composer = result.models.find((model) => model.id === "grok-composer-2.5-fast");
     if (!composer) {
       throw new Error("expected OAuth Composer model");
@@ -937,7 +937,7 @@ describe("xai provider plugin", () => {
       model: { ...auto, provider: "xai" },
     } as never);
 
-    expect(normalized?.id).toBe("grok-4.6");
+    expect(normalized?.id).toBe("auto");
     expect(normalized?.thinkingLevelMap?.xhigh).toBe("xhigh");
     expect(normalized?.compat).toMatchObject({
       supportedReasoningEfforts: ["low", "medium", "high", "xhigh"],

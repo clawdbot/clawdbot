@@ -842,72 +842,73 @@ function renderSessionsCard(
 
   const selectedDaySet = new Set(selectedDays);
 
-  const getSessionMetricValue = (s: UsageSessionEntry, metric: "tokens" | "cost"): number => {
-    const usage = s.usage;
-    if (!usage) {
-      return 0;
-    }
-
-    if (selectedDaySet.size > 0 && usage.dailyBreakdown && usage.dailyBreakdown.length > 0) {
-      return usage.dailyBreakdown.reduce((sum, day) => {
-        if (!selectedDaySet.has(day.date)) {
-          return sum;
+  const sortedSessions = sessions
+    .map((session) => {
+      const usage = session.usage;
+      let tokens = usage?.totalTokens ?? 0;
+      let cost = usage?.totalCost ?? 0;
+      const daily = selectedDaySet.size > 0 ? usage?.dailyBreakdown : undefined;
+      if (daily?.length) {
+        tokens = 0;
+        cost = 0;
+        for (const day of daily) {
+          if (selectedDaySet.has(day.date)) {
+            tokens += day.tokens;
+            cost += day.cost;
+          }
         }
-        return sum + (metric === "tokens" ? day.tokens : day.cost);
-      }, 0);
-    }
-
-    return metric === "tokens" ? (usage.totalTokens ?? 0) : (usage.totalCost ?? 0);
-  };
-
-  const getSessionValue = (s: UsageSessionEntry): number => {
-    return getSessionMetricValue(s, isTokenMode ? "tokens" : "cost");
-  };
-
-  const getSessionSortValue = (s: UsageSessionEntry): number => {
-    switch (sessionSort) {
-      case "recent":
-        return s.updatedAt ?? 0;
-      case "messages":
-        return s.usage?.messageCounts?.total ?? 0;
-      case "errors":
-        return s.usage?.messageCounts?.errors ?? 0;
-      case "cost":
-        return getSessionMetricValue(s, "cost");
-      case "tokens":
-        return getSessionMetricValue(s, "tokens");
-    }
-    const exhaustiveSort: never = sessionSort;
-    return exhaustiveSort;
-  };
-
-  const sortedSessions = [...sessions].toSorted((a, b) => {
-    const valueDiff = getSessionSortValue(b) - getSessionSortValue(a);
-    if (valueDiff !== 0) {
-      return valueDiff;
-    }
-    const recentDiff = (b.updatedAt ?? 0) - (a.updatedAt ?? 0);
-    if (recentDiff !== 0) {
-      return recentDiff;
-    }
-    return formatSessionListLabel(a).localeCompare(formatSessionListLabel(b));
-  });
+      }
+      let sortValue: number;
+      switch (sessionSort) {
+        case "recent":
+          sortValue = session.updatedAt ?? 0;
+          break;
+        case "messages":
+          sortValue = usage?.messageCounts?.total ?? 0;
+          break;
+        case "errors":
+          sortValue = usage?.messageCounts?.errors ?? 0;
+          break;
+        case "cost":
+          sortValue = cost;
+          break;
+        case "tokens":
+          sortValue = tokens;
+          break;
+      }
+      return {
+        session,
+        displayLabel: formatSessionListLabel(session),
+        value: isTokenMode ? tokens : cost,
+        sortValue,
+      };
+    })
+    .toSorted((a, b) => {
+      const valueDiff = b.sortValue - a.sortValue;
+      if (valueDiff !== 0) {
+        return valueDiff;
+      }
+      const recentDiff = (b.session.updatedAt ?? 0) - (a.session.updatedAt ?? 0);
+      if (recentDiff !== 0) {
+        return recentDiff;
+      }
+      return a.displayLabel.localeCompare(b.displayLabel);
+    });
   const sortedWithDir = sessionSortDir === "asc" ? sortedSessions.toReversed() : sortedSessions;
 
-  const totalValue = sortedWithDir.reduce((sum, session) => sum + getSessionValue(session), 0);
+  const totalValue = sortedWithDir.reduce((sum, entry) => sum + entry.value, 0);
   const avgValue = sortedWithDir.length ? totalValue / sortedWithDir.length : 0;
   const totalErrors = sortedWithDir.reduce(
-    (sum, session) => sum + (session.usage?.messageCounts?.errors ?? 0),
+    (sum, entry) => sum + (entry.session.usage?.messageCounts?.errors ?? 0),
     0,
   );
 
   const renderSessionBarRow = (
-    s: UsageSessionEntry,
+    entry: (typeof sortedSessions)[number],
     isSelected: boolean,
     orderedKeys: string[],
   ) => {
-    const value = getSessionValue(s);
-    const displayLabel = formatSessionListLabel(s);
+    const { session: s, value, displayLabel } = entry;
     const meta = buildSessionMeta(s);
     return html`
       <div
@@ -942,7 +943,7 @@ function renderSessionsCard(
             class="btn btn--sm btn--ghost"
             @click=${(e: MouseEvent) => {
               e.stopPropagation();
-              void handleCopyButton(e, formatSessionListLabel(s), t("usage.sessions.copy"));
+              void handleCopyButton(e, displayLabel, t("usage.sessions.copy"));
             }}
           >
             <span data-copy-label>${t("usage.sessions.copy")}</span>
@@ -956,17 +957,17 @@ function renderSessionsCard(
   };
 
   const selectedSet = new Set(selectedSessions);
-  const selectedEntries = sortedWithDir.filter((s) => selectedSet.has(s.key));
+  const selectedEntries = sortedWithDir.filter((entry) => selectedSet.has(entry.session.key));
   const selectedCount = selectedEntries.length;
-  const sessionMap = new Map(sortedWithDir.map((s) => [s.key, s]));
+  const sessionMap = new Map(sortedWithDir.map((entry) => [entry.session.key, entry]));
   const recentEntries = recentSessions
     .map((key) => sessionMap.get(key))
-    .filter((entry): entry is UsageSessionEntry => Boolean(entry));
-  const renderSessionBarRows = (entries: UsageSessionEntry[]) => {
+    .filter((entry) => entry !== undefined);
+  const renderSessionBarRows = (entries: typeof sortedSessions) => {
     // Selection follows this rendered group, before a click reorders recently viewed sessions.
-    const orderedKeys = entries.map((entry) => entry.key);
+    const orderedKeys = entries.map((entry) => entry.session.key);
     return entries.map((entry) =>
-      renderSessionBarRow(entry, selectedSet.has(entry.key), orderedKeys),
+      renderSessionBarRow(entry, selectedSet.has(entry.session.key), orderedKeys),
     );
   };
 

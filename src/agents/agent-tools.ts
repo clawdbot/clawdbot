@@ -533,13 +533,12 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
       toolNames: ["read"],
       warn: () => undefined,
     }).length === 1;
-  // Prefer sessionKey for process isolation scope to prevent cross-session process visibility/killing.
-  // Fallback to agentId if no sessionKey is available (e.g. legacy or global contexts).
+  // Borrowed tool restrictions do not transfer ownership of the policy session's processes.
   const scopeKey = resolveProcessToolScopeKey({
     scopeKey: options?.exec?.scopeKey,
-    sessionKey: options?.sessionKey,
+    sessionKey: executionSessionKey,
     sessionId: options?.sessionId,
-    agentId,
+    agentId: executionAgentId,
   });
   if (options?.oneShotCliRun && scopeKey && options.registerRunCleanup) {
     const supervisor = getProcessSupervisor();
@@ -637,7 +636,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
 
   const imageSanitization = resolveImageSanitizationLimits(options?.config);
   options?.recordToolPrepStage?.("workspace-policy");
-  const { cleanupMs: cleanupMsOverride, ...execDefaults } = options?.exec ?? {};
+  const execDefaults = options?.exec ?? {};
   const effectiveExecPolicy = sessionPermissionPolicy
     ? resolveSessionPermissionExecPolicy(sessionPermissionPolicy, options?.exec)
     : applyExecPolicyLayer(execConfig, options?.exec);
@@ -687,6 +686,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
       safeBinTrustedDirs: options?.exec?.safeBinTrustedDirs ?? execConfig.safeBinTrustedDirs,
       safeBinProfiles: options?.exec?.safeBinProfiles ?? execConfig.safeBinProfiles,
       agentId,
+      cleanupMs: options?.exec?.cleanupMs ?? execConfig.cleanupMs,
       processToolAvailabilityRef,
       scopeKey,
       sessionKey: options?.sessionKey,
@@ -718,7 +718,6 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
         options?.exec?.notifyOnExitEmptySuccess ?? execConfig.notifyOnExitEmptySuccess,
     },
     processDefaults: {
-      cleanupMs: cleanupMsOverride ?? execConfig.cleanupMs,
       scopeKey,
     },
     recordToolPrepStage: options?.recordToolPrepStage,

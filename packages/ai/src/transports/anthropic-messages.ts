@@ -68,14 +68,13 @@ async function convertContentBlocks(
   profile: "provider" | "transport",
   isError: boolean,
 ) {
-  const text = extractToolResultText(content);
   const mediaPlaceholder = describeToolResultMediaPlaceholder(content);
   const hasImages =
     (profile === "provider" || model.input.includes("image")) &&
     content.some(isImageWithMediaPayload);
   if (!hasImages) {
     return sanitizeNonEmptyTransportPayloadText(
-      text,
+      extractToolResultText(content),
       mediaPlaceholder ??
         (profile === "transport" ? "(no output)" : isError ? "[tool error with no output]" : ""),
     );

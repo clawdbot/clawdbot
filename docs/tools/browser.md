@@ -174,6 +174,12 @@ launch cannot contain that tab. The panel shows **Start browser** instead, and
 preview cards keep their title and URL without a thumbnail when that target
 is unavailable. Click **Start browser** to launch the browser and show its current tabs.
 
+For local `attachOnly` CDP profiles on macOS and Linux, direct preview screenshots
+preserve the active Chrome tab when OpenClaw can verify that the attached browser
+is running with a visible window. Headless browsers and browsers whose mode cannot
+be verified keep the existing activation behavior so screenshots remain reliable.
+Explicit tab-focus actions still activate the requested tab.
+
 ## Configuration
 
 Browser settings live in `~/.openclaw/openclaw.json`.

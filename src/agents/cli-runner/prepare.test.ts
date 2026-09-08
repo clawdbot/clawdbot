@@ -18,9 +18,12 @@ import {
 import { prepareReplyToolAuthority } from "../../auto-reply/reply/reply-tool-authority.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import { getRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
+import { runWithCliHistoryWriter } from "../../config/sessions/cli-history-boundary.js";
 import {
   loadSessionEntryReadOnly,
   loadTranscriptEventsSync,
+  replaceSessionEntrySync,
+  patchSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { registerContextEngineForOwner } from "../../context-engine/registry.js";
@@ -41,6 +44,7 @@ import { createPluginRegistry } from "../../plugins/registry.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import type { PluginRuntime } from "../../plugins/runtime/types.js";
 import { setActiveDegradedSecretOwners } from "../../secrets/runtime-degraded-state.js";
+import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import type { SkillLibraryAuthoringCapability } from "../../skills/library/authoring.js";
 import { buildSkillSnapshot } from "../../skills/loading/workspace-skill-prompt.js";
 import type { SkillSnapshot } from "../../skills/types.js";
@@ -70,6 +74,7 @@ import {
   loadAuthProfileStoreWithoutExternalProfiles,
   saveAuthProfileStore,
 } from "../auth-profiles/store-runtime.js";
+import { CLI_AUTH_EPOCH_VERSION, resolveCliAuthEpoch } from "../cli-auth-epoch.js";
 import {
   resetCliAuthEpochTestDeps,
   setCliAuthEpochTestDeps,
@@ -85,7 +90,12 @@ import {
   wrappedPluginSystemContext,
   type TestCliBackendParams,
 } from "../cli-runner.test-helpers.js";
-import { hashCliSessionText } from "../cli-session.js";
+import {
+  applyCliSessionBindingResult,
+  clearCliSession,
+  getCliSessionBinding,
+  hashCliSessionText,
+} from "../cli-session.js";
 import { resetContextWindowCacheForTest } from "../context.js";
 import { claimPendingAgentQuestionAnswerFromCaller } from "../harness/gateway-question.js";
 import { withQuestionGateway } from "../harness/gateway-question.test-support.js";
@@ -105,6 +115,7 @@ import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
 import type { SystemAgentToolOptions } from "../tools/system-agent-tool.js";
 import { prepareClaudeCliSkillsPlugin } from "./claude-skills-plugin.js";
 import { executePluginOwnedProcess } from "./execute-plugin.js";
+import { prepareCliHistoryBoundary } from "./history-boundary.js";
 import { prepareCliRunContext } from "./prepare.js";
 import {
   resetCliRunnerPrepareTestDeps,
@@ -292,6 +303,75 @@ type CliContextBudgetTestCase = {
 
 describe("prepareCliRunContext", () => {
   let fixture: ReturnType<typeof createCliRunnerPrepareFixture>;
+
+  async function withAuthenticatedHistory(
+    provider: string,
+    run: (
+      prepare: (
+        overrides: NonNullable<Parameters<typeof fixture.prepare>[0]>,
+      ) => ReturnType<typeof fixture.prepare>,
+    ) => Promise<void>,
+  ) {
+    const { dir, sessionTarget } = fixture.session;
+    const agentDir = path.join(dir, "agents", "main", "agent");
+    const authProfileId = "history-test:account";
+    const credential = {
+      type: "token" as const,
+      provider: provider === "claude-cli" ? "anthropic" : provider,
+      token: "synthetic-history-account",
+    };
+    saveAuthProfileStore({ version: 1, profiles: { [authProfileId]: credential } }, agentDir);
+    const authEpoch = await resolveCliAuthEpoch({ provider, agentDir, authProfileId });
+    const runId = "authenticated-history-fixture";
+    await patchSessionEntryCore(sessionTarget, (entry) => ({ ...entry, activeWriterRunId: runId }));
+    const admission = prepareSystemAgentRunAdmission({}, runId, "main", "history-fixture");
+    try {
+      const admittedRunContext = await admission.admit("embedded");
+      const writer = await prepareCliHistoryBoundary(
+        {
+          admittedRunContext,
+          runId,
+          agentDir,
+          provider,
+          model: "test-model",
+          prompt: "seed",
+          workspaceDir: dir,
+          timeoutMs: 1000,
+          sessionId: sessionTarget.sessionId,
+          sessionKey: sessionTarget.sessionKey,
+          sessionFile: sessionTarget.sessionKey,
+          sessionTarget,
+        },
+        { credential },
+      );
+      expect(writer).toBeDefined();
+      await runWithCliHistoryWriter(writer, () =>
+        run((overrides) =>
+          fixture.prepare({
+            ...overrides,
+            provider,
+            agentDir,
+            authProfileId,
+            runId,
+            preparedRunAdmission: admission,
+            sessionKey: sessionTarget.sessionKey,
+            ...(overrides.cliSessionBinding
+              ? {
+                  cliSessionBinding: {
+                    ...overrides.cliSessionBinding,
+                    authProfileId,
+                    authEpoch,
+                    authEpochVersion: CLI_AUTH_EPOCH_VERSION,
+                  },
+                }
+              : {}),
+          }),
+        ),
+      );
+    } finally {
+      admission.close();
+    }
+  }
 
   async function prepareNativeAuthority(
     capabilities: readonly string[],
@@ -2180,40 +2260,42 @@ describe("prepareCliRunContext", () => {
   );
 
   it("uses compact current-turn context when a room event resumes a CLI session", async () => {
-    fixture.appendTranscript({
-      id: "msg-1",
-      parentId: null,
-      timestamp: new Date(1).toISOString(),
-      message: {
-        role: "user",
-        content: "prior room event",
-        timestamp: 1,
-      },
-    });
-    // Room resumes carry compact event text into the CLI prompt but keep the
-    // richer room context in OpenClaw history for reseed and audits.
-    const context = await fixture.prepare({
-      sessionKey: "agent:main:test",
-      agentId: "main",
-      trigger: "user",
-      prompt: "[OpenClaw room event]",
-      currentInboundEventKind: "room_event",
-      currentInboundContext: {
-        text: "Room context:\nAlice: lunch?\n\nCurrent event:\nBob: yes",
-        resumableText: "Current event:\nBob: yes",
-      },
-      cliSessionBinding: {
-        sessionId: "cli-session",
-      },
-      config: createCliBackendConfig({
-        reseedFromRawTranscriptWhenUncompacted: true,
-      }),
-    });
+    await withAuthenticatedHistory("test-cli", async (prepare) => {
+      fixture.appendTranscript({
+        id: "msg-1",
+        parentId: null,
+        timestamp: new Date(1).toISOString(),
+        message: {
+          role: "user",
+          content: "prior room event",
+          timestamp: 1,
+        },
+      });
+      // Room resumes carry compact event text into the CLI prompt but keep the
+      // richer room context in OpenClaw history for reseed and audits.
+      const context = await prepare({
+        sessionKey: "agent:main:test",
+        agentId: "main",
+        trigger: "user",
+        prompt: "[OpenClaw room event]",
+        currentInboundEventKind: "room_event",
+        currentInboundContext: {
+          text: "Room context:\nAlice: lunch?\n\nCurrent event:\nBob: yes",
+          resumableText: "Current event:\nBob: yes",
+        },
+        cliSessionBinding: {
+          sessionId: "cli-session",
+        },
+        config: createCliBackendConfig({
+          reseedFromRawTranscriptWhenUncompacted: true,
+        }),
+      });
 
-    expect(context.reusableCliSession).toEqual({ mode: "reuse", sessionId: "cli-session" });
-    expect(context.params.prompt).toBe("Current event:\nBob: yes\n\n[OpenClaw room event]");
-    expect(context.openClawHistoryPrompt).toContain("Room context:\nAlice: lunch?");
-    expect(context.openClawHistoryPrompt).toContain("Current event:\nBob: yes");
+      expect(context.reusableCliSession).toEqual({ mode: "reuse", sessionId: "cli-session" });
+      expect(context.params.prompt).toBe("Current event:\nBob: yes\n\n[OpenClaw room event]");
+      expect(context.openClawHistoryPrompt).toContain("Room context:\nAlice: lunch?");
+      expect(context.openClawHistoryPrompt).toContain("Current event:\nBob: yes");
+    });
   });
 
   it("marks inter-session prompts after CLI prompt-build hook context is applied", async () => {
@@ -3055,64 +3137,68 @@ describe("prepareCliRunContext", () => {
   });
 
   it("prepares raw-tail history for safe invalidations only when the backend opts in", async () => {
-    fixture.appendTranscript({
-      id: "msg-1",
-      parentId: null,
-      timestamp: new Date(1).toISOString(),
-      message: {
-        role: "user",
-        content: "prior no-compaction ask",
-        timestamp: 1,
-      },
-    });
+    await withAuthenticatedHistory("test-cli", async (prepare) => {
+      fixture.appendTranscript({
+        id: "msg-1",
+        parentId: null,
+        timestamp: new Date(1).toISOString(),
+        message: {
+          role: "user",
+          content: "prior no-compaction ask",
+          timestamp: 1,
+        },
+      });
 
-    const context = await fixture.prepare({
-      extraSystemPrompt: "changed stable prompt",
-      extraSystemPromptStatic: "changed stable prompt",
-      cliSessionBinding: {
+      const context = await prepare({
+        extraSystemPrompt: "changed stable prompt",
+        extraSystemPromptStatic: "changed stable prompt",
+        cliSessionBinding: {
+          sessionId: "cli-session",
+          extraSystemPromptHash: hashCliSessionText("old stable prompt"),
+        },
+        config: createCliBackendConfig({
+          reseedFromRawTranscriptWhenUncompacted: true,
+        }),
+      });
+
+      expect(context.reusableCliSession).toEqual({
+        mode: "reuse-with-drift",
         sessionId: "cli-session",
-        extraSystemPromptHash: hashCliSessionText("old stable prompt"),
-      },
-      config: createCliBackendConfig({
-        reseedFromRawTranscriptWhenUncompacted: true,
-      }),
+        drift: { reasons: ["system-prompt"] },
+      });
+      expect(context.openClawHistoryPrompt).toContain("prior no-compaction ask");
+      expect(context.openClawHistoryPrompt).toContain("latest ask");
     });
-
-    expect(context.reusableCliSession).toEqual({
-      mode: "reuse-with-drift",
-      sessionId: "cli-session",
-      drift: { reasons: ["system-prompt"] },
-    });
-    expect(context.openClawHistoryPrompt).toContain("prior no-compaction ask");
-    expect(context.openClawHistoryPrompt).toContain("latest ask");
   });
 
   it("prepares opted-in raw-tail history for session-expired retry without disabling native resume", async () => {
-    const { dir } = fixture.session;
-    fixture.appendTranscript({
-      id: "msg-1",
-      parentId: null,
-      timestamp: new Date(1).toISOString(),
-      message: {
-        role: "user",
-        content: "prior resumable ask",
-        timestamp: 1,
-      },
-    });
+    await withAuthenticatedHistory("test-cli", async (prepare) => {
+      const { dir } = fixture.session;
+      fixture.appendTranscript({
+        id: "msg-1",
+        parentId: null,
+        timestamp: new Date(1).toISOString(),
+        message: {
+          role: "user",
+          content: "prior resumable ask",
+          timestamp: 1,
+        },
+      });
 
-    const context = await fixture.prepare({
-      cliSessionBinding: {
-        sessionId: "cli-session",
-        cwdHash: hashCliSessionText(dir),
-      },
-      config: createCliBackendConfig({
-        reseedFromRawTranscriptWhenUncompacted: true,
-      }),
-    });
+      const context = await prepare({
+        cliSessionBinding: {
+          sessionId: "cli-session",
+          cwdHash: hashCliSessionText(dir),
+        },
+        config: createCliBackendConfig({
+          reseedFromRawTranscriptWhenUncompacted: true,
+        }),
+      });
 
-    expect(context.reusableCliSession).toEqual({ mode: "reuse", sessionId: "cli-session" });
-    expect(context.openClawHistoryPrompt).toContain("prior resumable ask");
-    expect(context.openClawHistoryPrompt).toContain("latest ask");
+      expect(context.reusableCliSession).toEqual({ mode: "reuse", sessionId: "cli-session" });
+      expect(context.openClawHistoryPrompt).toContain("prior resumable ask");
+      expect(context.openClawHistoryPrompt).toContain("latest ask");
+    });
   });
 
   it("applies direct-run prepend system context helpers on the CLI path", async () => {
@@ -5045,53 +5131,231 @@ describe("prepareCliRunContext", () => {
     });
   });
 
-  it("arms raw-transcript reseed for a missing claude-cli transcript so prior conversation is redelivered", async () => {
-    const recoveredAt = "2020-01-02T03:04:05.000Z";
-    fixture.appendTranscript({
-      id: "msg-1",
-      parentId: null,
-      timestamp: recoveredAt,
-      message: {
-        role: "user",
-        content: "prior claude-cli ask",
-        timestamp: 1,
-      },
-    });
-    setCliBackendForPrepareTest({
-      reseedFromRawTranscriptWhenUncompacted: true,
-    });
-    const transcriptCheck = vi.fn(async () => false);
-    const orphanCheck = vi.fn(async () => false);
-    setCliRunnerPrepareTestDeps({
-      claudeCliSessionTranscriptHasContent: transcriptCheck,
-      claudeCliSessionTranscriptHasOrphanedToolUse: orphanCheck,
-    });
+  it.each(["test:a", "test:b"])(
+    "authorizes history after successful replacement and later clear: %s",
+    async (account) => {
+      const { dir, sessionTarget } = fixture.session;
+      const agentDir = path.join(dir, "agents", "main", "agent");
+      saveAuthProfileStore(
+        {
+          version: 1,
+          profiles: {
+            "test:a": { type: "token", provider: "test-cli", token: "synthetic-account-a" },
+            "test:b": { type: "token", provider: "test-cli", token: "synthetic-account-b" },
+          },
+        },
+        agentDir,
+      );
+      const inputs: string[] = [];
+      let turn = 0;
+      const execute: CliBackendExecute = async function* (execution) {
+        inputs.push(execution.prompt);
+        const sessionId = "native-" + ++turn;
+        yield { type: "system", subtype: "init", session_id: sessionId };
+        yield {
+          type: "result",
+          subtype: "success",
+          is_error: false,
+          result: "completed",
+          session_id: sessionId,
+        };
+      };
+      setRawCliBackendForPrepareTest({
+        id: "test-cli",
+        pluginId: "test-plugin",
+        authEpochMode: "profile-only",
+        autoSelectAuthProfile: false,
+        prepareExecution: async () => ({ execute }),
+        parseJsonlEvent: (line) => {
+          const event = JSON.parse(line);
+          return event.type === "result"
+            ? { kind: "result", text: event.result, sessionId: event.session_id }
+            : null;
+        },
+        config: {
+          command: "/bin/sh",
+          args: [],
+          resumeArgs: ["--resume", "{sessionId}"],
+          input: "stdin",
+          output: "jsonl",
+          sessionMode: "existing",
+          sessionIdFields: ["session_id"],
+          reseedFromRawTranscriptWhenUncompacted: true,
+        },
+      });
+      const runTurn = async (authProfileId: string, prompt: string) => {
+        const entry = expectDefined(loadSessionEntryReadOnly(sessionTarget), "session");
+        const binding = getCliSessionBinding(entry, "test-cli");
+        const runId = "history-proof-" + turn;
+        await patchSessionEntryCore(sessionTarget, (current) => ({
+          ...current,
+          activeWriterRunId: runId,
+        }));
+        const admission = prepareSystemAgentRunAdmission({}, runId, "main", "history-proof");
+        try {
+          const recorder = createUserTurnTranscriptRecorder({
+            input: { text: prompt, idempotencyKey: runId },
+            target: { ...sessionTarget, sessionEntry: loadSessionEntryReadOnly(sessionTarget) },
+          });
+          const context = await fixture.prepare({
+            agentDir,
+            authProfileId,
+            prompt,
+            runId,
+            preparedRunAdmission: admission,
+            userTurnTranscriptRecorder: recorder,
+            persistAssistantTranscript: true,
+            storePath: sessionTarget.storePath,
+            expectedWriterRunId: runId,
+            sessionKey: sessionTarget.sessionKey,
+            cliSessionBinding: binding,
+          });
+          const { runPreparedCliAgent } = await import("../cli-runner.js");
+          const result = await runPreparedCliAgent(context);
+          expect(result.meta.agentMeta?.cliSessionBinding?.sessionId).toBeDefined();
+          expect(context.effectiveAuthProfileId).toBe(authProfileId);
+          expect(recorder.hasPersisted()).toBe(true);
+          await patchSessionEntryCore(sessionTarget, (current) => {
+            applyCliSessionBindingResult(current, "test-cli", result.meta.agentMeta);
+            return current;
+          });
+        } finally {
+          admission.close();
+        }
+      };
+      await runTurn("test:a", "account A private history");
+      await runTurn(account, "replacement turn");
+      expect(inputs.at(-1)).not.toContain("account A private history");
+      const entry = expectDefined(loadSessionEntryReadOnly(sessionTarget), "replacement");
+      expect(getCliSessionBinding(entry, "test-cli")?.authProfileId).toBe(account);
+      clearCliSession(entry, "test-cli");
+      replaceSessionEntrySync(sessionTarget, entry);
+      await runTurn(account, "recovery");
+      expect(inputs.at(-1)).toContain("recovery");
+      if (account === "test:a") {
+        expect(inputs.at(-1)).toContain("account A private history");
+      } else {
+        expect(inputs.at(-1)).not.toContain("account A private history");
+      }
+    },
+  );
 
-    const context = await fixture.prepare({
-      sessionKey: "agent:main:telegram:direct:peer",
-      provider: "claude-cli",
-      model: "opus",
-      cliSessionBinding: { sessionId: "stale-claude-sid" },
-      cliSessionId: "stale-claude-sid",
+  it("does not replay the already-admitted current user turn during fresh CLI recovery", async () => {
+    await withAuthenticatedHistory("claude-cli", async (prepare) => {
+      fixture.appendTranscript({
+        id: "prior",
+        parentId: null,
+        timestamp: "2020-01-01T00:00:00.000Z",
+        message: { role: "user", content: "prior task", timestamp: 1 },
+      });
+      const { sessionTarget } = fixture.session;
+      const recorder = createUserTurnTranscriptRecorder({
+        input: { text: "latest ask", idempotencyKey: "recovery-current-turn" },
+        target: {
+          ...sessionTarget,
+          sessionEntry: { sessionId: sessionTarget.sessionId, updatedAt: 1 },
+        },
+      });
+      await recorder.persistApproved();
+      expect(recorder.getAdmissionReceipt()).toBeDefined();
+      setCliBackendForPrepareTest({ reseedFromRawTranscriptWhenUncompacted: true });
+      const context = await prepare({
+        provider: "claude-cli",
+        model: "opus",
+        userTurnTranscriptRecorder: recorder,
+      });
+      expect(context.openClawHistoryPrompt).toContain("User: prior task");
+      expect(context.openClawHistoryPrompt?.split("latest ask")).toHaveLength(2);
     });
-
-    // Candidate is invalidated (no native --resume) yet reseed still fires:
-    // prepare hands the prior OpenClaw conversation forward as history.
-    expect(context.reusableCliSession).toEqual({
-      mode: "invalidate",
-      invalidatedReason: "missing-transcript",
-    });
-    expect(context.openClawHistoryPrompt).toContain(`[${recoveredAt}] User: prior claude-cli ask`);
-    expect(context.openClawHistoryPrompt).not.toContain(
-      "[1970-01-01T00:00:00.001Z] User: prior claude-cli ask",
-    );
-    expect(context.openClawHistoryPrompt).toContain(
-      "Recovered history may be stale; verify current and time-sensitive facts before acting.",
-    );
-    expect(context.openClawHistoryPrompt).toContain(
-      "<next_user_message>\nlatest ask\n</next_user_message>",
-    );
   });
+
+  it.each([true, false])(
+    "redelivers prior conversation to a fresh CLI session (previous binding: %s)",
+    async (hasBinding) => {
+      await withAuthenticatedHistory("claude-cli", async (prepare) => {
+        const recoveredAt = "2020-01-02T03:04:05.000Z";
+        fixture.appendTranscript({
+          id: "msg-1",
+          parentId: null,
+          timestamp: recoveredAt,
+          message: {
+            role: "user",
+            content: "prior claude-cli ask",
+            timestamp: 1,
+          },
+        });
+        fixture.appendTranscript({
+          id: "result-1",
+          parentId: "msg-1",
+          timestamp: "2020-01-02T03:04:06.000Z",
+          message: {
+            role: "toolResult",
+            toolCallId: "call-1",
+            toolName: "exec",
+            isError: false,
+            content: [{ type: "text", text: "Archive created at /tmp/example-backup.tar" }],
+            timestamp: 2,
+          },
+        });
+        fixture.appendTranscript({
+          id: "result-2",
+          parentId: "result-1",
+          timestamp: "2020-01-02T03:04:07.000Z",
+          message: {
+            role: "toolResult",
+            toolCallId: "call-2",
+            toolName: "exec",
+            isError: true,
+            content: [{ type: "text", text: "Upload failed: destination unavailable" }],
+            timestamp: 3,
+          },
+        });
+        setCliBackendForPrepareTest({
+          reseedFromRawTranscriptWhenUncompacted: true,
+        });
+        const transcriptCheck = vi.fn(async () => false);
+        const orphanCheck = vi.fn(async () => false);
+        setCliRunnerPrepareTestDeps({
+          claudeCliSessionTranscriptHasContent: transcriptCheck,
+          claudeCliSessionTranscriptHasOrphanedToolUse: orphanCheck,
+        });
+
+        const context = await prepare({
+          sessionKey: "agent:main:telegram:direct:peer",
+          provider: "claude-cli",
+          model: "opus",
+          cliSessionBinding: hasBinding ? { sessionId: "stale-claude-sid" } : undefined,
+          cliSessionId: hasBinding ? "stale-claude-sid" : undefined,
+        });
+
+        // Candidate is invalidated (no native --resume) yet reseed still fires:
+        // prepare hands the prior OpenClaw conversation forward as history.
+        expect(context.reusableCliSession).toEqual(
+          hasBinding
+            ? { mode: "invalidate", invalidatedReason: "missing-transcript" }
+            : { mode: "none" },
+        );
+        expect(context.openClawHistoryPrompt).toContain(
+          `[${recoveredAt}] User: prior claude-cli ask`,
+        );
+        expect(context.openClawHistoryPrompt).toContain(
+          "Tool result (exec): Archive created at /tmp/example-backup.tar",
+        );
+        expect(context.openClawHistoryPrompt).toContain(
+          "Tool result (exec) [error]: Upload failed: destination unavailable",
+        );
+        expect(context.openClawHistoryPrompt).not.toContain(
+          "[1970-01-01T00:00:00.001Z] User: prior claude-cli ask",
+        );
+        expect(context.openClawHistoryPrompt).toContain(
+          "Recovered history may be stale; verify current and time-sensitive facts before acting.",
+        );
+        expect(context.openClawHistoryPrompt).toContain(
+          "<next_user_message>\nlatest ask\n</next_user_message>",
+        );
+      });
+    },
+  );
 
   it("prepares node-placed Claude resumes without Gateway MCP, skills, or transcript checks", async () => {
     fixture.appendTranscript({
@@ -5166,7 +5430,8 @@ describe("prepareCliRunContext", () => {
     });
     // The reseed prompt is gateway-built text, so node placement keeps the
     // backend's raw-transcript reseed semantics for fresh-retry paths.
-    expect(context.openClawHistoryPrompt).toContain("gateway-only history");
+    // A borrowed native handle cannot authorize unverified durable history.
+    expect(context.openClawHistoryPrompt).toBeUndefined();
     expect(context.claudeSkillsPluginArgs).toEqual([]);
     expect(context.systemPrompt).not.toContain("GATEWAY_ONLY_SKILL_PATH");
     expect(context.mcpDeliveryCapture).toBeUndefined();
@@ -5187,60 +5452,62 @@ describe("prepareCliRunContext", () => {
   });
 
   it("keeps a warm claude-cli binding when its managed stdio child is still live", async () => {
-    const { dir } = fixture.session;
-    fixture.appendTranscript({
-      id: "msg-warm-1",
-      parentId: null,
-      timestamp: new Date(1).toISOString(),
-      message: {
-        role: "user",
-        content: "earlier warm context",
-        timestamp: 1,
-      },
-    });
-    setCliBackendForPrepareTest({
-      liveSession: true,
-      reseedFromRawTranscriptWhenUncompacted: true,
-    });
-    const transcriptCheck = vi.fn(async () => false);
-    const orphanCheck = vi.fn(async () => true);
-    const getLiveSessionGeneration = vi.fn(() => "warm-live-generation");
-    setCliRunnerPrepareTestDeps({
-      claudeCliSessionTranscriptHasContent: transcriptCheck,
-      claudeCliSessionTranscriptHasOrphanedToolUse: orphanCheck,
-      getCliLiveSessionGeneration: getLiveSessionGeneration,
-    });
+    await withAuthenticatedHistory("claude-cli", async (prepare) => {
+      const { dir } = fixture.session;
+      fixture.appendTranscript({
+        id: "msg-warm-1",
+        parentId: null,
+        timestamp: new Date(1).toISOString(),
+        message: {
+          role: "user",
+          content: "earlier warm context",
+          timestamp: 1,
+        },
+      });
+      setCliBackendForPrepareTest({
+        liveSession: true,
+        reseedFromRawTranscriptWhenUncompacted: true,
+      });
+      const transcriptCheck = vi.fn(async () => false);
+      const orphanCheck = vi.fn(async () => true);
+      const getLiveSessionGeneration = vi.fn(() => "warm-live-generation");
+      setCliRunnerPrepareTestDeps({
+        claudeCliSessionTranscriptHasContent: transcriptCheck,
+        claudeCliSessionTranscriptHasOrphanedToolUse: orphanCheck,
+        getCliLiveSessionGeneration: getLiveSessionGeneration,
+      });
 
-    const context = await fixture.prepare({
-      sessionKey: "agent:main:telegram:direct:peer",
-      prompt: "warm follow-up",
-      provider: "claude-cli",
-      model: "opus",
-      cliSessionBinding: { sessionId: "warm-claude-sid" },
-      cliSessionId: "warm-claude-sid",
-    });
+      const context = await prepare({
+        sessionKey: "agent:main:telegram:direct:peer",
+        prompt: "warm follow-up",
+        provider: "claude-cli",
+        model: "opus",
+        cliSessionBinding: { sessionId: "warm-claude-sid" },
+        cliSessionId: "warm-claude-sid",
+      });
 
-    expect(getLiveSessionGeneration).toHaveBeenCalledWith({
-      backendId: "claude-cli",
-      agentAccountId: undefined,
-      agentId: "main",
-      authProfileId: undefined,
-      sessionId: "session-test",
-      sessionKey: "agent:main:telegram:direct:peer",
+      expect(getLiveSessionGeneration).toHaveBeenCalledWith({
+        backendId: "claude-cli",
+        agentAccountId: undefined,
+        agentId: "main",
+        authProfileId: "history-test:account",
+        sessionId: "session-test",
+        sessionKey: "agent:main:main",
+      });
+      expect(transcriptCheck).toHaveBeenCalledWith({
+        sessionId: "warm-claude-sid",
+        workspaceDir: dir,
+      });
+      expect(orphanCheck).not.toHaveBeenCalled();
+      expect(context.reusableCliSession).toEqual({
+        mode: "reuse",
+        sessionId: "warm-claude-sid",
+      });
+      expect(context.params.agentId).toBe("main");
+      expect(context.requiredClaudeLiveSessionGeneration).toBe("warm-live-generation");
+      expect(context.openClawHistoryPrompt).toContain("earlier warm context");
+      expect(context.openClawHistoryPrompt).toContain("warm follow-up");
     });
-    expect(transcriptCheck).toHaveBeenCalledWith({
-      sessionId: "warm-claude-sid",
-      workspaceDir: dir,
-    });
-    expect(orphanCheck).not.toHaveBeenCalled();
-    expect(context.reusableCliSession).toEqual({
-      mode: "reuse",
-      sessionId: "warm-claude-sid",
-    });
-    expect(context.params.agentId).toBe("main");
-    expect(context.requiredClaudeLiveSessionGeneration).toBe("warm-live-generation");
-    expect(context.openClawHistoryPrompt).toContain("earlier warm context");
-    expect(context.openClawHistoryPrompt).toContain("warm follow-up");
   });
 
   it("disables Claude live transport while preserving native transcript resume", async () => {
@@ -5963,91 +6230,95 @@ describe("prepareCliRunContext", () => {
       expectsTruncation: true,
     },
   ])("$name", async (testCase) => {
-    const { dir, sessionTarget } = fixture.session;
-    if (testCase.provider === "claude-cli") {
-      setCliBackendForPrepareTest({ modelAliases: testCase.modelAliases });
-    }
-    const manager = SessionManager.open(sessionTarget, dir);
-    const firstKeptEntryId = manager.appendMessage({
-      role: "user",
-      content: "RESEED_RETAINED_PREFIX",
-      timestamp: 1,
-    });
-    manager.appendCompaction(
-      `${testCase.marker} ${"x".repeat(testCase.padding)}`,
-      firstKeptEntryId,
-      100_000,
-    );
-    manager.flushPendingPersistence();
+    await withAuthenticatedHistory(testCase.provider, async (prepare) => {
+      const { dir, sessionTarget } = fixture.session;
+      if (testCase.provider === "claude-cli") {
+        setCliBackendForPrepareTest({ modelAliases: testCase.modelAliases });
+      }
+      const manager = SessionManager.open(sessionTarget, dir);
+      const firstKeptEntryId = manager.appendMessage({
+        role: "user",
+        content: "RESEED_RETAINED_PREFIX",
+        timestamp: 1,
+      });
+      manager.appendCompaction(
+        `${testCase.marker} ${"x".repeat(testCase.padding)}`,
+        firstKeptEntryId,
+        100_000,
+      );
+      manager.flushPendingPersistence();
 
-    const context = await fixture.prepare({
-      provider: testCase.provider,
-      model: testCase.model,
-    });
+      const context = await prepare({
+        provider: testCase.provider,
+        model: testCase.model,
+      });
 
-    expect(context.openClawHistoryPrompt).toBeDefined();
-    expect(context.openClawHistoryPrompt).toContain("RESEED_RETAINED_PREFIX");
-    if (testCase.expectsTruncation) {
-      expect(context.openClawHistoryPrompt).toContain("OpenClaw reseed history truncated");
-    } else {
-      expect(context.openClawHistoryPrompt).toContain(testCase.marker);
-      expect(context.openClawHistoryPrompt).not.toContain("OpenClaw reseed history truncated");
-    }
+      expect(context.openClawHistoryPrompt).toBeDefined();
+      expect(context.openClawHistoryPrompt).toContain("RESEED_RETAINED_PREFIX");
+      if (testCase.expectsTruncation) {
+        expect(context.openClawHistoryPrompt).toContain("OpenClaw reseed history truncated");
+      } else {
+        expect(context.openClawHistoryPrompt).toContain(testCase.marker);
+        expect(context.openClawHistoryPrompt).not.toContain("OpenClaw reseed history truncated");
+      }
+    });
   });
 
   it("uses the automatic Claude CLI cap through the raw-tail reseed path", async () => {
-    const { dir } = fixture.session;
-    setRawCliBackendForPrepareTest({
-      id: "claude-cli",
-      pluginId: "anthropic",
-      bundleMcp: false,
-      config: {
-        command: "claude",
-        args: ["--print"],
-        output: "jsonl",
-        input: "stdin",
-        sessionMode: "existing",
-        reseedFromRawTranscriptWhenUncompacted: true,
-      },
-    });
-    setCliRunnerPrepareTestDeps({
-      claudeCliSessionTranscriptHasContent: vi.fn(async () => true),
-    });
-    const recentMarker = "RAW_RESEED_RECENT_MARKER_KEEP";
-    const padding = "x".repeat(8_000);
-    fixture.appendTranscript({
-      id: "msg-1",
-      parentId: null,
-      timestamp: new Date(1).toISOString(),
-      message: { role: "user", content: `EARLIEST_USER ${padding}`, timestamp: 1 },
-    });
-    fixture.appendTranscript({
-      id: "msg-2",
-      parentId: "msg-1",
-      timestamp: new Date(2).toISOString(),
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: `${recentMarker} ${padding}` }],
-        api: "responses",
-        provider: "test-cli",
-        model: "test-model",
-        usage: createZeroUsageFixture(),
-        stopReason: "stop",
-        timestamp: 2,
-      },
-    });
+    await withAuthenticatedHistory("claude-cli", async (prepare) => {
+      const { dir } = fixture.session;
+      setRawCliBackendForPrepareTest({
+        id: "claude-cli",
+        pluginId: "anthropic",
+        bundleMcp: false,
+        config: {
+          command: "claude",
+          args: ["--print"],
+          output: "jsonl",
+          input: "stdin",
+          sessionMode: "existing",
+          reseedFromRawTranscriptWhenUncompacted: true,
+        },
+      });
+      setCliRunnerPrepareTestDeps({
+        claudeCliSessionTranscriptHasContent: vi.fn(async () => true),
+      });
+      const recentMarker = "RAW_RESEED_RECENT_MARKER_KEEP";
+      const padding = "x".repeat(8_000);
+      fixture.appendTranscript({
+        id: "msg-1",
+        parentId: null,
+        timestamp: new Date(1).toISOString(),
+        message: { role: "user", content: `EARLIEST_USER ${padding}`, timestamp: 1 },
+      });
+      fixture.appendTranscript({
+        id: "msg-2",
+        parentId: "msg-1",
+        timestamp: new Date(2).toISOString(),
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: `${recentMarker} ${padding}` }],
+          api: "responses",
+          provider: "test-cli",
+          model: "test-model",
+          usage: createZeroUsageFixture(),
+          stopReason: "stop",
+          timestamp: 2,
+        },
+      });
 
-    const context = await fixture.prepare({
-      provider: "claude-cli",
-      model: "claude-haiku-3-5",
-      cliSessionBinding: { sessionId: "cli-session", cwdHash: hashCliSessionText(dir) },
-    });
+      const context = await prepare({
+        provider: "claude-cli",
+        model: "claude-haiku-3-5",
+        cliSessionBinding: { sessionId: "cli-session", cwdHash: hashCliSessionText(dir) },
+      });
 
-    expect(context.reusableCliSession).toEqual({ mode: "reuse", sessionId: "cli-session" });
-    expect(context.openClawHistoryPrompt).toBeDefined();
-    expect(context.openClawHistoryPrompt).toContain(recentMarker);
-    expect(context.openClawHistoryPrompt).toContain("EARLIEST_USER");
-    expect(context.openClawHistoryPrompt).not.toContain("OpenClaw reseed history truncated");
+      expect(context.reusableCliSession).toEqual({ mode: "reuse", sessionId: "cli-session" });
+      expect(context.openClawHistoryPrompt).toBeDefined();
+      expect(context.openClawHistoryPrompt).toContain(recentMarker);
+      expect(context.openClawHistoryPrompt).toContain("EARLIEST_USER");
+      expect(context.openClawHistoryPrompt).not.toContain("OpenClaw reseed history truncated");
+    });
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

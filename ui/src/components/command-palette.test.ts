@@ -54,6 +54,7 @@ function createGateway(
     connection: { gatewayUrl: "ws://localhost", token: "", bootstrapToken: "", password: "" },
     connectionRevision: 0,
     eventLog: [],
+    eventLogRevision: 0,
     connect: () => undefined,
     setSessionKey: () => undefined,
     start: () => undefined,

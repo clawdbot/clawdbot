@@ -118,6 +118,7 @@ const privateHarnessParamCases = [
   { field: "__openclawSourceReplyDeliveryRuntime", value: { currentMode: "automatic" } },
   { field: "compactionCountOwner", value: "caller" },
   { field: "onContextAccountingEvent", value: () => undefined },
+  { field: "onCompactionRequestBudget", value: () => undefined },
 ] as const;
 
 function createTranscriptRecorder(
@@ -1281,13 +1282,22 @@ describe("runAgentHarnessAttempt", () => {
     params.toolsAllow = ["openclaw"];
     params.systemAgentTool = { surface: "gateway", proposalRef: {}, directiveRef: {} };
     const onContextAccountingEvent = vi.fn();
-    Object.assign(params, { compactionCountOwner: "caller", onContextAccountingEvent });
+    const onCompactionRequestBudget = vi.fn();
+    Object.assign(params, {
+      compactionCountOwner: "caller",
+      onContextAccountingEvent,
+      onCompactionRequestBudget,
+    });
 
     const result = await runAgentHarnessAttempt(params);
 
     expect(result.sessionIdUsed).toBe("openclaw");
     expect(agentRunAttempt).toHaveBeenCalledWith(
-      expect.objectContaining({ compactionCountOwner: "caller", onContextAccountingEvent }),
+      expect.objectContaining({
+        compactionCountOwner: "caller",
+        onContextAccountingEvent,
+        onCompactionRequestBudget,
+      }),
     );
     expect(toolNames).toEqual(["openclaw"]);
     expect(isHostScopedAgentToolActive("openclaw")).toBe(false);

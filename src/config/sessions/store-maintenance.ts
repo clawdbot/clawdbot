@@ -6,6 +6,7 @@ import {
 import { parseByteSize } from "../../cli/parse-bytes.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { parseSessionDeliveryRoute } from "../../routing/session-key.js";
 import {
   isAcpSessionKey,
   isCronSessionKey,
@@ -22,7 +23,7 @@ const log = createSubsystemLogger("sessions/store");
 const DEFAULT_SESSION_PRUNE_AFTER_MS = 30 * 24 * 60 * 60 * 1000;
 const DEFAULT_DASHBOARD_ARCHIVE_AFTER_MS = 7 * 24 * 60 * 60 * 1000;
 const DEFAULT_MODEL_RUN_PRUNE_AFTER_MS = 24 * 60 * 60 * 1000;
-const DEFAULT_SESSION_MAX_ENTRIES = 500;
+const DEFAULT_SESSION_MAX_ENTRIES = 5000;
 const DEFAULT_SESSION_MAINTENANCE_MODE: SessionMaintenanceMode = "enforce";
 const DEFAULT_SESSION_DISK_BUDGET_HIGH_WATER_RATIO = 0.8;
 // Conversation history stays in SQLite until physical main-file + WAL + artifact usage crosses
@@ -41,6 +42,7 @@ export type SessionMaintenanceWarning = {
   wouldPrune: boolean;
   wouldCap: boolean;
   capOutcome?: "archive" | "remove" | null;
+  pruneOutcome?: "archive" | "remove" | null;
 };
 
 export type ResolvedSessionMaintenanceConfig = {
@@ -284,7 +286,7 @@ function isGatewayModelRunSessionKey(sessionKey: string): boolean {
 }
 
 /**
- * Remove entries whose `updatedAt` is older than the configured threshold.
+ * Archive stale durable entries in place; remove only disposable runtime entries.
  * Entries without `updatedAt` are kept (cannot determine staleness).
  * Mutates `store` in-place.
  */
@@ -294,6 +296,7 @@ export function pruneStaleEntries(
   opts: {
     log?: boolean;
     onPruned?: (params: { key: string; entry: SessionEntry }) => void;
+    onArchived?: (params: { key: string; entry: SessionEntry }) => void;
     preserveKeys?: ReadonlySet<string>;
     preserveRecentMs?: number | null;
   } = {},
@@ -302,7 +305,8 @@ export function pruneStaleEntries(
   if (maxAgeMs <= 0) {
     return 0;
   }
-  const cutoffMs = Date.now() - maxAgeMs;
+  const now = Date.now();
+  const cutoffMs = now - maxAgeMs;
   let pruned = 0;
   for (const [key, entry] of Object.entries(store)) {
     if (
@@ -316,9 +320,16 @@ export function pruneStaleEntries(
       continue;
     }
     if (entry?.updatedAt != null && entry.updatedAt < cutoffMs) {
-      opts.onPruned?.({ key, entry });
-      delete store[key];
-      pruned++;
+      if (isSyntheticSessionMaintenanceKey(key)) {
+        opts.onPruned?.({ key, entry });
+        delete store[key];
+        pruned++;
+      } else {
+        entry.archivedAt = now;
+        delete entry.archivedBy;
+        entry.archiveReason = "age-retention";
+        opts.onArchived?.({ key, entry });
+      }
     }
   }
   if (pruned > 0 && opts.log !== false) {
@@ -434,6 +445,7 @@ export function archiveStaleDashboardEntries(
     nowMs?: number;
     onArchived?: (params: { key: string; entry: SessionEntry }) => void;
     preserveKeys?: ReadonlySet<string>;
+    preserveRecentMs?: number | null;
   } = {},
 ): number {
   if (archiveAfterMs == null || archiveAfterMs <= 0) {
@@ -446,9 +458,7 @@ export function archiveStaleDashboardEntries(
     const parsed = parseAgentSessionKey(key);
     if (
       !parsed?.rest.startsWith("dashboard:") ||
-      entry.pinnedAt !== undefined ||
-      entry.archivedAt !== undefined ||
-      opts.preserveKeys?.has(key) === true
+      shouldPreserveMaintenanceEntry({ key, entry, ...opts })
     ) {
       continue;
     }
@@ -457,6 +467,7 @@ export function archiveStaleDashboardEntries(
       continue;
     }
     entry.archivedAt = now;
+    delete entry.archivedBy;
     entry.archiveReason = "stale-dashboard";
     opts.onArchived?.({ key, entry });
     archived += 1;
@@ -503,6 +514,8 @@ function isProtectedExternalConversationSessionKey(sessionKey: string): boolean 
   const parsed = parseAgentSessionKey(sessionKey);
   const rest = normalizeLowercaseStringOrEmpty(parsed?.rest ?? sessionKey);
   return (
+    parseSessionDeliveryRoute(sessionKey) !== null ||
+    /^direct:.+$/.test(rest) ||
     /^[^:]+:(?:group|channel):.+$/.test(rest) ||
     /^telegram:(?:direct|dm):.+:topic:[^:]+$/.test(rest)
   );
@@ -531,7 +544,10 @@ function isProtectedSessionMaintenanceEntry(
   if (parseThreadSessionSuffix(sessionKey).threadId) {
     return true;
   }
-  if (isProtectedExternalConversationSessionKey(sessionKey)) {
+  if (
+    entry?.delivery?.kind === "external" ||
+    isProtectedExternalConversationSessionKey(sessionKey)
+  ) {
     return true;
   }
   const chatType = normalizeLowercaseStringOrEmpty(
@@ -555,6 +571,7 @@ function shouldPreserveNonArchivedMaintenanceEntry(params: {
   // configured retention limits while the lock remains.
   return (
     params.entry?.modelSelectionLocked === true ||
+    params.entry?.status === "running" ||
     params.preserveKeys?.has(params.key) === true ||
     isRecentSessionMaintenanceEntry(params) ||
     isProtectedSessionMaintenanceEntry(params.key, params.entry)
@@ -684,6 +701,11 @@ export function getActiveSessionMaintenanceWarning(params: {
     wouldPrune,
     wouldCap,
     capOutcome,
+    pruneOutcome: wouldPrune
+      ? isSyntheticSessionMaintenanceKey(activeSessionKey)
+        ? "remove"
+        : "archive"
+      : null,
   };
 }
 

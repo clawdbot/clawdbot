@@ -404,6 +404,7 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
             this.closeTimer = undefined;
           }
           if (this.closed) {
+            this.forceClose(socket);
             return;
           }
           if (!opened || !settled) {

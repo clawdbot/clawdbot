@@ -1544,6 +1544,8 @@ class ChatControllerBranchCoordinationTest {
           "Canonical history must retire the accepted Room row before the health response",
           outbox.load("gateway-a").any { it.id == head.id },
         )
+        // A newer refresh can still own the visible snapshot when this history reaches health.
+        awaitBranchProgress { controller.outboxItems.value.isEmpty() }
         assertTrue(controller.outboxItems.value.isEmpty())
         assertEquals(1, gateway.callCount("chat.send"))
 

@@ -263,6 +263,21 @@ independent queries:
 ```
 
 Single-query calls continue to return the compact candidate array directly.
+When both shapes contain searches, the non-empty `query` runs first, with the
+top-level `limit` scoped to it. Batch entries follow in request order, including
+repeated query text; each occurrence keeps its own limit and counts toward the
+batch budgets.
+
+Beside a non-empty batch, an omitted, `null`, empty, or whitespace-only `query`
+is ignored. In that case, omit the top-level `limit` or set it to `null`; a
+non-null top-level limit is rejected rather than applied to the batch.
+An omitted or `null` `queries` retains scalar behavior, and `queries: []` also
+falls back to the scalar shape when `query` is non-empty. A blank scalar query
+without a batch still returns an empty candidate array. A missing or `null`
+scalar with no batch, or an empty batch with no non-empty scalar, is rejected.
+A scalar `limit: null` uses the default limit, just like an omitted limit.
+Invalid query shapes, invalid limits, and over-budget batches still fail.
+
 Batch calls return `{ results: [{ query, candidates }] }` in request order. Each
 query uses the same effective catalog, ranking, filtering, and per-query limit
 as an ordinary search; a candidate may appear in more than one result group.

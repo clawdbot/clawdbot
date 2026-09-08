@@ -19,6 +19,7 @@ import {
   markBackgrounded,
   markExited,
   type ProcessSession,
+  resolveProcessCleanupMs,
 } from "./bash-process-registry.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { createExecTool, createProcessTool } from "./bash-tools.js";
@@ -639,6 +640,7 @@ const seedFinishedLogSession = (lines: string[]) => {
   const session: ProcessSession = {
     id: `seeded-log-${nextCallId()}`,
     command: "seeded log",
+    cleanupMs: resolveProcessCleanupMs(),
     startedAt: Date.now(),
     maxOutputChars: 100_000,
     pendingMaxOutputChars: 100_000,

@@ -110,7 +110,8 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
 
   const activeProcessSessions = listActiveProcessSessionReferences({
     scopeKey: resolveProcessToolScopeKey({
-      sessionKey: params.setup.sandboxSessionKey,
+      sessionKey: attempt.sessionKey,
+      sessionId: attempt.sessionId,
       agentId: params.setup.sessionAgentId,
     }),
   });

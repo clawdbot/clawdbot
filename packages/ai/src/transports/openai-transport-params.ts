@@ -13,6 +13,7 @@ import { resolveModelRequestTimeoutMs, resolveProviderRequestPolicyConfig } from
 import { resolveOpenAICompletionsCompat } from "./openai-completions-compat.js";
 import { resolveOpenAIReasoningEffortMap } from "./openai-reasoning-compat.js";
 import type { OpenAIModeModel } from "./openai-transport-shared.js";
+import { resolveOpencodeSessionHeaders } from "./session-affinity.js";
 import { isCodeModeModelVisibleToolName, sha256Hex } from "./transport-utils.js";
 
 const MAX_OPENAI_STRICT_TOOL_DOWNGRADE_DIAGNOSTIC_KEYS = 256;
@@ -236,42 +237,6 @@ export function assertCodeModeResponsesToolSurface(
   );
 }
 
-function buildOpenAIStrictToolDowngradeDiagnosticKey(
-  diagnostics: ReturnType<typeof findOpenAIStrictToolProjectionDiagnostics>,
-  context: { transport: "responses" | "completions"; model: OpenAIModeModel },
-): string {
-  return sha256Hex(
-    JSON.stringify({
-      transport: context.transport,
-      provider: context.model.provider ?? null,
-      model: context.model.id ?? null,
-      diagnostics: diagnostics.map((entry) => ({
-        toolIndex: entry.toolIndex,
-        toolName: entry.toolName ?? null,
-        violations: entry.violations,
-      })),
-    }),
-  );
-}
-
-function shouldLogOpenAIStrictToolDowngradeDiagnostic(
-  diagnostics: ReturnType<typeof findOpenAIStrictToolProjectionDiagnostics>,
-  context: { transport: "responses" | "completions"; model: OpenAIModeModel },
-): boolean {
-  const key = buildOpenAIStrictToolDowngradeDiagnosticKey(diagnostics, context);
-  if (loggedOpenAIStrictToolDowngradeDiagnosticKeys.has(key)) {
-    return false;
-  }
-  if (
-    loggedOpenAIStrictToolDowngradeDiagnosticKeys.size >=
-    MAX_OPENAI_STRICT_TOOL_DOWNGRADE_DIAGNOSTIC_KEYS
-  ) {
-    loggedOpenAIStrictToolDowngradeDiagnosticKeys.clear();
-  }
-  loggedOpenAIStrictToolDowngradeDiagnosticKeys.add(key);
-  return true;
-}
-
 export function resolveOpenAIStrictToolFlagWithDiagnostics(
   projection: OpenAIToolProjection,
   strictSetting: boolean | null | undefined,
@@ -279,11 +244,30 @@ export function resolveOpenAIStrictToolFlagWithDiagnostics(
 ): boolean | undefined {
   const strict = resolveOpenAIProjectedToolsStrictToolFlag(projection, strictSetting);
   if (strictSetting === true && strict === false) {
-    const diagnostics = findOpenAIStrictToolProjectionDiagnostics(projection);
     getAiTransportHost().logDebug("openai-transport", () => {
-      if (!shouldLogOpenAIStrictToolDowngradeDiagnostic(diagnostics, context)) {
+      const diagnostics = findOpenAIStrictToolProjectionDiagnostics(projection);
+      const key = sha256Hex(
+        JSON.stringify({
+          transport: context.transport,
+          provider: context.model.provider ?? null,
+          model: context.model.id ?? null,
+          diagnostics: diagnostics.map((entry) => ({
+            toolIndex: entry.toolIndex,
+            toolName: entry.toolName ?? null,
+            violations: entry.violations,
+          })),
+        }),
+      );
+      if (loggedOpenAIStrictToolDowngradeDiagnosticKeys.has(key)) {
         return null;
       }
+      if (
+        loggedOpenAIStrictToolDowngradeDiagnosticKeys.size >=
+        MAX_OPENAI_STRICT_TOOL_DOWNGRADE_DIAGNOSTIC_KEYS
+      ) {
+        loggedOpenAIStrictToolDowngradeDiagnosticKeys.clear();
+      }
+      loggedOpenAIStrictToolDowngradeDiagnosticKeys.add(key);
       const sample = diagnostics.slice(0, 5).map((entry) => ({
         tool: entry.toolName ?? `tool[${entry.toolIndex}]`,
         violations: entry.violations.slice(0, 8),
@@ -333,6 +317,7 @@ function isNativeOpenAICodexResponsesBaseUrl(baseUrl?: string): boolean {
       "/backend-api/v1",
       "/backend-api/codex",
       "/backend-api/codex/v1",
+      "/backend-api/codex/responses",
     ].includes(pathname);
   } catch {
     return false;
@@ -382,7 +367,9 @@ export function buildOpenAIClientHeaders(
     // (companion/btw effects sessions) 400 without this clamp.
     resolvedHeaders.session_id = clampOpenAIPromptCacheKey(sessionId) ?? sessionId;
   }
-  return resolvedHeaders;
+  return (
+    resolveOpencodeSessionHeaders(model, { sessionId, headers: resolvedHeaders }) ?? resolvedHeaders
+  );
 }
 
 function resolveOpenAISdkTimeoutMs(model: Model, timeoutMs?: number): number | undefined {

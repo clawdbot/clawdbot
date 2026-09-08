@@ -1053,12 +1053,88 @@ describe("TUI PTY real backends", () => {
       async ({ onTestFinished }) => {
         const replyText = `${alias.toUpperCase()}_ALIAS_RESPONSE`;
         const prompt = `message through ${alias} alias`;
+        const cliModelId = "claude-sonnet-5";
+        const cliModelRef = `claude-cli/${cliModelId}`;
+        const canonicalModelRef = `anthropic/${cliModelId}`;
         const fixture = await startLocalModeTui(onTestFinished, {
           cliArgs: [alias],
           replyText,
+          ...(alias === "chat"
+            ? {
+                prepareConfig: ({ config }: { config: OpenClawConfig }) => {
+                  const mockProvider = config.models?.providers?.["tui-pty-mock"];
+                  if (!mockProvider) {
+                    throw new Error("local PTY fixture model provider is missing");
+                  }
+                  const cliProvider = structuredClone(mockProvider);
+                  for (const model of cliProvider.models) {
+                    model.id = cliModelId;
+                    model.name = cliModelId;
+                  }
+                  return {
+                    ...config,
+                    plugins: {
+                      enabled: true,
+                      allow: ["anthropic"],
+                      entries: { anthropic: { enabled: true } },
+                      slots: { memory: "none" },
+                    },
+                    agents: {
+                      ...config.agents,
+                      defaults: {
+                        ...config.agents?.defaults,
+                        models: {
+                          ...config.agents?.defaults?.models,
+                          [cliModelRef]: {},
+                        },
+                      },
+                    },
+                    models: {
+                      ...config.models,
+                      providers: {
+                        ...config.models?.providers,
+                        "claude-cli": cliProvider,
+                      },
+                    },
+                  } satisfies OpenClawConfig;
+                },
+              }
+            : {}),
         });
         try {
           await fixture.run.waitForOutput("local ready", LOCAL_STARTUP_TIMEOUT_MS);
+          if (alias === "chat") {
+            const modelOffset = fixture.run.visibleOutput().length;
+            await fixture.run.write(`/model ${cliModelRef}\r`, { delay: false });
+            const confirmation = await waitFor({
+              timeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
+              read: () => {
+                const output = fixture.run.visibleOutput().slice(modelOffset);
+                return output.includes(`model set to ${canonicalModelRef}`) ||
+                  output.includes(`model set to ${cliModelRef}`)
+                  ? output
+                  : null;
+              },
+              onTimeout: () => new Error(`model selection did not finish\n${fixture.run.output()}`),
+            });
+            expect.soft(confirmation).toContain(`model set to ${canonicalModelRef}`);
+            expect(fixture.mockModel.requests()).toHaveLength(0);
+            console.log(
+              `[behavior-evidence] tui-local-cli-model-identity ${JSON.stringify({
+                requested: cliModelRef,
+                confirmation: confirmation.match(/model set to [^\r\n]+/u)?.[0],
+                modelRequests: fixture.mockModel.requests().length,
+              })}`,
+            );
+
+            const restoreOffset = fixture.run.visibleOutput().length;
+            await fixture.run.write("/model tui-pty-mock/gpt-5.5\r", { delay: false });
+            await waitForOutputAfter(
+              fixture.run,
+              "model set to tui-pty-mock/gpt-5.5",
+              restoreOffset,
+            );
+          }
           await fixture.run.write(`${prompt}\r`);
           await waitFor({
             timeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
@@ -1069,7 +1145,16 @@ describe("TUI PTY real backends", () => {
           expect(JSON.stringify(fixture.mockModel.requests()[0]?.body)).toContain(prompt);
           await fixture.run.waitForOutput(replyText, LOCAL_OUTPUT_TIMEOUT_MS);
           await fixture.run.write("/exit\r", { delay: false });
-          expect((await fixture.run.waitForExit()).exitCode).toBe(0);
+          const exitCode = (await fixture.run.waitForExit()).exitCode;
+          expect(exitCode).toBe(0);
+          console.log(
+            `[behavior-evidence] tui-local-model-roundtrip ${JSON.stringify({
+              alias,
+              modelRequests: fixture.mockModel.requests().length,
+              replyVisible: fixture.run.visibleOutput().includes(replyText),
+              exitCode,
+            })}`,
+          );
         } finally {
           await fixture.cleanup();
         }

@@ -5,7 +5,6 @@ import { buildAnthropicCliBackend } from "./cli-backend.js";
 import {
   CLAUDE_CLI_CLEAR_ENV,
   normalizeClaudeBackendConfig,
-  resolveClaudeCliAutoCompactEnv,
   resolveClaudeCliExecutionArgs,
   supportsClaudeDynamicSystemPromptSections,
 } from "./cli-shared.js";
@@ -70,7 +69,10 @@ describe("Claude CLI adapter equivalence", () => {
       isolatedCompletionSystemPrompt: string;
     }) as { env?: Record<string, string>; isolatedCompletionEnforced?: true };
 
-    expect(prepared).toEqual({ env: {}, isolatedCompletionEnforced: true });
+    expect(prepared).toEqual({
+      env: { CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS: "1" },
+      isolatedCompletionEnforced: true,
+    });
   });
 
   it("builds Claude Code's native manual compaction command", () => {
@@ -107,18 +109,6 @@ describe("Claude CLI adapter equivalence", () => {
       ok: false,
       reason: "Claude CLI did not confirm that native compaction ran.",
     });
-  });
-});
-
-describe("resolveClaudeCliAutoCompactEnv", () => {
-  it("maps the effective OpenClaw context budget into Claude Code compaction", () => {
-    expect(resolveClaudeCliAutoCompactEnv(100_000.9)).toEqual({
-      CLAUDE_CODE_AUTO_COMPACT_WINDOW: "100000",
-    });
-  });
-
-  it.each([undefined, 0, 0.5, Number.NaN])("rejects an invalid context budget: %s", (budget) => {
-    expect(resolveClaudeCliAutoCompactEnv(budget)).toBeUndefined();
   });
 });
 
@@ -918,7 +908,10 @@ describe("normalizeClaudeBackendConfig", () => {
         contextTokenBudget: 100_000,
       }),
     ).toEqual({
-      env: { CLAUDE_CODE_AUTO_COMPACT_WINDOW: "100000" },
+      env: {
+        CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS: "1",
+        CLAUDE_CODE_AUTO_COMPACT_WINDOW: "100000",
+      },
     });
   });
 
@@ -948,6 +941,7 @@ describe("normalizeClaudeBackendConfig", () => {
     }) as ClaudePreparedExecutionWithSecret;
 
     expect(prepared.env).toEqual({
+      CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS: "1",
       CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR: "3",
     });
     expect(prepared.env).not.toHaveProperty("CLAUDE_CODE_OAUTH_TOKEN");
@@ -1058,6 +1052,7 @@ describe("normalizeClaudeBackendConfig", () => {
     }) as ClaudePreparedExecutionWithSecret;
 
     expect(prepared.env).toEqual({
+      CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS: "1",
       CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR: "3",
     });
     expect(prepared.env).not.toHaveProperty("ANTHROPIC_API_KEY");
