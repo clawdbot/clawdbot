@@ -8,7 +8,7 @@ vi.mock("../../packages/terminal-core/src/note.js", () => ({
 }));
 
 function collectFindingsAt(availableBytes: number) {
-  return collectDiskSpaceHealthFindings({ gateway: { mode: "local" } } as never, {
+  return collectDiskSpaceHealthFindings({
     env: { HOME: "/home/test" },
     readDiskSpace: () => ({ availableBytes }),
   });
@@ -105,7 +105,7 @@ describe("noteDiskSpace", () => {
     const { note: mockNote } = await import("../../packages/terminal-core/src/note.js");
     vi.mocked(mockNote).mockClear();
 
-    noteDiskSpace({ gateway: { mode: "local" } } as never, {
+    noteDiskSpace({
       env: { HOME: "/home/test" },
       readDiskSpace: () => ({ availableBytes: 300 * 1024 * 1024 }),
     });
@@ -123,7 +123,7 @@ describe("noteDiskSpace", () => {
     const { note: mockNote } = await import("../../packages/terminal-core/src/note.js");
     vi.mocked(mockNote).mockClear();
 
-    noteDiskSpace({ gateway: { mode: "local" } } as never, {
+    noteDiskSpace({
       env: { HOME: "/home/test" },
       readDiskSpace: () => ({ availableBytes: 50 * 1024 * 1024 }),
     });
@@ -140,7 +140,7 @@ describe("noteDiskSpace", () => {
     const { note: mockNote } = await import("../../packages/terminal-core/src/note.js");
     vi.mocked(mockNote).mockClear();
 
-    noteDiskSpace({ gateway: { mode: "local" } } as never, {
+    noteDiskSpace({
       env: { HOME: "/home/test" },
       readDiskSpace: () => ({ availableBytes: 10 * 1024 * 1024 * 1024 }),
     });
@@ -152,7 +152,7 @@ describe("noteDiskSpace", () => {
     const { note: mockNote } = await import("../../packages/terminal-core/src/note.js");
     vi.mocked(mockNote).mockClear();
 
-    noteDiskSpace({ gateway: { mode: "local" } } as never, {
+    noteDiskSpace({
       env: { HOME: "/home/test" },
       readDiskSpace: () => null,
     });
@@ -163,7 +163,7 @@ describe("noteDiskSpace", () => {
 
 describe("collectDiskSpaceHealthFindings", () => {
   it("returns a low-space warning finding", () => {
-    const findings = collectDiskSpaceHealthFindings({ gateway: { mode: "local" } } as never, {
+    const findings = collectDiskSpaceHealthFindings({
       env: { HOME: "/home/test" },
       readDiskSpace: () => ({ availableBytes: 300 * 1024 * 1024 }),
     });
@@ -182,7 +182,7 @@ describe("collectDiskSpaceHealthFindings", () => {
   });
 
   it("returns a critical-space error finding", () => {
-    const findings = collectDiskSpaceHealthFindings({ gateway: { mode: "local" } } as never, {
+    const findings = collectDiskSpaceHealthFindings({
       env: { HOME: "/home/test" },
       readDiskSpace: () => ({ availableBytes: 50 * 1024 * 1024 }),
     });
@@ -201,7 +201,7 @@ describe("collectDiskSpaceHealthFindings", () => {
   });
 
   it("returns no finding when space is sufficient", () => {
-    const findings = collectDiskSpaceHealthFindings({ gateway: { mode: "local" } } as never, {
+    const findings = collectDiskSpaceHealthFindings({
       env: { HOME: "/home/test" },
       readDiskSpace: () => ({ availableBytes: 10 * 1024 * 1024 * 1024 }),
     });
@@ -210,7 +210,7 @@ describe("collectDiskSpaceHealthFindings", () => {
   });
 
   it("returns no finding when disk space cannot be read", () => {
-    const findings = collectDiskSpaceHealthFindings({ gateway: { mode: "local" } } as never, {
+    const findings = collectDiskSpaceHealthFindings({
       env: { HOME: "/home/test" },
       readDiskSpace: () => null,
     });

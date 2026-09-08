@@ -126,6 +126,11 @@ describe("managed Responses transport terminal errors", () => {
         expect(result.responseId).toBe("resp_parallel_truncated");
         expect(result.responseModel).toBe("served-model");
       }
+      if (ending === "incomplete" || ending === "completed") {
+        expect(result.errorCode).toBe("incomplete_tool_call");
+      } else {
+        expect(result.errorCode).not.toBe("incomplete_tool_call");
+      }
       if (ending === "filtered") {
         expect(result.errorMessage).toBe("Provider incomplete_reason: content_filter");
       } else if (ending === "failed") {
@@ -202,6 +207,7 @@ describe("managed Responses transport terminal errors", () => {
         totalTokens: 29,
         reasoningTokens: 3,
       });
+      expect(result.errorCode).toBe("incomplete_tool_call");
       expect(result.responseId).toBe("resp_truncated");
       expect(result.responseModel).toBe("served-model");
     },

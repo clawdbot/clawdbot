@@ -1,5 +1,6 @@
 import { html, nothing } from "lit";
 import { property } from "lit/decorators.js";
+import { keyed } from "lit/directives/keyed.js";
 import type { ControlUiEnvironment } from "../../../src/gateway/control-ui-bootstrap-contract.js";
 import { t } from "../i18n/index.ts";
 import { IdentityAvatarController } from "../lib/identity-avatar-loader.ts";
@@ -32,11 +33,11 @@ class SidebarAgentCard extends OpenClawLightDomContentsElement {
   }
 
   private renderContent() {
-    const avatarUrl = this.avatarUrl?.startsWith("/")
-      ? this.avatarAuthReady
-        ? this.avatarLoader.resolve(this.avatarUrl)
-        : null
-      : this.avatarUrl;
+    const sourceUrl = this.avatarUrl;
+    const avatarUrl =
+      sourceUrl && (!sourceUrl.startsWith("/") || this.avatarAuthReady)
+        ? this.avatarLoader.resolve(sourceUrl)
+        : null;
     const menuLabel = this.switcherAvailable
       ? t("agentChip.switchAgent")
       : t("agentChip.menuLabel");
@@ -72,14 +73,18 @@ class SidebarAgentCard extends OpenClawLightDomContentsElement {
             }"
           >
             ${
-              avatarUrl
-                ? html`<img
-                    src=${avatarUrl}
-                    alt=""
-                    aria-hidden="true"
-                    loading="lazy"
-                    decoding="async"
-                  />`
+              avatarUrl && sourceUrl
+                ? keyed(
+                    avatarUrl,
+                    html`<img
+                      src=${avatarUrl}
+                      alt=""
+                      aria-hidden="true"
+                      loading="lazy"
+                      decoding="async"
+                      @error=${this.avatarLoader.imageErrorHandler(sourceUrl)}
+                    />`,
+                  )
                 : html`<span class="sidebar-agent-card__avatar-text" aria-hidden="true"
                     >${this.avatarText}</span
                   >`

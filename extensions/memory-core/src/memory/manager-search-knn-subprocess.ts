@@ -1,5 +1,6 @@
 // Parent-side subprocess boundary for synchronous sqlite-vec KNN work.
 import { spawn } from "node:child_process";
+import { ensureSqliteLibrarySelected } from "openclaw/plugin-sdk/memory-core-host-engine-knn";
 import {
   resolveRuntimeWorkerArgv,
   resolveRuntimeWorkerUrl,
@@ -160,9 +161,11 @@ export async function runVectorKnnInSubprocess(
   if (params.signal?.aborted) {
     throw toAbortError(params.signal);
   }
+  const sqliteLibrary = ensureSqliteLibrarySelected();
   const input: VectorKnnChildInput = {
     databasePath: params.databasePath,
     extensionPath: params.extensionPath,
+    ...(sqliteLibrary.source !== "runtime" ? { sqliteLibraryPath: sqliteLibrary.path } : {}),
     request: params.request,
   };
   const inputPayload = Buffer.from(JSON.stringify(input), "utf8");

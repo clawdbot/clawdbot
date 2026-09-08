@@ -583,6 +583,51 @@ describe("reply run registry", () => {
     await expect(settlement).resolves.toBe(true);
   });
 
+  it.each(["finalization expiry", "forced clear", "terminal expiry"] as const)(
+    "keeps late delivery ownership pending after %s reclaims the slot",
+    async (release) => {
+      await withFakeReplyTimers(async () => {
+        const operation = createTestReplyOperation();
+        const delivery = createDeferred();
+        const settled = vi.fn();
+        void operation.ownerSettlement?.then(settled);
+        operation.setPhase("running");
+        operation.retainFailureUntilComplete();
+        operation.freezeAbort();
+        try {
+          if (release === "finalization expiry") {
+            await vi.advanceTimersByTimeAsync(REPLY_RUN_FINALIZATION_SETTLE_TIMEOUT_MS);
+          } else if (release === "forced clear") {
+            expect(forceClearReplyOperation(operation)).toBe(true);
+          } else {
+            operation.fail("run_failed");
+            await vi.advanceTimersByTimeAsync(REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS);
+          }
+          expect(replyRunRegistry.isActive(operation.key)).toBe(false);
+          await Promise.resolve();
+          expect(settled).not.toHaveBeenCalled();
+          const ownerWait = waitForReplyOperationOwnerSettlement(operation, 100);
+          await vi.advanceTimersByTimeAsync(100);
+          await expect(ownerWait).resolves.toBe(false);
+          expect(settled).not.toHaveBeenCalled();
+
+          const successor = createTestReplyOperation({ sessionId: "successor" });
+          operation.completeWithAfterClearBarrier(delivery.promise);
+          operation.complete();
+          await Promise.resolve();
+          expect(settled).not.toHaveBeenCalled();
+          expect(replyRunRegistry.get(operation.key)).toBe(successor);
+          successor.complete();
+        } finally {
+          delivery.resolve();
+          operation.completeWithAfterClearBarrier(delivery.promise);
+          await operation.ownerSettlement;
+        }
+        expect(settled).toHaveBeenCalledOnce();
+      });
+    },
+  );
+
   it("does not settle the delivery owner when complete is called again before its barrier settles", async () => {
     const operation = createTestReplyOperation({ sessionId: "session-late-complete" });
     const delivery = createDeferred();

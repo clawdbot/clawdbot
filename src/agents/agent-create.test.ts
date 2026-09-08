@@ -132,7 +132,11 @@ describe("createAgent", () => {
         };
         mocks.persisted = transformed.nextConfig;
         mocks.config = transformed.nextConfig;
-        return { result: transformed.result, nextConfig: transformed.nextConfig };
+        return {
+          path: "/tmp/created-config.json",
+          result: transformed.result,
+          nextConfig: transformed.nextConfig,
+        };
       },
     );
   });

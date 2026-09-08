@@ -1,7 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
+import { createTestConfigFileStore } from "../commands/test-runtime-config-helpers.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import type { WizardPrompter } from "./prompts.js";
+
+const configFiles = createTestConfigFileStore();
 
 const mocks = vi.hoisted(() => ({
   currentConfig: {} as OpenClawConfig,
@@ -173,9 +176,8 @@ describe("writeWizardConfigFile", () => {
     vi.clearAllMocks();
     mocks.currentConfig = {};
     mocks.transformConfigWithPendingPluginInstalls.mockImplementation(
-      async (params: {
-        transform: (current: OpenClawConfig) => { nextConfig: OpenClawConfig };
-      }) => ({ nextConfig: params.transform(mocks.currentConfig).nextConfig }),
+      async (params: { transform: (current: OpenClawConfig) => { nextConfig: OpenClawConfig } }) =>
+        configFiles.write(params.transform(mocks.currentConfig).nextConfig),
     );
   });
 
@@ -206,7 +208,10 @@ describe("writeWizardConfigFile", () => {
     };
     mocks.currentConfig = { gateway: { port: 19001 } };
 
-    await expect(writeWizardConfigFile(config)).resolves.toEqual(config);
+    await expect(writeWizardConfigFile(config)).resolves.toMatchObject({
+      nextConfig: config,
+      path: "/tmp/openclaw.json",
+    });
   });
 
   it("applies only the wizard delta to a fresh concurrent config", async () => {
@@ -224,10 +229,13 @@ describe("writeWizardConfigFile", () => {
       plugins: { entries: { demo: { enabled: true } } },
     };
 
-    await expect(writeWizardConfigFile(next, { mergeBase: base })).resolves.toEqual({
-      agents: { defaults: { workspace: "/concurrent" } },
-      gateway: { port: 19001 },
-      plugins: { entries: { demo: { enabled: true } } },
+    await expect(writeWizardConfigFile(next, { mergeBase: base })).resolves.toMatchObject({
+      path: "/tmp/openclaw.json",
+      nextConfig: {
+        agents: { defaults: { workspace: "/concurrent" } },
+        gateway: { port: 19001 },
+        plugins: { entries: { demo: { enabled: true } } },
+      },
     });
   });
 });

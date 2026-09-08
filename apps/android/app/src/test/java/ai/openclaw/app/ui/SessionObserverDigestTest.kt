@@ -310,10 +310,10 @@ class SessionObserverDigestTest {
         endedAt = 500,
       )
 
-    assertEquals("Needs approval", sessionListSubtitle(failed, fallback = "Work", nowMs = 1_000))
+    assertEquals("Needs approval", sessionListSubtitle(failed, fallback = "Work", nowMs = 1_000, activeRunLabel = "Working"))
     assertEquals(
       "Agent note",
-      sessionListSubtitle(failed.copy(status = "running", lastRunError = null), fallback = "Work", nowMs = 1_000),
+      sessionListSubtitle(failed.copy(status = "running", lastRunError = null), fallback = "Work", nowMs = 1_000, activeRunLabel = "Working"),
     )
     assertEquals(
       "Waiting for a concurrency slot",
@@ -321,13 +321,88 @@ class SessionObserverDigestTest {
         failed.copy(agentStatus = null, status = "queued", lastRunError = null),
         fallback = "Work",
         nowMs = 1_000,
+        activeRunLabel = "Working",
       ),
+    )
+
+    assertEquals(
+      "Observer",
+      sessionListSubtitle(failed.copy(agentStatus = null, status = "running", lastRunError = null), fallback = "Work", nowMs = 1_000, activeRunLabel = "Working"),
     )
 
     val finalDigest = digest(runId = null, revision = 2, updatedAt = 2_000, headline = "Finished", health = "done")
     val idle = ChatSessionEntry(key = "work", updatedAtMs = 2_000, lastReadAt = 1_999, observerDigest = finalDigest)
-    assertEquals("Finished", sessionListSubtitle(idle, fallback = "Work", nowMs = 3_000))
-    assertEquals("Work", sessionListSubtitle(idle.copy(lastReadAt = 2_000), fallback = "Work", nowMs = 3_000))
+    assertEquals("Finished", sessionListSubtitle(idle, fallback = "Work", nowMs = 3_000, activeRunLabel = "Working"))
+    assertEquals("Work", sessionListSubtitle(idle.copy(lastReadAt = 2_000), fallback = "Work", nowMs = 3_000, activeRunLabel = "Working"))
+    assertEquals("Working", sessionListSubtitle(idle.copy(observerDigest = null, hasActiveRun = true), fallback = "Work", nowMs = 3_000, activeRunLabel = "Working"))
+    assertEquals("Working", sessionListSubtitle(idle.copy(observerDigest = null, status = " RUNNING "), fallback = "Work", nowMs = 3_000, activeRunLabel = "Working"))
+  }
+
+  @Test
+  fun subtitleHonorsLiveRunPrecedenceWithoutLosingQueuedOrFinalText() {
+    for ((status, flag, expected) in listOf(
+      Triple("running", false, "Thread"),
+      Triple("running", null, "Working"),
+      Triple("done", true, "Thread"),
+      Triple("failed", true, "Thread"),
+      Triple("killed", true, "Thread"),
+      Triple("timeout", true, "Thread"),
+      Triple("queued", false, "Thread"),
+      Triple("queued", null, "Waiting for a concurrency slot"),
+    )) {
+      val row = ChatSessionEntry(key = "work", updatedAtMs = 500, status = status, hasActiveRun = flag)
+      assertEquals("status=$status flag=$flag", expected, sessionListSubtitle(row, fallback = "Thread", nowMs = 1_000, activeRunLabel = "Working"))
+    }
+    val finished =
+      ChatSessionEntry(
+        key = "agent:main:work",
+        updatedAtMs = 500,
+        status = "done",
+        hasActiveRun = true,
+        observerDigest = digest(runId = "finished-run", revision = 1, updatedAt = 500, headline = "Finished", health = "done"),
+        lastReadAt = 499,
+      )
+    assertEquals("Finished", sessionListSubtitle(finished, fallback = "Thread", nowMs = 1_000, activeRunLabel = "Working"))
+    assertEquals("Finished", sessionListSubtitle(finished.copy(status = "queued", hasActiveRun = false), fallback = "Thread", nowMs = 1_000, activeRunLabel = "Working"))
+    assertEquals("Waiting for a concurrency slot", sessionListSubtitle(finished.copy(status = "queued", hasActiveRun = true), fallback = "Thread", nowMs = 1_000, activeRunLabel = "Working"))
+  }
+
+  @Test
+  fun inactiveSessionRejectsObserverEventsDespiteStaleRunMetadata() {
+    for ((status, flag) in listOf("running" to false, "done" to true)) {
+      val finished = digest(runId = "run-1", revision = 3, updatedAt = 500, headline = "Finished", health = "done")
+      val row =
+        ChatSessionEntry(
+          key = finished.sessionKey,
+          updatedAtMs = 500,
+          hasActiveRun = flag,
+          status = status,
+          activeRunIds = listOf("run-1"),
+          observerDigest = finished,
+        )
+      val late = digest(runId = "run-1", revision = 4, updatedAt = 600, headline = "Late work")
+      assertEquals("status=$status flag=$flag", row, applySessionObserverDigest(listOf(row), late).single())
+    }
+  }
+
+  @Test
+  fun inactiveProjectionRetainsFinalDigestWhenActiveRunIdsClear() {
+    val finished = digest(runId = "run-1", revision = 3, updatedAt = 500, headline = "Finished", health = "done")
+    val prior =
+      ChatSessionEntry(
+        key = finished.sessionKey,
+        updatedAtMs = 500,
+        hasActiveRun = true,
+        status = "running",
+        activeRunIds = listOf("run-1"),
+        observerDigest = finished,
+      )
+    for ((status, flag) in listOf("running" to false, "done" to true)) {
+      val next = ChatSessionEntry(key = prior.key, updatedAtMs = 600, hasActiveRun = flag, status = status, activeRunIds = emptyList())
+      val merged = mergeChatSessionEntry(prior, next)
+      assertEquals("status=$status flag=$flag", finished, merged.observerDigest)
+      assertEquals("Finished", sessionListSubtitle(merged, fallback = "Thread", nowMs = 1_000, activeRunLabel = "Working"))
+    }
   }
 
   private fun digest(

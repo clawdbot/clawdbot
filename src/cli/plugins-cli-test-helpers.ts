@@ -2,6 +2,7 @@
 import { Command } from "commander";
 import type { Mock } from "vitest";
 import { vi } from "vitest";
+import { createTestConfigSnapshot } from "../commands/test-runtime-config-helpers.js";
 import { getRuntimeConfig } from "../config/config.js";
 import type { ConfigWriteOptions } from "../config/io.types.js";
 import type { ConfigReplaceInput } from "../config/mutate.js";
@@ -1014,7 +1015,15 @@ export function resetPluginsCliTestState() {
     await configWriteMock(nextConfig);
     const configPath = params.writeOptions?.ownedConfigPathForWrite ?? "/tmp/openclaw-config.json5";
     mockPersistedConfigs.set(configPath, structuredClone(nextConfig));
-    return { path: configPath, nextConfig };
+    return {
+      path: configPath,
+      previousHash: null,
+      snapshot: createTestConfigSnapshot(nextConfig, nextConfig, configPath),
+      nextConfig,
+      persistedHash: "mock",
+      afterWrite: { mode: "auto" },
+      followUp: { mode: "auto", requiresRestart: false },
+    };
   }) as (...args: unknown[]) => Promise<unknown>);
   resolveStateDir.mockReturnValue("/tmp/openclaw-state");
   resolveMarketplaceInstallShortcutMock.mockResolvedValue(null);

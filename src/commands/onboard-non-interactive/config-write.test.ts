@@ -10,7 +10,10 @@ import { commitNonInteractiveOnboardConfig } from "./config-write.js";
 describe("commitNonInteractiveOnboardConfig", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    writeWizardConfigFile.mockImplementation(async (config: OpenClawConfig) => config);
+    writeWizardConfigFile.mockImplementation(async (config: OpenClawConfig) => ({
+      path: "/tmp/openclaw.json",
+      nextConfig: config,
+    }));
   });
 
   it("keeps the verified config hash on the canonical writer", async () => {

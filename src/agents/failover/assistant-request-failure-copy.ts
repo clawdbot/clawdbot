@@ -7,6 +7,7 @@ type AssistantRequestFailureCopyFacts = {
   reason?: FailoverReason | null;
   status?: number;
   storageFailure?: GatewayStorageFailure;
+  code?: string;
 };
 
 const STORAGE_FAILURE_COPY: Record<GatewayStorageFailure, string> = {
@@ -49,6 +50,9 @@ export function renderAssistantRequestFailureCopy(
 ): string | undefined {
   if (facts.storageFailure) {
     return `⚠️ Agent run failed: ${STORAGE_FAILURE_COPY[facts.storageFailure]}`;
+  }
+  if (facts.code === "incomplete_tool_call") {
+    return "⚠️ The provider returned an unfinished tool call. Earlier actions may have completed; verify their results before continuing.";
   }
   const provider = facts.provider?.trim();
   const model = facts.model?.trim();

@@ -889,6 +889,13 @@ native API requires a thread root can resolve a current-message reply against
 the admitted thread without redirecting arbitrary explicit `replyToId` targets.
 Omitted intent keeps the existing explicit-target behavior.
 
+For queued replies to the originating channel, the hook may also receive
+`currentMessageId`, the external inbound message ID captured by the queue owner.
+It is optional context, not an explicit reply target: core does not attach it as
+`replyToId`. The channel decides whether to use it for implicit correlation,
+while preserving explicit targets, null opt-outs, and reply-mode filtering.
+Internal and inter-session turns do not supply this external message fact.
+
 Auth-only channels can usually stop at the default path: core handles
 approvals and the plugin just exposes outbound/auth capabilities. Native
 approval channels such as Matrix, Slack, Telegram, and custom chat transports
