@@ -2601,6 +2601,17 @@
                 "group": "Testing and CI",
                 "pages": [
                   "reference/test",
+                  {
+                    "group": "Tests",
+                    "pages": [
+                      "reference/test/local",
+                      "reference/test/lanes",
+                      "reference/test/docker",
+                      "reference/test/performance",
+                      "reference/test/runner-internals",
+                      "reference/test/remote-proof"
+                    ]
+                  },
                   "ci",
                   {
                     "group": "CI",

@@ -707,7 +707,7 @@ Native dependency policy:
     - `pnpm test:perf:profile:runner` writes runner CPU+heap profiles for
       the unit suite with file parallelism disabled. Profiles span each worker's
       files and finish before teardown acknowledgement, including failed runs.
-      Both commands print their output directory; see [Test performance tooling](/reference/test#test-performance-tooling)
+      Both commands print their output directory; see [Test performance tooling](/reference/test/performance#test-performance-tooling)
       for output selection, capture boundaries, and supported runners.
 
   </Accordion>

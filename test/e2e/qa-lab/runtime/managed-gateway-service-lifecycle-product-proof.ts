@@ -184,7 +184,9 @@ function createEvidenceWriter(options: ProducerOptions) {
         "docs/cli/gateway.md",
         "docs/install/updating.md",
         "docs/gateway/troubleshooting.md",
-        "docs/reference/test.md",
+        // The testing reference is an index over docs/reference/test/*; point at
+        // the page that owns the commands this proof runs, not the index.
+        "docs/reference/test/local.md",
       ],
       id: SCENARIO_ID,
       sourcePath: SOURCE_PATH,
