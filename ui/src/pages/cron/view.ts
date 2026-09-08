@@ -525,18 +525,21 @@ function renderJobsTable(props: CronProps, hasAnyJobsFilters: boolean) {
               : nothing
           : groupedJobs.map(
               (group) => html`
-                ${group.label
-                  ? html`<div class="cron-table__group" data-test-id="cron-job-group">
-                      <span>${group.label}</span><span>${group.jobs.length}</span>
-                    </div>`
-                  : nothing}
+                ${
+                  group.label
+                    ? html`<div class="cron-table__group" data-test-id="cron-job-group">
+                        <span>${group.label}</span><span>${group.jobs.length}</span>
+                      </div>`
+                    : nothing
+                }
                 ${repeat(
                   group.jobs,
                   (job) => job.id,
                   (job) => renderJobRow(job, props),
                 )}
               `,
-            )}
+            )
+      }
       ${renderCronJobsPagination({
         jobsShown: props.jobs.length,
         jobsTotal: props.jobsTotal,

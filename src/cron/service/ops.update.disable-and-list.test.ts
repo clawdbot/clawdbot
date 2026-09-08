@@ -46,12 +46,8 @@ describe("cron service ops: disable + list round-trip", () => {
 
   it("filters the paginated inventory by group and tag", async () => {
     const { storePath } = fixtures.makeStorePath();
-    const state = createCronServiceState({
-      cronEnabled: true,
+    const state = createCronRegressionState({
       storePath,
-      log: noopLogger,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob: vi.fn(),
     });
     try {
