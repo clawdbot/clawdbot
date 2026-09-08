@@ -433,11 +433,13 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
   if (queuedSettleResult === "settled" && noVisibleReplyFallbackAllowed()) {
     try {
       throwIfDispatchOperationAborted();
-      const fallbackPayload: ReplyPayload = queueCapRejected
-        ? { text: QUEUE_CAP_REJECTION_TEXT }
-        : {
-            text: buildNoVisibleReplyFallbackText(state.params.replyOptions?.runId),
-          };
+      // Missing delivery does not establish a failed agent run. Preserve terminal
+      // classification rather than turning this notice into an isError payload.
+      const fallbackPayload: ReplyPayload = {
+        text: queueCapRejected
+          ? QUEUE_CAP_REJECTION_TEXT
+          : buildNoVisibleReplyFallbackText(state.getAgentRunId()),
+      };
       const result = await routeReplyToOriginating(fallbackPayload, {
         abortSignal: getDispatchAbortSignal(),
         kind: "final",

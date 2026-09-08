@@ -27,7 +27,8 @@ const NO_VISIBLE_REPLY_FALLBACK_TEXT =
 
 export function buildNoVisibleReplyFallbackText(runId?: string): string {
   const reference = normalizeOptionalString(runId);
-  return reference
+  // Caller-supplied IDs must not inject markup, mentions, or unbounded text into a channel.
+  return reference && /^[a-z0-9][a-z0-9_-]{0,127}$/iu.test(reference)
     ? `${NO_VISIBLE_REPLY_FALLBACK_TEXT} Reference: ${reference}.`
     : NO_VISIBLE_REPLY_FALLBACK_TEXT;
 }
