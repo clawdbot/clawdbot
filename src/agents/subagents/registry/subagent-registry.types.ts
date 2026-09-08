@@ -343,16 +343,14 @@ export type SubagentRunReadRecord = Pick<
   | "accumulatedRuntimeMs"
   | "runTimeoutSeconds"
   | "endedReason"
-  // Delete-cleanup facts: a still-present dispatch stamp means sessions.delete
-  // was handed off and its outcome is not a confirmed session-changed
-  // rejection. The child is then gone while the row waits out its archive
-  // deadline. Both stamps ship so this projection suppresses child links
-  // exactly like the full-record surfaces do (see child-link liveness).
-  | "cleanup"
+  // Delete-cleanup facts let lightweight session-list projections distinguish
+  // an unfinished handoff from a completed targeted deletion.
   | "cleanupCompletedAt"
   | "deleteCleanupDispatchedAt"
+  | "deleteCleanupTarget"
   | "delivery"
 > & {
+  cleanup?: SubagentRunRecord["cleanup"];
   execution: Pick<SubagentExecutionState, "status" | "startedAt" | "endedAt" | "outcome">;
   collectorCompletion?: Pick<SwarmCollectorCompletion, "status">;
 };

@@ -681,6 +681,77 @@ describe("subagent registry recovery scheduling", () => {
     expect(runs.has(entry.runId)).toBe(false);
   });
 
+  it("retries an unfinished dispatched delete against its persisted identity at expiry", async () => {
+    const runtime = { current: {} as GatewayRecoveryRuntime };
+    const { entry, runs, callGateway, notifyContextEngineSubagentEnded, sweeper } =
+      createHarness(runtime);
+    const now = Date.now();
+    entry.cleanup = "delete";
+    entry.archiveAtMs = now - 1;
+    entry.deleteCleanupDispatchedAt = now - 10_000;
+    entry.deleteCleanupTarget = {
+      sessionId: "original-session",
+      lifecycleRevision: "original-revision",
+    };
+    entry.cleanupCompletedAt = undefined;
+    entry.execution = {
+      status: "terminal",
+      startedAt: now - 60_000,
+      endedAt: now - 55_000,
+      outcome: { status: "ok" },
+    };
+
+    await sweeper.sweepOnce();
+
+    expect(callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "sessions.delete",
+        params: expect.objectContaining({
+          expectedSessionId: "original-session",
+          expectedLifecycleRevision: "original-revision",
+        }),
+      }),
+    );
+    expect(notifyContextEngineSubagentEnded).toHaveBeenCalledWith({
+      agentDir: undefined,
+      childSessionKey: entry.childSessionKey,
+      reason: "swept",
+      workspaceDir: undefined,
+    });
+    expect(runs.has(entry.runId)).toBe(false);
+  });
+
+  it("retains an unfinished dispatched delete when the expiry retry fails", async () => {
+    const runtime = { current: {} as GatewayRecoveryRuntime };
+    const { entry, runs, callGateway, notifyContextEngineSubagentEnded, sweeper, warn } =
+      createHarness(runtime);
+    const now = Date.now();
+    entry.cleanup = "delete";
+    entry.archiveAtMs = now - 1;
+    entry.deleteCleanupDispatchedAt = now - 10_000;
+    entry.deleteCleanupTarget = {
+      sessionId: "original-session",
+      lifecycleRevision: "original-revision",
+    };
+    entry.execution = {
+      status: "terminal",
+      startedAt: now - 60_000,
+      endedAt: now - 55_000,
+      outcome: { status: "ok" },
+    };
+    const failure = new Error("gateway unavailable");
+    callGateway.mockRejectedValueOnce(failure);
+
+    await sweeper.sweepOnce();
+
+    expect(runs.get(entry.runId)).toBe(entry);
+    expect(notifyContextEngineSubagentEnded).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith(
+      "sessions.delete failed during subagent sweep; keeping run for retry",
+      expect.objectContaining({ runId: entry.runId, error: failure }),
+    );
+  });
+
   it("retires an archived stale owner when guarded deletion sees a successor", async () => {
     const runtime = { current: {} as GatewayRecoveryRuntime };
     const { entry, runs, callGateway, notifyContextEngineSubagentEnded, sweeper } =

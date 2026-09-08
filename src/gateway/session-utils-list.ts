@@ -252,6 +252,7 @@ function filterSessionEntries(params: {
             activeDescendants: filterRowContext
               ? filterRowContext.subagentRuns.countActiveDescendantRuns(key)
               : countActiveDescendantRuns(key),
+            childSessionExists: true,
             now,
           })
         : shouldKeepStoreOnlyChildLink(entry, now) &&

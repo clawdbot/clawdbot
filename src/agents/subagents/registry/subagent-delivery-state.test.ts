@@ -1,6 +1,10 @@
 // Subagent delivery-state tests cover current registry record normalization.
 import { describe, expect, it } from "vitest";
-import { normalizeSubagentRunState } from "./subagent-delivery-state.js";
+import {
+  normalizeSubagentRunState,
+  persistChangedDeleteCleanupFence,
+  persistSuppressedSubagentSessionEffects,
+} from "./subagent-delivery-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 function baseRun(overrides: Partial<SubagentRunRecord> = {}): SubagentRunRecord {
@@ -21,6 +25,34 @@ function baseRun(overrides: Partial<SubagentRunRecord> = {}): SubagentRunRecord 
     ...overrides,
   };
 }
+
+describe("delete-cleanup persistence fences", () => {
+  it("rolls back a missing-identity fence when durable persistence fails", () => {
+    const entry = baseRun({ cleanup: "delete" });
+    expect(() =>
+      persistSuppressedSubagentSessionEffects(entry, () => {
+        throw new Error("registry store boom");
+      }),
+    ).toThrow("registry store boom");
+    expect(entry.execution.suppressSessionEffects).toBeUndefined();
+  });
+
+  it("keeps a session-changed fence in memory when durable persistence fails", () => {
+    const entry = baseRun({
+      cleanup: "delete",
+      deleteCleanupDispatchedAt: 200,
+      deleteCleanupTarget: { sessionId: "child", lifecycleRevision: "revision" },
+    });
+    expect(() =>
+      persistChangedDeleteCleanupFence(entry, () => {
+        throw new Error("registry store boom");
+      }),
+    ).toThrow("registry store boom");
+    expect(entry.execution.suppressSessionEffects).toBe(true);
+    expect(entry.deleteCleanupDispatchedAt).toBeUndefined();
+    expect(entry.deleteCleanupTarget).toBeUndefined();
+  });
+});
 
 describe("normalizeSubagentRunState", () => {
   it("normalizes durable task ownership and generation metadata", () => {

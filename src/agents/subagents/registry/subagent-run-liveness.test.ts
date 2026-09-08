@@ -140,20 +140,67 @@ describe("subagent run liveness", () => {
       cleanupCompletedAt: endedAt + 1_000,
     };
     expect(shouldKeepSubagentRunChildLink(entry, { now })).toBe(true);
+    expect(
+      shouldKeepSubagentRunChildLink(entry, {
+        childSessionExists: true,
+        now: endedAt + RECENT_ENDED_SUBAGENT_CHILD_SESSION_MS + 1,
+      }),
+    ).toBe(true);
   });
 
-  it("drops child links once delete cleanup dispatched sessions.delete", () => {
+  it("drops child links once a targeted delete cleanup completes", () => {
     const endedAt = now - 60_000;
-    // The dispatch stamp is durable before the gateway call and the completion
-    // stamp only after it, so a run interrupted in between must not relink.
     const entry = {
       createdAt: now - 120_000,
       execution: { endedAt },
       cleanup: "delete" as const,
       deleteCleanupDispatchedAt: endedAt + 1_000,
+      deleteCleanupTarget: {
+        sessionId: "child-session-id",
+        lifecycleRevision: "child-lifecycle-revision",
+      },
+      cleanupCompletedAt: endedAt + 2_000,
     };
-    expect(shouldKeepSubagentRunChildLink(entry, { now })).toBe(false);
-    expect(shouldKeepSubagentRunChildLink(entry, { activeDescendants: 1, now })).toBe(false);
+    expect(shouldKeepSubagentRunChildLink(entry, { childSessionExists: false, now })).toBe(false);
+    expect(
+      shouldKeepSubagentRunChildLink(entry, {
+        activeDescendants: 1,
+        childSessionExists: false,
+        now,
+      }),
+    ).toBe(false);
+    expect(shouldKeepSubagentRunChildLink(entry, { childSessionExists: true, now })).toBe(true);
+    expect(
+      shouldKeepSubagentRunChildLink(entry, {
+        childSessionExists: true,
+        now: endedAt + RECENT_ENDED_SUBAGENT_CHILD_SESSION_MS + 1,
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps child links while a targeted delete is unfinished or stamp-only", () => {
+    const endedAt = now - 60_000;
+    const base = {
+      createdAt: now - 120_000,
+      execution: { endedAt },
+      cleanup: "delete" as const,
+      deleteCleanupDispatchedAt: endedAt + 1_000,
+    };
+    expect(
+      shouldKeepSubagentRunChildLink(
+        {
+          ...base,
+          deleteCleanupTarget: {
+            sessionId: "child-session-id",
+            lifecycleRevision: "child-lifecycle-revision",
+          },
+        },
+        { now },
+      ),
+    ).toBe(true);
+    expect(
+      shouldKeepSubagentRunChildLink({ ...base, cleanupCompletedAt: endedAt + 2_000 }, { now }),
+    ).toBe(true);
   });
 
   it("keeps the child link while delete cleanup has not been dispatched", () => {

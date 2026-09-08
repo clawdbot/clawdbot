@@ -635,6 +635,59 @@ describe("subagent registry lifecycle hardening", () => {
     },
   );
 
+  it("retries a failed announce-owned delete without redelivering completion", async () => {
+    vi.useFakeTimers();
+    const now = Date.now();
+    const entry = createRunEntry({
+      cleanup: "delete",
+      expectsCompletionMessage: true,
+      archiveAtMs: now + 30 * 60_000,
+    });
+    const runSubagentAnnounceFlow: LifecycleControllerParams["runSubagentAnnounceFlow"] = vi.fn(
+      async (announceParams) => {
+        expect(announceParams.onBeforeDeleteChildSession?.()).toBe(true);
+        entry.delivery = { status: "delivered", deliveredAt: now };
+        announceParams.onChildSessionDeleteOutcome?.("failed");
+        return "delivered" as const;
+      },
+    );
+    const resumeSubagentRun = vi.fn((runId: string) => {
+      controller.startSubagentAnnounceCleanupFlow(runId, entry);
+    });
+    const controller = createLifecycleController({
+      entry,
+      resumeSubagentRun,
+      runSubagentAnnounceFlow,
+    });
+
+    try {
+      await completeRun(controller, entry, {
+        triggerCleanup: true,
+        terminalReply: { disposition: "visible", text: "final completion reply" },
+      });
+      await waitForLifecycleState(() => expect(entry.cleanupHandled).toBe(false));
+      expect(entry.cleanupCompletedAt).toBeUndefined();
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      await waitForLifecycleState(() => expect(entry.cleanupCompletedAt).toBeTypeOf("number"));
+
+      expect(resumeSubagentRun).toHaveBeenCalledExactlyOnceWith(entry.runId);
+      expect(runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
+      expect(gatewayMocks.callGateway).toHaveBeenCalledWith(
+        expect.objectContaining({
+          method: "sessions.delete",
+          params: expect.objectContaining({
+            expectedSessionId: "child-session-id",
+            expectedLifecycleRevision: "child-lifecycle-revision",
+          }),
+        }),
+      );
+    } finally {
+      controller.clearScheduledResumeTimers();
+      vi.useRealTimers();
+    }
+  });
+
   it("records explicit empty success as intentional non-delivery at the lifecycle owner", async () => {
     const entry = createRunEntry({ expectsCompletionMessage: true });
     const captureSubagentCompletionReply = vi.fn(async () => "stale transcript reply");
@@ -1180,6 +1233,25 @@ describe("subagent registry lifecycle hardening", () => {
     releaseDelete?.();
     await waitForLifecycleState(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
     expect(runs.has(entry.runId)).toBe(false);
+  });
+
+  it("does not dispatch direct delete cleanup before its identity is durable", async () => {
+    const entry = createRunEntry({ cleanup: "delete", expectsCompletionMessage: false });
+    const persistOrThrow = vi.fn(() => {
+      if (entry.deleteCleanupDispatchedAt !== undefined) {
+        throw new Error("registry store boom");
+      }
+    });
+    const controller = createLifecycleController({ entry, persistOrThrow });
+
+    await completeRun(controller, entry, { triggerCleanup: true });
+    await waitForLifecycleState(() => expect(entry.cleanupHandled).toBe(false));
+
+    expect(entry.cleanupCompletedAt).toBeUndefined();
+    expect(gatewayMocks.callGateway).not.toHaveBeenCalledWith(
+      expect.objectContaining({ method: "sessions.delete" }),
+    );
+    controller.clearScheduledResumeTimers();
   });
 
   it("retries a cleanup handoff rejected by restart drain", async () => {
@@ -2197,6 +2269,54 @@ describe("subagent registry lifecycle hardening", () => {
     await waitForLifecycleState(() => expect(runs.has(entry.runId)).toBe(false));
   });
 
+  it("persists a no-delete fence when announce cleanup lacks a complete identity", async () => {
+    const entry = createRunEntry({ cleanup: "delete", expectsCompletionMessage: true });
+    sessionReconciliationMocks.loadSubagentSessionEntry.mockReset().mockReturnValue({
+      sessionId: "child-session-id",
+    });
+    const runSubagentAnnounceFlow: LifecycleControllerParams["runSubagentAnnounceFlow"] = vi.fn(
+      async (announceParams) => {
+        expect(announceParams.expectedDeleteTarget).toBeUndefined();
+        expect(announceParams.onBeforeDeleteChildSession?.()).toBe(false);
+        return "delivered" as const;
+      },
+    );
+    const controller = createLifecycleController({ entry, runSubagentAnnounceFlow });
+
+    await completeRun(controller, entry, {
+      triggerCleanup: true,
+      terminalReply: { disposition: "visible", text: "final completion reply" },
+    });
+    await waitForLifecycleState(() => expect(entry.cleanupCompletedAt).toBeTypeOf("number"));
+
+    expect(entry.execution.suppressSessionEffects).toBe(true);
+    expect(entry.deleteCleanupDispatchedAt).toBeUndefined();
+    expect(gatewayMocks.callGateway).not.toHaveBeenCalledWith(
+      expect.objectContaining({ method: "sessions.delete" }),
+    );
+  });
+
+  it("persists a no-delete fence when already-delivered cleanup lacks an identity", async () => {
+    const entry = createRunEntry({
+      cleanup: "delete",
+      delivery: { status: "delivered", announcedAt: 3_500, deliveredAt: 3_500 },
+      endedAt: 4_000,
+    });
+    sessionReconciliationMocks.loadSubagentSessionEntry.mockReset().mockReturnValue({
+      sessionId: "child-session-id",
+    });
+    const controller = createLifecycleController({ entry });
+
+    await expect(completeRun(controller, entry, { triggerCleanup: true })).resolves.toBeUndefined();
+    await waitForLifecycleState(() => expect(entry.cleanupCompletedAt).toBeTypeOf("number"));
+
+    expect(entry.execution.suppressSessionEffects).toBe(true);
+    expect(entry.deleteCleanupDispatchedAt).toBeUndefined();
+    expect(gatewayMocks.callGateway).not.toHaveBeenCalledWith(
+      expect.objectContaining({ method: "sessions.delete" }),
+    );
+  });
+
   it.each([
     { name: "direct", expectsCompletionMessage: false as const },
     { name: "announce", expectsCompletionMessage: true as const },
@@ -2352,7 +2472,7 @@ describe("subagent registry lifecycle hardening", () => {
     }
   });
 
-  it("does not delete a live successor when cleanup restarts from a persisted dispatch target", async () => {
+  it("does not hide an incomplete live successor when cleanup restarts from a persisted target", async () => {
     const now = Date.now();
     const archiveAtMs = now + 30 * 60_000;
     const originalRevision = "child-lifecycle-revision";
@@ -2373,7 +2493,6 @@ describe("subagent registry lifecycle hardening", () => {
     });
     sessionReconciliationMocks.loadSubagentSessionEntry.mockReset().mockImplementation(() => ({
       sessionId: "child-session-id",
-      lifecycleRevision: successorRevision,
     }));
     gatewayMocks.callGateway.mockImplementation((opts) => {
       if (opts.method !== "sessions.delete") {
@@ -4229,6 +4348,37 @@ describe("subagent registry lifecycle hardening", () => {
     expect(persist).toHaveBeenCalled();
   });
 
+  it("persists the delete identity before retrying an already-delivered cleanup", async () => {
+    const entry = createRunEntry({
+      cleanup: "delete",
+      delivery: { status: "delivered", announcedAt: 3_500, deliveredAt: 3_500 },
+      endedAt: 4_000,
+    });
+    const persistedSnapshots: SubagentRunRecord[] = [];
+    const runSubagentAnnounceFlow = vi.fn(async () => "delivered" as const);
+    const controller = createLifecycleController({
+      entry,
+      persistOrThrow: vi.fn(() => persistedSnapshots.push(structuredClone(entry))),
+      runSubagentAnnounceFlow,
+    });
+
+    await expect(completeRun(controller, entry, { triggerCleanup: true })).resolves.toBeUndefined();
+    await waitForLifecycleState(() => expect(entry.cleanupCompletedAt).toBeTypeOf("number"));
+
+    expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
+    const dispatchSnapshot = persistedSnapshots.find(
+      (snapshot) => snapshot.deleteCleanupDispatchedAt !== undefined,
+    );
+    expect(dispatchSnapshot).toMatchObject({
+      deleteCleanupDispatchedAt: expect.any(Number),
+      deleteCleanupTarget: {
+        sessionId: "child-session-id",
+        lifecycleRevision: "child-lifecycle-revision",
+      },
+    });
+    expect(dispatchSnapshot?.cleanupCompletedAt).toBeUndefined();
+  });
+
   it("emits ended hook while retrying cleanup after completion was already delivered", async () => {
     const entry = createRunEntry({
       delivery: { status: "delivered", announcedAt: 3_500, deliveredAt: 3_500 },
@@ -5282,9 +5432,9 @@ describe("requester settle wake trigger", () => {
 
     expect(entry.requesterSettleWake?.retireAfterSettle).toBe(true);
     const completeBatch = firstCallArg(settleWake).completeBatch as (
-      runIds: readonly string[],
+      batch: readonly SubagentRunRecord[],
     ) => void;
-    completeBatch([entry.runId]);
+    completeBatch([entry]);
     expect(runs.has(entry.runId)).toBe(false);
   });
 

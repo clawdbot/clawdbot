@@ -3,12 +3,13 @@ import { defaultRuntime } from "../../../runtime.js";
 import { normalizeDeliveryContext } from "../../../utils/delivery-context.shared.js";
 import {
   assignDeleteCleanupDispatch,
-  clearDeleteCleanupDispatch,
   ensureCompletionState,
   ensureDeliveryState,
   getDeliveryLastError,
   isDeliverySuspended,
   normalizeDeleteCleanupTarget,
+  persistChangedDeleteCleanupFence,
+  persistSuppressedSubagentSessionEffects,
 } from "./subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_COMPLETE } from "./subagent-lifecycle-events.js";
 import { shouldSuppressSubagentRecoverySessionEffects } from "./subagent-recovery-state.js";
@@ -404,29 +405,10 @@ export const startSubagentAnnounceCleanupFlow = (
   if (cleanupGeneration === undefined) {
     return false;
   }
-  if (typeof entry.delivery?.announcedAt === "number" || entry.delivery?.status === "delivered") {
-    runDetachedCleanupAttempt(context, {
-      runId,
-      entry,
-      cleanupGeneration,
-      run: async () => {
-        await finalizeSubagentCleanup(context, runId, cleanup, "delivered", cleanupGeneration, {
-          skipAnnounce: true,
-        });
-      },
-    });
-    return true;
-  }
   const cleanupSessionEntry = suppressSessionEffects
     ? undefined
     : loadSubagentSessionEntry({ childSessionKey: entry.childSessionKey });
-  const liveCleanupSessionIdentity =
-    cleanupSessionEntry?.sessionId && cleanupSessionEntry.lifecycleRevision
-      ? {
-          sessionId: cleanupSessionEntry.sessionId,
-          lifecycleRevision: cleanupSessionEntry.lifecycleRevision,
-        }
-      : undefined;
+  const liveCleanupSessionIdentity = normalizeDeleteCleanupTarget(cleanupSessionEntry);
   // A persisted dispatch target outranks the live session row. A stamp
   // without a target is a pre-upgrade record: the live same-key row may
   // be a successor, so do not backfill it as the delete identity.
@@ -437,24 +419,14 @@ export const startSubagentAnnounceCleanupFlow = (
   // A dispatch that already removed the original child leaves no live row.
   // Retrying that identity is unnecessary; resolving the current key would
   // be a successor delete.
-  const deleteTargetAlreadyGone = Boolean(
-    persistedCleanupSessionIdentity && !liveCleanupSessionIdentity,
-  );
+  const deleteTargetAlreadyGone = Boolean(persistedCleanupSessionIdentity && !cleanupSessionEntry);
   const suppressChildSessionEffects = () => {
     suppressSessionEffects = true;
-    if (entry.execution.suppressSessionEffects !== true) {
-      const previousExecution = entry.execution;
-      entry.execution = {
-        ...entry.execution,
-        suppressSessionEffects: true,
-      };
-      try {
-        params.persistOrThrow(runId);
-      } catch (error) {
-        entry.execution = previousExecution;
-        suppressSessionEffects = false;
-        throw error;
-      }
+    try {
+      persistSuppressedSubagentSessionEffects(entry, () => params.persistOrThrow(runId));
+    } catch (error) {
+      suppressSessionEffects = false;
+      throw error;
     }
   };
   const childSessionEffectsAllowed = () => {
@@ -470,23 +442,43 @@ export const startSubagentAnnounceCleanupFlow = (
     // persistOrThrow must see both fields together. If it throws, keep the
     // in-memory fence: rolling suppression back lets the detached retry
     // reload the live successor and submit sessions.delete against it.
-    if (
-      entry.deleteCleanupDispatchedAt === undefined &&
-      entry.execution.suppressSessionEffects === true
-    ) {
-      suppressSessionEffects = true;
-      return;
-    }
-    clearDeleteCleanupDispatch(entry);
     suppressSessionEffects = true;
-    if (entry.execution.suppressSessionEffects !== true) {
-      entry.execution = {
-        ...entry.execution,
-        suppressSessionEffects: true,
-      };
-    }
-    params.persistOrThrow(runId);
+    persistChangedDeleteCleanupFence(entry, () => params.persistOrThrow(runId));
   };
+  if (typeof entry.delivery?.announcedAt === "number" || entry.delivery?.status === "delivered") {
+    runDetachedCleanupAttempt(context, {
+      runId,
+      entry,
+      cleanupGeneration,
+      run: async () => {
+        if (cleanup === "delete" && !deleteTargetAlreadyGone && childSessionEffectsAllowed()) {
+          if (!cleanupSessionIdentity) {
+            suppressChildSessionEffects();
+          } else {
+            assignDeleteCleanupDispatch(entry, cleanupSessionIdentity);
+            params.persistOrThrow(runId);
+            const sessionCleanup = await deleteSubagentSessionForCleanup({
+              callGateway: params.callGateway,
+              childSessionKey: entry.childSessionKey,
+              spawnMode: entry.spawnMode,
+              expectedSessionId: cleanupSessionIdentity.sessionId,
+              expectedLifecycleRevision: cleanupSessionIdentity.lifecycleRevision,
+            });
+            if (sessionCleanup === "failed") {
+              throw new Error("subagent session cleanup did not complete");
+            }
+            if (sessionCleanup === "changed") {
+              releaseDeleteCleanupDispatchAfterSessionChanged();
+            }
+          }
+        }
+        await finalizeSubagentCleanup(context, runId, cleanup, "delivered", cleanupGeneration, {
+          skipAnnounce: true,
+        });
+      },
+    });
+    return true;
+  }
   if (entry.expectsCompletionMessage === false || skipRequesterDelivery) {
     runDetachedCleanupAttempt(context, {
       runId,
@@ -511,7 +503,7 @@ export const startSubagentAnnounceCleanupFlow = (
             // identity must land with the stamp so restart cannot retarget a
             // successor at the same child key.
             assignDeleteCleanupDispatch(entry, cleanupSessionIdentity);
-            params.persist(runId);
+            params.persistOrThrow(runId);
             const sessionCleanup = await deleteSubagentSessionForCleanup({
               callGateway: params.callGateway,
               childSessionKey: entry.childSessionKey,
@@ -580,6 +572,7 @@ export const startSubagentAnnounceCleanupFlow = (
     );
   };
 
+  let deleteCleanupFailed = false;
   const announceParams: Parameters<RunSubagentAnnounceFlow>[0] = {
     childSessionKey: pendingPayload.childSessionKey,
     childRunId: pendingPayload.childRunId,
@@ -617,6 +610,7 @@ export const startSubagentAnnounceCleanupFlow = (
               return false;
             }
             if (!cleanupSessionIdentity) {
+              suppressChildSessionEffects();
               return false;
             }
             const previousDelivery = entry.delivery
@@ -652,6 +646,10 @@ export const startSubagentAnnounceCleanupFlow = (
     onChildSessionDeleteOutcome:
       cleanup === "delete"
         ? (outcome) => {
+            if (outcome === "failed") {
+              deleteCleanupFailed = true;
+              return;
+            }
             if (
               outcome !== "changed" ||
               !context.isCleanupAttemptCurrent(runId, entry, cleanupGeneration)
@@ -740,6 +738,9 @@ export const startSubagentAnnounceCleanupFlow = (
         );
       } finally {
         clearTimeout(deadlineTimer);
+      }
+      if (deleteCleanupFailed) {
+        throw new Error("subagent session cleanup did not complete");
       }
       await finalizeAnnounceCleanup(announceOutcome);
     },

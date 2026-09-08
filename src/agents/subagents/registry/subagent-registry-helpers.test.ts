@@ -262,6 +262,21 @@ describe("reconcileOrphanedRestoredRuns", () => {
     expect(runs.has(entry.runId)).toBe(false);
   });
 
+  it("keeps an expired targeted delete-cleanup row recoverable", () => {
+    const entry = createRunEntry({
+      cleanup: "delete",
+      execution: { status: "terminal", startedAt: 1_000, endedAt: 2_000 },
+      deleteCleanupDispatchedAt: 2_000,
+      deleteCleanupTarget: { sessionId: "child-session", lifecycleRevision: "revision" },
+      archiveAtMs: Date.now() - 1,
+    });
+    const runs = new Map([[entry.runId, entry]]);
+
+    expect(reconcileOrphanedRestoredRuns({ runs, resumedRuns: new Set() })).toBe(false);
+    expect(runs.get(entry.runId)).toBe(entry);
+    expect(entry.cleanupCompletedAt).toBeUndefined();
+  });
+
   it("prunes a completed delete-cleanup row once its archive deadline passed", () => {
     const entry = createRunEntry({
       cleanup: "delete",

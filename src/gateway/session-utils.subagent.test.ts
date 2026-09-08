@@ -400,7 +400,7 @@ describe("session list subagent metadata", () => {
     });
 
     const parent = (
-      await listSessionsFromStoreAsync({
+      await listSessionFixture({
         cfg,
         storePath: "/tmp/sessions.json",
         store,
@@ -411,7 +411,7 @@ describe("session list subagent metadata", () => {
     expect(parent?.childSessions).toBeUndefined();
     expect(
       (
-        await listSessionsFromStoreAsync({
+        await listSessionFixture({
           cfg,
           storePath: "/tmp/sessions.json",
           store,
@@ -455,7 +455,7 @@ describe("session list subagent metadata", () => {
     });
 
     const parent = (
-      await listSessionsFromStoreAsync({
+      await listSessionFixture({
         cfg,
         storePath: "/tmp/sessions.json",
         store,

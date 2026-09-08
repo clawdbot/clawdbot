@@ -3,12 +3,16 @@
  *
  * Ages out stale unended runs while keeping recent/composed child links visible.
  */
+import { normalizeDeleteCleanupTarget } from "./subagent-delivery-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { resolveSubagentRunDurationMs } from "./subagent-run-timeout.js";
 import { getSubagentSessionStartedAt } from "./subagent-session-metrics.js";
 
 type SubagentDeleteCleanupFacts = Partial<
-  Pick<SubagentRunRecord, "cleanup" | "deleteCleanupDispatchedAt">
+  Pick<
+    SubagentRunRecord,
+    "cleanup" | "cleanupCompletedAt" | "deleteCleanupDispatchedAt" | "deleteCleanupTarget"
+  >
 >;
 
 type SubagentRunLivenessRecord = Pick<
@@ -98,14 +102,30 @@ export function shouldKeepSubagentRunChildLink(
   entry: SubagentRunLivenessRecord,
   options?: {
     activeDescendants?: number;
+    childSessionExists?: boolean;
     now?: number;
   },
 ): boolean {
   const now = options?.now ?? Date.now();
+  // A rejected or deliberately suppressed delete can leave the original child
+  // (or a same-key successor) live longer than the normal recent-run window.
+  // The retained registry row remains its latest controller until archival.
+  if (
+    entry.cleanup === "delete" &&
+    typeof entry.cleanupCompletedAt === "number" &&
+    options?.childSessionExists === true
+  ) {
+    return true;
+  }
   // Linking a deleted child gives the sidebar an expandable count whose
   // sessions.list lookup returns no row.
-  if (hasDispatchedDeleteCleanup(entry)) {
-    return false;
+  if (hasDispatchedDeleteCleanup(entry) && typeof entry.cleanupCompletedAt === "number") {
+    if (options?.childSessionExists === false) {
+      return false;
+    }
+    if (normalizeDeleteCleanupTarget(entry.deleteCleanupTarget)) {
+      return false;
+    }
   }
   return (
     isLiveUnendedSubagentRun(entry, now) ||

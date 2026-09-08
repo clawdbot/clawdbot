@@ -714,22 +714,14 @@ describe("subagent registry persistence", () => {
       ).toBeGreaterThan(0);
       if (cleanup === "delete") {
         // Archive retention owns retirement; settlement must not drop the row.
-        expect(
-          delivered?.requesterSettleWake?.retireAfterSettle,
-          "archive-retained delete does not retire on settle",
-        ).toBeUndefined();
-        expect(delivered?.archiveAtMs, "delete cleanup armed an archive deadline").toBeGreaterThan(
-          Date.now(),
-        );
+        expect(delivered?.requesterSettleWake?.retireAfterSettle).toBeUndefined();
+        expect(delivered?.archiveAtMs).toBeGreaterThan(Date.now());
       }
       await settlement.release();
       expect(settlement.run).toHaveBeenCalledOnce();
       const afterSecond = readPersistedRegistry();
       if (cleanup === "delete") {
-        expect(
-          afterSecond.runs[runId],
-          "settled delete stays until the archive deadline",
-        ).toMatchObject({
+        expect(afterSecond.runs[runId]).toMatchObject({
           delivery: { status: "delivered" },
         });
       } else {

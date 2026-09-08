@@ -25,6 +25,7 @@ import {
   getDeliveryAttemptCount,
   getDeliveryLastError,
   hasRetainedRequiredCompletionDelivery,
+  normalizeDeleteCleanupTarget,
 } from "./subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
@@ -307,13 +308,13 @@ export function reconcileOrphanedRun(params: {
   if (hasRetainedRequiredCompletionDelivery(params.entry)) {
     return false;
   }
-  // Dispatch already reached sessions.delete. Resume must not prune this
-  // unexpired row — startSubagentAnnounceCleanupFlow owns finalization.
-  // Stamping complete here (or pruning) skips requester settle and cleanup tails.
+  // Preserve a durable targeted handoff until its guarded delete completes.
+  // Stamp-only legacy rows remain bounded by their archive deadline.
   if (
     hasDispatchedDeleteCleanup(params.entry) &&
-    typeof params.entry.archiveAtMs === "number" &&
-    params.entry.archiveAtMs > Date.now()
+    ((typeof params.entry.archiveAtMs === "number" && params.entry.archiveAtMs > Date.now()) ||
+      (typeof params.entry.cleanupCompletedAt !== "number" &&
+        normalizeDeleteCleanupTarget(params.entry.deleteCleanupTarget) !== undefined))
   ) {
     return false;
   }
@@ -370,12 +371,12 @@ export function reconcileOrphanedRestoredRuns(params: {
     }
     if (
       hasDispatchedDeleteCleanup(entry) &&
-      typeof entry.archiveAtMs === "number" &&
-      entry.archiveAtMs > now
+      ((typeof entry.archiveAtMs === "number" && entry.archiveAtMs > now) ||
+        (typeof entry.cleanupCompletedAt !== "number" &&
+          normalizeDeleteCleanupTarget(entry.deleteCleanupTarget) !== undefined))
     ) {
-      // Dispatch already reached sessions.delete. Keep the unexpired row, but
-      // do not stamp cleanupCompletedAt — resumeSubagentRun would skip
-      // requester settle and cleanup tails. Restore activation owns that.
+      // Restore activation retries targeted handoffs and safely finalizes
+      // unexpired legacy stamps without retargeting a same-key successor.
       continue;
     }
     if (

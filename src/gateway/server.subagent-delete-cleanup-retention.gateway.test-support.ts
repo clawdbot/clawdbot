@@ -1,4 +1,4 @@
-// Isolated-gateway trace for delete-cleanup archive retention. Starts a real
+// Real-gateway trace suite for delete-cleanup archive retention. Starts a real
 // ephemeral gateway (which activates the subagent registry), then drives the
 // live completion path: lifecycle end, retained listing, SQLite restart, expiry.
 import { afterEach, describe, expect, test, vi } from "vitest";
@@ -166,11 +166,13 @@ describe("delete-cleanup archive retention through a real gateway", () => {
     activateSubagentRegistry(
       () =>
         ({
-          recoveryRuntime: {
-            dispatchAgent: vi.fn(),
-            waitForAgent: vi.fn(),
-            sendRecoveryNotice: vi.fn(),
-          },
+          resolveGatewayContext: () => ({
+            recoveryRuntime: {
+              dispatchAgent: vi.fn(),
+              waitForAgent: vi.fn(),
+              sendRecoveryNotice: vi.fn(),
+            },
+          }),
         }) as never,
     );
     const recovered = await vi.waitFor(
@@ -488,11 +490,13 @@ describe("delete-cleanup archive retention through a real gateway", () => {
     activateSubagentRegistry(
       () =>
         ({
-          recoveryRuntime: {
-            dispatchAgent: vi.fn(),
-            waitForAgent: vi.fn(),
-            sendRecoveryNotice: vi.fn(),
-          },
+          resolveGatewayContext: () => ({
+            recoveryRuntime: {
+              dispatchAgent: vi.fn(),
+              waitForAgent: vi.fn(),
+              sendRecoveryNotice: vi.fn(),
+            },
+          }),
         }) as never,
     );
 
@@ -613,11 +617,13 @@ describe("delete-cleanup archive retention through a real gateway", () => {
     activateSubagentRegistry(
       () =>
         ({
-          recoveryRuntime: {
-            dispatchAgent: vi.fn(),
-            waitForAgent: vi.fn(),
-            sendRecoveryNotice: vi.fn(),
-          },
+          resolveGatewayContext: () => ({
+            recoveryRuntime: {
+              dispatchAgent: vi.fn(),
+              waitForAgent: vi.fn(),
+              sendRecoveryNotice: vi.fn(),
+            },
+          }),
         }) as never,
     );
 
@@ -643,10 +649,10 @@ describe("delete-cleanup archive retention through a real gateway", () => {
     });
     const parentRow = listed.find((row) => row.key === REQUESTER_SESSION_KEY);
     expect(parentRow).toBeDefined();
-    // Stamp-only is a pre-upgrade no-delete fence. The leftover stamp
-    // hides the registry child link; the live successor still lists.
-    expect(parentRow?.childSessions).toBeUndefined();
-    expect(shouldKeepSubagentRunChildLink(recovered)).toBe(false);
+    // Stamp-only is a pre-upgrade no-delete fence, not proof of deletion.
+    // The preserved live successor therefore remains navigable.
+    expect(parentRow?.childSessions).toContain(childSessionKey);
+    expect(shouldKeepSubagentRunChildLink(recovered)).toBe(true);
     expect(deletedRevisions).toEqual([]);
 
     const verdict = {

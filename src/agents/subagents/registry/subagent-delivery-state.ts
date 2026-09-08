@@ -37,9 +37,43 @@ export function assignDeleteCleanupDispatch(
 }
 
 /** Releases a confirmed session-changed rejection so restart cannot retry that delete. */
-export function clearDeleteCleanupDispatch(entry: SubagentRunRecord): void {
+function clearDeleteCleanupDispatch(entry: SubagentRunRecord): void {
   entry.deleteCleanupDispatchedAt = undefined;
   entry.deleteCleanupTarget = undefined;
+}
+
+/** Durably fences a cleanup from mutating a child session, rolling back on persistence failure. */
+export function persistSuppressedSubagentSessionEffects(
+  entry: SubagentRunRecord,
+  persistOrThrow: () => void,
+): void {
+  if (entry.execution.suppressSessionEffects === true) {
+    return;
+  }
+  const previousExecution = entry.execution;
+  entry.execution = { ...entry.execution, suppressSessionEffects: true };
+  try {
+    persistOrThrow();
+  } catch (error) {
+    entry.execution = previousExecution;
+    throw error;
+  }
+}
+
+/** Durably converts a rejected targeted delete into a no-delete fence. */
+export function persistChangedDeleteCleanupFence(
+  entry: SubagentRunRecord,
+  persistOrThrow: () => void,
+): void {
+  if (
+    entry.deleteCleanupDispatchedAt === undefined &&
+    entry.execution.suppressSessionEffects === true
+  ) {
+    return;
+  }
+  clearDeleteCleanupDispatch(entry);
+  entry.execution = { ...entry.execution, suppressSessionEffects: true };
+  persistOrThrow();
 }
 
 export function normalizeSubagentRunState(entry: SubagentRunRecord): SubagentRunRecord {

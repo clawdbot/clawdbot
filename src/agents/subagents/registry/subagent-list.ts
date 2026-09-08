@@ -92,7 +92,11 @@ function resolveSessionEntryForKey(params: {
 /** Build child-session indexes from the latest run associated with each child key. */
 function buildLatestSubagentRunIndex(
   runs: Map<string, SubagentRunRecord>,
-  options?: { now?: number },
+  options: {
+    cfg: OpenClawConfig;
+    cache: Map<string, Record<string, SessionEntry>>;
+    now?: number;
+  },
 ) {
   const now = options?.now ?? Date.now();
   const readIndex = buildSubagentRunReadIndexFromRuns({ runs, now });
@@ -107,6 +111,12 @@ function buildLatestSubagentRunIndex(
     if (
       !shouldKeepSubagentRunChildLink(entry, {
         activeDescendants: readIndex.countActiveDescendantRuns(childSessionKey),
+        childSessionExists:
+          resolveSessionEntryForKey({
+            cfg: options.cfg,
+            key: childSessionKey,
+            cache: options.cache,
+          }).entry !== undefined,
         now,
       })
     ) {
@@ -183,7 +193,11 @@ export function buildSubagentList(params: {
   const now = Date.now();
   const cache = new Map<string, Record<string, SessionEntry>>();
   const snapshot = getSubagentRunsSnapshotForRead(subagentRuns);
-  const { childSessionsByController, readIndex } = buildLatestSubagentRunIndex(snapshot);
+  const { childSessionsByController, readIndex } = buildLatestSubagentRunIndex(snapshot, {
+    cfg: params.cfg,
+    cache,
+    now,
+  });
   const pendingDescendantCount = (sessionKey: string) =>
     readIndex.countPendingDescendantRuns(sessionKey);
   const runView = buildSubagentRunView({
