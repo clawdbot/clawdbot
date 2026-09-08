@@ -3683,8 +3683,14 @@ describe("systemd service install and uninstall", () => {
     });
   });
 
-  it("disables the OPENCLAW_SYSTEMD_UNIT override during uninstall", async () => {
+  it.each(["directory", "alias"])("uninstalls node environment through a %s", async (layout) => {
     await withNodeSystemdFixture(async ({ env, unitPath, nodeEnvFilePath }) => {
+      const stateDir = path.dirname(nodeEnvFilePath);
+      if (layout === "alias") {
+        await fs.rename(stateDir, `${stateDir}-target`);
+        await fs.symlink(`${stateDir}-target`, stateDir, "dir");
+      }
+      await fs.chmod(stateDir, 0o3700);
       await fs.mkdir(path.dirname(unitPath), { recursive: true, mode: 0o755 });
       await fs.writeFile(unitPath, "[Unit]\nDescription=OpenClaw Node\n", {
         encoding: "utf8",
@@ -3731,6 +3737,8 @@ describe("systemd service install and uninstall", () => {
         ].join("\n") + "\n",
       );
       expect(requireFirstWrite(write)).toContain("Removed systemd service");
+      expect((await fs.stat(stateDir)).mode & 0o7777).toBe(0o3700);
+      expect((await fs.stat(nodeEnvFilePath)).mode & 0o7777).toBe(0o600);
       expect(execFileMock).toHaveBeenCalledTimes(2);
     });
   });
@@ -3759,58 +3767,72 @@ describe("systemd service install and uninstall", () => {
     });
   });
 
-  it("keeps the node environment file intact when the uninstall rewrite fails mid-write", async () => {
-    await withNodeSystemdFixture(async ({ env, unitPath, nodeEnvFilePath }) => {
-      await fs.mkdir(path.dirname(unitPath), { recursive: true, mode: 0o755 });
-      await fs.writeFile(unitPath, "[Unit]\nDescription=OpenClaw Node\n", {
-        encoding: "utf8",
-        mode: 0o644,
-      });
-      const originalEnv =
-        "OPENCLAW_GATEWAY_TOKEN=stale-node-token\nOPENROUTER_API_KEY=operator-key\n";
-      await fs.writeFile(nodeEnvFilePath, originalEnv, { encoding: "utf8", mode: 0o600 });
+  it.each(["write", "ENOSPC", "EPERM"])(
+    "preserves the node environment after %s failure",
+    async (failure) => {
+      await withNodeSystemdFixture(async ({ env, unitPath, nodeEnvFilePath }) => {
+        await fs.mkdir(path.dirname(unitPath), { recursive: true, mode: 0o755 });
+        await fs.writeFile(unitPath, "[Unit]\nDescription=OpenClaw Node\n", {
+          encoding: "utf8",
+          mode: 0o644,
+        });
+        const originalEnv =
+          "OPENCLAW_GATEWAY_TOKEN=stale-node-token\nOPENROUTER_API_KEY=operator-key\n";
+        await fs.writeFile(nodeEnvFilePath, originalEnv, { encoding: "utf8", mode: 0o600 });
 
-      execFileMock
-        .mockImplementationOnce(systemctlUserSuccess("status"))
-        .mockImplementationOnce(systemctlUserSuccess("disable", "--now", NODE_SERVICE));
+        execFileMock
+          .mockImplementationOnce(systemctlUserSuccess("status"))
+          .mockImplementationOnce(systemctlUserSuccess("disable", "--now", NODE_SERVICE));
 
-      // Fail the staged env rewrite halfway through, as a full disk does.
-      // writeTextAtomic publishes via fs.promises.writeFile(handle, content),
-      // so track the staged temp handle at open time and fail its writeFile.
-      const stateDir = path.dirname(nodeEnvFilePath);
-      const stagedHandles = new Set<unknown>();
-      const realOpen = fs.open.bind(fs);
-      const realWriteFile = fs.writeFile.bind(fs);
-      const openSpy = vi.spyOn(fs, "open").mockImplementation(async (file, flags, mode) => {
-        const handle = await realOpen(file, flags, mode as never);
-        if (String(file).startsWith(stateDir) && String(file).endsWith(".tmp")) {
-          stagedHandles.add(handle);
-        }
-        return handle;
-      });
-      const writeSpy = vi.spyOn(fs, "writeFile").mockImplementation(async (file, data, options) => {
-        if (stagedHandles.has(file)) {
-          await realWriteFile(file as never, data, options as never);
-          throw Object.assign(new Error("no space left on device"), { code: "ENOSPC" });
-        }
-        return realWriteFile(file as never, data as never, options as never);
-      });
-
-      try {
-        const { stdout } = createWritableStreamMock();
-        await expect(uninstallSystemdService({ env, stdout })).rejects.toMatchObject({
-          code: "ENOSPC",
+        const stateDir = path.dirname(nodeEnvFilePath);
+        await fs.chmod(stateDir, 0o3700);
+        const stagedHandles = new Set<unknown>();
+        const realOpen = fs.open.bind(fs);
+        const realWriteFile = fs.writeFile.bind(fs);
+        const openSpy = vi.spyOn(fs, "open").mockImplementation(async (file, flags, mode) => {
+          const handle = await realOpen(file, flags, mode);
+          if (String(file).startsWith(stateDir) && String(file).endsWith(".tmp")) {
+            stagedHandles.add(handle);
+          }
+          return handle;
+        });
+        const writeSpy = vi
+          .spyOn(fs, "writeFile")
+          .mockImplementation(async (file, data, options) => {
+            if (failure === "write" && (file === nodeEnvFilePath || stagedHandles.has(file))) {
+              await realWriteFile(file, "partial", options);
+              throw Object.assign(new Error("no space left on device"), { code: "ENOSPC" });
+            }
+            return realWriteFile(file, data, options);
+          });
+        const realRename = fs.rename.bind(fs);
+        const renameSpy = vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+          if (failure !== "write" && to === nodeEnvFilePath) {
+            throw Object.assign(new Error("rename failed"), { code: failure });
+          }
+          return realRename(from, to);
         });
 
-        await expect(fs.readFile(nodeEnvFilePath, "utf8")).resolves.toBe(originalEnv);
-        expect((await fs.stat(nodeEnvFilePath)).mode & 0o777).toBe(0o600);
-        expect((await fs.readdir(stateDir)).filter((entry) => entry.includes(".tmp"))).toEqual([]);
-      } finally {
-        writeSpy.mockRestore();
-        openSpy.mockRestore();
-      }
-    });
-  });
+        try {
+          const { stdout } = createWritableStreamMock();
+          await expect(uninstallSystemdService({ env, stdout })).rejects.toMatchObject({
+            code: failure === "write" ? "ENOSPC" : failure,
+          });
+
+          await expect(fs.readFile(nodeEnvFilePath, "utf8")).resolves.toBe(originalEnv);
+          expect((await fs.stat(nodeEnvFilePath)).mode & 0o777).toBe(0o600);
+          expect((await fs.stat(stateDir)).mode & 0o7777).toBe(0o3700);
+          expect((await fs.readdir(stateDir)).filter((entry) => entry.includes(".tmp"))).toEqual(
+            [],
+          );
+        } finally {
+          renameSpy.mockRestore();
+          writeSpy.mockRestore();
+          openSpy.mockRestore();
+        }
+      });
+    },
+  );
 
   it("preserves node env file values when unit removal fails during uninstall", async () => {
     await withNodeSystemdFixture(async ({ env, unitPath, nodeEnvFilePath }) => {

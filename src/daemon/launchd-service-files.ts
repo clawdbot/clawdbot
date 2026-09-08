@@ -149,13 +149,9 @@ async function prepareLaunchAgentProgramArguments(params: {
   const wrapperPath = resolveLaunchAgentEnvWrapperPath(params.env, params.label);
   const generatedWrapper = buildLaunchAgentEnvironmentWrapper();
   await ensureSecureDirectory(envDir, LAUNCH_AGENT_PRIVATE_DIR_MODE);
-  // Publish atomically like the plist below: a torn env file drops the gateway
-  // token and the service can no longer authenticate on its next start.
+  // A failed credential rotation must leave the previous service environment usable.
   const envTemporaryPath = `${envFilePath}.openclaw-${randomUUID()}.tmp`;
   try {
-    // The write itself stays inside the cleanup scope: a partial write that
-    // rejects (ENOSPC/EFBIG) must not leave credential material behind on an
-    // already-full filesystem.
     await fs.writeFile(envTemporaryPath, buildLaunchAgentEnvironmentFile(entries), {
       encoding: "utf8",
       flag: "wx",

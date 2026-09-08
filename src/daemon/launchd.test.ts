@@ -2046,8 +2046,6 @@ describe("launchd install", () => {
     const envFilePath = "/Users/test/.openclaw/service-env/ai.openclaw.gateway.env";
     const originalEnv = "export OPENCLAW_GATEWAY_TOKEN='original-token'\n";
     state.files.set(envFilePath, originalEnv);
-    // The env file publishes through a staged temp + rename; fail the rename as
-    // a full disk would, before any plist mutation happens.
     vi.mocked(fs.rename).mockRejectedValueOnce(
       Object.assign(new Error("ENOSPC: no space left on device, rename"), { code: "ENOSPC" }),
     );
@@ -2059,7 +2057,7 @@ describe("launchd install", () => {
     ).catch((caught: unknown) => caught);
 
     expect(error).toBeInstanceOf(Error);
-    expect((error as NodeJS.ErrnoException).code).toBe("ENOSPC");
+    expect(error).toMatchObject({ code: "ENOSPC" });
     expect(state.files.get(envFilePath)).toBe(originalEnv);
     expect([...state.files.keys()].filter((key) => key.includes(".tmp"))).toEqual([]);
   });
@@ -2069,8 +2067,6 @@ describe("launchd install", () => {
     const envFilePath = "/Users/test/.openclaw/service-env/ai.openclaw.gateway.env";
     const originalEnv = "export OPENCLAW_GATEWAY_TOKEN='original-token'\n";
     state.files.set(envFilePath, originalEnv);
-    // Fail the temporary write itself after some bytes landed, as EFBIG would
-    // on a full filesystem; cleanup must still remove the partial temporary.
     vi.mocked(fs.writeFile).mockImplementationOnce(async (p: string, data: string) => {
       state.files.set(p, data.slice(0, 16));
       throw Object.assign(new Error("EFBIG: file too large, write"), { code: "EFBIG" });
@@ -2083,7 +2079,7 @@ describe("launchd install", () => {
     ).catch((caught: unknown) => caught);
 
     expect(error).toBeInstanceOf(Error);
-    expect((error as NodeJS.ErrnoException).code).toBe("EFBIG");
+    expect(error).toMatchObject({ code: "EFBIG" });
     expect(state.files.get(envFilePath)).toBe(originalEnv);
     expect([...state.files.keys()].filter((key) => key.includes(".tmp"))).toEqual([]);
   });
