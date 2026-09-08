@@ -30,6 +30,28 @@ const MEMORY_FLUSH_PROMPT_RE =
   /Save important context from this session to the daily memory file\.\s*STRICT RULES:/i;
 const PROMOTION_SCORE_METADATA_RE =
   /\[\s*score=\d+(?:\.\d+)?\s+(?:signals=\d+\s+)?recalls=\d+\s+avg=\d+(?:\.\d+)?\s+source=memory\//i;
+const CONCRETE_SECRET_VALUE_RE =
+  /(?:^|[^a-z0-9])(?:sk-[a-z0-9_-]{12,}|ghp_[a-z0-9_]{20,}|AKIA[0-9A-Z]{16}|eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{10,})/;
+const PRIVATE_KEY_BLOCK_RE = /-----BEGIN [A-Z ]*PRIVATE KEY-----/;
+const ASSIGNED_SECRET_VALUE_RE =
+  /\b(?:password|passwd|api[_ -]?key|access[_ -]?token|auth[_ -]?token|authorization|bearer)\s*[=:]\s*(?!\*{3}|\.{3})\S{6,}/i;
+// Snippet filters below match the normalized single-line form: every promotion
+// gate passes normalizeSnippet() output before this predicate runs, so
+// line-anchored shapes would never fire on real store input.
+const STACK_FRAME_RE = /(?:^|[\s,;])(?:at\s+[\w.$<>]+\s+)?\([^)\s]*\.\w{1,10}:\d+:\d+\)/;
+const ISO_TIMESTAMP_RE = /\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?\b/;
+const HTTP_STATUS_RE = /\bhttps?\s+[45]\d\d\b/i;
+const FENCED_RAW_DUMP_RE = /(?:^|\s)```[a-z]*\s*[{[]/i;
+const TEMP_DIR_RE = /(?:^|\s)\/(?:tmp|var\/tmp|private\/var\/folders)\/|\/(?:tmp|temp)\//;
+const PATH_CONTEXT_RE = /\b(?:output|directory|path|contents|file|logs?|temp|temporary)\b/i;
+const TRANSIENT_DIAGNOSTIC_RE =
+  /\b(?:not generated|not created|pipeline aborted|exit code\s+\d+|stack trace|traceback|unhandledpromiserejection|econnreset|etimedout|epipe|enoent|eacces|incorrect username or password|authentication failure|user account is locked|token expired|token revoked|invalid[_-]?grant|refresh[_ -]?token|credentials? expired|attempt \d+\/\d+ failed)\b/i;
+const ERROR_TABLE_CONTEXT_RE = /\b(?:failed|failure|error|root cause|exception)\b/i;
+// Snippets stating a standing preference stay eligible even when they mention
+// transient-looking vocabulary; dropping this carve-out discards durable
+// operator guidance alongside the noise (mirrors rem-evidence's carve-out).
+const DURABLE_INTENT_RE =
+  /\b(?:always use|prefers?|preferences?|standing rule|rule:|remember|should default to)\b/i;
 const DREAMING_DIFF_PREFIX_RE = /@@\s*-\d+(?:,\d+)?\s+[-*+]\s+/iy;
 const DEFAULT_PROMOTION_WEIGHTS: PromotionWeights = {
   frequency: 0.24,
@@ -156,6 +178,45 @@ function hasDreamingNarrativeLead(snippet: string): boolean {
   return /\b(?:Candidate|Reflections?):/i.test(head);
 }
 
+function hasConcreteSecretValue(snippet: string): boolean {
+  return (
+    CONCRETE_SECRET_VALUE_RE.test(snippet) ||
+    PRIVATE_KEY_BLOCK_RE.test(snippet) ||
+    ASSIGNED_SECRET_VALUE_RE.test(snippet)
+  );
+}
+
+function isNonDurablePromotionSnippet(raw: string): boolean {
+  const snippet = normalizeSnippet(raw);
+  if (!snippet) {
+    return true;
+  }
+  if (hasConcreteSecretValue(snippet)) {
+    return true;
+  }
+  // Secret values already returned; the carve-out must not re-admit them.
+  if (DURABLE_INTENT_RE.test(snippet)) {
+    return false;
+  }
+  if (
+    TRANSIENT_DIAGNOSTIC_RE.test(snippet) ||
+    STACK_FRAME_RE.test(snippet) ||
+    ISO_TIMESTAMP_RE.test(snippet) ||
+    HTTP_STATUS_RE.test(snippet) ||
+    FENCED_RAW_DUMP_RE.test(snippet)
+  ) {
+    return true;
+  }
+  if (TEMP_DIR_RE.test(snippet) && PATH_CONTEXT_RE.test(snippet)) {
+    return true;
+  }
+  const pipeCount = (snippet.match(/\|/g) ?? []).length;
+  if (pipeCount >= 8 && ERROR_TABLE_CONTEXT_RE.test(snippet)) {
+    return true;
+  }
+  return false;
+}
+
 export function isContaminatedDreamingSnippet(
   raw: string,
   opts: { allowTranscriptTurnSnippet?: boolean } = {},
@@ -163,6 +224,9 @@ export function isContaminatedDreamingSnippet(
   const snippet = normalizeSnippet(raw);
   if (!snippet) {
     return false;
+  }
+  if (isNonDurablePromotionSnippet(raw)) {
+    return true;
   }
   if (
     /<!--\s*openclaw-memory-promotion:/i.test(snippet) ||
