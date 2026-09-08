@@ -989,18 +989,12 @@ const writeCases: WriteCase[] = [
     next: { gateway: { mode: "local", port: 18789 } },
     error: "Config write would flatten $include-owned config at <root>",
   },
-  {
-    name: "does not restore root $schema when the next config explicitly clears it",
+  ...[null, 123].map((value) => ({
+    name: `preserves invalid $schema ${value} for write validation`,
     current: { $schema: "https://openclaw.ai/config.json", gateway: { mode: "local" } },
-    next: { $schema: null, gateway: { mode: "local", port: 18789 } },
-    expected: { gateway: { mode: "local", port: 18789 } },
-  },
-  {
-    name: "does not restore root $schema when the next config sets an invalid value",
-    current: { $schema: "https://openclaw.ai/config.json", gateway: { mode: "local" } },
-    next: { $schema: 123, gateway: { mode: "local", port: 18789 } },
-    expected: { $schema: 123, gateway: { mode: "local", port: 18789 } },
-  },
+    next: { $schema: value, gateway: { mode: "local", port: 18789 } },
+    expected: { $schema: value, gateway: { mode: "local", port: 18789 } },
+  })),
 ];
 
 function resolveWriteCase(testCase: WriteCase): OpenClawConfig {

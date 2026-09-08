@@ -5,6 +5,7 @@ import { listTaskRecordsUnsorted } from "../../../tasks/runtime-internal.js";
 import { configureTaskRegistryRuntime } from "../../../tasks/task-registry.store.js";
 import type { TaskRecord } from "../../../tasks/task-registry.types.js";
 import { resetTaskRegistryForTests } from "../../../tasks/task-runtime.test-helpers.js";
+import { createInMemoryTaskRegistryStore } from "../../../test-utils/task-registry-store.js";
 import { installGatewayTestHooks } from "../../server.auth.test-helpers.js";
 import {
   createTaskSnapshot,
@@ -28,11 +29,11 @@ test("preserves task pagination during metadata patches but invalidates new requ
     resetTaskRegistryForTests({ persist: false });
     configureTaskRegistryRuntime({
       store: {
+        ...createInMemoryTaskRegistryStore(),
         loadSnapshot: () => ({
           tasks: new Map([...createTaskSnapshot()].slice(0, 256)),
           deliveryStates: new Map(),
         }),
-        saveSnapshot: () => {},
       },
     });
   };
@@ -136,11 +137,11 @@ test("preserves task pagination during metadata patches but invalidates new requ
     resetTaskRegistryForTests({ persist: false });
     configureTaskRegistryRuntime({
       store: {
+        ...createInMemoryTaskRegistryStore(),
         loadSnapshot: () => ({
           tasks: new Map([...metadataTasks, missingSessionTask].map((task) => [task.taskId, task])),
           deliveryStates: new Map(),
         }),
-        saveSnapshot: () => {},
       },
     });
     const beforeCreation = await sendRpc<TasksListResult>(

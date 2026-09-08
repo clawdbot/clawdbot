@@ -8,6 +8,8 @@ const enLogin = {
     lede: "Enter the Gateway URL and secret, or open the one-time link that openclaw dashboard prints on the Gateway host.",
     gatewayUrl: "Gateway URL",
     secret: "Gateway secret",
+    setupCodeHint:
+      "This is a device setup code for the OpenClaw mobile app, not the Gateway secret. Paste it in the app's Gateway settings instead; the Gateway secret comes from openclaw gateway auth-token --show on the Gateway host.",
     secretPlaceholder: "Paste the token or type the password",
     runOnHost: "Run on the Gateway host",
     connection: {
@@ -125,7 +127,7 @@ const enLogin = {
           "The browser could not reach {host}. Check the address and transport before retrying credentials.",
         stepGateway: "Confirm the Gateway is running with openclaw status or openclaw gateway run.",
         stepUrl:
-          "Check the WebSocket URL and use wss:// when the Gateway is behind HTTPS/Tailscale Serve.",
+          "Check the Gateway URL and use wss:// when the Gateway is behind HTTPS/Tailscale Serve.",
         stepDashboard:
           "Reopen the dashboard with openclaw dashboard --no-open to recopy the current URL and auth details.",
       },

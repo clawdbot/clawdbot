@@ -266,7 +266,7 @@ export function prepareLegacyWorkspaceStateReset(
 /** Discard retired workspace files from a pre-removal reset plan. */
 export async function removeLegacyWorkspaceStateForReset(
   plan: LegacyWorkspaceResetPlan,
-  options?: { dryRun?: boolean },
+  options?: { dryRun?: boolean; assertCurrent?: () => void },
 ): Promise<LegacyWorkspaceResetCleanup> {
   const removedPaths: string[] = [];
   const warnings: string[] = [];
@@ -299,6 +299,7 @@ export async function removeLegacyWorkspaceStateForReset(
         }
       }
       if (!options?.dryRun) {
+        options?.assertCurrent?.();
         await sourceRoot.remove(relativePath);
       }
       removedPaths.push(sourcePath);

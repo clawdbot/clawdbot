@@ -498,6 +498,14 @@ plugins.
 | `api.session.controls.registerSessionAction(...)`                                    | Typed session actions clients can dispatch through the Gateway                                                                                             |
 | `api.registerBoardWidgetContentKind(...)`                                            | Sandboxed board widget source validation, renderer resources, and document composition                                                                     |
 
+Runtime lifecycle registrations can also supply `dispose()` for resources captured
+by that registration. Explicitly owned, uncached plugin inspections invoke it on
+rollback or release and await cleanup, including invalid asynchronous registration
+work. Doctor uses this ownership when loading a context engine for discovery; it
+still does not invoke a discovery-only engine factory. `dispose()` must not delete
+durable state or disable another registration. Existing raw loader and Gateway
+lifetimes do not gain automatic disposal: keep their `cleanup(ctx)` behavior.
+
 `registerBoardWidgetContentKind(...)` is for plugins that own a declarative
 widget source format. The registration supplies a globally unique lowercase
 `kind`, a short label, one capability-scoped plugin surface plus its renderer

@@ -5,10 +5,17 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
 source "$ROOT_DIR/scripts/lib/frozen-target-compat.sh"
 SOURCE_ROOT="${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$ROOT_DIR}"
-openclaw_prepare_frozen_target_context "$SOURCE_ROOT" || {
+FROZEN_CONTEXT=0
+openclaw_prepare_frozen_target_context "$SOURCE_ROOT" && FROZEN_CONTEXT=1 || {
   context_status=$?
   [ "$context_status" -eq 1 ] || exit "$context_status"
 }
+LEGACY_GATEWAY_CLIENT=""
+if [[ "$FROZEN_CONTEXT" == "1" ]] &&
+  openclaw_frozen_target_source_has_path "$SOURCE_ROOT" scripts/e2e/lib/gateway-network/client.mjs &&
+  ! openclaw_frozen_target_source_has_path "$SOURCE_ROOT" scripts/e2e/lib/gateway-network/client.mts; then
+  LEGACY_GATEWAY_CLIENT="$SOURCE_ROOT/scripts/e2e/lib/gateway-network/client.mjs"
+fi
 IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-gateway-network-e2e" OPENCLAW_GATEWAY_NETWORK_E2E_IMAGE)"
 SKIP_BUILD="${OPENCLAW_GATEWAY_NETWORK_E2E_SKIP_BUILD:-0}"
 
@@ -70,6 +77,10 @@ docker_e2e_docker_cmd network create "$NET_NAME" >/dev/null
 
 echo "Starting gateway container..."
 docker_e2e_harness_mount_args
+gateway_setup='node "$entry" config set gateway.controlUi.enabled false >/dev/null'
+if [[ -z "$LEGACY_GATEWAY_CLIENT" ]]; then
+  gateway_setup+='; if [[ ! -f /tmp/gateway-network-configured ]]; then node "$entry" plugins enable admin-http-rpc >/dev/null; touch /tmp/gateway-network-configured; fi'
+fi
 docker_e2e_docker_cmd run -d \
   "${DOCKER_E2E_HARNESS_ARGS[@]}" \
   --name "$GW_NAME" \
@@ -80,7 +91,7 @@ docker_e2e_docker_cmd run -d \
   -e "OPENCLAW_SKIP_CRON=1" \
   -e "OPENCLAW_SKIP_CANVAS_HOST=1" \
   "$IMAGE_NAME" \
-  bash -lc "set -euo pipefail; source scripts/lib/openclaw-e2e-instance.sh; entry=\"\$(openclaw_e2e_resolve_entrypoint)\"; node \"\$entry\" config set gateway.controlUi.enabled false >/dev/null; if [[ ! -f /tmp/gateway-network-configured ]]; then node \"\$entry\" plugins enable admin-http-rpc >/dev/null; touch /tmp/gateway-network-configured; fi; openclaw_e2e_exec_gateway \"\$entry\" $PORT lan /tmp/gateway-net-e2e.log" >/dev/null
+  bash -lc "set -euo pipefail; source scripts/lib/openclaw-e2e-instance.sh; entry=\"\$(openclaw_e2e_resolve_entrypoint)\"; $gateway_setup; openclaw_e2e_exec_gateway \"\$entry\" $PORT lan /tmp/gateway-net-e2e.log" >/dev/null
 
 echo "Waiting for gateway to come up..."
 if ! docker_e2e_wait_container_bash "$GW_NAME" 180 0.5 "source scripts/lib/openclaw-e2e-instance.sh; openclaw_e2e_probe_tcp 127.0.0.1 $PORT"; then
@@ -90,6 +101,19 @@ if ! docker_e2e_wait_container_bash "$GW_NAME" 180 0.5 "source scripts/lib/openc
 fi
 
 echo "Running client container (connect + health)..."
+if [[ -n "$LEGACY_GATEWAY_CLIENT" ]]; then
+  DOCKER_COMMAND_TIMEOUT="$CLIENT_TIMEOUT" run_logged gateway-network-client docker_e2e_docker_run_cmd run --rm \
+    "${DOCKER_E2E_HARNESS_ARGS[@]}" \
+    --network "$NET_NAME" \
+    "${CLIENT_LIMIT_ENV_ARGS[@]}" \
+    -v "$LEGACY_GATEWAY_CLIENT:/tmp/openclaw-gateway-network-client.mjs:ro" \
+    -e "GW_URL=ws://$GW_NAME:$PORT" \
+    -e "GW_TOKEN=$TOKEN" \
+    "$IMAGE_NAME" \
+    node /tmp/openclaw-gateway-network-client.mjs
+  echo "OK"
+  exit 0
+fi
 CAPABILITIES_DIR="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-gateway-network-capabilities.XXXXXX")"
 CAPABILITIES_PATH="$CAPABILITIES_DIR/capabilities.json"
 if [[ ! -O "$CAPABILITIES_DIR" ]]; then

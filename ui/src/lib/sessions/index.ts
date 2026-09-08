@@ -1,5 +1,4 @@
 import type { SessionCatalogPullRequestSummary } from "../../../../packages/gateway-protocol/src/schema/sessions-catalog.js";
-import { GatewayRequestError } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { formatUiError } from "../format-error.ts";
 import { createGatewayConnectionLifecycle } from "../gateway-connection-lifecycle.ts";
@@ -28,6 +27,9 @@ import {
 } from "./session-key.ts";
 import { createSessionMutations } from "./session-mutations.ts";
 import { createSessionPermissionProjection } from "./session-permission-projection.ts";
+import { sessionRetryDelayMs } from "./session-retry.ts";
+import { createSessionRosterCacheLifecycle } from "./session-roster-cache-lifecycle.ts";
+import type { SessionRosterCacheOptions } from "./session-roster-cache.ts";
 import { createSessionRosterRefresh } from "./session-roster-refresh.ts";
 import { createSessionScopedOperations } from "./session-scoped-operations.ts";
 import { SwarmActivityTracker } from "./swarm-activity.ts";
@@ -64,21 +66,6 @@ export type {
   SessionScopeHostWithKey,
 } from "./navigation.ts";
 
-const SESSION_RETRY_DEFAULT_MS = 500;
-const SESSION_RETRY_MIN_MS = 100;
-const SESSION_RETRY_MAX_MS = 30_000;
-
-function sessionRetryDelayMs(error: unknown): number | null {
-  if (!(error instanceof GatewayRequestError) || !error.retryable) {
-    return null;
-  }
-  const requested =
-    typeof error.retryAfterMs === "number" && Number.isFinite(error.retryAfterMs)
-      ? error.retryAfterMs
-      : SESSION_RETRY_DEFAULT_MS;
-  return Math.min(Math.max(requested, SESSION_RETRY_MIN_MS), SESSION_RETRY_MAX_MS);
-}
-
 type SessionAgentSelection = {
   readonly state: { readonly selectedId: string | null };
   subscribe: (listener: () => void) => () => void;
@@ -87,6 +74,7 @@ type SessionAgentSelection = {
 export function createSessionCapability(
   gateway: SessionGateway,
   agentSelection: SessionAgentSelection,
+  cacheOptions: SessionRosterCacheOptions = {},
 ): SessionCapability {
   let state: SessionState = {
     result: null,
@@ -95,10 +83,17 @@ export function createSessionCapability(
     loading: false,
     error: null,
     deletedSessions: [],
-    groups: [],
-    groupSettings: [],
-    sectionOrder: [],
+    groups: cacheOptions.bootRecord?.groups.map((group) => group.name) ?? [],
+    groupSettings: cacheOptions.bootRecord?.groups ?? [],
+    sectionOrder: cacheOptions.bootRecord?.sectionOrder ?? [],
   };
+  const cacheLifecycle = createSessionRosterCacheLifecycle(gateway, agentSelection, cacheOptions, {
+    readState: () => state,
+    publish: (next) => publish(next),
+    connected: () => connection.capture() !== null,
+    query: () => roster.lastOptions(),
+  });
+
   const connection = createGatewayConnectionLifecycle(gateway.snapshot);
   const githubPublication = createSessionGitHubPublication({
     connection,
@@ -155,6 +150,7 @@ export function createSessionCapability(
     }
     state = next;
     githubPublication.observeRows(next.result?.sessions ?? [], next.agentId);
+    cacheLifecycle.persist(next);
     for (const listener of listeners) {
       listener(state);
     }
@@ -493,6 +489,7 @@ export function createSessionCapability(
     const selfUserId = next.selfUser?.id.trim() || null;
     const connectionChanged = connection.transition(next);
     roster.observeGateway(next, connectionChanged);
+    cacheLifecycle.synchronize(next);
     connectionClient = next.client;
     githubPublication.observeRows([]);
     if (connectionChanged) {
@@ -521,8 +518,8 @@ export function createSessionCapability(
       hydratedSelfUserId = null;
       publish({
         ...state,
-        result: null,
-        agentId: null,
+        result: state.resultCached ? state.result : null,
+        agentId: state.resultCached ? state.agentId : null,
         loading: false,
         error: null,
         deletedSessions: [],
@@ -650,6 +647,7 @@ export function createSessionCapability(
       return canonicalListRevision;
     },
     githubPublication,
+    whenCachedRosterSettled: () => cacheLifecycle.settled,
     captureConnectionScope: () => connection.capture(),
     isConnectionScopeCurrent: (scope) => connection.isCurrent(scope),
     list: roster.list,
@@ -717,6 +715,7 @@ export function createSessionCapability(
       return () => listeners.delete(listener);
     },
     dispose() {
+      cacheLifecycle.dispose();
       githubPublication.clear();
       roster.dispose();
       operations.dispose();

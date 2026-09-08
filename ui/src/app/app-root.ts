@@ -571,11 +571,14 @@ export class OpenClawApp extends OpenClawLightDomElement {
       gatewaySnapshot.lastError === null &&
       (gatewaySnapshot.phase === "starting" ||
         (gatewaySnapshot.phase === "connecting" && !this.loginGatePinned));
-    if (initialConnectPending) {
+    const warmConnectPending = initialConnectPending && runtime.warmBoot && !this.loginGatePinned;
+    if (initialConnectPending && !warmConnectPending) {
       return renderConnectingSplash(gatewayStartupStatus);
     }
     const shellOwnsRecovery =
-      gatewaySnapshot.phase === "reconnecting" || gatewaySnapshot.phase === "reload-required";
+      gatewaySnapshot.phase === "reconnecting" ||
+      gatewaySnapshot.phase === "reload-required" ||
+      warmConnectPending;
     const showLoginGate = !gatewayConnected && !shellOwnsRecovery;
     if (showLoginGate && !isOptionalElementDefined(LOGIN_GATE_ELEMENT)) {
       const loadState = this.loginGateLoader.visibleState;

@@ -3,7 +3,7 @@ import { html, nothing } from "lit";
 import { routePageSpec } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { loadSkillStatusReport } from "../../lib/skills/index.ts";
+import { loadSkillStatusReport } from "../../lib/skills/status-report.ts";
 import type { SkillsRouteData } from "./skills-page.ts";
 
 async function loadSkillsRouteData(context: ApplicationContext): Promise<SkillsRouteData> {

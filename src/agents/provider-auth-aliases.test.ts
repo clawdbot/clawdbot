@@ -3,6 +3,7 @@
  * Verifies plugin metadata aliases, origin priority, trust, and cache behavior.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { buildDeclaredProviderOwnerIndex } from "../plugins/provider-owner-index.js";
 
 const pluginRegistryMocks = vi.hoisted(() => {
   const loadManifestRegistry = vi.fn();
@@ -123,6 +124,7 @@ function createPluginMetadataSnapshot(params: {
     diagnostics: [],
     byPluginId: new Map(params.plugins.map((plugin) => [plugin.id, plugin])),
     normalizePluginId: (pluginId) => pluginId,
+    declaredProviderOwners: buildDeclaredProviderOwnerIndex(params.plugins),
     owners: {
       channels: new Map(),
       channelConfigs: new Map(),

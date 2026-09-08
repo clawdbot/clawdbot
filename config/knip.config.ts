@@ -91,6 +91,8 @@ const repositoryScriptEntries = [
   // systemd-sealed-service-definition.sh executes these via Node stdin and a container path.
   "scripts/e2e/lib/systemd-sealed-service-definition/file-mount.mjs!",
   "scripts/e2e/lib/systemd-sealed-service-definition/paired-mounts.mjs!",
+  // abandoned-update.sh invokes the upgrade ledger assertions through Node.
+  "scripts/e2e/lib/upgrade-survivor/abandoned-update.mjs!",
   "scripts/e2e/lib/upgrade-survivor/config-parking.mjs!",
   // Capture runs in the container; sanitization runs only on the trusted host.
   "scripts/e2e/lib/upgrade-survivor/diagnostics.mjs!",
@@ -235,6 +237,8 @@ const rootEntries = [
   "src/agents/subagents/registry/subagent-registry-restart-recovery.ts!",
   // Task cancellation loads this control facade by string path to avoid a registry cycle.
   "src/tasks/task-registry-control.runtime.ts!",
+  // Reply dispatch and Gateway startup consume this namespace through loadGetReplyFromConfigRuntime.
+  "src/auto-reply/reply/get-reply-from-config.runtime.ts!",
   // Human plugin listing lazily loads its formatter to keep JSON startup lean.
   "src/cli/plugins-list-format.ts!",
   "src/infra/warning-filter.ts!",

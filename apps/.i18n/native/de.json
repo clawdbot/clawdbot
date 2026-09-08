@@ -1693,6 +1693,7 @@
     "native.apple.05f711cec069ec47": "Kopplung erforderlich. Führen Sie in einem bereits gekoppelten OpenClaw-Client /pair approve aus und prüfen Sie dann die Verbindung erneut.",
     "native.apple.0603402116243f9e": "Neuer Chat im Arbeitsbaum",
     "native.apple.060e3947436fa930": "%1$@ konnte nicht verarbeitet werden: %2$@",
+    "native.apple.0644a7702bb80de1": "Die Browser-Anmeldung ist abgelaufen. Verbinden Sie diesen Gateway erneut.",
     "native.apple.067bbf8e4b7d1837": "Gehört: %@",
     "native.apple.06aa02b192d6a1b3": "Wird überprüft",
     "native.apple.06ced75261e8a242": "App-PID",

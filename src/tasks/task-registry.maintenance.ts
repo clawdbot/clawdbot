@@ -887,6 +887,9 @@ export function getInspectableActiveTaskRestartBlockers(): ActiveTaskRestartBloc
       status: task.status,
       runtime: task.runtime,
     };
+    if (task.taskKind) {
+      blocker.taskKind = task.taskKind;
+    }
     if (task.runId) {
       blocker.runId = task.runId;
     }

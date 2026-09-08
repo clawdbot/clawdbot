@@ -4,7 +4,7 @@ import { access, mkdir, open, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { repoRoot } from "./host-command.ts";
 
-const DEFAULT_TEXT_FILE_TAIL_BYTES = 4 * 1024 * 1024;
+const TEXT_FILE_TAIL_BYTES = 4 * 1024 * 1024;
 const OPENCLAW_VERSION_PATTERN = /OpenClaw\s+([0-9][^\s]*)/gi;
 
 export async function exists(filePath: string): Promise<boolean> {
@@ -20,17 +20,14 @@ export async function readJson<T>(filePath: string): Promise<T> {
   return JSON.parse(await readFile(filePath, "utf8")) as T;
 }
 
-async function readTextFileTail(
-  filePath: string,
-  maxBytes = DEFAULT_TEXT_FILE_TAIL_BYTES,
-): Promise<string> {
+async function readTextFileTail(filePath: string): Promise<string> {
   const file = await open(filePath, "r").catch(() => null);
   if (!file) {
     return "";
   }
   try {
     const stats = await file.stat();
-    const start = Math.max(0, stats.size - maxBytes);
+    const start = Math.max(0, stats.size - TEXT_FILE_TAIL_BYTES);
     const length = stats.size - start;
     if (length <= 0) {
       return "";
@@ -46,9 +43,8 @@ async function readTextFileTail(
 export async function extractLastOpenClawVersionFromLog(
   logPath: string,
   pattern = OPENCLAW_VERSION_PATTERN,
-  maxBytes = DEFAULT_TEXT_FILE_TAIL_BYTES,
 ): Promise<string> {
-  const text = await readTextFileTail(logPath, maxBytes);
+  const text = await readTextFileTail(logPath);
   const flags = pattern.flags.includes("g") ? pattern.flags : `${pattern.flags}g`;
   const globalPattern = new RegExp(pattern.source, flags);
   return [...text.matchAll(globalPattern)].at(-1)?.[1] ?? "";

@@ -29,6 +29,8 @@ import { prepareGithubIssue } from "../infra/github-issue.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
 import * as replaceFile from "../infra/replace-file.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
+import * as sqlitePrivateDirectory from "../infra/sqlite-private-directory.js";
+import * as windowsPrivateDirectory from "../infra/windows-private-directory.js";
 import { ExitError } from "../runtime.js";
 import {
   AGENT_DATABASE_MAINTENANCE_LEASE,
@@ -1321,6 +1323,15 @@ describe("runDoctorSessionSqlite", () => {
       const fsync = fs.fsyncSync;
       const failureCode =
         syncFailure === "EIO" ? "EIO" : platform === "win32" ? "EPERM" : "ENOTSUP";
+      // Simulate directory-sync policy without invoking foreign-platform ACL APIs.
+      const stagingRootSpy = vi
+        .spyOn(sqlitePrivateDirectory, "resolvePrivateSqliteSnapshotStagingRoot")
+        .mockReturnValue(store.tempDir);
+      const privateDirectorySpy = vi
+        .spyOn(windowsPrivateDirectory, "createPrivateWindowsDirectory")
+        .mockImplementation((directoryPath) => {
+          fs.mkdirSync(directoryPath, { mode: 0o700 });
+        });
       const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue(platform);
       const syncSpy = vi.spyOn(fs, "fsyncSync").mockImplementation((fd) => {
         if (!isDirectoryDescriptor(fd, path.dirname(manifestPath))) {
@@ -1364,6 +1375,8 @@ describe("runDoctorSessionSqlite", () => {
       } finally {
         syncSpy.mockRestore();
         platformSpy.mockRestore();
+        privateDirectorySpy.mockRestore();
+        stagingRootSpy.mockRestore();
       }
     },
   );

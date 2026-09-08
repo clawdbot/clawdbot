@@ -171,8 +171,9 @@ function providerPluginStub(
 const healthCommand = vi.hoisted(() => vi.fn(async () => {}));
 const ensureWorkspaceAndSessions = vi.hoisted(() => vi.fn(async () => {}));
 const ensureOnboardingConfig = vi.hoisted(() =>
-  vi.fn(async ({ config }: { config: OpenClawConfig }) => ({
+  vi.fn(async ({ config, baseConfig }: { config: OpenClawConfig; baseConfig: OpenClawConfig }) => ({
     config,
+    configBase: baseConfig,
     agentId: "main",
     bootstrapPending: true,
   })),
@@ -692,8 +693,9 @@ describe("runSetupWizard", () => {
 
   it("prompts for and stages the named first agent on a fresh install", async () => {
     const prompter = buildWizardPrompter({ text: vi.fn(async () => "robby") });
-    ensureOnboardingConfig.mockImplementationOnce(async ({ config }) => ({
+    ensureOnboardingConfig.mockImplementationOnce(async ({ config, baseConfig }) => ({
       config,
+      configBase: baseConfig,
       agentId: "robby",
       bootstrapPending: true,
       createdAgent: true,

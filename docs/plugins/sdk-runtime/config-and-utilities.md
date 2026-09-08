@@ -31,6 +31,15 @@ Use `current()`, a passed-in `cfg`, `mutateConfigFile(...)`, or
 
 For direct SDK imports, prefer the focused config subpaths over the broad `openclaw/plugin-sdk/config-runtime` compatibility barrel: `config-contracts` for types, `runtime-config-snapshot` for current process snapshots, and `config-mutation` for writes. Read entry-scoped values from `api.pluginConfig`; use a supplied tool context only for its runtime-wide config snapshot, and keep plugin-specific merging at that boundary. Bundled plugin tests should mock these focused subpaths directly instead of mocking the broad compatibility barrel.
 
+When using the direct `config-mutation` import to replace a source snapshot, pass
+the edited config as `sourceConfig` to `replaceConfigFile`, retaining its `snapshot`,
+`baseHash`, `writeOptions`, and explicit `afterWrite` policy. Runtime-derived
+replacements continue to use `nextConfig`. Source replacements and focused mutations
+preserve their file snapshot's references even when the active runtime uses a different snapshot.
+
+The direct SDK `updateConfig` helper returns the config produced by its mutator.
+Its disk write restores environment references using the original read snapshot.
+
 Internal OpenClaw runtime code follows the same direction: load config once at the CLI, gateway, or process boundary, then pass that value through. Successful mutation writes refresh the process runtime snapshot and advance its internal revision; long-lived caches should key off the runtime-owned cache key instead of serializing config locally. Long-lived runtime modules have a zero-tolerance scanner for ambient `loadConfig()` calls; use a passed `cfg`, a request `context.getRuntimeConfig()`, or `getRuntimeConfig()` at an explicit process boundary.
 
 Provider and channel execution paths must use the active runtime config snapshot, not a file snapshot returned for config readback or editing. File snapshots preserve source values such as SecretRef markers for UI and writes; provider callbacks need the resolved runtime view. When a helper may be called with either the active source snapshot or the active runtime snapshot, route through `selectApplicableRuntimeConfig()` before reading credentials.

@@ -14,7 +14,19 @@ type WakeHandler = (
   request: SessionEventWakeRequest,
   signal: AbortSignal,
 ) => Promise<SessionEventWakeResult>;
-type Settlement = { active: boolean; settle: (result: SessionEventWakeResult) => void };
+export type SessionEventWakeWaitOptions = {
+  abortSignal?: AbortSignal;
+  /** Detach this waiter while the queue retains the wake at its retry deadline. */
+  stopWaitingOnRetry?: (
+    result: Extract<SessionEventWakeResult, { status: "skipped" }>,
+    retryAtMs: number,
+  ) => boolean;
+};
+type Settlement = {
+  active: boolean;
+  settle: (result: SessionEventWakeResult) => void;
+  stopWaitingOnRetry?: SessionEventWakeWaitOptions["stopWaitingOnRetry"];
+};
 type PendingWake = SessionEventWakeRequest & {
   sequence: number;
   barrierSequence?: number;
@@ -262,6 +274,14 @@ function createSessionEventWakeRuntime() {
           ? SESSION_EVENT_IDLE_RETRY_MS
           : RETRY_MS;
     const deadline = performance.now() + delay;
+    if (result) {
+      const retryAtMs = Date.now() + delay;
+      for (const entry of wake.settlements) {
+        if (entry.active && entry.stopWaitingOnRetry?.(result, retryAtMs)) {
+          entry.settle(result);
+        }
+      }
+    }
     enqueue(
       {
         ...wake,
@@ -444,11 +464,7 @@ function createSessionEventWakeRuntime() {
     };
   }
 
-  function enqueueRequest(
-    options: RequestOptions,
-    settlement?: Settlement,
-    retryResult?: Extract<SessionEventWakeResult, { status: "skipped" }>,
-  ): void {
+  function enqueueRequest(options: RequestOptions, settlement?: Settlement): void {
     const now = performance.now();
     const { coalesceMs, ...wake } = options;
     const normalized = {
@@ -471,11 +487,7 @@ function createSessionEventWakeRuntime() {
         notBefore: 0,
         settlements: settlement ? [settlement] : [],
       };
-      if (retryResult) {
-        retry(pendingWake, retryResult);
-      } else {
-        enqueue(pendingWake);
-      }
+      enqueue(pendingWake);
       schedulePending();
     });
   }
@@ -483,20 +495,15 @@ function createSessionEventWakeRuntime() {
   function requestSessionEventWake(options: RequestOptions): void {
     enqueueRequest(options);
   }
-  function requestSessionEventWakeRetry(
-    options: SessionEventWakeRequest,
-    result: Extract<SessionEventWakeResult, { status: "skipped" }>,
-  ): void {
-    enqueueRequest(options, undefined, result);
-  }
   function requestSessionEventWakeAndWait(
     options: RequestOptions,
-    lifecycle?: { abortSignal?: AbortSignal },
+    lifecycle?: SessionEventWakeWaitOptions,
   ): Promise<SessionEventWakeResult> {
     return new Promise((resolve) => {
       const signal = lifecycle?.abortSignal;
       const settlement: Settlement = {
         active: true,
+        stopWaitingOnRetry: lifecycle?.stopWaitingOnRetry,
         settle: (result) => {
           if (settlement.active) {
             settlement.active = false;
@@ -519,7 +526,6 @@ function createSessionEventWakeRuntime() {
   return {
     setSessionEventWakeHandler,
     requestSessionEventWake,
-    requestSessionEventWakeRetry,
     requestSessionEventWakeAndWait,
     getSessionEventWakeAbortSignal: () => abortSignals.getStore(),
     areSessionEventWakesEnabled: () => enabled,
@@ -533,7 +539,6 @@ function createSessionEventWakeRuntime() {
 export const {
   setSessionEventWakeHandler,
   requestSessionEventWake,
-  requestSessionEventWakeRetry,
   requestSessionEventWakeAndWait,
   getSessionEventWakeAbortSignal,
   areSessionEventWakesEnabled,

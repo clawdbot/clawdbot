@@ -21,7 +21,10 @@ import {
   resolveUiConfiguredMainKey,
 } from "../../lib/sessions/session-key.ts";
 import { invalidateChatAvatarCache } from "./chat-avatar.ts";
-import { getChatHistoryLoadState } from "./chat-history-state.ts";
+import {
+  getChatHistoryLoadState,
+  synchronizeInitialChatSnapshotConnection,
+} from "./chat-history-state.ts";
 import { syncSelectedSessionMessageSubscription } from "./chat-history-subscription.ts";
 import { applyChatAgentsList, resumePendingChatHistoryLoad } from "./chat-history.ts";
 import { ChatPaneLifecycle } from "./chat-pane-lifecycle.ts";
@@ -378,6 +381,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     }
     state.client = snapshot.client;
     state.connected = snapshot.phase === "connected";
+    synchronizeInitialChatSnapshotConnection(state);
     const recoveryReady = state.connected && Boolean(state.client?.recoveryScopeReady);
     const resumeOutboxes = recoveryReady && (clientChanged || !this.outboxRecoveryReady);
     this.outboxRecoveryReady = recoveryReady;

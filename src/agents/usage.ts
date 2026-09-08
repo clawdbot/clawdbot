@@ -300,6 +300,23 @@ export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefi
   };
 }
 
+/** Aggregate token counters for model.usage diagnostics, separate from context snapshots. */
+export function toDiagnosticUsage(usage: NormalizedUsage) {
+  const input = usage.input ?? 0;
+  const output = usage.output ?? 0;
+  const cacheRead = usage.cacheRead ?? 0;
+  const cacheWrite = usage.cacheWrite ?? 0;
+  const promptTokens = input + cacheRead + cacheWrite;
+  return {
+    input,
+    output,
+    cacheRead,
+    cacheWrite,
+    promptTokens,
+    total: usage.total ?? promptTokens + output,
+  };
+}
+
 /**
  * Maps normalized usage to OpenAI Chat Completions `usage` fields.
  *

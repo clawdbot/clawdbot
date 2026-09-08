@@ -252,10 +252,17 @@ An explicit `--config` run through `scripts/run-vitest.mjs` keeps its stricter
 named-file policy and does not permit empty named-file runs. Plugin
 `--allow-no-tests` and `--allow-empty-after-exclude` controls are unchanged.
 
-Codex and other linked/sparse worktrees can run local tests and checks. When the
-dependency install is ready, use the normal commands above. If pnpm would
-reconcile a shared install, use the direct Node harnesses to bypass that
-package-manager preflight:
+Codex and other linked/sparse worktrees can run local tests and checks. Tooling
+requires prepared dependencies; it does not create an implicit link to the
+primary checkout. Keep any existing borrowed install unchanged while another
+task uses it. A source install's `pnpm:devPreinstall` check refuses borrowed links
+at the checkout-root module directories and their `.pnpm` directories before
+normal dependency reconciliation. It does not inspect every workspace package's
+dependencies or lock paths against concurrent replacement; `--ignore-scripts`
+skips it, and alternate pnpm directory settings are not exhaustively validated.
+When dependencies are ready, use the normal commands above. To avoid pnpm's
+package-manager preflight against an existing shared install, use these direct
+Node harnesses:
 
 - Bounded focused proof with ready dependencies:
   `node scripts/run-vitest.mjs <path-or-filter>`.
@@ -338,6 +345,10 @@ Doctor process output tests with bundled plugins disabled reuse that compiled CL
 inside one lazily created package fixture per test run, keeping real UI checks on
 fixture-owned assets and each scenario’s state separate. Standalone and watch runs
 use live source inside the same fixture.
+
+Isolated Doctor config scripts also share the prepared config-flow, health-writer,
+and install-index modules. Each case still starts a fresh process with separate
+state; standalone and watch runs resolve the original TypeScript entrypoints.
 
 The prepared model-catalog worker also uses this compiled generation. Separate
 prepared model generations still own separate worker threads, and their choice

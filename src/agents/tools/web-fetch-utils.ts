@@ -6,12 +6,22 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { stripInvisibleUnicode } from "../../infra/unicode-visibility.js";
 import { decodeHtmlEntities } from "../../shared/html-entities.js";
+import {
+  RAW_TEXT_TAGS,
+  isAsciiWhitespace,
+  isTagNameChar,
+  readRawTextOpenTagName,
+  findRawTextOpenTagStart,
+  startsLikeHtmlTag,
+  readTagToken,
+  closeRawTextTagEnd,
+  skipRawTextElement,
+} from "./web-fetch-html-tag.js";
 import { sanitizeHtml } from "./web-fetch-visibility.js";
 
 /** Output mode requested by web_fetch extraction. */
 export type ExtractMode = "markdown" | "text";
 
-const RAW_TEXT_TAGS = new Set(["script", "style", "noscript"]);
 const BLOCK_BREAK_TAGS = new Set([
   "p",
   "div",
@@ -35,245 +45,10 @@ type RenderContext =
   | { kind: "heading"; level: number; parts: string[] }
   | { kind: "list-item"; parts: string[] };
 
-type HtmlTagToken = {
-  closing: boolean;
-  name: string;
-  raw: string;
-  selfClosing: boolean;
-};
-
-type ReadTagResult = {
-  token: HtmlTagToken | null;
-  next: number;
-};
-
-type TagEndResult = {
-  end: number;
-  rawTextStart?: number;
-};
-
 function decodeEntities(value: string): string {
   // Display extraction historically accepted mixed-case &nbsp; and treats non-breaking spaces as
   // ordinary collapsible whitespace. Normalize it before the shared decoder to stay single-pass.
   return decodeHtmlEntities(value.replace(/&nbsp;/gi, "\u00a0")).replaceAll("\u00a0", " ");
-}
-
-function isAsciiWhitespace(value: string): boolean {
-  return value === " " || value === "\n" || value === "\r" || value === "\t" || value === "\f";
-}
-
-function isTagNameChar(value: string): boolean {
-  const code = value.charCodeAt(0);
-  return (
-    (code >= 48 && code <= 57) ||
-    (code >= 65 && code <= 90) ||
-    (code >= 97 && code <= 122) ||
-    value === "." ||
-    value === "-" ||
-    value === "_" ||
-    value === ":"
-  );
-}
-
-function isTagNameStartChar(value: string): boolean {
-  const code = value.charCodeAt(0);
-  return (code >= 65 && code <= 90) || (code >= 97 && code <= 122);
-}
-
-function isTagBoundary(value: string | undefined): boolean {
-  return !value || isAsciiWhitespace(value) || value === ">" || value === "/";
-}
-
-function asciiLower(value: string): string {
-  const code = value.charCodeAt(0);
-  return code >= 65 && code <= 90 ? String.fromCharCode(code + 32) : value;
-}
-
-function startsWithClosingTag(html: string, start: number, tagName: string): boolean {
-  if (html[start] !== "<" || html[start + 1] !== "/") {
-    return false;
-  }
-  for (let offset = 0; offset < tagName.length; offset += 1) {
-    if (asciiLower(html[start + 2 + offset] ?? "") !== tagName[offset]) {
-      return false;
-    }
-  }
-  return isTagBoundary(html[start + 2 + tagName.length]);
-}
-
-function readRawTextOpenTagName(html: string, start: number): string | undefined {
-  if (html[start] !== "<" || html[start + 1] === "/") {
-    return undefined;
-  }
-  for (const tagName of RAW_TEXT_TAGS) {
-    let matches = true;
-    for (let offset = 0; offset < tagName.length; offset += 1) {
-      if (asciiLower(html[start + 1 + offset] ?? "") !== tagName[offset]) {
-        matches = false;
-        break;
-      }
-    }
-    if (matches && isTagBoundary(html[start + 1 + tagName.length])) {
-      return tagName;
-    }
-  }
-  return undefined;
-}
-
-function findRawTextOpenTagStart(html: string, start: number, end: number): number {
-  for (let i = start; i < end; i += 1) {
-    if (readRawTextOpenTagName(html, i)) {
-      return i;
-    }
-  }
-  return -1;
-}
-
-function startsLikeHtmlTag(html: string, start: number): boolean {
-  const next = html[start + 1];
-  return next === "!" || next === "?" || next === "/" || isTagNameStartChar(next ?? "");
-}
-
-function findTagEnd(html: string, start: number): TagEndResult {
-  let quote: string | null = null;
-  let afterEquals = false;
-  let rawTextStartInQuote: number | undefined;
-  for (let i = start + 1; i < html.length; i += 1) {
-    const ch = html.charAt(i);
-    if (quote) {
-      if (rawTextStartInQuote === undefined && readRawTextOpenTagName(html, i)) {
-        rawTextStartInQuote = i;
-      }
-      if (ch === quote) {
-        quote = null;
-      }
-      continue;
-    }
-    if (afterEquals && isAsciiWhitespace(ch)) {
-      continue;
-    }
-    if (afterEquals && (ch === '"' || ch === "'")) {
-      quote = ch;
-      afterEquals = false;
-      continue;
-    }
-    afterEquals = false;
-    if (readRawTextOpenTagName(html, i)) {
-      return { end: -1, rawTextStart: i };
-    }
-    if (ch === ">") {
-      return { end: i };
-    }
-    if (ch === "=") {
-      afterEquals = true;
-    }
-  }
-  return { end: -1, rawTextStart: rawTextStartInQuote };
-}
-
-function isSelfClosingTagRaw(raw: string): boolean {
-  const trimmed = raw.trimEnd();
-  if (!trimmed.endsWith("/")) {
-    return false;
-  }
-  const beforeSlash = trimmed.charAt(trimmed.length - 2);
-  const tagBody = trimmed.slice(0, -1);
-  let hasAttributeSeparator = false;
-  for (const ch of tagBody) {
-    if (isAsciiWhitespace(ch)) {
-      hasAttributeSeparator = true;
-      break;
-    }
-  }
-  return (
-    !beforeSlash ||
-    isAsciiWhitespace(beforeSlash) ||
-    beforeSlash === '"' ||
-    beforeSlash === "'" ||
-    !hasAttributeSeparator
-  );
-}
-
-function readTagToken(html: string, start: number): ReadTagResult | null {
-  if (html.startsWith("<!--", start)) {
-    if (html[start + 4] === ">") {
-      return {
-        token: null,
-        next: start + 5,
-      };
-    }
-    if (html.startsWith("->", start + 4)) {
-      return {
-        token: null,
-        next: start + 6,
-      };
-    }
-    const commentEnd = html.indexOf("-->", start + 4);
-    return {
-      token: null,
-      next: commentEnd === -1 ? html.length : commentEnd + 3,
-    };
-  }
-
-  const tagEnd = findTagEnd(html, start);
-  const end = tagEnd.end;
-  if (end === -1) {
-    if (tagEnd.rawTextStart !== undefined) {
-      return {
-        token: null,
-        next: tagEnd.rawTextStart,
-      };
-    }
-    return null;
-  }
-
-  let pos = start + 1;
-  while (pos < end && isAsciiWhitespace(html.charAt(pos))) {
-    pos += 1;
-  }
-  const closing = html[pos] === "/";
-  if (closing) {
-    pos += 1;
-    while (pos < end && isAsciiWhitespace(html.charAt(pos))) {
-      pos += 1;
-    }
-  }
-
-  if (pos >= end || html[pos] === "!" || html[pos] === "?") {
-    return {
-      token: null,
-      next: end + 1,
-    };
-  }
-
-  const nameStart = pos;
-  while (pos < end && isTagNameChar(html.charAt(pos))) {
-    pos += 1;
-  }
-  if (pos === nameStart || !isTagNameStartChar(html[nameStart] ?? "")) {
-    const rawTextStart = findRawTextOpenTagStart(html, start + 1, end + 1);
-    if (rawTextStart !== -1) {
-      return {
-        token: null,
-        next: rawTextStart,
-      };
-    }
-    return {
-      token: null,
-      next: end + 1,
-    };
-  }
-
-  const raw = html.slice(start + 1, end);
-  return {
-    token: {
-      closing,
-      name: html.slice(nameStart, pos).toLowerCase(),
-      raw,
-      selfClosing: isSelfClosingTagRaw(raw),
-    },
-    next: end + 1,
-  };
 }
 
 function readAttributeValue(rawTag: string, name: string): string | undefined {
@@ -469,24 +244,6 @@ function closeOpenAnchorWithText(stack: RenderContext[], state: { title?: string
     }
   }
   return false;
-}
-
-function closeRawTextTagEnd(html: string, tagName: string, contentStart: number): number {
-  let closeStart = html.indexOf("</", contentStart);
-  while (closeStart !== -1) {
-    if (startsWithClosingTag(html, closeStart, tagName)) {
-      const closeEnd = findTagEnd(html, closeStart).end;
-      return closeEnd === -1 ? html.length : closeEnd + 1;
-    }
-    closeStart = html.indexOf("</", closeStart + 2);
-  }
-  return html.length;
-}
-
-function skipRawTextElement(html: string, start: number, tagName: string): number {
-  const openerEnd = findTagEnd(html, start);
-  const contentStart = openerEnd.end === -1 ? start + tagName.length + 1 : openerEnd.end + 1;
-  return closeRawTextTagEnd(html, tagName, contentStart);
 }
 
 function htmlFragmentToMarkdown(html: string): { text: string; title?: string } {

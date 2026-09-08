@@ -40,6 +40,12 @@ Options: `--json`, `--bindings` (include full routing rules, not only per-agent 
 Provider-status labels include optional account display names beside account IDs.
 Routing rules continue to identify accounts by channel and account ID.
 
+Provider rows summarize local account status for the displayed binding scopes.
+A wildcard includes each locally known account once; message routing still applies
+peer and account precedence. Stored bindings with an omitted or blank account id
+refer to the literal `default` account key, independently of a channel's preferred
+account for commands. Use `--json --bindings` to include provider rows in JSON.
+
 Identity fields saved in config take precedence. Fields that are not configured
 fall back to `IDENTITY.md` in the agent's workspace. Unsupported avatar values
 and unreadable local images also fall back to the workspace avatar.
@@ -76,9 +82,12 @@ Options: `--force`, `--json`.
 - The only configured agent cannot be deleted.
 - Without `--force`, interactive confirmation is required (fails in a non-TTY session; re-run with `--force`).
 - Workspace, agent state, and session transcript directories move to Trash, not hard-deleted. If Trash is unavailable, agent config deletion still succeeds and reports paths requiring manual cleanup; `--json` exposes path outcomes in `removed` and `failed` arrays.
+- If session-store cleanup fails, the agent is removed from config but its files and pending cleanup are retained. Resolve the reported storage error, then retry the same deletion command; `--json` reports `purgeFailed: true` until the purge succeeds.
 - On installations that have not migrated shared auth yet, the legacy owner cannot be deleted. Run `openclaw doctor --fix`; after relocation into shared state SQLite, `main` follows the same deletion rules as any other agent.
+- An agent that owns a session database still used by another configured agent cannot be deleted, even when retaining files. Keep that owner configured; moving shared history to another owner requires a supported migration, which is not currently available.
 - When the Gateway is reachable, deletion routes through the Gateway so config and session-store cleanup share the same writer as runtime traffic. If the Gateway is unreachable, the CLI falls back to the offline local path and removes the agent's scheduled jobs transactionally. If Gateway credentials are unavailable before the CLI can test reachability, deletion still falls back locally but warns that cron cleanup was skipped because a live scheduler may own the store.
 - If another agent's workspace is the same path, inside this workspace, or contains this workspace, the workspace is retained, and `--json` reports `workspaceRetained`, `workspaceRetainedReason`, and `workspaceSharedWith`.
+- Cleanup also retains directories containing another agent's registered database, so deleting a parent directory cannot discard the survivor's history.
 
 ## Routing bindings
 
@@ -120,7 +129,7 @@ If you omit `--agent` for `bind` or `unbind`, OpenClaw targets the current defau
 
 ### Binding scope behavior
 
-- A stored binding without `accountId` matches the channel default account only.
+- A stored binding without `accountId` matches the literal `default` account key only.
 - `accountId: "*"` is the channel-wide fallback (all accounts) and is less specific than an explicit account binding.
 - If the same agent already has a matching channel binding without `accountId`, and you later bind with an explicit or resolved `accountId`, OpenClaw upgrades that existing binding in place instead of adding a duplicate.
 

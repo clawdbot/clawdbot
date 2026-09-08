@@ -29,7 +29,7 @@ type BrowserRouteHandler = (req: BrowserRequest, res: BrowserResponse) => void |
 
 /** Minimal registrar interface implemented by HTTP and test dispatchers. */
 export type BrowserRouteRegistrar = {
-  get: (path: string, handler: BrowserRouteHandler) => void;
-  post: (path: string, handler: BrowserRouteHandler) => void;
-  delete: (path: string, handler: BrowserRouteHandler) => void;
+  get(path: string, handler: BrowserRouteHandler): void;
+  post(path: string, handler: BrowserRouteHandler): void;
+  delete(path: string, handler: BrowserRouteHandler): void;
 };

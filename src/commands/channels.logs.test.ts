@@ -197,21 +197,28 @@ describe("channelsLogsCommand", () => {
     expect(JSON.stringify(payload)).not.toContain(fixtureCredential);
   });
 
-  it("preserves ordering and line limits for an explicit all filter", async () => {
+  it.each([
+    { lines: undefined, count: 200 },
+    { lines: 2, count: 2 },
+  ])("preserves ordering with line limit $lines", async ({ lines, count }) => {
+    const messages = Array.from({ length: 205 }, (_, index) => `message-${index}`);
     await fs.writeFile(
       logPath,
-      [
-        logLine({ module: "gateway/channels/slack/send", message: "first" }),
-        logLine({ module: "gateway/channels/external-chat/send", message: "second" }),
-        logLine({ module: "gateway/channels/slack/send", message: "third" }),
-      ].join(""),
+      messages
+        .map((message, index) =>
+          logLine({
+            module: `gateway/channels/${index % 2 ? "external-chat" : "slack"}/send`,
+            message,
+          }),
+        )
+        .join(""),
     );
 
-    await channelsLogsCommand({ channel: "all", lines: 2, json: true }, runtime);
+    await channelsLogsCommand({ channel: "all", lines, json: true }, runtime);
 
     const payload = readJsonPayload();
     expect(payload.channel).toBe("all");
-    expect(payload.lines.map((line) => line.message)).toEqual(["second", "third"]);
+    expect(payload.lines.map((line) => line.message)).toEqual(messages.slice(-count));
   });
 
   it("finds sparse channel records beyond the shared 5000-line cap", async () => {
@@ -334,9 +341,10 @@ describe("channelsLogsCommand", () => {
     expect(payload.lines).toStrictEqual([]);
   });
 
-  it("rejects partial line limits", async () => {
-    await expect(channelsLogsCommand({ lines: "2x", json: true }, runtime)).rejects.toThrow(
+  it.each(["2x", "", "   "])("rejects invalid line limit %j", async (lines) => {
+    await expect(channelsLogsCommand({ lines, json: true }, runtime)).rejects.toThrow(
       "--lines must be a positive integer.",
     );
+    expect(runtime.log).not.toHaveBeenCalled();
   });
 });

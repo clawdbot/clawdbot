@@ -16,6 +16,7 @@ import { createProviderAuthAvailability } from "./provider-auth-availability-cor
 import { createProviderExternalAuthResolver } from "./provider-external-auth-core.js";
 import { createProviderHookRuntime } from "./provider-hook-runtime-core.js";
 import { createProviderRegistryResolver } from "./providers.runtime-core.js";
+import { PluginRegistryInspectionResources } from "./registry-inspection-resources.js";
 import type { PluginRegistry } from "./registry-types.js";
 import { createRuntimeModelAuth } from "./runtime/runtime-model-auth.js";
 import type { PluginRuntime } from "./runtime/types.js";
@@ -85,6 +86,33 @@ export function resolvePluginCapabilityCatalogContext() {
 }
 export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegistry {
   return loadOpenClawPluginsCore(options, loaderBindings);
+}
+
+/** Acquires a fresh discovery registry; release waits for its registration resources. */
+export async function acquirePluginRegistryForInspection(
+  options: Omit<PluginLoadOptions, "activate" | "cache"> = {},
+): Promise<{ registry: PluginRegistry; release: () => Promise<void> }> {
+  const resources = new PluginRegistryInspectionResources();
+  try {
+    const registry = loadOpenClawPluginsCore(
+      { ...options, activate: false, cache: false },
+      loaderBindings,
+      undefined,
+      resources,
+    );
+    return { registry, release: () => resources.release() };
+  } catch (error) {
+    try {
+      await resources.release();
+    } catch (disposalError) {
+      throw new AggregateError(
+        [error, disposalError],
+        "Plugin inspection failed and its resources could not be disposed",
+        { cause: disposalError },
+      );
+    }
+    throw error;
+  }
 }
 
 export function loadOpenClawPluginsWithInternalOverrides(

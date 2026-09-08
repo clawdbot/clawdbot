@@ -494,11 +494,11 @@ describe("Parallels smoke model selection", () => {
   it("extracts the last OpenClaw version from a bounded log tail", async () => {
     const tempDir = makeTempDir(tempDirs, "openclaw-parallels-log-tail-");
     const logPath = join(tempDir, "phase.log");
-    writeFileSync(logPath, ["OpenClaw 0.0.1", "x".repeat(4096), "OpenClaw 2026.6.7"].join("\n"));
+    writeFileSync(logPath, ["OpenClaw 0.0.1", "x".repeat(4 * 1024 * 1024)].join("\n"));
+    await expect(extractLastOpenClawVersionFromLog(logPath)).resolves.toBe("");
 
-    await expect(extractLastOpenClawVersionFromLog(logPath, undefined, 128)).resolves.toBe(
-      "2026.6.7",
-    );
+    writeFileSync(logPath, "\nOpenClaw 2026.6.6\nOpenClaw 2026.6.7", { flag: "a" });
+    await expect(extractLastOpenClawVersionFromLog(logPath)).resolves.toBe("2026.6.7");
   });
 
   it("keeps the public shell entrypoints as thin TypeScript launchers", () => {

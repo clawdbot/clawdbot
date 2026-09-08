@@ -240,9 +240,28 @@ function stripRuntimeContextPromptPreface(text: string): string {
 
 /** Remove protected and legacy runtime-context blocks from text. */
 export function stripInternalRuntimeContext(
-  text: string,
-  options: { preserveSurroundingWhitespace?: boolean; separator?: string } = {},
+  input: string,
+  options: {
+    preserveSurroundingWhitespace?: boolean;
+    separator?: string;
+    streaming?: boolean;
+  } = {},
 ): string {
+  let text = input;
+  if (options.streaming) {
+    // A cumulative preview must not publish a marker before its next chunk
+    // completes the delimiter. Final text still preserves literal prefixes.
+    const lineStart = text.lastIndexOf("\n") + 1;
+    const tail = text.slice(lineStart).trim();
+    if (
+      tail &&
+      [INTERNAL_RUNTIME_CONTEXT_BEGIN, INTERNAL_RUNTIME_CONTEXT_END].some(
+        (marker) => tail.length < marker.length && marker.startsWith(tail),
+      )
+    ) {
+      text = text.slice(0, lineStart).trimEnd();
+    }
+  }
   // All removable formats contain a delimiter or the whitespace-tolerant runtime notice.
   // Skip delimiter scans and line parsing for ordinary display text.
   if (
@@ -276,7 +295,7 @@ export function hasInternalRuntimeContext(text: string): boolean {
 }
 
 /** Identifies hidden runtime context independently of its queue or transcript owner. */
-function isOpenClawRuntimeContextCustomMessage(message: unknown): boolean {
+export function isOpenClawRuntimeContextCustomMessage(message: unknown): boolean {
   if (!message || typeof message !== "object") {
     return false;
   }

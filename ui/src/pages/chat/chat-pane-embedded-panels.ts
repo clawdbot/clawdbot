@@ -15,10 +15,7 @@ import { SIDEBAR_PANEL_SHORTCUTS } from "./chat-pane-panel-shortcuts.ts";
 import { resolveAssistantAttachmentAuthToken } from "./chat-pane-state.ts";
 import type { ChatSessionCompanionThread } from "./chat-session-companion.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
-import {
-  isSessionWorkspaceItemLoading,
-  resolveSessionDiffSidebarContent,
-} from "./components/chat-session-workspace.ts";
+import { resolveSessionDiffSidebarContent } from "./components/chat-session-workspace.ts";
 import type {
   SidebarPanelDefinition,
   SidebarPanelTemplates,
@@ -194,12 +191,10 @@ export function sidebarPanelDefinitions(
       ></openclaw-session-discussion>`
     : null;
   const attachmentContent = state?.attachmentSidebarContent ?? null;
-  const detailLoading = state ? isSessionWorkspaceItemLoading(state) : false;
   // The region owns mounting and visibility. Hidden Review tabs must keep the
   // same cached diff loader so their live content and selection survive.
   const detailContent =
-    state?.sidebarContent ??
-    (state && !detailLoading ? resolveSessionDiffSidebarContent(state) : null);
+    state?.sidebarContent ?? (state ? resolveSessionDiffSidebarContent(state) : null);
   const workspaceContent =
     attachmentContent && params
       ? params.renderDetail(attachmentContent)
@@ -221,7 +216,7 @@ export function sidebarPanelDefinitions(
       "detail",
       "review",
       icons.diff,
-      detailLoading
+      detailContent?.kind === "loading"
         ? renderPanelLoadingSkeleton("review", t("common.loading"))
         : detailContent && params
           ? params.renderDetail(detailContent)

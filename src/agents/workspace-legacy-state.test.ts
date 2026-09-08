@@ -40,6 +40,28 @@ describe("legacy workspace reset cleanup", () => {
     });
   }
 
+  it("retains retired state when ownership expires during asynchronous validation", async () => {
+    const context = setup();
+    await fs.mkdir(context.workspaceDir, { recursive: true });
+    const marker = `${LEGACY_WORKSPACE_ATTESTATION_HEADER}\n`;
+    const siblingPath = `${context.workspaceDir}.attested`;
+    await fs.writeFile(siblingPath, marker);
+    let owned = true;
+    const cleanup = removeLegacyWorkspaceStateForReset(prepare(context), {
+      assertCurrent: () => {
+        if (!owned) {
+          throw new Error("cleanup ownership expired");
+        }
+      },
+    });
+    owned = false;
+
+    const result = await cleanup;
+    expect(result.removedPaths).toEqual([]);
+    expect(result.warnings).toEqual([expect.stringContaining("cleanup ownership expired")]);
+    expect(await fs.readFile(siblingPath, "utf8")).toBe(marker);
+  });
+
   it("removes retired setup files, claims, and owned attestations", async () => {
     const context = setup();
     await fs.mkdir(context.workspaceDir, { recursive: true });

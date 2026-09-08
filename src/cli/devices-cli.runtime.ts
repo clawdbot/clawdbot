@@ -123,6 +123,7 @@ function buildPendingNodeApprovalNotice(
   return {
     action: device.nodeSurface ? "reapproval" : "approval",
     label:
+      normalizeOptionalString(device.operatorLabel) ??
       normalizeOptionalString(pending.displayName) ??
       normalizeOptionalString(device.nodeSurface?.displayName) ??
       normalizeOptionalString(device.displayName) ??

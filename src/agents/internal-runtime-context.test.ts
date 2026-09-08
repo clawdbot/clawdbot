@@ -92,6 +92,21 @@ describe("internal runtime context codec", () => {
     expect(stripInternalRuntimeContext(input)).toBe("Visible intro");
   });
 
+  it("withholds trailing marker prefixes only in cumulative previews", () => {
+    for (const marker of [INTERNAL_RUNTIME_CONTEXT_BEGIN, INTERNAL_RUNTIME_CONTEXT_END]) {
+      for (let length = 1; length < marker.length; length += 1) {
+        const prefix = marker.slice(0, length);
+        expect(stripInternalRuntimeContext(`Visible\n  ${prefix}`, { streaming: true })).toBe(
+          "Visible",
+        );
+        expect(stripInternalRuntimeContext(prefix)).toBe(prefix);
+      }
+    }
+    expect(stripInternalRuntimeContext("Visible\n<ordinary", { streaming: true })).toBe(
+      "Visible\n<ordinary",
+    );
+  });
+
   it("detects canonical runtime context and ignores inline marker mentions", () => {
     expect(
       hasInternalRuntimeContext(

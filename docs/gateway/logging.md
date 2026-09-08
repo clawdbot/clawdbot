@@ -23,6 +23,8 @@ agent model: openai/gpt-5.6-sol (thinking=medium, fast=on)
 
 `thinking` comes from the default agent, model params, or the global agent default; when unset it shows `medium`. `fast` comes from the default agent or the model's `fastMode` params.
 
+If a plugin reload supersedes startup plugin loading, the model line, loaded-plugin summary, and channel warnings use the replacement configuration and plugin metadata.
+
 ## File-based logger
 
 - Default rolling log files are under `/tmp/openclaw/` (one file per day), dated by the gateway host's local timezone. The default profile uses `openclaw-YYYY-MM-DD.log`; named profiles use `openclaw-<profile>-YYYY-MM-DD.log` (for example, `openclaw-dev-YYYY-MM-DD.log`). If that directory is unsafe or unwritable (wrong owner, world-writable, a symlink), OpenClaw falls back to a user-scoped `os.tmpdir()/openclaw-<uid>` path instead; on Windows it always uses that OS-tmpdir fallback.
@@ -57,6 +59,28 @@ Failed SQLite session writes include a bounded, redacted `error` summary in
 their structured file-log record, with cause and error-code details when
 available. Long summaries are truncated; the record retains its write timing
 and store fields.
+
+### Slow agent database opens
+
+A completed physical agent-database open taking at least one second emits
+`slow OpenClaw agent database open`. The record retains total elapsed time and
+the `open`, `validation`, `configuration`, `schema`, and `registration` phases.
+For a yielded integrity check, it also includes `integrityGateMs` and
+`integrityGateOutcome` (`healthy` or `failed`). The gate includes the check plus
+any driver waits, scheduling, and ownership revalidation. When admission uses a
+separate integrity Worker, its lifetime is included. This does not isolate
+native-check or CPU time.
+
+When canonical-index validation completes, `canonicalIndexMs` reports the
+subsequent synchronous inspection and any repair or rechecks, and
+`repairedIndexCount` counts indexes successfully repaired by that operation.
+A healthy initial integrity check can still require an index-definition repair;
+a failed initial check can be recovered by a successful repair. Fields are
+absent when their stage does not run, including the yielded-check fields for a
+fresh empty database. These details cover portions of `validation`, not extra
+time to add to it. The summary is emitted only at registration; earlier failures
+and live cache hits produce no summary. The details add no index names or
+database contents.
 
 ### Slow cron list pages
 
