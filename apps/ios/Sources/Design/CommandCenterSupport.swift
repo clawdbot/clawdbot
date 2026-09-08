@@ -54,7 +54,7 @@ struct CommandSessionRow: View {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     if self.item.isUnread {
                         Circle()
-                            .fill(OpenClawBrand.accent)
+                            .fill(Color.primary)
                             .frame(width: 7, height: 7)
                             .accessibilityHidden(true)
                     }
@@ -97,6 +97,11 @@ struct CommandSessionRow: View {
             OpenClawSessionColorStripe(color: self.item.sessionColor)
         }
         .contentShape(Rectangle())
+        .accessibilityElement(children: .combine)
+        .accessibilityValue([
+            self.item.isUnread ? String(localized: "Unread") : nil,
+            self.item.isPinned ? String(localized: "Pinned") : nil,
+        ].compactMap(\.self).joined(separator: ", "))
     }
 
     private var progressLabel: String {
@@ -129,6 +134,14 @@ struct CommandSessionActions {
     let delete: () -> Void
 }
 
+/// Session menus inherit the app brand tint. DESIGN.md reserves red for
+/// destructive work, so standard actions use the system label instead.
+enum CommandSessionMenuChrome {
+    static var standardActionTint: Color {
+        .primary
+    }
+}
+
 struct CommandSessionActionsModifier: ViewModifier {
     private enum Editor {
         case rename
@@ -159,6 +172,7 @@ struct CommandSessionActionsModifier: ViewModifier {
         content
             .contextMenu {
                 OpenClawSessionColorMenu(color: self.session.color, onSelect: self.actions.setColor)
+                    .tint(CommandSessionMenuChrome.standardActionTint)
                 if self.isArchived {
                     if self.canArchive {
                         self.actionButton("Unarchive", systemImage: "archivebox") {
@@ -266,6 +280,7 @@ struct CommandSessionActionsModifier: ViewModifier {
             Label("Move to Group", systemImage: "folder")
                 .font(OpenClawType.subhead)
         }
+        .tint(CommandSessionMenuChrome.standardActionTint)
     }
 
     private var deleteButton: some View {
@@ -306,8 +321,10 @@ struct CommandSessionActionsModifier: ViewModifier {
                     .font(OpenClawType.subhead)
             } icon: {
                 Image(systemName: systemImage)
+                    .foregroundStyle(CommandSessionMenuChrome.standardActionTint)
             }
         }
+        .tint(CommandSessionMenuChrome.standardActionTint)
     }
 
     private func beginRename() {

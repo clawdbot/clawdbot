@@ -41,7 +41,6 @@ struct CleanChatComposerSurface: ViewModifier {
 
 enum CleanChatComposerMetrics {
     static let surfaceCornerRadius: CGFloat = 20
-    static let restingMinHeight: CGFloat = 104
     static let controlTouchSize: CGFloat = 44
     static let primaryVisualSize: CGFloat = 32
     static let editorInlineInset: CGFloat = 14
@@ -234,6 +233,7 @@ struct OpenClawChatAttachmentMenu<ExtraItems: View>: View {
         } label: {
             CompactChatAttachmentLabel()
         }
+        .menuOrder(.fixed)
         .help("Composer options")
         .accessibilityLabel("Composer options")
         .accessibilityIdentifier("chat-attachment-picker")
@@ -291,12 +291,15 @@ struct OpenClawChatMicButton: View {
         case cancel
     }
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     let dictationControl: OpenClawChatDictationControl?
     let voiceNoteControl: OpenClawChatVoiceNoteControl?
     let isDictationPending: Bool
     let isRealtimeTalkActive: Bool
     let isComposerEnabled: Bool
     let isAttachmentInputEnabled: Bool
+    var enablesTasteMotion = false
     let onCancelDictation: @MainActor () -> Void
     let onStartDictation: @MainActor () -> Void
 
@@ -347,6 +350,17 @@ struct OpenClawChatMicButton: View {
             .foregroundStyle(showsStop ? OpenClawChatTheme.accent : .secondary)
             .frame(width: 44, height: 44)
             .contentShape(Rectangle())
+            .modifier(ChatTasteSymbolReplaceModifier(enabled: self.tasteSymbolReplaceEnabled))
+    }
+
+    private var tasteSymbolReplaceEnabled: Bool {
+        #if os(iOS)
+        chatTasteAllowsSymbolReplace(
+            tasteMotionEnabled: self.enablesTasteMotion,
+            reduceMotion: self.reduceMotion)
+        #else
+        false
+        #endif
     }
 
     private func performDictationAction() {

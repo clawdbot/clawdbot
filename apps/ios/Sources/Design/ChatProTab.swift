@@ -6,8 +6,8 @@ import SwiftUI
 private struct ChatScrollEdgeTreatment: ViewModifier {
     func body(content: Content) -> some View {
         if #available(iOS 26.0, *) {
-            // The shared canvas supplies color for the native blur. Automatic
-            // edge effects harden to black when the host inserts an opaque fill.
+            // Soft edges need the transcript to reach the chrome. ChatView
+            // overlays the composer so this blur is not blocked by a footer fill.
             content.scrollEdgeEffectStyle(.soft, for: .vertical)
         } else {
             content
@@ -214,6 +214,10 @@ struct ChatProTab: View {
                 composerChrome: .clean,
                 isComposerEnabled: self.gatewayConnected || self.canQueueOffline,
                 isAttachmentInputEnabled: self.gatewayConnected || self.canQueueOffline,
+                hostConnectionStatus: Self.chatHostConnectionStatus(
+                    state: self.gatewayDisplayState,
+                    isGatewayUsable: self.gatewayConnected),
+                enablesTasteMotion: true,
                 messagePlaceholder: self.messagePlaceholder,
                 emptyAssistantIntro: String(localized: "What would you like to work on?"),
                 emptyAssistantPrompts: Self.emptyAssistantPrompts,
@@ -234,7 +238,9 @@ struct ChatProTab: View {
                 })
                 // iMessage-style grey bubbles for agent replies in the clean chrome.
                 .environment(\.openClawAssistantBubblesInCleanChrome, true)
-                .id(ObjectIdentifier(viewModel))
+                .id(Self.chatCanvasIdentity(
+                    ownerID: self.viewModelOwnerID,
+                    transportAgentID: self.viewModelTransportAgentID))
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         } else {
             ContentUnavailableView(
@@ -343,14 +349,17 @@ struct ChatProTab: View {
         HStack(spacing: 7) {
             self.headerIdentityBadge
             VStack(alignment: .leading, spacing: 2) {
-                if self.showsExpandedGatewayStatus {
+                ZStack(alignment: .leading) {
                     self.expandedGatewayStatusLabel
-                        .transition(.opacity.combined(with: .move(edge: .leading)))
-                } else {
-                    Text(self.agentDisplayName)
-                        .font(OpenClawType.headline)
-                        .lineLimit(1)
-                        .transition(.opacity)
+                        .hidden()
+                        .accessibilityHidden(true)
+                    if self.showsExpandedGatewayStatus {
+                        self.expandedGatewayStatusLabel
+                    } else {
+                        Text(self.agentDisplayName)
+                            .font(OpenClawType.headline)
+                            .lineLimit(1)
+                    }
                 }
                 if let session = self.coloredHeaderSession {
                     self.headerSessionTitle(session)
@@ -398,18 +407,23 @@ struct ChatProTab: View {
     }
 
     private var expandedGatewayStatusLabel: some View {
-        Text(Self.gatewayStatusTitle(state: self.gatewayDisplayState, isGatewayUsable: self.gatewayConnected))
-            .font(OpenClawType.subheadMedium)
-            .foregroundStyle(.primary)
-            .lineLimit(1)
-            .fixedSize(horizontal: true, vertical: false)
-            .padding(.horizontal, 9)
-            .padding(.vertical, 5)
-            .background(self.gatewayStatusColor.opacity(0.12), in: Capsule())
-            .overlay {
-                Capsule()
-                    .stroke(self.gatewayStatusColor.opacity(0.28), lineWidth: 1)
-            }
+        ZStack {
+            Text(Self.reservedGatewayStatusTitle)
+                .hidden()
+                .accessibilityHidden(true)
+            Text(Self.gatewayStatusTitle(state: self.gatewayDisplayState, isGatewayUsable: self.gatewayConnected))
+        }
+        .font(OpenClawType.subheadMedium)
+        .foregroundStyle(.primary)
+        .lineLimit(1)
+        .fixedSize(horizontal: true, vertical: false)
+        .padding(.horizontal, 9)
+        .padding(.vertical, 5)
+        .background(self.gatewayStatusColor.opacity(0.12), in: Capsule())
+        .overlay {
+            Capsule()
+                .stroke(self.gatewayStatusColor.opacity(0.28), lineWidth: 1)
+        }
     }
 
     private var showsExpandedGatewayStatus: Bool {
@@ -830,7 +844,7 @@ struct ChatProTab: View {
         case .error:
             "Attention"
         case .disconnected:
-            "Offline"
+            "Disconnected"
         }
     }
 
@@ -923,6 +937,28 @@ struct ChatProTab: View {
 
     nonisolated static func normalizedBadgeEmoji(_ value: String?) -> String? {
         AgentIdentityPresentation.normalizedBadgeEmoji(value)
+    }
+
+    nonisolated static let reservedGatewayStatusTitle = "Disconnected"
+
+    nonisolated static func chatCanvasIdentity(ownerID: String, transportAgentID: String) -> String {
+        "\(ownerID)|\(transportAgentID)"
+    }
+
+    nonisolated static func chatHostConnectionStatus(
+        state: GatewayDisplayState,
+        isGatewayUsable: Bool) -> ChatHostConnectionStatus
+    {
+        switch state {
+        case .connected:
+            isGatewayUsable ? .connected : .error
+        case .connecting:
+            .connecting
+        case .error:
+            .error
+        case .disconnected:
+            .disconnected
+        }
     }
 
     nonisolated static func transportAgentID(_ value: String?) -> String {

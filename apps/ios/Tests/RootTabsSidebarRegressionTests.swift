@@ -177,6 +177,11 @@ struct RootTabsSidebarRegressionTests {
         #expect(!brandHeader.contains("self.selectSidebarDestination(.settings)"))
         #expect(footer.contains("self.selectSidebarDestination(.settings)"))
         #expect(footer.contains("RootTabs.Sidebar.Destination.settings"))
+        #expect(!footer.contains("gatewayName"))
+        #expect(!footer.contains("gatewayRemoteAddress"))
+        #expect(!footer.contains("gatewayServerName"))
+        #expect(!footer.contains("selectSidebarDestination(.gateway)"))
+        #expect(footer.contains("accessibilityValue(self.gatewayStatusTitle)"))
 
         #expect(pages.contains("ForEach(pinnedSessionNodes)"))
         #expect(sessions.contains("section.id == \"recent\""))
@@ -190,6 +195,8 @@ struct RootTabsSidebarRegressionTests {
         #expect(pin.lowerBound < detail.lowerBound)
         #expect(openChat.lowerBound < contextActions.lowerBound)
         #expect(sessionButton.contains("sessionAccessibilityValue"))
+        #expect(sessionButton.contains("OpenClawSidebarPalette.unread"))
+        #expect(!sessionButton.contains(".fill(OpenClawSidebarPalette.accent)"))
     }
 
     @Test func `sidebar selection resets embedded settings navigation path`() throws {

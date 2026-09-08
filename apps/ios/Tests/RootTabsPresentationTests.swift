@@ -61,10 +61,19 @@ struct RootTabsPresentationTests {
         #expect(!appModel.consumeDashboardNavigationRequest(appModel.dashboardNavigationRequestID))
     }
 
-    @Test func `sidebar gateway label ignores empty identity values`() {
-        #expect(RootSidebar.gatewayName(serverName: "  ", remoteAddress: " gateway.example ") == "gateway.example")
-        #expect(RootSidebar.gatewayName(serverName: "Gateway", remoteAddress: "fallback") == "Gateway")
-        #expect(RootSidebar.gatewayName(serverName: nil, remoteAddress: "\n") == "Connection")
+    @Test func `session menu keeps standard actions off the destructive brand tint`() throws {
+        let source = try String(
+            contentsOf: URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .appendingPathComponent("Sources/Design/CommandCenterSupport.swift"),
+            encoding: .utf8)
+
+        #expect(source.contains("CommandSessionMenuChrome.standardActionTint"))
+        #expect(source.contains(".tint(CommandSessionMenuChrome.standardActionTint)"))
+        #expect(source.contains("Button(role: .destructive)"))
+        #expect(source.contains("Label(\"Delete…\", systemImage: \"trash\")"))
+        #expect(!source.contains(".tint(OpenClawBrand.accent)"))
     }
 
     @Test func `new chat request is consumed once by the active chat owner`() {
@@ -457,6 +466,25 @@ struct RootTabsPresentationTests {
             nextOwnerID: "gateway-a",
             currentTransportAgentID: "main",
             nextTransportAgentID: "work"))
+    }
+
+    @Test func `chat canvas identity stays stable for the captured owner not the view-model pointer`() {
+        let ownerA = ChatProTab.chatCanvasIdentity(ownerID: "gateway-a", transportAgentID: "main")
+        #expect(ownerA == ChatProTab.chatCanvasIdentity(ownerID: "gateway-a", transportAgentID: "main"))
+        #expect(ownerA != ChatProTab.chatCanvasIdentity(ownerID: "gateway-b", transportAgentID: "main"))
+        #expect(ownerA != ChatProTab.chatCanvasIdentity(ownerID: "gateway-a", transportAgentID: "work"))
+    }
+
+    @Test func `chat canvas does not remount on every view-model pointer`() throws {
+        let source = try String(
+            contentsOf: URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .appendingPathComponent("Sources/Design/ChatProTab.swift"),
+            encoding: .utf8)
+        #expect(!source.contains(".id(ObjectIdentifier(viewModel))"))
+        #expect(source.contains("chatCanvasIdentity("))
+        #expect(source.contains("enablesTasteMotion: true"))
     }
 
     @Test func `localized QR status matcher accepts positional placeholders`() {
