@@ -18,7 +18,7 @@ import {
 import type { DoctorPrompter } from "./doctor-prompter.js";
 import {
   collectRepointedWorkspaceAliasFindings,
-  maybeRepairRepointedWorkspaceAliases,
+  createWorkspaceAliasMigrationRepair,
 } from "./doctor-workspace-alias.js";
 
 let testState: OpenClawTestState | undefined;
@@ -57,6 +57,12 @@ function buildPrompter(overrides: Partial<DoctorPrompter> = {}): DoctorPrompter 
 
 function buildAliasCfg(aliasPath: string): OpenClawConfig {
   return { agents: { entries: { main: { workspace: aliasPath } } } } as OpenClawConfig;
+}
+
+async function runWorkspaceRepair(params: { cfg: OpenClawConfig; prompter: DoctorPrompter }) {
+  const repair = createWorkspaceAliasMigrationRepair(params.prompter, vi.fn());
+  expect(repair).toBeTypeOf("function");
+  await repair!(params.cfg);
 }
 
 function repointAlias(params: { seedAttestedFile?: boolean }): {
@@ -100,7 +106,7 @@ describe("doctor workspace alias repair", () => {
         return true;
       }),
     });
-    await maybeRepairRepointedWorkspaceAliases({ cfg, prompter });
+    await expect(runWorkspaceRepair({ cfg, prompter })).rejects.toThrow();
     expect(readWorkspaceStateSnapshot(original).setupExists).toBe(true);
     expect(readWorkspaceStateSnapshot(replacement).setupExists).toBe(false);
   });
@@ -116,7 +122,7 @@ describe("doctor workspace alias repair", () => {
         return true;
       }),
     });
-    await maybeRepairRepointedWorkspaceAliases({ cfg: buildAliasCfg(alias), prompter });
+    await expect(runWorkspaceRepair({ cfg: buildAliasCfg(alias), prompter })).rejects.toThrow();
     expect(readWorkspaceStateSnapshot(original).setupExists).toBe(true);
     expect(readWorkspaceStateSnapshot(changed).setupExists).toBe(false);
   });
@@ -145,21 +151,21 @@ describe("doctor workspace alias repair", () => {
     const { alias, original } = repointAlias({ seedAttestedFile: true });
     const prompter = buildPrompter();
 
-    await maybeRepairRepointedWorkspaceAliases({ cfg: buildAliasCfg(alias), prompter });
+    await expect(runWorkspaceRepair({ cfg: buildAliasCfg(alias), prompter })).rejects.toThrow();
 
     expect(prompter.confirmAutoFix).not.toHaveBeenCalled();
     expect(prompter.confirmRuntimeRepair).toHaveBeenCalledOnce();
     expect(readWorkspaceStateSnapshot(original).setupExists).toBe(true);
 
     const approving = buildPrompter({ confirmRuntimeRepair: vi.fn(async () => true) });
-    await maybeRepairRepointedWorkspaceAliases({ cfg: buildAliasCfg(alias), prompter: approving });
+    await runWorkspaceRepair({ cfg: buildAliasCfg(alias), prompter: approving });
     const snapshot = readWorkspaceStateSnapshot(alias);
     expect(snapshot.setupExists).toBe(true);
     expect(snapshot.setup.bootstrapSeededAt).toBe("2026-07-16T01:00:00.000Z");
 
     // A second run finds nothing left to repair.
     const secondPrompter = buildPrompter();
-    await maybeRepairRepointedWorkspaceAliases({
+    await runWorkspaceRepair({
       cfg: buildAliasCfg(alias),
       prompter: secondPrompter,
     });
@@ -170,7 +176,7 @@ describe("doctor workspace alias repair", () => {
     const { alias, original } = repointAlias({ seedAttestedFile: false });
     const prompter = buildPrompter();
 
-    await maybeRepairRepointedWorkspaceAliases({ cfg: buildAliasCfg(alias), prompter });
+    await expect(runWorkspaceRepair({ cfg: buildAliasCfg(alias), prompter })).rejects.toThrow();
 
     expect(prompter.confirmAutoFix).not.toHaveBeenCalled();
     expect(prompter.confirmRuntimeRepair).toHaveBeenCalledOnce();
@@ -178,7 +184,7 @@ describe("doctor workspace alias repair", () => {
     expect(readWorkspaceStateSnapshot(original).setupExists).toBe(true);
 
     const approving = buildPrompter({ confirmRuntimeRepair: vi.fn(async () => true) });
-    await maybeRepairRepointedWorkspaceAliases({ cfg: buildAliasCfg(alias), prompter: approving });
+    await runWorkspaceRepair({ cfg: buildAliasCfg(alias), prompter: approving });
     expect(readWorkspaceStateSnapshot(alias).setupExists).toBe(true);
   });
 
@@ -187,7 +193,7 @@ describe("doctor workspace alias repair", () => {
     mergeWorkspaceSetupState(replacement, { bootstrapSeededAt: "2026-07-16T02:00:00.000Z" }, 2_000);
     const prompter = buildPrompter({ confirmRuntimeRepair: vi.fn(async () => true) });
 
-    await maybeRepairRepointedWorkspaceAliases({ cfg: buildAliasCfg(alias), prompter });
+    await expect(runWorkspaceRepair({ cfg: buildAliasCfg(alias), prompter })).rejects.toThrow();
 
     expect(prompter.confirmAutoFix).not.toHaveBeenCalled();
     expect(prompter.confirmRuntimeRepair).not.toHaveBeenCalled();
@@ -196,7 +202,7 @@ describe("doctor workspace alias repair", () => {
   });
 
   it("does not move records from diagnostic mode", async () => {
-    const { alias, original } = repointAlias({ seedAttestedFile: true });
+    const { original } = repointAlias({ seedAttestedFile: true });
     const prompter = buildPrompter({
       shouldRepair: false,
       confirmRuntimeRepair: vi.fn(async () => true),
@@ -209,7 +215,7 @@ describe("doctor workspace alias repair", () => {
       },
     });
 
-    await maybeRepairRepointedWorkspaceAliases({ cfg: buildAliasCfg(alias), prompter });
+    expect(createWorkspaceAliasMigrationRepair(prompter, vi.fn())).toBeUndefined();
 
     expect(prompter.confirmAutoFix).not.toHaveBeenCalled();
     expect(prompter.confirmRuntimeRepair).not.toHaveBeenCalled();
@@ -228,7 +234,7 @@ describe("doctor workspace alias repair", () => {
       },
     } as OpenClawConfig;
 
-    await maybeRepairRepointedWorkspaceAliases({ cfg, prompter });
+    await expect(runWorkspaceRepair({ cfg, prompter })).rejects.toThrow();
 
     expect(prompter.confirmRuntimeRepair).not.toHaveBeenCalled();
     expect(readWorkspaceStateSnapshot(original).setupExists).toBe(true);

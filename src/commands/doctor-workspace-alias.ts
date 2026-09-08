@@ -79,7 +79,7 @@ export function collectRepointedWorkspaceAliasFindings(
   return findings;
 }
 
-export async function maybeRepairRepointedWorkspaceAliases(params: {
+async function maybeRepairRepointedWorkspaceAliases(params: {
   cfg: OpenClawConfig;
   prompter: DoctorPrompter;
 }): Promise<void> {
