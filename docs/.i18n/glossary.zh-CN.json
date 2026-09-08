@@ -2514,5 +2514,33 @@
   {
     "source": "Automation troubleshooting",
     "target": "自动化故障排查"
+  },
+  {
+    "source": "Run doctor",
+    "target": "运行 Doctor"
+  },
+  {
+    "source": "What doctor checks",
+    "target": "Doctor 检查内容"
+  },
+  {
+    "source": "Config and migration repairs",
+    "target": "配置与迁移修复"
+  },
+  {
+    "source": "Provider and route repairs",
+    "target": "提供商与路由修复"
+  },
+  {
+    "source": "State, session, and plugin repairs",
+    "target": "状态、会话与插件修复"
+  },
+  {
+    "source": "Gateway, service, and security checks",
+    "target": "Gateway、服务与安全检查"
+  },
+  {
+    "source": "Workspace tips and Dreams UI actions",
+    "target": "工作区提示与 Dreams UI 操作"
   }
 ]

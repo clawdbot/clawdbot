@@ -2146,6 +2146,18 @@
                       "gateway/health",
                       "gateway/heartbeat",
                       "gateway/doctor",
+                      {
+                        "group": "Doctor",
+                        "pages": [
+                          "gateway/doctor/running",
+                          "gateway/doctor/checks",
+                          "gateway/doctor/config-migrations",
+                          "gateway/doctor/provider-repairs",
+                          "gateway/doctor/state-and-sessions",
+                          "gateway/doctor/gateway-and-services",
+                          "gateway/doctor/workspace-and-dreams"
+                        ]
+                      },
                       "gateway/audit",
                       "gateway/telemetry",
                       "logging",
