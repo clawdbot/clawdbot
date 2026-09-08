@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { FollowupRun } from "./queue.js";
+import { resolveFollowupRunToolAuthorityFingerprint } from "./reply-tool-authority.js";
 
 const state = vi.hoisted(() => ({
   admitLifecycle: vi.fn(),
@@ -96,6 +97,7 @@ function createOperation(sessionId = "queued-session") {
     fail: vi.fn(),
     complete: vi.fn(),
     updateSessionId: vi.fn(),
+    bindToolAuthoritySnapshot: vi.fn(),
   };
 }
 
@@ -123,6 +125,36 @@ beforeEach(() => {
 });
 
 describe("admitFollowupTurn", () => {
+  it("binds the admitted turn's tool authority snapshot to the reply operation", async () => {
+    const operation = createOperation("admitted-session");
+    const admittedEntry: SessionEntry = { sessionId: "admitted-session", updatedAt: 2 };
+    state.admitReply.mockResolvedValue({ status: "owned", operation, sessionEntry: admittedEntry });
+    state.loadEntry.mockReturnValue(admittedEntry);
+
+    const result = await admitFollowupTurn({
+      queued: createRun(),
+      defaults: createDefaults({ storePath: "/tmp/sessions.json" }),
+    });
+
+    expect(result.kind).toBe("admitted");
+    if (result.kind !== "admitted") {
+      return;
+    }
+    expect(operation.bindToolAuthoritySnapshot).toHaveBeenCalledOnce();
+    const snapshot = operation.bindToolAuthoritySnapshot.mock.calls[0]?.[0] as
+      | { fingerprint: (route?: { provider: string; model: string }) => string }
+      | undefined;
+    const route = { provider: "anthropic", model: "claude" };
+    // The snapshot must describe the admitted generation, not the enqueue-time run.
+    expect(result.turn.queued.run.sessionId).toBe("admitted-session");
+    expect(snapshot?.fingerprint(route)).toBe(
+      resolveFollowupRunToolAuthorityFingerprint(result.turn.queued, route),
+    );
+    expect(snapshot?.fingerprint(route)).not.toBe(
+      resolveFollowupRunToolAuthorityFingerprint(createRun(), route),
+    );
+  });
+
   it("reports each active-run deferral without adopting the queued source", async () => {
     state.admitReply.mockResolvedValue({ status: "skipped", reason: "active-run" });
     const onDeferredHeartbeat = vi.fn();

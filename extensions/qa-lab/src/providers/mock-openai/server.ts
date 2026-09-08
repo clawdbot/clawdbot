@@ -51,6 +51,8 @@ import {
   QA_REPEATED_REQUEST_RECOVERY_PROMPT_RE,
   QA_REPEATED_REQUEST_QUEUED_REPLY_PROMPT_RE,
   QA_REPEATED_REQUEST_QUEUED_REPLY_MARKER,
+  QA_QUEUED_FOLLOWUP_STALL_PROMPT_RE,
+  QA_QUEUED_FOLLOWUP_STALL_RESPONSE_PAUSE_MS,
   QA_STREAMING_PROMPT_RE,
   QA_FINAL_ONLY_MARKER_STREAMING_PROMPT_RE,
   QA_BLOCK_STREAMING_PROMPT_RE,
@@ -2935,6 +2937,10 @@ export async function startQaMockOpenAiServer(params?: {
                 ? QA_REPEATED_REQUEST_STALLED_RESPONSE_PAUSE_MS
                 : QA_REPEATED_REQUEST_RESPONSE_PAUSE_MS,
           }
+        : {}),
+      // Keep the first turn active while a mid-run follow-up is admitted (#139847).
+      ...(QA_QUEUED_FOLLOWUP_STALL_PROMPT_RE.test(prompt)
+        ? { responsePauseMs: QA_QUEUED_FOLLOWUP_STALL_RESPONSE_PAUSE_MS }
         : {}),
     };
   };

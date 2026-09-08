@@ -285,6 +285,10 @@ export const QA_REPEATED_REQUEST_RECOVERY_PROMPT_RE = /repeated request recovery
 export const QA_REPEATED_REQUEST_QUEUED_REPLY_PROMPT_RE =
   /repeated request queued reply gateway qa check/i;
 export const QA_REPEATED_REQUEST_QUEUED_REPLY_MARKER = "GATEWAY_REPEATED_REQUEST_QUEUED_OK";
+export const QA_QUEUED_FOLLOWUP_STALL_PROMPT_RE = /queued followup stall gateway qa check/i;
+// Holds one reply run active long enough for a second inbound message to be
+// admitted as a queued follow-up while the first run is still running (#139847).
+export const QA_QUEUED_FOLLOWUP_STALL_RESPONSE_PAUSE_MS = 15_000;
 export const QA_STREAMING_PROMPT_RE = /(?:partial|quiet) streaming qa check/i;
 export const QA_FINAL_ONLY_MARKER_STREAMING_PROMPT_RE = /final-only marker streaming qa check/i;
 export const QA_BLOCK_STREAMING_PROMPT_RE = /block streaming qa check/i;
