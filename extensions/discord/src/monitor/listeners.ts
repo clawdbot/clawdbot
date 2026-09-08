@@ -137,6 +137,15 @@ export class DiscordPresenceListener extends PresenceUpdateListener {
   }
 
   async seedGuildSnapshot(data: GuildCreateEvent): Promise<void> {
+    // Cache metadata before awaiting greeting policy so updates and READY retain dispatch order.
+    if (data.unavailable !== true && "presences" in data && Array.isArray(data.presences)) {
+      for (const presence of data.presences) {
+        const userId = presence.user?.id;
+        if (userId) {
+          setPresence(this.params.accountId, userId, { ...presence, guild_id: data.id });
+        }
+      }
+    }
     if (!this.params.readPolicy) {
       this.seedGuildSnapshotWithPolicy(data, this.params.guildEntries);
       return;
@@ -207,15 +216,15 @@ export class DiscordPresenceListener extends PresenceUpdateListener {
   }
 
   async handle(data: PresenceUpdateEvent, client: Client) {
-    const pendingSeed = this.pendingGuildSeeds.get(data.guild_id);
-    if (pendingSeed && !(await pendingSeed)) {
-      return;
-    }
     const userId = data.user?.id;
     if (!userId) {
       return;
     }
     setPresence(this.params.accountId, userId, data);
+    const pendingSeed = this.pendingGuildSeeds.get(data.guild_id);
+    if (pendingSeed && !(await pendingSeed)) {
+      return;
+    }
     const presenceKey = `${this.params.accountId}:${data.guild_id}:${userId}`;
     const gatewayGeneration = this.gatewayGeneration;
     const guildGeneration = this.guildPresenceState.get(data.guild_id)?.generation ?? 0;
