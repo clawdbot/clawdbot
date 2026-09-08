@@ -339,7 +339,7 @@ KillMode=mixed
 WantedBy=default.target
 ```
 
-Hand-written units do not inherit the adaptive heap sizing that `openclaw gateway install` writes for managed Gateway services. Prefer the managed installer, or set an explicit heap limit in the custom supervisor after accounting for native-memory headroom.
+Hand-written units do not inherit the adaptive heap sizing that `openclaw gateway install` writes for managed Gateway services. Prefer the managed installer, or set an explicit heap limit in the custom supervisor after accounting for native-memory headroom. Keep `TimeoutStopSec` at `330` or higher: the Gateway drains active work for up to five minutes on stop and restart, and a shorter stop timeout makes systemd SIGKILL it mid-turn.
 
 Enable it:
 
