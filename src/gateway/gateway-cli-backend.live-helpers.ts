@@ -430,6 +430,7 @@ async function connectClientOnce(params: {
   deviceIdentity?: DeviceIdentity;
   clientDisplayName?: string | null;
   caps?: string[];
+  scopes?: string[];
   requestTimeoutMs?: number;
   tickWatchTimeoutMs?: number;
   waitForEventLoopReady?: boolean;
