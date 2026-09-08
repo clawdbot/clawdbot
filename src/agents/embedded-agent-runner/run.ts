@@ -215,6 +215,7 @@ import {
   resolveEmptyResponseRetryInstruction,
   resolveIncompleteTurnPayloadText,
   resolveReasoningOnlyRetryInstruction,
+  resolveSettledToolContinuationInstruction,
   resolveSilentToolResultReplyPayload,
   resolveReplayInvalidFlag,
   resolveRunLivenessState,
@@ -1630,6 +1631,8 @@ async function runEmbeddedAgentInternal(
       let lastRetryFailoverReason: FailoverReason | null = null;
       let reasoningOnlyRetryInstruction: string | null = null;
       let emptyResponseRetryInstruction: string | null = null;
+      let settledToolContinuationInstruction: string | null = null;
+      let settledToolContinuationAttempts = 0;
       let compactionContinuationRetryInstruction: string | null = null;
       let nextAttemptPromptOverride: string | null = null;
       let rateLimitProfileRotations = 0;
@@ -1934,6 +1937,7 @@ async function runEmbeddedAgentInternal(
           const promptAdditions = [
             reasoningOnlyRetryInstruction,
             emptyResponseRetryInstruction,
+            settledToolContinuationInstruction,
             compactionContinuationRetryInstruction,
           ].filter(
             (value): value is string => typeof value === "string" && value.trim().length > 0,
@@ -2091,8 +2095,9 @@ async function runEmbeddedAgentInternal(
             currentInboundContext: params.currentInboundContext,
             images: params.images,
             imageOrder: params.imageOrder,
-            clientTools: params.clientTools,
-            disableTools: params.disableTools,
+            clientTools:
+              settledToolContinuationInstruction === null ? params.clientTools : undefined,
+            disableTools: params.disableTools || settledToolContinuationInstruction !== null,
             provider,
             modelId,
             requestedModelId,
@@ -3721,6 +3726,7 @@ async function runEmbeddedAgentInternal(
                 ? [silentToolResultReplyPayload]
                 : payloadsWithToolMedia;
           const payloadCount = payloadsForTerminalPath?.length ?? 0;
+          const afterSettledToolContinuation = settledToolContinuationAttempts > 0;
           const emptyAssistantReplyIsSilent = shouldTreatEmptyAssistantReplyAsSilent({
             allowEmptyAssistantReplyAsSilent: params.allowEmptyAssistantReplyAsSilent,
             payloadCount,
@@ -3728,29 +3734,31 @@ async function runEmbeddedAgentInternal(
             timedOut,
             attempt,
           });
-          const nextReasoningOnlyRetryInstruction = emptyAssistantReplyIsSilent
-            ? null
-            : resolveReasoningOnlyRetryInstruction({
-                provider: activeErrorContext.provider,
-                modelId: activeErrorContext.model,
-                modelApi: effectiveModel.api,
-                executionContract,
-                aborted,
-                timedOut,
-                attempt,
-              });
-          const nextEmptyResponseRetryInstruction = emptyAssistantReplyIsSilent
-            ? null
-            : resolveEmptyResponseRetryInstruction({
-                provider: activeErrorContext.provider,
-                modelId: activeErrorContext.model,
-                modelApi: effectiveModel.api,
-                executionContract,
-                payloadCount,
-                aborted,
-                timedOut,
-                attempt,
-              });
+          const nextReasoningOnlyRetryInstruction =
+            emptyAssistantReplyIsSilent || afterSettledToolContinuation
+              ? null
+              : resolveReasoningOnlyRetryInstruction({
+                  provider: activeErrorContext.provider,
+                  modelId: activeErrorContext.model,
+                  modelApi: effectiveModel.api,
+                  executionContract,
+                  aborted,
+                  timedOut,
+                  attempt,
+                });
+          const nextEmptyResponseRetryInstruction =
+            emptyAssistantReplyIsSilent || afterSettledToolContinuation
+              ? null
+              : resolveEmptyResponseRetryInstruction({
+                  provider: activeErrorContext.provider,
+                  modelId: activeErrorContext.model,
+                  modelApi: effectiveModel.api,
+                  executionContract,
+                  payloadCount,
+                  aborted,
+                  timedOut,
+                  attempt,
+                });
           if (
             nextReasoningOnlyRetryInstruction &&
             reasoningOnlyRetryAttempts < maxReasoningOnlyRetryAttempts
@@ -3769,6 +3777,7 @@ async function runEmbeddedAgentInternal(
             reasoningOnlyRetryAttempts >= maxReasoningOnlyRetryAttempts;
           if (
             !emptyAssistantReplyIsSilent &&
+            !afterSettledToolContinuation &&
             shouldRetryMissingAssistantTurn({
               payloadCount,
               aborted,
@@ -3782,6 +3791,28 @@ async function runEmbeddedAgentInternal(
             log.warn(
               `missing assistant terminal message detected: runId=${params.runId} sessionId=${params.sessionId} ` +
                 `provider=${activeErrorContext.provider}/${activeErrorContext.model} — retrying ${missingAssistantRetryAttempts}/${MAX_MISSING_ASSISTANT_RETRIES} with same prompt`,
+            );
+            continue;
+          }
+          const nextSettledToolContinuationInstruction =
+            emptyAssistantReplyIsSilent || agentHarness.id !== "openclaw"
+              ? null
+              : resolveSettledToolContinuationInstruction({
+                  provider: activeErrorContext.provider,
+                  modelId: activeErrorContext.model,
+                  modelApi: effectiveModel.api,
+                  executionContract,
+                  payloadCount,
+                  aborted,
+                  timedOut,
+                  attempt,
+                });
+          if (nextSettledToolContinuationInstruction && settledToolContinuationAttempts < 1) {
+            settledToolContinuationAttempts += 1;
+            settledToolContinuationInstruction = nextSettledToolContinuationInstruction;
+            log.warn(
+              `settled post-tool turn lacked a final answer: runId=${params.runId} sessionId=${params.sessionId} ` +
+                `provider=${activeErrorContext.provider}/${activeErrorContext.model} — continuing from settled tool results`,
             );
             continue;
           }
@@ -4024,6 +4055,7 @@ async function runEmbeddedAgentInternal(
             suppressNextUserMessagePersistence = true;
             reasoningOnlyRetryInstruction = null;
             emptyResponseRetryInstruction = null;
+            settledToolContinuationInstruction = null;
             compactionContinuationRetryInstruction = null;
             log.warn(
               `before_agent_finalize requested one more pass: ` +

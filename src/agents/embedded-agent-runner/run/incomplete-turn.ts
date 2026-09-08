@@ -136,6 +136,8 @@ export const REASONING_ONLY_RETRY_INSTRUCTION =
   "The previous assistant turn recorded reasoning but did not produce a user-visible answer. Continue from that partial turn and produce the visible answer now. Do not restate the reasoning or restart from scratch.";
 export const EMPTY_RESPONSE_RETRY_INSTRUCTION =
   "The previous attempt did not produce a user-visible answer. Continue from the current state and produce the visible answer now. Do not restart from scratch.";
+export const SETTLED_TOOL_CONTINUATION_INSTRUCTION =
+  "The previous assistant turn completed its tool calls but did not produce a user-visible answer. Continue from the current transcript and produce the final user-visible answer now. Do not repeat completed tool calls or restart from scratch.";
 
 /**
  * Marks whether retrying the attempt can safely replay the prompt. Concrete
@@ -724,6 +726,43 @@ export function resolveReasoningOnlyRetryInstruction(params: {
   }
 
   return REASONING_ONLY_RETRY_INSTRUCTION;
+}
+
+/** Continues once after a side-effecting tool batch is proven complete. */
+export function resolveSettledToolContinuationInstruction(params: {
+  provider?: string;
+  modelId?: string;
+  modelApi?: string;
+  executionContract?: string;
+  payloadCount: number;
+  aborted: boolean;
+  timedOut: boolean;
+  attempt: IncompleteTurnAttempt;
+}): string | null {
+  const assistant = params.attempt.currentAttemptAssistant;
+  if (
+    params.payloadCount !== 0 ||
+    params.aborted ||
+    params.timedOut ||
+    assistant?.stopReason !== "stop" ||
+    params.attempt.toolMetas.length === 0 ||
+    params.attempt.toolMetas.some((tool) => tool.asyncStarted === true) ||
+    !resolveAttemptReplayMetadata(params.attempt).hadPotentialSideEffects ||
+    params.attempt.itemLifecycle.startedCount === 0 ||
+    params.attempt.itemLifecycle.completedCount !== params.attempt.itemLifecycle.startedCount ||
+    params.attempt.itemLifecycle.activeCount !== 0 ||
+    params.attempt.lastToolError ||
+    params.attempt.clientToolCalls ||
+    params.attempt.yieldDetected ||
+    params.attempt.didSendDeterministicApprovalPrompt ||
+    hasAcceptedSessionSpawn(params.attempt.acceptedSessionSpawns) ||
+    hasMessagingToolDeliveryEvidence(params.attempt) ||
+    !isEmptyResponseAssistantTurn({ payloadCount: params.payloadCount, attempt: params.attempt }) ||
+    !shouldApplyNonVisibleTurnRetryGuard(params)
+  ) {
+    return null;
+  }
+  return SETTLED_TOOL_CONTINUATION_INSTRUCTION;
 }
 
 /**
