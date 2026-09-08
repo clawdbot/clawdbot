@@ -1,5 +1,6 @@
 // Vitest project config tests validate aggregate Vitest project wiring.
 import { afterEach, describe, expect, it } from "vitest";
+import { spawnNodeEvalSync } from "../src/test-utils/node-process.js";
 import { createPatternFileHelper } from "./helpers/pattern-file.js";
 import { normalizeConfigPath, normalizeConfigPaths } from "./helpers/vitest-config-paths.js";
 import { auditFullSuiteTestFileOwnership } from "./vitest-projects-config.test-support.js";
@@ -44,6 +45,7 @@ import {
   sharedVitestConfig,
 } from "./vitest/vitest.shared.config.ts";
 import { fullSuiteVitestShards } from "./vitest/vitest.test-shards.mjs";
+import { DEFAULT_VITEST_TEST_TIMEOUT_MS } from "./vitest/vitest.timeouts.ts";
 import { uiIsolatedTestFiles } from "./vitest/vitest.ui-isolated-paths.mjs";
 import { createUiVitestConfig } from "./vitest/vitest.ui.config.ts";
 import { createUnitFastFakeTimersVitestConfig } from "./vitest/vitest.unit-fast-fake-timers.config.ts";
@@ -83,6 +85,30 @@ afterEach(() => {
 });
 
 describe("projects vitest config", () => {
+  it("resolves the complete root watch project graph", () => {
+    const result = spawnNodeEvalSync(
+      `
+        import { resolveConfig } from "vitest/node";
+        import rootConfig from "./vitest.config.ts";
+        const resolved = await resolveConfig({ config: false }, rootConfig);
+        console.log("ROOT_PROJECT_RESOLUTION " + resolved.test.resolvedProjects.length);
+      `,
+      {
+        imports: ["tsx"],
+        env: { ...process.env, GITHUB_ACTIONS: "true", OPENCLAW_VITEST_INCLUDE_FILE: undefined },
+        timeout: DEFAULT_VITEST_TEST_TIMEOUT_MS,
+      },
+    );
+    expect(result.error, result.stderr).toBeUndefined();
+    expect(result.signal, result.stderr).toBeNull();
+    expect(result.status, result.stderr).toBe(0);
+    const report = result.stdout
+      .split("\n")
+      .find((line) => line.startsWith("ROOT_PROJECT_RESOLUTION "));
+    expect(report, result.stdout).toBeDefined();
+    expect(Number(report!.slice("ROOT_PROJECT_RESOLUTION ".length))).toBeGreaterThan(0);
+  });
+
   it("keeps root and full-suite agent projects aligned with canonical owners", () => {
     const agenticShard = fullSuiteVitestShards.find((shard) => shard.name === "agentic");
     const agentConfigs = new Set(agentVitestProjectConfigs);
