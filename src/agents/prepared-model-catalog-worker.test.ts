@@ -6,7 +6,8 @@ import {
 } from "./prepared-model-catalog-worker.js";
 import type { PreparedModelRuntimeAgentFacts } from "./prepared-model-runtime.catalog-contract.js";
 
-vi.mock("../plugins/manifest-registry-installed.js", () => ({
+vi.mock("../plugins/manifest-registry-installed.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/manifest-registry-installed.js")>()),
   resolveInstalledManifestRegistryIndexFingerprint: () => "test-plugin-index",
 }));
 
