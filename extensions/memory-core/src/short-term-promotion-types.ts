@@ -4,6 +4,13 @@ import {
   DEFAULT_MEMORY_DEEP_DREAMING_MIN_SCORE,
   DEFAULT_MEMORY_DEEP_DREAMING_MIN_UNIQUE_QUERIES,
 } from "openclaw/plugin-sdk/memory-core-host-status";
+import type {
+  RepairShortTermPromotionArtifactsResult as MemoryRepairShortTermPromotionArtifactsResult,
+  ShortTermAuditIssue as MemoryShortTermAuditIssue,
+  ShortTermAuditSummary as MemoryShortTermAuditSummary,
+  ShortTermDreamingStats,
+  ShortTermDreamingStatsEntry,
+} from "openclaw/plugin-sdk/memory-core-host-status";
 import type { ConceptTagScriptCoverage } from "./concept-vocabulary.js";
 
 export const DEFAULT_PROMOTION_MIN_SCORE = DEFAULT_MEMORY_DEEP_DREAMING_MIN_SCORE;
@@ -108,43 +115,13 @@ export type PromotionCandidate = {
   provenance?: MemoryEntryProvenance;
 };
 
-export type ShortTermAuditIssue = {
-  severity: "warn" | "error";
-  code:
-    | "recall-store-unreadable"
-    | "recall-store-empty"
-    | "recall-store-invalid"
-    | "recall-store-dangling"
-    | "recall-store-over-limit"
-    | "recall-lock-stale"
-    | "recall-lock-unreadable";
-  message: string;
-  fixable: boolean;
-};
+export type ShortTermAuditSummary = MemoryShortTermAuditSummary<ConceptTagScriptCoverage>;
+export type ShortTermAuditIssue = MemoryShortTermAuditIssue;
 
-export type ShortTermAuditSummary = {
-  storePath: string;
-  lockPath: string;
-  updatedAt?: string;
-  exists: boolean;
-  entryCount: number;
-  promotedCount: number;
-  spacedEntryCount: number;
-  conceptTaggedEntryCount: number;
-  conceptTagScripts?: ConceptTagScriptCoverage;
-  invalidEntryCount: number;
-  danglingEntryCount?: number;
-  issues: ShortTermAuditIssue[];
-};
-
-export type RepairShortTermPromotionArtifactsResult = {
-  changed: boolean;
-  removedInvalidEntries: number;
-  removedDanglingEntries?: number;
-  removedOverflowEntries: number;
-  rewroteStore: boolean;
-  removedStaleLock: boolean;
-};
+export type RepairShortTermPromotionArtifactsResult = Omit<
+  MemoryRepairShortTermPromotionArtifactsResult,
+  "removedOverflowEntries"
+> & { removedOverflowEntries: number };
 
 export type RankShortTermPromotionOptions = {
   workspaceDir: string;
@@ -214,39 +191,4 @@ export type ApplyShortTermPromotionsResult = {
   compactedDates: string[];
 };
 
-export type ShortTermDreamingStatsEntry = {
-  key: string;
-  path: string;
-  startLine: number;
-  endLine: number;
-  snippet: string;
-  recallCount: number;
-  dailyCount: number;
-  groundedCount: number;
-  totalSignalCount: number;
-  lightHits: number;
-  remHits: number;
-  phaseHitCount: number;
-  promotedAt?: string;
-  lastRecalledAt?: string;
-};
-
-export type ShortTermDreamingStats = {
-  shortTermCount: number;
-  recallSignalCount: number;
-  dailySignalCount: number;
-  groundedSignalCount: number;
-  totalSignalCount: number;
-  phaseSignalCount: number;
-  lightPhaseHitCount: number;
-  remPhaseHitCount: number;
-  promotedTotal: number;
-  promotedToday: number;
-  storePath: string;
-  phaseSignalPath: string;
-  phaseSignalError?: string;
-  lastPromotedAt?: string;
-  shortTermEntries: ShortTermDreamingStatsEntry[];
-  signalEntries: ShortTermDreamingStatsEntry[];
-  promotedEntries: ShortTermDreamingStatsEntry[];
-};
+export type { ShortTermDreamingStats, ShortTermDreamingStatsEntry };
