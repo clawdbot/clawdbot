@@ -24,6 +24,13 @@ type ResolveInboundConversationParams = Parameters<
   NonNullable<ChannelMessagingAdapter["resolveInboundConversation"]>
 >[0];
 
+interface MinimalInboundHookContext {
+  from: string;
+  content: string;
+  channelId: string;
+  isGroup: boolean;
+}
+
 function makeInboundCtx(overrides: Partial<FinalizedMsgContext> = {}): FinalizedMsgContext {
   return {
     From: "demo-chat:user:123",
@@ -131,14 +138,13 @@ describe("message hook mappers", () => {
     derived.mediaStagingPending = true;
     derived.originalMedia = [];
 
-    expect(
-      toPluginMessageContext({
-        from: "sender",
-        content: "hello",
-        channelId: "demo-chat",
-        isGroup: false,
-      }),
-    ).toMatchObject({ channelId: "demo-chat" });
+    const minimal: MinimalInboundHookContext = {
+      from: "sender",
+      content: "hello",
+      channelId: "demo-chat",
+      isGroup: false,
+    };
+    expect(toPluginMessageContext(minimal)).toMatchObject({ channelId: "demo-chat" });
   });
 
   it("derives canonical inbound context with body precedence and group metadata", () => {
