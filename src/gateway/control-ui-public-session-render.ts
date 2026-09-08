@@ -1,4 +1,5 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import MarkdownIt from "markdown-it";
 import { isHeartbeatOkResponse, isHeartbeatUserMessage } from "../auto-reply/heartbeat-filter.js";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
@@ -117,8 +118,10 @@ export function renderPublicSessionDocument(params: {
 }): string {
   const isLatest = params.isLatest !== false;
   const title = escapeHtml(
-    redactToolPayloadText(stripInternalMetadataForDisplay(params.title)).slice(0, 200).trim() ||
-      "Shared conversation",
+    truncateUtf16Safe(
+      redactToolPayloadText(stripInternalMetadataForDisplay(params.title)),
+      200,
+    ).trim() || "Shared conversation",
   );
   let truncated = params.truncated || params.messages.length > MAX_MESSAGES;
   let remaining = MAX_DOCUMENT_CHARS;
@@ -133,7 +136,7 @@ export function renderPublicSessionDocument(params: {
       truncated = true;
       break;
     }
-    const text = message.text.slice(0, Math.min(MAX_MESSAGE_CHARS, remaining));
+    const text = truncateUtf16Safe(message.text, Math.min(MAX_MESSAGE_CHARS, remaining));
     const clipped = text.length < message.text.length;
     truncated ||= clipped;
     remaining -= text.length;
