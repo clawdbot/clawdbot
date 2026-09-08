@@ -62,6 +62,12 @@ describe("codex plugin", () => {
     expect(manifest.providers).toBeUndefined();
   });
 
+  it("keeps only Codex sub-plugin policy changes on the live thread-rotation path", () => {
+    expect(plugin.reload).toEqual({
+      noopPrefixes: ["plugins.entries.codex.config.codexPlugins"],
+    });
+  });
+
   it("does not select an agent or open plugin state while registering", () => {
     const openSyncKeyedStore = vi.fn(() => {
       throw new Error("openSyncKeyedStore is only available through the plugin runtime proxy");
