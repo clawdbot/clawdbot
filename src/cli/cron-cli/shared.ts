@@ -251,6 +251,21 @@ export const formatCronLookupMiss = (jobId: string) =>
     valueLabel: "automation id",
   });
 
+/**
+ * Resolve the execution Gateway's platform so shell-string payloads are wrapped
+ * for the host that will run them. Returns undefined when the Gateway does not
+ * expose it (older gateway, offline); callers then fall back to the local platform.
+ */
+export async function resolveGatewayPlatform(opts: GatewayRpcOpts): Promise<string | undefined> {
+  try {
+    // SAFETY: system.info responds with a gateway-info record; only platform is consumed.
+    const res = (await callGatewayFromCli("system.info", opts, {})) as { platform?: unknown };
+    return typeof res?.platform === "string" && res.platform.length > 0 ? res.platform : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export async function warnIfCronSchedulerDisabled(opts: GatewayRpcOpts) {
   // Old/offline gateways should not make successful cron mutations fail after the fact.
   try {

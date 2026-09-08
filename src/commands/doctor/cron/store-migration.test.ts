@@ -3,6 +3,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { resolveAgentHarnessPolicy } from "../../../agents/harness/policy.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { buildCronCommandShellArgv } from "../../../cron/command-shell-argv.js";
 import { legacyCodexProviderIdentityKey } from "../shared/codex-route-model-ref.js";
 import {
   IMAGE_INSPECTION_TOOL_NAME_MIGRATION,
@@ -617,7 +618,7 @@ describe("normalizeStoredCronJobs", () => {
     const payload = expectDefined(job, "job test invariant").payload as Record<string, unknown>;
     expect(payload).toEqual({
       kind: "command",
-      argv: ["sh", "-lc", command],
+      argv: buildCronCommandShellArgv(command),
       cwd: "/home/openclaw/.razor/quant",
       timeoutSeconds: 900,
     });

@@ -10,6 +10,7 @@ import {
   parseCronAgentTurnCommandPrompt,
   type CronAgentTurnShellPromptKind,
 } from "../../../cron/agent-turn-command-prompt.js";
+import { buildCronCommandShellArgv } from "../../../cron/command-shell-argv.js";
 import { toCanonicalOpenAIModelRef } from "../shared/codex-route-model-ref.js";
 import {
   IMAGE_INSPECTION_TOOL_NAME_MIGRATION,
@@ -352,7 +353,7 @@ export function migrateLegacyAgentTurnCommandPayload(payload: UnknownRecord): bo
   }
 
   payload.kind = "command";
-  payload.argv = ["sh", "-lc", parsed.command];
+  payload.argv = buildCronCommandShellArgv(parsed.command);
   if (parsed.cwd) {
     payload.cwd = parsed.cwd;
   }

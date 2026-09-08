@@ -6,6 +6,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
+import { buildCronCommandShellArgv } from "../../cron/command-shell-argv.js";
 import type { CronJob } from "../../cron/types.js";
 import { normalizeHttpWebhookUrl } from "../../cron/webhook-url.js";
 import { sanitizeAgentId } from "../../routing/session-key.js";
@@ -26,6 +27,7 @@ import {
   parseCronToolsAllow,
   printCronJson,
   printCronList,
+  resolveGatewayPlatform,
   warnIfCronSchedulerDisabled,
 } from "./shared.js";
 import { normalizeCronSessionTargetOption, parseCronThreadIdOption } from "./thread-id-shared.js";
@@ -132,6 +134,10 @@ export function registerCronAddCommand(cron: Command) {
               throw new Error("Choose at most one of --announce, --no-deliver, or --webhook");
             }
 
+            // Shell-string payloads execute on the Gateway host, which may differ
+            // from this CLI machine; resolve the wrapper for that platform.
+            const gatewayPlatform =
+              opts.command === undefined ? undefined : await resolveGatewayPlatform(opts);
             const payload = (() => {
               // Main-session jobs use system events; isolated/current/session jobs use messages.
               const systemEvent = normalizeOptionalString(opts.systemEvent) ?? "";
@@ -219,7 +225,8 @@ export function registerCronAddCommand(cron: Command) {
                 }
                 return {
                   kind: "command" as const,
-                  argv: commandArgv ?? ["sh", "-lc", commandShell ?? ""],
+                  argv:
+                    commandArgv ?? buildCronCommandShellArgv(commandShell ?? "", gatewayPlatform),
                   cwd: normalizeOptionalString(opts.commandCwd),
                   env: parseCronCommandEnv(opts.commandEnv),
                   input: typeof opts.commandInput === "string" ? opts.commandInput : undefined,
