@@ -5,14 +5,12 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import pLimit from "p-limit";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { Model } from "../llm/types.js";
 import { runAbortableTimeout } from "../node-host/with-timeout.js";
 import { resolveInstalledManifestRegistryIndexFingerprint } from "../plugins/manifest-registry-installed.js";
 import { prepareModelCatalogThinkingPolicies } from "../plugins/provider-thinking.js";
 import { dedupeByKey } from "../shared/dedupe-by-key.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { resolveUsableAgentCredentialModes } from "./agent-auth-credentials.js";
-import { getPreparedRuntimeAuthMaterializations } from "./auth-profiles/runtime-materializations.js";
 import { collectConfiguredAgentHarnessRuntimes } from "./harness-runtimes.js";
 import { augmentPreparedModelCatalogWithAgentHarness } from "./harness/model-catalog.js";
 import { createPreparedModelCatalogProviderNormalizer } from "./model-catalog-provider-normalizer.js";
@@ -22,11 +20,7 @@ import { createPreparedModelCatalogWorker } from "./prepared-model-catalog-worke
 import {
   getPreparedModelFullCatalogAuth,
   setPreparedModelFullCatalogAuth,
-  setPreparedModelRuntimeAuthMaterializations,
-  setPreparedModelRuntimeAuthLoader,
-  setPreparedModelRuntimeAuthStore,
   type PreparedModelRuntimeAuth,
-  type PreparedModelRuntimeAuthScope,
 } from "./prepared-model-runtime-auth.js";
 import type {
   PreparedModelRuntimeAgentFacts,
@@ -34,7 +28,11 @@ import type {
   PreparedModelRuntimeCatalogSource,
 } from "./prepared-model-runtime.catalog-contract.js";
 import { prepareConfiguredRuntimeFacts } from "./prepared-model-runtime.configured-catalog.js";
-import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
+import {
+  assertPreparedModelRuntimeInputCurrent,
+  assertPreparedModelRuntimeCandidatesCurrent,
+  PreparedModelRuntimePublicationSupersededError,
+} from "./prepared-model-runtime.errors.js";
 import {
   fingerprintPreparedRuntimeFacts,
   preparedModelInventoryKey,
@@ -43,6 +41,8 @@ import {
   prepareWorkspaceBuildGroup,
 } from "./prepared-model-runtime.facts.js";
 import {
+  createPreparedModelRuntimeSnapshot,
+  type PreparedModelRuntimeCatalogAccess,
   isPreparedModelCatalogFull,
   markPreparedModelCatalogFull,
   materializePreparedModelCatalog,
@@ -61,20 +61,12 @@ import type {
   PreparedModelRuntimeOwner,
   PreparedModelRuntimePluginGeneration,
   PreparedModelRuntimeSnapshot,
-  PreparedModelRuntimeStores,
 } from "./prepared-model-runtime.types.js";
-import { AuthStorage } from "./sessions/auth-storage.js";
 
 const MAX_CONCURRENT_MODEL_RUNTIME_AGENT_SOURCE_BUILDS = 2;
 const MAX_CONCURRENT_FULL_MODEL_CATALOG_BUILDS = 1;
 const limitFullModelCatalogBuild = pLimit(MAX_CONCURRENT_FULL_MODEL_CATALOG_BUILDS);
 
-type PreparedModelRuntimeCatalogAccess = Readonly<{
-  isCurrent: () => boolean;
-  readFullModelCatalog: () => ModelCatalogSnapshot | undefined;
-  loadFullModelCatalog: (options?: { refresh?: boolean }) => Promise<ModelCatalogSnapshot>;
-  loadAuth: (scope: PreparedModelRuntimeAuthScope) => Promise<PreparedModelRuntimeAuth>;
-}>;
 export type PreparedModelRuntimeBuildCandidate = Readonly<{
   input: PreparedModelRuntimeInput;
   catalogOwner: PreparedModelRuntimeSnapshot["catalogOwner"];
@@ -124,25 +116,6 @@ function runSerializedPreparedModelRuntimeTask<T>(params: {
     }
   });
   return pending;
-}
-
-function assertPreparedModelRuntimeInputCurrent(
-  input: PreparedModelRuntimeInput,
-  isCurrent: (() => boolean) | undefined,
-): void {
-  if (isCurrent && !isCurrent()) {
-    throw new PreparedModelRuntimePublicationSupersededError(
-      `prepared model runtime publication was superseded for ${input.agentDir}`,
-    );
-  }
-}
-
-function assertPreparedModelRuntimeCandidatesCurrent(
-  candidates: readonly PreparedModelRuntimeBuildCandidate[],
-): void {
-  for (const candidate of candidates) {
-    assertPreparedModelRuntimeInputCurrent(candidate.input, candidate.isBuildCurrent);
-  }
 }
 
 function groupBuildCandidates<K>(
@@ -374,66 +347,6 @@ function createFullModelCatalogAccess(params: {
   };
 }
 
-function createSnapshot(
-  catalogOwner: PreparedModelRuntimeSnapshot["catalogOwner"],
-  agentFacts: PreparedModelRuntimeAgentFacts,
-  pluginGeneration: PreparedModelRuntimePluginGeneration,
-  catalogFacts: PreparedModelRuntimeCatalogFacts,
-  catalogAccess: PreparedModelRuntimeCatalogAccess,
-): PreparedModelRuntimeSnapshot {
-  const { credentials, input } = agentFacts;
-  const { mediaCapabilityProviders, messageToolCatalog, pluginMetadataSnapshot, pluginRegistry } =
-    pluginGeneration;
-  const { configuredRuntimeModels, inlineProviderModels, templateModelRegistry } = catalogFacts;
-  const modelCatalog = materializePreparedModelCatalog(
-    catalogFacts.modelCatalog,
-    agentFacts.runtimeCapabilityModels,
-    configuredRuntimeModels,
-  );
-  prepareModelCatalogThinkingPolicies({
-    catalog: modelCatalog,
-    metadataSnapshot: pluginMetadataSnapshot,
-    providers: pluginRegistry?.providers,
-  });
-  const createStores = (): PreparedModelRuntimeStores => {
-    // Runtime API keys and session extensions mutate these objects. Fork them per run while the
-    // credential map and parsed catalog remain owned by the lifecycle snapshot.
-    const authStorage = AuthStorage.inMemory(credentials);
-    return { authStorage, modelRegistry: templateModelRegistry.fork(authStorage) };
-  };
-  const snapshot: PreparedModelRuntimeSnapshot = Object.freeze({
-    catalogOwner,
-    ...(input.agentId ? { agentId: input.agentId } : {}),
-    agentDir: input.agentDir,
-    activeProjectKeys: [],
-    ...(input.inheritedAuthDir ? { inheritedAuthDir: input.inheritedAuthDir } : {}),
-    ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
-    config: input.config,
-    observationConfig: input.config,
-    isCurrent: catalogAccess.isCurrent,
-    authModes: resolveUsableAgentCredentialModes(credentials),
-    metadataSnapshot: pluginMetadataSnapshot,
-    allowGatewaySubagentBinding: input.allowGatewaySubagentBinding === true,
-    ...(pluginRegistry ? { pluginRegistry } : {}),
-    ...(messageToolCatalog ? { messageToolCatalog } : {}),
-    ...(mediaCapabilityProviders ? { mediaCapabilityProviders } : {}),
-    modelCatalog,
-    readFullModelCatalog: catalogAccess.readFullModelCatalog,
-    loadFullModelCatalog: catalogAccess.loadFullModelCatalog,
-    configuredRuntimeModels,
-    inlineProviderModels,
-    createStores,
-    routeModelResolutionMemo: new Map<string, Promise<Model>>(),
-  });
-  setPreparedModelRuntimeAuthStore(snapshot, agentFacts.authStore);
-  setPreparedModelRuntimeAuthLoader(snapshot, catalogAccess.loadAuth);
-  setPreparedModelRuntimeAuthMaterializations(
-    snapshot,
-    Object.freeze([...getPreparedRuntimeAuthMaterializations(input.agentDir)]),
-  );
-  return snapshot;
-}
-
 async function buildSnapshotBatch(
   candidates: readonly PreparedModelRuntimeBuildCandidate[],
   catalogMode: PreparedModelRuntimeCatalogMode,
@@ -660,7 +573,7 @@ async function buildSnapshotBatch(
       throw new Error(`prepared model runtime snapshot facts missing for ${input.agentDir}`);
     }
     return {
-      snapshot: createSnapshot(
+      snapshot: createPreparedModelRuntimeSnapshot(
         candidate.catalogOwner,
         agentFacts,
         pluginGeneration,
