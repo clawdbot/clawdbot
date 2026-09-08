@@ -397,7 +397,33 @@ export async function runBridgeRequest(params: {
             `Unknown skill ${JSON.stringify(name)}. Available skills: ${names}`,
           );
         }
-        value = await readCodeModeSkill(skill, params.signal);
+        const relativePath = values[1];
+        if (
+          relativePath !== undefined &&
+          relativePath !== null &&
+          typeof relativePath !== "string"
+        ) {
+          throw new ToolInputError("skills.read relative path must be a string");
+        }
+        try {
+          value = await readCodeModeSkill(
+            skill,
+            params.signal,
+            typeof relativePath === "string" ? relativePath : undefined,
+          );
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          if (
+            message.includes("invalid skill relative path") ||
+            message.includes("escapes skill root") ||
+            message.includes("skill relative file exceeds") ||
+            message.includes("node-hosted skill") ||
+            message.includes("node skill reader")
+          ) {
+            throw new ToolInputError(message);
+          }
+          throw error;
+        }
         break;
       }
       case "sleep": {

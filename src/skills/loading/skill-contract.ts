@@ -15,6 +15,8 @@ export interface Skill {
   baseDir: string;
   /** @deprecated Ignored; retained for API compatibility until the next Plugin SDK major. */
   promptVersion?: string;
+  /** Host filesystem path retained when `filePath` is remapped to a sandbox container path. */
+  hostFilePath?: string;
   sourceInfo: SourceInfo;
   disableModelInvocation: boolean;
   // Preserve legacy source reads while keeping the canonical upstream shape.

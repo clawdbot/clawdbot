@@ -17,7 +17,7 @@ type CodeModeHandle = ((input?: unknown) => Promise<unknown>) & { callableName: 
 declare const catalog: { search(query: string, options?: {limit?: number}): Promise<readonly CodeModeHandle[]>; all(): readonly CodeModeHandle[] };
 type CodeModeApiFile = {path: string; description?: string; bytes: number; content: string};
 declare const API: { list(prefix?: string): Promise<{files: Array<{path: string; description?: string; bytes?: number}>}>; read(path: string): Promise<CodeModeApiFile> };
-declare const skills: { list(): Promise<unknown>; read(name: string): Promise<string> };
+declare const skills: { list(): Promise<unknown>; read(name: string, relativePath?: string): Promise<string> };
 declare const nodes: unknown;
 declare const namespaces: unknown;
 `;

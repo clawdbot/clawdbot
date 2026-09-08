@@ -227,7 +227,7 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
 
   const skills = Object.freeze({
     list: () => request("skillsList", []),
-    read: (name) => request("skillsRead", [name]),
+    read: (name, relativePath) => request("skillsRead", [name, relativePath]),
   });
 
   if (globalThis.__openclawSwarmEnabled === true) {
