@@ -45,6 +45,7 @@ import {
   registerSessionBindingAdapter,
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { saveRemoteMedia } from "openclaw/plugin-sdk/media-runtime";
+import { buildDiscordMessageProcessContext } from "./message-handler.context.js";
 import {
   createDiscordMessage,
   createDiscordPreflightArgs,
@@ -381,6 +382,58 @@ describe("preflightDiscordMessage", () => {
     handleDiscordDmCommandDecisionMock.mockReset();
     handleDiscordDmCommandDecisionMock.mockResolvedValue(undefined);
   });
+
+  it.each(["guild", "direct"] as const)(
+    "uses the supplied host context builder after %s message preflight",
+    async (conversationKind) => {
+      const channelId = `host-context-${conversationKind}`;
+      const message = createDiscordMessage({
+        id: `host-context-message-${conversationKind}`,
+        channelId,
+        content: "hello <@openclaw-bot>",
+        mentionedUsers: [{ id: "openclaw-bot" }],
+        author: { id: "123456789012345678", bot: false, username: "alice" },
+      });
+      const hostBoundaryError = new Error("host context authority is no longer active");
+      const buildContext: NonNullable<
+        Parameters<typeof preflightDiscordMessage>[0]["buildContext"]
+      > = () => {
+        throw hostBoundaryError;
+      };
+      const ctx = expectPreflightResult(
+        await preflightDiscordMessage({
+          ...createPreflightArgs({
+            cfg: DEFAULT_PREFLIGHT_CFG,
+            discordConfig: { dmPolicy: "open" },
+            data:
+              conversationKind === "guild"
+                ? createGuildEvent({
+                    channelId,
+                    guildId: "host-context-guild",
+                    author: message.author,
+                    message,
+                  })
+                : ({
+                    channel_id: channelId,
+                    author: message.author,
+                    message,
+                  } as DiscordMessageEvent),
+            client:
+              conversationKind === "guild"
+                ? createGuildTextClient(channelId)
+                : createDmClient(channelId),
+          }),
+          buildContext,
+        }),
+      );
+
+      // Processing must enter the host's builder, including its authority checks.
+      await expect(
+        buildDiscordMessageProcessContext({ ctx, text: message.content ?? "", mediaList: [] }),
+      ).rejects.toBe(hostBoundaryError);
+      expect(ctx.buildContext).toBe(buildContext);
+    },
+  );
 
   it("admits embed-only messages when their text appears after a textless first embed", async () => {
     const channelId = "dm-channel-multiple-embeds";
