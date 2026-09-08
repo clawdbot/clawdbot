@@ -89,6 +89,7 @@ function createLazyBrowserTool(
       channel?: string;
       chatType?: string;
     };
+    senderIsOwner?: boolean;
     runToolBinding?: unknown;
   },
   config?: OpenClawPluginToolContext["runtimeConfig"],
@@ -110,6 +111,7 @@ function createLazyBrowserTool(
   const capabilities = resolveBrowserToolCapabilities({
     tabBound: bindingResult?.ok,
     evaluateEnabled: config?.browser?.evaluateEnabled !== false,
+    ...(opts?.senderIsOwner !== undefined ? { senderIsOwner: opts.senderIsOwner } : {}),
     ...(boundProfile ? { profileCapabilities: getBrowserProfileCapabilities(boundProfile) } : {}),
   });
   return {
@@ -151,6 +153,7 @@ function createBrowserToolOptions(ctx: OpenClawPluginToolContext): {
     channel?: string;
     chatType?: string;
   };
+  senderIsOwner?: boolean;
   runToolBinding?: unknown;
 } {
   const mediaChannel = ctx.deliveryContext?.channel ?? ctx.messageChannel;
@@ -181,6 +184,7 @@ function createBrowserToolOptions(ctx: OpenClawPluginToolContext): {
           },
         }
       : {}),
+    ...(ctx.senderIsOwner !== undefined ? { senderIsOwner: ctx.senderIsOwner } : {}),
     ...(ctx.toolBindings && Object.hasOwn(ctx.toolBindings, "browser")
       ? { runToolBinding: ctx.toolBindings.browser }
       : {}),

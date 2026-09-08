@@ -197,6 +197,7 @@ export function createBrowserTool(
     sandboxBridgeUrl?: string;
     allowHostControl?: boolean;
     agentSessionKey?: string;
+    senderIsOwner?: boolean;
     runToolBinding?: unknown;
     toolCapabilities?: BrowserToolCapabilities;
   },
@@ -222,6 +223,7 @@ export function createBrowserTool(
       return resolveBrowserToolCapabilities({
         tabBound: bindingResult?.ok,
         evaluateEnabled: config.browser?.evaluateEnabled !== false,
+        ...(opts?.senderIsOwner !== undefined ? { senderIsOwner: opts.senderIsOwner } : {}),
         ...(boundProfile
           ? { profileCapabilities: getBrowserProfileCapabilities(boundProfile) }
           : {}),
@@ -242,6 +244,11 @@ export function createBrowserTool(
         ? applyBrowserTabToolBinding(args as Record<string, unknown>, bindingResult.binding)
         : (args as Record<string, unknown>);
       const action = readStringParam(params, "action", { required: true });
+      if (action === "importprofile" && opts?.senderIsOwner === false) {
+        throw new Error(
+          "system profile import requires the owner; run it from an owner conversation or use the openclaw browser import-profile CLI.",
+        );
+      }
       if (!capabilities.actions.some((candidate) => candidate === action)) {
         throw new Error(
           `browser action ${JSON.stringify(action)} is unavailable for this run; use an available action such as snapshot, or select a managed browser profile in an unbound run.`,
