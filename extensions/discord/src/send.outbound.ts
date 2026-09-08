@@ -190,10 +190,13 @@ export async function sendMessageDiscord(
     typeof opts.textLimit === "number" && Number.isFinite(opts.textLimit)
       ? Math.max(1, Math.min(Math.floor(opts.textLimit), 2000))
       : undefined;
-  const mediaMaxBytes =
-    typeof accountInfo.config.mediaMaxMb === "number"
-      ? accountInfo.config.mediaMaxMb * 1024 * 1024
-      : DEFAULT_DISCORD_MEDIA_MAX_MB * 1024 * 1024;
+  const mediaMaxBytes = Math.floor(
+    (typeof accountInfo.config.mediaMaxMb === "number"
+      ? accountInfo.config.mediaMaxMb
+      : DEFAULT_DISCORD_MEDIA_MAX_MB) *
+      1024 *
+      1024,
+  );
   const { renderedText, textWithMentions } = prepareDiscordOutboundText(text ?? "", {
     cfg,
     account: accountInfo,

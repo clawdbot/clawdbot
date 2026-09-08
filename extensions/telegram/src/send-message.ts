@@ -11,6 +11,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { telegramCaptionDeliveryMetadata } from "./caption.js";
 import { renderTelegramHtmlText } from "./format.js";
 import { buildInlineKeyboard } from "./inline-keyboard.js";
+import { resolveTelegramMediaMaxBytes } from "./media-limits.js";
 import { planTelegramMediaBatches } from "./outbound-media-batches.js";
 import {
   prepareTelegramOutboundMedia,
@@ -137,11 +138,10 @@ export async function sendMessageTelegram(
     const mediaUrls = (opts.mediaUrls?.length ? opts.mediaUrls : [opts.mediaUrl ?? ""])
       .map((url) => url.trim())
       .filter(Boolean);
-    const mediaMaxBytes =
-      opts.maxBytes ??
-      (typeof account.config.mediaMaxMb === "number" ? account.config.mediaMaxMb : 100) *
-        1024 *
-        1024;
+    const mediaMaxBytes = resolveTelegramMediaMaxBytes({
+      maxBytes: opts.maxBytes,
+      mediaMaxMb: account.config.mediaMaxMb,
+    });
     const replyMarkup = buildInlineKeyboard(opts.buttons);
 
     const singleUseReplyTo =

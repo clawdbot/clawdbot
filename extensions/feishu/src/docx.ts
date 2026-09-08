@@ -1179,14 +1179,16 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
     params: { accountId?: string } | undefined,
     defaultAccountId?: string,
   ) =>
-    (resolveFeishuToolAccount({
-      api,
-      executeParams: params,
-      defaultAccountId,
-      requiredTool: { family: "doc", label: "Doc" },
-    }).config?.mediaMaxMb ?? 30) *
-    1024 *
-    1024;
+    Math.floor(
+      (resolveFeishuToolAccount({
+        api,
+        executeParams: params,
+        defaultAccountId,
+        requiredTool: { family: "doc", label: "Doc" },
+      }).config?.mediaMaxMb ?? 30) *
+        1024 *
+        1024,
+    );
 
   const getImageReadTimeoutMs = (
     params: { accountId?: string } | undefined,

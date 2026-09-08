@@ -971,7 +971,7 @@ export async function sendMediaFeishu(params: {
     return resolved;
   });
   const mediaMaxBytes = Math.min(
-    (account.config?.mediaMaxMb ?? 30) * 1024 * 1024,
+    Math.floor((account.config?.mediaMaxMb ?? 30) * 1024 * 1024),
     FEISHU_MAX_FILE_UPLOAD_BYTES,
   );
 

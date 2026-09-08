@@ -70,6 +70,7 @@ import {
   buildTelegramSelfSenderName,
   recordTelegramGroupHistoryEntry,
 } from "./group-history-window.js";
+import { resolveTelegramMediaMaxBytes } from "./media-limits.js";
 import { registerTelegramOutboundGroupHistoryRecorder } from "./outbound-message-context.js";
 import {
   prepareTelegramPollAnswerContext,
@@ -334,7 +335,10 @@ export function createTelegramBotCore(
     providerSetting: telegramCfg.commands?.nativeSkills,
     globalSetting: cfg.commands?.nativeSkills,
   });
-  const mediaMaxBytes = (opts.mediaMaxMb ?? telegramCfg.mediaMaxMb ?? 100) * 1024 * 1024;
+  const mediaMaxBytes = resolveTelegramMediaMaxBytes({
+    mediaMaxMb: opts.mediaMaxMb,
+    fallbackMediaMaxMb: telegramCfg.mediaMaxMb,
+  });
   const logger = getChildLogger({ module: "telegram-auto-reply" });
   const resolveGroupPolicy = (chatId: string | number, turnCfg: OpenClawConfig) =>
     resolveChannelGroupPolicy({

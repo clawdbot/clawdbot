@@ -315,6 +315,29 @@ describe("tlon core", () => {
     expect(resolved.configured).toBe(true);
   });
 
+  it("resolves fractional media limits to whole bytes", () => {
+    const resolved = resolveTlonAccount({
+      channels: {
+        tlon: {
+          mediaMaxMb: 1.5 / (1024 * 1024),
+        },
+      },
+    } as OpenClawConfig);
+
+    expect(resolved.mediaMaxBytes).toBe(1);
+  });
+
+  it.each([0, -1, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY])(
+    "ignores invalid media limit %s",
+    (mediaMaxMb) => {
+      const resolved = resolveTlonAccount({
+        channels: { tlon: { mediaMaxMb } },
+      } as OpenClawConfig);
+
+      expect(resolved.mediaMaxBytes).toBeUndefined();
+    },
+  );
+
   it("keeps the default account on channel-level config only", () => {
     const resolved = resolveTlonAccount(
       {

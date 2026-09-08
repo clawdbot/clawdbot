@@ -1368,11 +1368,14 @@ async function sendMessageSlackQueuedInner(params: {
     ...(opts.textIsSlackMrkdwn ? { textIsSlackMrkdwn: true } : {}),
     ...(opts.textIsSlackPlainText ? { preservePlainText: true } : {}),
   });
+  const configuredMediaMaxBytes =
+    typeof account.config.mediaMaxMb === "number"
+      ? Math.floor(account.config.mediaMaxMb * 1024 * 1024)
+      : undefined;
   const mediaMaxBytes =
-    opts.mediaMaxBytes ??
-    (typeof account.config.mediaMaxMb === "number"
-      ? account.config.mediaMaxMb * 1024 * 1024
-      : undefined);
+    typeof opts.mediaMaxBytes === "number"
+      ? Math.floor(opts.mediaMaxBytes)
+      : configuredMediaMaxBytes;
 
   let chunksToPost: string[];
   if (opts.mediaUrl) {

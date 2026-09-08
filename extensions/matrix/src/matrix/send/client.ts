@@ -22,7 +22,9 @@ export function resolveMediaMaxBytes(
   // Only a positive value is a cap, matching CommonMediaMaxMbSchema. `0` or a negative
   // number would become a literal 0-byte limit that rejects every outbound media send;
   // fall through to the unset path instead. Inbound floors the same field (monitor/index.ts).
-  return typeof mediaMaxMb === "number" && mediaMaxMb > 0 ? mediaMaxMb * 1024 * 1024 : undefined;
+  return typeof mediaMaxMb === "number" && mediaMaxMb > 0
+    ? Math.floor(mediaMaxMb * 1024 * 1024)
+    : undefined;
 }
 
 export async function withResolvedMatrixSendClient<T>(
