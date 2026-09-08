@@ -15,7 +15,6 @@ import type {
   ReadConfigFileSnapshotWithPluginMetadataResult,
 } from "../../config/config.js";
 import { ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS_ENV } from "../../config/future-version-guard.js";
-import { CONFIG_AUDIT_STORE_LABEL } from "../../config/io.audit.js";
 import {
   isDoctorRecoverableInvalidConfigError,
   isInvalidConfigError,
@@ -75,10 +74,8 @@ import {
   isTerminalInteractive,
   NON_INTERACTIVE_GATEWAY_RUN_FORCE_MESSAGE,
 } from "../terminal-interactivity.js";
-import {
-  enforceGatewayRunFutureConfigGuard,
-  isGatewayRunFutureConfigAllowed,
-} from "./future-config-guard.js";
+import { enforceGatewayRunFutureConfigGuard } from "./future-config-guard.js";
+import { getGatewayStartGuardErrors } from "./pre-bootstrap.js";
 import { installQaParentWatchdog } from "./qa-parent-watchdog.js";
 import { runGatewayLoop } from "./run-loop.js";
 import type { GatewayRunOpts } from "./run-options.js";
@@ -250,39 +247,8 @@ function shouldBlockGatewayBindWithoutExplicitAuth(params: {
   );
 }
 
-function getGatewayStartGuardErrors(params: {
-  allowUnconfigured?: boolean;
-  configExists: boolean;
-  configAuditLocation: string;
-  mode: string | undefined;
-}): string[] {
-  if (params.allowUnconfigured || params.mode === "local") {
-    return [];
-  }
-  if (!params.configExists) {
-    return [
-      `Missing config. Run \`${formatCliCommand("openclaw setup")}\` or set gateway.mode=local (or pass --allow-unconfigured).`,
-    ];
-  }
-  if (params.mode === undefined) {
-    return [
-      [
-        "Gateway start blocked: existing config is missing gateway.mode.",
-        "Treat this as suspicious or clobbered config.",
-        `Re-run \`${formatCliCommand("openclaw onboard --mode local")}\` or \`${formatCliCommand("openclaw setup")}\`, set gateway.mode=local manually, or pass --allow-unconfigured.`,
-      ].join(" "),
-      `Config write audit: ${params.configAuditLocation}`,
-    ];
-  }
-  return [
-    `Gateway start blocked: set gateway.mode=local (current: ${params.mode}) or pass --allow-unconfigured.`,
-    `Config write audit: ${params.configAuditLocation}`,
-  ];
-}
-
 async function readGatewayStartupConfig(params: {
   lowerPrecedenceEnv: Readonly<Record<string, string>>;
-  opts: GatewayRunOpts;
   startupTrace: ReturnType<typeof createGatewayCliStartupTrace>;
 }): Promise<{
   cfg: OpenClawConfig;
@@ -290,35 +256,16 @@ async function readGatewayStartupConfig(params: {
   startupConfigSnapshotRead?: ReadConfigFileSnapshotWithPluginMetadataResult;
 }> {
   const { readConfigFileSnapshotWithPluginMetadata } = await import("../../config/config.js");
-  let blockedRecoveryConfig: OpenClawConfig | null = null;
   const snapshotRead: ReadConfigFileSnapshotWithPluginMetadataResult | null =
     await params.startupTrace.measure("cli.config-snapshot", () =>
       readConfigFileSnapshotWithPluginMetadata({
         isolateEnv: true,
+        observe: false,
         ...(Object.keys(params.lowerPrecedenceEnv).length > 0
           ? { lowerPrecedenceEnv: params.lowerPrecedenceEnv }
           : {}),
-        recoverSuspicious: true,
-        allowSuspiciousRecovery: (config, current) => {
-          const blockedConfig = [current, config].find(
-            (candidate) =>
-              !isGatewayRunFutureConfigAllowed({ opts: params.opts, config: candidate }),
-          );
-          if (!blockedConfig) {
-            return true;
-          }
-          blockedRecoveryConfig = blockedConfig;
-          return false;
-        },
       }).catch(() => null),
     );
-  if (blockedRecoveryConfig) {
-    enforceGatewayRunFutureConfigGuard({
-      opts: params.opts,
-      runtime: defaultRuntime,
-      config: blockedRecoveryConfig,
-    });
-  }
   const snapshot: ConfigFileSnapshot | null = snapshotRead?.snapshot ?? null;
   const cfg = snapshot?.config ?? {};
   return {
@@ -401,7 +348,6 @@ function gatewayRunShellEnvFallbackPlanSignature(plan: GatewayRunShellEnvFallbac
 }
 
 async function readGatewayStartupConfigWithShellEnv(params: {
-  opts: GatewayRunOpts;
   startupTrace: ReturnType<typeof createGatewayCliStartupTrace>;
 }): Promise<
   Awaited<ReturnType<typeof readGatewayStartupConfig>> & {
@@ -414,7 +360,6 @@ async function readGatewayStartupConfigWithShellEnv(params: {
     for (let readCount = 0; readCount < GATEWAY_SHELL_ENV_CONVERGENCE_MAX_READS; readCount += 1) {
       const startupConfig = await readGatewayStartupConfig({
         lowerPrecedenceEnv,
-        opts: params.opts,
         startupTrace: params.startupTrace,
       });
       const plan = await resolveGatewayRunShellEnvFallbackPlan(
@@ -715,7 +660,6 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
   gatewayLog.info("loading configuration…");
   const { cfg, lowerPrecedenceEnv, snapshot, startupConfigSnapshotRead } =
     await readGatewayStartupConfigWithShellEnv({
-      opts,
       startupTrace,
     });
   if (
@@ -941,7 +885,6 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
   const guardErrors = getGatewayStartGuardErrors({
     allowUnconfigured: opts.allowUnconfigured,
     configExists,
-    configAuditLocation: CONFIG_AUDIT_STORE_LABEL,
     mode,
   });
   if (guardErrors.length > 0) {

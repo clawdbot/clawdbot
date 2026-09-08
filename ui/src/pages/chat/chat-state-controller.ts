@@ -295,6 +295,9 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
       cancelChatStreamRenderFrame(state);
       cancelChatScroll(state);
       invalidateImageLightbox(state);
+      if (state.sidebarContent?.kind === "loading") {
+        state.sidebarContent = null;
+      }
       clearSessionWorkspaceTimers(state);
       stopChatRealtimeTalk(state);
       state.resetToolStream?.();

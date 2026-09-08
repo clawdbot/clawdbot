@@ -108,6 +108,7 @@ export function registerAuthModesSuite(): void {
       const ws = await openWs(port);
       const res = await connectReq(ws, { token: "secret" });
       expect(res.ok).toBe(true);
+      expect(res.payload).toMatchObject({ auth: { method: "token" } });
       ws.close();
     });
 
@@ -211,7 +212,7 @@ export function registerAuthModesSuite(): void {
       {
         mode: "password" as const,
         envKey: "OPENCLAW_GATEWAY_PASSWORD" as const,
-        expected: "gateway auth mode is password, but no password was configured",
+        expected: "gateway auth password is blank",
       },
     ])("rejects $mode mode before startup when its credential is empty", async (testCase) => {
       const previous = process.env[testCase.envKey];

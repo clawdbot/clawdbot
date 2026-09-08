@@ -1430,7 +1430,8 @@ mktemp() {
 }
 
 tail() {
-  printf "%s\\n" "$*" >"$TMPDIR/tail-seen"
+  [[ "$#" = "3" && "$1" = "-c" && "$2" = "65536" && -p "$3" ]] || return 1
+  printf "%s %s\\n" "$1" "$2" >"$TMPDIR/tail-seen"
   /usr/bin/tail "$@"
 }
 
@@ -1447,15 +1448,15 @@ status="$?"
 set -e
 
 stderr="$(<"$TMPDIR/stderr")"
-[[ "$status" = "125" ]]
-[[ "$stderr" = before\\ Docker* ]]
-[[ "$stderr" = *"NanoCPUs can not be set"* ]]
-[[ "$stderr" = *"Docker E2E resource limits are incompatible with this Docker runtime"* ]]
-[[ "$stderr" = *"OPENCLAW_DOCKER_E2E_DISABLE_RESOURCE_LIMITS=1"* ]]
-[[ "$(grep -c '^run ' "$TMPDIR/docker-seen")" = "1" ]]
-[[ "$(<"$TMPDIR/tail-seen")" = "-c 65536" ]]
-[[ "$(<"$TMPDIR/mktemp-seen")" = -d* ]]
-[[ ! -e "$(<"$TMPDIR/diagnostic-dir")" ]]
+[[ "$status" = "125" ]] || exit 1
+[[ "$stderr" = before\\ Docker* ]] || exit 1
+[[ "$stderr" = *"NanoCPUs can not be set"* ]] || exit 1
+[[ "$stderr" = *"Docker E2E resource limits are incompatible with this Docker runtime"* ]] || exit 1
+[[ "$stderr" = *"OPENCLAW_DOCKER_E2E_DISABLE_RESOURCE_LIMITS=1"* ]] || exit 1
+[[ "$(grep -c '^run ' "$TMPDIR/docker-seen")" = "1" ]] || exit 1
+test "$(<"$TMPDIR/tail-seen")" = "-c 65536"
+[[ "$(<"$TMPDIR/mktemp-seen")" = -d* ]] || exit 1
+[[ ! -e "$(<"$TMPDIR/diagnostic-dir")" ]] || exit 1
 `,
     },
     {
@@ -1484,10 +1485,10 @@ status="$?"
 set -e
 
 stderr="$(<"$TMPDIR/stderr")"
-[[ "$status" = "125" ]]
-[[ "$stderr" = *"No such image: cgroup-helper"* ]]
-[[ "$stderr" != *"OPENCLAW_DOCKER_E2E_DISABLE_RESOURCE_LIMITS"* ]]
-[[ "$(grep -c '^run ' "$TMPDIR/docker-seen")" = "1" ]]
+[[ "$status" = "125" ]] || exit 1
+[[ "$stderr" = *"No such image: cgroup-helper"* ]] || exit 1
+[[ "$stderr" != *"OPENCLAW_DOCKER_E2E_DISABLE_RESOURCE_LIMITS"* ]] || exit 1
+[[ "$(grep -c '^run ' "$TMPDIR/docker-seen")" = "1" ]] || exit 1
 `,
     },
     {
@@ -1507,9 +1508,9 @@ OPENCLAW_DOCKER_E2E_PIDS_LIMIT=many docker_e2e_docker_cmd run demo 2>"$TMPDIR/st
 status="$?"
 set -e
 
-[[ "$status" = "2" ]]
-[[ "$(<"$TMPDIR/stderr")" = *"invalid OPENCLAW_DOCKER_E2E_PIDS_LIMIT: many"* ]]
-[[ ! -e "$TMPDIR/docker-seen" ]]
+[[ "$status" = "2" ]] || exit 1
+[[ "$(<"$TMPDIR/stderr")" = *"invalid OPENCLAW_DOCKER_E2E_PIDS_LIMIT: many"* ]] || exit 1
+[[ ! -e "$TMPDIR/docker-seen" ]] || exit 1
 `,
     },
     {
@@ -1533,9 +1534,9 @@ OPENCLAW_DOCKER_E2E_PIDS_LIMIT=many docker_e2e_docker_run_cmd run demo 2>"$TMPDI
 status="$?"
 set -e
 
-[[ "$status" = "2" ]]
-[[ "$(<"$TMPDIR/stderr")" = *"invalid OPENCLAW_DOCKER_E2E_PIDS_LIMIT: many"* ]]
-[[ ! -e "$TMPDIR/docker-seen" ]]
+[[ "$status" = "2" ]] || exit 1
+[[ "$(<"$TMPDIR/stderr")" = *"invalid OPENCLAW_DOCKER_E2E_PIDS_LIMIT: many"* ]] || exit 1
+[[ ! -e "$TMPDIR/docker-seen" ]] || exit 1
 `,
     },
     {
@@ -1568,11 +1569,11 @@ status="$?"
 set -e
 
 stderr="$(<"$TMPDIR/stderr")"
-[[ "$status" = "125" ]]
-[[ "$stderr" = *"controller pids is not available"* ]]
-[[ "$stderr" = *"Docker E2E resource limits are incompatible with this Docker runtime"* ]]
-[[ "$stderr" = *"OPENCLAW_DOCKER_E2E_DISABLE_RESOURCE_LIMITS=1"* ]]
-[[ "$(grep -c '^run ' "$TMPDIR/docker-seen")" = "1" ]]
+[[ "$status" = "125" ]] || exit 1
+[[ "$stderr" = *"controller pids is not available"* ]] || exit 1
+[[ "$stderr" = *"Docker E2E resource limits are incompatible with this Docker runtime"* ]] || exit 1
+[[ "$stderr" = *"OPENCLAW_DOCKER_E2E_DISABLE_RESOURCE_LIMITS=1"* ]] || exit 1
+[[ "$(grep -c '^run ' "$TMPDIR/docker-seen")" = "1" ]] || exit 1
 `,
     },
     {
@@ -6156,6 +6157,15 @@ source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
     expect(dockerfile).toContain("procps");
   });
 
+  it("copies the pnpm lockfile into the runtime image before normalizing its permissions", () => {
+    const dockerfile = readFileSync("Dockerfile", "utf8");
+    const copy = "COPY --from=runtime-assets --chown=node:node /app/pnpm-lock.yaml .";
+    const chmod = "chmod a+r /app/pnpm-lock.yaml";
+
+    expect(dockerfile).toContain(copy);
+    expect(dockerfile.indexOf(copy)).toBeLessThan(dockerfile.indexOf(chmod));
+  });
+
   it("caches package downloads across prepared Docker E2E image builds", () => {
     const dockerfile = readFileSync("scripts/e2e/Dockerfile", "utf8");
     expect(dockerfile).toContain(
@@ -6197,7 +6207,7 @@ source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
     writeFileSync(join(physicalRoot, "package.json"), '{"name":"openclaw"}');
     writeFileSync(
       join(physicalRoot, "cli.cjs"),
-      'process.stdout.write(require.resolve("@openclaw/fs-safe/package.json"));',
+      'process.stdout.write(require.resolve("@openclaw/fs-safe"));',
     );
     writeFileSync(
       join(fsSafe, "package.json"),
@@ -6205,12 +6215,14 @@ source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
         name: "@openclaw/fs-safe",
         type: "module",
         exports: {
-          "./package.json": "./package.json",
+          ".": "./dist/index.js",
           "./config": "./config.js",
           "./durability": "./durability.js",
         },
       }),
     );
+    mkdirSync(join(fsSafe, "dist"), { recursive: true });
+    writeFileSync(join(fsSafe, "dist/index.js"), "export {};\n");
     writeFileSync(
       join(fsSafe, "config.js"),
       'export function configureFsSafeNative({ mode }) { if (mode !== "off") throw new Error("fixture requires fallback mode"); }',
@@ -6228,7 +6240,7 @@ export async function sha256File(file) {
     symlinkSync(physicalRoot, logicalRoot, process.platform === "win32" ? "junction" : "dir");
     expect(
       execFileSync(process.execPath, [join(logicalRoot, "cli.cjs")], { encoding: "utf8" }),
-    ).toBe(join(fsSafe, "package.json"));
+    ).toBe(join(fsSafe, "dist/index.js"));
     for (const packageRoot of [physicalRoot, logicalRoot]) {
       const result = spawnSync(
         process.execPath,
@@ -7841,6 +7853,19 @@ done
     expect(helper).not.toContain('require("node:readline")');
     expect(helper).not.toContain("fs.readFileSync");
     expect(helper).not.toContain('.split("\\n")');
+  });
+
+  it("accepts the image compatibility alias in installer E2E transcripts", () => {
+    const runner = readFileSync(INSTALL_E2E_RUNNER_PATH, "utf8");
+    const start = runner.indexOf("assert_session_used_tools() {");
+    const end = runner.indexOf("\nsession_jsonl_path()", start);
+    const helper = runner.slice(start, end);
+
+    expect(helper).toContain('spec.split("|").filter(Boolean)');
+    expect(helper).toContain("group.some((tool) => seen.has(tool))");
+    expect(runner).toContain(
+      'assert_session_used_tools "$profile" "$TURN4_SESSION_ID" "image|view_image" write',
+    );
   });
 
   it("exports SQLite-backed installer E2E sessions before scanning tools", () => {

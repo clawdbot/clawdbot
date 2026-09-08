@@ -7,8 +7,11 @@ import type {
 } from "../../gateway/server-methods/types.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import type { PluginOrigin } from "../plugin-origin.types.js";
+import type { DeclaredProviderOwnerIndex } from "../provider-owner-index.js";
 import type { PluginRegistry } from "../registry-types.js";
+import { getPluginRegistryState } from "../runtime-state.js";
 import type { OpenClawPluginNodeWorkspace } from "../types.node-host.js";
+import { getPluginRuntimeLoadContextState } from "./load-context-state.js";
 
 type PluginRuntimeGatewayRequestScope = {
   /** Exact placement owner captured before the local harness begins. */
@@ -51,6 +54,7 @@ type PluginRuntimeGatewayRequestScope = {
   pluginTrustedOfficialInstall?: boolean;
   gatewayMethodDispatchAllowed?: boolean;
   pluginRegistry?: PluginRegistry;
+  declaredProviderOwners?: DeclaredProviderOwnerIndex;
 };
 
 type PluginRuntimePluginScope = {
@@ -176,13 +180,21 @@ export function withPluginRuntimeGatewayContextResolver<T>(
 export function withPluginRuntimeRegistryScope<T>(
   registry: PluginRegistry | undefined,
   run: () => T,
+  declaredProviderOwners?: DeclaredProviderOwnerIndex,
 ): T {
   if (!registry) {
     return run();
   }
   const current = pluginRuntimeGatewayRequestScope.getStore();
   return pluginRuntimeGatewayRequestScope.run(
-    { isWebchatConnect: () => false, ...current, pluginRegistry: registry },
+    {
+      isWebchatConnect: () => false,
+      ...current,
+      pluginRegistry: registry,
+      declaredProviderOwners:
+        declaredProviderOwners ??
+        getPluginRuntimeLoadContextState(registry)?.declaredProviderOwners,
+    },
     run,
   );
 }
@@ -230,4 +242,15 @@ export function getPluginRuntimeGatewayRequestScope():
   | PluginRuntimeGatewayRequestScope
   | undefined {
   return pluginRuntimeGatewayRequestScope.getStore();
+}
+
+/** Reads registration/request/active registry precedence without initializing a cold runtime. */
+export function getPluginRegistryForContext(): PluginRegistry | null {
+  const state = getPluginRegistryState();
+  return (
+    state?.registrationContext?.registry ??
+    getPluginRuntimeGatewayRequestScope()?.pluginRegistry ??
+    state?.activeRegistry ??
+    null
+  );
 }

@@ -2798,27 +2798,78 @@ describe("prepareCliRunContext", () => {
     expect(context.reusableCliSession).toEqual({ mode: "reuse", sessionId: "cli-session" });
   });
 
-  it("invalidates CLI session reuse when explicit message-target policy changes", async () => {
-    const context = await fixture.prepare({
-      sourceReplyDeliveryMode: "message_tool_only",
-      requireExplicitMessageTarget: true,
-      cliSessionBinding: {
-        sessionId: "cli-session",
-        messageToolPolicyHash: hashCliSessionText(
-          JSON.stringify({
-            sourceReplyDeliveryMode: "message_tool_only",
-            requireExplicitMessageTarget: false,
-          }),
-        ),
-      },
-    });
+  it.each([false, true])(
+    "invalidates CLI session reuse when explicit message-target policy changes, stable=%s",
+    async (stable) => {
+      const context = await fixture.prepare({
+        sourceReplyDeliveryMode: "message_tool_only",
+        requireExplicitMessageTarget: true,
+        ...(stable
+          ? {
+              cliSessionBindingFacts: {
+                sourceReplyDeliveryMode: "message_tool_only" as const,
+                requireExplicitMessageTarget: true,
+              },
+            }
+          : {}),
+        cliSessionBinding: {
+          sessionId: "cli-session",
+          messageToolPolicyHash: hashCliSessionText(
+            JSON.stringify({
+              sourceReplyDeliveryMode: "message_tool_only",
+              requireExplicitMessageTarget: false,
+            }),
+          ),
+        },
+      });
 
-    expect(context.messageToolPolicyHash).toBeDefined();
-    expect(context.reusableCliSession).toEqual({
-      mode: "invalidate",
-      invalidatedReason: "message-policy",
-    });
-  });
+      expect(context.messageToolPolicyHash).toBeDefined();
+      expect(context.reusableCliSession).toEqual({
+        mode: "invalidate",
+        invalidatedReason: "message-policy",
+      });
+    },
+  );
+
+  it.each([
+    { trigger: "cron", sessionKey: "agent:main:telegram:group:chat" },
+    { trigger: "heartbeat", sessionKey: "agent:main:main" },
+    { trigger: "heartbeat", sessionKey: "agent:main:subagent:child" },
+  ] as const)(
+    "reuses normal/$trigger/normal CLI bindings for $sessionKey",
+    async ({ trigger, sessionKey }) => {
+      const cliSessionBindingFacts = { extraSystemPromptStatic: "" };
+      const first = await fixture.prepare({ sessionKey, cliSessionBindingFacts });
+      const binding = {
+        sessionId: "cli-session",
+        extraSystemPromptHash: first.extraSystemPromptHash,
+        messageToolPolicyHash: first.messageToolPolicyHash,
+        promptToolNamesHash: first.promptToolNamesHash,
+        cwdHash: first.cwdHash,
+        mcpConfigHash: first.preparedBackend.mcpConfigHash,
+        mcpResumeHash: first.preparedBackend.mcpResumeHash,
+      };
+      const background = await fixture.prepare({
+        sessionKey,
+        cliSessionBindingFacts,
+        trigger,
+        requireExplicitMessageTarget: true,
+        cliSessionBinding: binding,
+      });
+      const normal = await fixture.prepare({
+        sessionKey,
+        cliSessionBindingFacts,
+        cliSessionBinding: binding,
+      });
+      expect(background.params.requireExplicitMessageTarget).toBe(true);
+      expect(background.messageToolPolicyHash).toBe(first.messageToolPolicyHash);
+      expect(background.reusableCliSession).toEqual({ mode: "reuse", sessionId: "cli-session" });
+      expect(normal.reusableCliSession).toEqual({ mode: "reuse", sessionId: "cli-session" });
+      if (!sessionKey.includes(":subagent:")) {
+        expect(first.messageToolPolicyHash).toBeUndefined();
+      }
+    },
+  );
 
   it("requires explicit message targets by default for CLI subagents", async () => {
     const context = await fixture.prepare({
@@ -3060,6 +3111,7 @@ describe("prepareCliRunContext", () => {
           config,
           sessionKey: "main",
           prompt: "first ask",
+          requireExplicitMessageTarget: true,
           extraSystemPrompt: `volatile msg-1\n\n${staticPrompt}`,
           sourceReplyDeliveryMode: "message_tool_only",
           currentMessageId: "msg-1",
@@ -3084,6 +3136,18 @@ describe("prepareCliRunContext", () => {
           },
         });
 
+        expect(resolveMcpLoopbackScopedTools).toHaveBeenNthCalledWith(
+          1,
+          expect.objectContaining({
+            context: expect.objectContaining({ requireExplicitMessageTarget: true }),
+          }),
+        );
+        expect(resolveMcpLoopbackScopedTools).toHaveBeenNthCalledWith(
+          2,
+          expect.objectContaining({
+            context: expect.objectContaining({ requireExplicitMessageTarget: undefined }),
+          }),
+        );
         expect(first.extraSystemPromptHash).toBe(hashCliSessionText(staticPrompt));
         expect(first.messageToolPolicyHash).toBeDefined();
         expect(second.extraSystemPromptHash).toBe(first.extraSystemPromptHash);

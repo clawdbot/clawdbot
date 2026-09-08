@@ -38,7 +38,7 @@ function contextFor(resolution: SessionsResolveResult = { ok: false }, mainKey =
       subscribeEvents: vi.fn(() => () => undefined),
     },
     agents: { state: { agentsList: { mainKey } } },
-    sessions: { list, state: { result: null } },
+    sessions: { list, state: { result: null }, whenCachedRosterSettled: async () => undefined },
   } as unknown as ApplicationContext;
   return { context, list, request };
 }

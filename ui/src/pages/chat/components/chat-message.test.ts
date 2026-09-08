@@ -3206,6 +3206,7 @@ describe("grouped chat rendering", () => {
     expect(activitySummary.getAttribute("aria-expanded")).toBe("false");
     expect(activitySummary.textContent).not.toContain("failed");
     expect(activitySummary.querySelector(".chat-activity-group__badge")).toBeNull();
+    expect(container.querySelector(".chat-tool-msg-body")).toBeNull();
     selectText(expectElement(activitySummary, ".chat-activity-group__label", HTMLElement));
     pointerClick(activitySummary);
     expect(onToggleToolMessageExpanded).not.toHaveBeenCalled();
@@ -3215,34 +3216,6 @@ describe("grouped chat rendering", () => {
 
     expect(onToggleToolMessageExpanded).toHaveBeenCalledWith("activity:tool-group", false);
     container.remove();
-  });
-
-  it("keeps recovered grouped activity collapsed without a failure summary", () => {
-    const container = document.createElement("div");
-    const group = createToolGroup("tool-group", [
-      createMessageEntry(
-        "tool-message-1",
-        createToolResultMessage("call-1", "web_search", JSON.stringify({ error: "No matches" }), {
-          isError: true,
-          timestamp: 1000,
-        }),
-      ),
-      createMessageEntry(
-        "tool-message-2",
-        createToolResultMessage("call-2", "read_file", "Fallback context", {
-          timestamp: 1001,
-        }),
-      ),
-    ]);
-
-    renderMessageGroups(container, [group]);
-
-    expect(container.querySelector(".chat-activity-group.is-open")).toBeNull();
-    expect(container.querySelector(".chat-activity-group__summary--error")).toBeNull();
-    expect(container.querySelector(".chat-activity-group__label")?.textContent).not.toContain(
-      "failed",
-    );
-    expect(container.querySelector(".chat-tool-msg-body")).toBeNull();
   });
 
   it("keeps recovered coalesced tool failures neutral in the activity list", () => {

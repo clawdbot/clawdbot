@@ -1,186 +1,44 @@
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { UPDATE_RUN_PHASES } from "../../packages/gateway-protocol/src/update-run-vocabulary.js";
-import { resolveStateDir } from "../config/paths.js";
-import { redactSensitiveText } from "../logging/redact.js";
-import { escapeRegExp } from "../shared/regexp.js";
+import {
+  UPDATE_RUN_DRIVER_LIMIT,
+  UPDATE_RUN_PHASES,
+} from "../../packages/gateway-protocol/src/update-run-vocabulary.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db-contract.js";
 import { withExistingOpenClawStateDatabaseArtifactPreservingReadOnly } from "../state/openclaw-state-db-readonly.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
-import type { DB, UpdateRuns } from "../state/openclaw-state-db.generated.js";
+import type { DB } from "../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
-import { resolveRequiredHomeDir } from "./home-dir.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
+import {
+  inspectUpdateRunAbandonment,
+  isStaleIdentitylessUpdateRun,
+  recordedUpdateRunDrivers,
+} from "./update-run-activity.js";
+import {
+  decodeRun,
+  encodeRun,
+  isRetainedStep,
+  type UpdateRunLedgerOptions as LedgerOptions,
+} from "./update-run-codec.js";
+import {
+  inspectUpdateRunDriver,
+  readUpdateRunDriver,
+  sameUpdateRunDriver,
+  type UpdateRunDriver,
+} from "./update-run-driver.js";
 import type { UpdateRunRecord, UpdateRunPhase, UpdateRunStep } from "./update-run-record.js";
-import { UpdateRunRecordSchema } from "./update-run-schema.js";
+import { ABANDONED_UPDATE_RUN_MS } from "./update-run-timeouts.js";
 
-const JSON_BYTES = 16 * 1024;
-const RETAINED_STEP_NAMES = [
-  ...UPDATE_RUN_PHASES,
-  "notice:ack",
-  "notice:activating",
-  "notice:verifying",
-  "previous generation restoration",
-];
-const JSON_FIELDS = [
-  "origin",
-  "target",
-  "before",
-  "after",
-  "steps",
-  "verification",
-  "repair",
-] as const;
 type LedgerDatabase = Pick<DB, "update_runs">;
-type LedgerOptions = OpenClawStateDatabaseOptions & { redactPaths?: readonly string[] };
 type RunPatch = Partial<
   Pick<UpdateRunRecord, "origin" | "target" | "before" | "after" | "trigger">
 >;
-
-function mapJsonText(value: unknown, transform: (text: string) => string): unknown {
-  if (typeof value === "string") {
-    return transform(value);
-  }
-  if (Array.isArray(value)) {
-    return value.map((entry) => mapJsonText(entry, transform));
-  }
-  if (isRecord(value)) {
-    return Object.fromEntries(
-      Object.keys(value)
-        .toSorted()
-        .map((key) => [key, mapJsonText(value[key], transform)]),
-    );
-  }
-  return value;
-}
-
-function isRetainedStep(item: unknown): boolean {
-  return isRecord(item) && RETAINED_STEP_NAMES.some((name) => name === item.step);
-}
-
-/** Phase history, notice custody, and restoration proof survive diagnostic eviction. */
-function boundedJson(input: unknown): string {
-  let value = input;
-  let json = JSON.stringify(value);
-  while (Buffer.byteLength(json) > JSON_BYTES) {
-    if (Array.isArray(value)) {
-      const disposable = value.findIndex((item) => !isRetainedStep(item));
-      if (disposable >= 0) {
-        value = value.toSpliced(disposable, 1);
-      } else {
-        // Reserved identities and timestamps fit; discard optional diagnostics
-        // before losing phase history, notice custody, or restoration proof.
-        value = value.map((item) => (isRecord(item) ? { ...item, detail: undefined } : item));
-      }
-    } else if (isRecord(value)) {
-      const object = value;
-      const key = Object.keys(object)
-        .toSorted()
-        .find((field) => Array.isArray(object[field]) && object[field].length > 0);
-      const array = key ? object[key] : undefined;
-      if (key && Array.isArray(array)) {
-        value = { ...object, [key]: array.slice(1) };
-      } else {
-        value = mapJsonText(value, (text) => truncateUtf16Safe(text, Math.floor(text.length / 2)));
-      }
-    } else {
-      throw new Error("Update run metadata exceeds its bounded schema");
-    }
-    json = JSON.stringify(value);
-  }
-  return json;
-}
-
-function encodeRun(input: UpdateRunRecord, options: LedgerOptions): UpdateRuns {
-  const env = options.env ?? process.env;
-  // Home-relative selectors remain actionable in reports. Other captured roots
-  // are diagnostic only; model refs, slash commands, and URLs are not paths.
-  const roots: [string | undefined, string][] = [
-    [resolveRequiredHomeDir(env), "~"],
-    [env.HOME, "~"],
-    [env.USERPROFILE, "~"],
-    [resolveStateDir(env), "$OPENCLAW_STATE_DIR"],
-    [env.OPENCLAW_CONFIG_PATH, "[path]"],
-    ...(options.redactPaths ?? []).map((root): [string, string] => [root, "[path]"]),
-  ];
-  const redactPaths: [RegExp, string][] = roots.flatMap(([root, replacement]) => {
-    if (!root) {
-      return [];
-    }
-    const prefix = root
-      .replaceAll("\\", "/")
-      .replace(/\/+$/u, "")
-      .split("/")
-      .map(escapeRegExp)
-      .join("[\\\\/]");
-    const flags = /^(?:[A-Za-z]:|\\\\)/u.test(root) ? "giu" : "gu";
-    return prefix
-      ? [
-          [
-            new RegExp(
-              `(?<!https?:)(?:(?<![\\w/])|(?<=file:///?))${prefix}(?=$|[\\\\/\\s"'<>.,;:)])`,
-              flags,
-            ),
-            replacement,
-          ],
-        ]
-      : [];
-  });
-  const record = UpdateRunRecordSchema.parse(
-    mapJsonText(input, (value) => {
-      let text = redactSensitiveText(value, { mode: "tools" });
-      for (const [pattern, replacement] of redactPaths) {
-        text = text.replace(pattern, () => replacement);
-      }
-      return truncateUtf16Safe(text, 1024);
-    }),
-  );
-  return {
-    run_id: record.runId,
-    created_at_ms: record.createdAtMs,
-    updated_at_ms: record.updatedAtMs,
-    trigger: record.trigger,
-    phase: record.phase,
-    status: record.status,
-    reason: record.reason,
-    origin_json: boundedJson(record.origin),
-    target_json: boundedJson(record.target),
-    before_json: boundedJson(record.before),
-    after_json: boundedJson(record.after),
-    steps_json: boundedJson(record.steps),
-    verification_json: boundedJson(record.verification),
-    repair_json: boundedJson(record.repair),
-    confirmed_at_ms: record.confirmedAtMs,
-    finished_at_ms: record.finishedAtMs,
-    downtime_ms: record.downtimeMs,
-  };
-}
-
-function decodeRun(row: UpdateRuns): UpdateRunRecord {
-  const metadata = Object.fromEntries(
-    JSON_FIELDS.map((field) => [field, JSON.parse(row[`${field}_json`])]),
-  );
-  return UpdateRunRecordSchema.parse({
-    ...metadata,
-    runId: row.run_id,
-    createdAtMs: row.created_at_ms,
-    updatedAtMs: row.updated_at_ms,
-    trigger: row.trigger,
-    phase: row.phase,
-    status: row.status,
-    reason: row.reason,
-    confirmedAtMs: row.confirmed_at_ms,
-    finishedAtMs: row.finished_at_ms,
-    downtimeMs: row.downtime_ms,
-  });
-}
 
 const schemaStart = OPENCLAW_STATE_SCHEMA_SQL.indexOf("CREATE TABLE IF NOT EXISTS update_runs (");
 const schemaEndMarker = "ON update_runs(status, created_at_ms DESC, run_id);";
@@ -220,6 +78,23 @@ function writeRun<T>(operation: (db: DatabaseSync) => T, options: OpenClawStateD
   return result;
 }
 
+function persistRun(
+  db: DatabaseSync,
+  record: UpdateRunRecord,
+  options: LedgerOptions,
+): UpdateRunRecord {
+  record.updatedAtMs = Math.max(Date.now(), record.updatedAtMs + 1);
+  const row = encodeRun(record, options);
+  executeSqliteQuerySync(
+    db,
+    getNodeSqliteKysely<LedgerDatabase>(db)
+      .updateTable("update_runs")
+      .set(row)
+      .where("run_id", "=", record.runId),
+  );
+  return decodeRun(row);
+}
+
 function mutateRun(
   runId: string,
   update: (record: UpdateRunRecord) => void,
@@ -235,21 +110,16 @@ function mutateRun(
     if (before === JSON.stringify(record)) {
       return record;
     }
-    record.updatedAtMs = Math.max(Date.now(), record.updatedAtMs + 1);
-    const row = encodeRun(record, options);
-    executeSqliteQuerySync(
-      db,
-      getNodeSqliteKysely<LedgerDatabase>(db)
-        .updateTable("update_runs")
-        .set(row)
-        .where("run_id", "=", runId),
-    );
-    return decodeRun(row);
+    return persistRun(db, record, options);
   }, options);
 }
 
 export function createUpdateRun(
-  input: RunPatch & { runId?: string; trigger: UpdateRunRecord["trigger"] },
+  input: RunPatch & {
+    runId?: string;
+    trigger: UpdateRunRecord["trigger"];
+    supersedeStaleIdentityless?: boolean;
+  },
   options: LedgerOptions = {},
 ): UpdateRunRecord {
   const now = Date.now();
@@ -280,6 +150,29 @@ export function createUpdateRun(
     if (existing) {
       return existing;
     }
+    // Only an explicit new CLI invocation may supersede the single legacy run.
+    // Selection, activity recheck, terminalization, and admission share this transaction.
+    if (input.supersedeStaleIdentityless && !input.runId && input.trigger === "cli") {
+      const active = executeSqliteQuerySync(
+        db,
+        getNodeSqliteKysely<LedgerDatabase>(db)
+          .selectFrom("update_runs")
+          .selectAll()
+          .where("status", "=", "running")
+          .limit(2),
+      ).rows;
+      const previous = active.length === 1 && active[0] ? decodeRun(active[0]) : undefined;
+      if (previous && isStaleIdentitylessUpdateRun(previous)) {
+        upsertStep(previous, {
+          step: "reconcile:superseded",
+          status: "failed",
+          endedAtMs: now,
+          detail: "operator-started-update-supersedes-inactive-identityless-run",
+        });
+        finishRunRecord(previous, { status: "failed", reason: "superseded" });
+        persistRun(db, previous, options);
+      }
+    }
     executeSqliteQuerySync(
       db,
       getNodeSqliteKysely<LedgerDatabase>(db).insertInto("update_runs").values(row),
@@ -297,8 +190,192 @@ function upsertStep(record: UpdateRunRecord, step: UpdateRunStep): void {
   }
   while (record.steps.length > 128) {
     const disposable = record.steps.findIndex((entry) => !isRetainedStep(entry));
+    if (disposable < 0) {
+      throw new Error("Update run retained steps exceed the step limit");
+    }
     record.steps.splice(disposable, 1);
   }
+}
+
+/** Adoption is explicit: reading or reserving an existing run does not make this process its driver. */
+export function adoptUpdateRun(runId: string, options: LedgerOptions = {}): UpdateRunRecord {
+  const driver = readUpdateRunDriver();
+  let identityUnavailable = false;
+  const adopted = mutateRun(
+    runId,
+    (record) => {
+      if (record.status !== "running") {
+        throw new Error(`Update run ${runId} is already ${record.status}; it cannot be adopted.`);
+      }
+      if (!driver) {
+        if (!record.steps.some((step) => step.step === "driver:identity-unavailable")) {
+          // Retain known parents, but their death cannot prove this adopter exited.
+          upsertStep(record, {
+            step: "driver:identity-unavailable",
+            status: "completed",
+            endedAtMs: Date.now(),
+          });
+          identityUnavailable = true;
+        }
+        return;
+      }
+      const previousDrivers: UpdateRunDriver[] = [];
+      for (const previous of recordedUpdateRunDrivers(record)) {
+        if (
+          !sameUpdateRunDriver(previous, driver) &&
+          !previousDrivers.some((retained) => sameUpdateRunDriver(retained, previous)) &&
+          inspectUpdateRunDriver(previous) !== "dead"
+        ) {
+          previousDrivers.push(previous);
+        }
+      }
+      if (previousDrivers.length >= UPDATE_RUN_DRIVER_LIMIT) {
+        throw new Error(
+          `Update run ${runId} has too many live or unobservable drivers; adoption refused.`,
+        );
+      }
+      const retained = record.origin.previousDrivers ?? [];
+      if (
+        record.origin.driver &&
+        sameUpdateRunDriver(record.origin.driver, driver) &&
+        record.steps.some((step) => step.step === "driver:adopted") &&
+        retained.length === previousDrivers.length &&
+        retained.every((previous, index) => {
+          const next = previousDrivers[index];
+          return next !== undefined && sameUpdateRunDriver(previous, next);
+        })
+      ) {
+        return;
+      }
+      record.origin.driver = driver;
+      record.origin.previousDrivers = previousDrivers.length ? previousDrivers : undefined;
+      upsertStep(record, { step: "driver:adopted", status: "completed", endedAtMs: Date.now() });
+    },
+    options,
+  );
+  if (identityUnavailable) {
+    console.warn(
+      "[update] Driver identity recording is unavailable. The update will continue; this run requires explicit recovery if it stops reporting progress.",
+    );
+  }
+  return adopted;
+}
+
+/** Retained orchestrators can renew their children; pruned identities cannot. */
+export function heartbeatUpdateRun(
+  runId: string,
+  driver: UpdateRunDriver | undefined,
+  options: LedgerOptions = {},
+): void {
+  if (!driver) {
+    return;
+  }
+  mutateRun(
+    runId,
+    (record) => {
+      if (
+        record.status === "running" &&
+        recordedUpdateRunDrivers(record).some((current) => sameUpdateRunDriver(current, driver))
+      ) {
+        record.updatedAtMs = Math.max(Date.now(), record.updatedAtMs + 1);
+      }
+    },
+    options,
+  );
+}
+
+/** Record the operator's successful ledger-only repair without changing the failed outcome. */
+export function acknowledgeAbandonedUpdateRun(runId: string, options: LedgerOptions = {}): void {
+  mutateRun(
+    runId,
+    (record) => {
+      if (
+        record.status === "failed" &&
+        record.reason === "abandoned" &&
+        !record.steps.some((step) => step.step === "reconcile:acknowledged")
+      ) {
+        upsertStep(record, {
+          step: "reconcile:acknowledged",
+          status: "completed",
+          endedAtMs: Date.now(),
+        });
+      }
+    },
+    options,
+  );
+}
+
+/** The writer rechecks activity and process identity in the same transaction as terminalization. */
+export function reconcileAbandonedUpdateRuns(
+  input: { explicit?: boolean; runIds?: readonly string[]; requireAllActive?: boolean } = {},
+  options: LedgerOptions = {},
+): UpdateRunRecord[] {
+  if (input.runIds?.length === 0) {
+    return [];
+  }
+  const candidates =
+    withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(({ db }) => {
+      if (!tableExists(db, "update_runs")) {
+        return [];
+      }
+      let query = getNodeSqliteKysely<LedgerDatabase>(db)
+        .selectFrom("update_runs")
+        .select("run_id")
+        .where("status", "=", "running");
+      if (!input.explicit) {
+        query = query.where("updated_at_ms", "<", Date.now() - ABANDONED_UPDATE_RUN_MS);
+      }
+      if (input.runIds) {
+        query = query.where("run_id", "in", [...input.runIds]);
+      }
+      return executeSqliteQuerySync(db, query.orderBy("run_id")).rows;
+    }, options) ?? [];
+  if (!candidates.length) {
+    return [];
+  }
+  return writeRun((db) => {
+    if (
+      input.requireAllActive &&
+      executeSqliteQueryTakeFirstSync(
+        db,
+        getNodeSqliteKysely<LedgerDatabase>(db)
+          .selectFrom("update_runs")
+          .select("run_id")
+          .where("status", "=", "running")
+          .where(
+            "run_id",
+            "not in",
+            candidates.map((candidate) => candidate.run_id),
+          )
+          .limit(1),
+      )
+    ) {
+      return [];
+    }
+    const selected = candidates.flatMap((candidate) => {
+      const record = readRun(db, candidate.run_id);
+      return record?.status === "running"
+        ? [{ record, rule: inspectUpdateRunAbandonment(record, input) }]
+        : [];
+    });
+    // Operator recovery is one selection: renewed activity preserves every selected row.
+    if (input.explicit && selected.some(({ rule }) => !rule)) {
+      return [];
+    }
+    return selected.flatMap(({ record, rule }) => {
+      if (!rule) {
+        return [];
+      }
+      upsertStep(record, {
+        step: "reconcile:abandoned",
+        status: "failed",
+        endedAtMs: Date.now(),
+        detail: rule,
+      });
+      finishRunRecord(record, { status: "failed", reason: "abandoned" });
+      return [persistRun(db, record, options)];
+    });
+  }, options);
 }
 
 export function recordUpdateRunPhase(
@@ -402,36 +479,37 @@ export function finishUpdateRun(
   },
   options: LedgerOptions = {},
 ): UpdateRunRecord {
-  return mutateRun(
-    runId,
-    (record) => {
-      // CLI and the new Gateway may finish together. The first durable terminal outcome wins.
-      if (record.status !== "running") {
-        return;
-      }
-      const now = Date.now();
-      // A thrown command or interrupted updater can miss its completion callback.
-      // Terminal runs cannot retain live steps after their lifecycle closes.
-      for (const step of record.steps) {
-        if (step.step === record.phase || step.status === "in_progress") {
-          step.status =
-            result.status === "failed"
-              ? "failed"
-              : result.status === "skipped"
-                ? "skipped"
-                : "completed";
-          step.endedAtMs = now;
-        }
-      }
-      record.status = result.status;
-      record.phase = "finished";
-      record.reason = result.reason ?? null;
-      record.finishedAtMs = now;
-      record.after = { ...record.after, ...result.after };
-      record.downtimeMs = result.downtimeMs ?? record.downtimeMs;
-    },
-    options,
-  );
+  return mutateRun(runId, (record) => finishRunRecord(record, result), options);
+}
+
+function finishRunRecord(
+  record: UpdateRunRecord,
+  result: Parameters<typeof finishUpdateRun>[1],
+): void {
+  // CLI and the new Gateway may finish together. The first durable terminal outcome wins.
+  if (record.status !== "running") {
+    return;
+  }
+  const now = Date.now();
+  // A thrown command or interrupted updater can miss its completion callback.
+  // Terminal runs cannot retain live steps after their lifecycle closes.
+  for (const step of record.steps) {
+    if (step.step === record.phase || step.status === "in_progress") {
+      step.status =
+        result.status === "failed"
+          ? "failed"
+          : result.status === "skipped"
+            ? "skipped"
+            : "completed";
+      step.endedAtMs = now;
+    }
+  }
+  record.status = result.status;
+  record.phase = "finished";
+  record.reason = result.reason ?? null;
+  record.finishedAtMs = now;
+  record.after = { ...record.after, ...result.after };
+  record.downtimeMs = result.downtimeMs ?? record.downtimeMs;
 }
 
 export function recordUpdateRunVerification(

@@ -208,13 +208,13 @@ function readFirstInstallPlanArg(): Record<string, unknown> {
 }
 
 function readFirstConfigWriteParams(): {
-  nextConfig?: { gateway?: { mode?: string; auth?: { token?: string } } };
+  sourceConfig?: { gateway?: { mode?: string; auth?: { token?: string } } };
 } {
   const [params] = replaceConfigFileMock.mock.calls[0] ?? [];
   if (!params || typeof params !== "object") {
     throw new Error("expected first config write params");
   }
-  return params as { nextConfig?: { gateway?: { mode?: string; auth?: { token?: string } } } };
+  return params as { sourceConfig?: { gateway?: { mode?: string; auth?: { token?: string } } } };
 }
 
 function readFirstNodeStartupTlsEnvironmentArg(): Record<string, unknown> {
@@ -481,7 +481,7 @@ describe("runDaemonInstall", () => {
     expect(actionState.failed).toStrictEqual([]);
     expect(replaceConfigFileMock).toHaveBeenCalledTimes(1);
     const writeParams = readFirstConfigWriteParams();
-    expect(writeParams.nextConfig?.gateway?.auth?.token).toBe("minted-token");
+    expect(writeParams.sourceConfig?.gateway?.auth?.token).toBe("minted-token");
     expectFields(readFirstInstallPlanArg(), { port: 18789 });
     expectFirstInstallPlanCallOmitsToken();
     expect(installDaemonServiceAndEmitMock).toHaveBeenCalledTimes(1);
@@ -517,7 +517,7 @@ describe("runDaemonInstall", () => {
 
     expect(actionState.failed).toStrictEqual([]);
     expect(replaceConfigFileMock).toHaveBeenCalledTimes(1);
-    expect(readFirstConfigWriteParams().nextConfig?.gateway?.mode).toBe("local");
+    expect(readFirstConfigWriteParams().sourceConfig?.gateway?.mode).toBe("local");
     expect(actionState.warnings).toContain(
       "No gateway.mode found. Set gateway.mode=local for managed gateway install.",
     );

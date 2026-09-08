@@ -24,7 +24,10 @@ import {
   resolveCatalog,
   visibleCatalogEntries,
 } from "./tool-search-catalog.js";
-import { renderToolSearchControlText } from "./tool-search-control-result.js";
+import {
+  renderToolSearchControlText,
+  serializeToolSearchControlResult,
+} from "./tool-search-control-result.js";
 import {
   buildLexicalIndex,
   readParameterText,
@@ -51,7 +54,7 @@ import type {
   UnknownToolErrorOptions,
   UnknownToolRecoverySurface,
 } from "./tool-search-types.js";
-import { asToolParamsRecord, jsonResult, ToolInputError } from "./tools/common.js";
+import { asToolParamsRecord, textResult, ToolInputError } from "./tools/common.js";
 
 function describeEntry(entry: ToolSearchCatalogEntry) {
   return {
@@ -655,18 +658,21 @@ export class ToolSearchRuntime {
 export function formatToolSearchControlResult<T>(
   payload: T,
   runtime: ToolSearchRuntime | undefined,
-  parentToolCallId?: string,
-  terminalBatchStatus?: "waiting" | "completed" | "failed",
+  options: {
+    parentToolCallId?: string;
+    terminalBatchStatus?: "waiting" | "completed" | "failed";
+    compact?: boolean;
+  } = {},
 ): AgentToolResult<T> {
-  let result: AgentToolResult<T> = jsonResult(payload);
-  const content = result.content[0];
-  if (runtime?.hasNetworkContent(parentToolCallId) && content?.type === "text") {
-    const { text } = renderToolSearchControlText(content.text, true);
-    result = { ...result, content: [{ ...content, text }] };
-  }
+  const serialized = serializeToolSearchControlResult(payload, options.compact);
+  const { text } = renderToolSearchControlText(
+    serialized,
+    runtime?.hasNetworkContent(options.parentToolCallId) ?? false,
+  );
+  const result = textResult(text, payload);
   const terminal =
-    terminalBatchStatus !== "waiting" &&
-    runtime?.takeTerminalTargetBatch(parentToolCallId) === true;
+    options.terminalBatchStatus !== "waiting" &&
+    runtime?.takeTerminalTargetBatch(options.parentToolCallId) === true;
   // A failed guest cannot revoke an already completed tool's explicit terminal outcome.
   return terminal ? { ...result, terminate: true } : result;
 }

@@ -50,7 +50,7 @@ extensions/browser/src/browser-tool-session-tabs.ts	3
 extensions/browser/src/browser-tool.actions.ts	14
 extensions/browser/src/browser-tool.snapshot.ts	2
 extensions/browser/src/browser-tool.ts	6
-extensions/browser/src/browser/bridge-server.ts	3
+extensions/browser/src/browser/bridge-server.ts	2
 extensions/browser/src/browser/cdp-page-session.ts	3
 extensions/browser/src/browser/cdp-proxy-bypass.ts	1
 extensions/browser/src/browser/cdp-websocket.ts	2
@@ -117,7 +117,6 @@ extensions/browser/src/cli/browser-cli-shared.ts	1
 extensions/browser/src/cli/browser-cli-state.ts	1
 extensions/browser/src/gateway/browser-request.ts	4
 extensions/browser/src/node-host/invoke-browser.ts	5
-extensions/browser/src/server.ts	1
 extensions/browser/test-fetch.ts	2
 extensions/buzz/src/directory-state.ts	1
 extensions/buzz/src/gateway.ts	1
@@ -1888,7 +1887,6 @@ src/agents/provider-attribution.ts	14
 src/agents/provider-auth-aliases.ts	1
 src/agents/provider-http-errors.ts	1
 src/agents/provider-local-service.ts	4
-src/agents/provider-model-normalization.runtime.ts	1
 src/agents/provider-model-route.ts	1
 src/agents/provider-request-config.ts	6
 src/agents/provider-secret-egress.ts	3
@@ -2101,7 +2099,7 @@ src/auto-reply/reply/commands-reset.ts	1
 src/auto-reply/reply/commands-setunset-standard.ts	3
 src/auto-reply/reply/commands-subagents/action-log.ts	1
 src/auto-reply/reply/commands-system-prompt.ts	2
-src/auto-reply/reply/config-mutations.ts	3
+src/auto-reply/reply/config-mutations.ts	1
 src/auto-reply/reply/conversation-turn-capture.ts	2
 src/auto-reply/reply/directive-handling.impl.ts	2
 src/auto-reply/reply/directive-handling.levels.ts	9
@@ -2296,7 +2294,6 @@ src/cli/gateway-cli/qa-parent-watchdog.ts	3
 src/cli/gateway-cli/register.ts	4
 src/cli/gateway-cli/run.ts	12
 src/cli/gateway-cli/suspend-cli.ts	2
-src/cli/hooks-cli.ts	1
 src/cli/logs-cli.ts	1
 src/cli/mcp-cli.ts	1
 src/cli/models-cli.ts	19
@@ -2374,8 +2371,8 @@ src/commands/backup-verify.ts	2
 src/commands/channel-setup/config-compatibility.ts	2
 src/commands/channel-setup/discovery.ts	10
 src/commands/channel-test-registry.ts	2
-src/commands/channels/add-wizard.ts	2
-src/commands/channels/add.ts	3
+src/commands/channels/add-wizard.ts	1
+src/commands/channels/add.ts	2
 src/commands/channels/capabilities.ts	4
 src/commands/channels/list.ts	1
 src/commands/channels/status.runtime.ts	9
@@ -2398,7 +2395,7 @@ src/commands/doctor-config-preflight.cron.ts	4
 src/commands/doctor-db-bloat.ts	1
 src/commands/doctor-gateway-services.ts	1
 src/commands/doctor-heartbeat-main-session-repair.ts	1
-src/commands/doctor-heartbeat-scratch-migration.ts	6
+src/commands/doctor-heartbeat-scratch-migration.ts	5
 src/commands/doctor-main-session-recovery.ts	1
 src/commands/doctor-model-catalog-credentials.ts	1
 src/commands/doctor-plugin-model-catalog.ts	1
@@ -2534,7 +2531,7 @@ src/config/io.clobber-snapshot.ts	2
 src/config/io.context.ts	1
 src/config/io.health-state.ts	1
 src/config/io.load.ts	2
-src/config/io.observe-recovery.ts	11
+src/config/io.observe-recovery.ts	7
 src/config/io.observe.ts	1
 src/config/io.read-helpers.ts	3
 src/config/io.session-store-owner.ts	2
@@ -2565,7 +2562,7 @@ src/config/plugins-allowlist.ts	1
 src/config/redact-snapshot.ts	4
 src/config/runtime-overrides.ts	2
 src/config/runtime-snapshot.ts	1
-src/config/runtime-source-projection.ts	4
+src/config/runtime-source-projection.ts	3
 src/config/schema.ts	1
 src/config/sessions/archive-compression.ts	1
 src/config/sessions/cleanup-service.ts	3
@@ -2588,7 +2585,6 @@ src/config/sessions/session-accessor.sqlite-delta.ts	2
 src/config/sessions/session-accessor.sqlite-entry-availability.ts	1
 src/config/sessions/session-accessor.sqlite-entry-cache.ts	2
 src/config/sessions/session-accessor.sqlite-entry.ts	1
-src/config/sessions/session-accessor.sqlite-history-events.ts	2
 src/config/sessions/session-accessor.sqlite-message-cut.ts	1
 src/config/sessions/session-accessor.sqlite-parent-fork.ts	1
 src/config/sessions/session-accessor.sqlite-read.ts	12
@@ -2887,7 +2883,7 @@ src/gateway/server/ws-connection/message-handler.ts	10
 src/gateway/session-compaction-checkpoints.ts	7
 src/gateway/session-companion-context.ts	6
 src/gateway/session-companion-rpc.ts	3
-src/gateway/session-history-state.ts	3
+src/gateway/session-history-state.ts	2
 src/gateway/session-lifecycle-state.ts	1
 src/gateway/session-observer-rpc.ts	1
 src/gateway/session-recovery-service.ts	2
@@ -3317,7 +3313,7 @@ src/plugins/config-normalization-shared.ts	1
 src/plugins/config-schema.ts	6
 src/plugins/contracts/inventory/bundled-capability-metadata.ts	3
 src/plugins/contracts/registry.ts	1
-src/plugins/contracts/tts-contract-suites.ts	31
+src/plugins/contracts/tts-contract-suites.ts	19
 src/plugins/conversation-binding.ts	1
 src/plugins/current-plugin-metadata-snapshot.ts	1
 src/plugins/dashboard-capabilities.ts	1
@@ -3792,7 +3788,7 @@ ui/src/components/onboarding-memory-import.ts	1
 ui/src/components/panel-tab-strip.ts	4
 ui/src/components/select-picker.ts	3
 ui/src/components/sensitive-input.ts	2
-ui/src/components/session-data-controller.ts	2
+ui/src/components/session-data-controller.ts	1
 ui/src/components/session-data-scroll-controller.ts	1
 ui/src/components/session-group-defaults-dialog.ts	1
 ui/src/components/session-organizer-controller.ts	5

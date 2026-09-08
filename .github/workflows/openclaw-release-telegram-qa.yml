@@ -1626,6 +1626,48 @@ jobs:
             chmod -R a+rX,go-w "$OPENCLAW_BUNDLED_PLUGINS_DIR"
           fi
 
+          if [[ "$requested_config_path" == "$config_path" ]]; then
+            # Doctor owns a writable runtime copy; the scenario's source stays immutable.
+            # Keep generation receipts outside SUT state so a canonical mutation always
+            # refreshes the copy, while an unchanged source preserves Doctor repairs.
+            projection_dir="${OPENCLAW_STATE_DIR}/qa-runtime-config"
+            generation_dir="${RUNTIME_ROOT}/config-generations"
+            install -d -o root -g root -m 0700 "$generation_dir"
+            generation_key="$(printf %s "$config_path" | sha256sum | cut -d ' ' -f1)"
+            generation_path="${generation_dir}/${generation_key}"
+            config_generation="$(sha256sum "$config_path" | cut -d ' ' -f1)"
+            previous_generation=""
+            if [[ -e "$generation_path" ]]; then
+              [[ "$(stat -c '%F:%a:%u:%g' "$generation_path")" == "regular file:600:0:0" ]]
+              previous_generation="$(<"$generation_path")"
+            fi
+            if [[ "$previous_generation" != "$config_generation" || ! -e "$projection_dir/openclaw.json" ]]; then
+              # Only the unprivileged SUT writes below its private state root.
+              /usr/bin/setpriv --reuid="$SUT_UID" --regid="$SUT_GID" \
+                --clear-groups --no-new-privs --inh-caps=-all --ambient-caps=-all --bounding-set=-all \
+                /usr/bin/env -i PATH=/usr/bin:/bin /bin/bash -ceu '
+                  umask 077
+                  source_config="$1"
+                  projection_dir="$2"
+                  expected_generation="$3"
+                  mkdir -p "$projection_dir"
+                  [[ -d "$projection_dir" && ! -L "$projection_dir" &&
+                        "$(realpath -e "$projection_dir")" == "$projection_dir" ]]
+                  projection_tmp="$(mktemp "$projection_dir/.seed.XXXXXX")"
+                  trap '\''rm -f "$projection_tmp"'\'' EXIT
+                  cat "$source_config" >"$projection_tmp"
+                  [[ "$(sha256sum "$projection_tmp" | cut -d " " -f1)" == "$expected_generation" ]]
+                  mv -T "$projection_tmp" "$projection_dir/openclaw.json"
+                ' openclaw-config-projection "$config_path" "$projection_dir" "$config_generation"
+              [[ "$(sha256sum "$config_path" | cut -d ' ' -f1)" == "$config_generation" ]]
+              generation_tmp="$(mktemp "$generation_dir/.generation.XXXXXX")"
+              printf %s "$config_generation" >"$generation_tmp"
+              chmod 0600 "$generation_tmp"
+              mv -T "$generation_tmp" "$generation_path"
+            fi
+            export OPENCLAW_CONFIG_PATH="$projection_dir/openclaw.json"
+          fi
+
           boundary_mode=false
           for key in "${control_keys[@]}"; do
             if declare -p "$key" >/dev/null 2>&1; then
@@ -1851,8 +1893,14 @@ jobs:
                           -r "${CANONICAL_CONFIG_PATH:?}" &&
                           ! -w "$CANONICAL_CONFIG_PATH" ]]
                     if [[ "$OPENCLAW_CONFIG_PATH" != "$CANONICAL_CONFIG_PATH" ]]; then
-                      [[ "${1:-}" == "models" && "${2:-}" == "auth" &&
-                            -r "$OPENCLAW_CONFIG_PATH" && -w "$OPENCLAW_CONFIG_PATH" ]]
+                      [[ -r "$OPENCLAW_CONFIG_PATH" && -w "$OPENCLAW_CONFIG_PATH" &&
+                            ! -L "$OPENCLAW_CONFIG_PATH" ]]
+                      case "$OPENCLAW_CONFIG_PATH" in
+                        "${OPENCLAW_STATE_DIR}/qa-runtime-config/openclaw.json") ;;
+                        "${OPENCLAW_STATE_DIR}/qa-auth-bootstrap/openclaw.json")
+                          [[ "${1:-}" == "models" && "${2:-}" == "auth" ]] ;;
+                        *) exit 1 ;;
+                      esac
                     fi
                     [[ -d "${CANDIDATE_ARTIFACTS_DIR:?}" && -r "$CANDIDATE_ARTIFACTS_DIR" && -x "$CANDIDATE_ARTIFACTS_DIR" && ! -w "$CANDIDATE_ARTIFACTS_DIR" ]]
                     for writable_path in \

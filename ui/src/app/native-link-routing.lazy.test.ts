@@ -58,6 +58,11 @@ it("loads the native menu only on demand and opens only the latest right-click w
   expect(document.querySelector("openclaw-native-link-menu")).toBeNull();
   menuLoad.ready.resolve();
   await vi.dynamicImportSettled();
+  // showMenu appends in the continuation after its awaited import; that microtask can run
+  // after dynamicImportSettled resolves, so wait for the element instead of assuming it.
+  await vi.waitFor(() =>
+    expect(document.querySelector("openclaw-native-link-menu")).not.toBeNull(),
+  );
   const menu = document.querySelector<NativeLinkMenu>("openclaw-native-link-menu");
   expect(menu?.trigger).toBe(latest);
   expect(append).toHaveBeenCalledOnce();

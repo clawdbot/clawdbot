@@ -82,6 +82,7 @@ Control UI capabilities grouped by area, each with the Gateway RPC methods behin
   </Accordion>
   <Accordion title="Usage">
     - Session-derived token and estimated-cost analysis stays separate from provider billing.
+    - The Sessions card counts the rows currently shown: up to 50 in **All**, or matching sessions selected on this Usage page in **Recently viewed**. The total is the loaded session count for the agent scope; the separate selected-session comparison does not increase the shown count.
     - Filter sessions with the provider, model, channel, or tool menus, or type case-insensitive `key:value` terms. Values within one category match as alternatives. Toggling a menu option preserves the other filters and their quoted text.
     - Selecting days narrows token and cost totals to those days within the active session filters. Daily charts and exports retain that session scope. Provider/model/tool queries select matching sessions, including all usage within each matched session; hour filters select sessions active in those hours.
     - Drag the handles in a session’s usage timeline to inspect an interval. Tool-call counts use assistant invocations in the loaded conversation, including repeated calls to the same tool; tool results do not add calls.
@@ -89,6 +90,7 @@ Control UI capabilities grouped by area, each with the Gateway RPC methods behin
     - Provider cards call `usage.status` and show live plan names, quota windows, balances, spend, and budgets reported by configured provider plugins.
     - A provider usage failure does not block the session/cost dashboard; unavailable provider cards show their own error state.
     - Incomplete session/cost totals stay readable while the visible, focused page checks for updates. Automatic checks are bounded; if they pause, select **Refresh** to check again.
+    - **Refresh** also reloads the selected session's timeline, conversation, and system-prompt breakdown.
     - The overview loads session summaries first. Full system-prompt breakdowns load when you select a session; the `has:context` filter still works before opening details.
     - JSON exports keep the displayed usage snapshot and load prompt details for the same session instance. If that session has been replaced, refresh Usage and export again.
 

@@ -7,7 +7,7 @@ import { toErrorObject } from "../infra/errors.js";
 import { cancelUnreadResponseBody } from "../infra/http-body.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { normalizeHostname } from "../infra/net/hostname.js";
-import { resolveCliName } from "./cli-name.js";
+import { CLI_NAME } from "./cli-name.js";
 import {
   asBoolean,
   asNumber,
@@ -133,8 +133,7 @@ export function cameraTempPath(opts: {
     ext: opts.ext,
   });
   const facingPart = opts.facing ? `-${opts.facing}` : "";
-  const cliName = resolveCliName();
-  return path.join(tmpDir, `${cliName}-camera-${opts.kind}${facingPart}-${id}${ext}`);
+  return path.join(tmpDir, `${CLI_NAME}-camera-${opts.kind}${facingPart}-${id}${ext}`);
 }
 
 function validateCameraPayloadUrl(url: string, expectedNodeHost: string): string {

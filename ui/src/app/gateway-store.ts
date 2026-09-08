@@ -29,7 +29,7 @@ import { setAvatarGatewayOrigin } from "../lib/identity-avatar-context.ts";
 import { resolveSessionKey } from "../lib/sessions/index.ts";
 import { readSessionDefaults } from "../lib/sessions/session-key.ts";
 import { generateUUID } from "../lib/uuid.ts";
-import { clearStoredChatSnapshots } from "../pages/chat/session-snapshot-invalidation.runtime.ts";
+import { clearWarmBootState } from "./bootstrap-warm-boot.ts";
 import type {
   ApplicationGateway,
   ApplicationGatewayConnectOptions,
@@ -376,7 +376,7 @@ export function createApplicationGateway(
     const retiredEventLog = credentialsChanged ? eventLog.resetConnection() : null;
     if (credentialsChanged) {
       connectionRevision += 1;
-      void clearStoredChatSnapshots();
+      clearWarmBootState();
     }
     // Only a gateway URL that differs from the current connection counts as an
     // explicit selection. The login gate always resubmits its prefilled URL, so

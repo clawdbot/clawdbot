@@ -21,7 +21,6 @@ import {
   ensureTaskRegistryReady,
   getTasksByRunId,
   taskRegistryLog,
-  persistTaskRegistry,
   pickPreferredRunIdTask,
   readTaskRegistryRevision,
   rebuildRunIdIndex,
@@ -456,7 +455,7 @@ export function deleteTaskRecordById(taskId: string): boolean {
   return true;
 }
 
-export function resetTaskRegistryForTests(opts?: { persist?: boolean }) {
+export function resetTaskRegistryForTests() {
   getTaskRegistryProcessState().runOwners.clear();
   clearTaskRegistryMemory();
   resetTaskRegistryRestoreState();
@@ -464,11 +463,7 @@ export function resetTaskRegistryForTests(opts?: { persist?: boolean }) {
   resetTaskRegistryListenerState();
   deliveryRuntimeLoader.clear();
   controlRuntimeLoader.clear();
-  if (opts?.persist !== false) {
-    persistTaskRegistry();
-  }
-  // Always close the sqlite handle so Windows temp-dir cleanup can remove the
-  // state directory even when a test intentionally skips persisting the reset.
+  // Close the default SQLite handle too, even when a custom store was configured.
   getTaskRegistryStore().close?.();
 }
 

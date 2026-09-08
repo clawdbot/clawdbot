@@ -41,7 +41,7 @@ node scripts/e2e/lib/update-first-hop-package-fixtures.mjs   future-tarball "$ca
 cat /tmp/openclaw-corrupt-plugin-update-method.json
 pack_fixture_plugin "$npm_pack_dir" /tmp/demo-corrupt-plugin.tgz demo-corrupt-plugin 0.0.1 demo.corrupt "Demo Corrupt Plugin"
 (
-  # Restore the candidate registry and stop serving the synthetic plugin before update.
+  # Restore the candidate registry to prove unavailable-target refusal first.
   # The parent retains the pack directory needed for post-core result evidence.
   trap - EXIT
   start_npm_fixture_registry "@openclaw/demo-corrupt-plugin" "0.0.1" /tmp/demo-corrupt-plugin.tgz "$npm_registry_dir"
@@ -76,20 +76,58 @@ if [ -f "$plugin_dir/package.json" ]; then
   exit 1
 fi
 
-echo "Updating OpenClaw with corrupt plugin present..."
-set +e
-openclaw_e2e_maybe_timeout "${update_timeout_seconds}s" \
-  node "$entry" update \
-  --channel beta \
-  --tag "$future_package" \
-  --yes \
-  --no-restart \
-  --timeout "$update_step_timeout_seconds" \
-  --json \
-  >/tmp/openclaw-update-corrupt-plugin.json \
-  2>/tmp/openclaw-update-corrupt-plugin.err
-update_status=$?
-set -e
+capture_corrupt_state() {
+  node --input-type=module - "$OPENCLAW_CONFIG_PATH" "$plugin_dir" <<'NODE'
+import fs from "node:fs";
+import path from "node:path";
+import { readPluginInstallRecords } from "./scripts/e2e/lib/plugin-index-sqlite.mjs";
+const [configPath, pluginDir] = process.argv.slice(2);
+process.stdout.write(JSON.stringify({
+  config: fs.readFileSync(configPath, "utf8"),
+  records: readPluginInstallRecords(),
+  packageJsonExists: fs.existsSync(path.join(pluginDir, "package.json")),
+  entry: fs.readFileSync(path.join(pluginDir, "index.js"), "utf8"),
+  manifest: fs.readFileSync(path.join(pluginDir, "openclaw.plugin.json"), "utf8"),
+}));
+NODE
+}
+
+run_corrupt_update() {
+  local output_prefix="$1"
+  openclaw_e2e_maybe_timeout "${update_timeout_seconds}s" \
+    node "$entry" update \
+    --channel beta \
+    --tag "$future_package" \
+    --yes \
+    --no-restart \
+    --timeout "$update_step_timeout_seconds" \
+    --json \
+    >"$output_prefix.json" 2>"$output_prefix.err"
+}
+
+echo "Checking unavailable corrupt-plugin target preserves the installation..."
+state_before_refusal="$(capture_corrupt_state)"
+if run_corrupt_update /tmp/openclaw-corrupt-plugin-unavailable; then
+  echo "Expected the unavailable plugin target to refuse the core update." >&2
+  exit 1
+fi
+node scripts/e2e/lib/plugin-update/probe.mjs assert-corrupt-unavailable /tmp/openclaw-corrupt-plugin-unavailable.json demo-corrupt-plugin
+if [ "$(capture_corrupt_state)" != "$state_before_refusal" ]; then
+  echo "Unavailable plugin admission changed config, install records, or corrupt payload." >&2
+  exit 1
+fi
+source_version="$(node -p 'JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")).sourceVersion' /tmp/openclaw-corrupt-plugin-update-method.json)"
+node scripts/e2e/lib/release-scenarios/assertions.mjs assert-package-version "$package_root" "$source_version" unavailable-plugin-refusal
+
+# The recovery case has a real registry package to reinstall; admission must not be bypassed.
+mkdir "$npm_registry_dir/recovery"
+start_npm_fixture_registry "@openclaw/demo-corrupt-plugin" "0.0.1" /tmp/demo-corrupt-plugin.tgz "$npm_registry_dir/recovery"
+echo "Updating OpenClaw with a recoverable corrupt plugin present..."
+if run_corrupt_update /tmp/openclaw-update-corrupt-plugin; then
+  update_status=0
+else
+  update_status=$?
+fi
 if [ "$update_status" -ne 0 ]; then
   echo "openclaw update failed or timed out after ${update_timeout_seconds}s with corrupt plugin present" >&2
   openclaw_e2e_print_log /tmp/openclaw-update-corrupt-plugin.err >&2

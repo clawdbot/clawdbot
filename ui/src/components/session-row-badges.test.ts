@@ -47,6 +47,8 @@ function expectTooltipText(badge: Element | null | undefined, text: string) {
 
 describe("sidebar connection status", () => {
   it.each([
+    { phase: "starting", offline: true, restartPending: true, expected: "restarting" },
+    { phase: "connecting", offline: true, suspensionPhase: "prepared", expected: "suspended" },
     { offline: true, restartPending: true, suspensionPhase: "prepared", expected: "restarting" },
     { offline: false, restartPending: true, expected: "restarting" },
     { offline: true, suspensionPhase: "preparing", expected: "suspending" },
@@ -67,6 +69,20 @@ describe("sidebar connection status", () => {
   ] as const)("renders $label without a retry button", ({ kind, label }) => {
     render(renderSidebarConnectionStatus({ kind, onRetry: () => {} }), container);
     expect(container.querySelector('[role="status"]')?.textContent).toContain(label);
+    expect(container.querySelector("button")).toBeNull();
+  });
+});
+
+describe("sidebar initial connection", () => {
+  it.each([false, true])("labels the first connection while offlineStable is %s", (offline) => {
+    const kind = resolveSidebarConnectionStatus({ phase: "connecting", offline });
+    expect(kind).not.toBeNull();
+    if (!kind) {
+      throw new Error("Expected initial connection status");
+    }
+    render(renderSidebarConnectionStatus({ kind, onRetry: () => undefined }), container);
+    expect(container.textContent?.trim()).toBe("Connecting…");
+    expect(container.querySelector("[role=status]")).not.toBeNull();
     expect(container.querySelector("button")).toBeNull();
   });
 });

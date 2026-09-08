@@ -282,7 +282,6 @@ describe("embedded model resolution consistency", () => {
     ]);
     expect(normalizeProviderModelIdWithRuntimeMock).toHaveBeenCalledWith({
       provider: "custom-provider",
-      plugins: manifestPlugins,
       context: {
         provider: "custom-provider",
         modelId: "modern-model",

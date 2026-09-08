@@ -2,7 +2,7 @@
 import { confirm, isCancel } from "@clack/prompts";
 import { stylePromptMessage } from "../../../packages/terminal-core/src/prompt-style.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
-import { readConfigFileSnapshot } from "../../config/config.js";
+import { createConfigIO } from "../../config/config.js";
 import { formatConfigIssueLines } from "../../config/issue-format.js";
 import { disableCurrentOpenClawUpdateLaunchdJob } from "../../daemon/launchd.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -36,7 +36,7 @@ import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-version
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { assertOpenClawStateWriteAllowedAtPath } from "../../state/openclaw-state-ownership.js";
 import { VERSION } from "../../version.js";
-import { resolveCliName } from "../cli-name.js";
+import { CLI_NAME } from "../cli-name.js";
 import { createUpdateProgress } from "./progress.js";
 import {
   DEFAULT_PACKAGE_NAME,
@@ -76,7 +76,6 @@ import {
 import type { UpdateCommandRecoveryState } from "./update-command-service.js";
 import { withUpdateFailureTriage } from "./update-command-triage.js";
 
-const CLI_NAME = resolveCliName();
 const DEFAULT_UPDATE_STEP_TIMEOUT_MS = 30 * 60_000;
 
 export async function updateCommand(inputOpts: UpdateCommandOptions): Promise<void> {
@@ -201,13 +200,15 @@ async function updateCommandInternal(
     return;
   }
 
-  let configSnapshot = await readConfigFileSnapshot({
-    skipPluginValidation: true,
+  const preparedConfig = await createConfigIO({
+    pluginValidation: "skip",
     observe: false,
-  });
+  }).readConfigFileSnapshotForWrite();
+  let configSnapshot = preparedConfig.snapshot;
   if (opts.channel && !opts.dryRun && !configSnapshot.valid) {
     configSnapshot = await maybeRepairLegacyConfigForUpdateChannel({
       configSnapshot,
+      configWriteOptions: preparedConfig.writeOptions,
       jsonMode: Boolean(opts.json),
     });
   }
@@ -480,6 +481,7 @@ async function updateCommandInternal(
     devTarget,
     packageTargetSchemaVersions,
     packageTargetVersion: targetVersion ?? undefined,
+    packageInstallSpec,
     opts,
     refuseUpdate,
   });
@@ -545,10 +547,7 @@ async function updateCommandInternal(
         { env: run.env },
       );
       defaultRuntime.error(
-        [
-          "Downgrade confirmation required.",
-          "Downgrading can break configuration. Re-run in a TTY to confirm.",
-        ].join("\n"),
+        "Downgrade confirmation required.\nDowngrading can break configuration. Re-run in a TTY to confirm.",
       );
       defaultRuntime.exit(1);
       return;

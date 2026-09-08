@@ -169,7 +169,7 @@ export function renewNativeHookRelayBridgeRecord(
 export function unregisterNativeHookRelayBridge(
   relayId: string,
   options?: {
-    deferBridgeRecordRemovalMs?: number;
+    deferListenerCloseMs?: number;
     expectedBridge?: NativeHookRelayBridgeRegistration;
   },
 ): void {
@@ -180,27 +180,23 @@ export function unregisterNativeHookRelayBridge(
   if (relayBridges.get(relayId) === bridge) {
     relayBridges.delete(relayId);
   }
-  const removeRecord = () => {
-    bridge.server.close();
-    try {
-      deleteNativeHookRelayBridgeRecordIfOwned({ ...bridge, pid: process.pid });
-    } catch (error) {
-      log.debug("failed to remove native hook relay bridge record", { error, relayId });
-    }
-  };
-  const deferBridgeRecordRemovalMs = normalizePositiveInteger(
-    options?.deferBridgeRecordRemovalMs,
-    0,
-  );
-  if (deferBridgeRecordRemovalMs > 0) {
-    // Keep the retired listener with its locator during replacement: it rejects
-    // stale requests and reserves the port until the successor publishes. The
-    // token-scoped cleanup cannot delete that successor's record.
-    const timeout = setTimeout(removeRecord, deferBridgeRecordRemovalMs);
+  // Stop advertising the retired endpoint before its listener can close.
+  // Token-scoped removal cannot delete an already-published successor.
+  try {
+    deleteNativeHookRelayBridgeRecordIfOwned({ ...bridge, pid: process.pid });
+  } catch (error) {
+    log.debug("failed to remove native hook relay bridge record", { error, relayId });
+  }
+  const closeListener = () => bridge.server.close();
+  const deferListenerCloseMs = normalizePositiveInteger(options?.deferListenerCloseMs, 0);
+  if (deferListenerCloseMs > 0) {
+    // Readers that already captured the old locator still receive a stale-owner
+    // rejection. New lookups wait for the successor's listener publication.
+    const timeout = setTimeout(closeListener, deferListenerCloseMs);
     timeout.unref();
     return;
   }
-  removeRecord();
+  closeListener();
 }
 
 async function handleNativeHookRelayBridgeRequest(
