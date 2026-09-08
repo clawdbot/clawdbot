@@ -150,8 +150,11 @@ with transcript cleanup enabled. The Gateway removes the live session row,
 transcript generations, session-owned runtime state, bindings, boards, and
 other lifecycle artifacts. For ordinary sessions it retains the transcript as
 a verified `.jsonl.deleted.<timestamp>` archive; incognito transcripts are
-removed without an archive. If a managed worktree cannot be removed safely,
-the command reports the preserved branch and path for manual cleanup.
+removed without an archive. Retained deleted-session archives can remain
+eligible for memory search until you run
+`openclaw memory forget --session <id-or-key>`. If a managed worktree cannot be
+removed safely, the command reports the preserved branch and path for manual
+cleanup.
 
 Both lifecycle commands:
 

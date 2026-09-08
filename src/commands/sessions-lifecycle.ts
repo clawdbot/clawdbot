@@ -175,8 +175,14 @@ function outputLifecycleResults(
           break;
         case "deleted":
           runtime.log(`Deleted session ${result.key}.`);
-          for (const archived of result.archived ?? []) {
+          const archivedTranscripts = result.archived ?? [];
+          for (const archived of archivedTranscripts) {
             runtime.log(`Archived transcript: ${archived}`);
+          }
+          if (archivedTranscripts.length > 0) {
+            runtime.log(
+              `Archived transcripts can remain eligible for memory search. To remove indexed memories for this session, run ${formatCliCommand(`openclaw memory forget --session ${result.key}`)}.`,
+            );
           }
           if (result.worktreePreserved) {
             const preserved = result.worktreePreserved;

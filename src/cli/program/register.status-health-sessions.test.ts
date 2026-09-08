@@ -519,6 +519,18 @@ describe("registerStatusHealthSessionsCommands", () => {
     });
   });
 
+  it("documents retained delete archives in sessions delete help", () => {
+    const sessions = createProgram().commands.find((command) => command.name() === "sessions");
+    const deleteCommand = sessions?.commands.find((command) => command.name() === "delete");
+
+    expect(deleteCommand?.helpInformation()).toContain(
+      "Retained deleted-session archives can remain eligible for memory search",
+    );
+    expect(deleteCommand?.helpInformation()).toContain(
+      "openclaw memory forget --session <id-or-key>",
+    );
+  });
+
   it("rejects inherited session-list filters for lifecycle mutations", async () => {
     await expectSessionsRegistrationError(
       [
