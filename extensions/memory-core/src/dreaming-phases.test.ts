@@ -884,10 +884,13 @@ describe("memory-core dreaming phases", () => {
 
   it("checkpoints daily ingestion and skips unchanged daily files", async () => {
     const workspaceDir = await createDreamingWorkspace();
-    const dailyPath = path.join(workspaceDir, "memory", "2026-04-05.md");
+    // Write today's daily file so the light sweep can ingest it within the lookback window.
+    // The sweep uses the current date, not the test base time, for daily file paths.
+    const todayDay = new Date().toISOString().slice(0, 10);
+    const dailyPath = path.join(workspaceDir, "memory", `${todayDay}.md`);
     await fs.writeFile(
       dailyPath,
-      ["# 2026-04-05", "", "- Move backups to S3 Glacier."].join("\n"),
+      [`# ${todayDay}`, "", "- Move backups to S3 Glacier."].join("\n"),
       "utf-8",
     );
 

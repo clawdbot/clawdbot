@@ -168,6 +168,7 @@ describe("memory host event journal integration", () => {
       workspaceDir,
       phase: "light",
       bodyLines: ["- staged note", "- second note"],
+      hasContent: true,
       nowMs: Date.UTC(2026, 3, 5, 13, 0, 0),
       storage: { mode: "both", separateReports: true },
     });
