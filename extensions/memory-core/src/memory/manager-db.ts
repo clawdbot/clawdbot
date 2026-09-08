@@ -33,22 +33,27 @@ const MEMORY_REINDEX_ENTRY_SUFFIXES = ["-wal", "-shm", "-journal", ""] as const;
 const MEMORY_REINDEX_UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const MEMORY_REINDEX_ORPHAN_MIN_AGE_MS = 24 * 60 * 60_000;
+const MEMORY_REINDEX_SHADOW_PREFIX_SUFFIXES = [".memory-reindex-"] as const;
+const LEGACY_MEMORY_REINDEX_SHADOW_PREFIX_SUFFIXES = [".tmp-"] as const;
 
 function resolveMemoryReindexBaseName(
   databaseBaseName: string,
   entryName: string,
+  prefixSuffixes: readonly string[],
 ): string | undefined {
   for (const suffix of MEMORY_REINDEX_ENTRY_SUFFIXES) {
     if (!entryName.endsWith(suffix)) {
       continue;
     }
     const baseName = entryName.slice(0, entryName.length - suffix.length);
-    const prefix = `${databaseBaseName}.memory-reindex-`;
-    if (
-      baseName.startsWith(prefix) &&
-      MEMORY_REINDEX_UUID_PATTERN.test(baseName.slice(prefix.length))
-    ) {
-      return baseName;
+    for (const prefixSuffix of prefixSuffixes) {
+      const prefix = `${databaseBaseName}${prefixSuffix}`;
+      if (
+        baseName.startsWith(prefix) &&
+        MEMORY_REINDEX_UUID_PATTERN.test(baseName.slice(prefix.length))
+      ) {
+        return baseName;
+      }
     }
   }
   return undefined;
@@ -341,11 +346,13 @@ export function removeMemoryDatabaseFiles(dbPath: string): void {
   }
 }
 
-/** Remove crash-left shadows while the caller owns the reindex lease. */
-export function cleanupAgedMemoryReindexTempFiles(dbPath: string, nowMs = Date.now()): void {
-  if (!isRegularFile(dbPath)) {
-    return;
-  }
+/** Remove crash-left shadows for an active leased DB or a retired migration path. */
+function cleanupAgedMemoryReindexShadows(
+  dbPath: string,
+  prefixSuffixes: readonly string[],
+  nowMs = Date.now(),
+): { removed: number; failed: number } {
+  const result = { removed: 0, failed: 0 };
   const dir = path.dirname(dbPath);
   const databaseBaseName = path.basename(dbPath);
   const shadowBaseNames = new Set<string>();
@@ -353,14 +360,18 @@ export function cleanupAgedMemoryReindexTempFiles(dbPath: string, nowMs = Date.n
   try {
     entries = fs.readdirSync(dir, { withFileTypes: true });
   } catch {
-    return;
+    return result;
   }
 
   for (const entry of entries) {
     if (!entry.isFile()) {
       continue;
     }
-    const shadowBaseName = resolveMemoryReindexBaseName(databaseBaseName, entry.name);
+    const shadowBaseName = resolveMemoryReindexBaseName(
+      databaseBaseName,
+      entry.name,
+      prefixSuffixes,
+    );
     if (shadowBaseName) {
       shadowBaseNames.add(shadowBaseName);
     }
@@ -383,6 +394,9 @@ export function cleanupAgedMemoryReindexTempFiles(dbPath: string, nowMs = Date.n
       }
     }
     if (hasUnknownFileState || stats.length === 0) {
+      if (hasUnknownFileState) {
+        result.failed += 1;
+      }
       continue;
     }
     if (nowMs - Math.max(...stats.map((stat) => stat.mtimeMs)) < MEMORY_REINDEX_ORPHAN_MIN_AGE_MS) {
@@ -393,7 +407,42 @@ export function cleanupAgedMemoryReindexTempFiles(dbPath: string, nowMs = Date.n
         fs.rmSync(filePath, { force: true });
       } catch {}
     }
+    const removalComplete = filePaths.every((filePath) => {
+      try {
+        fs.statSync(filePath);
+        return false;
+      } catch (err) {
+        return typeof err === "object" && err !== null && "code" in err && err.code === "ENOENT";
+      }
+    });
+    result[removalComplete ? "removed" : "failed"] += 1;
   }
+  return result;
+}
+
+/** Remove crash-left current-format shadows for an active database. */
+export function cleanupAgedMemoryReindexTempFiles(
+  dbPath: string,
+  nowMs = Date.now(),
+): { removed: number; failed: number } {
+  // Without the primary database, a current-format shadow may be the only
+  // recoverable copy. Retired legacy paths use the Doctor-only cleaner below.
+  if (!isRegularFile(dbPath)) {
+    return { removed: 0, failed: 0 };
+  }
+  return cleanupAgedMemoryReindexShadows(dbPath, MEMORY_REINDEX_SHADOW_PREFIX_SUFFIXES, nowMs);
+}
+
+/** Remove aged legacy `.tmp-<uuid>` shadows beside a retired Doctor-owned path. */
+export function cleanupAgedLegacyMemoryReindexTempFiles(
+  dbPath: string,
+  nowMs = Date.now(),
+): { removed: number; failed: number } {
+  return cleanupAgedMemoryReindexShadows(
+    dbPath,
+    LEGACY_MEMORY_REINDEX_SHADOW_PREFIX_SUFFIXES,
+    nowMs,
+  );
 }
 
 export function openMemoryDatabaseAtPath(dbPath: string, allowExtension: boolean): DatabaseSync {

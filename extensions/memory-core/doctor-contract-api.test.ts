@@ -2233,6 +2233,59 @@ describe("memory-core doctor dreaming migration", () => {
     await fs.access(`${legacyPath}.migrated`);
   });
 
+  it("removes aged reindex shadows after the legacy database was already archived", async () => {
+    const stateDir = path.join(rootDir, "state");
+    const legacyPath = path.join(stateDir, "memory", "main.sqlite");
+    const archivedPath = `${legacyPath}.migrated`;
+    const agedShadow = `${legacyPath}.tmp-11111111-2222-3333-4444-555555555555`;
+    const youngShadow = `${legacyPath}.tmp-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee`;
+    const currentShadow = `${legacyPath}.memory-reindex-22222222-3333-4444-5555-666666666666`;
+    const missingPrimaryShadow = path.join(
+      stateDir,
+      "memory",
+      "recoverable.sqlite.tmp-33333333-4444-5555-6666-777777777777",
+    );
+    const malformedShadow = `${legacyPath}.tmp-not-a-uuid`;
+    const canonicalPath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
+    await fs.mkdir(path.dirname(legacyPath), { recursive: true });
+    await fs.mkdir(path.dirname(canonicalPath), { recursive: true });
+    await fs.writeFile(archivedPath, "archived");
+    await fs.writeFile(canonicalPath, "canonical");
+    const old = new Date(Date.now() - 48 * 60 * 60_000);
+    for (const suffix of ["", "-wal", "-shm", "-journal"]) {
+      await fs.writeFile(`${agedShadow}${suffix}`, "orphan");
+      await fs.utimes(`${agedShadow}${suffix}`, old, old);
+    }
+    await fs.writeFile(youngShadow, "active");
+    await fs.writeFile(currentShadow, "recoverable");
+    await fs.utimes(currentShadow, old, old);
+    await fs.writeFile(missingPrimaryShadow, "recoverable");
+    await fs.utimes(missingPrimaryShadow, old, old);
+    await fs.writeFile(malformedShadow, "unrelated");
+
+    const migration = legacyMemoryIndexMigration();
+    await expect(migration.detectLegacyState(migrationParams())).resolves.toEqual({
+      preview: [`- Memory Core legacy reindex shadows: ${legacyPath} -> remove aged orphans`],
+    });
+    const result = await migration.migrateLegacyState(migrationParams());
+
+    expect(result).toEqual({
+      changes: [
+        `Removed 1 aged Memory Core reindex orphan shadow database(s) beside retired memory index ${legacyPath}`,
+      ],
+      warnings: [],
+    });
+    for (const suffix of ["", "-wal", "-shm", "-journal"]) {
+      await expect(fs.access(`${agedShadow}${suffix}`)).rejects.toMatchObject({ code: "ENOENT" });
+    }
+    await expect(fs.access(youngShadow)).resolves.toBeUndefined();
+    await expect(fs.access(currentShadow)).resolves.toBeUndefined();
+    await expect(fs.access(missingPrimaryShadow)).resolves.toBeUndefined();
+    await expect(fs.access(malformedShadow)).resolves.toBeUndefined();
+    await expect(fs.access(archivedPath)).resolves.toBeUndefined();
+    await expect(fs.access(canonicalPath)).resolves.toBeUndefined();
+  });
+
   it("archives conflicting custom derived indexes without creating a retry copy", async () => {
     const stateDir = path.join(rootDir, "state");
     const legacyPath = path.join(rootDir, "custom-memory", "main.sqlite");

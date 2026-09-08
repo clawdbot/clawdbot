@@ -548,4 +548,16 @@ describe("memory manager database publication", () => {
     await expectPathMissing(`${oldShadow}-journal`);
     await fs.access(youngShadow);
   });
+
+  it("preserves current-format shadows when the primary database is absent", async () => {
+    const databasePath = path.join(fixtureRoot, "missing.sqlite");
+    const shadowPath = `${databasePath}.memory-reindex-11111111-2222-3333-4444-555555555555`;
+    const old = new Date(Date.now() - 48 * 60 * 60_000);
+    await fs.writeFile(shadowPath, "recoverable");
+    await fs.utimes(shadowPath, old, old);
+
+    expect(cleanupAgedMemoryReindexTempFiles(databasePath)).toEqual({ removed: 0, failed: 0 });
+
+    await expect(fs.access(shadowPath)).resolves.toBeUndefined();
+  });
 });
