@@ -2800,12 +2800,16 @@ function createCompactNodeTestShardBundles(
     );
     const strongestGroupCount =
       hostedGroups.findLastIndex((group) => group.runner === hostedGroups[0]!.runner) + 1;
+    type HostedUnit = [NodeTestShardGroup, ...NodeTestShardGroup[]];
     const units = [
       ...hostedGroups.slice(0, strongestGroupCount).map((group) => [group]),
       ...anchors,
       ...hostedGroups.slice(strongestGroupCount).map((group) => [group]),
-    ] as Array<[NodeTestShardGroup, ...NodeTestShardGroup[]]>;
-    packedBins = packNodeTestGroups(units, (candidate, unit) => {
+    ] as HostedUnit[];
+    const canShareHostedUnit = (
+      candidate: readonly [HostedUnit, ...HostedUnit[]],
+      unit: HostedUnit,
+    ) => {
       if (!isHostedToolingGroup(unit[0])) {
         return false;
       }
@@ -2821,7 +2825,30 @@ function createCompactNodeTestShardBundles(
         hasDistinctStripeFamilies(combined) &&
         estimateBinSeconds(combined) <= COMPACT_EXCLUSIVE_JOB_SECONDS
       );
-    }).map((bin) => bin.flat() as [NodeTestShardGroup, ...NodeTestShardGroup[]]);
+    };
+    packedBins = packNodeTestGroups(units, canShareHostedUnit).map(
+      (bin) => bin.flat() as HostedUnit,
+    );
+    // Preserve successful plans; compare one alternate only after tail splitting still overflows.
+    if (splitHostedToolingTails && packedBins.length > COMPACT_NODE_TEST_JOB_CAP) {
+      const alternateUnits = [
+        ...anchors,
+        ...hostedGroups
+          .toSorted(
+            (a, b) =>
+              estimateBinSeconds([b]) - estimateBinSeconds([a]) ||
+              runnerRank(b) - runnerRank(a) ||
+              a.shard_name.localeCompare(b.shard_name),
+          )
+          .map((group) => [group]),
+      ] as HostedUnit[];
+      const alternateBins = packNodeTestGroups(alternateUnits, canShareHostedUnit).map(
+        (bin) => bin.flat() as HostedUnit,
+      );
+      if (alternateBins.length < packedBins.length) {
+        packedBins = alternateBins;
+      }
+    }
   }
 
   const compactJobs: CompactNodeTestShard[] = [];
