@@ -15,7 +15,7 @@ import {
   resolveOnboardCommandOptions,
 } from "./register.onboard.js";
 
-const SYSTEM_AGENT_OPTION_NAMES = new Set(["message", "yes", "json"]);
+const NON_ONBOARDING_OPTION_NAMES = new Set(["message", "yes", "json", "tailscaleResetOnExit"]);
 const BASELINE_OPTION_NAMES = new Set(["baseline", "workspace", "json"]);
 
 type SetupRoute = "onboarding" | "system-agent";
@@ -42,7 +42,7 @@ export function resolveSetupCommandRoute(input: {
 function hasExplicitOnboardingOption(command: Command): boolean {
   return command.options.some((option) => {
     const name = option.attributeName();
-    return !SYSTEM_AGENT_OPTION_NAMES.has(name) && command.getOptionValueSource(name) === "cli";
+    return !NON_ONBOARDING_OPTION_NAMES.has(name) && command.getOptionValueSource(name) === "cli";
   });
 }
 
@@ -173,6 +173,21 @@ export function registerSetupCommand(program: Command): void {
       const options = rawOptions as Record<string, unknown>;
       const hasOnboardingFlag = hasExplicitOnboardingOption(commandRuntime);
       const hasSystemAgentRequest = hasExplicitOptions(commandRuntime, ["message", "yes"]);
+      if (hasOnboardingFlag && hasSystemAgentRequest) {
+        const systemAgentFlags = commandRuntime.options
+          .filter(
+            (option) =>
+              ["message", "yes"].includes(option.attributeName()) &&
+              commandRuntime.getOptionValueSource(option.attributeName()) === "cli",
+          )
+          .map((option) => option.long ?? option.short ?? option.flags)
+          .toSorted();
+        defaultRuntime.error(
+          `${systemAgentFlags.join(", ")} cannot be combined with onboarding options. Rerun with either --message/--yes or onboarding options, not both.`,
+        );
+        defaultRuntime.exit(1);
+        return;
+      }
       const configured =
         hasOnboardingFlag || hasSystemAgentRequest ? false : await isConfiguredInstance();
       const route = resolveSetupCommandRoute({

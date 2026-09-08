@@ -17,11 +17,13 @@ falls through to guided onboarding. Use `-m`/`--message` for one request or
 
 Routing order:
 
-1. Any onboarding option (`--wizard`, `--baseline`, workspace, reset,
+1. Mixing `-m`/`--message` or `--yes` with an onboarding option is rejected;
+   choose either a system-agent request or onboarding.
+2. Any onboarding option (`--wizard`, `--baseline`, workspace, reset,
    non-interactive, flow, mode, Gateway, daemon, skip, import, remote, or auth
    options) runs onboarding exactly as `openclaw onboard` does.
-2. `-m`/`--message` or `--yes` runs the system agent.
-3. With no routing option, a configured interactive system opens OpenClaw. A
+3. `-m`/`--message` or `--yes` runs the system agent.
+4. With no routing option, a configured interactive system opens OpenClaw. A
    fresh system runs onboarding. On a configured system, `--json` prints the
    system overview even without a TTY; an onboarding option keeps onboarding's
    JSON summary.
