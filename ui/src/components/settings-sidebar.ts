@@ -44,7 +44,6 @@ type SettingsSidebarProps = {
   activeSearch?: string;
   activeHash?: string;
   offline: boolean;
-  phase?: ApplicationGatewaySnapshot["phase"];
   restartPending?: boolean;
   suspensionPhase?: ApplicationGatewaySnapshot["suspensionPhase"];
   queuedOutboxCount?: number;

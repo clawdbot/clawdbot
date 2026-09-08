@@ -55,7 +55,6 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
     normalizeReplyMediaPayload,
     notifySessionMetadataChanges,
     onToolResultFromReplyOptions,
-    onReasoningStream,
     params,
     reasoningPayloadsEnabled,
     replyConfig,
@@ -70,6 +69,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
     shouldSuppressDefaultToolProgressMessages,
     trackDispatchLifecycleWork,
     typing,
+    wasReplyDeliveredAsBlock,
     waitForPendingDirectBlockReplyDelivery,
     wrapProgressCallback,
   } = state;
@@ -137,7 +137,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                         }
                       },
                     }),
-                onReasoningStream,
+                onReasoningStream: wrapProgressCallback(params.replyOptions?.onReasoningStream),
                 streamReasoningInNonStreamModes:
                   params.replyOptions?.streamReasoningInNonStreamModes,
                 onReasoningEnd: wrapProgressCallback(params.replyOptions?.onReasoningEnd),
@@ -202,9 +202,6 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                   waitForDirectBlockReplyDelivery: true,
                 }),
                 onToolResult: (payload) => {
-                  if (state.replyOperationRunState.heartbeat) {
-                    return Promise.resolve();
-                  }
                   state.getDispatchReplyOperation()?.recordActivity();
                   markProgress();
                   const run = async () => {
@@ -447,10 +444,6 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                   }
                 },
                 onBlockReply: (inputPayload, context) => {
-                  // A monitor decides notify only after its structured final result.
-                  if (state.replyOperationRunState.heartbeat) {
-                    return Promise.resolve();
-                  }
                   markProgress();
                   const run = async () => {
                     if (isDispatchOperationAborted()) {
@@ -585,11 +578,8 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                         "block",
                         context?.deliveryIntentId,
                       );
-                      const outcome = state.recordRoutedBlockReplyDelivery(
-                        normalizedPayload,
-                        result,
-                      );
-                      if (outcome === "delivered" && !state.suppressAutomaticSourceDelivery) {
+                      state.recordRoutedBlockReplyDelivery(normalizedPayload, result);
+                      if (result?.delivered === true && !state.suppressAutomaticSourceDelivery) {
                         await params.replyOptions?.onBlockReplyQueued?.(
                           visiblePayload,
                           queuedContext,
@@ -597,8 +587,8 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                       }
                     } else {
                       markInboundDedupeReplayUnsafe();
-                      const delivery = state.sendTrackedBlockReply(normalizedPayload);
-                      if (delivery.queued) {
+                      const admitted = state.sendTrackedBlockReply(normalizedPayload);
+                      if (admitted) {
                         // Capture admission's drain; concurrent or aborted waiters must
                         // not consume another callback's delivery obligation.
                         const pending = dispatcher.waitForIdle().then(() => undefined);
@@ -606,17 +596,16 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                         state.progressState.pendingDirectBlockReplyDelivery = pending;
                       }
                       if (
-                        delivery.queued &&
+                        admitted &&
                         !state.suppressAutomaticSourceDelivery &&
                         params.replyOptions?.onBlockReplyQueued
                       ) {
-                        // Settled dispatchers notify on this block's confirmed delivery.
-                        // Receipt-less dispatchers retain their admission-time boundary
-                        // notification; its callback is not delivery evidence.
+                        // Block callbacks are delivery facts, not queue-admission facts.
+                        // Resolve them after beforeDeliver hooks without stalling streaming.
                         trackDispatchLifecycleWork(
-                          (delivery.outcome ?? Promise.resolve("delivered")).then(
-                            async (outcome) => {
-                              if (outcome === "delivered" && !context?.abortSignal?.aborted) {
+                          wasReplyDeliveredAsBlock(normalizedPayload, context?.abortSignal).then(
+                            async (delivered) => {
+                              if (delivered) {
                                 await params.replyOptions?.onBlockReplyQueued?.(
                                   visiblePayload,
                                   queuedContext,

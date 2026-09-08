@@ -3,7 +3,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { collectChangedPaths } from "../config/config-change-paths.js";
 import {
   assertConfigWriteAllowedInCurrentMode,
-  readConfigFileSnapshotForWrite,
+  readConfigFileSnapshot,
   replaceConfigFile,
 } from "../config/config.js";
 import { ensurePluginAllowlisted } from "../config/plugins-allowlist.js";
@@ -19,7 +19,6 @@ import { normalizePluginId } from "./config-state.js";
 import { resolvePluginControlPlaneWorkspace } from "./control-plane-workspace.js";
 import { getProcessGatewayPluginMetadataSnapshot } from "./current-plugin-metadata-state.js";
 import { enableExplicitlySelectedPluginInConfig } from "./enable.js";
-import { selectInstallMutationWriteOptions } from "./install-config-mutation.js";
 import type { InstallPolicyWarningDetails } from "./install-security-scan.types.js";
 import { createInstalledPluginOwnershipResolver } from "./installed-plugin-package-ownership.js";
 import {
@@ -325,17 +324,17 @@ export async function mutateManagedPluginEnabled(
 ) {
   const env = params.env ?? process.env;
   const cli = params.caller === "cli";
-  return await withPluginLifecycleLease({ env }, async (lease) => {
+  return await withPluginLifecycleLease({ env }, async () => {
     if (cli) {
       assertConfigWriteAllowedInCurrentMode({ env });
     }
     // CLI policy writes retain their config owner's include admission. Management
     // additionally requires the install mutation preflight before any consent.
     const snapshot = cli
-      ? await readConfigFileSnapshotForWrite().then(({ snapshot: file, writeOptions }) => ({
+      ? await readConfigFileSnapshot().then((file) => ({
           config: file.sourceConfig,
           baseHash: file.hash,
-          writeOptions: selectInstallMutationWriteOptions(writeOptions),
+          writeOptions: {},
         }))
       : await readPluginMutationSnapshot(env);
     const metadata = loadFreshManagedPluginMetadata(snapshot.config, env);
@@ -384,9 +383,7 @@ export async function mutateManagedPluginEnabled(
       // Bundled kinds are already prepared under this lease. External CLI inspection
       // still needs the enabled config to resolve legacy runtime-only kinds.
       const slotMetadata = cli && !isBundledManifestOwner(installedPlugin) ? undefined : metadata;
-      const slotResult = await applySlotSelectionForPlugin(next, pluginId, slotMetadata, () =>
-        lease.assertOwned(),
-      );
+      const slotResult = applySlotSelectionForPlugin(next, pluginId, slotMetadata);
       next = slotResult.config;
       slotWarnings.push(...slotResult.warnings);
     } else {
@@ -394,20 +391,17 @@ export async function mutateManagedPluginEnabled(
     }
     const changedPaths = new Set<string>();
     collectChangedPaths(snapshot.config, next, "", changedPaths);
-    const committed = await replaceConfigFile({
-      sourceConfig: next,
+    await replaceConfigFile({
+      nextConfig: next,
       baseHash: snapshot.baseHash,
       // CLI alias writes preserve merged canonical settings during source projection.
       writeOptions: cli
-        ? {
-            ...snapshot.writeOptions,
-            explicitSetPaths: [["plugins", "entries", policyPluginId]],
-          }
+        ? { explicitSetPaths: [["plugins", "entries", policyPluginId]] }
         : snapshot.writeOptions,
     });
     const registryWarnings: string[] = [];
     await refreshPluginRegistryAfterConfigMutation({
-      configPath: committed.path,
+      config: next,
       env,
       reason: "policy-changed",
       invalidateRuntimeCache: false,

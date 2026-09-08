@@ -369,10 +369,6 @@ export function isSettingsNavigationRoute(routeId: NavigationRouteId): boolean {
   return SETTINGS_NAVIGATION_ROUTES.has(routeId);
 }
 
-export function isSettingsTakeover(routeId: RouteId | undefined): boolean {
-  return routeId !== undefined && isSettingsNavigationRoute(routeId);
-}
-
 export function settingsNavigationOwnerRoute(routeId: NavigationRouteId): NavigationRouteId {
   return SETTINGS_SUBPAGE_OWNER_ROUTES[routeId] ?? routeId;
 }

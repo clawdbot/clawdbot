@@ -10,11 +10,11 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
 import { withClawPackageLifecycleLease } from "../state/claw-package-lifecycle-lease.js";
 import { shortenHomePath } from "../utils.js";
+import { resolveDefaultPluginExtensionsDir } from "./install-paths.js";
 import {
   selectInstallMutationWriteOptions,
   type ConfigSnapshotForInstallPersist,
-} from "./install-config-mutation.js";
-import { resolveDefaultPluginExtensionsDir } from "./install-paths.js";
+} from "./install-persistence.js";
 import { commitPluginInstallRecordsWithConfig } from "./install-record-commit.js";
 import {
   loadInstalledPluginIndexInstallRecords,
@@ -271,7 +271,7 @@ export async function uninstallPluginWithPolicy(
         // Remove owned aliases while their realpath still exists; failed deletion remains retryable.
         await runUninstallPhase(params, "config disable", () =>
           replaceConfigFile({
-            sourceConfig: prepareConfigForDisabledPluginSet(
+            nextConfig: prepareConfigForDisabledPluginSet(
               snapshot.config,
               policyPluginIds,
               plan.config,
@@ -336,7 +336,7 @@ export async function uninstallPluginWithPolicy(
         ...directoryResult.warnings,
       ];
       await refreshPluginRegistryAfterConfigMutation({
-        configPath: snapshot.writeOptions.ownedConfigPathForWrite,
+        config: nextConfig,
         env,
         reason: "source-changed",
         installRecords: nextInstallRecords,

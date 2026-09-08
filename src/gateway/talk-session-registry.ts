@@ -2,8 +2,6 @@
  * Process-local registry that lets Talk protocol methods resolve opaque
  * `sessionId` values to the concrete relay or managed-room backend.
  */
-import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
-import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalMap } from "../shared/global-singleton.js";
 import { formatError } from "./server-utils.js";
 import type { PreparedTalkSessionTarget } from "./talk-session-target.types.js";
@@ -33,109 +31,27 @@ const unifiedTalkSessions = resolveGlobalMap<string, UnifiedTalkSessionRecord>(
   Symbol.for("openclaw.unifiedTalkSessions"),
   "close-and-restart",
 );
-type TalkConnectionCleanup = {
-  run: () => void | Promise<void>;
-  nextRun?: () => void | Promise<void>;
-  pending?: Promise<void>;
-  failed: boolean;
-};
-
-const talkConnectionCleanups = resolveGlobalMap<
-  string,
-  Map<TalkConnectionCleanupKind, TalkConnectionCleanup>
->(
+const talkConnectionCleanups = resolveGlobalMap<string, Map<TalkConnectionCleanupKind, () => void>>(
   Symbol.for("openclaw.talkConnectionCleanups"),
-  async (connections) => {
-    const results = await Promise.allSettled(
-      [...connections].flatMap(([connId, cleanups]) =>
-        [...cleanups].map(async ([kind, cleanup]) => {
-          await runTalkConnectionCleanup(connId, kind, cleanup);
-        }),
-      ),
-    );
-    const failures = results.flatMap((result) =>
-      result.status === "rejected" ? [result.reason] : [],
-    );
-    if (failures.length > 0) {
-      throw new AggregateError(failures, "Talk provider cleanup did not complete");
-    }
-  },
   "close-and-restart",
 );
 
-function runTalkConnectionCleanup(
-  connId: string,
-  kind: TalkConnectionCleanupKind,
-  cleanup: TalkConnectionCleanup,
-): void | Promise<void> {
-  if (cleanup.pending) {
-    return cleanup.pending;
-  }
-  if (talkConnectionCleanups.get(connId)?.get(kind) !== cleanup) {
-    return;
-  }
-  // A cleanup callback can reenter shutdown before returning its own promise.
-  const completion = createDeferredCore();
-  cleanup.pending = completion.promise;
-  const completed = (): void | Promise<void> => {
-    cleanup.pending = undefined;
-    cleanup.failed = false;
-    const cleanups = talkConnectionCleanups.get(connId);
-    if (cleanups?.get(kind) === cleanup) {
-      if (cleanup.nextRun) {
-        cleanup.run = cleanup.nextRun;
-        cleanup.nextRun = undefined;
-        return runTalkConnectionCleanup(connId, kind, cleanup);
-      }
-      cleanups.delete(kind);
-      if (cleanups.size === 0 && talkConnectionCleanups.get(connId) === cleanups) {
-        talkConnectionCleanups.delete(connId);
-      }
-    }
-  };
-  const failed = (error: unknown): never => {
-    cleanup.pending = undefined;
-    cleanup.failed = true;
-    throw error;
-  };
-  try {
-    const run = cleanup.run;
-    const result = run();
-    if (isPromiseLike(result)) {
-      completion.resolve(Promise.resolve(result).then(completed, failed));
-      return completion.promise;
-    }
-    const next = completed();
-    completion.resolve(next);
-    return next;
-  } catch (error) {
-    completion.reject(error);
-    // The caller observes the synchronous throw; a reentrant drain may also join this promise.
-    void completion.promise.catch(() => {});
-    return failed(error);
-  }
-}
-
-/** Keeps failed cleanup under its original owner until a successful retry. */
+/**
+ * Keeps one owner cleanup per relay kind until the connection closes.
+ * Replacing by kind stays bounded while the owner cleanup scans all live sessions.
+ */
 export function registerTalkConnectionCleanup(
   connId: string,
   kind: TalkConnectionCleanupKind,
-  cleanup: () => void | Promise<void>,
+  cleanup: () => void,
 ): void {
   const cleanups =
-    talkConnectionCleanups.get(connId) ??
-    new Map<TalkConnectionCleanupKind, TalkConnectionCleanup>();
-  const previous = cleanups.get(kind);
-  // Each kind scans its live sessions; retain a failed original before the latest replacement.
-  if (previous?.pending || previous?.failed) {
-    previous.nextRun = cleanup;
-  } else {
-    cleanups.set(kind, { run: cleanup, failed: false });
-  }
+    talkConnectionCleanups.get(connId) ?? new Map<TalkConnectionCleanupKind, () => void>();
+  cleanups.set(kind, cleanup);
   talkConnectionCleanups.set(connId, cleanups);
 }
 
-/** Starts cleanup without blocking the socket callback and reports asynchronous failures. */
+/** Runs and forgets every Talk cleanup owned by a disconnected gateway connection. */
 export function cleanupTalkConnection(
   connId: string,
   log: { warn: (message: string) => void },
@@ -144,24 +60,15 @@ export function cleanupTalkConnection(
   if (!cleanups) {
     return;
   }
-  // Snapshot owners because callbacks can remove or replace cleanup kinds.
-  const snapshot = [...cleanups];
-  for (const [kind, cleanup] of snapshot) {
-    if (cleanup.pending) {
-      continue;
-    }
-    const report = (error: unknown) => {
+  // Delete first so cleanup failures or re-entrancy cannot retain stale connection owners.
+  talkConnectionCleanups.delete(connId);
+  for (const [kind, cleanup] of cleanups) {
+    try {
+      cleanup();
+    } catch (error) {
       log.warn(
         `failed to run ${kind} Talk cleanup after connection disconnect: ${formatError(error)}`,
       );
-    };
-    try {
-      const pending = runTalkConnectionCleanup(connId, kind, cleanup);
-      if (pending) {
-        void pending.catch(report);
-      }
-    } catch (error) {
-      report(error);
     }
   }
 }

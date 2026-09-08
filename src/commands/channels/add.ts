@@ -28,7 +28,7 @@ import { normalizeExternalChannelSetupConfig } from "../channel-setup/config-com
 import { resolveChannelSetupOwner } from "../channel-setup/owner.js";
 import { assertAccountSelectorForMutation } from "./account-selector.js";
 import { channelLabel } from "./runtime-label.js";
-import { requireValidConfigForWrite, shouldUseWizard } from "./shared.js";
+import { requireValidConfigFileSnapshot, shouldUseWizard } from "./shared.js";
 
 const loadChannelSetupPluginInstall = createLazyPromise(
   () => import("../channel-setup/plugin-install.js"),
@@ -133,11 +133,12 @@ async function channelsAddCommandImpl(
   params?: { hasFlags?: boolean; beforePersistentEffect?: () => Promise<void> },
 ) {
   assertAccountSelectorForMutation(opts.account);
-  const writeSnapshot = await requireValidConfigForWrite(runtime);
-  if (!writeSnapshot) {
+  const configSnapshot = await requireValidConfigFileSnapshot(runtime);
+  if (!configSnapshot) {
     return;
   }
-  const cfg = writeSnapshot.snapshot.sourceConfig;
+  const cfg = (configSnapshot.sourceConfig ?? configSnapshot.config) as OpenClawConfig;
+  const baseHash = configSnapshot.hash;
   let nextConfig = cfg;
   let pluginRegistrySourceChanged = false;
 
@@ -161,7 +162,8 @@ async function channelsAddCommandImpl(
       return;
     }
     await runChannelsAddWizardFlow({
-      writeSnapshot,
+      cfg,
+      ...(baseHash !== undefined ? { baseHash } : {}),
       runtime,
       prompter: createClackPrompter(),
       ...(workspaceDir ? { workspaceDir } : {}),
@@ -302,12 +304,13 @@ async function channelsAddCommandImpl(
 
   await params?.beforePersistentEffect?.();
   const committed = await commitConfigWithPendingPluginInstalls({
-    sourceConfig: nextConfig,
-    writeOptions: writeSnapshot.writeOptions,
-    baseHash: writeSnapshot.snapshot.hash,
+    nextConfig,
+    ...(baseHash !== undefined ? { baseHash } : {}),
   });
+  const writtenConfig = committed.config;
   if (committed.movedInstallRecords || pluginRegistrySourceChanged) {
     await refreshPluginRegistryAfterConfigMutation({
+      config: writtenConfig,
       reason: "source-changed",
       ...(committed.movedInstallRecords ? { installRecords: committed.installRecords } : {}),
       logger: { warn: (message) => runtime.log(message) },
@@ -334,7 +337,7 @@ async function channelsAddCommandImpl(
             }),
         },
       ],
-      configPath: committed.path,
+      cfg: writtenConfig,
       runtime,
       ...(params?.beforePersistentEffect
         ? { beforePersistentEffect: params.beforePersistentEffect }

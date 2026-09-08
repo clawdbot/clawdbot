@@ -1,3 +1,4 @@
+// Memory Host SDK module implements batch runner behavior.
 import { resolveSafeTimeoutDelayMs } from "../../../gateway-client/src/timeouts.js";
 import { formatBatchErrorDetail } from "./batch-error-utils.js";
 import { applyEmbeddingBatchOutputLine, readEmbeddingBatchJsonl } from "./batch-output.js";

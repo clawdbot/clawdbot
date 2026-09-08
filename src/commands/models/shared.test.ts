@@ -1,6 +1,6 @@
 // Model command shared tests cover shared config and provider helper behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig, TransformConfigFileParams } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { loadValidConfigOrThrow, resolveModelsTargetAgent, updateConfig } from "./shared.js";
 
 const mocks = vi.hoisted(() => ({
@@ -10,22 +10,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../../config/config.js", () => ({
   readConfigFileSnapshot: (...args: unknown[]) => mocks.readConfigFileSnapshot(...args),
-  transformConfigFile: async ({ transform }: TransformConfigFileParams<unknown>) => {
-    const loaded = await mocks.readConfigFileSnapshot();
-    const snapshot = {
-      path: "/tmp/openclaw.json",
-      parsed: loaded.sourceConfig ?? loaded.config,
-      runtimeConfig: loaded.config,
-      ...loaded,
-    };
-    const { nextConfig, result } = await transform(
-      snapshot.sourceConfig ?? snapshot.config,
-      { snapshot, previousHash: snapshot.hash ?? null, attempt: 0 },
-      {},
-    );
-    await mocks.replaceConfigFile({ sourceConfig: nextConfig, baseHash: snapshot.hash });
-    return { nextConfig, result };
-  },
+  replaceConfigFile: (...args: unknown[]) => mocks.replaceConfigFile(...args),
 }));
 
 describe("models/shared", () => {
@@ -129,7 +114,7 @@ describe("models/shared", () => {
 
     expect(mocks.replaceConfigFile).toHaveBeenCalledOnce();
     const [replaceParams] = mocks.replaceConfigFile.mock.calls[0] ?? [];
-    expect(replaceParams?.sourceConfig.update).toEqual({ channel: "beta" });
+    expect(replaceParams?.nextConfig.update).toEqual({ channel: "beta" });
     expect(replaceParams?.baseHash).toBe("config-1");
   });
 
@@ -161,7 +146,7 @@ describe("models/shared", () => {
 
     expect(mocks.replaceConfigFile).toHaveBeenCalledOnce();
     const [replaceParams] = mocks.replaceConfigFile.mock.calls[0] ?? [];
-    expect(replaceParams?.sourceConfig).toEqual(sourceConfig);
+    expect(replaceParams?.nextConfig).toEqual(sourceConfig);
     expect(replaceParams?.baseHash).toBe("config-2");
   });
 });

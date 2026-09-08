@@ -49,21 +49,6 @@ const writeClient = () => ({ clientIp: "127.0.0.1", scopes: ["operator.write"] }
 const rootControlUiBasePath = () => undefined;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function persistentStore() {
-  resetPluginStateStoreForTests();
-  const keyedStore = createPluginStateKeyedStoreForTests<BeamStoredSession>("beam", {
-    namespace: "sessions",
-    maxEntries: BEAM_MAX_SESSIONS,
-    overflowPolicy: "evict-oldest",
-    defaultTtlMs: BEAM_RETENTION_MS,
-    env: { OPENCLAW_STATE_DIR: tempDirs.make("beam-store-") },
-  });
-  const store = createBeamStore({
-    state: { openKeyedStore: () => keyedStore },
-  } as unknown as PluginRuntime);
-  return { keyedStore, store };
-}
-
 function memoryStore(): BeamStore & { values: Map<string, BeamStoredSession> } {
   const values = new Map<string, BeamStoredSession>();
   return {
@@ -77,7 +62,6 @@ function memoryStore(): BeamStore & { values: Map<string, BeamStoredSession> } {
       return true;
     },
     get: async (beamId) => values.get(beamId),
-    delete: async (beamId) => values.delete(beamId),
     list: async () => [...values.values()],
   };
 }
@@ -264,7 +248,17 @@ describe("Beam receiver", () => {
   });
 
   it("orders replacement snapshots without refreshing stale state", async () => {
-    const { keyedStore, store } = persistentStore();
+    resetPluginStateStoreForTests();
+    const keyedStore = createPluginStateKeyedStoreForTests<BeamStoredSession>("beam", {
+      namespace: "sessions",
+      maxEntries: BEAM_MAX_SESSIONS,
+      overflowPolicy: "evict-oldest",
+      defaultTtlMs: BEAM_RETENTION_MS,
+      env: { OPENCLAW_STATE_DIR: tempDirs.make("beam-snapshot-ordering-") },
+    });
+    const store = createBeamStore({
+      state: { openKeyedStore: () => keyedStore },
+    } as unknown as PluginRuntime);
     let receivedAt = 100;
     let profileId = "terminal-publisher";
     const endpoint = await serve(store, {
@@ -583,41 +577,6 @@ describe("Beam mirror receiver boundary", () => {
 });
 
 describe("Beam session catalog", () => {
-  it("permanently deletes only known gateway sessions and allows re-upload", async () => {
-    const { store } = persistentStore();
-    const endpoint = await serve(store);
-    const catalog = createBeamSessionCatalog(store);
-    const params = {
-      agentId: "main",
-      hostId: "gateway",
-      threadId: sampleUpload().beamId,
-      confirmNoOtherRunner: true as const,
-    };
-
-    try {
-      expect((await postUpload(endpoint)).status).toBe(200);
-      await expect(catalog.archive?.({ ...params, hostId: "other-host" })).rejects.toThrow(
-        "unknown Beam host: other-host",
-      );
-      await expect(catalog.read(params)).resolves.toMatchObject({ threadId: params.threadId });
-      await expect(catalog.archive?.({ ...params, threadId: "missing" })).rejects.toThrow(
-        "unknown Beam session: missing",
-      );
-
-      await expect(catalog.archive?.(params)).resolves.toEqual({ ok: true });
-      const [host] = await catalog.list({ agentId: "main" });
-      expect(host?.sessions).toEqual([]);
-      await expect(catalog.read(params)).rejects.toThrow(
-        `unknown Beam session: ${params.threadId}`,
-      );
-
-      expect((await postUpload(endpoint)).status).toBe(200);
-      await expect(catalog.read(params)).resolves.toMatchObject({ threadId: params.threadId });
-    } finally {
-      resetPluginStateStoreForTests();
-    }
-  });
-
   it("queries Beam ids by strict share-prefix without choosing between collisions", async () => {
     const store = memoryStore();
     const ids = [
@@ -699,7 +658,7 @@ describe("Beam session catalog", () => {
       status: "live",
       source: "claude",
       canContinue: true,
-      canArchive: true,
+      canArchive: false,
     });
     expect(host.nextCursor).toBe("1");
     expect(catalog.audience).toBe("gateway-operators");
@@ -772,6 +731,7 @@ describe("Beam session catalog", () => {
         cursor: transcript.nextCursor,
       }),
     ).rejects.toThrow("stale Beam transcript cursor");
+    expect(catalog.archive).toBeUndefined();
     expect(catalog.openTerminal).toBeUndefined();
   });
 });

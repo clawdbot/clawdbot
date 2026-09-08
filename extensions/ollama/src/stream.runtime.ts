@@ -390,7 +390,6 @@ interface OllamaChatRequest {
 interface OllamaChatMessage {
   role: "system" | "user" | "assistant" | "tool";
   content: string;
-  thinking?: string;
   images?: string[];
   tool_calls?: OllamaToolCall[];
   tool_name?: string;
@@ -470,7 +469,6 @@ function estimateOllamaPromptTokens(params: {
   let chars = 0;
   for (const message of params.messages) {
     chars += estimateStringChars(message.content);
-    chars += message.thinking ? estimateStringChars(message.thinking) : 0;
     chars += safeJsonLength(message.images);
     chars += safeJsonLength(message.tool_calls);
     chars += message.tool_name ? estimateStringChars(message.tool_name) : 0;
@@ -513,7 +511,6 @@ function resolveOptionalUsageCount(value: number | undefined): number | undefine
 
 type InputContentPart =
   | { type: "text"; text: string }
-  | ThinkingContent
   | { type: "image"; data: string }
   | { type: "toolCall"; id: string; name: string; arguments: unknown }
   | { type: "tool_use"; id: string; name: string; input: unknown };
@@ -538,22 +535,6 @@ function extractOllamaImages(content: unknown): string[] {
   return (content as InputContentPart[])
     .filter((part): part is { type: "image"; data: string } => part.type === "image")
     .map((part) => part.data);
-}
-
-function extractOllamaThinking(content: unknown): string {
-  if (!Array.isArray(content)) {
-    return "";
-  }
-  return content
-    .filter(
-      (part): part is ThinkingContent =>
-        isRecord(part) &&
-        part.type === "thinking" &&
-        typeof part.thinking === "string" &&
-        !part.redacted,
-    )
-    .map((part) => part.thinking)
-    .join("");
 }
 
 function ensureArgsObject(value: unknown): Record<string, unknown> {
@@ -774,12 +755,10 @@ export function convertToOllamaMessages(
 
     if (msg.role === "assistant") {
       const text = extractTextContent(msg.content);
-      const thinking = extractOllamaThinking(msg.content);
       const toolCalls = extractToolCalls(msg.content, options);
       result.push({
         role: "assistant",
         content: text,
-        ...(thinking ? { thinking } : {}),
         ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
       });
       continue;

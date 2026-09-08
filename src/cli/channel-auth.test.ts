@@ -51,10 +51,6 @@ vi.mock("../config/config.js", () => ({
   getRuntimeConfig: mocks.loadConfig,
   loadConfig: mocks.loadConfig,
   readConfigFileSnapshot: mocks.readConfigFileSnapshot,
-  readConfigFileSnapshotForWrite: async () => ({
-    snapshot: await mocks.readConfigFileSnapshot(),
-    writeOptions: {},
-  }),
   replaceConfigFile: mocks.replaceConfigFile,
 }));
 
@@ -151,44 +147,44 @@ describe("channel-auth", () => {
       sourceConfig: mocks.loadConfig(),
     }));
     mocks.applyPluginAutoEnable.mockImplementation(({ config }) => ({ config, changes: [] }));
-    mocks.replaceConfigFile.mockImplementation(async ({ sourceConfig }) => {
-      mocks.loadConfig.mockReturnValue(sourceConfig);
+    mocks.replaceConfigFile.mockImplementation(async ({ nextConfig }) => {
+      mocks.loadConfig.mockReturnValue(nextConfig);
     });
     mocks.commitConfigWithPendingPluginInstalls.mockImplementation(
       async ({
-        sourceConfig,
+        nextConfig,
         baseHash,
       }: {
-        sourceConfig: { plugins?: { installs?: Record<string, unknown> } };
+        nextConfig: { plugins?: { installs?: Record<string, unknown> } };
         baseHash?: string;
       }) => {
         if (
-          !sourceConfig.plugins?.installs ||
-          Object.keys(sourceConfig.plugins.installs).length === 0
+          !nextConfig.plugins?.installs ||
+          Object.keys(nextConfig.plugins.installs).length === 0
         ) {
           await mocks.replaceConfigFile({
-            sourceConfig,
+            nextConfig,
             ...(baseHash !== undefined ? { baseHash } : {}),
           });
           return {
-            config: sourceConfig,
+            config: nextConfig,
             installRecords: {},
             movedInstallRecords: false,
           };
         }
-        const { installs: _installs, ...plugins } = sourceConfig.plugins;
+        const { installs: _installs, ...plugins } = nextConfig.plugins;
         const strippedConfig =
           Object.keys(plugins).length > 0
-            ? { ...sourceConfig, plugins }
-            : Object.fromEntries(Object.entries(sourceConfig).filter(([key]) => key !== "plugins"));
+            ? { ...nextConfig, plugins }
+            : Object.fromEntries(Object.entries(nextConfig).filter(([key]) => key !== "plugins"));
         await mocks.replaceConfigFile({
-          sourceConfig: strippedConfig,
+          nextConfig: strippedConfig,
           ...(baseHash !== undefined ? { baseHash } : {}),
           writeOptions: { unsetPaths: [["plugins", "installs"]] },
         });
         return {
           config: strippedConfig,
-          installRecords: sourceConfig.plugins.installs,
+          installRecords: nextConfig.plugins.installs,
           movedInstallRecords: true,
         };
       },
@@ -520,7 +516,7 @@ describe("channel-auth", () => {
       channelInput: "whatsapp",
     });
     expect(mocks.replaceConfigFile).toHaveBeenCalledWith({
-      sourceConfig: autoEnabledCfg,
+      nextConfig: autoEnabledCfg,
       baseHash: "config-1",
     });
     expect(mocks.resolveAccount.mock.calls[0]?.[0]).toEqual(refreshedRuntimeConfig);
@@ -538,7 +534,7 @@ describe("channel-auth", () => {
       method: "channels.logout",
     });
     expect(mocks.replaceConfigFile).toHaveBeenCalledWith({
-      sourceConfig: autoEnabledCfg,
+      nextConfig: autoEnabledCfg,
       baseHash: "config-1",
     });
   });
@@ -684,7 +680,7 @@ describe("channel-auth", () => {
       },
     );
     expect(mocks.replaceConfigFile).toHaveBeenCalledWith({
-      sourceConfig: { channels: { whatsapp: {} } },
+      nextConfig: { channels: { whatsapp: {} } },
       baseHash: "config-1",
     });
     expect(mocks.login).toHaveBeenCalledTimes(1);
@@ -736,7 +732,7 @@ describe("channel-auth", () => {
     await runChannelLogin({ channel: "whatsapp" }, runtime);
 
     expect(mocks.replaceConfigFile).toHaveBeenCalledWith({
-      sourceConfig: {
+      nextConfig: {
         channels: { whatsapp: {} },
         plugins: {
           entries: { whatsapp: { enabled: true } },

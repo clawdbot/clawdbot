@@ -32,16 +32,14 @@ export function preparedPluginGenerationSupportsSelections(
     selections: input.runtimePluginSelections,
     metadataSnapshot: generation.pluginMetadataSnapshot,
   });
-  // Failed and disabled loads are recorded generation outcomes, not missing owners.
-  // Borrowing preserves those outcomes; downstream model resolution owns availability.
+  // Failed loads are recorded generation outcomes, not missing owners. Preserve their
+  // diagnostics without making unrelated configured harnesses a condition of borrowing.
   return (
     registry !== undefined &&
     (plan.pluginIds ?? []).every(
       (id) =>
-        registry.plugins.some(
-          (plugin) =>
-            plugin.id === id && (plugin.status === "error" || plugin.status === "disabled"),
-        ) || registryContainsRuntimePluginIds(registry, [id]),
+        registry.plugins.some((plugin) => plugin.id === id && plugin.status === "error") ||
+        registryContainsRuntimePluginIds(registry, [id]),
     )
   );
 }

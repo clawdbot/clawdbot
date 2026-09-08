@@ -136,8 +136,9 @@ fi
       expect(readFileSync(path.join(tempDir, "container-stdin"), "utf8")).toBe(
         "container stdin proof\n",
       );
-      const dockerCommands = readFileSync(path.join(tempDir, "docker-cleanup"), "utf8");
-      expect(dockerCommands.trimEnd().split("\n").at(-1)).toBe("rm -f proof-container");
+      expect(readFileSync(path.join(tempDir, "docker-cleanup"), "utf8")).toBe(
+        "rm -f proof-container\n",
+      );
       expect(readdirSync(tempDir).sort()).toEqual(["container-stdin", "docker-cleanup"]);
       expect(result.stdout).not.toContain("old log head");
       if (status === 0) {

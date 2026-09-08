@@ -53,7 +53,7 @@ Bun remains usable as an optional package-script runner. The default package man
 
 Bun blocks dependency lifecycle scripts unless explicitly trusted. For this repo, the commonly blocked scripts are not required:
 
-- `baileys` `preinstall`: checks Node major >= 20 (OpenClaw requires Node 24.16+ or 26.1+, with Node 26 recommended)
+- `baileys` `preinstall`: checks Node major >= 20 (OpenClaw requires Node 22.22.3+, 24.15+, or 25.9+, with Node 26 recommended)
 - `protobufjs` `postinstall`: emits warnings about incompatible version schemes (no build artifacts)
 
 If you hit a runtime issue that needs these scripts, trust them explicitly:
@@ -64,49 +64,13 @@ bun pm trust baileys protobufjs
 
 ## Caveats
 
-Bun 1.4.2 can retain SQLite statement handles and WAL/shared-memory files after
-`DatabaseSync.close()` or `Symbol.dispose()`. Use Node when database files must
-be released promptly after closing. This is a temporary runtime workaround while
-the [upstream close fix](https://github.com/oven-sh/bun/pull/40005) is pending;
-OpenClaw cannot finalize these handles through Bun's public `node:sqlite` API.
-
-On macOS, install Homebrew SQLite to enable native `sqlite-vec` KNN memory queries:
-
-```sh
-brew install sqlite
-```
-
-OpenClaw automatically selects a WAL-reset-safe, extension-capable SQLite library
-from Homebrew or MacPorts before opening a database, and uses the same library in
-the memory KNN child process. Discovery checks `$HOMEBREW_PREFIX/opt/sqlite/lib/libsqlite3.dylib`
-first, then the standard Homebrew paths under `/opt/homebrew` and `/usr/local`,
-then `/opt/local/lib/libsqlite3.dylib` for MacPorts. Linux and Windows Bun already
-support extension loading and need no additional SQLite installation.
-
-To override discovery, set `OPENCLAW_SQLITE_LIBRARY` in the process environment
-before starting OpenClaw:
-
-```sh
-OPENCLAW_SQLITE_LIBRARY=/path/to/libsqlite3.dylib bun openclaw.mjs gateway
-```
-
-The override must point to a loadable SQLite library that meets the WAL safety
-floor and supports extension loading. An invalid override fails with an error
-explaining how to fix or unset it. Node and Bun on platforms other than macOS
-ignore this override; Gateway startup logs a warning when it is ignored.
-
-If you previously used a Bun preload script that calls `Database.setCustomSQLite()`,
-remove that preload and set `OPENCLAW_SQLITE_LIBRARY` to the same library path
-instead. Bun permits that hook only once per process; keeping the preload causes
-startup to fail with `SQLite already loaded`, even when both selections name the
-same library. The environment override lets OpenClaw select the library before
-opening databases and forward the path to the memory KNN child.
-
-Without a suitable library on macOS, Bun keeps Apple's system SQLite, which omits
-native extension loading. OpenClaw can open ordinary agent databases when that
-library meets the WAL safety floor. Memory search falls back to a batched
-embedding scan with the same provider and source filters and cancellation checks
-between batches. This can be slower on large indexes.
+On macOS, Bun uses Apple's system SQLite, which omits native extension loading.
+OpenClaw can open ordinary agent databases without extension loading when that
+library meets the WAL safety floor. Operations that require extensions, including `sqlite-vec`, need an
+extension-capable SQLite library. Use Node, or preload a compatible SQLite
+library with Bun's [custom SQLite setup](https://bun.sh/docs/runtime/sqlite#loadextension)
+before opening any database. OpenClaw does not select a different SQLite library
+automatically.
 
 Some package scripts hardcode `pnpm` internally (for example `check:docs`, `ui:*`, `protocol:check`). Running them via `bun run` still shells out to `pnpm`, so just run those via `pnpm` directly.
 

@@ -5,7 +5,6 @@ import { createRequire } from "node:module";
 import { createServer as createNetServer } from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { HelloOk } from "@openclaw/gateway-protocol";
 import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import { buildControlUiSessionPath } from "@openclaw/session-url-contract";
 import type { ConsoleMessage, Frame, Locator, Page, Request } from "playwright";
@@ -13,12 +12,7 @@ import type { InlineConfig, Plugin, PreviewServer, ViteDevServer } from "vite";
 import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/version.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-contract.js";
 import { controlUiPluginAssetRoot } from "../../../src/gateway/control-ui-plugin-assets-contract.js";
-import type {
-  AgentsListResult,
-  ModelCatalogEntry,
-  UpdateAvailable,
-  UpdateScheduleState,
-} from "../api/types.ts";
+import type { ModelCatalogEntry, UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
 import type { AuthenticatedUser } from "../app/user-profile.ts";
 import { normalizeControlUiBuildInfo } from "../build-info-normalizers.ts";
 import type { ControlUiBuildInfo } from "../build-info.ts";
@@ -402,8 +396,6 @@ export type ControlUiMockGatewayScenario = {
   controlUiBuildSource?: "bundled" | "configured";
   serverVersion?: string;
   deviceToken?: string;
-  authMethod?: HelloOk["auth"]["method"];
-  authMode?: HelloOk["snapshot"]["authMode"] | null;
   featureMethods?: string[];
   /** Simulate a legacy Gateway that predates the advertised method catalog. */
   omitFeatureMethods?: boolean;
@@ -471,7 +463,7 @@ export type ControlUiMockGatewayScenario = {
   operatorScopes?: string[];
   /** Selected fixture and event default; use controlUiSessionUrl to select it in the UI. */
   sessionKey?: string;
-  sessionScope?: AgentsListResult["scope"];
+  sessionScope?: "agent" | "global";
   mainSessionKey?: string;
   /** Initial gateway-owned custom group catalog (sessions.groups.*), in order. */
   sessionGroups?: string[];
@@ -1049,8 +1041,6 @@ function normalizeScenario(
     controlUiBuildSource: scenario.controlUiBuildSource ?? "bundled",
     serverVersion: scenario.serverVersion?.trim() || "e2e",
     deviceToken: scenario.deviceToken?.trim() || "e2e-device-token",
-    authMethod: scenario.authMethod ?? "token",
-    authMode: scenario.authMode ?? null,
     // Baseline scenarios represent a current Gateway. Tests for unsupported or
     // mixed-version methods provide an explicit narrower catalog.
     featureMethods: scenario.featureMethods ?? [...defaultControlUiFeatureMethods],
@@ -1092,7 +1082,7 @@ function normalizeScenario(
           ]),
     sessionArchiveFiltering: scenario.sessionArchiveFiltering ?? false,
     sessionKey,
-    sessionScope: scenario.sessionScope ?? "per-sender",
+    sessionScope: scenario.sessionScope ?? "agent",
     sessionGroups: scenario.sessionGroups ?? [],
     sessionGroupDefaults: scenario.sessionGroupDefaults ?? {},
     terminalEnabled: scenario.terminalEnabled ?? false,
@@ -2104,7 +2094,6 @@ function installControlUiMockGateway(
             : {
                 auth: {
                   deviceToken: connectedDeviceToken,
-                  method: scenario.authMethod,
                   recoveryMigrationAllowed: true as const,
                   recoveryScope: "e2e-recovery-scope",
                   role: "operator",
@@ -2138,7 +2127,6 @@ function installControlUiMockGateway(
             hasMultipleSessionSharingIdentities: scenario.hasMultipleSessionSharingIdentities,
           },
           snapshot: {
-            ...(scenario.authMode ? { authMode: scenario.authMode } : {}),
             suspension: { phase: scenario.gatewaySuspensionPhase },
             ...presenceSnapshot(params),
             ...(scenario.updateAvailable ? { updateAvailable: scenario.updateAvailable } : {}),

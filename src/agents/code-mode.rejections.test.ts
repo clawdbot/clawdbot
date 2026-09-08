@@ -50,11 +50,11 @@ describe("Code Mode promise rejection settlement", () => {
       code: 'void Promise.reject(new Error("lost failure"));',
       userFrame: true,
     },
-    { name: "detached tool", code: "void failing_tool({});", userFrame: true },
+    { name: "detached tool", code: "void failing_tool({});", userFrame: false },
     {
       name: "detached combinator",
       code: "void Promise.all([failing_tool({})]);",
-      userFrame: true,
+      userFrame: false,
     },
     {
       name: "rejection before snapshot",
@@ -170,13 +170,7 @@ describe("Code Mode promise rejection settlement", () => {
           code,
         });
       }
-      const failure = {
-        name: "Error",
-        message: "synthetic actionable cause",
-        code: "SYNTHETIC",
-        effectStatus: "unknown",
-        location: expect.stringMatching(/openclaw-code-mode:user\.js:2:/),
-      };
+      const failure = { name: "Error", message: "synthetic actionable cause", code: "SYNTHETIC" };
       const value = {
         results: [
           { status: "rejected", reason: failure },
@@ -185,15 +179,9 @@ describe("Code Mode promise rejection settlement", () => {
       };
       expect(result).toMatchObject({ status: "completed", value });
       expect(result.output).toEqual([
-        { type: "text", text: expect.any(String) },
+        { type: "text", text: JSON.stringify(failure) },
         { type: "json", value },
       ]);
-      expect(
-        JSON.parse(
-          expectDefined((result.output as Array<{ text: string }>)[0], "text output").text,
-        ),
-      ).toEqual(failure);
-      expect(JSON.stringify(result.output)).not.toContain("controller.js");
       expect(failing.execute).toHaveBeenCalledTimes(1);
       expect(testing.activeRuns.size).toBe(0);
     },

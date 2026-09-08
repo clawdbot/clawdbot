@@ -9,7 +9,7 @@ import { hasExplicitPluginIdScope, normalizePluginIdScope } from "./plugin-scope
 import type { PluginRegistry } from "./registry.js";
 import { getActivePluginRegistryWorkspaceDir } from "./runtime.js";
 import {
-  buildPluginRuntimeLoadOptions,
+  buildPluginRuntimeLoadOptionsFromValues,
   createPluginRuntimeLoaderLogger,
 } from "./runtime/load-context.js";
 
@@ -137,7 +137,7 @@ function resolveWebProviderLoadOptions(
   context: WebProviderRuntimeContext,
   params: ResolvePluginWebProvidersParams,
 ) {
-  return buildPluginRuntimeLoadOptions(
+  return buildPluginRuntimeLoadOptionsFromValues(
     {
       env: context.env,
       config: context.config,
@@ -193,7 +193,7 @@ export function resolvePluginWebProviders<TEntry>(
       }
     }
     const registry = loadOpenClawPlugins(
-      buildPluginRuntimeLoadOptions(
+      buildPluginRuntimeLoadOptionsFromValues(
         {
           config: withActivatedPluginIds({
             config: params.config,

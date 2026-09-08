@@ -5,7 +5,6 @@ import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
-import { replaceConfigFile, type OpenClawConfig } from "../config/config.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -145,9 +144,8 @@ describe("plugin install record commit rollback", () => {
                   },
                 },
               },
-              commit: async (nextConfig) => {
+              commit: async () => {
                 commits += 1;
-                return await replaceConfigFile({ sourceConfig: nextConfig });
               },
             });
             expect(commits).toBe(1);
@@ -164,9 +162,8 @@ describe("plugin install record commit rollback", () => {
             );
           });
           let commits = 0;
-          const commit = async (nextConfig: OpenClawConfig) => {
+          const commit = async () => {
             commits += 1;
-            return await replaceConfigFile({ sourceConfig: nextConfig });
           };
           await expect(
             commitConfigWriteWithPendingPluginInstalls({

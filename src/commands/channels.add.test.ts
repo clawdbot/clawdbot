@@ -22,7 +22,6 @@ import {
   createExternalChatCatalogEntry,
   createExternalChatSetupPlugin,
 } from "./channels.plugin-install.test-helpers.js";
-import { committedConfigFiles as configFiles } from "./committed-config.test-support.js";
 import {
   baseConfigSnapshot,
   createTestConfigSnapshot,
@@ -476,21 +475,19 @@ describe("channelsAddCommand", () => {
 
   beforeEach(async () => {
     resetPluginRuntimeStateForTest();
-    configFiles.clear();
     configMocks.readConfigFileSnapshot.mockClear();
-    configMocks.readConfigFileSnapshotForWrite.mockClear();
     configMocks.writeConfigFile.mockClear();
     configMocks.replaceConfigFile
       .mockReset()
-      .mockImplementation(async (params: { sourceConfig: unknown }) => {
-        await configMocks.writeConfigFile(params.sourceConfig);
+      .mockImplementation(async (params: { nextConfig: unknown }) => {
+        await configMocks.writeConfigFile(params.nextConfig);
       });
     pluginInstallRecordCommitMocks.commitConfigWithPendingPluginInstalls.mockReset();
     pluginInstallRecordCommitMocks.commitConfigWithPendingPluginInstalls.mockImplementation(
-      async (params: { sourceConfig: OpenClawConfig }) => {
-        await configMocks.writeConfigFile(params.sourceConfig);
+      async (params: { nextConfig: unknown }) => {
+        await configMocks.writeConfigFile(params.nextConfig);
         return {
-          ...configFiles.write(params.sourceConfig),
+          config: params.nextConfig,
           installRecords: {},
           movedInstallRecords: false,
         };
@@ -540,57 +537,6 @@ describe("channelsAddCommand", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
   });
-
-  it.each(["direct", "guided", "gateway"] as const)(
-    "keeps the original write ownership across awaited %s channel setup",
-    async (flow) => {
-      const cfg: OpenClawConfig = {
-        gateway: { auth: { mode: "token", token: "at-read" } },
-        agents: {
-          ownership: "explicit",
-          entries: { research: {} },
-          defaults: { systemAgent: { agentId: "research" } },
-        },
-      };
-      const snapshot = createTestConfigSnapshot(cfg);
-      const writeOptions = {
-        expectedConfigPath: snapshot.path,
-        envSnapshotForRestore: { CHANNEL_SETUP_TOKEN: "at-read" },
-      };
-      configMocks.readConfigFileSnapshot.mockResolvedValue(snapshot);
-      configMocks.readConfigFileSnapshotForWrite.mockResolvedValueOnce({ snapshot, writeOptions });
-      vi.stubEnv("CHANNEL_SETUP_TOKEN", "at-read");
-      const changeEnvironment = async () => {
-        await Promise.resolve();
-        vi.stubEnv("CHANNEL_SETUP_TOKEN", "after-await");
-      };
-      channelWizardMocks.setupChannels.mockImplementationOnce(async (...args: unknown[]) => {
-        await changeEnvironment();
-        const options = args[3] as SetupChannelsOptions;
-        options.onSelection?.(["lifecycle-chat"]);
-        options.onAccountId?.("lifecycle-chat", "default");
-        return cfg;
-      });
-      if (flow === "gateway") {
-        await runChannelsSetupWizard(
-          { channel: "lifecycle-chat", beforePersistentEffect: changeEnvironment },
-          runtime,
-          channelWizardMocks.prompter,
-        );
-      } else {
-        await channelsAddCommand({ channel: "lifecycle-chat", token: "fixture-token" }, runtime, {
-          hasFlags: flow === "direct",
-          beforePersistentEffect: changeEnvironment,
-        });
-      }
-      expect(process.env.CHANNEL_SETUP_TOKEN).toBe("after-await");
-      expect(
-        pluginInstallRecordCommitMocks.commitConfigWithPendingPluginInstalls,
-      ).toHaveBeenCalledWith(expect.objectContaining({ writeOptions }));
-      expect(configMocks.writeConfigFile).toHaveBeenCalledOnce();
-      expect(runtime.error).not.toHaveBeenCalled();
-    },
-  );
 
   it.each([false, true])("retains the selected workspace when hasFlags=%s", async (hasFlags) => {
     const cfg: OpenClawConfig = {
@@ -743,39 +689,6 @@ describe("channelsAddCommand", () => {
     expect(setupOptions().deferDeviceLinkToClient).toBe(true);
   });
 
-  it.each(["authority", "write"] as const)(
-    "does not run guided hooks after %s rejection",
-    async (failure) => {
-      const hook = vi.fn(async () => {});
-      const beforePersistentEffect = vi.fn(async () => {
-        if (failure === "authority") {
-          throw new Error("owner revoked");
-        }
-      });
-      channelWizardMocks.setupChannels.mockImplementationOnce(async (...args: unknown[]) => {
-        const options = args[3] as SetupChannelsOptions;
-        options.onPostWriteHook?.({ channel: "matrix", accountId: "ops", run: hook });
-        return { ...(args[0] as OpenClawConfig), messages: { responsePrefix: "configured" } };
-      });
-      if (failure === "write") {
-        pluginInstallRecordCommitMocks.commitConfigWithPendingPluginInstalls.mockRejectedValueOnce(
-          new Error("write failed"),
-        );
-      }
-
-      await expect(
-        channelsAddCommand({}, runtime, { hasFlags: false, beforePersistentEffect }),
-      ).rejects.toThrow(failure === "authority" ? "owner revoked" : "write failed");
-
-      expect(hook).not.toHaveBeenCalled();
-      expect(beforePersistentEffect).toHaveBeenCalledOnce();
-      expect(configMocks.writeConfigFile).not.toHaveBeenCalled();
-      expect(
-        pluginInstallRecordCommitMocks.commitConfigWithPendingPluginInstalls,
-      ).toHaveBeenCalledTimes(failure === "authority" ? 0 : 1);
-    },
-  );
-
   it.each(["external-chat", "ext"])(
     "preselects a hosted catalog channel from the %s selector",
     async (channel) => {
@@ -925,7 +838,7 @@ describe("channelsAddCommand", () => {
 
     expect(
       pluginInstallRecordCommitMocks.commitConfigWithPendingPluginInstalls,
-    ).toHaveBeenCalledWith(expect.objectContaining({ sourceConfig: installedConfig }));
+    ).toHaveBeenCalledWith(expect.objectContaining({ nextConfig: installedConfig }));
     expect(
       pluginInstallRecordCommitMocks.commitConfigWithPendingPluginInstalls,
     ).toHaveBeenCalledOnce();
@@ -1438,6 +1351,13 @@ describe("channelsAddCommand", () => {
     expect(installCall().promptInstall).toBe(false);
     expect(loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenCalledTimes(1);
     expect(snapshotCall().forceSetupOnlyChannelPlugins).toBe(true);
+    const refreshedChannels = requireRecord(
+      requireRecord(refreshCall().config, "refresh config").channels,
+      "refresh channels",
+    );
+    expect(
+      requireRecord(refreshedChannels["external-chat"], "refreshed external chat").enabled,
+    ).toBe(true);
     expect(refreshCall().reason).toBe("source-changed");
     expectExternalChatEnabledConfigWrite();
     expect(runtime.error).not.toHaveBeenCalled();
@@ -1933,12 +1853,12 @@ describe("channelsAddCommand", () => {
       },
     };
     pluginInstallRecordCommitMocks.commitConfigWithPendingPluginInstalls.mockImplementationOnce(
-      async (params: { sourceConfig: OpenClawConfig }) => {
-        const { installs: _installs, ...plugins } = params.sourceConfig.plugins ?? {};
-        const writtenConfigLocal = { ...params.sourceConfig, plugins };
+      async (params: { nextConfig: OpenClawConfig }) => {
+        const { installs: _installs, ...plugins } = params.nextConfig.plugins ?? {};
+        const writtenConfigLocal = { ...params.nextConfig, plugins };
         await configMocks.writeConfigFile(writtenConfigLocal);
         return {
-          ...configFiles.write(writtenConfigLocal),
+          config: writtenConfigLocal,
           installRecords,
           movedInstallRecords: true,
         };
@@ -1968,7 +1888,7 @@ describe("channelsAddCommand", () => {
     );
 
     const commitCall = commitInstallCall();
-    const commitNextConfig = requireRecord(commitCall.sourceConfig, "commit source config");
+    const commitNextConfig = requireRecord(commitCall.nextConfig, "commit next config");
     expect(requireRecord(commitNextConfig.plugins, "commit plugins").installs).toEqual(
       installRecords,
     );

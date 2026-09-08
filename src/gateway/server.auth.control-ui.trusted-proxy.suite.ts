@@ -216,7 +216,6 @@ export function registerControlUiTrustedProxySuite(): void {
           client: { ...CONTROL_UI_CLIENT },
         });
         expect(res.ok).toBe(true);
-        expect(res.payload).toMatchObject({ auth: { method: "trusted-proxy" } });
         const payload = res.payload as
           | {
               auth?: { scopes?: string[]; deviceToken?: string };

@@ -88,10 +88,6 @@ extension AppState {
         var remoteUrl: String
         var remoteToken: String
         var dirtyFields: Set<GatewayConfigField>
-
-        var clearsPrimaryGateway: Bool {
-            self.connectionMode == .unconfigured && self.dirtyFields.contains(.mode)
-        }
     }
 
     struct GatewaySelectionSnapshot: Equatable {
@@ -106,31 +102,28 @@ struct GatewayConfigConflictRecoveryView: View {
     @Bindable var state: AppState
 
     var body: some View {
-        let conflict = self.state.gatewayConfigConflict
-        if let message = conflict?.message ?? state.gatewayConfigSyncFailure {
+        if let conflict = state.gatewayConfigConflict {
             HStack(alignment: .top, spacing: 10) {
                 Image(systemName: "exclamationmark.triangle.fill")
                     .foregroundStyle(.orange)
                     .accessibilityHidden(true)
 
                 VStack(alignment: .leading, spacing: 8) {
-                    Text(verbatim: message)
+                    Text(verbatim: conflict.message)
                         .fixedSize(horizontal: false, vertical: true)
 
-                    if conflict != nil {
-                        HStack(spacing: 8) {
-                            Button("Use file version") {
-                                self.state.useFileGatewayConfigConflict()
-                            }
-                            .buttonStyle(.bordered)
-
-                            Button("Keep my edits") {
-                                self.state.keepGatewayConfigEdits()
-                            }
-                            .buttonStyle(.borderedProminent)
+                    HStack(spacing: 8) {
+                        Button("Use file version") {
+                            self.state.useFileGatewayConfigConflict()
                         }
-                        .controlSize(.small)
+                        .buttonStyle(.bordered)
+
+                        Button("Keep my edits") {
+                            self.state.keepGatewayConfigEdits()
+                        }
+                        .buttonStyle(.borderedProminent)
                     }
+                    .controlSize(.small)
                 }
             }
         }

@@ -5,7 +5,6 @@ import { serveWorkerTasks } from "./worker-task-pool.js";
 
 export type PoolFixtureInput = {
   label: string;
-  exchanges?: number;
   counters?: SharedArrayBuffer;
   wait?: boolean;
   exitCode?: number;
@@ -20,7 +19,7 @@ export type PoolFixtureResult = {
 
 let previousBuffer: ArrayBuffer | undefined;
 serveWorkerTasks<PoolFixtureResult>(
-  async (input, channel) => {
+  (input) => {
     assert.ok(isRecord(input));
     assert.ok(typeof input.label === "string");
     if (input.exitCode !== undefined) {
@@ -33,13 +32,6 @@ serveWorkerTasks<PoolFixtureResult>(
       Atomics.add(counters, 0, 1);
       if (input.wait) {
         Atomics.wait(counters, 1, 0);
-      }
-    }
-    if (input.exchanges && channel) {
-      channel.consumeInput();
-      for (let index = 0; index < Number(input.exchanges); index++) {
-        const response = await channel.request({ label: input.label });
-        response.consumed();
       }
     }
     const previousBufferBytes = previousBuffer?.byteLength;

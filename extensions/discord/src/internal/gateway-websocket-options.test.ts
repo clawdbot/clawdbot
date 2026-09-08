@@ -1,15 +1,13 @@
 // Discord tests cover gateway websocket transport options.
+import { EventEmitter } from "node:events";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { webSocketCtorCalls, mockOwner } = vi.hoisted(() => {
-  const calls: Array<{ url: string; options: unknown }> = [];
-  const owner: { constructor: unknown } = { constructor: undefined };
-  return { webSocketCtorCalls: calls, mockOwner: owner };
-});
+const { webSocketCtorCalls } = vi.hoisted(() => ({
+  webSocketCtorCalls: [] as Array<{ url: string; options: unknown }>,
+}));
 
-vi.mock("./ws-runtime.js", async () => {
-  const { EventEmitter } = await import("node:events");
-  class MockWebSocket extends EventEmitter {
+vi.mock("ws", () => ({
+  WebSocket: class MockWebSocket extends EventEmitter {
     readyState = 1;
     send = vi.fn();
     close = vi.fn();
@@ -18,12 +16,8 @@ vi.mock("./ws-runtime.js", async () => {
       super();
       webSocketCtorCalls.push({ url, options });
     }
-  }
-  mockOwner.constructor = MockWebSocket;
-  return { WebSocket: MockWebSocket };
-});
-
-import { WebSocket } from "./ws-runtime.js";
+  },
+}));
 
 describe("GatewayPlugin websocket options", () => {
   let GatewayPlugin: typeof import("./gateway.js").GatewayPlugin;
@@ -34,7 +28,6 @@ describe("GatewayPlugin websocket options", () => {
   });
 
   it("bounds inbound gateway websocket payloads and the opening handshake", () => {
-    expect(WebSocket).toBe(mockOwner.constructor);
     const gateway = new GatewayPlugin({
       autoInteractions: false,
       url: "wss://gateway.example.test",

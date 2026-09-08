@@ -1,3 +1,4 @@
+// Markdown Core module implements ir behavior.
 import { avoidTrailingHighSurrogateBreak } from "@openclaw/normalization-core/utf16-slice";
 import MarkdownIt, {
   type MarkdownIt as MarkdownItParser,
@@ -13,14 +14,10 @@ import {
 } from "./assistant-transcript.js";
 import { chunkText } from "./chunk-text.js";
 import { matchMarkdownHtmlTag, tokenizeHtmlTags } from "./html-tags.js";
-import { appendAssistantTranscriptRoleText, appendImageAlternative } from "./ir-annotations.js";
 import {
-  appendHtmlTags,
-  copyHtmlTags,
-  defineMetadata,
-  RAW_HTML_TOKEN_TYPE,
-  type MarkdownHtmlMetadata,
-} from "./ir-metadata.js";
+  appendAssistantTranscriptRoleImage,
+  appendAssistantTranscriptRoleText,
+} from "./ir-annotations.js";
 import { computeNextMappedBlockStarts, sourceBlockNewlineCount } from "./ir-source-spacing.js";
 import {
   clampAnnotationSpans,
@@ -57,6 +54,8 @@ type LinkState = {
   labelStart: number;
   autoLinked: boolean;
 };
+
+const OPEN_MARKDOWN_HTML_TAG_PATTERN = /<\/?[a-zA-Z][a-zA-Z0-9-]*\b[^<>]*$/;
 
 const INLINE_STYLE_BY_TOKEN = new Map<string, MarkdownStyle>([
   ["underline_open", "underline"],
@@ -148,7 +147,7 @@ type MarkdownBlockSpan = {
   sourceEndLine?: number;
 };
 
-export type MarkdownIR = MarkdownHtmlMetadata & {
+export type MarkdownIR = {
   text: string;
   styles: MarkdownStyleSpan[];
   links: MarkdownLinkSpan[];
@@ -169,7 +168,7 @@ export type MarkdownTableData = {
   aligns?: (MarkdownTableAlignment | undefined)[];
 };
 
-export type MarkdownTableCell = MarkdownHtmlMetadata & {
+export type MarkdownTableCell = {
   text: string;
   styles: MarkdownStyleSpan[];
   links: MarkdownLinkSpan[];
@@ -252,6 +251,18 @@ type RenderState = RenderTarget & {
   source: string;
   sourceIndex: ReturnType<typeof indexSourceLines> | undefined;
 };
+
+function defineMetadata<T extends object, K extends keyof T>(target: T, key: K, value: T[K]): void {
+  if (value === undefined) {
+    return;
+  }
+  Object.defineProperty(target, key, {
+    configurable: true,
+    enumerable: false,
+    value,
+    writable: true,
+  });
+}
 
 function attachListItemMetadata(
   item: MarkdownListItemMarker,
@@ -357,10 +368,9 @@ function createMarkdownIt(options: MarkdownParseOptions): MarkdownItParser {
   if (options.enableTaskLists) {
     md.core.ruler.before("inline", "markdown_core_task_lists", protectTaskListMarkers);
   }
-  const enableHtmlUnderline = options.enableHtmlUnderline === true;
-  md.inline.ruler.before("html_inline", RAW_HTML_TOKEN_TYPE, (state, silent) =>
-    parseHtmlLexeme(state, silent, enableHtmlUnderline),
-  );
+  if (options.enableHtmlUnderline) {
+    md.inline.ruler.before("html_inline", "markdown_core_html_underline", parseHtmlUnderline);
+  }
   if (options.enableSpoilers) {
     // Spoiler delimiters can surround a line-leading role header. Normalize
     // them before semantic detection so later rendering cannot expose a role
@@ -446,7 +456,7 @@ function protectTaskListMarkers(state: StateCore): void {
   }
 }
 
-function parseHtmlLexeme(state: StateInline, silent: boolean, enableUnderline: boolean): boolean {
+function parseHtmlUnderline(state: StateInline, silent: boolean): boolean {
   if (state.src.charCodeAt(state.pos) !== 0x3c) {
     return false;
   }
@@ -456,11 +466,11 @@ function parseHtmlLexeme(state: StateInline, silent: boolean, enableUnderline: b
   }
   const tag = tokenizeHtmlTags(raw).next().value;
   const underlineTag =
-    enableUnderline && tag && (tag.name === "u" || tag.name === "ins") ? tag : undefined;
+    tag && tag.start === 0 && (tag.name === "u" || tag.name === "ins") ? tag : undefined;
   if (!silent) {
     const token = state.push(
       !underlineTag || underlineTag.selfClosing
-        ? RAW_HTML_TOKEN_TYPE
+        ? "text"
         : underlineTag.closing
           ? "underline_close"
           : "underline_open",
@@ -468,12 +478,7 @@ function parseHtmlLexeme(state: StateInline, silent: boolean, enableUnderline: b
       0,
     );
     if (!underlineTag || underlineTag.selfClosing) {
-      // Preserve the complete lexeme before entity decoding or text joining; raw
-      // anchors intentionally leave linkLevel unchanged so their bodies still linkify.
       token.content = raw;
-      if (tag) {
-        defineMetadata(token, "htmlTags", [tag]);
-      }
     }
   }
   state.pos += raw.length;
@@ -602,12 +607,11 @@ function resolveRenderTarget(state: RenderState): RenderTarget {
   return state.table?.currentCell ?? state;
 }
 
-function appendText(state: RenderState, value: string, provenance?: object) {
+function appendText(state: RenderState, value: string) {
   if (!value) {
     return;
   }
   const target = resolveRenderTarget(state);
-  appendHtmlTags(target, provenance, target.text.length);
   target.text += value;
 }
 
@@ -855,6 +859,17 @@ function handleLinkClose(state: RenderState) {
   target.links.push(span);
 }
 
+function isInsideMarkdownHtmlTag(text: string): boolean {
+  const openTagStart = text.lastIndexOf("<");
+  if (openTagStart === -1) {
+    return false;
+  }
+  return (
+    text.lastIndexOf(">") < openTagStart &&
+    OPEN_MARKDOWN_HTML_TAG_PATTERN.test(text.slice(openTagStart))
+  );
+}
+
 function initTableState(): TableState {
   return {
     sourceHeaders: [],
@@ -871,12 +886,12 @@ function initTableState(): TableState {
 
 function finishTableCell(cell: RenderTarget): TableCell {
   closeRemainingStyles(cell);
-  return copyHtmlTags(cell, {
+  return {
     text: cell.text,
     styles: cell.styles,
     links: cell.links,
     ...(cell.annotations.length > 0 ? { annotations: cell.annotations } : {}),
-  });
+  };
 }
 
 function trimCell(cell: TableCell): TableCell {
@@ -898,7 +913,6 @@ function appendCell(state: RenderState, cell: TableCell) {
     return;
   }
   const start = state.text.length;
-  appendHtmlTags(state, cell, start);
   state.text += cell.text;
   for (const span of cell.styles) {
     state.styles.push({
@@ -1019,17 +1033,15 @@ function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
         break;
       case "text":
         recordTaskMarker(state, token.content ?? "");
-        appendText(state, token.content ?? "", token);
+        appendText(state, token.content ?? "");
         break;
       case ASSISTANT_TRANSCRIPT_ROLE_NODE_TYPE: {
         const meta = (token.meta as AssistantTranscriptRoleTokenMeta | undefined)
           ?.assistantTranscriptRoleHeader;
         if (meta) {
-          const target = resolveRenderTarget(state);
-          appendHtmlTags(target, token, target.text.length);
-          appendAssistantTranscriptRoleText(target, token.content ?? "", meta);
+          appendAssistantTranscriptRoleText(resolveRenderTarget(state), token.content ?? "", meta);
         } else {
-          appendText(state, token.content ?? "", token);
+          appendText(state, token.content ?? "");
         }
         break;
       }
@@ -1038,7 +1050,7 @@ function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
         break;
       case "link_open": {
         const target = resolveRenderTarget(state);
-        const href = getAttr(token, "href") ?? "";
+        const href = isInsideMarkdownHtmlTag(target.text) ? "" : (getAttr(token, "href") ?? "");
         target.linkStack.push({
           href,
           labelStart: target.text.length,
@@ -1052,10 +1064,11 @@ function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
       case "image": {
         const meta = (token.meta as AssistantTranscriptRoleImageMeta | undefined)
           ?.assistantTranscriptRoleImage;
-        appendImageAlternative(
-          resolveRenderTarget(state),
-          meta ?? { text: token.content ?? "", spans: [] },
-        );
+        if (meta) {
+          appendAssistantTranscriptRoleImage(resolveRenderTarget(state), meta);
+        } else {
+          appendText(state, token.content ?? "");
+        }
         break;
       }
       case "softbreak":
@@ -1227,8 +1240,7 @@ function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
         break;
       case "html_block":
       case "html_inline":
-      case RAW_HTML_TOKEN_TYPE:
-        appendText(state, token.content ?? "", token);
+        appendText(state, token.content ?? "");
         break;
 
       // Table handling
@@ -1354,7 +1366,6 @@ function appendSpans<T extends { start: number; end: number }>(
 /** Transfers a separately owned IR slice, including its metadata, into an accumulator. */
 export function appendMarkdownIR(target: MarkdownIR, source: MarkdownIR): void {
   const offset = target.text.length;
-  appendHtmlTags(target, source, offset);
   target.text += source.text;
   appendSpans(target.styles, source.styles, offset);
   appendSpans(target.links, source.links, offset);
@@ -1488,7 +1499,7 @@ export function sliceMarkdownIR(ir: MarkdownIR, start: number, end: number): Mar
     ...(annotations.length > 0 ? { annotations } : {}),
     ...(listItems.length > 0 ? { listItems } : {}),
   };
-  return copyHtmlTags(ir, attachBlockMetadata(sliced, blocks), normalizedStart, normalizedEnd);
+  return attachBlockMetadata(sliced, blocks);
 }
 
 export function markdownToIR(markdown: string, options: MarkdownParseOptions = {}): MarkdownIR {
@@ -1638,7 +1649,6 @@ export function markdownToIRWithMeta(
     ...(listItems.length > 0 ? { listItems } : {}),
   };
   attachBlockMetadata(ir, blocks);
-  copyHtmlTags(state, ir, 0, finalLength);
   return {
     ir,
     hasTables: state.hasTables,

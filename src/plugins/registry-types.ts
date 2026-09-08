@@ -43,7 +43,6 @@ import type {
   PluginManifestMcpServer,
 } from "./manifest.js";
 import type { PluginKind } from "./plugin-kind.types.js";
-import type { PluginProviderRegistration } from "./provider-plugin.types.js";
 import type {
   ContextEngineRegistration,
   MemoryCorpusSupplementRegistration,
@@ -92,6 +91,7 @@ type PluginLogger = import("./types.js").PluginLogger;
 type PluginOrigin = import("./types.js").PluginOrigin;
 type PluginTextTransformRegistration = import("./types.js").PluginTextTransformRegistration;
 type MigrationProviderPlugin = import("./types.js").MigrationProviderPlugin;
+type ProviderPlugin = import("./types.js").ProviderPlugin;
 type RealtimeTranscriptionProviderPlugin = import("./types.js").RealtimeTranscriptionProviderPlugin;
 type RealtimeVoiceProviderPlugin = import("./types.js").RealtimeVoiceProviderPlugin;
 type SpeechProviderPlugin = import("./types.js").SpeechProviderPlugin;
@@ -172,6 +172,14 @@ type PluginChannelSetupRegistration = {
   origin?: PluginOrigin;
   source: string;
   enabled: boolean;
+  rootDir?: string;
+};
+
+type PluginProviderRegistration = {
+  pluginId: string;
+  pluginName?: string;
+  provider: ProviderPlugin;
+  source: string;
   rootDir?: string;
 };
 

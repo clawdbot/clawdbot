@@ -71,9 +71,8 @@ export class UpdatePreMutationError extends Error {
   constructor(
     readonly reason: string,
     message: string,
-    options?: ErrorOptions,
   ) {
-    super(message, options);
+    super(message);
     this.name = "UpdatePreMutationError";
   }
 }

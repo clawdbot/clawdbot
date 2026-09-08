@@ -77,11 +77,7 @@ it.each([
   const args = ["worktree", "add"];
   const result = await executeGitCommand("/repo", args, { timeoutMs });
   const label = `timed out after ${seconds} seconds`;
-  const message = createGitCommandError("git worktree add", result).message;
-  expect(message).toContain(label);
-  expect(message).toContain(
-    `Git did not finish within its ${seconds}s budget; check remote reachability, repository locks, and clone shape (partial clones fetch missing objects lazily).`,
-  );
+  expect(createGitCommandError("git worktree add", result).message).toContain(label);
   await expect(requireGitCommand("/repo", args, { timeoutMs })).rejects.toThrow(label);
   expect(
     commandSpy.mock.calls.map(([, options]) =>
@@ -194,9 +190,7 @@ describe.each([
       expect(message.length).toBeLessThan(400);
       expect(message).toContain("Updating files: 999/1000");
       if (metadata.termination === "timeout") {
-        expect(message).toContain(
-          "Git did not finish within its 120s budget; check remote reachability, repository locks, and clone shape (partial clones fetch missing objects lazily).",
-        );
+        expect(message).toContain("Check repository access and disk space.");
       } else {
         expect(message).not.toMatch(/timed out|timeout/i);
       }

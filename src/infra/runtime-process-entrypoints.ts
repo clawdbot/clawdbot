@@ -22,11 +22,6 @@ export const runtimeProcessEntrypoints = {
     sourceWorkerName: "sqlite-integrity.worker",
     distWorkerPath: "infra/sqlite-integrity.worker.js",
   },
-  preparedModelCatalog: {
-    currentModuleUrl,
-    sourceWorkerName: "../agents/prepared-model-catalog.worker",
-    distWorkerPath: "agents/prepared-model-catalog.worker.js",
-  },
   updateRepair: {
     currentModuleUrl,
     sourceWorkerName: "update-repair.worker",

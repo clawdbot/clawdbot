@@ -329,25 +329,14 @@ describe("mock OpenAI response markers", () => {
     },
   );
 
-  it("echoes dynamic OpenClaw E2E and update serving markers", async () => {
+  it("echoes dynamic OpenClaw E2E markers", async () => {
     await withMockServer(mockOpenAiPath, {}, async (baseUrl) => {
-      const servingMarker = "update-verified-67a60fb5-203d-4d08-bfba-6f5a053af61b";
-      const cases = [
-        ...["OPENCLAW_E2E_SEED_0_123", "OPENCLAW_E2E_ANDROID_OK"].map((marker) => ({
-          marker,
-          prompt: `Reply exactly with ${marker}.`,
-        })),
-        {
-          marker: servingMarker,
-          prompt: `This is an OpenClaw update serving check. Do not use tools. Reply with exactly: ${servingMarker}`,
-        },
-      ];
-      for (const { marker, prompt } of cases) {
+      for (const marker of ["OPENCLAW_E2E_SEED_0_123", "OPENCLAW_E2E_ANDROID_OK"]) {
         const response = await fetch(`${baseUrl}/v1/responses`, {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
-            input: prompt,
+            input: `Reply exactly with ${marker}.`,
             stream: false,
           }),
         });

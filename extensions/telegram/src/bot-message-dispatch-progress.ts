@@ -135,6 +135,7 @@ export function canPushToolProgress(turn: Turn): boolean {
 
 function canPushCompactionProgress(turn: Turn): boolean {
   return Boolean(
+    turn.streamMode === "progress" &&
     turn.answerLane.stream &&
     !turn.answerLane.finalized &&
     !turn.finalAnswerDeliveryStarted &&

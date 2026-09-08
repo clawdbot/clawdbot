@@ -404,9 +404,7 @@ export function createStreamRendering({
     const blockReplySuffix = lastDeliveredBlockReplyText
       ? blockReplyText.slice(lastDeliveredBlockReplyText.length)
       : "";
-    // A deferred prefix was never delivered and may be superseded at terminal release.
     const prefixReplayCandidate = Boolean(
-      !state.deferBlockReplyDelivery &&
       state.blockReplyBreak === "text_end" &&
       state.toolExecutionSinceLastBlockReply &&
       lastDeliveredBlockReplyText &&

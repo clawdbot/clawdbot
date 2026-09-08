@@ -159,6 +159,31 @@ export function refreshSessionWorkspace(state: SessionWorkspaceHost, refreshFile
   }
 }
 
+function beginWorkspaceOpenRequest(workspace: SessionWorkspaceState, itemId: string): object {
+  workspace.activeId = itemId;
+  return (workspace.openRequest = {});
+}
+
+function isCurrentWorkspaceOpenRequest(
+  state: SessionWorkspaceHost,
+  workspace: SessionWorkspaceState,
+  request: object,
+  itemId: string,
+): boolean {
+  return (
+    workspace.openRequest === request &&
+    isCurrentSessionWorkspace(state, workspace) &&
+    workspace.activeId === itemId
+  );
+}
+
+export function isSessionWorkspaceItemLoading(state: SessionWorkspaceHost): boolean {
+  const workspace = state.sessionWorkspaceState;
+  return Boolean(
+    workspace && isCurrentSessionWorkspace(state, workspace) && workspace.openRequest !== undefined,
+  );
+}
+
 function openWorkspaceItem<T>(
   state: SessionWorkspaceHost,
   workspace: SessionWorkspaceState,
@@ -170,34 +195,29 @@ function openWorkspaceItem<T>(
   if (!state.client || !state.connected) {
     return;
   }
-  const request = { kind: "loading" } as const;
-  workspace.activeId = itemId;
-  // The Review selection owns completion; Files rows can change independently.
-  openSessionCheckoutSidebar(state, request);
-  const isCurrent = () =>
-    state.sidebarContent === request && isCurrentSessionWorkspace(state, workspace);
+  const request = beginWorkspaceOpenRequest(workspace, itemId);
   void (async () => {
+    state.handleOpenSidebar(null);
     workspace.error = null;
     try {
       const result = await load();
       const content = result == null ? null : render(result);
       if (!content) {
-        if (isCurrent()) {
+        if (isCurrentWorkspaceOpenRequest(state, workspace, request, itemId)) {
           workspace.error = missingMessage;
         }
         return;
       }
-      if (isCurrent()) {
-        trackSessionCheckoutSidebar(content);
-        state.sidebarContent = content;
+      if (isCurrentWorkspaceOpenRequest(state, workspace, request, itemId)) {
+        openSessionCheckoutSidebar(state, content);
       }
     } catch (error) {
-      if (isCurrent()) {
+      if (isCurrentWorkspaceOpenRequest(state, workspace, request, itemId)) {
         workspace.error = formatUiError(error);
       }
     } finally {
-      if (state.sidebarContent === request) {
-        state.sidebarContent = null;
+      if (workspace.openRequest === request) {
+        delete workspace.openRequest;
       }
       requestWorkspaceUpdate(state);
     }

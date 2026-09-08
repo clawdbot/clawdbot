@@ -92,8 +92,7 @@ describe("config doc baseline integration", () => {
     const byPath = await getSharedByPath();
     const tokenEntry = byPath.get("gateway.auth.token");
 
-    expect(tokenEntry?.help).toContain("Shared secret selected by gateway.auth.mode=token");
-    expect(tokenEntry?.help).toContain("either auth.token or auth.password");
+    expect(tokenEntry?.help).toContain("gateway access");
     expect(tokenEntry?.tags).toContain("auth");
     expect(tokenEntry?.tags).toContain("security");
   });

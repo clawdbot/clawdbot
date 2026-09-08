@@ -3,7 +3,7 @@ import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-t
 import { hasAvailableAuthForProvider } from "../../agents/model-auth.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import { promptYesNo } from "../../cli/prompt.js";
-import { readConfigFileSnapshotForWrite, replaceConfigFile } from "../../config/config.js";
+import { readConfigFileSnapshot, replaceConfigFile } from "../../config/config.js";
 import { formatConfigIssueLines } from "../../config/issue-format.js";
 import type { AgentModelEntryConfig } from "../../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -207,26 +207,26 @@ function requirePromotionPlugins(
   );
 }
 
-async function readValidConfigWriteSnapshot() {
-  const prepared = await readConfigFileSnapshotForWrite();
-  const { snapshot } = prepared;
+type ConfigSnapshot = Awaited<ReturnType<typeof readConfigFileSnapshot>>;
+
+async function readValidConfigSnapshot(): Promise<ConfigSnapshot> {
+  const snapshot = await readConfigFileSnapshot();
   if (!snapshot.valid) {
     const issues = formatConfigIssueLines(snapshot.issues, "-").join("\n");
     throw new Error(`Invalid config at ${snapshot.path}\n${issues}`);
   }
-  return prepared;
+  return snapshot;
 }
 
 async function ensureProviderAuth(params: {
   promotion: ClawHubPromotion;
   provider: string;
   authChoice: ResolvedAuthChoice | undefined;
-  prepared: Awaited<ReturnType<typeof readValidConfigWriteSnapshot>>;
+  snapshot: ConfigSnapshot;
   opts: PromosClaimOptions;
   runtime: RuntimeEnv;
 }): Promise<void> {
-  const { promotion, provider, authChoice, prepared, opts, runtime } = params;
-  const { snapshot, writeOptions } = prepared;
+  const { promotion, provider, authChoice, snapshot, opts, runtime } = params;
   const catalogEntry = authChoice?.entry;
   const runtimeConfig = snapshot.runtimeConfig ?? snapshot.config;
   const apiKey = opts.apiKey?.trim();
@@ -272,7 +272,7 @@ async function ensureProviderAuth(params: {
   if (!applied || !authCompleted) {
     throw new Error(`Authentication for "${provider}" was not completed; nothing was changed.`);
   }
-  await replaceConfigFile({ sourceConfig: applied.config, baseHash: snapshot.hash, writeOptions });
+  await replaceConfigFile({ nextConfig: applied.config, baseHash: snapshot.hash });
 }
 
 function aliasTaken(models: Record<string, AgentModelEntryConfig>, alias: string): boolean {
@@ -302,8 +302,7 @@ export async function promosClaimCommand(
   for (const model of promotion.models) {
     resolvePromotionModelTarget(promotion, model.modelRef);
   }
-  const prepared = await readValidConfigWriteSnapshot();
-  const { snapshot } = prepared;
+  const snapshot = await readValidConfigSnapshot();
   const authChoice = resolveAuthChoice(
     promotion,
     provider,
@@ -311,7 +310,7 @@ export async function promosClaimCommand(
   );
   requirePromotionPlugins(promotion, authChoice);
 
-  await ensureProviderAuth({ promotion, provider, authChoice, prepared, opts, runtime });
+  await ensureProviderAuth({ promotion, provider, authChoice, snapshot, opts, runtime });
 
   const suggested = promotion.models.find((model) => model.suggestedDefault) ?? promotion.models[0];
   let makeDefault = Boolean(opts.setDefault && suggested);

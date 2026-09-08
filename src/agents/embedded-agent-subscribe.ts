@@ -31,6 +31,7 @@ import {
   filterToolResultMediaUrls,
 } from "./embedded-agent-tool-media.js";
 import { stripDowngradedToolCallText } from "./embedded-agent-utils.js";
+import type { AgentMessage } from "./runtime/index.js";
 import { setSessionModelUsageSink } from "./sessions/session-model-usage.js";
 
 const embeddedLog = createSubsystemLogger("agent/embedded");
@@ -75,8 +76,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     emitBlockReply,
     finalizeAssistantTexts,
     flushAssistantStream,
-    noteLastAssistant,
-    releaseDeferredReplies,
+    flushDeferredBlockReplies,
   } = replyDelivery;
 
   // ── Messaging tool duplicate detection ──────────────────────────────────────
@@ -339,6 +339,12 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     resetAssistantMessageState(0);
   };
 
+  const noteLastAssistant = (msg: AgentMessage) => {
+    if (msg?.role === "assistant") {
+      state.lastAssistant = msg;
+    }
+  };
+
   // Re-filter the full raw buffer. Reusing live scanner state would hide the
   // visible prefix when timeout interrupts an open <think> or <final> block.
   const finalizeFlushedAssistantText = (text: string) =>
@@ -395,7 +401,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     emitAssistantStreamData,
     emitBlockReply,
     flushAssistantStream,
-    releaseDeferredReplies,
+    flushDeferredBlockReplies,
     clearAssistantStream,
     clearDeferredBlockReplies,
     emitReasoningStream,

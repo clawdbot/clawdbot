@@ -155,7 +155,6 @@ internal fun ChatMermaidBlock(source: String) {
           }
 
           rendered != null -> {
-            val anchor = rememberChatReaderAnchor(request)
             Image(
               bitmap = rendered.bitmap.asImageBitmap(),
               contentDescription = nativeString("Mermaid diagram"),
@@ -164,8 +163,7 @@ internal fun ChatMermaidBlock(source: String) {
                 Modifier
                   .fillMaxWidth()
                   .clickable(role = Role.Button, onClickLabel = nativeString("Expand diagram")) { expanded = true }
-                  .padding(start = 8.dp, end = 8.dp, top = 48.dp, bottom = 8.dp)
-                  .then(anchor?.modifier ?: Modifier),
+                  .padding(start = 8.dp, end = 8.dp, top = 48.dp, bottom = 8.dp),
             )
           }
 

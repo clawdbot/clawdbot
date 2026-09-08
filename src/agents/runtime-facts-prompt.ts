@@ -1,5 +1,5 @@
-/** Compact current-turn snapshots; instructions belong in the stable system prompt. */
 import path from "node:path";
+/** Compact current-turn snapshots; instructions belong in the stable system prompt. */
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadExecApprovals, resolveExecApprovalsFromFile } from "../infra/exec-approvals.js";
@@ -44,7 +44,12 @@ function buildApprovedExecutablesRuntimeContext(agentId: string): string {
     const hints = allowlist
       .flatMap((entry) => {
         const pattern = entry.pattern.trim();
-        if (pattern.startsWith("=command:") || !/[\\/~]/.test(pattern)) {
+        if (
+          !pattern ||
+          pattern === "*" ||
+          pattern.startsWith("=command:") ||
+          !/[\\/~]/.test(pattern)
+        ) {
           return [];
         }
         // Keep absolute approval tokens exact; a basename can resolve to another binary.

@@ -8,7 +8,6 @@ export type BeamStore = {
     updateValue: (current: BeamStoredSession | undefined) => BeamStoredSession | undefined,
   ) => Promise<boolean>;
   get: (beamId: string) => Promise<BeamStoredSession | undefined>;
-  delete: (beamId: string) => Promise<boolean>;
   list: () => Promise<BeamStoredSession[]>;
 };
 
@@ -22,7 +21,6 @@ export function createBeamStore(runtime: PluginRuntime): BeamStore {
   return {
     update: (beamId, updateValue) => store.update!(beamId, updateValue),
     get: (beamId) => store.lookup(beamId),
-    delete: (beamId) => store.delete(beamId),
     list: async () => (await store.entries()).map((entry) => entry.value),
   };
 }

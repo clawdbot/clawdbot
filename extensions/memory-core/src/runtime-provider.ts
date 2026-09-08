@@ -10,7 +10,7 @@ import {
 import type { MemoryCoreRuntimeHost } from "./memory/runtime-host.js";
 import { classifyWorkspaceMemoryPaths } from "./workspace-path-classifier.js";
 
-export function createMemoryRuntime(host: MemoryCoreRuntimeHost = {}) {
+export function createMemoryRuntime(host: MemoryCoreRuntimeHost = {}): MemoryPluginRuntime {
   if (host.openKeyedStore) {
     configureMemoryCoreDreamingState(host.openKeyedStore);
   }
@@ -27,16 +27,22 @@ export function createMemoryRuntime(host: MemoryCoreRuntimeHost = {}) {
         error,
       };
     },
-    resolveMemoryBackendConfig,
+    resolveMemoryBackendConfig(params) {
+      return resolveMemoryBackendConfig(params);
+    },
     async authorizeSearchHits(params) {
       const { filterMemorySearchHitsBySessionVisibility } =
         await import("./session-search-visibility.js");
       return await filterMemorySearchHitsBySessionVisibility(params);
     },
     classifyWorkspaceMemoryPaths,
-    closeAllMemorySearchManagers,
-    closeMemorySearchManager,
-  } satisfies MemoryPluginRuntime;
+    async closeAllMemorySearchManagers() {
+      await closeAllMemorySearchManagers();
+    },
+    async closeMemorySearchManager(params) {
+      await closeMemorySearchManager(params);
+    },
+  };
 }
 
 export const memoryRuntime = createMemoryRuntime();

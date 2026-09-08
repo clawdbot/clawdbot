@@ -75,12 +75,11 @@ export function createGitCommandError(
   result: (SpawnResult | Awaited<ReturnType<typeof runCommandBuffered>>) & { timeoutMs?: number },
 ): Error {
   // Buffered Git uses the fixed default; text results carry their applied budget.
-  const timeoutMs = result.timeoutMs ?? GIT_TIMEOUT_MS;
   const error = createCommandError(command, result, {
-    timeoutMs,
+    timeoutMs: result.timeoutMs ?? GIT_TIMEOUT_MS,
   });
   if (result.termination === "timeout") {
-    error.message += `\nGit did not finish within its ${timeoutMs / 1000}s budget; check remote reachability, repository locks, and clone shape (partial clones fetch missing objects lazily).`;
+    error.message += "\nCheck repository access and disk space.";
   }
   return error;
 }

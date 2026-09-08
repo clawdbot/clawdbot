@@ -7,13 +7,10 @@ import {
   resolveSessionStorePathCore,
   type InternalSessionEntry as SessionEntry,
   resolveAllAgentSessionStoreTargetsSync,
-  type SessionStoreTarget,
 } from "../../config/sessions.js";
 import { hasSessionEntriesByStatusReadOnly } from "../../config/sessions/session-accessor.js";
-import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { LEGACY_IMPLICIT_AGENT_ID } from "../../routing/session-key.js";
 import { resolveAgentSessionDirs } from "../session-dirs.js";
 
 export const mainSessionRecoveryLog = createSubsystemLogger("main-session-restart-recovery");
@@ -21,7 +18,6 @@ export const DEFAULT_RECOVERY_DELAY_MS = 5_000;
 export const MAX_RECOVERY_RETRIES = 3;
 export const RETRY_BACKOFF_MULTIPLIER = 2;
 export type ExpectedRestartRecoveryTarget = {
-  agentId?: string;
   canonicalSessionKey?: string;
   sessionId: string;
   sessionKey: string;
@@ -64,12 +60,11 @@ export function hasCurrentProcessOwner(params: {
   return params.activeSessionIds.size === 0 && params.activeSessionKeys.has(params.sessionKey);
 }
 
-export async function discoverRestartRecoveryStoreTargets(params: {
+export async function discoverRestartRecoveryStorePaths(params: {
   cfg?: OpenClawConfig;
   stateDir?: string;
-  statuses?: Parameters<typeof hasSessionEntriesByStatusReadOnly>[1];
-}): Promise<SessionStoreTarget[]> {
-  const storeTargets: SessionStoreTarget[] = [];
+}): Promise<string[]> {
+  const storePaths = new Set<string>();
   const stateDir = params.stateDir ?? resolveStateDir(process.env);
   const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
   if (params.cfg) {
@@ -91,24 +86,24 @@ export async function discoverRestartRecoveryStoreTargets(params: {
       if (!configuredAgentIdSet.has(target.agentId) && !configuredStorePaths.has(storePath)) {
         continue;
       }
-      storeTargets.push({ ...target, storePath });
+      storePaths.add(storePath);
     }
   } else {
     for (const sessionsDir of await resolveAgentSessionDirs(stateDir)) {
-      const storePath = path.join(sessionsDir, "sessions.json");
-      storeTargets.push({
-        agentId:
-          resolveSqliteTargetFromSessionStorePath(storePath).agentId ?? LEGACY_IMPLICIT_AGENT_ID,
-        storePath,
-      });
+      storePaths.add(path.join(sessionsDir, "sessions.json"));
     }
   }
-  return storeTargets
-    .filter(
-      (target) =>
-        !params.statuses || hasSessionEntriesByStatusReadOnly({ ...target, env }, params.statuses),
-    )
-    .toSorted(
-      (a, b) => a.storePath.localeCompare(b.storePath) || a.agentId.localeCompare(b.agentId),
-    );
+  return [...storePaths].toSorted((a, b) => a.localeCompare(b));
+}
+
+export async function resolveRestartRecoveryStorePaths(
+  params: Parameters<typeof discoverRestartRecoveryStorePaths>[0],
+): Promise<string[]> {
+  const stateDir = params.stateDir ?? resolveStateDir(process.env);
+  const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+  // Startup recovery needs running rows; shutdown must also mark queued turns
+  // whose session still carries a prior terminal status.
+  return (await discoverRestartRecoveryStorePaths(params)).filter((storePath) =>
+    hasSessionEntriesByStatusReadOnly({ env, storePath }, ["running"]),
+  );
 }

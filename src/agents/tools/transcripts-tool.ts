@@ -14,15 +14,13 @@ import {
   stopTranscriptCapture,
 } from "../../transcripts/capture-operations.js";
 import {
-  persistTranscriptSummary,
-  readTranscriptSummary,
-} from "../../transcripts/capture-summary.js";
-import {
   activeSessions,
   authorizeTranscriptSource,
   createTranscriptSessionId,
   isTranscriptSelectionCurrent,
+  persistTranscriptSummary,
   readTranscriptStringParam,
+  readTranscriptSummary,
   resolveTranscriptSourceOwnership,
   resolveSourceProvider,
   sourceFromParams,

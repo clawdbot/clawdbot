@@ -27,10 +27,7 @@ import type { FinalizedMsgContext } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import { maybeApplyAcpTts, prepareAcpDeliveryPayload } from "./dispatch-acp-payload.js";
 import type { NormalizeReplySkipReason } from "./normalize-reply-skip-reason.js";
-import {
-  resolveRoutedReplyDeliveryOutcome,
-  shouldRetryReplyDispatch,
-} from "./reply-dispatch-outcome.js";
+import { shouldRetryReplyDispatch } from "./reply-dispatch-outcome.js";
 import {
   attachReplyDispatchUndeliveredFallback,
   captureReplyDispatchDeliveryOutcome,
@@ -209,6 +206,16 @@ export function createAcpDispatchDeliveryCoordinator(params: {
   };
   let hasPendingDirectBlockReplyDelivery = false;
 
+  const waitForPendingDirectBlockReplyDelivery = async () => {
+    if (!hasPendingDirectBlockReplyDelivery) {
+      return;
+    }
+    // ACP direct block replies should not block the common visible-reply path.
+    // Defer the idle wait until a later tool delivery would otherwise overtake
+    // that block reply in user-visible ordering.
+    hasPendingDirectBlockReplyDelivery = false;
+    await waitForReplyDispatcherIdle(params.dispatcher, params.abortSignal);
+  };
   const settleDirectVisibleText = async () => {
     // Exact payload settlements own custody and coverage before final fallback reads them.
     await waitForReplyDispatcherIdle(
@@ -251,7 +258,9 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       return;
     }
     void Promise.resolve(params.onReplyStart?.()).catch((error: unknown) => {
-      logVerbose(`dispatch-acp: reply lifecycle start failed: ${formatErrorMessage(error)}`);
+      logVerbose(
+        `dispatch-acp: reply lifecycle start failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
     });
   };
 
@@ -259,6 +268,9 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     payload: ReplyPayload,
     toolCallId: string,
   ): Promise<boolean> => {
+    if (!params.shouldRouteToOriginating || !params.originatingChannel || !params.originatingTo) {
+      return false;
+    }
     const handle = state.toolMessageByCallId.get(toolCallId);
     if (!handle?.messageId) {
       return false;
@@ -547,21 +559,15 @@ export function createAcpDispatchDeliveryCoordinator(params: {
         replyKind: kind,
         runId: params.runId,
       });
-      const outcome = resolveRoutedReplyDeliveryOutcome(result);
-      const pending = outcome === "recovery-owned" || outcome === "failed-deliver";
-      if (
-        blockText &&
-        result.suppressed &&
-        (tracksVisibleText || (outcome === "channel-transform" && ttsPayload.text?.trim()))
-      ) {
-        // A channel veto covers its actual text even on a terminal-only surface.
+      const pending = !result.delivered && (result.queueCustody === "held" || result.ambiguous);
+      if (blockText && tracksVisibleText && result.suppressed) {
         blockText.needsFinalDelivery = false;
       }
       if (pending) {
         recordPendingDelivery(tracksVisibleText);
         return true;
       }
-      if (shouldRetryReplyDispatch(outcome) && hasFinalTtsMedia && ttsPayload.text?.trim()) {
+      if (!result.delivered && hasFinalTtsMedia && ttsPayload.text?.trim()) {
         if (!result.suppressed) {
           logVerbose(
             `dispatch-acp: route-reply (acp/${kind}) failed: ${result.error ?? "unknown error"}`,
@@ -586,9 +592,6 @@ export function createAcpDispatchDeliveryCoordinator(params: {
         return false;
       }
       if (result.suppressed) {
-        if (outcome === "channel-transform") {
-          coverFinalBlockText(ttsPayload);
-        }
         if (kind === "final") {
           state.deliveredFinalReply = true;
         }
@@ -618,10 +621,8 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       return true;
     }
 
-    if (kind === "tool" && hasPendingDirectBlockReplyDelivery) {
-      // Block admission stays non-blocking; a later tool cannot overtake its visible delivery.
-      hasPendingDirectBlockReplyDelivery = false;
-      await waitForReplyDispatcherIdle(params.dispatcher, params.abortSignal);
+    if (kind === "tool") {
+      await waitForPendingDirectBlockReplyDelivery();
     }
 
     const tracksVisibleText = await shouldTreatDeliveredTextAsVisible({
@@ -716,8 +717,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     getAccumulatedBlockTtsText: () => state.accumulatedBlockTtsText,
     getAccumulatedTranscriptText: () => state.accumulatedFinalText || getBlockTranscriptText(),
     resolveAccumulatedDeliveredTranscriptText: async () => {
-      // Transcript and fallback observers must await the same delivery settlements.
-      await Promise.all(state.pendingTranscriptOutcomes);
+      await Promise.all(state.pendingTranscriptOutcomes.splice(0));
       return state.accumulatedDeliveredFinalText || getBlockTranscriptText(true);
     },
     settleVisibleText: settleDirectVisibleText,

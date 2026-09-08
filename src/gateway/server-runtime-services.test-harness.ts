@@ -1,5 +1,4 @@
 import { vi } from "vitest";
-import { createInfoWarnErrorLogger } from "../../test/helpers/mock-logger.js";
 import type { scheduleGatewayPostReadyMaintenance } from "./server-runtime-services.js";
 
 type StartSessionDeliveryRuntime =
@@ -113,7 +112,11 @@ export function waitForFast<T>(
 
 export function createLog() {
   return {
-    child: vi.fn(() => createInfoWarnErrorLogger()),
+    child: vi.fn(() => ({
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+    })),
     warn: vi.fn(),
     error: vi.fn(),
   };

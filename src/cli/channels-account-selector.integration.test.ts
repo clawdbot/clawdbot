@@ -4,11 +4,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { defaultRuntime } from "../runtime.js";
 import { registerChannelsCli } from "./channels-cli.js";
 
-const requireValidConfigForWrite = vi.hoisted(() => vi.fn(async () => null));
+const requireValidConfigFileSnapshot = vi.hoisted(() => vi.fn(async () => null));
 
 vi.mock("../commands/config-validation.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../commands/config-validation.js")>()),
-  requireValidConfigForWrite,
+  requireValidConfigFileSnapshot,
 }));
 
 async function runChannelMutation(verb: string, account?: string) {
@@ -36,7 +36,7 @@ describe.each(["add", "remove", "login", "logout"])("channels %s account selecti
 
   afterEach(() => {
     vi.restoreAllMocks();
-    requireValidConfigForWrite.mockClear();
+    requireValidConfigFileSnapshot.mockClear();
   });
 
   it.each(["", "   "])("rejects an explicit blank before loading config", async (account) => {
@@ -46,7 +46,7 @@ describe.each(["add", "remove", "login", "logout"])("channels %s account selecti
       expect.stringContaining("--account must not be blank"),
     );
     expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
-    expect(requireValidConfigForWrite).not.toHaveBeenCalled();
+    expect(requireValidConfigFileSnapshot).not.toHaveBeenCalled();
   });
 
   it("keeps an omitted account on the default-selection path", async () => {
@@ -54,6 +54,6 @@ describe.each(["add", "remove", "login", "logout"])("channels %s account selecti
 
     expect(defaultRuntime.error).not.toHaveBeenCalled();
     expect(defaultRuntime.exit).not.toHaveBeenCalled();
-    expect(requireValidConfigForWrite).toHaveBeenCalledTimes(1);
+    expect(requireValidConfigFileSnapshot).toHaveBeenCalledTimes(1);
   });
 });

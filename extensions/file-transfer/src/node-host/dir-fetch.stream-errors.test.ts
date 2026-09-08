@@ -2,7 +2,6 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import * as tar from "tar";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { runCommandBufferedMock } = vi.hoisted(() => ({ runCommandBufferedMock: vi.fn() }));
@@ -39,13 +38,10 @@ afterEach(async () => {
 
 describe("dir.fetch process wrapper", () => {
   it("falls back to capped tar when the optional du probe fails", async () => {
-    const chunks: Buffer[] = [];
-    for await (const chunk of tar.c({ cwd: tmpRoot, gzip: true, portable: true }, ["ok.txt"])) {
-      chunks.push(Buffer.from(chunk));
-    }
     runCommandBufferedMock
       .mockRejectedValueOnce(new Error("du failed"))
-      .mockResolvedValueOnce(commandResult({ stdout: Buffer.concat(chunks) }));
+      .mockResolvedValueOnce(commandResult({ stdout: Buffer.from("archive") }))
+      .mockResolvedValueOnce(commandResult({ stdout: Buffer.from("./ok.txt\n") }));
 
     await expect(handleDirFetch({ path: tmpRoot, maxBytes: 1024 })).resolves.toMatchObject({
       ok: true,
@@ -130,17 +126,19 @@ describe("dir.fetch process wrapper", () => {
     },
   );
 
-  it("rejects invalid producer archive bytes before returning a transfer", async () => {
+  it("fails tar entry listing closed on wrapper errors", async () => {
     runCommandBufferedMock
       .mockResolvedValueOnce(commandResult({ stdout: Buffer.from("1\tproject\n") }))
-      .mockResolvedValueOnce(commandResult({ stdout: Buffer.from("archive") }));
+      .mockResolvedValueOnce(commandResult({ stdout: Buffer.from("archive") }))
+      .mockResolvedValueOnce(
+        commandResult({ code: null, termination: "error", error: new Error("listing failed") }),
+      );
 
     await expect(handleDirFetch({ path: tmpRoot, maxBytes: 1024 })).resolves.toMatchObject({
       ok: false,
       code: "READ_ERROR",
-      message: expect.stringContaining("archive inspection failed:"),
+      message: "tar entry listing failed",
     });
-    expect(runCommandBufferedMock).toHaveBeenCalledTimes(2);
   });
 
   describe.each([true, false])("archive failures with preflight=%s", (preflightOnly) => {

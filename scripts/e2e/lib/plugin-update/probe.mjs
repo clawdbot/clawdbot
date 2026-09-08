@@ -207,23 +207,6 @@ async function assertOutput(logPath) {
   }
 }
 
-function assertCorruptTargetUnavailable(updateJsonPath, pluginId) {
-  const result = readJson(updateJsonPath);
-  const details = (result.steps ?? []).map((step) => step.stderrTail ?? "").join("\n");
-  if (
-    result.status !== "error" ||
-    result.reason !== "plugin-target-unavailable" ||
-    result.recovery?.serviceRestartSafe !== true ||
-    !details.includes(`requires @openclaw/${pluginId}@0.0.1 for core `) ||
-    !details.includes(`Package not found on npm: @openclaw/${pluginId}@0.0.1`) ||
-    (result.steps ?? []).some((step) => step.name === "global install swap")
-  ) {
-    throw new Error(
-      `expected unavailable-target refusal before activation: ${JSON.stringify(result)}`,
-    );
-  }
-}
-
 function assertCorruptUpdate(updateJsonPath, pluginId) {
   const payload = readJson(updateJsonPath);
   if (payload.status !== "ok") {
@@ -340,6 +323,21 @@ function collectPluginEvidence(plugins, pluginId) {
   };
 }
 
+function assertLegacyPostUpdatePluginFailure(updateJsonPath) {
+  const payload = readJson(updateJsonPath);
+  if (payload.status !== "error" || payload.reason !== "post-update-plugins") {
+    throw new Error(
+      `expected legacy post-update plugin failure, got ${JSON.stringify({
+        status: payload.status,
+        reason: payload.reason,
+      })}`,
+    );
+  }
+  if (!payload.after?.version) {
+    throw new Error(`expected core update to install a new version: ${JSON.stringify(payload)}`);
+  }
+}
+
 function assertCorruptPluginPolicyPreserved(configPath, pluginId) {
   const config = readJson(configPath);
   const allow = config.plugins?.allow;
@@ -370,9 +368,9 @@ const commands = {
   snapshot: () => process.stdout.write(JSON.stringify(pluginRecordSnapshot(), null, 2)),
   "assert-snapshot": () => assertSnapshot(arg),
   "assert-output": () => assertOutput(arg),
-  "assert-corrupt-unavailable": () => assertCorruptTargetUnavailable(arg, arg2),
   "assert-corrupt-update": () => assertCorruptUpdate(arg, arg2),
   "assert-corrupt-plugin-result": () => assertCorruptPluginResult(arg, arg2),
+  "assert-legacy-post-update-plugin-failure": () => assertLegacyPostUpdatePluginFailure(arg),
   "assert-corrupt-policy-preserved": () => assertCorruptPluginPolicyPreserved(arg, arg2),
 };
 const run = commands[command];

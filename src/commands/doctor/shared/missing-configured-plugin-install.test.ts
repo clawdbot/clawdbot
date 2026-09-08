@@ -1689,114 +1689,6 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     });
   });
 
-  it.each([
-    { source: "official", installed: false, expectedVersion: "2026.9.3" },
-    { source: "external", installed: false, expectedVersion: "2026.9.4" },
-    { source: "official", installed: true, expectedVersion: "2026.8.1" },
-  ])(
-    "preserves the selected release while repairing $source plugins (installed=$installed)",
-    async ({ source, installed, expectedVersion }) => {
-      const pluginId = "duckduckgo";
-      const packageName = "@openclaw/duckduckgo-plugin";
-      const coreVersion = "2026.9.3";
-      const latestVersion = "2026.9.4";
-      const config: OpenClawConfig = {
-        update: { channel: "stable" },
-        plugins: { entries: { [pluginId]: { enabled: true } } },
-      };
-      const env = { ...testEnv, OPENCLAW_COMPATIBILITY_HOST_VERSION: coreVersion };
-      const installPath = tempDirs.make("openclaw-doctor-pinned-duckduckgo-");
-      const records = installed
-        ? installedRecords(pluginId, {
-            spec: `${packageName}@2026.8.1`,
-            resolvedVersion: "2026.8.1",
-            installPath,
-          })
-        : {};
-      if (installed) {
-        createColdPluginFixture({
-          rootDir: installPath,
-          pluginId,
-          packageName,
-          packageVersion: "2026.8.1",
-        });
-        mocks.loadPluginMetadataSnapshot.mockReturnValue({
-          plugins: [
-            {
-              id: pluginId,
-              origin: "global",
-              packageName,
-              rootDir: installPath,
-              source: path.join(installPath, "index.cjs"),
-              channels: [],
-            },
-          ],
-          diagnostics: [],
-        });
-      }
-      mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue(records);
-      mocks.listOfficialExternalPluginCatalogEntries.mockReturnValue([
-        officialPluginEntry({
-          id: pluginId,
-          npmSpec: packageName,
-          overrides: { name: packageName, source },
-        }),
-      ]);
-      const versionForSpec = (spec: string) =>
-        spec === packageName ? latestVersion : spec.slice(packageName.length + 1);
-      mocks.resolveNpmSpecMetadata.mockImplementation(async ({ spec }: { spec: string }) => ({
-        ok: true,
-        metadata: {
-          name: packageName,
-          version: versionForSpec(spec),
-          resolvedSpec: `${packageName}@${versionForSpec(spec)}`,
-        },
-      }));
-      mocks.installPluginFromNpmSpec.mockImplementation(async ({ spec }: { spec: string }) =>
-        successfulInstall({ pluginId, npmSpec: packageName, version: versionForSpec(spec) }),
-      );
-      const { preflightConfiguredNpmPluginTargets } =
-        await import("../../../cli/update-cli/update-command-plugin-preflight.js");
-      await preflightConfiguredNpmPluginTargets({
-        config,
-        env,
-        targetVersion: coreVersion,
-        channel: "stable",
-        timeoutMs: 1000,
-      });
-      const expectedSpec =
-        source === "external" ? packageName : `${packageName}@${expectedVersion}`;
-      expect(mocks.resolveNpmSpecMetadata).toHaveBeenCalledWith({
-        spec: expectedSpec,
-        timeoutMs: 1000,
-      });
-      expect(mocks.installPluginFromNpmSpec).not.toHaveBeenCalled();
-      expect(mocks.writePersistedInstalledPluginIndexInstallRecords).not.toHaveBeenCalled();
-
-      const result = await repairConfiguredPlugins(config, env);
-      expect(result.warnings).toEqual([]);
-      if (installed) {
-        expect(result.records).toEqual(records);
-        expect(mocks.installPluginFromNpmSpec).not.toHaveBeenCalled();
-        expect(mocks.writePersistedInstalledPluginIndexInstallRecords).not.toHaveBeenCalled();
-      } else {
-        expectRecordFields(mockCallArg(mocks.installPluginFromNpmSpec), {
-          spec: expectedSpec,
-          expectedPluginId: pluginId,
-        });
-        expectRecordFields(result.records[pluginId], {
-          spec: packageName,
-          resolvedVersion: expectedVersion,
-          resolvedSpec: `${packageName}@${expectedVersion}`,
-        });
-        expect(mocks.writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith(
-          result.records,
-          { config, env },
-        );
-      }
-    },
-  );
-
   it("does not install disabled configured plugin entries", async () => {
     mocks.listOfficialExternalPluginCatalogEntries.mockReturnValue([
       {
@@ -3503,30 +3395,85 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     },
   );
 
-  it.each(
-    // prettier-ignore
-    [
-    ["stale beta follows newer latest", "2026.9.1-beta.1", "2026.9.1-beta.1", "2026.9.2", "2026.9.2", true, undefined, undefined],
-    ["same-base beta follows newer latest", "2026.9.2-beta.1", "2026.9.2-beta.1", "2026.9.2", "2026.9.2", true, undefined, undefined],
-    ["newer beta stays ahead of latest", "2026.9.1-beta.1", "2026.9.3-beta.1", "2026.9.2", "2026.9.3-beta.1", true, undefined, undefined],
-    ["already-current beta older than the host is a no-op", "2026.9.1-beta.1", "2026.9.1-beta.1", "2026.8.31", "2026.9.1-beta.1", false, undefined, undefined],
-    ["already-current same-base beta is a no-op", "2026.9.2-beta.4", "2026.9.2-beta.4", "2026.9.1", "2026.9.2-beta.4", false, undefined, undefined],
-    ["registry tags behind the installed beta are a no-op", "2026.9.1-beta.2", "2026.9.1-beta.1", "2026.8.31", "2026.9.1-beta.1", false, undefined, undefined],
-    ["registry outage retains a healthy installed beta", "2026.9.1-beta.1", "2026.9.1-beta.1", "2026.9.2", "2026.9.2", false, true, undefined],
-    ["registry outage cannot hide broken package diagnostics", "2026.9.1-beta.1", "2026.9.1-beta.1", "2026.9.2", "2026.9.2", false, true, true],
-  ] as const,
-  )(
-    "converges managed Codex startup: %s",
-    async (
-      _name,
+  it.each([
+    {
+      name: "stale beta follows newer latest",
+      installedVersion: "2026.9.1-beta.1",
+      betaVersion: "2026.9.1-beta.1",
+      latestVersion: "2026.9.2",
+      selectedVersion: "2026.9.2",
+      refresh: true,
+    },
+    {
+      name: "same-base beta follows newer latest",
+      installedVersion: "2026.9.2-beta.1",
+      betaVersion: "2026.9.2-beta.1",
+      latestVersion: "2026.9.2",
+      selectedVersion: "2026.9.2",
+      refresh: true,
+    },
+    {
+      name: "newer beta stays ahead of latest",
+      installedVersion: "2026.9.1-beta.1",
+      betaVersion: "2026.9.3-beta.1",
+      latestVersion: "2026.9.2",
+      selectedVersion: "2026.9.3-beta.1",
+      refresh: true,
+    },
+    {
+      name: "already-current beta older than the host is a no-op",
+      installedVersion: "2026.9.1-beta.1",
+      betaVersion: "2026.9.1-beta.1",
+      latestVersion: "2026.8.31",
+      selectedVersion: "2026.9.1-beta.1",
+      refresh: false,
+    },
+    {
+      name: "already-current same-base beta is a no-op",
+      installedVersion: "2026.9.2-beta.4",
+      betaVersion: "2026.9.2-beta.4",
+      latestVersion: "2026.9.1",
+      selectedVersion: "2026.9.2-beta.4",
+      refresh: false,
+    },
+    {
+      name: "registry tags behind the installed beta are a no-op",
+      installedVersion: "2026.9.1-beta.2",
+      betaVersion: "2026.9.1-beta.1",
+      latestVersion: "2026.8.31",
+      selectedVersion: "2026.9.1-beta.1",
+      refresh: false,
+    },
+    {
+      name: "registry outage retains a healthy installed beta",
+      installedVersion: "2026.9.1-beta.1",
+      betaVersion: "2026.9.1-beta.1",
+      latestVersion: "2026.9.2",
+      selectedVersion: "2026.9.2",
+      refresh: false,
+      registryUnavailable: true,
+    },
+    {
+      name: "registry outage cannot hide broken package diagnostics",
+      installedVersion: "2026.9.1-beta.1",
+      betaVersion: "2026.9.1-beta.1",
+      latestVersion: "2026.9.2",
+      selectedVersion: "2026.9.2",
+      refresh: false,
+      registryUnavailable: true,
+      brokenPayload: true,
+    },
+  ])(
+    "converges managed Codex startup: $name",
+    async ({
       installedVersion,
       betaVersion,
       latestVersion,
       selectedVersion,
       refresh,
-      registryUnavailable: boolean | undefined = false,
-      brokenPayload: boolean | undefined = false,
-    ) => {
+      registryUnavailable = false,
+      brokenPayload = false,
+    }) => {
       mockNpmRegistryTags({ beta: betaVersion, latest: latestVersion });
       if (registryUnavailable) {
         mocks.resolveNpmSpecMetadata.mockResolvedValue({
@@ -4915,10 +4862,13 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     );
   });
 
-  it.each(
-    // prettier-ignore
-    [
-    ["installs missing configured non-channel plugins from the official external catalog", "diagnostics-otel", "@openclaw/diagnostics-otel", "2026.5.2", {
+  it.each([
+    {
+      name: "installs missing configured non-channel plugins from the official external catalog",
+      pluginId: "diagnostics-otel",
+      npmSpec: "@openclaw/diagnostics-otel",
+      version: "2026.5.2",
+      entry: {
         id: "diagnostics-otel",
         label: "Diagnostics OpenTelemetry",
         install: {
@@ -4926,8 +4876,16 @@ describe("repairMissingConfiguredPluginInstalls", () => {
           npmSpec: "@openclaw/diagnostics-otel",
           defaultChoice: "npm" as const,
         },
-      }, { plugins: { entries: { "diagnostics-otel": { enabled: true } } } }, false],
-    ["installs the official llama.cpp plugin for configured local memory embeddings", "llama-cpp", "@openclaw/llama-cpp-provider", "2026.6.2", {
+      },
+      cfg: { plugins: { entries: { "diagnostics-otel": { enabled: true } } } },
+      useManifestResolvers: false,
+    },
+    {
+      name: "installs the official llama.cpp plugin for configured local memory embeddings",
+      pluginId: "llama-cpp",
+      npmSpec: "@openclaw/llama-cpp-provider",
+      version: "2026.6.2",
+      entry: {
         id: "llama-cpp",
         label: "llama.cpp Provider",
         openclaw: {
@@ -4942,13 +4900,29 @@ describe("repairMissingConfiguredPluginInstalls", () => {
           npmSpec: "@openclaw/llama-cpp-provider",
           defaultChoice: "npm" as const,
         },
-      }, { memory: { search: { provider: "local" } }, agents: { defaults: {} } }, false],
-    ["does not let runtime fallback metadata override official catalog install specs", "acpx", "@openclaw/acpx", "2026.5.2-beta.2", {
+      },
+      cfg: { memory: { search: { provider: "local" } }, agents: { defaults: {} } },
+      useManifestResolvers: false,
+    },
+    {
+      name: "does not let runtime fallback metadata override official catalog install specs",
+      pluginId: "acpx",
+      npmSpec: "@openclaw/acpx",
+      version: "2026.5.2-beta.2",
+      entry: {
         id: "acpx",
         label: "ACPX Runtime",
         install: { npmSpec: "@openclaw/acpx", defaultChoice: "npm" as const },
-      }, { acp: { backend: "acpx" } }, false],
-    ["installs a configured external web search plugin from provider-only config", "brave", "@openclaw/brave-plugin", "2026.5.2", officialWebSearchPluginEntry({
+      },
+      cfg: { acp: { backend: "acpx" } },
+      useManifestResolvers: false,
+    },
+    {
+      name: "installs a configured external web search plugin from provider-only config",
+      pluginId: "brave",
+      npmSpec: "@openclaw/brave-plugin",
+      version: "2026.5.2",
+      entry: officialWebSearchPluginEntry({
         id: "brave",
         npmSpec: "@openclaw/brave-plugin",
         envVar: "BRAVE_API_KEY",
@@ -4956,21 +4930,36 @@ describe("repairMissingConfiguredPluginInstalls", () => {
         providerLabel: "Brave Search",
         credentialPath: "plugins.entries.brave.config.webSearch.apiKey",
         includeManifestInstall: true,
-      }), { tools: { web: { search: { provider: "brave" } } } }, true],
-    ["installs a configured external model provider without an auth choice", "groq", "@openclaw/groq-provider", undefined, officialPluginEntry({
+      }),
+      cfg: { tools: { web: { search: { provider: "brave" } } } },
+      useManifestResolvers: true,
+    },
+    {
+      name: "installs a configured external model provider without an auth choice",
+      pluginId: "groq",
+      npmSpec: "@openclaw/groq-provider",
+      entry: officialPluginEntry({
         id: "groq",
         npmSpec: "@openclaw/groq-provider",
         label: "Groq",
         manifest: { providers: [{ id: "groq" }] },
-      }), {
+      }),
+      cfg: {
         agents: { defaults: { model: "groq/llama-3.3-70b-versatile" } },
-      } satisfies OpenClawConfig, false],
-    ["installs an external media-understanding provider selected only by media config", "groq", "@openclaw/groq-provider", undefined, officialPluginEntry({
+      } satisfies OpenClawConfig,
+      useManifestResolvers: false,
+    },
+    {
+      name: "installs an external media-understanding provider selected only by media config",
+      pluginId: "groq",
+      npmSpec: "@openclaw/groq-provider",
+      entry: officialPluginEntry({
         id: "groq",
         npmSpec: "@openclaw/groq-provider",
         label: "Groq",
         manifest: { contracts: { mediaUnderstandingProviders: ["groq"] } },
-      }), {
+      }),
+      cfg: {
         tools: {
           media: {
             models: [
@@ -4982,17 +4971,25 @@ describe("repairMissingConfiguredPluginInstalls", () => {
             ],
           },
         },
-      } satisfies OpenClawConfig, false],
-    ["installs an external speech provider selected only by voiceModel", "gradium", "@openclaw/gradium-speech", undefined, officialPluginEntry({
+      } satisfies OpenClawConfig,
+      useManifestResolvers: false,
+    },
+    {
+      name: "installs an external speech provider selected only by voiceModel",
+      pluginId: "gradium",
+      npmSpec: "@openclaw/gradium-speech",
+      entry: officialPluginEntry({
         id: "gradium",
         npmSpec: "@openclaw/gradium-speech",
         label: "Gradium",
         manifest: { contracts: { speechProviders: ["gradium"] } },
-      }), {
+      }),
+      cfg: {
         agents: { defaults: { voiceModel: { primary: "gradium/tts-default" } } },
-      } satisfies OpenClawConfig, false],
-  ] as const,
-  )("%s", async (_name, pluginId, npmSpec, version, entry, cfg, useManifestResolvers) => {
+      } satisfies OpenClawConfig,
+      useManifestResolvers: false,
+    },
+  ])("$name", async ({ pluginId, npmSpec, version, entry, cfg, useManifestResolvers }) => {
     mocks.listOfficialExternalPluginCatalogEntries.mockReturnValue([entry]);
     if (useManifestResolvers) {
       useManifestCatalogResolvers();

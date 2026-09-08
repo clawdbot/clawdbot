@@ -3,15 +3,12 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { readSourceConfigBestEffort, resetConfigRuntimeState } from "../config/config.js";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { readAgentDeletionJournal } from "../state/agent-deletion-journal.js";
 import { listOpenClawRegisteredAgentDatabases } from "../state/openclaw-agent-db-registry.js";
 import {
   closeOpenClawAgentDatabases,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
-import type { DB } from "../state/openclaw-state-db.generated.js";
-import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { applyClawAddPlan } from "./add.js";
 import type { ClawRemoveApplyOptions, ClawRemoveResult } from "./lifecycle-remove-contract.js";
@@ -69,20 +66,6 @@ async function fixture(withFile = false) {
   return { state, workspace, install, remove, trashPath };
 }
 
-function expireDeletionLease(): void {
-  // A live deletion serializes successors; expiry models the recovery boundary.
-  runOpenClawStateWriteTransaction(({ db }) => {
-    executeSqliteQuerySync(
-      db,
-      getNodeSqliteKysely<Pick<DB, "state_leases">>(db)
-        .updateTable("state_leases")
-        .set({ expires_at: 0 })
-        .where("scope", "=", "core:agent-deletion")
-        .where("lease_key", "=", "worker"),
-    );
-  });
-}
-
 describe("Claw removal operation ownership", () => {
   it.each([
     { successor: "removing", reject: false },
@@ -112,7 +95,6 @@ describe("Claw removal operation ownership", () => {
     });
     try {
       const originalOperation = await entered.promise;
-      expireDeletionLease();
       next = current.remove({
         monitorGateway: {
           ...quiescentClawMonitorGateway,
@@ -138,11 +120,8 @@ describe("Claw removal operation ownership", () => {
       expect(await stale).toMatchObject({
         status: "partial",
         error: {
-          code: "monitor_cleanup_failed",
-          message: expect.stringMatching(
-            test.reject
-              ? /original quiescence failure|agent deletion core:agent-deletion\/worker was lost/
-              : /no longer owns|agent deletion core:agent-deletion\/worker was lost/,
+          message: expect.stringContaining(
+            test.reject ? "original quiescence failure" : "no longer owns",
           ),
         },
       });
@@ -173,7 +152,6 @@ describe("Claw removal operation ownership", () => {
     });
     try {
       await entered.promise;
-      expireDeletionLease();
       next = current.remove({
         monitorGateway: {
           ...quiescentClawMonitorGateway,
@@ -189,12 +167,9 @@ describe("Claw removal operation ownership", () => {
       release.resolve();
       expect(await stale).toMatchObject({
         status: "partial",
-        agentRemoved: true,
         error: {
-          code: "monitor_cleanup_failed",
-          message: expect.stringMatching(
-            /no longer owns|agent deletion core:agent-deletion\/worker was lost/,
-          ),
+          code: "session_cleanup_failed",
+          message: expect.stringContaining("Session cleanup failed"),
         },
       });
       expect(readClawInstallRecord("worker")).toEqual(before);
@@ -236,7 +211,6 @@ describe("Claw removal operation ownership", () => {
       });
       try {
         await entered.promise;
-        expireDeletionLease();
         next = current.remove({
           monitorGateway: {
             ...quiescentClawMonitorGateway,
@@ -254,16 +228,14 @@ describe("Claw removal operation ownership", () => {
         expect(registry.some((entry) => entry.agentId === "worker")).toBe(true);
         expect(files).toHaveLength(1);
         release.resolve();
-        expect(await stale).toMatchObject({
-          status: "partial",
-          agentRemoved: true,
-          error: {
-            code: "monitor_cleanup_failed",
-            message: expect.stringMatching(
-              /no longer owns|agent deletion core:agent-deletion\/worker was lost/,
-            ),
-          },
-        });
+        const outcome = await stale;
+        expect(outcome.status).toBe("partial");
+        if (!complete) {
+          expect(outcome.error).toMatchObject({
+            code: "workspace_cleanup_failed",
+            message: expect.stringContaining("Could not trash session transcripts"),
+          });
+        }
         expect(listOpenClawRegisteredAgentDatabases()).toEqual(registry);
         expect(readClawWorkspaceFiles("worker")).toEqual(files);
         expect(readClawInstallRecord("worker")).toEqual(install);

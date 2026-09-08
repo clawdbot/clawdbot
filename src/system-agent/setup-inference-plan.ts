@@ -31,10 +31,7 @@ import type { ProviderAuthResult } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createPluginCapabilityConsentPrompter } from "../wizard/plugin-capability-consent.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
-import {
-  resolveSystemAgentConfiguredRouteFromConfig,
-  type SystemAgentConfigSnapshot,
-} from "./inference-route.js";
+import { resolveSystemAgentConfiguredRouteFromConfig } from "./inference-route.js";
 import { createQuickstartNotePrompter } from "./setup-apply.js";
 import {
   supportsSetupManualSecret,
@@ -107,7 +104,6 @@ export async function buildTestPlan(params: {
   apiKey?: string;
   cfg: OpenClawConfig;
   sourceCfg: OpenClawConfig;
-  configSnapshot?: SystemAgentConfigSnapshot;
   workspaceDir: string;
   pluginWorkspaceDir: string;
   agentDir: string;
@@ -211,12 +207,9 @@ export async function buildTestPlan(params: {
     case "existing-model": {
       let route;
       try {
-        route = await resolveSystemAgentConfiguredRouteFromConfig(
-          cfg,
-          params.routeAgentId,
-          { loadAuthProfileStoreForRuntime: params.deps.loadAuthProfileStoreForRuntime },
-          params.configSnapshot,
-        );
+        route = await resolveSystemAgentConfiguredRouteFromConfig(cfg, params.routeAgentId, {
+          loadAuthProfileStoreForRuntime: params.deps.loadAuthProfileStoreForRuntime,
+        });
       } catch (error) {
         if (error instanceof CliExecutionAuthProfileError) {
           return { error: error.message, status: "auth" as const };

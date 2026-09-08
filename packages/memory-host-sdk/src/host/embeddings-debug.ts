@@ -1,3 +1,4 @@
+// Memory Host SDK module implements embeddings debug behavior.
 import { parseBoolean } from "@openclaw/normalization-core/boolean-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 

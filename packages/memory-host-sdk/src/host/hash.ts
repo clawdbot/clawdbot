@@ -1,3 +1,4 @@
+// Memory Host SDK module implements hash behavior.
 import crypto from "node:crypto";
 
 /** SHA-256 hash helper for stable cache/content keys. */

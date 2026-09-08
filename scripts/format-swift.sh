@@ -16,7 +16,7 @@ fi
 if [[ "$scope" != "ios" ]]; then
   swiftformat --lint apps/macos/Sources \
     --config config/swiftformat \
-    --exclude '**/OpenClawProtocol,**/HostEnvSecurityPolicy.generated.swift,**/BrowserInspectScript.generated.swift'
+    --exclude '**/OpenClawProtocol'
   swiftformat --lint \
     apps/macos-mlx-tts/Sources \
     apps/shared/OpenClawKit/Sources/OpenClawNativeState \

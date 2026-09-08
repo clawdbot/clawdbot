@@ -123,6 +123,10 @@ describe("memoryRuntime", () => {
       },
     ];
     filterMemorySearchHitsBySessionVisibilityMock.mockResolvedValue([]);
+    if (!memoryRuntime.authorizeSearchHits) {
+      throw new Error("memory runtime search authorizer is unavailable");
+    }
+
     await expect(
       memoryRuntime.authorizeSearchHits({
         cfg,

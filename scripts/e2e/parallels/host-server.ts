@@ -119,6 +119,7 @@ export async function startHostServer(input: {
   dir: string;
   hostIp: string;
   port: number;
+  artifactPath: string;
   label: string;
 }): Promise<HostServer> {
   const actualPort = input.port || allocateHostPort();
@@ -181,16 +182,20 @@ export async function startNpmRegistryServer(input: {
   };
 }
 
-async function stopHostServerChild(child: HostServerChild): Promise<boolean> {
+async function stopHostServerChild(
+  child: HostServerChild,
+  terminateTimeoutMs = 2_000,
+  killTimeoutMs = 1_500,
+): Promise<boolean> {
   if (hasHostServerChildExited(child)) {
     return true;
   }
   child.kill("SIGTERM");
-  if (await waitForChildExit(child, 2_000)) {
+  if (await waitForChildExit(child, terminateTimeoutMs)) {
     return true;
   }
   child.kill("SIGKILL");
-  return await waitForChildExit(child, 1_500);
+  return await waitForChildExit(child, killTimeoutMs);
 }
 
 async function waitForChildExit(child: HostServerChild, timeoutMs: number): Promise<boolean> {

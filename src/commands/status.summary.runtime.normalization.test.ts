@@ -1,10 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const resolveManifestModelIdNormalizationPoliciesMock = vi.hoisted(() => vi.fn());
+const normalizeProviderModelIdWithManifestMock = vi.hoisted(() => vi.fn());
 const normalizeProviderModelIdWithRuntimeMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../plugins/manifest-model-id-normalization.js", () => ({
-  resolveManifestModelIdNormalizationPolicies: resolveManifestModelIdNormalizationPoliciesMock,
+  normalizeProviderModelIdWithManifest: normalizeProviderModelIdWithManifestMock,
 }));
 
 vi.mock("../agents/provider-model-normalization.runtime.js", () => ({
@@ -14,7 +14,7 @@ vi.mock("../agents/provider-model-normalization.runtime.js", () => ({
 describe("statusSummaryRuntime configured model normalization", () => {
   beforeEach(() => {
     vi.resetModules();
-    resolveManifestModelIdNormalizationPoliciesMock.mockReset();
+    normalizeProviderModelIdWithManifestMock.mockReset();
     normalizeProviderModelIdWithRuntimeMock.mockReset();
   });
 
@@ -58,7 +58,7 @@ describe("statusSummaryRuntime configured model normalization", () => {
       model: "gpt-5.5",
     });
 
-    expect(resolveManifestModelIdNormalizationPoliciesMock).not.toHaveBeenCalled();
+    expect(normalizeProviderModelIdWithManifestMock).not.toHaveBeenCalled();
     expect(normalizeProviderModelIdWithRuntimeMock).not.toHaveBeenCalled();
   });
 
@@ -72,6 +72,7 @@ describe("statusSummaryRuntime configured model normalization", () => {
       },
     } as never;
 
+    normalizeProviderModelIdWithManifestMock.mockReturnValue("claude-opus-4-6");
     normalizeProviderModelIdWithRuntimeMock.mockReturnValue("runtime-normalized-opus");
 
     expect(
@@ -111,7 +112,7 @@ describe("statusSummaryRuntime configured model normalization", () => {
       model: "claude-opus-4-6",
     });
 
-    expect(resolveManifestModelIdNormalizationPoliciesMock).not.toHaveBeenCalled();
+    expect(normalizeProviderModelIdWithManifestMock).not.toHaveBeenCalled();
     expect(normalizeProviderModelIdWithRuntimeMock).not.toHaveBeenCalled();
   });
 });

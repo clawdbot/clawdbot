@@ -1,10 +1,10 @@
 // Gateway startup-migration readiness refusals shared by doctor config preflight.
 import { ExitError } from "../runtime.js";
 
-export function throwStartupMigrationRefusal(message: string, cause?: unknown): never {
+export function throwStartupMigrationRefusal(message: string): never {
   // ExitError bypasses entry.ts's generic failure formatter, so report the owned reason here.
   console.error(message);
-  throw Object.assign(new ExitError(78, message), { cause });
+  throw new ExitError(1, message);
 }
 
 export function throwStartupMigrationGuardRejected(): never {
@@ -15,7 +15,7 @@ export function throwStartupMigrationGuardRejected(): never {
 
 export function throwStartupMigrationIdentityChanged(): never {
   throwStartupMigrationRefusal(
-    "OpenClaw migration inputs changed during startup; refusing to report the gateway ready. Restart OpenClaw so state migrations run against the final config and plugin inventory.",
+    "OpenClaw plugin migration inputs changed during startup convergence; refusing to report the gateway ready. Restart OpenClaw so state migrations run against the final config and plugin inventory.",
   );
 }
 
@@ -27,7 +27,7 @@ export function throwStartupMigrationIdentityChanged(): never {
  * Test runs skip the probe like acquireGatewayLock does (locks are disabled under Vitest).
  * Returns the refusal message so each mutation boundary can report through its own runtime.
  */
-async function describeLiveGatewayOwnerStartupBlocker(
+export async function describeLiveGatewayOwnerStartupBlocker(
   env: NodeJS.ProcessEnv,
 ): Promise<string | undefined> {
   if (env.VITEST || env.NODE_ENV === "test") {

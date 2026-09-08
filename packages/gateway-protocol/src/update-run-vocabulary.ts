@@ -1,5 +1,3 @@
-export const UPDATE_RUN_DRIVER_LIMIT = 8;
-
 export const UPDATE_RUN_PHASES = [
   "requested",
   "staging",

@@ -38,7 +38,6 @@ vi.mock("../config/config.js", () => ({
     writeOptions: {
       assertConfigPathForWrite: assertConfigPathForWriteMock,
       basePluginMetadataSnapshot: {} as never,
-      envSnapshotForRestore: { INSTALL_CONFIG_READ_VALUE: "read-time" },
       expectedConfigPath: "/tmp/config.json5",
       ownedConfigPathForWrite: "/tmp/config.json5",
       includeFileHashesForWrite: includeFileHashesForWriteMock(),
@@ -63,8 +62,6 @@ vi.mock("./plugins-location-bridges.js", () => ({
 
 const DISCORD_REPO_INSTALL_SPEC = repoInstallSpec("discord");
 const installWriteOptions = {
-  inputBase: "source",
-  envSnapshotForRestore: { INSTALL_CONFIG_READ_VALUE: "read-time" },
   assertConfigPathForWrite: assertConfigPathForWriteMock,
   // Central install persistence stamps the journal origin onto every write.
   auditOrigin: "plugin-install",

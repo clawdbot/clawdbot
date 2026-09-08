@@ -1,6 +1,7 @@
 // Signal plugin module implements approval native behavior.
 import { createApproverRestrictedNativeApprovalCapabilityFromForwardingRoutes } from "openclaw/plugin-sdk/approval-delivery-runtime";
 import { createLazyChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
+import type { ChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { shouldSuppressLocalNativeExecApprovalPrompt } from "openclaw/plugin-sdk/approval-native-runtime";
 import { buildApprovalReactionPendingContentForRequest } from "openclaw/plugin-sdk/approval-reaction-runtime";
 import type {
@@ -65,14 +66,15 @@ const signalApproval = createApproverRestrictedNativeApprovalCapabilityFromForwa
   },
   createNativeRuntime: (routing) =>
     createLazyChannelApprovalNativeRuntimeAdapter({
-      capabilityBoundary: true,
       eventKinds: ["exec", "plugin", "system-agent"],
       isConfigured: ({ cfg, accountId, context }) =>
         Boolean(context) && routing.isNativeApprovalHandlerConfigured({ cfg, accountId }),
       shouldHandle: ({ cfg, accountId, context, approvalKind, request }) =>
         Boolean(context) &&
         routing.shouldHandleApprovalRequest({ cfg, accountId, approvalKind, request }),
-      load: async () => (await import("./approval-handler.runtime.js")).signalApprovalNativeRuntime,
+      load: async () =>
+        (await import("./approval-handler.runtime.js"))
+          .signalApprovalNativeRuntime as unknown as ChannelApprovalNativeRuntimeAdapter,
     }),
 });
 const signalApprovalRouting = signalApproval.routing;

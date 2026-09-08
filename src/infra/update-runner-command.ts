@@ -1,8 +1,6 @@
 import { runCommandWithTimeout } from "../process/exec.js";
-import { formatErrorMessage } from "./errors.js";
 import { trimLogTail } from "./restart-sentinel.js";
 import { createGlobalInstallEnv } from "./update-global.js";
-import { UPDATE_RUN_HEARTBEAT_MS } from "./update-run-timeouts.js";
 import type {
   CommandRunner,
   RunStepOptions,
@@ -13,9 +11,6 @@ import type {
 
 export const UPDATE_RUNNER_TIMEOUT_MS = 20 * 60_000;
 export const MAX_LOG_CHARS = 8000;
-
-// A run shares its heartbeat callback across steps; weak keys do not retain completed runs.
-const warnedHeartbeats = new WeakSet<() => void>();
 
 function mergeCommandEnvironments(
   baseEnv: NodeJS.ProcessEnv | undefined,
@@ -37,32 +32,7 @@ export async function runStep(opts: RunStepOptions): Promise<UpdateStepResult> {
   progress?.onStepStart?.(stepInfo);
 
   const started = Date.now();
-  const onHeartbeat = progress?.onHeartbeat;
-  const heartbeat = onHeartbeat
-    ? setInterval(() => {
-        try {
-          onHeartbeat();
-        } catch (error) {
-          if (!warnedHeartbeats.has(onHeartbeat)) {
-            warnedHeartbeats.add(onHeartbeat);
-            console.warn(
-              `[update] Could not refresh the update heartbeat; continuing the command: ${trimLogTail(formatErrorMessage(error), 500)}`,
-            );
-          }
-        }
-      }, UPDATE_RUN_HEARTBEAT_MS)
-    : undefined;
-  heartbeat?.unref();
-  let result: Awaited<ReturnType<CommandRunner>>;
-  try {
-    result = await runCommand(argv, {
-      cwd,
-      timeoutMs,
-      env,
-    });
-  } finally {
-    clearInterval(heartbeat);
-  }
+  const result = await runCommand(argv, { cwd, timeoutMs, env });
   const durationMs = Date.now() - started;
   const stdoutTail = trimLogTail(result.stdout, MAX_LOG_CHARS);
   const stderrTail = trimLogTail(result.stderr, MAX_LOG_CHARS);

@@ -64,13 +64,6 @@ const wizardMocks = vi.hoisted(() => ({
 vi.mock("../config/config.js", async () => ({
   ...(await vi.importActual<typeof import("../config/config.js")>("../config/config.js")),
   readConfigFileSnapshot: configMocks.readConfigFileSnapshot,
-  readConfigFileSnapshotForWrite: async () => {
-    const snapshot = await configMocks.readConfigFileSnapshot();
-    return {
-      snapshot: { ...snapshot, sourceConfig: snapshot.sourceConfig ?? snapshot.config },
-      writeOptions: {},
-    };
-  },
   replaceConfigFile: configMocks.replaceConfigFile,
 }));
 
@@ -248,52 +241,6 @@ describe("agents delete command", () => {
     });
   });
 
-  it.each(["relocated", "agent directory"])(
-    "refuses deleting a shared session database owner at a %s locator before any mutation",
-    async (location) => {
-      await withStateDirEnv("openclaw-agents-delete-shared-owner-", async ({ stateDir }) => {
-        const storePath =
-          location === "relocated"
-            ? path.join(stateDir, "shared.sqlite")
-            : path.join(stateDir, "agents", "alpha", "agent", "openclaw-agent.sqlite");
-        const cfg: OpenClawConfig = {
-          agents: {
-            ownership: "explicit",
-            entries: { alpha: {}, ops: {} },
-          },
-          session: { store: storePath },
-        };
-        openOpenClawAgentDatabase({ agentId: "alpha", path: storePath });
-        const sessions = {
-          "agent:alpha:main": { sessionId: "alpha-session", updatedAt: 1 },
-          ...(location === "relocated"
-            ? { "agent:ops:main": { sessionId: "ops-session", updatedAt: 2 } }
-            : {}),
-        };
-        await arrangeAgentsDeleteTest({ stateDir, cfg, deletedAgentId: "alpha", sessions });
-        saveExecApprovals({ version: 1, agents: { alpha: { security: "deny" } } });
-        const approvals = readExecApprovalsSnapshot();
-
-        await agentsDeleteCommand({ id: "alpha", force: true, json: true }, runtime);
-
-        expect(readJsonLogs()).toEqual([
-          expect.objectContaining({
-            ok: false,
-            error: expect.objectContaining({
-              message: expect.stringContaining('still used by agent "ops"'),
-            }),
-          }),
-        ]);
-        expect(configMocks.replaceConfigFile).not.toHaveBeenCalled();
-        expect(gatewayMocks.callGateway).not.toHaveBeenCalled();
-        expect(fsSafeMocks.movePathToTrash).not.toHaveBeenCalled();
-        expect(readAgentDeletionJournal("alpha")).toBeUndefined();
-        expect(readExecApprovalsSnapshot()).toEqual(approvals);
-        expectSessionStore(cfg, sessions, "alpha");
-      });
-    },
-  );
-
   it("deletes main normally after shared auth ownership moves to state SQLite", async () => {
     await withStateDirEnv("openclaw-agents-delete-relocated-auth-", async ({ stateDir }) => {
       const cfg: OpenClawConfig = {
@@ -445,7 +392,7 @@ describe("agents delete command", () => {
         `Warning: path could not be moved to Trash: trash unavailable; remove it manually at ${workspace}`,
       );
       expect(runtime.error).toHaveBeenCalledWith(
-        'Warning: session-store purge failed for deleted agent "ops"; source data was retained. Retry deletion after resolving the storage error.',
+        'Warning: session-store purge failed for deleted agent "ops"; stale shared-store rows may remain.',
       );
       expect(runtime.exit).not.toHaveBeenCalled();
     });
@@ -570,15 +517,13 @@ describe("agents delete command", () => {
         "talk.agentId",
       ]);
       const replaceConfigFileCalls = configMocks.replaceConfigFile.mock.calls as unknown as Array<
-        [{ sourceConfig: OpenClawConfig }]
+        [{ nextConfig: OpenClawConfig }]
       >;
+      expect(replaceConfigFileCalls[0]?.[0].nextConfig.agents?.defaults?.heartbeat).toBeUndefined();
       expect(
-        replaceConfigFileCalls[0]?.[0].sourceConfig.agents?.defaults?.heartbeat,
+        replaceConfigFileCalls[0]?.[0].nextConfig.agents?.defaults?.systemAgent,
       ).toBeUndefined();
-      expect(
-        replaceConfigFileCalls[0]?.[0].sourceConfig.agents?.defaults?.systemAgent,
-      ).toBeUndefined();
-      expect(replaceConfigFileCalls[0]?.[0].sourceConfig.talk).toEqual({
+      expect(replaceConfigFileCalls[0]?.[0].nextConfig.talk).toEqual({
         provider: "test-provider",
       });
     });
@@ -611,9 +556,9 @@ describe("agents delete command", () => {
       expect(runtime.exit).not.toHaveBeenCalled();
       expect(configMocks.replaceConfigFile).toHaveBeenCalledOnce();
       const replaceConfigFileCalls = configMocks.replaceConfigFile.mock.calls as unknown as Array<
-        [{ sourceConfig: OpenClawConfig }]
+        [{ nextConfig: OpenClawConfig }]
       >;
-      expect(replaceConfigFileCalls[0]?.[0].sourceConfig).toEqual({
+      expect(replaceConfigFileCalls[0]?.[0].nextConfig).toEqual({
         agents: {
           defaults: undefined,
           entries: {
@@ -812,10 +757,10 @@ describe("agents delete command", () => {
       expect(listOpenClawRegisteredAgentDatabases().map((entry) => entry.agentId)).toContain("ops");
 
       const writeCalls = configMocks.replaceConfigFile.mock.calls as unknown as Array<
-        [{ sourceConfig?: OpenClawConfig }]
+        [{ nextConfig?: OpenClawConfig }]
       >;
       const firstWrite = writeCalls[0]?.[0];
-      const nextConfig = firstWrite?.sourceConfig;
+      const nextConfig = firstWrite?.nextConfig;
       expect(nextConfig).toBeDefined();
       configMocks.readConfigFileSnapshot.mockResolvedValue({
         ...baseConfigSnapshot,

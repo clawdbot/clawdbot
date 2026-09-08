@@ -412,6 +412,7 @@ function buildCoreDistEntries(): Record<string, string> {
       "src/config/sessions/session-model-context.worker.ts",
     "config/sessions/disk-budget.worker": "src/config/sessions/disk-budget.worker.ts",
     "agents/model-provider-auth.worker": "src/agents/model-provider-auth.worker.ts",
+    "agents/prepared-model-catalog.worker": "src/agents/prepared-model-catalog.worker.ts",
     ...runtimeProcessBuildEntries,
     ...runtimeProcessDeclarationEntries,
     "system-agent/setup-inference-detection.worker":
@@ -811,10 +812,7 @@ const configs: UserConfig[] = [
       name: TSDOWN_UNIFIED_CONFIG_GROUP,
       // Build core entrypoints, plugin-sdk subpaths, bundled plugin entrypoints,
       // and bundled hooks in one graph so runtime singletons are emitted once.
-      entry: {
-        ...unifiedDistEntries,
-        "native-hook-relay/entry": "src/cli/native-hook-relay-entry.ts",
-      },
+      entry: unifiedDistEntries,
       deps: unifiedDeps,
       // Explicit ESM chunks avoid repeated package-format parsing in Node;
       // named entrypoints retain their public .js paths.

@@ -29,10 +29,6 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { registerContextEngineForOwner } from "../../context-engine/registry.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import type { resolveMcpLoopbackScopedTools as resolveLoopbackTools } from "../../gateway/mcp-http.runtime.js";
-import {
-  claimHeartbeatOutcomeForRun,
-  persistHeartbeatOutcome,
-} from "../../infra/heartbeat-outcome-store.js";
 import { CliBackendAuthProfilePreparationError } from "../../plugins/cli-backend-errors.js";
 import type {
   CliBackendExecute,
@@ -690,156 +686,6 @@ describe("prepareCliRunContext", () => {
     setActiveDegradedSecretOwners([]);
     vi.unstubAllEnvs();
     fixture.cleanup();
-  });
-
-  it.each(["process", "plugin"] as const)(
-    "carries silent heartbeat outcome in late %s user input without rebinding",
-    async (targetKind) => {
-      const { sessionTarget } = fixture.session;
-      if (targetKind === "plugin") {
-        setRawCliBackendForPrepareTest({
-          ...defaultTestCliBackend,
-          prepareExecution: () => ({
-            async *execute() {
-              yield { type: "result" };
-            },
-          }),
-        });
-      }
-      const admission = prepareSystemAgentRunAdmission(
-        {},
-        "run-test",
-        "main",
-        "heartbeat-context-test",
-      );
-      const input = {
-        preparedRunAdmission: admission,
-        sessionKey: sessionTarget.sessionKey,
-        trigger: "user" as const,
-        prompt: "What happened?",
-        transcriptPrompt: "What happened?",
-        currentInboundContext: { text: "Quoted reply", resumableText: "Room delta" },
-      };
-      try {
-        const before = await fixture.prepare(input);
-        persistHeartbeatOutcome({
-          ...sessionTarget,
-          runSessionKey: "agent:main:main:heartbeat",
-          occurredAt: 1,
-          response: { outcome: "done", notify: false, summary: "ISOLATED_CLI_OUTCOME_947" },
-        });
-        for (let retry = 0; retry < 2; retry++) {
-          const context = await fixture.prepare(input);
-          expect(context.executionTarget.kind).toBe(targetKind);
-          const visibleInput = [
-            context.params.prompt,
-            context.promptContext?.prependContext,
-            context.promptContext?.appendContext,
-          ]
-            .filter(Boolean)
-            .join("\n");
-          expect(visibleInput.match(/ISOLATED_CLI_OUTCOME_947/g)).toHaveLength(1);
-          expect(context.params.transcriptPrompt).toBe("What happened?");
-          expect(context.systemPrompt).toBe(before.systemPrompt);
-          expect(context.extraSystemPromptHash).toBe(before.extraSystemPromptHash);
-          expect(context.messageToolPolicyHash).toBe(before.messageToolPolicyHash);
-          expect(input.currentInboundContext).toEqual({
-            text: "Quoted reply",
-            resumableText: "Room delta",
-          });
-        }
-        const laterAdmission = prepareSystemAgentRunAdmission(
-          {},
-          "later-user-run",
-          "main",
-          "heartbeat-context-test",
-        );
-        try {
-          const later = await fixture.prepare({
-            ...input,
-            runId: "later-user-run",
-            preparedRunAdmission: laterAdmission,
-          });
-          expect(JSON.stringify([later.params.prompt, later.promptContext])).not.toContain(
-            "ISOLATED_CLI_OUTCOME_947",
-          );
-        } finally {
-          laterAdmission.close();
-        }
-      } finally {
-        admission.close();
-      }
-    },
-  );
-
-  it.each(["heartbeat", "cron", "in-memory", "aborted"] as const)(
-    "does not consume silent heartbeat context for %s CLI preparation",
-    async (kind) => {
-      const { sessionTarget, dir } = fixture.session;
-      persistHeartbeatOutcome({
-        ...sessionTarget,
-        runSessionKey: "agent:main:main:heartbeat",
-        occurredAt: 1,
-        response: { outcome: "done", notify: false, summary: "Retained CLI outcome" },
-      });
-      const admission = prepareSystemAgentRunAdmission(
-        {},
-        "run-test",
-        "main",
-        "heartbeat-context-test",
-      );
-      const input = {
-        preparedRunAdmission: admission,
-        sessionKey: sessionTarget.sessionKey,
-        trigger: kind === "heartbeat" || kind === "cron" ? kind : ("user" as const),
-        ...(kind === "in-memory" ? { sessionManager: SessionManager.inMemory(dir) } : {}),
-        ...(kind === "aborted" ? { abortSignal: AbortSignal.abort() } : {}),
-      };
-      try {
-        if (kind === "aborted") {
-          await expect(fixture.prepare(input)).rejects.toThrow();
-        } else {
-          const context = await fixture.prepare(input);
-          expect(JSON.stringify([context.params.prompt, context.promptContext])).not.toContain(
-            "Retained CLI outcome",
-          );
-        }
-        expect(claimHeartbeatOutcomeForRun({ ...sessionTarget, runId: "next-user" })?.summary).toBe(
-          "Retained CLI outcome",
-        );
-      } finally {
-        admission.close();
-      }
-    },
-  );
-
-  it("does not renew an explicitly revoked CLI owner to claim silent heartbeat context", async () => {
-    const { sessionTarget } = fixture.session;
-    persistHeartbeatOutcome({
-      ...sessionTarget,
-      runSessionKey: "agent:main:main:heartbeat",
-      occurredAt: 1,
-      response: { outcome: "done", notify: false, summary: "Keep revoked-owner outcome" },
-    });
-    const admission = prepareSystemAgentRunAdmission(
-      {},
-      "revoked-user",
-      "main",
-      "heartbeat-context-test",
-    );
-    const admittedRunContext = await admission.admit("embedded");
-    admission.close();
-    await expect(
-      fixture.prepare({
-        admittedRunContext,
-        runId: "revoked-user",
-        trigger: "user",
-        sessionKey: sessionTarget.sessionKey,
-      }),
-    ).rejects.toThrow("authority");
-    expect(claimHeartbeatOutcomeForRun({ ...sessionTarget, runId: "next-user" })?.summary).toBe(
-      "Keep revoked-owner outcome",
-    );
   });
 
   it("carries the session-key-derived workspace owner into prepared params", async () => {
@@ -2798,78 +2644,27 @@ describe("prepareCliRunContext", () => {
     expect(context.reusableCliSession).toEqual({ mode: "reuse", sessionId: "cli-session" });
   });
 
-  it.each([false, true])(
-    "invalidates CLI session reuse when explicit message-target policy changes, stable=%s",
-    async (stable) => {
-      const context = await fixture.prepare({
-        sourceReplyDeliveryMode: "message_tool_only",
-        requireExplicitMessageTarget: true,
-        ...(stable
-          ? {
-              cliSessionBindingFacts: {
-                sourceReplyDeliveryMode: "message_tool_only" as const,
-                requireExplicitMessageTarget: true,
-              },
-            }
-          : {}),
-        cliSessionBinding: {
-          sessionId: "cli-session",
-          messageToolPolicyHash: hashCliSessionText(
-            JSON.stringify({
-              sourceReplyDeliveryMode: "message_tool_only",
-              requireExplicitMessageTarget: false,
-            }),
-          ),
-        },
-      });
-
-      expect(context.messageToolPolicyHash).toBeDefined();
-      expect(context.reusableCliSession).toEqual({
-        mode: "invalidate",
-        invalidatedReason: "message-policy",
-      });
-    },
-  );
-
-  it.each([
-    { trigger: "cron", sessionKey: "agent:main:telegram:group:chat" },
-    { trigger: "heartbeat", sessionKey: "agent:main:main" },
-    { trigger: "heartbeat", sessionKey: "agent:main:subagent:child" },
-  ] as const)(
-    "reuses normal/$trigger/normal CLI bindings for $sessionKey",
-    async ({ trigger, sessionKey }) => {
-      const cliSessionBindingFacts = { extraSystemPromptStatic: "" };
-      const first = await fixture.prepare({ sessionKey, cliSessionBindingFacts });
-      const binding = {
+  it("invalidates CLI session reuse when explicit message-target policy changes", async () => {
+    const context = await fixture.prepare({
+      sourceReplyDeliveryMode: "message_tool_only",
+      requireExplicitMessageTarget: true,
+      cliSessionBinding: {
         sessionId: "cli-session",
-        extraSystemPromptHash: first.extraSystemPromptHash,
-        messageToolPolicyHash: first.messageToolPolicyHash,
-        promptToolNamesHash: first.promptToolNamesHash,
-        cwdHash: first.cwdHash,
-        mcpConfigHash: first.preparedBackend.mcpConfigHash,
-        mcpResumeHash: first.preparedBackend.mcpResumeHash,
-      };
-      const background = await fixture.prepare({
-        sessionKey,
-        cliSessionBindingFacts,
-        trigger,
-        requireExplicitMessageTarget: true,
-        cliSessionBinding: binding,
-      });
-      const normal = await fixture.prepare({
-        sessionKey,
-        cliSessionBindingFacts,
-        cliSessionBinding: binding,
-      });
-      expect(background.params.requireExplicitMessageTarget).toBe(true);
-      expect(background.messageToolPolicyHash).toBe(first.messageToolPolicyHash);
-      expect(background.reusableCliSession).toEqual({ mode: "reuse", sessionId: "cli-session" });
-      expect(normal.reusableCliSession).toEqual({ mode: "reuse", sessionId: "cli-session" });
-      if (!sessionKey.includes(":subagent:")) {
-        expect(first.messageToolPolicyHash).toBeUndefined();
-      }
-    },
-  );
+        messageToolPolicyHash: hashCliSessionText(
+          JSON.stringify({
+            sourceReplyDeliveryMode: "message_tool_only",
+            requireExplicitMessageTarget: false,
+          }),
+        ),
+      },
+    });
+
+    expect(context.messageToolPolicyHash).toBeDefined();
+    expect(context.reusableCliSession).toEqual({
+      mode: "invalidate",
+      invalidatedReason: "message-policy",
+    });
+  });
 
   it("requires explicit message targets by default for CLI subagents", async () => {
     const context = await fixture.prepare({
@@ -3111,7 +2906,6 @@ describe("prepareCliRunContext", () => {
           config,
           sessionKey: "main",
           prompt: "first ask",
-          requireExplicitMessageTarget: true,
           extraSystemPrompt: `volatile msg-1\n\n${staticPrompt}`,
           sourceReplyDeliveryMode: "message_tool_only",
           currentMessageId: "msg-1",
@@ -3136,18 +2930,6 @@ describe("prepareCliRunContext", () => {
           },
         });
 
-        expect(resolveMcpLoopbackScopedTools).toHaveBeenNthCalledWith(
-          1,
-          expect.objectContaining({
-            context: expect.objectContaining({ requireExplicitMessageTarget: true }),
-          }),
-        );
-        expect(resolveMcpLoopbackScopedTools).toHaveBeenNthCalledWith(
-          2,
-          expect.objectContaining({
-            context: expect.objectContaining({ requireExplicitMessageTarget: undefined }),
-          }),
-        );
         expect(first.extraSystemPromptHash).toBe(hashCliSessionText(staticPrompt));
         expect(first.messageToolPolicyHash).toBeDefined();
         expect(second.extraSystemPromptHash).toBe(first.extraSystemPromptHash);

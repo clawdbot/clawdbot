@@ -1,3 +1,4 @@
+// Agent Core module implements agent behavior.
 import type {
   ImageContent,
   Message,

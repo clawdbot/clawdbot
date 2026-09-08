@@ -17,7 +17,7 @@ import {
   isRelayableExecCompletionEvent,
 } from "./heartbeat-events-filter.js";
 import {
-  heartbeatLog as log,
+  heartbeatLog,
   resolveConfiguredHeartbeatPrompt,
   resolveHeartbeatResponseToolPrompt,
   type HeartbeatConfig,
@@ -38,6 +38,8 @@ import {
   resolveSystemEventDeliveryContext,
   type SystemEvent,
 } from "./system-events.js";
+
+const log = heartbeatLog;
 
 export function truncateHeartbeatPreview(value: string | undefined): string | undefined {
   return value ? truncateUtf16Safe(value, 200) : undefined;

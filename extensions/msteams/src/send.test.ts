@@ -595,15 +595,6 @@ describe("editMessageMSTeams", () => {
         type: "message",
         id: "activity-123",
         text: "Updated message text",
-        entities: [
-          {
-            type: "https://schema.org/Message",
-            "@type": "Message",
-            "@context": "https://schema.org",
-            "@id": "",
-            additionalType: ["AIGeneratedContent"],
-          },
-        ],
       },
       { serviceUrlBoundary: { cloud: "Public" } },
     );

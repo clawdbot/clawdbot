@@ -24,7 +24,6 @@ import {
   recordLegacyMigrationReceipt,
 } from "./state-migrations.receipts.js";
 import {
-  createWorkspaceSetupFingerprint,
   resolveWorkspaceMigrationSourceKey,
   type MigrationReceipt,
 } from "./state-migrations.workspace-setup-receipts.js";
@@ -177,6 +176,20 @@ function mapsEqual(left: ReadonlyMap<string, string>, right: ReadonlyMap<string,
 
 function canonicalFingerprint(value: unknown): string {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");
+}
+
+function setupFingerprint(params: {
+  workspace_path: string | null;
+  bootstrap_seeded_at: string | null;
+  setup_completed_at: string | null;
+}): string {
+  return canonicalFingerprint({
+    kind: "setup",
+    workspacePath: params.workspace_path,
+    version: WORKSPACE_SETUP_STATE_VERSION,
+    bootstrapSeededAt: params.bootstrap_seeded_at,
+    setupCompletedAt: params.setup_completed_at,
+  });
 }
 
 function attestationFingerprint(params: {
@@ -359,7 +372,7 @@ export function importAndRecordReceipt(params: {
           ) {
             throw new Error("legacy workspace setup conflicts with canonical SQLite state");
           }
-          const existingFingerprint = createWorkspaceSetupFingerprint(existing);
+          const existingFingerprint = setupFingerprint(existing);
           // The canonical record is authoritative even without an import receipt.
           // Keep legacy differences for inspection instead of replaying old milestones.
           for (const [milestone, canonical] of [
@@ -400,7 +413,7 @@ export function importAndRecordReceipt(params: {
           );
           imported = true;
           resolution = existing ? "merged" : "inserted";
-          verifiedFingerprint = createWorkspaceSetupFingerprint(setupColumns);
+          verifiedFingerprint = setupFingerprint(setupColumns);
         }
         const verified = executeSqliteQueryTakeFirstSync(
           db,
@@ -412,9 +425,7 @@ export function importAndRecordReceipt(params: {
         // Every setup import branch writes the source path, so a NULL path
         // here is a verification failure, not an attestation-only row.
         const actualFingerprint =
-          verified && verified.workspace_path != null
-            ? createWorkspaceSetupFingerprint(verified)
-            : null;
+          verified && verified.workspace_path != null ? setupFingerprint(verified) : null;
         if (!verified || actualFingerprint !== verifiedFingerprint) {
           throw new Error("SQLite verification failed for workspace setup state");
         }

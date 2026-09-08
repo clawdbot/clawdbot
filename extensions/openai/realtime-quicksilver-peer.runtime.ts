@@ -45,8 +45,6 @@ type InboundRtpState = {
 export type OpenAIQuicksilverAudioPeerCallbacks = {
   onAudio: (audio: Buffer) => void;
   onError: (error: Error) => void;
-  // Omission preserves the existing fatal packet-error callback contract.
-  onMediaError?: (error: Error) => void;
   onRtpPacket?: () => void;
 };
 
@@ -152,7 +150,6 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
         callbacks: params.callbacks,
         decoder,
         encoder,
-        libopus,
         peer,
         transceiver,
         werift,
@@ -174,7 +171,6 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
 
   private connected = false;
   private closed = false;
-  private outboundPacketFailed = false;
   private activeInboundSsrc: number | undefined;
   private inboundRtpState: InboundRtpState = { pendingPackets: new Map() };
   private mediaTimer: ReturnType<typeof setInterval> | undefined;
@@ -197,7 +193,6 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
       callbacks: OpenAIQuicksilverAudioPeerCallbacks;
       decoder: LibopusDecoder;
       encoder: LibopusEncoder;
-      libopus: LibopusModule;
       peer: WeriftPeerConnection;
       transceiver: WeriftTransceiver;
       werift: WeriftModule;
@@ -285,11 +280,6 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
     }
     this.subscribedTracks.add(track.uuid);
     track.onReceiveRtp.subscribe((packet) => this.handleInboundRtp(packet));
-  }
-
-  private reportMediaError(error: unknown): void {
-    const report = this.state.callbacks.onMediaError ?? this.state.callbacks.onError;
-    report(toErrorObject(error, "OpenAI GPT-Live WebRTC media failed"));
   }
 
   private handleInboundRtp(packet: WeriftRtpPacket): void {
@@ -418,26 +408,7 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
 
   private decodeInboundPacket(packet: WeriftRtpPacket): void {
     const opusPacket = this.state.werift.dePacketizeRtpPackets("opus", [packet]).data;
-    let decoded: Int16Array;
-    try {
-      decoded = this.state.decoder.decode(opusPacket, { maxFrameSize: 5_760 });
-    } catch (error) {
-      const invalidPacket =
-        (error instanceof this.state.libopus.OpusError &&
-          error.code === this.state.libopus.OpusErrorCode.InvalidPacket) ||
-        (opusPacket.length === 0 && error instanceof RangeError);
-      if (!invalidPacket || !this.state.callbacks.onMediaError) {
-        throw error;
-      }
-      this.reportMediaError(error);
-      if (this.closed) {
-        return;
-      }
-      // Conceal this packet once and let the same drain continue. Codec-state and
-      // audio-consumer failures still escape to the fatal boundary.
-      decoded = this.state.decoder.decodePacketLoss(OPUS_FRAME_SAMPLES);
-    }
-    this.emitInboundPcm(decoded);
+    this.emitInboundPcm(this.state.decoder.decode(opusPacket, { maxFrameSize: 5_760 }));
   }
 
   private decodeInboundPacketLoss(): void {
@@ -496,26 +467,9 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
       this.timestamp = (this.timestamp + OPUS_FRAME_SAMPLES) >>> 0;
       // werift queues encrypted UDP synchronously before sendRtp yields
       // (rtpSender.js:538; transport/dtls.js:455), preserving per-tick order.
-      void this.state.transceiver.sender.sendRtp(rtp).then(
-        () => {
-          this.outboundPacketFailed = false;
-        },
-        (error: unknown) => {
-          if (this.closed) {
-            return;
-          }
-          // A successful send restores usability. Another failure without one
-          // means the transport cannot sustain packet-level recovery.
-          if (this.outboundPacketFailed) {
-            this.state.callbacks.onError(
-              toErrorObject(error, "OpenAI GPT-Live WebRTC media failed"),
-            );
-            return;
-          }
-          this.outboundPacketFailed = true;
-          this.reportMediaError(error);
-        },
-      );
+      void this.state.transceiver.sender.sendRtp(rtp).catch((error: unknown) => {
+        this.state.callbacks.onError(toErrorObject(error, "OpenAI GPT-Live WebRTC media failed"));
+      });
     } catch (error) {
       this.state.callbacks.onError(toErrorObject(error, "OpenAI GPT-Live WebRTC media failed"));
     }

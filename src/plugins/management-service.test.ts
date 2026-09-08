@@ -44,9 +44,6 @@ vi.mock("../config/config.js", () => ({
 
 vi.mock("./install-persistence.js", () => ({
   persistPluginInstall: (...args: unknown[]) => mocks.persistInstall(...args),
-}));
-
-vi.mock("./install-config-mutation.js", () => ({
   resolveInstallConfigMutationPreflights: (...args: unknown[]) => mocks.preflight(...args),
   selectInstallMutationWriteOptions: (writeOptions: unknown) =>
     mocks.selectWriteOptions(writeOptions),
@@ -538,7 +535,7 @@ describe("plugin management service", () => {
 
     expect(mocks.replaceConfig).toHaveBeenCalledWith(
       expect.objectContaining({
-        sourceConfig: {
+        nextConfig: {
           plugins: {
             allow: ["memory-core", "workboard"],
             entries: { workboard: { enabled: true } },
@@ -584,7 +581,7 @@ describe("plugin management service", () => {
 
     expect(mocks.replaceConfig).toHaveBeenCalledWith(
       expect.objectContaining({
-        sourceConfig: {
+        nextConfig: {
           plugins: {
             allow: [],
             entries: { workboard: { enabled: true } },

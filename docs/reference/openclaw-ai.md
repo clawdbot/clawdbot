@@ -66,11 +66,6 @@ A runnable version lives in the repository at `examples/ai-chat`.
 | `./providers`    | `registerBuiltInApiProviders`, `resetApiProviders`                             |
 | `./types`        | Model/message/tool/stream types                                                |
 | `./validation`   | Tool argument validation                                                       |
-| `./diagnostics`  | Diagnostics contracts, transport logging, and sanitized URL formatting         |
+| `./diagnostics`  | Diagnostics contracts                                                          |
 | `./event-stream` | Shared `EventStream` implementation                                            |
 | `./internal/*`   | OpenClaw-internal, no semver guarantee                                         |
-
-Use `@openclaw/ai/diagnostics` for `emitModelTransportDebug`,
-`formatModelTransportDebugUrl`, and `formatModelTransportDebugBaseUrl` when
-you only need logging helpers. This entrypoint keeps provider transport
-implementations out of the import graph.

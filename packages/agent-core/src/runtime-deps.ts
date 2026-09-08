@@ -1,3 +1,4 @@
+// Agent Core module implements runtime deps behavior.
 import type { CompleteSimpleFn, StreamFn, Usage } from "@openclaw/llm-core";
 
 /** Runtime functions injected by host packages so agent-core stays provider-agnostic. */

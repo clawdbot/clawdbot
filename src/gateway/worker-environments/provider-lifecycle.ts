@@ -6,7 +6,6 @@ import {
   WorkerProviderError,
   type WorkerExecutionMode,
   type WorkerLease,
-  type WorkerNodeRuntimeIdentity,
   type WorkerProfile,
   type WorkerProvider,
 } from "../../plugins/types.js";
@@ -213,7 +212,6 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
     provider: WorkerProvider,
     preparedInstallation?: WorkerInstallationArtifact,
     cancellation?: ReturnType<typeof createWorkerProvisionCancellation>,
-    nodeRuntimeIdentity?: WorkerNodeRuntimeIdentity,
   ) => {
     let record = initialRecord;
     let lease: WorkerLease;
@@ -255,7 +253,6 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
         provider,
         cancellation?.signal,
         preparedInstallation,
-        nodeRuntimeIdentity,
       );
       const project = readWorkerProjectSnapshot(record.profileSnapshot.project);
       if (project) {
@@ -291,7 +288,6 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
                 ? {
                     beginNodeEnrollment: enrollmentOperation.begin,
                     prepareNodeRuntime: enrollmentOperation.prepareRuntime,
-                    nodeRuntimeIdentity,
                   }
                 : {}),
               ...(cancellation ? { signal: cancellation.signal } : {}),
@@ -429,13 +425,11 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
     }
     try {
       let installation: WorkerInstallationArtifact | undefined;
-      const preparedNode = await nodeProvisioning.prepare(record, provider, signal);
-      installation = preparedNode?.installation;
+      await nodeProvisioning.prepare(record, provider, signal);
       cancellation?.assertActive();
       if (
         record.state === "requested" &&
         record.destroyRequestedAtMs === null &&
-        !installation &&
         provider.provisionBeforeInstallation !== true
       ) {
         try {
@@ -453,13 +447,7 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
         }
         cancellation?.assertActive();
       }
-      return await finishProvision(
-        record,
-        provider,
-        installation,
-        cancellation,
-        preparedNode?.identity,
-      );
+      return await finishProvision(record, provider, installation, cancellation);
     } finally {
       cancellation?.close();
     }

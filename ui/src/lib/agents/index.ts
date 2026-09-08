@@ -1,4 +1,3 @@
-import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
   AgentsFilesGetResult,
@@ -9,7 +8,6 @@ import type {
   ToolsCatalogResult,
   ToolsEffectiveResult,
 } from "../../api/types.ts";
-import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import { formatUiError } from "../format-error.ts";
 import {
   createGatewayConnectionLifecycle,
@@ -63,14 +61,9 @@ type AgentsConfigCapability = {
   stageDefaultAgent: (agentId: string) => boolean;
 };
 
-type AgentGatewaySnapshot = GatewayConnectionSnapshot &
-  Pick<ApplicationGatewaySnapshot, "selfUser">;
-
 type AgentGateway = {
-  readonly connection?: { gatewayUrl: string };
-  readonly connectionRevision?: number;
-  readonly snapshot: AgentGatewaySnapshot;
-  subscribe: (listener: (snapshot: AgentGatewaySnapshot) => void) => () => void;
+  readonly snapshot: GatewayConnectionSnapshot;
+  subscribe: (listener: (snapshot: GatewayConnectionSnapshot) => void) => () => void;
 };
 
 type AgentFilesStatus = {
@@ -85,7 +78,6 @@ type AgentCapabilityState = {
   agentsLoading: boolean;
   agentsError: string | null;
   agentsList: AgentsListResult | null;
-  agentsListCached: boolean;
 };
 
 export type AgentCapability = {
@@ -243,24 +235,14 @@ function readOptionalAgentId(agentId: string | null | undefined): string | null 
   return normalized ? normalized : null;
 }
 
-export function createAgentCapability(
-  gateway: AgentGateway,
-  options: { cachedList?: AgentsListResult | null; cachedProfileId?: string | null } = {},
-): AgentCapability {
-  let cachedList = options.cachedList ?? null;
-  const cachedProfileId = options.cachedProfileId ?? null;
-  const cachedConnectionRevision = gateway.connectionRevision;
-  const cachedScope = gateway.connection
-    ? gatewayCredentialScope(gateway.connection.gatewayUrl)
-    : null;
+export function createAgentCapability(gateway: AgentGateway): AgentCapability {
   const lifecycle = createGatewayConnectionLifecycle(gateway.snapshot);
   const state: AgentCapabilityState = {
     client: gateway.snapshot.client,
     connected: gateway.snapshot.phase === "connected",
     agentsLoading: false,
     agentsError: null,
-    agentsList: cachedList,
-    agentsListCached: cachedList !== null,
+    agentsList: null,
   };
   const files = new Map<string, AgentFilesStatus>();
   const fileRequests = new Map<string, Promise<AgentsFilesListResult | null>>();
@@ -302,7 +284,7 @@ export function createAgentCapability(
     if (agentsRequest && !force) {
       return agentsRequest;
     }
-    if (state.agentsList && !state.agentsListCached && !force) {
+    if (state.agentsList && !force) {
       return state.agentsList;
     }
     const revision = ++listRevision;
@@ -313,12 +295,7 @@ export function createAgentCapability(
       .then((result) => {
         const current = lifecycle.isCurrent(scope) && listRevision === revision;
         if (current) {
-          // Refresh an existing warm fallback without reviving a retired scope or profile.
-          if (cachedList) {
-            cachedList = result;
-          }
           state.agentsList = result;
-          state.agentsListCached = false;
           state.agentsError = null;
         }
         return current ? result : null;
@@ -400,18 +377,12 @@ export function createAgentCapability(
   const stopGateway = gateway.subscribe((snapshot) => {
     const clientChanged = state.client !== snapshot.client;
     const connected = snapshot.phase === "connected";
-    const connectionChanged = lifecycle.transition(snapshot);
-    const scopeMismatch =
-      gateway.connectionRevision !== cachedConnectionRevision ||
-      (cachedScope !== null &&
-        gateway.connection !== undefined &&
-        gatewayCredentialScope(gateway.connection.gatewayUrl) !== cachedScope);
-    if (scopeMismatch) {
-      cachedList = null;
+    if (!lifecycle.transition(snapshot)) {
+      return;
     }
     state.client = snapshot.client;
     state.connected = connected;
-    if (connectionChanged && (clientChanged || !connected)) {
+    if (clientChanged || !connected) {
       retireAgentsRequest();
       fileRequests.clear();
       fileRequestOwners.clear();
@@ -419,21 +390,10 @@ export function createAgentCapability(
         status.loading = false;
       }
       files.clear();
-      state.agentsList = cachedList;
-      state.agentsListCached = cachedList !== null;
+      state.agentsList = null;
       state.agentsError = null;
     }
-    const cacheMismatch =
-      state.agentsListCached &&
-      (scopeMismatch || (connected && (snapshot.selfUser?.id ?? null) !== cachedProfileId));
-    if (cacheMismatch) {
-      cachedList = null;
-      state.agentsList = null;
-      state.agentsListCached = false;
-    }
-    if (connectionChanged || cacheMismatch) {
-      publish();
-    }
+    publish();
   });
 
   return {

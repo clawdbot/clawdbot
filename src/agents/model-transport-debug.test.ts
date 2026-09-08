@@ -1,4 +1,4 @@
-import { emitModelTransportDebug } from "@openclaw/ai/diagnostics";
+import { emitModelTransportDebug } from "@openclaw/ai/transports";
 import { describe, expect, it, vi } from "vitest";
 
 describe("emitModelTransportDebug", () => {
@@ -6,7 +6,7 @@ describe("emitModelTransportDebug", () => {
     const info = vi.fn();
     const debug = vi.fn();
     return {
-      log: { info, debug },
+      log: { info, debug } as unknown as Parameters<typeof emitModelTransportDebug>[0],
       info,
       debug,
     };

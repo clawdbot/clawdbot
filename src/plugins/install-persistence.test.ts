@@ -88,7 +88,7 @@ describe("persistPluginInstall", () => {
   );
 
   it("labels plugin lifecycle config writes", async () => {
-    const { selectInstallMutationWriteOptions } = await import("./install-config-mutation.js");
+    const { selectInstallMutationWriteOptions } = await import("./install-persistence.js");
 
     expect(
       selectInstallMutationWriteOptions({
@@ -173,7 +173,7 @@ describe("persistPluginInstall", () => {
       refreshPluginRegistryMock,
       "refreshPluginRegistryMock",
     );
-    expect(refreshParams.config).toEqual(enabledConfig);
+    expect(refreshParams.config).toBe(enabledConfig);
     expect(refreshParams.reason).toBe("source-changed");
     expect((refreshParams.installRecords as Record<string, unknown>).alpha).toEqual({
       source: "npm",

@@ -764,7 +764,6 @@ describe("doctor repair sequencing", () => {
     const researchPlugin = {
       id: "research-channel",
       source: "/srv/research/.openclaw/extensions/research-channel/openclaw.plugin.json",
-      providers: [],
     };
     const manifestRegistry = { plugins: [researchPlugin], diagnostics: [] };
     mocks.resolveConfigWidePluginManifestRegistry.mockReturnValue(manifestRegistry);

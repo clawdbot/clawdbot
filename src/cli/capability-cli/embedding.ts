@@ -2,6 +2,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { Command } from "commander";
 import { resolveAgentDir } from "../../agents/agent-scope.js";
 import { resolveMemorySearchConfig } from "../../agents/memory-search.js";
+import { getRuntimeConfig } from "../../config/config.js";
 import { createEmbeddingProvider } from "../../plugin-sdk/memory-core-bundled-runtime.js";
 import { listEmbeddingProviders } from "../../plugins/embedding-provider-runtime.js";
 import { listRegisteredMemoryEmbeddingProviderAdapters } from "../../plugins/memory-embedding-provider-runtime.js";
@@ -13,7 +14,6 @@ import type { CapabilityEnvelope } from "./metadata.js";
 import { emitJsonOrText, formatEnvelopeForText, providerSummaryText } from "./output.js";
 import {
   providerHasGenericConfig,
-  registerLocalProvidersCommand,
   requireProviderModelOverride,
   resolveCapabilityAgentOption,
   resolveCapabilityProviderAgentId,
@@ -129,60 +129,68 @@ export function registerEmbeddingCapabilityCommands(capability: Command): void {
       });
     });
 
-  registerLocalProvidersCommand(
-    embedding,
-    "List embedding providers",
-    (cfg, agentId) => {
-      const resolvedMemory = resolveMemorySearchConfig(cfg, agentId);
-      const selectedProvider = resolvedMemory?.provider;
-      const providers = new Map(
-        listRegisteredMemoryEmbeddingProviderAdapters().map((provider) => [
-          provider.id,
-          {
+  embedding
+    .command("providers")
+    .description("List embedding providers")
+    .option("--agent <id>", "Agent whose provider state should be inspected")
+    .option("--json", "Output JSON", false)
+    .action(async (opts, command) => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        const cfg = getRuntimeConfig();
+        const agentId = resolveCapabilityProviderAgentId(
+          cfg,
+          resolveCapabilityAgentOption(command, opts.agent),
+        );
+        const resolvedMemory = resolveMemorySearchConfig(cfg, agentId);
+        const selectedProvider = resolvedMemory?.provider;
+        const providers = new Map(
+          listRegisteredMemoryEmbeddingProviderAdapters().map((provider) => [
+            provider.id,
+            {
+              id: provider.id,
+              defaultModel: provider.defaultModel,
+              transport: provider.transport,
+              autoSelectPriority: provider.autoSelectPriority,
+            },
+          ]),
+        );
+        for (const provider of listEmbeddingProviders(cfg)) {
+          if (providers.has(provider.id)) {
+            continue;
+          }
+          providers.set(provider.id, {
             id: provider.id,
             defaultModel: provider.defaultModel,
             transport: provider.transport,
-            autoSelectPriority: provider.autoSelectPriority,
-          },
-        ]),
-      );
-      for (const provider of listEmbeddingProviders(cfg)) {
-        if (providers.has(provider.id)) {
-          continue;
+            autoSelectPriority: undefined,
+          });
         }
-        providers.set(provider.id, {
+        if (selectedProvider && !providers.has(selectedProvider)) {
+          providers.set(selectedProvider, {
+            id: selectedProvider,
+            defaultModel: resolvedMemory?.model || undefined,
+            transport: providerHasGenericConfig({ cfg, providerId: selectedProvider, agentId })
+              ? "remote"
+              : undefined,
+            autoSelectPriority: undefined,
+          });
+        }
+        const result = Array.from(providers.values()).map((provider) => ({
+          available: true,
+          configured:
+            provider.id === selectedProvider ||
+            providerHasGenericConfig({
+              cfg,
+              providerId: provider.id,
+              agentId,
+            }),
+          selected: provider.id === selectedProvider,
           id: provider.id,
           defaultModel: provider.defaultModel,
           transport: provider.transport,
-          autoSelectPriority: undefined,
-        });
-      }
-      if (selectedProvider && !providers.has(selectedProvider)) {
-        providers.set(selectedProvider, {
-          id: selectedProvider,
-          defaultModel: resolvedMemory?.model || undefined,
-          transport: providerHasGenericConfig({ cfg, providerId: selectedProvider, agentId })
-            ? "remote"
-            : undefined,
-          autoSelectPriority: undefined,
-        });
-      }
-      return Array.from(providers.values()).map((provider) => ({
-        available: true,
-        configured:
-          provider.id === selectedProvider ||
-          providerHasGenericConfig({
-            cfg,
-            providerId: provider.id,
-            agentId,
-          }),
-        selected: provider.id === selectedProvider,
-        id: provider.id,
-        defaultModel: provider.defaultModel,
-        transport: provider.transport,
-        autoSelectPriority: provider.autoSelectPriority,
-      }));
-    },
-    providerSummaryText,
-  );
+          autoSelectPriority: provider.autoSelectPriority,
+        }));
+        emitJsonOrText(defaultRuntime, Boolean(opts.json), result, providerSummaryText);
+      });
+    });
 }

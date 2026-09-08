@@ -1,7 +1,7 @@
 import {
   PENDING_FINAL_DELIVERY_CLEAR_PATCH,
   sanitizePendingFinalDeliveryText,
-} from "../../auto-reply/reply/pending-final-delivery-state.js";
+} from "../../auto-reply/reply/pending-final-delivery.js";
 import type {
   InternalSessionEntry as SessionEntry,
   MainRestartRecoveryState,

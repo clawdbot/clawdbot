@@ -3,42 +3,6 @@ import { en } from "./en.ts";
 
 // Settings copy loads with its lazy page or search, not the startup shell.
 const enSettings = {
-  connection: {
-    access: {
-      title: "Connection",
-      descriptionOffline: "Not connected.",
-      connectedTo: "Connected to {host}",
-      tick: "{tick} tick",
-      auth: {
-        none: "no auth",
-        token: "token auth",
-        password: "password auth",
-        trustedProxy: "proxy auth",
-      },
-      status: {
-        connected: "Connected",
-        offline: "Offline",
-      },
-      gatewayUrl: "Gateway URL",
-      gatewayUrlHint: "Use wss:// when the Gateway sits behind HTTPS or Tailscale Serve.",
-      secret: "Gateway secret",
-      secretPlaceholder: "Paste the token or type the password",
-      setupCodeHint:
-        "This is a device setup code for the OpenClaw mobile app, not the Gateway secret. Paste it in the app's Gateway settings instead; the Gateway secret comes from openclaw gateway auth-token --show on the Gateway host.",
-      secretHint: "Tokens are saved for this tab after connecting. Passwords are never stored.",
-      tokenHint: "This Gateway expects its token. Saved for this tab after connecting.",
-      passwordHint: "This Gateway expects its password. Passwords are never stored.",
-      trustedProxy: "Authenticated via trusted proxy.",
-      trustedProxyStatus: "Trusted proxy",
-      sessionKey: "Default session",
-      sessionKeyHint: "Session opened after connecting.",
-      unsavedHint: "Unsaved changes apply when you connect.",
-      lastError: "Last error",
-      showSecret: "Show secret",
-      hideSecret: "Hide secret",
-      toggleSecretVisibility: "Toggle secret visibility",
-    },
-  },
   cloudWorkersPage: {
     intro: "Run agent sessions on ephemeral cloud machines instead of this gateway.",
     sectionTitle: "Profiles",
@@ -64,7 +28,7 @@ const enSettings = {
       profileId: "Profile ID",
       profileIdHelp: "Use letters, numbers, hyphens, or underscores.",
       backend: "Crabbox backend",
-      backendHelp: "The backend passed to Crabbox, such as AWS, Azure, or Hetzner.",
+      backendHelp: "The backend passed to Crabbox, such as AWS or Hetzner.",
       backendPlaceholder: "hetzner",
       machineClass: "Machine class",
       machineClassHelp:
@@ -80,7 +44,7 @@ const enSettings = {
       setupPlaceholder: "command -v node || install-node",
       desktop: "Desktop",
       desktopHelp:
-        "Warm a direct or coordinator-backed AWS or Azure worker, or a coordinator-backed Hetzner worker, with node-carried Browser and Terminal access. Existing workers must be reprovisioned after this changes.",
+        "Warm a direct or coordinator-backed AWS worker, or a coordinator-backed Hetzner worker, with node-carried Browser and Terminal access. Existing workers must be reprovisioned after this changes.",
       binary: "Crabbox binary",
       binaryHelp: "Optional absolute path to the Crabbox executable on the gateway.",
       binaryPlaceholder: "/usr/local/bin/crabbox",
@@ -93,7 +57,7 @@ const enSettings = {
         "Use a profile ID that starts with a letter or number and contains only letters, numbers, hyphens, or underscores.",
       profileExists: "Choose another profile ID; this one already exists.",
       profileMissing: "This profile changed or was removed. Reload the page and try again.",
-      backend: "Enter a Crabbox backend, such as aws, azure, or hetzner.",
+      backend: "Enter a Crabbox backend, such as aws or hetzner.",
       machineClass: "Enter a machine class of 1 to 128 characters.",
       ttl: "Enter a positive Go duration for max lifetime, such as 8h or 90m.",
       idleTimeout: "Enter a positive Go duration for idle stop, such as 45m.",
@@ -810,7 +774,6 @@ export const registerSettingsEnglish = Object.assign(
     en.modelProviders = enSettings.modelProviders;
     // Extend the shared objects: eager save/update copy and existing readers survive.
     en.cloudWorkersPage = enSettings.cloudWorkersPage;
-    Object.assign(en.connection, enSettings.connection);
     Object.assign(en.configPage, enSettings.configPage);
     Object.assign(en.configView, enSettings.configView);
     Object.assign(en.updates, enSettings.updates);

@@ -57,7 +57,8 @@ export class OpenClawApp extends OpenClawLightDomElement {
   @state() private loginGatewayUrl = "";
   @state() private loginToken = "";
   @state() private loginPassword = "";
-  @state() private loginShowGatewaySecret = false;
+  @state() private loginShowGatewayToken = false;
+  @state() private loginShowGatewayPassword = false;
   @state() private pendingGatewayUrl: string | null = null;
   @state() private onboarding = resolveOnboardingMode(globalThis.location?.search ?? "");
   @state() private focusDashboardRoute: FocusDashboardRouteState = { kind: "loading" };
@@ -211,7 +212,8 @@ export class OpenClawApp extends OpenClawLightDomElement {
   }
 
   private resetLoginSensitivePresentation() {
-    this.loginShowGatewaySecret = false;
+    this.loginShowGatewayToken = false;
+    this.loginShowGatewayPassword = false;
   }
 
   private updateLoginGatewayUrl(value: string) {
@@ -454,8 +456,6 @@ export class OpenClawApp extends OpenClawLightDomElement {
           <openclaw-gateway-url-confirmation
             .props=${{
               pendingGatewayUrl: this.pendingGatewayUrl,
-              currentGatewayUrl: runtime.context.gateway.connection.gatewayUrl,
-              linkCarriesToken: Boolean(runtime.pendingGatewayConnection?.token),
               onConfirm: () => {
                 runtime.confirmPendingGatewayConnection();
                 this.pendingGatewayUrl = null;
@@ -571,14 +571,11 @@ export class OpenClawApp extends OpenClawLightDomElement {
       gatewaySnapshot.lastError === null &&
       (gatewaySnapshot.phase === "starting" ||
         (gatewaySnapshot.phase === "connecting" && !this.loginGatePinned));
-    const warmConnectPending = initialConnectPending && runtime.warmBoot && !this.loginGatePinned;
-    if (initialConnectPending && !warmConnectPending) {
+    if (initialConnectPending) {
       return renderConnectingSplash(gatewayStartupStatus);
     }
     const shellOwnsRecovery =
-      gatewaySnapshot.phase === "reconnecting" ||
-      gatewaySnapshot.phase === "reload-required" ||
-      warmConnectPending;
+      gatewaySnapshot.phase === "reconnecting" || gatewaySnapshot.phase === "reload-required";
     const showLoginGate = !gatewayConnected && !shellOwnsRecovery;
     if (showLoginGate && !isOptionalElementDefined(LOGIN_GATE_ELEMENT)) {
       const loadState = this.loginGateLoader.visibleState;
@@ -602,25 +599,29 @@ export class OpenClawApp extends OpenClawLightDomElement {
             resourceBasePath: context.resourceBasePath,
             connected: gatewayConnected,
             lastError: gatewaySnapshot.lastError,
-            reconnectPending:
-              gatewaySnapshot.lastError !== null &&
-              (gatewaySnapshot.phase === "connecting" || gatewaySnapshot.phase === "reconnecting"),
             lastErrorCode: gatewaySnapshot.lastErrorCode,
             lastErrorAuthReason: gatewaySnapshot.lastErrorAuthReason,
             hasToken: Boolean(this.loginToken.trim()),
             hasPassword: Boolean(this.loginPassword.trim()),
             gatewayUrl: this.loginGatewayUrl,
-            secret: this.loginToken || this.loginPassword,
-            showGatewaySecret: this.loginShowGatewaySecret,
+            token: this.loginToken,
+            password: this.loginPassword,
+            showGatewayToken: this.loginShowGatewayToken,
+            showGatewayPassword: this.loginShowGatewayPassword,
             onGatewayUrlChange: (value: string) => {
               this.updateLoginGatewayUrl(value);
             },
-            onSecretChange: (value: string) => {
+            onTokenChange: (value: string) => {
               this.loginToken = value;
-              this.loginPassword = "";
             },
-            onToggleGatewaySecret: () => {
-              this.loginShowGatewaySecret = !this.loginShowGatewaySecret;
+            onPasswordChange: (value: string) => {
+              this.loginPassword = value;
+            },
+            onToggleGatewayToken: () => {
+              this.loginShowGatewayToken = !this.loginShowGatewayToken;
+            },
+            onToggleGatewayPassword: () => {
+              this.loginShowGatewayPassword = !this.loginShowGatewayPassword;
             },
             onConnect: () => {
               this.loginGatePinned = true;

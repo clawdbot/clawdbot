@@ -67,8 +67,7 @@ describe("createReplyTurnLedger", () => {
     expect(send.queued).toBe(true);
     expect(send.outcome).toBeDefined();
     await ledger.settleQueued();
-    expect(ledger.mayHaveDelivered()).toBe(true);
-    expect(ledger.hasObservedDelivery()).toBe(true);
+    expect(ledger.hasVisibleDelivery()).toBe(true);
     dispatcher.markComplete();
     await dispatcher.waitForIdle();
   });
@@ -80,7 +79,7 @@ describe("createReplyTurnLedger", () => {
     expect(ledger.sendQueued("final", { text: "hello" }).queued).toBe(true);
     await ledger.settleQueued();
     expect(deliver).not.toHaveBeenCalled();
-    expect(ledger.mayHaveDelivered()).toBe(false);
+    expect(ledger.hasVisibleDelivery()).toBe(false);
     dispatcher.markComplete();
     await dispatcher.waitForIdle();
   });
@@ -97,7 +96,7 @@ describe("createReplyTurnLedger", () => {
     expect(ledger.sendQueued("block", { text: "streamed" }).queued).toBe(true);
     await ledger.settleQueued();
     expect(deliver).not.toHaveBeenCalled();
-    expect(ledger.mayHaveDelivered()).toBe(false);
+    expect(ledger.hasVisibleDelivery()).toBe(false);
     dispatcher.markComplete();
     await dispatcher.waitForIdle();
   });
@@ -113,8 +112,7 @@ describe("createReplyTurnLedger", () => {
     const ledger = createReplyTurnLedger(dispatcher);
     expect(ledger.sendQueued("block", { text: "streamed" }).queued).toBe(true);
     await ledger.settleQueued();
-    expect(ledger.mayHaveDelivered()).toBe(true);
-    expect(ledger.hasObservedDelivery()).toBe(false);
+    expect(ledger.hasVisibleDelivery()).toBe(true);
     dispatcher.markComplete();
     await dispatcher.waitForIdle();
   });
@@ -146,8 +144,7 @@ describe("createReplyTurnLedger", () => {
     const send = ledger.sendQueued("final", { text: "hello" });
     expect(send.outcome).toBeUndefined();
     await ledger.settleQueued();
-    expect(ledger.mayHaveDelivered()).toBe(true);
-    expect(ledger.hasObservedDelivery()).toBe(false);
+    expect(ledger.hasVisibleDelivery()).toBe(true);
   });
 
   it("does not fabricate visibility when a receipt-capable dispatcher omits its receipt", async () => {
@@ -156,22 +153,19 @@ describe("createReplyTurnLedger", () => {
     );
     ledger.sendQueued("final", { text: "hello" });
     await ledger.settleQueued();
-    expect(ledger.mayHaveDelivered()).toBe(false);
+    expect(ledger.hasVisibleDelivery()).toBe(false);
   });
 
   it("records routed settlements only when delivered and contentful", () => {
     const ledger = createReplyTurnLedger(createUntrackedDispatcher());
-    ledger.recordRoutedDelivery(
-      { text: "suppressed" },
-      { ok: true, delivered: false, reason: "channel_transform" },
-    );
-    ledger.recordRoutedDelivery({ text: "" }, { ok: true, delivered: true });
-    expect(ledger.mayHaveDelivered()).toBe(false);
+    ledger.recordRoutedDelivery({ text: "suppressed" }, { delivered: false });
+    ledger.recordRoutedDelivery({ text: "" }, { delivered: true });
+    expect(ledger.hasVisibleDelivery()).toBe(false);
     ledger.recordRoutedDelivery(
       { mediaUrl: "https://example.com/seatmap.png" },
-      { ok: true, delivered: true },
+      { delivered: true },
     );
-    expect(ledger.mayHaveDelivered()).toBe(true);
+    expect(ledger.hasVisibleDelivery()).toBe(true);
   });
 
   it("stops settling when the abort signal fires", async () => {
@@ -188,7 +182,7 @@ describe("createReplyTurnLedger", () => {
     const settled = ledger.settleQueued(abortController.signal);
     abortController.abort();
     await expect(settled).resolves.toBe("aborted");
-    expect(ledger.mayHaveDelivered()).toBe(false);
+    expect(ledger.hasVisibleDelivery()).toBe(false);
     releaseDeliver();
     dispatcher.markComplete();
     await dispatcher.waitForIdle();
@@ -208,7 +202,7 @@ describe("createReplyTurnLedger", () => {
 
     try {
       await expect(Promise.race([settled, Promise.resolve("pending")])).resolves.toBe("aborted");
-      expect(ledger.mayHaveDelivered()).toBe(false);
+      expect(ledger.hasVisibleDelivery()).toBe(false);
     } finally {
       releaseDeliver();
       dispatcher.markComplete();

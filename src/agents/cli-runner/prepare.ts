@@ -33,7 +33,6 @@ import {
   resolveMcpLoopbackPolicyTools,
   resolveMcpLoopbackScopedTools,
 } from "../../gateway/mcp-http.runtime.js";
-import { claimHeartbeatContextForUserRun } from "../../infra/heartbeat-outcome-store.js";
 import { buildSystemAgentToolsMcpServerConfig } from "../../mcp/openclaw-tools-serve-config.js";
 import { CliBackendAuthProfilePreparationError } from "../../plugins/cli-backend-errors.js";
 import type {
@@ -97,7 +96,6 @@ import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { resolveContextTokensForModel } from "../context.js";
 import { resolveConversationCapabilityProfile } from "../conversation-capability-profile.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
-import { waitForDeferredTurnMaintenanceForSession } from "../embedded-agent-runner/context-engine-maintenance.js";
 import { resolvePromptBuildHookResult } from "../embedded-agent-runner/run/attempt-prompt-helpers.js";
 import { composeSystemPromptWithHookContext } from "../embedded-agent-runner/run/attempt-thread-helpers.js";
 import {
@@ -150,7 +148,7 @@ import {
   type BundledCliBackendAuthPolicy,
 } from "./cli-backend-auth-policy.js";
 import { getCliLiveSessionGeneration } from "./cli-live-session-registry.js";
-import { createCliRunCurrentAssertion, resolveCliExecutionTarget } from "./execution-target.js";
+import { resolveCliExecutionTarget } from "./execution-target.js";
 import { buildCliAgentSystemPrompt, isClaudeCliBackendId, normalizeCliModel } from "./helpers.js";
 import { prepareCliHistoryBoundary } from "./history-boundary.js";
 import { cliBackendLog } from "./log.js";
@@ -161,7 +159,7 @@ import {
   buildCliSessionHistoryPrompt,
   hasCliSessionTranscript,
   loadCliSessionHistoryMessages,
-  loadCliSessionPromptContext,
+  loadCliSessionReseedMessages,
   resolveAutoCliSessionReseedHistoryChars,
 } from "./session-history.js";
 import type {
@@ -263,14 +261,23 @@ function canTransportSystemPrompt(backend: CliBackendConfig): boolean {
   );
 }
 
+function buildCliSessionDriftUserContext(
+  reusableCliSession: CliReusableSession,
+): string | undefined {
+  if (reusableCliSession.mode !== "reuse-with-drift") {
+    return undefined;
+  }
+  return `OpenClaw resumed this CLI session after prompt content changed. Follow the current turn's instructions; changed=${reusableCliSession.drift.reasons.join(",")}.`;
+}
+
 function prependCliSessionDriftUserContext(
   context: RunCliAgentParams["currentInboundContext"],
   reusableCliSession: CliReusableSession,
 ): RunCliAgentParams["currentInboundContext"] {
-  if (reusableCliSession.mode !== "reuse-with-drift") {
+  const note = buildCliSessionDriftUserContext(reusableCliSession);
+  if (!note) {
     return context;
   }
-  const note = `OpenClaw resumed this CLI session after prompt content changed. Follow the current turn's instructions; changed=${reusableCliSession.drift.reasons.join(",")}.`;
   if (!context) {
     return { text: note };
   }
@@ -564,11 +571,6 @@ async function prepareCliRunContextWithinReadFence(
         sessionKey: suppliedSessionKey,
       }),
     };
-  }
-  // Every prompt/history read must observe prior deferred rewrites. Caller-owned
-  // memory remains independent of durable work sharing its correlation key.
-  if (!params.isolatedCompletion && !isControlOperation && !params.sessionManager) {
-    await waitForDeferredTurnMaintenanceForSession(params.sessionKey ?? params.sessionId);
   }
   const policySessionKey = params.runtimePolicySessionKey ?? params.sessionKey;
   // Capture the requester before admission replaces agentId with the execution owner.
@@ -910,12 +912,8 @@ async function prepareCliRunContextWithinReadFence(
   const requireExplicitMessageTarget =
     params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey);
   const hasCliSessionBindingFacts = bindingFacts !== undefined;
-  // Per-turn background restrictions must not replace the session-stable binding policy.
   const bindingRequireExplicitMessageTarget =
-    bindingFacts?.requireExplicitMessageTarget ??
-    (hasCliSessionBindingFacts
-      ? isSubagentSessionKey(params.sessionKey)
-      : requireExplicitMessageTarget);
+    bindingFacts?.requireExplicitMessageTarget ?? requireExplicitMessageTarget;
   const bindingSourceReplyDeliveryMode = hasCliSessionBindingFacts
     ? bindingFacts.sourceReplyDeliveryMode
     : params.sourceReplyDeliveryMode;
@@ -1992,33 +1990,8 @@ async function prepareCliRunContextWithinReadFence(
         }) ?? builtSystemPrompt)
       : builtSystemPrompt;
     let systemPrompt = transformedSystemPrompt;
-    const allowRawTranscriptReseed =
-      backendResolved.config.reseedFromRawTranscriptWhenUncompacted === true;
-    const historyParams = await admitPreparedParams(params);
-    params = historyParams;
-    const cliHistoryWriter = !isSideQuestion
-      ? await prepareCliHistoryBoundary(historyParams, { credential: authCredential })
-      : undefined;
-    // Explicit caller-owned memory remains input; it cannot authorize borrowed durable history.
-    const historyAllowed = params.sessionManager !== undefined || cliHistoryWriter !== undefined;
-    // Native compatibility and transcript account ownership are independent gates.
-    const rawTranscriptReseedReason = !historyAllowed
-      ? "auth-unknown"
-      : reusableCliSessionId
-        ? "session-expired"
-        : (invalidatedReason ?? (ignoreCliSessionCandidate ? undefined : "missing-transcript"));
-    const sessionPromptContext =
-      skipsTurnPreparation || params.isolatedCompletion
-        ? undefined
-        : await loadCliSessionPromptContext({
-            sessionManager: params.sessionManager,
-            sessionTarget: params.sessionTarget,
-            allowRawTranscriptReseed,
-            rawTranscriptReseedReason,
-          });
     const finalizedTranscriptPrompt =
-      (params.finalizePromptForResolvedTools || sessionPromptContext?.durableContext) &&
-      params.transcriptPrompt === undefined
+      params.finalizePromptForResolvedTools && params.transcriptPrompt === undefined
         ? params.prompt
         : params.transcriptPrompt;
     let promptContext: CliBackendPromptContext | undefined;
@@ -2036,7 +2009,6 @@ async function prepareCliRunContextWithinReadFence(
       try {
         const hookResult = promptBuildHookResult;
         const prependContext = [
-          sessionPromptContext?.durableContext,
           hookResult?.prependContext,
           authorizedPromptBuildResult?.prependContext,
         ]
@@ -2106,14 +2078,34 @@ async function prepareCliRunContextWithinReadFence(
         promptForHooks = renderCurrentPrompt(promptForHooks, preferResumableText);
       }
     }
+    const allowRawTranscriptReseed =
+      backendResolved.config.reseedFromRawTranscriptWhenUncompacted === true;
+    const historyParams = await admitPreparedParams(params);
+    params = historyParams;
+    const cliHistoryWriter = !isSideQuestion
+      ? await prepareCliHistoryBoundary(historyParams, { credential: authCredential })
+      : undefined;
+    // Explicit caller-owned memory remains input; it cannot authorize borrowed durable history.
+    const historyAllowed = params.sessionManager !== undefined || cliHistoryWriter !== undefined;
+    // Native compatibility and transcript account ownership are independent gates.
+    const rawTranscriptReseedReason = !historyAllowed
+      ? "auth-unknown"
+      : reusableCliSessionId
+        ? "session-expired"
+        : (invalidatedReason ?? (ignoreCliSessionCandidate ? undefined : "missing-transcript"));
     // Node placement keeps this: the history prompt is built from the
     // gateway-side OpenClaw transcript, so a fresh remote CLI session still
     // receives prior conversation context via stdin.
     const shouldPrepareOpenClawHistoryPrompt =
       !skipsTurnPreparation && (!reusableCliSessionId || allowRawTranscriptReseed);
-    let openClawHistoryPrompt = shouldPrepareOpenClawHistoryPrompt
+    const openClawHistoryPrompt = shouldPrepareOpenClawHistoryPrompt
       ? buildCliSessionHistoryPrompt({
-          messages: sessionPromptContext?.reseedMessages ?? [],
+          messages: await loadCliSessionReseedMessages({
+            sessionManager: params.sessionManager,
+            sessionTarget: params.sessionTarget,
+            allowRawTranscriptReseed,
+            rawTranscriptReseedReason,
+          }),
           prompt: historyPromptCurrentTurn,
           maxHistoryChars: autoReseedHistoryChars,
         })
@@ -2268,7 +2260,7 @@ async function prepareCliRunContextWithinReadFence(
     }
     const hadSessionFile = await hasCliSessionTranscript(params);
     const contextEngineTurnPrompt = params.transcriptPrompt ?? params.prompt;
-    let preparedParams = await admitPreparedParams({
+    const preparedParams = await admitPreparedParams({
       ...params,
       config: runConfig,
       prompt: preparedPrompt,
@@ -2290,32 +2282,6 @@ async function prepareCliRunContextWithinReadFence(
       fallbackReason: params.modelRoutingProvenance?.fallbackReason,
     });
 
-    const note = claimHeartbeatContextForUserRun({
-      ...preparedParams,
-      agentId: sessionAgentId,
-      storePath: params.sessionTarget?.storePath ?? params.storePath,
-      detached: Boolean(params.sessionManager || params.isolatedCompletion),
-      assertCurrent: createCliRunCurrentAssertion(preparedParams),
-    });
-    if (note) {
-      preparedParams = {
-        ...preparedParams,
-        transcriptPrompt: finalizedTranscriptPrompt ?? params.prompt,
-      };
-      const append = (text: string) => composeCliPromptContext(text, { appendContext: note });
-      if (executionTarget.kind === "plugin") {
-        promptContext = {
-          ...promptContext,
-          appendContext: append(promptContext?.appendContext ?? ""),
-        };
-        promptForHooks = append(promptForHooks ?? preparedParams.prompt);
-      } else {
-        preparedParams.prompt = append(preparedParams.prompt);
-        if (openClawHistoryPrompt) {
-          openClawHistoryPrompt = append(openClawHistoryPrompt);
-        }
-      }
-    }
     return {
       params: preparedParams,
       bindQuestionAnswerAuthority,

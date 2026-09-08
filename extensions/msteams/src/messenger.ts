@@ -14,6 +14,7 @@ import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import type { MarkdownTableMode, MSTeamsReplyStyle, OpenClawConfig } from "../runtime-api.js";
+import { AI_GENERATED_ENTITY } from "./ai-entity.js";
 import type { MSTeamsAccessTokenProvider } from "./attachments/types.js";
 import type { MSTeamsSdkCloudOptions } from "./cloud.js";
 import type { StoredConversationReference } from "./conversation-store.js";
@@ -27,7 +28,7 @@ import {
   uploadAndShareSharePoint,
 } from "./graph-upload.js";
 import { extractFilename, extractMessageId, getMimeType, isLocalPath } from "./media-helpers.js";
-import { buildMSTeamsMessageActivity } from "./message-activity.js";
+import { parseMentions } from "./mentions.js";
 import { setPendingUploadActivityId } from "./pending-uploads.js";
 import { withRevokedProxyFallback } from "./revoked-context.js";
 import { getMSTeamsRuntime } from "./runtime.js";
@@ -279,12 +280,23 @@ async function buildActivity(
   mediaMaxBytes?: number,
   options?: { feedbackLoopEnabled?: boolean },
 ): Promise<Record<string, unknown>> {
-  const activity: Record<string, unknown> = buildMSTeamsMessageActivity(msg.text);
+  const activity: Record<string, unknown> = { type: "message" };
 
   // Mark as AI-generated so Teams renders the "AI generated" badge.
   activity.channelData = {
     feedbackLoopEnabled: options?.feedbackLoopEnabled ?? false,
   };
+
+  if (msg.text) {
+    // Parse mentions from text (format: @[Name](id))
+    const { text: formattedText, entities } = parseMentions(msg.text);
+    activity.text = formattedText;
+
+    // Start with mention entities (if any) + AI-generated entity
+    activity.entities = [...(entities.length > 0 ? entities : []), AI_GENERATED_ENTITY];
+  } else {
+    activity.entities = [AI_GENERATED_ENTITY];
+  }
 
   if (msg.mediaUrl) {
     let contentUrl = msg.mediaUrl;

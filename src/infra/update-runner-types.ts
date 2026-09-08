@@ -98,7 +98,6 @@ export type UpdateStepInfo = {
 type UpdateStepCompletion = UpdateStepInfo & Omit<UpdateStepResult, "cwd">;
 
 export type UpdateStepProgress = {
-  onHeartbeat?: () => void;
   onStepStart?: (step: UpdateStepInfo) => void;
   onStepComplete?: (step: UpdateStepCompletion) => void;
 };

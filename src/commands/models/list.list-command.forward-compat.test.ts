@@ -239,7 +239,7 @@ function modelRegistryOptions(index = 0): Record<string, unknown> {
 }
 
 let modelsListCommand: typeof import("./list.list-command.js").modelsListCommand;
-let buildModelListRows: typeof import("./list.rows.js").buildModelListRows;
+let listRowsModule: typeof import("./list.rows.js");
 let cliBackendsTesting: typeof import("../../agents/cli-backends.test-support.js").testing;
 
 function installModelsListCommandForwardCompatMocks() {
@@ -391,12 +391,13 @@ function installModelsListCommandForwardCompatMocks() {
 beforeAll(async () => {
   installModelsListCommandForwardCompatMocks();
   ({ testing: cliBackendsTesting } = await import("../../agents/cli-backends.test-support.js"));
-  ({ buildModelListRows } = await import("./list.rows.js"));
+  listRowsModule = await import("./list.rows.js");
   ({ modelsListCommand } = await import("./list.list-command.js"));
 });
 
-async function buildAllOpenAiCodexRows() {
+async function buildAllOpenAiCodexRows(opts: { supplementCatalog?: boolean } = {}) {
   const loaded = await mocks.loadModelRegistry();
+  const rows: unknown[] = [];
   const context = {
     cfg: mocks.resolvedConfig,
     agentDir: "/tmp/openclaw-agent",
@@ -416,13 +417,20 @@ async function buildAllOpenAiCodexRows() {
     ),
     filter: { provider: "openai" },
   };
-  return buildModelListRows({
-    includePreparedCatalog: true,
-    entries: [],
-    registryModels: loaded.models as never,
+  const seenKeys = await listRowsModule.appendDiscoveredRows({
+    rows: rows as never,
+    models: loaded.models as never,
     modelRegistry: loaded.registry as never,
     context: context as never,
   });
+  if (opts.supplementCatalog !== false) {
+    await listRowsModule.appendPreparedModelCatalogRows({
+      rows: rows as never,
+      context: context as never,
+      seenKeys,
+    });
+  }
+  return rows;
 }
 
 beforeEach(() => {
@@ -1183,27 +1191,16 @@ describe("modelsListCommand forward-compat", () => {
       {
         authModes: { "claude-cli": "api_key" as const },
         providerApiKey: false,
-        registryAvailableKeys: new Set<string>(),
         available: true,
       },
-      {
-        authModes: {},
-        providerApiKey: false,
-        registryAvailableKeys: new Set<string>(),
-        available: null,
-      },
-      {
-        authModes: {},
-        providerApiKey: true,
-        registryAvailableKeys: new Set(["anthropic/claude-opus-5"]),
-        available: null,
-      },
+      { authModes: {}, providerApiKey: false, available: null },
+      { authModes: {}, providerApiKey: true, available: null },
     ])(
       "uses the prepared CLI runtime auth result ($available) with provider key=$providerApiKey",
-      async ({ authModes, providerApiKey, registryAvailableKeys, available }) => {
+      async ({ authModes, providerApiKey, available }) => {
         vi.stubEnv("ANTHROPIC_API_KEY", providerApiKey ? "test-key" : "");
         const config = configureClaudeRuntime();
-        primeModelRegistry([ANTHROPIC_CLI_MODEL], registryAvailableKeys);
+        primeModelRegistry([ANTHROPIC_CLI_MODEL]);
         mocks.prepareScopedReadOnlyModelAuthModes.mockResolvedValueOnce(authModes);
 
         await modelsListCommand({ provider: "anthropic", json: true }, createRuntime() as never);
@@ -1236,7 +1233,7 @@ describe("modelsListCommand forward-compat", () => {
       mocks.prepareScopedReadOnlyModelAuthModes.mockResolvedValueOnce({
         "claude-cli": "api_key",
       });
-      primeModelRegistry([ANTHROPIC_CLI_MODEL], new Set(["anthropic/claude-opus-5"]));
+      primeModelRegistry([ANTHROPIC_CLI_MODEL]);
 
       await modelsListCommand({ provider: "anthropic", json: true }, createRuntime() as never);
 
@@ -1813,11 +1810,10 @@ describe("modelsListCommand forward-compat", () => {
 
     it("suppresses direct openai gpt-5.3-codex-spark rows in --all output", async () => {
       mocks.resolveConfiguredEntries.mockReturnValueOnce({ entries: [] });
-      mocks.loadModelCatalog.mockResolvedValueOnce([]);
-      const rows = await buildModelListRows({
-        includePreparedCatalog: true,
-        entries: [],
-        registryModels: [
+      const rows: unknown[] = [];
+      await listRowsModule.appendDiscoveredRows({
+        rows: rows as never,
+        models: [
           {
             provider: "openai",
             id: "gpt-5.3-codex-spark",

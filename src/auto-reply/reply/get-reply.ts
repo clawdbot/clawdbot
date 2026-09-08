@@ -19,10 +19,6 @@ import { publishedModelCatalogOwnerMatchesAgent } from "../../agents/prepared-mo
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { resolveEffectiveToolFsRootExpansionAllowed } from "../../agents/tool-fs-policy.js";
-import {
-  WorkspaceAliasRepointedError,
-  WorkspaceVanishedError,
-} from "../../agents/workspace-state-identity.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../../agents/workspace.js";
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import { type OpenClawConfig, getRuntimeConfig } from "../../config/config.js";
@@ -52,10 +48,7 @@ import {
 import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import type { GetReplyOptions } from "../get-reply-options.types.js";
 import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS, stripHeartbeatToken } from "../heartbeat.js";
-import {
-  markReplyPayloadForSourceSuppressionDelivery,
-  type ReplyPayload,
-} from "../reply-payload.js";
+import type { ReplyPayload } from "../reply-payload.js";
 import type { RuntimeMsgContext as MsgContext } from "../templating.js";
 import { normalizeThinkLevel } from "../thinking.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
@@ -70,7 +63,10 @@ import {
 import { handleInlineActions } from "./get-reply-inline-actions.js";
 import { maybeResolveNativeSlashCommandFastReply } from "./get-reply-native-slash-fast-path.js";
 import { runPreparedReply } from "./get-reply-run.js";
-import type { InternalGetReplyOptions as BaseInternalGetReplyOptions } from "./get-reply.types.js";
+import type {
+  InternalGetReplyOptions as BaseInternalGetReplyOptions,
+  ReplySessionBinding,
+} from "./get-reply.types.js";
 import { finalizeInboundContext } from "./inbound-context.js";
 import {
   hasInboundAudio,
@@ -83,7 +79,7 @@ import { resolveOriginMessageProvider } from "./origin-routing.js";
 import {
   PENDING_FINAL_DELIVERY_CLEAR_PATCH,
   sanitizePendingFinalDeliveryText,
-} from "./pending-final-delivery-state.js";
+} from "./pending-final-delivery.js";
 import { getPreparedReplyDispatchRuntime } from "./prepared-reply-dispatch-context.js";
 import { attachProgressNarratorToReplyOptions } from "./progress-narrator.js";
 import { prepareReplyConversation } from "./prompt-session-context.js";
@@ -103,6 +99,7 @@ import { createTypingController } from "./typing.js";
 type ResetCommandAction = "new" | "reset";
 
 type RuntimeInternalGetReplyOptions = BaseInternalGetReplyOptions & {
+  onSessionPrepared?: (binding: ReplySessionBinding) => void;
   extractedFileImages?: ExtractedFileImage[];
 };
 
@@ -521,37 +518,18 @@ export async function getReplyFromConfig(
       })
     : { cfg, agentId, ...(agentSessionKey ? { sessionKey: agentSessionKey } : {}) };
 
-  let workspace: Awaited<ReturnType<typeof ensureAgentWorkspace>>;
-  try {
-    workspace = await traceGetReplyPhase("reply.ensure_workspace", async () =>
-      useFastTestBootstrap
-        ? (await fs.mkdir(workspaceDirRaw, { recursive: true }), { dir: workspaceDirRaw })
-        : await ensureAgentWorkspace({
-            dir: workspaceDirRaw,
-            ensureBootstrapFiles: !agentCfg?.skipBootstrap && !isFastTestEnv,
-            skipOptionalBootstrapFiles: agentCfg?.skipOptionalBootstrapFiles,
-            provisioning: await (
-              await import("../../agents/acp-workspace-provisioning.js")
-            ).resolveAcpAgentWorkspaceProvisioningForTurn(acpWorkspaceProvisioningInput),
-          }),
-    );
-  } catch (error) {
-    if (
-      opts?.isHeartbeat === true ||
-      !(error instanceof WorkspaceAliasRepointedError || error instanceof WorkspaceVanishedError)
-    ) {
-      throw error;
-    }
-    // Permanent failures must finish ingress even in tool-only conversations.
-    // Keep host paths in operator logs; heartbeat failures retain their own owner.
-    typing.cleanup();
-    logVerbose(`workspace unavailable; replying with repair notice: ${error.message}`);
-    const text =
-      error instanceof WorkspaceAliasRepointedError
-        ? "⚠️ This agent's workspace state needs repair: the configured workspace path no longer matches its stored identity. Ask the gateway operator to run `openclaw doctor --fix` and confirm the move only if the same workspace moved."
-        : "⚠️ This agent's workspace is missing on the gateway host. Ask the operator to restore the workspace from backup and run `openclaw doctor`.";
-    return markReplyPayloadForSourceSuppressionDelivery({ text });
-  }
+  const workspace = await traceGetReplyPhase("reply.ensure_workspace", async () =>
+    useFastTestBootstrap
+      ? (await fs.mkdir(workspaceDirRaw, { recursive: true }), { dir: workspaceDirRaw })
+      : await ensureAgentWorkspace({
+          dir: workspaceDirRaw,
+          ensureBootstrapFiles: !agentCfg?.skipBootstrap && !isFastTestEnv,
+          skipOptionalBootstrapFiles: agentCfg?.skipOptionalBootstrapFiles,
+          provisioning: await (
+            await import("../../agents/acp-workspace-provisioning.js")
+          ).resolveAcpAgentWorkspaceProvisioningForTurn(acpWorkspaceProvisioningInput),
+        }),
+  );
   const workspaceDir = workspace.dir;
 
   if (
@@ -751,7 +729,6 @@ export async function getReplyFromConfig(
   internalResolvedOpts?.onSessionPrepared?.({
     sessionKey,
     sessionId,
-    lifecycleRevision: sessionEntry.lifecycleRevision,
     storePath,
   });
 

@@ -194,7 +194,6 @@ export const UI_APPEARANCE_DEFAULTS = {
 
 export type UiSettings = {
   gatewayUrl: string;
-  // In-memory Gateway secret; only token-mode hello may persist it.
   token: string;
   sessionKey: string;
   lastActiveSessionKey: string;
@@ -653,6 +652,7 @@ export function loadLocalUserIdentity(): LocalUserIdentity {
 }
 
 function persistSettings(next: UiSettings, options: { selectGateway?: boolean } = {}) {
+  persistSessionToken(next.gatewayUrl, next.token);
   const storage = getSafeLocalStorage();
   const scope = gatewayOriginScope(next.gatewayUrl);
   const scopedKey = settingsKeyForGateway(next.gatewayUrl);

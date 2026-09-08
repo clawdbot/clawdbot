@@ -13,8 +13,10 @@ import { tryListenOnPort } from "./ports-probe.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "./supervisor-markers.js";
-import { resolveUpdateCandidateStatePath } from "./update-candidate-paths.js";
-import { UpdateCandidateStateSnapshotSchema } from "./update-candidate-state.js";
+import {
+  resolveUpdateCandidateStatePath,
+  UpdateStateSchemaVersionsSchema,
+} from "./update-candidate-state.js";
 import {
   CONTROL_PLANE_UPDATE_SENTINEL_META_ENV,
   UPDATE_RUN_ID_ENV,
@@ -48,27 +50,8 @@ function isolatedConfig(
   stateDir: string,
   port: number,
   sourceEnv: NodeJS.ProcessEnv,
-  pluginPaths: Record<string, string>,
 ): OpenClawConfig {
   const copied = structuredClone(config);
-  const projectPluginPath = (value: string) => {
-    const projected = pluginPaths[resolveUserPath(value, sourceEnv)];
-    if (!projected) {
-      throw new Error("Plugin locator was not included in the candidate snapshot");
-    }
-    return projected;
-  };
-  for (const record of Object.values(copied.plugins?.installs ?? {})) {
-    if (record.source === "path" && record.sourcePath) {
-      record.sourcePath = projectPluginPath(record.sourcePath);
-    }
-    if (record.installPath) {
-      record.installPath = projectPluginPath(record.installPath);
-    }
-  }
-  if (copied.plugins?.load?.paths) {
-    copied.plugins.load.paths = copied.plugins.load.paths.map(projectPluginPath);
-  }
   const workspace = path.join(stateDir, "workspace");
   const entries =
     copied.agents?.entries ??
@@ -122,7 +105,6 @@ function isolatedConfig(
 export async function prepareUpdateCandidateRehearsal(params: {
   config: OpenClawConfig;
   sourceConfigHash?: string | null;
-  candidateRoot: string;
   stateDir: string;
   env?: NodeJS.ProcessEnv;
   nodeRunner?: string;
@@ -138,9 +120,7 @@ export async function prepareUpdateCandidateRehearsal(params: {
     }
     return milliseconds;
   };
-  const tempDir = await fs.realpath(
-    await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-canary-")),
-  );
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-canary-"));
   const sourceEnv = params.env ?? process.env;
   const configPath = path.join(tempDir, "openclaw.json");
   const workspaceDir = path.join(tempDir, "workspace");
@@ -227,7 +207,6 @@ export async function prepareUpdateCandidateRehearsal(params: {
           stateDir: params.stateDir,
           config: params.config,
           targetStateDir: tempDir,
-          candidateRoot: params.candidateRoot,
           env: {
             HOME: sourceEnv.HOME,
             OPENCLAW_HOME: sourceEnv.OPENCLAW_HOME,
@@ -248,23 +227,14 @@ export async function prepareUpdateCandidateRehearsal(params: {
         `Candidate state snapshot failed (${snapshot.termination}): ${redactSupportString(snapshot.stderr.toString("utf8"), { env: sourceEnv, stateDir: params.stateDir }, { maxLength: 20_000 })}`,
       );
     }
-    const { pluginPaths } = UpdateCandidateStateSnapshotSchema.parse(
-      JSON.parse(snapshot.stdout.toString("utf8")),
-    );
+    UpdateStateSchemaVersionsSchema.parse(JSON.parse(snapshot.stdout.toString("utf8")));
     const port = await tryListenOnPort({
       port: 0,
       host: "127.0.0.1",
       signal: AbortSignal.timeout(remaining()),
     });
     const serialized = JSON.stringify(
-      isolatedConfig(
-        params.config,
-        path.resolve(params.stateDir),
-        tempDir,
-        port,
-        sourceEnv,
-        pluginPaths,
-      ),
+      isolatedConfig(params.config, path.resolve(params.stateDir), tempDir, port, sourceEnv),
     );
     const baseline: Record<string, unknown> = JSON.parse(serialized);
     await fs.writeFile(configPath, serialized, { mode: 0o600 });

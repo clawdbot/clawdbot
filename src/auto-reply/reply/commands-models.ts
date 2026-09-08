@@ -26,7 +26,6 @@ import { createProviderAuthChecker } from "../../agents/model-provider-auth.js";
 import { isRetiredModelPickerProvider } from "../../agents/model-runtime-aliases.js";
 import {
   dedupeModelCatalogEntries,
-  LEGACY_MODEL_POLICY_ALLOW_CONFIG_PATH,
   modelCatalogLogicalKey,
 } from "../../agents/model-selection-shared.js";
 import {
@@ -106,6 +105,13 @@ type ParsedModelsCommand =
 
 function isModelsBrowseVisibleProvider(provider: string): boolean {
   return !isRetiredModelPickerProvider(provider);
+}
+
+function usesUnfilteredCatalogModels(
+  provider: string,
+  cliRuntimeProviders: ReadonlySet<string>,
+): boolean {
+  return cliRuntimeProviders.has(normalizeProviderId(provider));
 }
 
 function normalizeRuntimeChoiceId(runtime: string | undefined): string {
@@ -379,11 +385,6 @@ async function projectPreparedModelsProviderData(
   });
   const restrictToProviderWildcards =
     options.view !== "all" && visibilityPolicy.hasProviderWildcards;
-  // Preserve legacy/unrestricted CLI browsing without widening an explicit policy.
-  const useUnfilteredCliCatalog =
-    options.view === "all" ||
-    visibilityPolicy.allowAny ||
-    visibilityPolicy.allowConfigPath === LEGACY_MODEL_POLICY_ALLOW_CONFIG_PATH;
 
   const byProvider = new Map<string, Set<string>>();
   const add = (p: string, m: string) => {
@@ -393,7 +394,7 @@ async function projectPreparedModelsProviderData(
     }
     if (
       restrictToProviderWildcards &&
-      !(useUnfilteredCliCatalog && cliRuntimeProviders.has(key)) &&
+      !usesUnfilteredCatalogModels(key, cliRuntimeProviders) &&
       !visibilityPolicy.allows({ provider: key, model: m })
     ) {
       return;
@@ -470,8 +471,7 @@ async function projectPreparedModelsProviderData(
 
   for (const entry of catalog) {
     if (
-      useUnfilteredCliCatalog &&
-      cliRuntimeProviders.has(normalizeProviderId(entry.provider)) &&
+      usesUnfilteredCatalogModels(entry.provider, cliRuntimeProviders) &&
       (await hasAuth(entry.provider, {
         modelId: entry.id,
         api: entry.api,

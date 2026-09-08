@@ -7,7 +7,6 @@ struct RootCommand: Equatable {
 
 enum RootCommandAction: Equatable {
     case usage
-    case control([String])
     case connect([String])
     case configureRemote([String])
     case discover([String])
@@ -22,8 +21,6 @@ struct OpenClawMacCLI {
         switch resolveRootCommandAction(args) {
         case .usage:
             printUsage()
-        case let .control(commandArgs):
-            runMacControl(commandArgs)
         case let .connect(commandArgs):
             await runConnect(commandArgs)
         case let .configureRemote(commandArgs):
@@ -47,12 +44,10 @@ func parseRootCommand(_ args: [String]) -> RootCommand? {
 
 func resolveRootCommandAction(_ args: [String]) -> RootCommandAction {
     guard let command = parseRootCommand(args) else {
-        return .control(args)
+        return .usage
     }
 
     switch command.name {
-    case "status", "primary", "gateway", "--profile", "--json", "--timeout", "--launch", "--no-launch":
-        return .control(args)
     case "-h", "--help", "help":
         return .usage
     case "connect":
@@ -73,10 +68,6 @@ private func printUsage() {
     openclaw-mac
 
     Usage:
-      openclaw-mac status [--json] [--profile <name>] [--no-launch]
-      openclaw-mac primary show|set|clear [options]
-      openclaw-mac gateway list|add|remove|reconnect [options]
-        Run openclaw-mac primary --help for app control options.
       openclaw-mac connect [--url <ws://host:port>] [--token <token>] [--password <password>]
                            [--mode <local|remote>] [--timeout <ms>] [--probe] [--json]
                            [--client-id <id>] [--client-mode <mode>] [--display-name <name>]

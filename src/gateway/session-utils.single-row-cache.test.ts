@@ -348,19 +348,12 @@ describe("single gateway session row child projections", () => {
     await withSingleRowCacheStore(
       "openclaw-single-row-missing-store-",
       "/tmp/openclaw-single-row-missing-store",
-      async ({ now }) => {
+      async () => {
         const databasePath = resolveOpenClawAgentSqlitePath({ agentId: MAIN_AGENT_ID });
-        const missing = loadSessionEntry("main", { clone: false });
-        expect(missing.entry).toBeUndefined();
+        expect(loadSessionEntry("main", { clone: false }).entry).toBeUndefined();
         expect(existsSync(databasePath)).toBe(false);
         expect(loadSessionEntry("main").entry).toBeUndefined();
         expect(existsSync(databasePath)).toBe(true);
-        expect(
-          buildGatewaySessionInfo({ ...missing, key: missing.canonicalKey, now }),
-        ).toMatchObject({
-          pinned: false,
-          pinnedAt: undefined,
-        });
       },
     );
   });

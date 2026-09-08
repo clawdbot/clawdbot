@@ -68,6 +68,7 @@ export class TuiSessionRunCoordinator {
 
   private readonly historyReloadRuns = new Map<string, TuiHistoryReloadRun>();
   private readonly confirmedStreamRunIds = new Set<string>();
+  private readonly retiredOrphanRunIds = new Map<string, number>();
   private rejectUnconfirmedRuns = false;
   private readonly historyReloadRunner = createTuiRefreshCoalescer(() =>
     this.drainHistoryReloadQueue(),
@@ -131,6 +132,7 @@ export class TuiSessionRunCoordinator {
       return;
     }
     if (confirmedRun) {
+      this.retiredOrphanRunIds.delete(runId);
       this.confirmedStreamRunIds.add(runId);
       if (this.confirmedStreamRunIds.size > MAX_TRACKED_RUNS) {
         for (const protectedRunId of this.confirmedStreamRunIds) {
@@ -149,7 +151,10 @@ export class TuiSessionRunCoordinator {
   }
 
   isRetiredOrphanRun(runId: string): boolean {
-    return this.rejectUnconfirmedRuns && !this.sessionRuns.has(runId);
+    return (
+      this.retiredOrphanRunIds.has(runId) ||
+      (this.rejectUnconfirmedRuns && !this.sessionRuns.has(runId))
+    );
   }
 
   isHistoryTerminalDiagnosticRun(runId: string): boolean {
@@ -232,7 +237,9 @@ export class TuiSessionRunCoordinator {
           continue;
         }
         this.forgetSessionRun(candidateRunId);
+        this.retiredOrphanRunIds.set(candidateRunId, Date.now());
       }
+      this.pruneRunMap(this.retiredOrphanRunIds);
     }
   }
 
@@ -468,6 +475,7 @@ export class TuiSessionRunCoordinator {
     this.postFinalizingRuns.clear();
     this.historyReloadRuns.clear();
     this.confirmedStreamRunIds.clear();
+    this.retiredOrphanRunIds.clear();
     this.rejectUnconfirmedRuns = false;
     this.historyReloadQueued = false;
     this.pendingHistoryRefresh = false;

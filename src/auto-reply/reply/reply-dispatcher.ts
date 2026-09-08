@@ -4,11 +4,11 @@ import type { TypingCallbacks } from "../../channels/typing.js";
 import type { HumanDelayConfig } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
-  isDeliveryRecoveryOwnedRetry,
   isRetryableDeliveryNotSentError,
   resolveDeliveryNotSentRetryability,
 } from "../../infra/delivery-recovery.shared.js";
-import { toErrorObject } from "../../infra/errors.js";
+import { collectErrorGraphCandidates, toErrorObject } from "../../infra/errors.js";
+import { isOutboundDeliveryError } from "../../infra/outbound/deliver-types.js";
 import { settlePendingFinalDelivery } from "../../infra/outbound/delivery-completion.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { SilentReplyConversationType } from "../../shared/silent-reply-policy.js";
@@ -38,7 +38,6 @@ import {
   isReplyDispatchDeliveryPending,
   REPLY_DISPATCH_OUTCOME_COUNTS,
   resolveReplyDispatchDeliveryOutcome,
-  resolveReplyDispatchErrorOutcome,
   shouldRetryReplyDispatch,
   type ReplyDispatchDeliveryOutcome,
 } from "./reply-dispatch-outcome.js";
@@ -312,7 +311,10 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
     ...(hasPendingDelivery ? { hasPendingDelivery: true } : {}),
   });
 
-  const unregister = registerDispatcher(() => pending);
+  const { unregister } = registerDispatcher({
+    pending: () => pending,
+    waitForIdle,
+  });
 
   const reportObserverError = (err: unknown, info: ReplyDispatchRuntimeInfo) => {
     void Promise.resolve(options.onError?.(err, info)).catch(() => undefined);
@@ -369,25 +371,26 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
     let deliveryStarted = false;
     let pendingDelivery = false;
     const custody = getReplyPayloadMetadata(payload)?.pendingFinalDeliveryCompletion;
-    const settleCustody = (state: "delivered" | "suppressed" | "unknown") =>
+    const settleCustody = (state: "delivered" | "unknown") =>
       custody
         ? settlePendingFinalDelivery({ kind: "pending-final", ...custody }, state, ["queued"])
         : undefined;
     const settleFailure = async (error: unknown): Promise<ReplyDispatchDeliveryOutcome> => {
       const retryableNoSend = isRetryableDeliveryNotSentError(error);
-      const queueHeld = isDeliveryRecoveryOwnedRetry(error);
+      const queueHeld = collectErrorGraphCandidates(error, (current) => [current.cause]).some(
+        (candidate) => isOutboundDeliveryError(candidate) && candidate.queueCustody === "held",
+      );
       pendingDelivery ||=
         queueHeld ||
         (deliveryStarted &&
           !retryableNoSend &&
           resolveDeliveryNotSentRetryability(error) !== false);
       hasPendingDelivery ||= pendingDelivery;
-      const outcome = deliveryStarted
-        ? resolveReplyDispatchErrorOutcome(error)
-        : "failed-before-deliver";
       if (retryableNoSend) {
         retryableNoSendError ??= toErrorObject(error, "reply delivery failed before dispatch");
       }
+      const outcome: ReplyDispatchDeliveryOutcome =
+        deliveryStarted && !retryableNoSend ? "failed-deliver" : "failed-before-deliver";
       if (custody && deliveryStarted && !queueHeld) {
         // Proven no-send restores replayable custody, including after direct
         // admission marked it unknown. An external queue keeps its own marker.
@@ -448,21 +451,14 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
         settlement: (async (): Promise<ReplyDispatchDeliveryOutcome> => {
           try {
             const finalized = finalization ? await finalization : undefined;
-            const settledResult =
+            const outcome =
               finalization && isRecord(result) && isRecord(finalized)
                 ? { ...result, ...finalized, finalization: undefined }
                 : result;
-            const outcome = resolveReplyDispatchDeliveryOutcome(settledResult);
-            pendingDelivery = isReplyDispatchDeliveryPending(settledResult);
+            pendingDelivery = isReplyDispatchDeliveryPending(outcome);
             hasPendingDelivery ||= pendingDelivery;
-            await settleCustody(
-              pendingDelivery || outcome === "failed-deliver"
-                ? "unknown"
-                : outcome === "channel-transform"
-                  ? "suppressed"
-                  : "delivered",
-            );
-            return outcome;
+            await settleCustody(pendingDelivery ? "unknown" : "delivered");
+            return resolveReplyDispatchDeliveryOutcome(outcome);
           } catch (error) {
             // The channel lifecycle owns deferred error observers; custody uses the same rules.
             return await settleFailure(error);

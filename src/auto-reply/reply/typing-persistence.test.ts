@@ -97,12 +97,7 @@ describe("typing persistence bug fix", () => {
         controller.markRunComplete();
       }
       await starting;
-      await controller.onReplyStart();
-      await controller.startTypingLoop();
       await controller.startTypingOnText("late text");
-      controller.refreshTypingTtl();
-      controller.markRunComplete();
-      controller.markDispatchIdle();
       controller.cleanup();
 
       expect(controller.isActive()).toBe(false);

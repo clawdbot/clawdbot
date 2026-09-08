@@ -139,11 +139,7 @@ async function writeScheduledTaskScript({
   });
   await fs.writeFile(scriptPath, encodeWindowsLauncherScript({ format: "cmd", content: script }));
   if (taskLaunchPath !== scriptPath) {
-    const launcher = buildHiddenLauncherScript({
-      description: taskDescription,
-      scriptPath,
-      taskSupervisor: environment?.OPENCLAW_SERVICE_KIND === "gateway",
-    });
+    const launcher = buildHiddenLauncherScript({ description: taskDescription, scriptPath });
     await fs.writeFile(
       taskLaunchPath,
       encodeWindowsLauncherScript({ format: "vbs", content: launcher }),
@@ -256,11 +252,7 @@ async function activateScheduledTask(params: {
       await fs.mkdir(path.dirname(startupEntryPath), { recursive: true });
       const useHiddenLauncher = shouldUseHiddenWindowsTaskLauncher(params.env);
       const launcher = useHiddenLauncher
-        ? buildHiddenLauncherScript({
-            description: taskDescription,
-            scriptPath: params.scriptPath,
-            taskSupervisor: params.env.OPENCLAW_SERVICE_KIND === "gateway",
-          })
+        ? buildHiddenLauncherScript({ description: taskDescription, scriptPath: params.scriptPath })
         : buildStartupLauncherScript({
             description: taskDescription,
             scriptPath: params.scriptPath,

@@ -1,10 +1,6 @@
 /** Human-readable formatter for `openclaw message` action results. */
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
-import {
-  getTerminalTableWidth,
-  renderTable,
-  renderTerminalSafeTable,
-} from "../../packages/terminal-core/src/table.js";
+import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
 import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { getLoadedChannelPlugin } from "../channels/plugins/index.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
@@ -152,7 +148,7 @@ function renderReactions(payload: unknown, opts: FormatOpts): string | null {
     const entry = r as Record<string, unknown>;
     const emojiObj = entry.emoji as Record<string, unknown> | undefined;
     const emoji =
-      firstNonemptyString(emojiObj, "raw") || firstNonemptyString(entry, "name", "emoji", "key");
+      firstNonemptyString(emojiObj, "raw") || firstNonemptyString(entry, "name", "emoji");
     const count = typeof entry.count === "number" ? String(entry.count) : "";
     const userList = Array.isArray(entry.users)
       ? (entry.users as unknown[])
@@ -180,8 +176,7 @@ function renderReactions(payload: unknown, opts: FormatOpts): string | null {
     return theme.muted("No reactions.");
   }
 
-  // Escape remote labels and users only for display; raw keys remain identities in JSON.
-  return renderTerminalSafeTable({
+  return renderTable({
     width: opts.width,
     columns: [
       { key: "Emoji", header: "Emoji", minWidth: 8 },

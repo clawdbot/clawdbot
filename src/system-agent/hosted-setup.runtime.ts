@@ -52,7 +52,7 @@ export async function runHostedSetup(params: {
   run: (context: { baseConfig: OpenClawConfig; runtime: RuntimeEnv }) => Promise<
     | {
         nextConfig: OpenClawConfig;
-        afterWrite?: (configPath: string) => Promise<void>;
+        afterWrite?: (committedConfig: OpenClawConfig) => Promise<void>;
       }
     | { keptCurrent: true }
   >;
@@ -71,12 +71,12 @@ export async function runHostedSetup(params: {
     return "kept-current";
   }
   await params.beforePersistentApply(runtime);
-  const committed = await writeWizardConfigFile(result.nextConfig, {
+  const committedConfig = await writeWizardConfigFile(result.nextConfig, {
     allowConfigSizeDrop: false,
     baseHash: snapshot.hash,
     ...(params.afterWrite ? { afterWrite: params.afterWrite } : {}),
   });
-  await result.afterWrite?.(committed.path);
+  await result.afterWrite?.(committedConfig);
   return "applied";
 }
 
@@ -86,15 +86,15 @@ export async function runHostedChannelSetup(
   beforePersistentApply: (runtime: RuntimeEnv) => Promise<void>,
   runtime?: RuntimeEnv,
 ): Promise<HostedSetupCompletion> {
-  const { createChannelSetupHooks, setupChannels } =
+  const { createChannelSetupTransaction, setupChannels } =
     await import("../commands/onboard-channels.js");
-  let channelSetup: ReturnType<typeof createChannelSetupHooks>;
+  let channelSetup: ReturnType<typeof createChannelSetupTransaction>;
   return await runHostedSetup({
     label: "Channel setup",
     runtime,
     beforePersistentApply,
     run: async ({ baseConfig, runtime: setupRuntime }) => {
-      channelSetup = createChannelSetupHooks({
+      channelSetup = createChannelSetupTransaction({
         runtime: setupRuntime,
         beforePersistentEffect: async () => await beforePersistentApply(setupRuntime),
       });
@@ -111,8 +111,8 @@ export async function runHostedChannelSetup(
           beforePersistentEffect: async () => await beforePersistentApply(setupRuntime),
           onPostWriteHook: (hook) => channelSetup.onPostWriteHook(hook),
         }),
-        afterWrite: async (configPath) => {
-          await channelSetup.runPostWriteHooks(configPath);
+        afterWrite: async (committedConfig) => {
+          await channelSetup.runPostWriteHooks(committedConfig);
         },
       };
     },

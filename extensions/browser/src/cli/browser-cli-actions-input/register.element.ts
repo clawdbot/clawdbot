@@ -19,17 +19,6 @@ import {
   resolveBrowserActionContext,
 } from "./shared.js";
 
-function parseBrowserMouseButtonOption(value: string): "left" | "right" | "middle" {
-  if (value === "left" || value === "right" || value === "middle") {
-    return value;
-  }
-  throw Object.assign(new Error("--button must be left, right, or middle."), {
-    name: "InvalidArgumentError",
-    code: "commander.invalidArgument",
-    exitCode: 1,
-  });
-}
-
 /** Registers element-centric Browser action commands. */
 export function registerBrowserElementCommands(
   browser: Command,
@@ -83,7 +72,7 @@ export function registerBrowserElementCommands(
     .argument("<ref>", "Ref id from snapshot")
     .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
     .option("--double", "Double click", false)
-    .option("--button <left|right|middle>", "Mouse button to use", parseBrowserMouseButtonOption)
+    .option("--button <left|right|middle>", "Mouse button to use")
     .option("--modifiers <list>", "Comma-separated modifiers (Shift,Alt,Meta)")
     .action(async (ref: string | undefined, opts, cmd) => {
       const refValue = requireRef(ref);
@@ -121,7 +110,7 @@ export function registerBrowserElementCommands(
     .argument("<y>", "Viewport y coordinate")
     .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
     .option("--double", "Double click", false)
-    .option("--button <left|right|middle>", "Mouse button to use", parseBrowserMouseButtonOption)
+    .option("--button <left|right|middle>", "Mouse button to use")
     .option("--delay-ms <ms>", "Delay between mouse down/up", (v: string) =>
       parseBrowserNonNegativeIntegerOption(v, "--delay-ms"),
     )

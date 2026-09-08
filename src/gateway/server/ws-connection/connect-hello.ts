@@ -175,7 +175,6 @@ export async function sendGatewayHello(
     ...(controlUiWidgetKinds.length > 0 ? { controlUiWidgetKinds } : {}),
     ...(Object.keys(pluginSurfaceUrls).length > 0 ? { pluginSurfaceUrls } : {}),
     auth: {
-      method: authMethod,
       role,
       scopes,
       ...(recoveryScope ? { recoveryScope } : {}),

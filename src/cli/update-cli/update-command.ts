@@ -2,7 +2,7 @@
 import { confirm, isCancel } from "@clack/prompts";
 import { stylePromptMessage } from "../../../packages/terminal-core/src/prompt-style.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
-import { createConfigIO } from "../../config/config.js";
+import { readConfigFileSnapshot } from "../../config/config.js";
 import { formatConfigIssueLines } from "../../config/issue-format.js";
 import { disableCurrentOpenClawUpdateLaunchdJob } from "../../daemon/launchd.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -36,7 +36,7 @@ import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-version
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { assertOpenClawStateWriteAllowedAtPath } from "../../state/openclaw-state-ownership.js";
 import { VERSION } from "../../version.js";
-import { CLI_NAME } from "../cli-name.js";
+import { resolveCliName } from "../cli-name.js";
 import { createUpdateProgress } from "./progress.js";
 import {
   DEFAULT_PACKAGE_NAME,
@@ -76,6 +76,7 @@ import {
 import type { UpdateCommandRecoveryState } from "./update-command-service.js";
 import { withUpdateFailureTriage } from "./update-command-triage.js";
 
+const CLI_NAME = resolveCliName();
 const DEFAULT_UPDATE_STEP_TIMEOUT_MS = 30 * 60_000;
 
 export async function updateCommand(inputOpts: UpdateCommandOptions): Promise<void> {
@@ -110,57 +111,50 @@ export async function updateCommand(inputOpts: UpdateCommandOptions): Promise<vo
     runId: run.runId,
   };
   recoveryState.triageTarget.root = prepared.discoveredRoot;
-  let disposePresentation: (() => void) | undefined;
-  let executionStarted = false;
+  const presentation = createUpdateProgress(!opts.json, run);
   try {
-    const presentation = createUpdateProgress(!opts.json, run);
-    disposePresentation = presentation.dispose;
-    await withUpdateFailureTriage({ ...opts, invocationCwd }, recoveryState.triageTarget, () =>
-      withUpdateInProgressEnv(invocationCwd, async () => {
-        executionStarted = true;
-        let failure: { error: unknown } | undefined;
-        try {
-          await updateCommandInternal(opts, recoveryState, invocationCwd, prepared, presentation);
-        } catch (error) {
-          failure = { error };
-        }
-        try {
-          await recoveryState.windowsTaskAutoStartRecovery?.restore();
-          await recoveryState.windowsTaskAutoStartRecovery?.complete();
-        } catch (restoreError) {
-          let error = restoreError;
+    await withUpdateFailureTriage(
+      { ...opts, invocationCwd },
+      recoveryState.triageTarget,
+      async () => {
+        await withUpdateInProgressEnv(invocationCwd, async () => {
+          let failure: { error: unknown } | undefined;
           try {
-            await recoveryState.windowsTaskAutoStartRecovery?.complete(false);
-          } catch (compensationError) {
-            error = new AggregateError(
-              [error, compensationError],
-              `Windows task autostart recovery failed: ${formatErrorMessage(error)}; ${formatErrorMessage(compensationError)}`,
-              { cause: error },
-            );
+            await updateCommandInternal(opts, recoveryState, invocationCwd, prepared, presentation);
+          } catch (error) {
+            failure = { error };
           }
-          failure = mergeWindowsTaskRecoveryFailure(failure, error);
-        }
-        if (failure) {
-          if (!recoveryState.ledgerHandoffOwned) {
-            if (failure.error instanceof UpdateCommandFailure) {
-              completeUpdateCommandRun(failure.error.result, run);
-            } else {
-              failUpdateCommandRun(failure.error, run);
+          try {
+            await recoveryState.windowsTaskAutoStartRecovery?.restore();
+            await recoveryState.windowsTaskAutoStartRecovery?.complete();
+          } catch (restoreError) {
+            let error = restoreError;
+            try {
+              await recoveryState.windowsTaskAutoStartRecovery?.complete(false);
+            } catch (compensationError) {
+              error = new AggregateError(
+                [error, compensationError],
+                `Windows task autostart recovery failed: ${formatErrorMessage(error)}; ${formatErrorMessage(compensationError)}`,
+                { cause: error },
+              );
             }
+            failure = mergeWindowsTaskRecoveryFailure(failure, error);
           }
-          throw failure.error;
-        }
-      }),
+          if (failure) {
+            if (!recoveryState.ledgerHandoffOwned) {
+              if (failure.error instanceof UpdateCommandFailure) {
+                completeUpdateCommandRun(failure.error.result, run);
+              } else {
+                failUpdateCommandRun(failure.error, run);
+              }
+            }
+            throw failure.error;
+          }
+        });
+      },
     );
-  } catch (error) {
-    // Execution owns its unwind, including helper-pending rollback and migrated state.
-    // This boundary only terminalizes failures before that owner starts.
-    if (!executionStarted) {
-      failUpdateCommandRun(error, run);
-    }
-    throw error;
   } finally {
-    disposePresentation?.();
+    presentation.dispose();
   }
 }
 
@@ -200,15 +194,13 @@ async function updateCommandInternal(
     return;
   }
 
-  const preparedConfig = await createConfigIO({
-    pluginValidation: "skip",
+  let configSnapshot = await readConfigFileSnapshot({
+    skipPluginValidation: true,
     observe: false,
-  }).readConfigFileSnapshotForWrite();
-  let configSnapshot = preparedConfig.snapshot;
+  });
   if (opts.channel && !opts.dryRun && !configSnapshot.valid) {
     configSnapshot = await maybeRepairLegacyConfigForUpdateChannel({
       configSnapshot,
-      configWriteOptions: preparedConfig.writeOptions,
       jsonMode: Boolean(opts.json),
     });
   }
@@ -481,7 +473,6 @@ async function updateCommandInternal(
     devTarget,
     packageTargetSchemaVersions,
     packageTargetVersion: targetVersion ?? undefined,
-    packageInstallSpec,
     opts,
     refuseUpdate,
   });
@@ -547,7 +538,10 @@ async function updateCommandInternal(
         { env: run.env },
       );
       defaultRuntime.error(
-        "Downgrade confirmation required.\nDowngrading can break configuration. Re-run in a TTY to confirm.",
+        [
+          "Downgrade confirmation required.",
+          "Downgrading can break configuration. Re-run in a TTY to confirm.",
+        ].join("\n"),
       );
       defaultRuntime.exit(1);
       return;

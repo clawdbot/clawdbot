@@ -38,10 +38,7 @@ describe("watched session PR retention", () => {
             : githubJson([pullListItem({ merged_at: "2026-07-09T10:00:00Z" })]),
       },
     ]);
-    const snapshots = new Map<
-      string,
-      { rateLimited: boolean; pullRequests: unknown[]; repository: unknown }
-    >();
+    const snapshots = new Map<string, { rateLimited: boolean; pullRequests: unknown[] }>();
     const subscriptions = createControlUiSessionPullRequestSubscriptions({
       broadcastToConnIds: (_event, payload) => {
         if (!isRecord(payload) || !isRecord(payload.sessions)) {
@@ -58,7 +55,6 @@ describe("watched session PR retention", () => {
           snapshots.set(key, {
             rateLimited: snapshot.rateLimited,
             pullRequests: snapshot.pullRequests,
-            repository: snapshot.repository,
           });
         }
       },
@@ -87,9 +83,6 @@ describe("watched session PR retention", () => {
           (snapshot) => snapshot.rateLimited && snapshot.pullRequests.length === 1,
         ),
       ).toBe(true);
-      for (const snapshot of snapshots.values()) {
-        expect(snapshot.repository).toEqual({ owner: "openclaw", repo: "openclaw" });
-      }
       vi.setSystemTime(Date.now() + 61_000);
       await subscriptions.replace("watcher", keys, new Set(keys));
       expect(fetchImpl.mock.calls).toHaveLength(callsAtBackoff);
@@ -245,12 +238,7 @@ describe("watched session PR retention", () => {
       root = "/retained/third";
       branch = "feature-c";
       fetchFailure = true;
-      await expect(load()).resolves.toEqual({
-        pullRequests: [],
-        repository: { owner: "openclaw", repo: "openclaw" },
-        rateLimited: false,
-        status: "unavailable",
-      });
+      await expect(load()).rejects.toMatchObject({ statusCode: 502 });
       // Preserve context and the GitHub failure's expiry, but drop obsolete branch facts.
       expect(pins()).toBe(2);
       fetchFailure = false;

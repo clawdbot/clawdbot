@@ -182,7 +182,6 @@ describe.skipIf(process.platform === "win32")("embedded triage installation targ
             agentId: "diagnostic",
             agentDir: state.statePath("agents", "diagnostic", "agent"),
             runConfig: config,
-            sourceConfig: config,
           },
           modelFallbacks: ["fixture/blocked", "blocked-provider/model", "fixture/fallback"],
           prompt: "Check the installation.",
@@ -231,7 +230,6 @@ describe.skipIf(process.platform === "win32")("embedded triage installation targ
           agentId: "diagnostic",
           agentDir: state.statePath("agents", "diagnostic", "agent"),
           runConfig: config,
-          sourceConfig: config,
         },
         modelFallbacks: [],
       });

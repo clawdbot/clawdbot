@@ -438,7 +438,7 @@ export async function runConfigOperations(params: {
   }
 
   await replaceConfigFile({
-    sourceConfig: nextConfig,
+    nextConfig,
     snapshot,
     ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
     writeOptions: {

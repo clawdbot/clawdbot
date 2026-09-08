@@ -4,7 +4,6 @@ import { SessionManager } from "../agents/sessions/session-manager.js";
 import {
   isSessionTranscriptProjectionUnavailableError,
   readRecentSessionTranscriptMessageEvents,
-  readSessionTranscriptBoundedMessageTailPage,
   readSessionTranscriptMessageEvents,
   resolveConcreteSessionStorePath,
   resolveSessionTranscriptReadTarget,
@@ -23,8 +22,6 @@ import {
   readSessionTranscriptHistoryEvents,
 } from "../config/sessions/session-accessor.sqlite-history-events.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
-import { readSessionTranscriptRunId } from "../sessions/transcript-events.js";
-import { projectSessionDisplayMessage } from "./session-display-projection.js";
 import { aggregateSessionTranscriptUsage } from "./session-transcript-derived-readers.js";
 import { projectTranscriptEntryMessage } from "./session-transcript-message.js";
 import type {
@@ -440,35 +437,6 @@ export function readRecentSessionUsageFromTranscript(
     maxMessages: 1000,
   });
   return aggregateSessionTranscriptUsage(extractMessagePayloads(page.events));
-}
-
-/** Reads the answering model only when the latest visible message belongs to this settled run. */
-export function readSessionTerminalModelFromTranscript(
-  scope: SessionTranscriptReadScope,
-  runId: string,
-): { modelProvider: string; model: string } | undefined {
-  try {
-    const page = readSessionTranscriptBoundedMessageTailPage(scope, {
-      maxBytes: 256 * 1024,
-      maxMessages: 1,
-      offset: 0,
-    });
-    const message = asOptionalRecord(asOptionalRecord(page.events[0]?.event)?.message);
-    if (
-      (message?.stopReason === "stop" || message?.stopReason === "length") &&
-      readSessionTranscriptRunId(message) === runId &&
-      projectSessionDisplayMessage(message)?.role === "assistant" &&
-      typeof message.provider === "string" &&
-      typeof message.model === "string"
-    ) {
-      return { modelProvider: message.provider, model: message.model };
-    }
-  } catch (error) {
-    if (!isSessionTranscriptProjectionUnavailableError(error)) {
-      throw error;
-    }
-  }
-  return undefined;
 }
 
 /** Reads a bounded display or canonical model-context preview before discarding metadata. */

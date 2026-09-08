@@ -16,8 +16,7 @@ import {
   type MainSessionRecoveryTransitionResult,
 } from "./main-session-recovery-state.js";
 
-export type MainSessionRecoveryStoreTarget = {
-  agentId?: string;
+type MainSessionRecoveryStoreTarget = {
   sessionKey: string;
   storePath: string;
 };
@@ -80,7 +79,6 @@ export async function commitMainSessionRecovery(params: {
     params.scanAliases || reservationCleanup || recoveryAdmission || exactOwnerClaim,
   );
   return await applySessionEntryReplacements<MainSessionRecoveryStoreResult>({
-    agentId: params.target.agentId,
     requireWriteSuccess: params.requireWriteSuccess,
     ...(scansAliases ? {} : { sessionKeys: [params.target.sessionKey] }),
     storePath: params.target.storePath,
@@ -239,7 +237,7 @@ export async function claimMainSessionRecoveryOwner(params: {
     }
     return {
       kind: "claimed",
-      lease: { ...params.target, ...claim.transition.claim },
+      lease: { ...claim.transition.claim, storePath: params.target.storePath },
       entry: claim.entry,
       sessionKey: claim.sessionKey,
     } as const;
@@ -339,12 +337,7 @@ async function releaseMainSessionRecoveryOwnerWithRetries(
   ) {
     return undefined;
   }
-  return {
-    agentId: lease.agentId,
-    sessionId: entry.sessionId,
-    sessionKey,
-    storePath: lease.storePath,
-  };
+  return { sessionId: entry.sessionId, sessionKey, storePath: lease.storePath };
 }
 
 export async function releaseMainSessionRecoveryOwner(

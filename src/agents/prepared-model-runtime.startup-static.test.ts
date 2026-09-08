@@ -15,7 +15,6 @@ const mocks = vi.hoisted(() => {
     pluginIds: [],
     index: { plugins: [{ pluginId: "openai", enabled: true }] },
     manifestRegistry: { plugins: [], diagnostics: [] },
-    declaredProviderOwners: new Map(),
     owners: {
       channels: new Map(),
       channelConfigs: new Map(),
@@ -735,11 +734,7 @@ describe("prepared model runtime Gateway catalog mode", () => {
     await expect(snapshot?.loadFullModelCatalog?.({ refresh: true })).rejects.toThrow(
       "refresh failed",
     );
-    expect(catalogPublicationEvents).toEqual([
-      "catalog-published",
-      "catalog-published",
-      "catalog-failed",
-    ]);
+    expect(catalogPublicationEvents).toEqual(["catalog-published", "catalog-published"]);
     unregisterCatalogPublication();
     expect(snapshot?.readFullModelCatalog?.()).toEqual(fullCatalog);
     expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledTimes(3);

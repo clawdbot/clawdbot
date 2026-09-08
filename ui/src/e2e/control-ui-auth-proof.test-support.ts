@@ -58,9 +58,7 @@ export async function captureConfigReadbackFailure(page: Page): Promise<void> {
             outletInert:
               document.querySelector<HTMLElement>("openclaw-router-outlet")?.inert ?? null,
             rawButtons: [
-              ...document.querySelectorAll<HTMLButtonElement>(
-                ".settings-segmented--primary button",
-              ),
+              ...document.querySelectorAll<HTMLButtonElement>(".config-mode-toggle button"),
             ]
               .filter((button) => button.textContent?.trim() === "Raw")
               .slice(0, 3)

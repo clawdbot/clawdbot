@@ -97,13 +97,9 @@ class UsagePage extends OpenClawLightDomElement {
   private routeDataEnabled = true;
   private readonly refreshPolicy = new UsageRefreshPolicy({
     isLoading: () => this.usageLoading,
-    reload: (reason) => {
+    reload: () => {
       this.clearDateDebounce();
-      const sessionKey =
-        reason === "manual" && this.usageSelectedSessions.length === 1
-          ? this.usageSelectedSessions[0]
-          : undefined;
-      return this.loadUsage(sessionKey);
+      return this.loadUsage();
     },
     onIncompleteUsageExhausted: () => this.requestUpdate(),
   });
@@ -133,15 +129,11 @@ class UsagePage extends OpenClawLightDomElement {
   });
 
   private readonly usageRequest = createUsageRequest(this, {
-    task: async (
-      [client, refreshSessionKey]: readonly [GatewayBrowserClient, string | undefined],
-      { signal },
-    ) => {
+    task: async (client: GatewayBrowserClient, { signal }) => {
       this.refreshPolicy.beginLoad();
       const epoch = this.connectionEpoch;
       return {
         epoch,
-        refreshSessionKey,
         snapshot: await requestUsageSnapshot(
           client,
           {
@@ -164,12 +156,7 @@ class UsagePage extends OpenClawLightDomElement {
         const sessionKey =
           this.usageSelectedSessions.length === 1 ? this.usageSelectedSessions[0] : undefined;
         if (sessionKey) {
-          // Manual intent belongs to this request's selection, never a later poll or selection.
-          if (value.refreshSessionKey === sessionKey) {
-            this.details.load(sessionKey);
-          } else {
-            void this.details.contextWeight.load(sessionKey);
-          }
+          void this.details.contextWeight.load(sessionKey);
         }
       } else {
         this.applyUsageError(snapshot.error.cause);
@@ -352,7 +339,7 @@ class UsagePage extends OpenClawLightDomElement {
     return !this.routeDataInitialized || this.usageRequest.pending;
   }
 
-  private loadUsage(refreshSessionKey?: string): Promise<void> {
+  private loadUsage(): Promise<void> {
     const client = this.gateway.client;
     if (!client || !this.gateway.connected) {
       this.refreshPolicy.markLoadDeferred();
@@ -364,7 +351,7 @@ class UsagePage extends OpenClawLightDomElement {
     this.usageLoadStartDate = this.usageStartDate;
     this.usageLoadEndDate = this.usageEndDate;
     this.usageError = null;
-    return this.usageRequest.run([client, refreshSessionKey]);
+    return this.usageRequest.run(client);
   }
 
   private clearSelections() {

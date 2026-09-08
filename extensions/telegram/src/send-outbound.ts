@@ -40,21 +40,23 @@ type PreparedTelegramOutbound = {
 type PreparedTelegramOutboundWithMessageId<T> = PreparedTelegramOutbound &
   (T extends string | number ? { messageId: number } : { messageId?: undefined });
 
-export function buildTelegramProviderDeliveryResult(params: {
+export async function reportTelegramProviderDelivery(params: {
   message: TelegramOutboundPromptContextMessage;
   messageId: string | number;
   fallbackChatId: string | number;
   successfulSendThread?: TelegramThreadSpec;
   kind?: MessageReceiptPartKind;
   meta?: TelegramSendResult["meta"];
-}): TelegramSendResult {
+  onPrepared?: (delivery: TelegramSendResult) => void;
+  onDeliveryResult?: TelegramSendOpts["onDeliveryResult"];
+}): Promise<TelegramSendResult> {
   const messageId = String(params.messageId);
   const chatId = String(params.message.chat?.id ?? params.fallbackChatId);
   const providerThreadId = resolveTelegramProviderObservedThreadId({
     message: params.message,
     successfulSendThread: params.successfulSendThread,
   });
-  return {
+  const delivery: TelegramSendResult = {
     messageId,
     chatId,
     ...(providerThreadId !== undefined
@@ -68,15 +70,6 @@ export function buildTelegramProviderDeliveryResult(params: {
       : {}),
     ...(params.meta ? { meta: params.meta } : {}),
   };
-}
-
-export async function reportTelegramProviderDelivery(
-  params: Parameters<typeof buildTelegramProviderDeliveryResult>[0] & {
-    onPrepared?: (delivery: TelegramSendResult) => void;
-    onDeliveryResult?: TelegramSendOpts["onDeliveryResult"];
-  },
-): Promise<TelegramSendResult> {
-  const delivery = buildTelegramProviderDeliveryResult(params);
   params.onPrepared?.(delivery);
   await params.onDeliveryResult?.(delivery);
   try {
@@ -86,7 +79,7 @@ export async function reportTelegramProviderDelivery(
     });
   } catch (error) {
     throw createChannelPartialDeliveryError(error, {
-      messageIds: [delivery.messageId],
+      messageIds: [messageId],
       ...(delivery.receipt ? { receipt: delivery.receipt } : {}),
       visibleReplySent: true,
     });

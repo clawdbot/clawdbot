@@ -921,9 +921,11 @@ describe("Tool Search network error boundaries", () => {
           ? await runtime.call("raw_network", {}, { parentToolCallId })
           : await runtime.callValue("raw_network", {}, { parentToolCallId });
 
-      const result = formatToolSearchControlResult(payload, runtime, {
-        parentToolCallId: surface === "structured tool call" ? parentToolCallId : undefined,
-      });
+      const result = formatToolSearchControlResult(
+        payload,
+        runtime,
+        surface === "structured tool call" ? parentToolCallId : undefined,
+      );
       const text = result.content[0]?.type === "text" ? result.content[0].text : "";
 
       expect(text.length).toBeLessThan(21_000);
@@ -936,9 +938,7 @@ describe("Tool Search network error boundaries", () => {
       expect(result.details).toBe(payload);
       expect(JSON.stringify(result.details)).toContain(huge);
 
-      const isolated = formatToolSearchControlResult({ value: "local" }, runtime, {
-        parentToolCallId: "other-parent",
-      });
+      const isolated = formatToolSearchControlResult({ value: "local" }, runtime, "other-parent");
       expect(isolated.content[0]).toEqual({
         type: "text",
         text: '{\n  "value": "local"\n}',

@@ -1,6 +1,5 @@
 import { html, nothing } from "lit";
 import { repeat } from "lit/directives/repeat.js";
-import { html as staticHtml, literal } from "lit/static-html.js";
 import { presenceUserKey } from "../../../src/shared/presence-user.ts";
 import type { GatewayControlUiPluginTab } from "../api/gateway.ts";
 import {
@@ -45,7 +44,6 @@ import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import { icons } from "./icons.ts";
 import { renderNewSessionLink } from "./new-session-link.ts";
 import { HOME_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
-import { personActivityLink, personActivityRouting } from "./person-activity-link.ts";
 import {
   renderSessionAttentionIcon,
   sessionAttentionSubtitle,
@@ -297,10 +295,6 @@ export function renderAppSidebarOnline(host: AppSidebarRenderHost) {
   if (users.length === 0) {
     return nothing;
   }
-  const routing = personActivityRouting(
-    { basePath: host.basePath, navigate: (route, options) => host.onNavigate?.(route, options) },
-    () => host.dismissTransientMenus(),
-  );
   return html`
     <section class="sidebar-online" aria-label=${label} data-session-section=${sectionId}>
       ${renderSidebarSessionSectionHeader({
@@ -340,32 +334,22 @@ export function renderAppSidebarOnline(host: AppSidebarRenderHost) {
           ? nothing
           : html`<div class="sidebar-online__list">
               ${repeat(users, presenceUserKey, (user) => {
-                const activity = personActivityLink(
-                  user.identity?.id,
-                  routing,
-                  presenceViewerLabel(user),
-                );
-                const tag = activity ? literal`a` : literal`button`;
-                return staticHtml`<div
+                return html`<div
                   class="sidebar-online__row"
                   data-person-card
                   data-person-card-section="online"
                 >
-                  <${tag}
+                  <button
                     class="sidebar-online__person ${
                       isPresenceViewerIdle(user) ? "sidebar-online__person--away" : ""
                     }"
-                    type=${activity ? nothing : "button"}
-                    href=${activity?.href ?? nothing}
-                    @click=${activity?.open ?? nothing}
+                    type="button"
                     data-online-user-id=${user.id}
                     data-person-card-key=${presenceUserKey(user)}
                     data-person-card-trigger
                     aria-haspopup="dialog"
                     aria-expanded="false"
-                    aria-label=${t(activity ? "presence.card.ariaLabel" : "presence.card.details", {
-                      name: presenceViewerLabel(user),
-                    })}
+                    aria-label=${t("presence.card.details", { name: presenceViewerLabel(user) })}
                   >
                     <openclaw-viewer-avatar
                       .user=${user}
@@ -377,7 +361,7 @@ export function renderAppSidebarOnline(host: AppSidebarRenderHost) {
                     <span class="sidebar-online__person-action" aria-hidden="true"
                       >${icons.chevronRight}</span
                     >
-                  </${tag}>
+                  </button>
                 </div>`;
               })}
             </div>`
@@ -388,12 +372,7 @@ export function renderAppSidebarOnline(host: AppSidebarRenderHost) {
 
 /** Zone 5: product chrome recedes to one slim footer bar. */
 export function renderAppSidebarFooterBar(host: AppSidebarRenderHost) {
-  const connectionStatus = resolveSidebarConnectionStatus({
-    offline: host.offline,
-    restartPending: host.restartPending,
-    suspensionPhase: host.suspensionPhase,
-    phase: host.sessionDataContext?.gateway.snapshot.phase,
-  });
+  const connectionStatus = resolveSidebarConnectionStatus(host);
   const selfUser = resolveCurrentSelfUser({
     snapshotUser: host.sessionDataContext?.gateway.snapshot.selfUser,
     presenceEntries: readPresenceEntries(host.sessionData.presencePayload),

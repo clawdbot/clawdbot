@@ -2,7 +2,6 @@ import type { WorkerAdmissionHandshake } from "../../../packages/gateway-protoco
 import type {
   WorkerLease,
   WorkerNodeEnrollment,
-  WorkerNodeRuntimeIdentity,
   WorkerNodeRuntimePreparation,
   WorkerProvider,
 } from "../../plugins/types.js";
@@ -27,7 +26,6 @@ type WorkerNodeProvisioningOptions = Pick<
   | "closeNodeEnrollment"
   | "ensureNodeWorkerBundle"
   | "move"
-  | "saveError"
   | "serviceError"
 > & {
   commitReady: WorkerCredentialBroker["commitReady"];
@@ -63,38 +61,24 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
     provider: WorkerProvider,
     signal?: AbortSignal,
   ) => {
-    if (!provider.requiresNodeEnrollment || !options.prepareNodeBootstrap) {
-      return undefined;
+    if (
+      record.state !== "requested" ||
+      !provider.requiresNodeEnrollment ||
+      !options.prepareNodeBootstrap
+    ) {
+      return;
     }
-    let identity: WorkerNodeRuntimeIdentity;
-    let installation: WorkerInstallationArtifact | undefined;
-    // Replay also identifies the requested bytes; it must not relabel a previously enrolled node.
+    // Preparing the immutable runtime must finish before a fresh paid allocation.
     try {
-      const nodeBootstrapSha256 = await options.prepareNodeBootstrap(record, signal);
-      if (record.profileSnapshot.project) {
-        installation = await prepareBundle(undefined, signal);
-      }
-      identity = {
-        nodeBootstrapSha256,
-        executionMode:
-          record.profileSnapshot.executionMode === "remote-exec" ? "remote-exec" : "worker-turn",
-        ...(installation?.install === "bundle"
-          ? { workerBundleSha256: installation.tarballSha256 }
-          : {}),
-      };
+      await options.prepareNodeBootstrap(record, signal);
     } catch (error) {
       signal?.throwIfAborted();
       const current = options.store.get(record.environmentId);
       if (
-        current?.provisionOperationId === record.provisionOperationId &&
-        current.ownerEpoch === record.ownerEpoch &&
-        current.destroyRequestedAtMs === null
+        current?.state === "requested" &&
+        current.provisionOperationId === record.provisionOperationId
       ) {
-        if (current.state === "requested") {
-          options.move(current, "failed", { lastError: boundedError(error) });
-        } else if (current.state === "provisioning") {
-          options.saveError(current, error);
-        }
+        options.move(current, "failed", { lastError: boundedError(error) });
       }
       throw options.serviceError(
         "bootstrap_failure",
@@ -107,7 +91,6 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
       !current ||
       current.state !== record.state ||
       current.provisionOperationId !== record.provisionOperationId ||
-      current.ownerEpoch !== record.ownerEpoch ||
       current.destroyRequestedAtMs !== null
     ) {
       throw options.serviceError(
@@ -115,7 +98,6 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
         "Worker provisioning changed during bootstrap preparation",
       );
     }
-    return { identity, installation };
   };
 
   const createEnrollmentOperation = (
@@ -123,7 +105,6 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
     provider: WorkerProvider,
     signal?: AbortSignal,
     preparedInstallation?: WorkerInstallationArtifact,
-    identity?: WorkerNodeRuntimeIdentity,
   ) => {
     if (provider.requiresNodeEnrollment !== true) {
       return undefined;
@@ -179,19 +160,6 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
         throw new Error("Worker node enrollment has already begun");
       }
     };
-    const assertRuntimeIdentity = (
-      prepared: WorkerNodeRuntimePreparation | WorkerNodeEnrollment,
-    ) => {
-      if (
-        identity &&
-        (prepared.nodeBootstrap.sha256 !== identity.nodeBootstrapSha256 ||
-          ("workerBundle" in prepared &&
-            identity.workerBundleSha256 !== undefined &&
-            prepared.workerBundle.sha256 !== identity.workerBundleSha256))
-      ) {
-        throw new Error("Worker node runtime changed after provisioning preparation");
-      }
-    };
     return {
       prepareRuntime: prepareNodeRuntime
         ? async () => {
@@ -202,7 +170,6 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
               const prepared = await prepareNodeRuntime(record, artifact, controller.signal);
               try {
                 assertRuntimeCurrent();
-                assertRuntimeIdentity(prepared);
               } catch (error) {
                 options.closeNodeRuntime?.(prepared);
                 throw error;
@@ -223,7 +190,6 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
           // A provider timeout can close this operation during artifact preparation.
           try {
             assertCurrent();
-            assertRuntimeIdentity(prepared);
           } catch (error) {
             options.closeNodeEnrollment?.(prepared);
             throw error;

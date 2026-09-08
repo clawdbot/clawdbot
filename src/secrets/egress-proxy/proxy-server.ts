@@ -10,24 +10,20 @@ import {
   Agent as HttpsAgent,
   createServer as createHttpsServer,
   request as httpsRequest,
+  type Server as HttpsServer,
 } from "node:https";
 import net, { type Socket } from "node:net";
 import path from "node:path";
 import type { Duplex, Readable, Writable } from "node:stream";
 import { rootCertificates } from "node:tls";
 import { URL } from "node:url";
+import { ensureSecretEgressProxyCa, generateLocalProxyLeaf } from "../../proxy-capture/ca.js";
 import { normalizeExactAllowedHost as normalizeHostname } from "../exact-hostname.js";
 import {
   containsSecretSentinel,
   resolveSecretSentinel,
   SECRET_SENTINEL_PATTERN,
 } from "../sentinel.js";
-import {
-  createSecretEgressCertificates,
-  SecretEgressCertificateError,
-  type SecretEgressCertificateStatus,
-  type SecretEgressTlsContext,
-} from "./certificates.js";
 import {
   createSecretEgressBodyTransform,
   SecretEgressSubstitutionError,
@@ -43,7 +39,7 @@ type SecretEgressProxyAuditEvent = {
   kind: "forwarded" | "refused";
   host: string;
   substituted: boolean;
-  reason?: SecretEgressRefusalReason | "bypass" | "certificate-error";
+  reason?: SecretEgressRefusalReason | "bypass";
 };
 
 export type SecretEgressSentinelBinding = Readonly<{
@@ -55,7 +51,6 @@ export type SecretEgressSentinelBinding = Readonly<{
 export type SecretEgressProxyHandle = {
   caCertPath: string;
   proxyOrigin: string;
-  getCertificateStatus: () => SecretEgressCertificateStatus;
   registerRun: (
     run: Readonly<{ instanceId: string; runId: string }>,
     bindings?: readonly SecretEgressSentinelBinding[],
@@ -71,7 +66,7 @@ type RegisteredRun = {
   token: Buffer;
   isActive: () => boolean;
   resources: Set<Readable | Writable>;
-  tlsServers: Map<string, SecretEgressTlsContext>;
+  tlsServers: Map<string, Promise<HttpsServer | undefined>>;
 };
 
 function parseConnectTarget(rawTarget: string | undefined): ConnectTarget {
@@ -254,8 +249,8 @@ export async function startSecretEgressProxyServer(params: {
   bypassHosts?: readonly string[];
   onAudit: (event: SecretEgressProxyAuditEvent) => void;
 }): Promise<SecretEgressProxyHandle> {
-  const certificates = await createSecretEgressCertificates(params.caDir);
-  const { caPem } = certificates;
+  const ca = await ensureSecretEgressProxyCa(params.caDir);
+  const caPem = fs.readFileSync(ca.certPath, "utf8");
   const trustBundlePath = path.join(params.caDir, "trust-bundle.pem");
   fs.writeFileSync(trustBundlePath, `${rootCertificates.join("\n")}\n${caPem}`, { mode: 0o644 });
   const upstreamTlsAgent = new HttpsAgent({
@@ -268,6 +263,7 @@ export async function startSecretEgressProxyServer(params: {
       : new Set(params.allowedHosts.map(normalizeHostname));
   const registrations = new Map<string, RegisteredRun>();
   const sockets = new Set<Socket>();
+  const preparations = new Set<Promise<HttpsServer | undefined>>();
   let stopped = false;
   let stopPromise: Promise<void> | undefined;
 
@@ -295,7 +291,10 @@ export async function startSecretEgressProxyServer(params: {
     }
     registered.resources.clear();
     for (const server of registered.tlsServers.values()) {
-      server.close();
+      void server.then(
+        (ready) => ready?.close(),
+        () => {},
+      );
     }
     registered.tlsServers.clear();
   };
@@ -493,26 +492,38 @@ export async function startSecretEgressProxyServer(params: {
 
   const tlsServerFor = (target: ConnectTarget, registered: RegisteredRun) => {
     const key = `${target.hostname}:${target.port}`;
-    let context = registered.tlsServers.get(key);
-    if (!context) {
-      context = certificates.createContext({
+    let server = registered.tlsServers.get(key);
+    if (!server) {
+      server = generateLocalProxyLeaf({
+        certDir: params.caDir,
+        ca,
         hostname: target.hostname,
-        isActive: registered.isActive,
-        createServer: (leaf) =>
-          createHttpsServer(leaf, (request, response) => {
-            const parsed = parseRequestTarget(
-              request,
-              response,
-              `https://${target.hostname}${target.port === 443 ? "" : `:${target.port}`}`,
-            );
-            if (parsed) {
-              forwardRequest({ request, response, ...parsed, registered });
-            }
-          }).on("secureConnection", (socket) => ownResource(registered, socket)),
+      }).then((leaf) => {
+        // A closed registration cannot publish a prepared server, including when
+        // a replacement has reused its run key while certificate work awaited.
+        if (!registered.isActive()) {
+          return undefined;
+        }
+        return createHttpsServer(leaf, (request, response) => {
+          const parsed = parseRequestTarget(
+            request,
+            response,
+            `https://${target.hostname}${target.port === 443 ? "" : `:${target.port}`}`,
+          );
+          if (parsed) {
+            forwardRequest({ request, response, ...parsed, registered });
+          }
+        }).on("secureConnection", (socket) => ownResource(registered, socket));
       });
-      registered.tlsServers.set(key, context);
+      registered.tlsServers.set(key, server);
+      preparations.add(server);
+      const prepared = server;
+      void prepared.then(
+        () => preparations.delete(prepared),
+        () => preparations.delete(prepared),
+      );
     }
-    return context.get();
+    return server;
   };
 
   const proxy = createHttpServer((request, response) => {
@@ -619,7 +630,7 @@ export async function startSecretEgressProxyServer(params: {
           clientSocket.unshift(head);
         }
         tlsServer.emit("connection", clientSocket);
-      } catch (error) {
+      } catch {
         if (!authorization.isActive() || clientSocket.destroyed) {
           return;
         }
@@ -627,12 +638,9 @@ export async function startSecretEgressProxyServer(params: {
           kind: "refused",
           host: target.hostname,
           substituted: false,
-          reason: "certificate-error",
+          reason: "upstream-error",
         });
-        const body = `${error instanceof SecretEgressCertificateError ? error.message : "Secret egress TLS certificate unavailable. Check Gateway logs, then retry."}\n`;
-        clientSocket.end(
-          `HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`,
-        );
+        clientSocket.end("HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n");
       }
     })();
   });
@@ -650,9 +658,8 @@ export async function startSecretEgressProxyServer(params: {
   }
   const proxyOrigin = `http://127.0.0.1:${address.port}`;
   return {
-    caCertPath: certificates.caCertPath,
+    caCertPath: ca.certPath,
     proxyOrigin,
-    getCertificateStatus: certificates.getStatus,
     registerRun: (run, bindings = []) => {
       if (stopped) {
         throw new Error("Secret egress proxy has stopped");
@@ -720,7 +727,7 @@ export async function startSecretEgressProxyServer(params: {
         new Promise<void>((resolve) => {
           proxy.close(() => resolve());
         }),
-        certificates.waitForPreparations(),
+        Promise.allSettled(preparations),
       ]).then(() => {});
       return stopPromise;
     },

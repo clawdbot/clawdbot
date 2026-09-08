@@ -53,7 +53,6 @@ export function createEmptyPluginMetadataSnapshot(workspaceDir?: string): Plugin
     diagnostics: [],
     byPluginId: new Map(),
     normalizePluginId: (pluginId) => pluginId,
-    declaredProviderOwners: new Map(),
     owners: {
       channels: new Map(),
       channelConfigs: new Map(),

@@ -16,7 +16,7 @@ function resolveCanonicalSystemTempRoot(): string {
   if (cachedRoot !== undefined) {
     return cachedRoot;
   }
-  const canonicalRoot = fs.realpathSync.native(rawRoot);
+  const canonicalRoot = fs.realpathSync(rawRoot);
   canonicalSystemTempRoots.set(rawRoot, canonicalRoot);
   return canonicalRoot;
 }

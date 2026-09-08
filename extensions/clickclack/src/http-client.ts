@@ -8,6 +8,7 @@ import {
   readProviderJsonResponse,
   readResponseTextLimited,
 } from "openclaw/plugin-sdk/provider-http";
+import { WebSocket } from "ws";
 import type {
   ClickClackBotCommand,
   ClickClackChannel,
@@ -17,7 +18,6 @@ import type {
   ClickClackUser,
   ClickClackWorkspace,
 } from "./types.js";
-import { WebSocket } from "./ws-runtime.js";
 
 type ClickClackUpload = {
   id: string;

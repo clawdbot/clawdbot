@@ -1,7 +1,6 @@
 import path from "node:path";
 import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configured-model-refs";
 import { parseModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
-import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { z } from "zod";
 import { readProviderJsonResponse } from "../agents/provider-http-errors.js";
@@ -242,7 +241,7 @@ export function buildTelemetryPayload(
       },
     ),
   ];
-  const providerFamilies = [...new Set(configuredProviders.map(normalizeProviderId))]
+  const providerFamilies = [...new Set(configuredProviders)]
     .filter(
       (providerId) =>
         SAFE_FEATURE_NAME.test(providerId) &&

@@ -18,8 +18,6 @@ import {
 import {
   assertSqliteIntegrity,
   runSqliteIntegrityOperationSync,
-  sqliteIntegrityCheckSteps,
-  type SqliteIntegrityDiagnostics,
   type SqliteIntegrityOperation,
 } from "../infra/sqlite-integrity.js";
 import { migrateSqliteSchemaToStrictInTransaction } from "../infra/sqlite-strict.js";
@@ -484,7 +482,6 @@ export function* agentDatabaseIntegrityBeforeMutationSteps(
   database: DatabaseSync,
   agentId: string,
   pathname: string,
-  diagnostics?: SqliteIntegrityDiagnostics,
 ): SqliteIntegrityOperation<boolean> {
   database.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
   const userVersion = readSqliteUserVersion(database);
@@ -515,7 +512,6 @@ export function* agentDatabaseIntegrityBeforeMutationSteps(
       allowMissingColumns: true,
       validateAfterRepair: () =>
         assertOpenClawAgentCurrentRuntimeSchema(database, { agentId, pathname }),
-      diagnostics,
     });
     assertOpenClawAgentCurrentRuntimeSchema(database, { agentId, pathname });
   } else if (
@@ -528,7 +524,7 @@ export function* agentDatabaseIntegrityBeforeMutationSteps(
     assertSqliteIntegrity(database, pathname);
   } else {
     // Every physical open proves the full file before schema mutation or exposure.
-    yield* sqliteIntegrityCheckSteps(database, pathname, diagnostics);
+    yield { database, databaseLabel: pathname };
   }
   return hasPendingCurrentVersionMigration;
 }

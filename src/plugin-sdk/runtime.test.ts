@@ -2,7 +2,6 @@
  * Tests plugin SDK runtime exports, logging wrappers, and runtime env helpers.
  */
 import { describe, expect, it, vi } from "vitest";
-import { createInfoErrorLogger } from "../../test/helpers/mock-logger.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveRuntimeEnv } from "./runtime.js";
 
@@ -15,7 +14,10 @@ describe("resolveRuntimeEnv", () => {
         throw new Error("exit");
       }),
     };
-    const logger = createInfoErrorLogger();
+    const logger = {
+      info: vi.fn(),
+      error: vi.fn(),
+    };
 
     const resolved = resolveRuntimeEnv({ runtime, logger });
 
@@ -25,7 +27,10 @@ describe("resolveRuntimeEnv", () => {
   });
 
   it("creates logger-backed runtime when runtime is missing", () => {
-    const logger = createInfoErrorLogger();
+    const logger = {
+      info: vi.fn(),
+      error: vi.fn(),
+    };
 
     const resolved = resolveRuntimeEnv({ logger });
     resolved.log?.("hello %s", "world");

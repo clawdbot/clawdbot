@@ -37,7 +37,7 @@ export function attachOpenClawTranscriptMeta(
   };
 }
 
-export function readTranscriptMessageIdempotencyKey(message: unknown): string | undefined {
+function readTranscriptMessageIdempotencyKey(message: unknown): string | undefined {
   if (!message || typeof message !== "object" || Array.isArray(message)) {
     return undefined;
   }

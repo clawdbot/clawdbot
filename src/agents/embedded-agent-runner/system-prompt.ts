@@ -20,6 +20,8 @@ type EmbeddedSystemPromptParams = Omit<
     model: string;
     provider?: string;
     chatType?: ChatType;
+    /** Supported message actions for the current channel (e.g., react, edit, unsend) */
+    channelActions?: string[];
   };
   tools: AgentTool[];
   userTimezone: string;

@@ -1,10 +1,23 @@
-import { webKitHostWindow, type WebKitHostMessages } from "./native-webkit-bridge.ts";
+export type NativeNavState = {
+  collapsed: boolean;
+  width: number;
+};
 
-export type NativeNavState = Omit<WebKitHostMessages["openclawNav"], "type">;
+type WebKitMessageHandler = {
+  postMessage(message: unknown): void;
+};
+
+type WebKitBridgeWindow = Window & {
+  webkit?: {
+    messageHandlers?: {
+      openclawNav?: WebKitMessageHandler;
+    };
+  };
+};
 
 export function postNativeNavState(state: NativeNavState): void {
   try {
-    webKitHostWindow()?.webkit?.messageHandlers?.openclawNav?.postMessage({
+    (window as WebKitBridgeWindow).webkit?.messageHandlers?.openclawNav?.postMessage({
       type: "nav-state",
       ...state,
     });

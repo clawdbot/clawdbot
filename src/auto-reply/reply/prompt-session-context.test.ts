@@ -48,13 +48,7 @@ describe("prepared reply conversation", () => {
     },
     { name: "matching cron", input: { ...current, InternalTurnSource: "cron" }, inherits: true },
     { name: "matching exec", input: current, inherits: true },
-    {
-      name: "heartbeat without a current route",
-      input: { InternalTurnSource: "heartbeat" },
-      inherits: true,
-    },
-    { name: "cron without a current route", input: { InternalTurnSource: "cron" }, inherits: true },
-    { name: "exec without a current route", input: { InternalTurnSource: "exec" }, inherits: true },
+    { name: "no current route", input: { InternalTurnSource: "exec" }, inherits: true },
     {
       name: "different channel",
       input: { ...current, OriginatingChannel: "discord" },
@@ -84,16 +78,6 @@ describe("prepared reply conversation", () => {
         channel: input.OriginatingChannel ?? "slack",
         chat_type: "channel",
       });
-      if (inherits) {
-        expect(conversation.fields).toMatchObject({
-          Provider: "slack",
-          ChatType: "channel",
-          GroupChannel: "#ops",
-          OriginatingTo: input.OriginatingTo ?? "C123",
-          AccountId: "work",
-          MessageThreadId: input.MessageThreadId ?? "42",
-        });
-      }
     },
   );
 

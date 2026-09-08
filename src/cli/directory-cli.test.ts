@@ -38,13 +38,6 @@ vi.mock("../config/config.js", () => ({
   getRuntimeConfig: mocks.loadConfig,
   loadConfig: mocks.loadConfig,
   readConfigFileSnapshot: mocks.readConfigFileSnapshot,
-  readConfigFileSnapshotForWrite: async () => {
-    const snapshot = await mocks.readConfigFileSnapshot();
-    return {
-      snapshot: { ...snapshot, sourceConfig: snapshot.sourceConfig ?? snapshot.config },
-      writeOptions: {},
-    };
-  },
   replaceConfigFile: mocks.replaceConfigFile,
 }));
 
@@ -153,9 +146,9 @@ describe("registerDirectoryCli", () => {
       configChanged: true,
       pluginInstalled: true,
     }));
-    mocks.replaceConfigFile.mockImplementation(async ({ sourceConfig: writtenSource }) => {
+    mocks.replaceConfigFile.mockImplementation(async ({ nextConfig }) => {
       postWriteRuntimeConfig = {
-        ...writtenSource,
+        ...nextConfig,
         messages: { responsePrefix: "runtime-default" },
       };
       runtimeConfig = postWriteRuntimeConfig;
@@ -176,11 +169,11 @@ describe("registerDirectoryCli", () => {
     expect(installArgs.cfg).toEqual(sourceConfig);
     expect(mocks.replaceConfigFile).toHaveBeenCalledTimes(1);
     const replaceArgs = firstRecordArg(mocks.replaceConfigFile);
-    expect(replaceArgs.sourceConfig).toEqual({
+    expect(replaceArgs.nextConfig).toEqual({
       channels: { slack: { botToken: tokenRef } },
       plugins: { entries: { slack: { enabled: true } } },
     });
-    expect(replaceArgs.sourceConfig).not.toHaveProperty("messages");
+    expect(replaceArgs.nextConfig).not.toHaveProperty("messages");
     expect(replaceArgs.baseHash).toBe("config-1");
     expect(mocks.resolveCommandSecretRefsViaGateway).toHaveBeenCalledOnce();
     expect(firstRecordArg(mocks.resolveCommandSecretRefsViaGateway)).toMatchObject({
@@ -286,9 +279,8 @@ describe("registerDirectoryCli", () => {
     expect(self).toHaveBeenCalledTimes(1);
     expect(firstRecordArg(self).cfg).toBe(autoEnabledConfig);
     expect(mocks.replaceConfigFile).toHaveBeenCalledWith({
-      sourceConfig: autoEnabledConfig,
+      nextConfig: autoEnabledConfig,
       baseHash: "config-1",
-      writeOptions: {},
     });
   });
 

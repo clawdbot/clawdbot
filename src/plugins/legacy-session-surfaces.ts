@@ -19,8 +19,10 @@ import {
 } from "./manifest-owner-policy.js";
 import { unwrapDefaultModuleExport } from "./module-export.js";
 import { getCachedPluginModuleLoader } from "./plugin-module-loader-cache.js";
-import { resolvePluginRuntimeArtifact } from "./plugin-runtime-artifact-resolution.js";
-import { resolvePluginRuntimeExecutionArtifact } from "./plugin-runtime-artifact-selection.js";
+import {
+  resolveCanonicalDistRuntimeSource,
+  resolvePluginRuntimeArtifact,
+} from "./plugin-runtime-artifact-resolution.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import type { PluginRuntimeLoadContext } from "./runtime/load-context.js";
 import { resolvePluginRuntimeLoadContext } from "./runtime/load-context.resolve.js";
@@ -105,18 +107,18 @@ function loadLegacySessionSurface(params: {
   env: NodeJS.ProcessEnv;
   artifactRegistry: ReturnType<typeof createEmptyPluginRegistry>;
 }): BundledChannelLegacySessionSurface {
-  const { source: moduleSource, rootDir: moduleRoot } = resolvePluginRuntimeExecutionArtifact(
-    resolvePluginRuntimeArtifact({
-      pluginId: params.record.id,
-      entryKind: "setup",
-      source: params.record.setupSource,
-      rootDir: params.record.rootDir,
-      origin: params.record.origin,
-      preferBuiltPluginArtifacts: false,
-      packageManifest: params.record.packageManifest,
-      registry: params.artifactRegistry,
-    }),
-  );
+  const setupEntry = resolvePluginRuntimeArtifact({
+    pluginId: params.record.id,
+    entryKind: "setup",
+    source: params.record.setupSource,
+    rootDir: params.record.rootDir,
+    origin: params.record.origin,
+    preferBuiltPluginArtifacts: false,
+    packageManifest: params.record.packageManifest,
+    registry: params.artifactRegistry,
+  });
+  const moduleSource = resolveCanonicalDistRuntimeSource(setupEntry.source);
+  const moduleRoot = resolveCanonicalDistRuntimeSource(setupEntry.rootDir);
   const opened = openRootFileSync({
     absolutePath: moduleSource,
     rootPath: moduleRoot,

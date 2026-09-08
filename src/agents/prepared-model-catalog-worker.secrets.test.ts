@@ -24,8 +24,10 @@ import { resolveUsableCustomProviderApiKey } from "./model-auth-provider-config.
 import * as modelsConfig from "./models-config.js";
 import { createPreparedModelCatalogWorkerInput } from "./prepared-model-catalog-worker.js";
 import { runPreparedModelCatalogWorkerRequest } from "./prepared-model-catalog.worker.js";
-import { prepareWorkspaceBuildGroup } from "./prepared-model-runtime.facts.js";
-import { prepareAgentCatalogSource } from "./prepared-model-runtime.scoped-catalog.js";
+import {
+  prepareAgentCatalogSource,
+  prepareWorkspaceBuildGroup,
+} from "./prepared-model-runtime.facts.js";
 
 // Run the real worker entrypoint without attaching it to Vitest's own worker port.
 vi.mock("node:worker_threads", async (importOriginal) => ({

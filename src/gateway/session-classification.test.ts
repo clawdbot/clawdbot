@@ -90,7 +90,7 @@ describe("sessionClassificationForRow", () => {
     expect(JSON.stringify(result)).not.toContain("491234567890");
   });
 
-  it("preserves delivery classification when spawn lineage is persisted", () => {
+  it("lets persisted spawn ownership override a delivery-shaped key", () => {
     expect(
       classification({
         key: "agent:main:telegram:main:direct:491234567890",
@@ -98,26 +98,12 @@ describe("sessionClassificationForRow", () => {
         entry: entry({ spawnedBy: "agent:main:main" }),
       }),
     ).toMatchObject({
-      classification: "direct",
+      classification: "subagent",
       accountId: "main",
       peerKind: "direct",
-      isBackground: false,
+      isBackground: true,
     });
   });
-
-  it.each([
-    ["agent:main:dashboard:01234567-89ab-cdef-0123-456789abcdef", "direct", false],
-    ["agent:main:subagent:child", "subagent", true],
-  ] as const)(
-    "keeps %s classification independent of spawn lineage",
-    (key, expected, isBackground) => {
-      for (const spawnedBy of [undefined, "agent:main:main"]) {
-        expect(
-          classification({ key, isMain: false, entry: entry({ chatType: "direct", spawnedBy }) }),
-        ).toMatchObject({ classification: expected, isBackground });
-      }
-    },
-  );
 
   it("classifies stored chat type when a provider key is not a delivery route", () => {
     expect(

@@ -219,7 +219,7 @@ export function parseLaunchAgentEnabled(output: string, label: string): boolean 
 export async function isLaunchAgentEnabled(args: GatewayServiceEnvArgs): Promise<boolean> {
   const domain = resolveLaunchAgentGuiDomain();
   const label = resolveLaunchAgentLabel(args.env);
-  const res = await execLaunchctl(["print-disabled", domain], args.timeoutMs);
+  const res = await execLaunchctl(["print-disabled", domain]);
   if (res.code !== 0) {
     throw new Error(`launchctl print-disabled failed: ${formatLaunchctlResultDetail(res)}`);
   }

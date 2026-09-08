@@ -50,10 +50,7 @@ function messagesMatchForIdempotentReplay(stored: unknown, candidate: unknown): 
 export function appendTranscriptMessageInTransaction<TMessage>(
   database: OpenClawAgentDatabase,
   resolved: ResolvedTranscriptScope,
-  options: TranscriptMessageAppendOptions<TMessage> & {
-    messageAlreadyRedacted?: boolean;
-    appendMode?: "side";
-  },
+  options: TranscriptMessageAppendOptions<TMessage> & { messageAlreadyRedacted?: boolean },
 ): TranscriptMessageAppendResult<TMessage> | undefined {
   const pending = resolveSessionPendingInputAppend(database, resolved, options.message);
   if (
@@ -149,7 +146,6 @@ export function appendTranscriptMessageInTransaction<TMessage>(
     type: "message",
     id: messageId,
     parentId: parentId ?? null,
-    ...(options.appendMode ? { appendMode: options.appendMode } : {}),
     timestamp: resolveTimestampMsToIsoString(now),
     message: finalMessage,
   };

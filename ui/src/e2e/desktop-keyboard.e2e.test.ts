@@ -1,7 +1,5 @@
-import path from "node:path";
-import type { Locator, Page } from "playwright";
+import type { Page } from "playwright";
 import { expect, it } from "vitest";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { installScriptedRfbServer } from "./desktop-rfb-test-support.ts";
@@ -11,19 +9,17 @@ const suite = createControlUiE2eSuite({
   startServerBeforeBrowser: true,
 });
 
-const desktopObserve = {
-  transport: "rfb",
-  wsPath: "/desktop/observe?token=synthetic-keyboard",
-  expiresAtMs: 60_000,
-  control: true,
-};
-
-async function openKeyboard(page: Page, beforeReady?: (panel: Locator) => Promise<void>) {
+async function openKeyboard(page: Page) {
   const gateway = await installMockGateway(page, {
-    deferredMethods: ["environments.list", "desktop.observe"],
+    deferredMethods: ["environments.list"],
     featureMethods: ["desktop.observe", "environments.list"],
     methodResponses: {
-      "desktop.observe": desktopObserve,
+      "desktop.observe": {
+        transport: "rfb",
+        wsPath: "/desktop/observe?token=synthetic-keyboard",
+        expiresAtMs: 60_000,
+        control: true,
+      },
     },
   });
   await page.goto(`${suite.server.baseUrl}focus/desktop/control/source/gateway`);
@@ -33,16 +29,11 @@ async function openKeyboard(page: Page, beforeReady?: (panel: Locator) => Promis
     environments: [{ id: "gateway", type: "local", status: "available", desktop: true }],
   });
   const panel = page.locator("openclaw-desktop-panel");
-  await gateway.waitForRequest("desktop.observe");
-  await beforeReady?.(panel);
-  await gateway.resolveDeferred("desktop.observe");
   await panel.locator(".desktop-surface canvas").waitFor();
   await expect.poll(peer.events).toEqual(["authenticated:1"]);
-  await panel
-    .getByRole("status", { name: "Connecting to desktop…", exact: true })
-    .waitFor({ state: "hidden" });
+  await panel.getByText("Connecting to desktop…", { exact: true }).waitFor({ state: "hidden" });
   await panel.getByRole("button", { name: "Keyboard", exact: true }).click();
-  return { gateway, panel, peer, input: panel.locator(".desktop-keyboard-input") };
+  return { peer, input: panel.locator(".desktop-keyboard-input") };
 }
 
 function keyPresses(keysyms: readonly number[]) {
@@ -53,29 +44,9 @@ function keyPresses(keysyms: readonly number[]) {
 }
 
 suite.define(() => {
-  it("accepts 32 pasted ASCII characters only after connected control and disables view-only input", async () => {
+  it("preserves all 32 pasted ASCII characters through padding reset and Backspace", async () => {
     await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
-      await page.setViewportSize({ width: 720, height: 540 });
-      const artifactDirectory = createControlUiE2eArtifactDir("desktop-keyboard-readiness");
-      const { gateway, panel, peer, input } = await openKeyboard(page, async (connectingPanel) => {
-        await connectingPanel
-          .getByRole("status", { name: "Connecting to desktop…", exact: true })
-          .waitFor();
-        const keyboard = connectingPanel.getByRole("button", { name: "Keyboard", exact: true });
-        const pendingInput = connectingPanel.locator(".desktop-keyboard-input");
-        const padding = await pendingInput.inputValue();
-        const bounds = await keyboard.boundingBox();
-        if (!bounds) {
-          throw new Error("Expected the visible desktop Keyboard button");
-        }
-        await page.mouse.click(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
-        await page.keyboard.insertText("early");
-        await page.screenshot({ path: path.join(artifactDirectory, "connecting.png") });
-        expect(await pendingInput.inputValue()).toBe(padding);
-        expect(await keyboard.isDisabled()).toBe(true);
-        expect(await pendingInput.isDisabled()).toBe(true);
-      });
-      expect(await peer.keyEvents()).toEqual([]);
+      const { peer, input } = await openKeyboard(page);
       const padding = await input.inputValue();
       const text = "Aa7!z?Bb8@x#Cc9$w%Dd0^v&Ee1*f(G)";
       const expected = keyPresses(Array.from(text, (character) => character.charCodeAt(0)));
@@ -87,20 +58,6 @@ suite.define(() => {
       await page.keyboard.insertText("Z");
       await page.keyboard.press("Backspace");
       await expect.poll(peer.keyEvents).toEqual([...expected, ...keyPresses([0x5a, 0xff08])]);
-      await page.screenshot({ path: path.join(artifactDirectory, "connected-control.png") });
-
-      await gateway.setMethodResponse("desktop.observe", { ...desktopObserve, control: false });
-      await panel.getByRole("button", { name: "Switch to view only", exact: true }).click();
-      await gateway.waitForRequest("desktop.observe", { after: 1 });
-      await expect.poll(peer.events).toContain("authenticated:2");
-      await panel
-        .getByRole("status", { name: "Connecting to desktop…", exact: true })
-        .waitFor({ state: "hidden" });
-      expect(await panel.getByRole("button", { name: "Keyboard", exact: true }).isDisabled()).toBe(
-        true,
-      );
-      expect(await input.isDisabled()).toBe(true);
-      await page.screenshot({ path: path.join(artifactDirectory, "connected-view-only.png") });
     });
   });
 

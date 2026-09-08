@@ -13,7 +13,6 @@ export {
   DEFAULT_MAX_ENTRY_BYTES,
   createTarEntryPreflightChecker,
   extractArchive,
-  inspectTarArchive,
   loadZipArchiveWithPreflight,
   mergeExtractedTreeIntoDestination,
   prepareArchiveDestinationDir,

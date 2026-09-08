@@ -23,8 +23,6 @@ import {
   resolveMemoryDreamingConfig,
   resolveMemoryDreamingWorkspaces,
   resolveMemoryRemDreamingConfig,
-  type ShortTermDreamingStats,
-  type ShortTermDreamingStatsEntry,
 } from "../../memory-host-sdk/dreaming.js";
 import * as defaultMemoryCoreRuntime from "../../plugin-sdk/memory-core-bundled-runtime.js";
 import { getActiveMemorySearchManagerCore } from "../../plugins/memory-runtime.js";
@@ -75,23 +73,53 @@ type DoctorMemoryRemDreamingPayload = DoctorMemoryDreamingPhasePayload & {
   minPatternStrength: number;
 };
 
-type DoctorMemoryDreamingPayload = Omit<ShortTermDreamingStats, "storePath" | "phaseSignalPath"> & {
+type DoctorMemoryDreamingEntryPayload = {
+  key: string;
+  path: string;
+  startLine: number;
+  endLine: number;
+  snippet: string;
+  recallCount: number;
+  dailyCount: number;
+  groundedCount: number;
+  totalSignalCount: number;
+  lightHits: number;
+  remHits: number;
+  phaseHitCount: number;
+  promotedAt?: string;
+  lastRecalledAt?: string;
+};
+
+type DoctorMemoryDreamingPayload = {
   enabled: boolean;
   timezone?: string;
   verboseLogging: boolean;
   storageMode: "inline" | "separate" | "both";
   separateReports: boolean;
+  shortTermCount: number;
+  recallSignalCount: number;
+  dailySignalCount: number;
+  groundedSignalCount: number;
+  totalSignalCount: number;
+  phaseSignalCount: number;
+  lightPhaseHitCount: number;
+  remPhaseHitCount: number;
+  promotedTotal: number;
+  promotedToday: number;
   storePath?: string;
   phaseSignalPath?: string;
+  lastPromotedAt?: string;
   storeError?: string;
+  phaseSignalError?: string;
+  shortTermEntries: DoctorMemoryDreamingEntryPayload[];
+  signalEntries: DoctorMemoryDreamingEntryPayload[];
+  promotedEntries: DoctorMemoryDreamingEntryPayload[];
   phases: {
     light: DoctorMemoryLightDreamingPayload;
     deep: DoctorMemoryDeepDreamingPayload;
     rem: DoctorMemoryRemDreamingPayload;
   };
 };
-
-type DoctorMemoryDreamingEntryPayload = ShortTermDreamingStatsEntry;
 
 export type DoctorMemoryStatusPayload = {
   agentId: string;

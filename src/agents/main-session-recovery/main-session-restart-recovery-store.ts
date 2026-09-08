@@ -25,10 +25,7 @@ import {
   isMainRestartRecoveryAggregateTerminalOnly,
   isMainRestartRecoveryCandidate,
 } from "./main-session-recovery-state.js";
-import {
-  commitMainSessionRecovery,
-  type MainSessionRecoveryStoreTarget,
-} from "./main-session-recovery-store.js";
+import { commitMainSessionRecovery } from "./main-session-recovery-store.js";
 import {
   hasRestartRecoveryMessageActionAuthority,
   requiresRestartRecoveryMessageActionAuthority,
@@ -90,12 +87,13 @@ function pendingFinalRecoveryAction(
 
 async function completePendingFinalRecoveryWithNotice(
   entry: SessionEntry,
-  target: MainSessionRecoveryStoreTarget,
+  sessionKey: string,
+  storePath: string,
 ): Promise<boolean> {
   const endedAt = Date.now();
   let completed = false;
   await updateSessionEntry(
-    target,
+    { sessionKey, storePath },
     (current) => {
       if (
         current.sessionId !== entry.sessionId ||
@@ -143,9 +141,12 @@ async function completePendingFinalRecoveryWithNotice(
   return completed;
 }
 
-export type ExpectedRestartRecoveryClaim = ExpectedRestartRecoveryTarget & {
+export type ExpectedRestartRecoveryClaim = {
+  canonicalSessionKey?: string;
   recoveryRunId: string;
   recoverySourceRunId: string;
+  sessionId: string;
+  sessionKey: string;
 };
 
 export function loadExpectedRestartRecoveryClaim(params: {
@@ -153,8 +154,8 @@ export function loadExpectedRestartRecoveryClaim(params: {
   storePath: string;
 }): SessionEntry | undefined {
   const exact = loadExactSessionEntry({
-    ...params.expected,
     readConsistency: "latest",
+    sessionKey: params.expected.sessionKey,
     storePath: params.storePath,
   });
   const entry = exact?.sessionKey === params.expected.sessionKey ? exact.entry : undefined;
@@ -173,7 +174,7 @@ export function loadExpectedRestartRecoveryTarget(params: {
   storePath: string;
 }): SessionEntry | undefined {
   const exact = loadExactSessionEntry({
-    ...params.expected,
+    sessionKey: params.expected.sessionKey,
     storePath: params.storePath,
     readConsistency: "latest",
   });
@@ -187,7 +188,6 @@ export function loadExpectedRestartRecoveryTarget(params: {
 }
 
 export async function recoverStore(params: {
-  storeAgentId?: string;
   cfg?: OpenClawConfig;
   observationOnly?: boolean;
   onExhaustedTarget?: (target: ExhaustedRestartRecoveryTarget) => void;
@@ -211,6 +211,16 @@ export async function recoverStore(params: {
     }
     result.skipped++;
     return true;
+  };
+  const resumeIfCurrent = async (resumeParams: Parameters<typeof resumeMainSession>[0]) => {
+    if (!shouldContinue()) {
+      return "skipped" as const;
+    }
+    return await resumeMainSession({
+      ...resumeParams,
+      lifecycleGeneration: params.lifecycleGeneration,
+      shouldContinue: params.shouldContinue,
+    });
   };
   const providedActiveSessionIds =
     params.activeSessionIds === undefined ? undefined : normalizeStringSet(params.activeSessionIds);
@@ -237,10 +247,7 @@ export async function recoverStore(params: {
       });
       entries = entry ? [{ sessionKey: params.expectedTarget.sessionKey, entry }] : [];
     } else {
-      entries = listSessionEntriesByStatus(
-        { agentId: params.storeAgentId, storePath: params.storePath },
-        ["running"],
-      );
+      entries = listSessionEntriesByStatus({ storePath: params.storePath }, ["running"]);
     }
   } catch (err) {
     mainSessionRecoveryLog.warn(`failed to load session store ${params.storePath}: ${String(err)}`);
@@ -270,8 +277,6 @@ export async function recoverStore(params: {
       continue;
     }
     const dispatchTarget = resolveRestartRecoveryDispatchTarget({
-      agentId: (params.expectedClaim ?? params.expectedTarget)?.agentId,
-      storeAgentId: params.storeAgentId,
       cfg: params.cfg,
       sessionKey,
       storePath: params.storePath,
@@ -281,7 +286,6 @@ export async function recoverStore(params: {
       continue;
     }
     const agentId = dispatchTarget.agentId;
-    const target = { agentId, sessionKey, storePath: params.storePath };
     const dispatchSessionKey =
       params.expectedClaim?.canonicalSessionKey ??
       params.expectedTarget?.canonicalSessionKey ??
@@ -297,7 +301,7 @@ export async function recoverStore(params: {
       result.skipped++;
       continue;
     }
-    const resumeDedupeKey = JSON.stringify([agentId, dispatchSessionKey]);
+    const resumeDedupeKey = sessionKey;
     if (params.handledSessionKeys.has(resumeDedupeKey)) {
       result.skipped++;
       continue;
@@ -315,7 +319,7 @@ export async function recoverStore(params: {
       },
       requireWriteSuccess: true,
       shouldContinue: params.shouldContinue,
-      target,
+      target: { sessionKey, storePath: params.storePath },
     });
     if (!observed.entry || observed.transition.kind !== "observed") {
       result.skipped++;
@@ -339,12 +343,14 @@ export async function recoverStore(params: {
         return result;
       }
       const tombstone = await tombstoneMainRestartRecoveryWithNotice({
-        ...target,
+        agentId,
         cfg: params.cfg,
         entry,
         gatewayRuntime: params.gatewayRuntime,
         observation: recoveryView.observation,
         reason: recoveryView.reason,
+        sessionKey,
+        storePath: params.storePath,
       });
       if (tombstone === "notice_failed") {
         result.failed++;
@@ -369,7 +375,7 @@ export async function recoverStore(params: {
       } else {
         result.failed++;
         const current = loadExpectedRestartRecoveryTarget({
-          expected: { agentId, sessionId: entry.sessionId, sessionKey },
+          expected: { sessionId: entry.sessionId, sessionKey },
           storePath: params.storePath,
         });
         if (
@@ -377,9 +383,10 @@ export async function recoverStore(params: {
           !current?.mainRestartRecovery?.reservation
         ) {
           params.onExhaustedTarget?.({
-            ...target,
             canonicalSessionKey: dispatchSessionKey,
             sessionId: entry.sessionId,
+            sessionKey,
+            storePath: params.storePath,
           });
         }
       }
@@ -392,12 +399,14 @@ export async function recoverStore(params: {
         return result;
       }
       const tombstone = await tombstoneMainRestartRecoveryWithNotice({
-        ...target,
+        agentId,
         cfg: params.cfg,
         entry,
         gatewayRuntime: params.gatewayRuntime,
         observation: recoveryView.observation,
         reason: "message-tool-only recovery authority is unavailable",
+        sessionKey,
+        storePath: params.storePath,
       });
       if (tombstone === "notice_failed") {
         result.failed++;
@@ -416,22 +425,19 @@ export async function recoverStore(params: {
         "forceCodeModeTools" | "forceRestartSafeTools" | "pendingFinalDeliveryText"
       > = {},
     ) => {
-      if (stopped()) {
-        return;
-      }
       recordResumeResult(
-        await resumeMainSession({
-          ...target,
+        await resumeIfCurrent({
+          agentId,
           canonicalSessionKey: dispatchSessionKey,
           cfg: params.cfg,
           entry,
           observation: recoveryView.observation,
           recoveryAttempt: recoveryView.nextAttempt,
+          storePath: params.storePath,
+          sessionKey,
           sessionWorkAdmissionHandoffId: params.sessionWorkAdmissionHandoffId,
           gatewayRuntime: params.gatewayRuntime,
           ...options,
-          lifecycleGeneration: params.lifecycleGeneration,
-          shouldContinue: params.shouldContinue,
         }),
       );
     };
@@ -447,11 +453,13 @@ export async function recoverStore(params: {
     }
     if (pendingAction === "complete") {
       const completion = await markSessionCompletedAfterRecoveryCheckpoint({
-        ...target,
+        agentId,
         entry,
         messages: [],
         pendingFinalDeliveryIntentId: entry.pendingFinalDelivery?.intentId,
         reason: "delivered-terminal-receipt",
+        sessionKey,
+        storePath: params.storePath,
       });
       if (completion.outcome === "completed") {
         params.handledSessionKeys.add(resumeDedupeKey);
@@ -462,7 +470,11 @@ export async function recoverStore(params: {
       continue;
     }
     if (pendingAction === "notice") {
-      const completed = await completePendingFinalRecoveryWithNotice(entry, target);
+      const completed = await completePendingFinalRecoveryWithNotice(
+        entry,
+        sessionKey,
+        params.storePath,
+      );
       result[completed ? "settled" : "skipped"]++;
       continue;
     }
@@ -504,9 +516,11 @@ export async function recoverStore(params: {
     let messages: unknown[];
     try {
       const transcriptScope = {
-        ...target,
+        agentId,
         sessionEntry: entry,
         sessionId: entry.sessionId,
+        sessionKey,
+        storePath: params.storePath,
       };
       messages = await readSessionMessagesAsync(transcriptScope, {
         mode: "recent",
@@ -559,9 +573,10 @@ export async function recoverStore(params: {
         return result;
       }
       const reconciliation = await reconcileInterruptedCompletionReport({
-        ...target,
         entry,
         source: completionSource,
+        storePath: params.storePath,
+        sessionKey,
       });
       if (reconciliation.outcome === "reconciled") {
         params.handledSessionKeys.add(resumeDedupeKey);
@@ -593,10 +608,12 @@ export async function recoverStore(params: {
         return result;
       }
       const completion = await markSessionCompletedAfterRecoveryCheckpoint({
-        ...target,
+        agentId,
         entry,
         messages,
         reason: resumePolicy.reason,
+        storePath: params.storePath,
+        sessionKey,
         sourceTurnId: expectedRecoverySourceRunId,
         ...(resumePolicy.reason === "handled-silent"
           ? {}

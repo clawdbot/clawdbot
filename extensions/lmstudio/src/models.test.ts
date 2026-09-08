@@ -107,7 +107,7 @@ describe("lmstudio-models", () => {
         });
       }
       if (String(url).endsWith("/api/v1/models/load")) {
-        return jsonResponse({ status: "loaded", instance_id: "inst-loaded" });
+        return jsonResponse({ status: "loaded" });
       }
       throw new Error(`Unexpected fetch URL: ${String(url)}`);
     });

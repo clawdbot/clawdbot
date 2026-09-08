@@ -290,7 +290,7 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
     "resolves literal compaction overrides without discovering provider plugins $name",
     ({ models }) => {
       const manifestNormalization = vi
-        .spyOn(manifestModelIdNormalization, "resolveManifestModelIdNormalizationPolicies")
+        .spyOn(manifestModelIdNormalization, "normalizeProviderModelIdWithManifest")
         .mockImplementation(() => {
           throw new Error("literal compaction overrides must not discover plugin manifests");
         });

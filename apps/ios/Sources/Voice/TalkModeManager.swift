@@ -2962,7 +2962,7 @@ final class TalkModeManager: NSObject {
                 if let modelId {
                     GatewayDiagnostics.log("talk tts: modelId=\(modelId)")
                 }
-                let request = ElevenLabsTTSRequest(
+                let request = self.makeElevenLabsTTSRequest(
                     text: cleaned,
                     directive: directive,
                     modelId: modelId,
@@ -2981,7 +2981,7 @@ final class TalkModeManager: NSObject {
                 { mp3Format in
                     client.streamSynthesize(
                         voiceId: voiceId,
-                        request: ElevenLabsTTSRequest(
+                        request: self.makeElevenLabsTTSRequest(
                             text: cleaned,
                             directive: directive,
                             modelId: modelId,
@@ -3137,6 +3137,28 @@ final class TalkModeManager: NSObject {
         let resolvedKey = configuredKey
         #endif
         return resolvedKey?.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func makeElevenLabsTTSRequest(
+        text: String,
+        directive: TalkDirective?,
+        modelId: String?,
+        outputFormat: String?,
+        language: String?) -> ElevenLabsTTSRequest
+    {
+        ElevenLabsTTSRequest(
+            text: text,
+            modelId: modelId,
+            outputFormat: outputFormat,
+            speed: TalkTTSValidation.resolveSpeed(speed: directive?.speed, rateWPM: directive?.rateWPM),
+            stability: TalkTTSValidation.validatedStability(directive?.stability, modelId: modelId),
+            similarity: TalkTTSValidation.validatedUnit(directive?.similarity),
+            style: TalkTTSValidation.validatedUnit(directive?.style),
+            speakerBoost: directive?.speakerBoost,
+            seed: TalkTTSValidation.validatedSeed(directive?.seed),
+            normalize: ElevenLabsTTSClient.validatedNormalize(directive?.normalize),
+            language: language,
+            latencyTier: TalkTTSValidation.validatedLatencyTier(directive?.latencyTier))
     }
 
     private func startSpeechInterruptionRecognitionIfNeeded() {
@@ -3367,12 +3389,10 @@ final class TalkModeManager: NSObject {
     private func startIncrementalPrefetch(segment: String, context: IncrementalSpeechContext) {
         guard context.canUseElevenLabs, let apiKey = context.apiKey, let voiceId = context.voiceId else { return }
         let prefetchOutputFormat = self.resolveIncrementalPrefetchOutputFormat(context: context)
-        let request = ElevenLabsTTSRequest(
+        let request = self.makeIncrementalTTSRequest(
             text: segment,
-            directive: context.directive,
-            modelId: context.modelId,
-            outputFormat: prefetchOutputFormat,
-            language: context.language)
+            context: context,
+            outputFormat: prefetchOutputFormat)
         let id = UUID()
         let task = Task { [weak self] in
             let stream = ElevenLabsTTSClient(apiKey: apiKey).streamSynthesize(voiceId: voiceId, request: request)
@@ -3614,6 +3634,30 @@ final class TalkModeManager: NSObject {
             canUseElevenLabs: canUseElevenLabs)
     }
 
+    private func makeIncrementalTTSRequest(
+        text: String,
+        context: IncrementalSpeechContext,
+        outputFormat: String?) -> ElevenLabsTTSRequest
+    {
+        ElevenLabsTTSRequest(
+            text: text,
+            modelId: context.modelId,
+            outputFormat: outputFormat,
+            speed: TalkTTSValidation.resolveSpeed(
+                speed: context.directive?.speed,
+                rateWPM: context.directive?.rateWPM),
+            stability: TalkTTSValidation.validatedStability(
+                context.directive?.stability,
+                modelId: context.modelId),
+            similarity: TalkTTSValidation.validatedUnit(context.directive?.similarity),
+            style: TalkTTSValidation.validatedUnit(context.directive?.style),
+            speakerBoost: context.directive?.speakerBoost,
+            seed: TalkTTSValidation.validatedSeed(context.directive?.seed),
+            normalize: ElevenLabsTTSClient.validatedNormalize(context.directive?.normalize),
+            language: context.language,
+            latencyTier: TalkTTSValidation.validatedLatencyTier(context.directive?.latencyTier))
+    }
+
     /// Returns `mp3_44100_128` when the API has already rejected PCM, otherwise `pcm_44100`.
     private var effectiveDefaultOutputFormat: String {
         self.pcmFormatUnavailable ? "mp3_44100_128" : "pcm_44100"
@@ -3689,12 +3733,10 @@ final class TalkModeManager: NSObject {
         }
 
         let client = ElevenLabsTTSClient(apiKey: apiKey)
-        let request = ElevenLabsTTSRequest(
+        let request = self.makeIncrementalTTSRequest(
             text: text,
-            directive: context.directive,
-            modelId: context.modelId,
-            outputFormat: context.outputFormat,
-            language: context.language)
+            context: context,
+            outputFormat: context.outputFormat)
         let rawStream: AsyncThrowingStream<Data, Error> = if let prefetchedAudio, !prefetchedAudio.chunks.isEmpty {
             Self.makeBufferedAudioStream(chunks: prefetchedAudio.chunks)
         } else {
@@ -3707,12 +3749,10 @@ final class TalkModeManager: NSObject {
         { mp3Format in
             client.streamSynthesize(
                 voiceId: voiceId,
-                request: ElevenLabsTTSRequest(
+                request: self.makeIncrementalTTSRequest(
                     text: text,
-                    directive: context.directive,
-                    modelId: context.modelId,
-                    outputFormat: mp3Format,
-                    language: context.language))
+                    context: context,
+                    outputFormat: mp3Format))
         }
         guard self.isCurrentSpeechGeneration(speechGeneration) else { return }
         if !result.finished, let interruptedAt = result.interruptedAt {
@@ -4215,7 +4255,7 @@ extension TalkModeManager {
                 defaultModelIdFallback: Self.defaultModelIdFallback,
                 defaultRealtimeModelIdFallback: Self.defaultRealtimeModelIdFallback,
                 defaultSilenceTimeoutMs: Self.defaultSilenceTimeoutMs)
-            if parsed.snapshot.missingResolvedPayload {
+            if parsed.missingResolvedPayload {
                 GatewayDiagnostics.log(
                     "talk config ignored: normalized payload missing talk.resolved")
             }
@@ -4272,14 +4312,14 @@ extension TalkModeManager {
         let routing = TalkModeRoutingResolver.resolve(
             parsed: parsed,
             defaultProvider: Self.defaultTalkProvider)
-        let realtimeVoiceId = parsed.snapshot.realtime.voice
+        let realtimeVoiceId = parsed.realtimeVoiceId
         self.executionMode = routing.executionMode
         self.runtimeRoute = routing.route
         self.realtimeProvider = routing.realtimeProvider
         self.realtimeModelId = routing.realtimeModelId
         self.realtimeVoiceId = realtimeVoiceId
         self.defaultVoiceId = parsed.defaultVoiceId
-        self.voiceAliases = parsed.snapshot.voiceAliases
+        self.voiceAliases = parsed.voiceAliases
         if !self.voiceOverrideActive {
             self.currentVoiceId = self.defaultVoiceId
         }
@@ -4308,14 +4348,14 @@ extension TalkModeManager {
             redactedFallbackMissingScope: redactedFallbackMissingScope,
             gatewayOwnedVoiceProvider: gatewayOwnedVoiceProvider)
 
-        if let interrupt = parsed.snapshot.interruptOnSpeech {
+        if let interrupt = parsed.interruptOnSpeech {
             self.interruptOnSpeech = interrupt
         }
-        self.gatewaySpeechLocaleID = parsed.snapshot.speechLocaleID
-        self.silenceWindow = TimeInterval(parsed.snapshot.silenceTimeoutMs) / 1000
-        if parsed.snapshot.normalizedPayload || parsed.defaultVoiceId != nil || parsed.rawConfigApiKey != nil {
+        self.gatewaySpeechLocaleID = parsed.speechLocaleID
+        self.silenceWindow = TimeInterval(parsed.silenceTimeoutMs) / 1000
+        if parsed.normalizedPayload || parsed.defaultVoiceId != nil || parsed.rawConfigApiKey != nil {
             GatewayDiagnostics.log(
-                "talk config provider=\(routing.activeProvider) silenceTimeoutMs=\(parsed.snapshot.silenceTimeoutMs)")
+                "talk config provider=\(routing.activeProvider) silenceTimeoutMs=\(parsed.silenceTimeoutMs)")
         }
     }
 

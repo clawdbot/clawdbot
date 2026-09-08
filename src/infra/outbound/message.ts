@@ -129,8 +129,6 @@ type MessageSendParams = {
   onDeliveryResult?: (result: OutboundDeliveryResult) => Promise<void> | void;
   /** @internal Revalidates caller authority immediately before recipient-visible I/O. */
   onPlatformSendDispatch?: () => Promise<void>;
-  /** @internal Synchronously fence the live owner after waits and before platform I/O. */
-  assertDirectAdapterHandoff?: () => void;
   /** @internal Keep ephemeral-authority sends out of replayable recovery. */
   skipQueue?: boolean;
   mirror?: OutboundMirror;
@@ -312,7 +310,6 @@ async function callMessageGateway<T>(params: {
   method: string;
   params: Record<string, unknown>;
   onPlatformSendDispatch?: () => Promise<void>;
-  assertDirectAdapterHandoff?: () => void;
 }): Promise<T> {
   const { callGatewayLeastPrivilege } = await loadMessageGatewayRuntime();
   const gateway = resolveGatewayOptions(params.gateway);
@@ -320,7 +317,6 @@ async function callMessageGateway<T>(params: {
   // by the Gateway's live operational-run validator, not token freshness.
   const agentRuntimeIdentityToken = await params.gateway?.resolveAgentRuntimeIdentityToken?.();
   await params.onPlatformSendDispatch?.();
-  params.assertDirectAdapterHandoff?.();
   return await callGatewayLeastPrivilege<T>({
     url: gateway.url,
     token: gateway.token,
@@ -470,7 +466,6 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       ...(params.onPlatformSendDispatch
         ? { onPlatformSendDispatch: params.onPlatformSendDispatch }
         : {}),
-      assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
       skipQueue: params.skipQueue,
       ...(params.onDeliveredPayload ? { onDeliveredPayload: params.onDeliveredPayload } : {}),
       mirror: params.mirror
@@ -511,7 +506,6 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
     gateway: params.gateway,
     method: "send",
     onPlatformSendDispatch: params.onPlatformSendDispatch,
-    assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
     params: {
       to: params.to,
       message: params.content,

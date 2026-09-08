@@ -243,17 +243,17 @@ function renderMcpToolSignature(
 
 function renderMcpServerHeader(server: McpApiServerDoc, tools: readonly McpApiToolDoc[]): string {
   const lines = [
-    "interface McpApiHeader { header: string; tools?: unknown[]; schemas?: Record<string, unknown> }",
+    "type McpApiHeader = { header: string; tools?: unknown[]; schemas?: Record<string, unknown> };",
     "",
-    "interface McpToolResult {",
+    "type McpToolResult = {",
     "  content: unknown[];",
     "  structuredContent?: unknown;",
     "  isError?: boolean;",
-    "}",
-    "interface McpResourcesListResult { resources: unknown[]; nextCursor?: string }",
-    "interface McpResourcesReadResult { contents: unknown[] }",
-    "interface McpPromptsListResult { prompts: unknown[]; nextCursor?: string }",
-    "interface McpPromptsGetResult { messages: unknown[]; description?: string }",
+    "};",
+    "type McpResourcesListResult = { resources: unknown[]; nextCursor?: string };",
+    "type McpResourcesReadResult = { contents: unknown[] };",
+    "type McpPromptsListResult = { prompts: unknown[]; nextCursor?: string };",
+    "type McpPromptsGetResult = { messages: unknown[]; description?: string };",
     "",
     `declare namespace MCP.${server.identifier} {`,
     "  /** Return this TypeScript-style API header. */",
@@ -286,14 +286,15 @@ function renderMcpServerHeader(server: McpApiServerDoc, tools: readonly McpApiTo
   return lines.join("\n");
 }
 
-function renderMcpRootHeader(): string {
+function renderMcpRootHeader(servers: readonly McpApiServerDoc[]): string {
   return [
-    "interface McpRootApiHeader { header: string; servers?: unknown[] }",
+    "type McpApiHeader = { header: string; servers?: unknown[] };",
     "",
-    "declare namespace MCP {",
+    "declare const MCP: {",
     "  /** List visible MCP servers and request server-specific headers. */",
-    "  function $api(): Promise<McpRootApiHeader>;",
-    "}",
+    "  $api(): Promise<McpApiHeader>;",
+    ...servers.map((server) => `  readonly ${server.identifier}: typeof MCP.${server.identifier};`),
+    "};",
   ].join("\n");
 }
 
@@ -307,7 +308,7 @@ export function buildMcpApiResponse(params: {
     return {
       kind: "mcp_api",
       scope: "root",
-      header: renderMcpRootHeader(),
+      header: renderMcpRootHeader(params.servers),
       servers: params.servers.map((server) => ({
         identifier: server.identifier,
         serverName: server.serverName,
@@ -353,7 +354,7 @@ export function createMcpApiVirtualFiles(
   const rootContent = [
     ...servers.map((server) => `/// <reference path="./${server.identifier}.d.ts" />`),
     "",
-    renderMcpRootHeader(),
+    renderMcpRootHeader(servers),
   ].join("\n");
   return [
     {

@@ -64,14 +64,12 @@ function makeFreshSessionEntry(overrides?: Record<string, unknown>) {
 function makeSuccessfulRunResult(overrides?: Record<string, unknown>) {
   return {
     result: {
-      result: {
-        payloads: [{ text: "digest complete" }],
-        meta: {
-          agentMeta: {
-            model: "claude-sonnet-4-6",
-            provider: "anthropic",
-            usage: { input: 100, output: 50 },
-          },
+      payloads: [{ text: "digest complete" }],
+      meta: {
+        agentMeta: {
+          model: "claude-sonnet-4-6",
+          provider: "anthropic",
+          usage: { input: 100, output: 50 },
         },
       },
     },

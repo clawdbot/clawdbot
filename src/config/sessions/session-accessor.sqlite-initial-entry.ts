@@ -13,7 +13,7 @@ import {
   readSessionIdentitySnapshot,
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
-import { prepareSessionIdentityPublication } from "./session-accessor.sqlite-identity.js";
+import { emitCommittedSessionIdentityDiff } from "./session-accessor.sqlite-identity.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import { assertCanonicalSessionKeyWrite } from "./session-canonical-key.js";
 import {
@@ -38,10 +38,12 @@ export function ensureSessionEntrySync(
   const resolved = resolveSqliteScope(fencedScope);
   assertCanonicalSessionKeyWrite(resolved.sessionKey, resolved.agentId);
   let owned = false;
-  const publishCommitted = runOpenClawAgentWriteTransaction((database) => {
+  let previous = new Map<string, SessionEntry>();
+  let current = new Map<string, SessionEntry>();
+  runOpenClawAgentWriteTransaction((database) => {
     assertOwnedTranscriptWriteCommit({ ...fencedScope, sessionId: entry.sessionId });
     const identityKeys = collectSessionEntryLookupKeys(database, resolved.sessionKey);
-    const previous = readSessionIdentitySnapshot(database, identityKeys);
+    previous = readSessionIdentitySnapshot(database, identityKeys);
     const existing = readSessionEntryRow(database, resolved.sessionKey)?.entry;
     if (existing) {
       // Initial leases require absence, even for copied ids. Repeated initial appends inside
@@ -51,24 +53,20 @@ export function ensureSessionEntrySync(
       }
       // Existing writers retain the read-only probe; the following append validates their fence.
       owned = existing.sessionId === entry.sessionId;
-      return undefined;
+      current = previous;
+      return;
     }
     if (fencedScope.expectedWriterRunId !== undefined && !initializing) {
-      return undefined;
+      current = previous;
+      return;
     }
     const persisted = writeSessionEntry(
       database,
       resolved.sessionKey,
       initializing ? { ...entry, activeWriterRunId: initialWriter.writerRunId } : entry,
     );
-    const current = readSessionIdentitySnapshot(database, identityKeys);
+    current = readSessionIdentitySnapshot(database, identityKeys);
     owned = current.get(resolved.sessionKey)?.sessionId === entry.sessionId;
-    const publish = prepareSessionIdentityPublication(
-      database,
-      resolved.agentId,
-      previous,
-      current,
-    );
     if (initializing) {
       if (!owned || persisted.activeWriterRunId !== initialWriter.writerRunId) {
         throw new SessionTranscriptWriterClaimReboundError();
@@ -83,17 +81,16 @@ export function ensureSessionEntrySync(
           try {
             initialWriter.recordCommitted(fence);
           } finally {
-            publish();
+            emitCommittedSessionIdentityDiff(resolved.agentId, previous, current);
           }
         })
       ) {
         throw new Error("initial session writer requires a managed commit boundary");
       }
     }
-    return publish;
   }, toDatabaseOptions(resolved));
-  if (!initializing) {
-    publishCommitted?.();
+  if (!initializing && (current.size !== previous.size || owned)) {
+    emitCommittedSessionIdentityDiff(resolved.agentId, previous, current);
   }
   if (fencedScope.expectedWriterRunId !== undefined && !owned) {
     throw new SessionTranscriptWriterClaimReboundError();

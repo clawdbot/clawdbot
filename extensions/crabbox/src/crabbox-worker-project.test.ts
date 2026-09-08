@@ -34,11 +34,6 @@ function projectOptions(events: string[], controller = new AbortController()) {
     return undefined;
   };
   const options = {
-    nodeRuntimeIdentity: {
-      nodeBootstrapSha256: createNodeBootstrapFixture().sha256,
-      executionMode: "worker-turn" as const,
-      workerBundleSha256: createWorkerArchiveFixture().sha256,
-    },
     project: {
       key: PROJECT_KEY,
       baseCommit: BASE_COMMIT,

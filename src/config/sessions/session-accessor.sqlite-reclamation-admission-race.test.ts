@@ -18,7 +18,6 @@ const archiveMaterializationHook = vi.hoisted(() => ({
   beforeMaterialize: undefined as (() => Promise<void>) | undefined,
   beforeReclaim: undefined as (() => Promise<void>) | undefined,
   beforeCommitRequest: undefined as (() => void) | undefined,
-  afterCommitRequest: undefined as (() => void) | undefined,
 }));
 
 vi.mock("./session-accessor.sqlite-reclamation.js", async (importOriginal) => {
@@ -47,7 +46,6 @@ vi.mock("./session-accessor.sqlite-archive.js", async (importOriginal) => {
           ? () => {
               archiveMaterializationHook.beforeCommitRequest?.();
               params.onCommitRequest?.();
-              archiveMaterializationHook.afterCommitRequest?.();
             }
           : undefined,
       }),
@@ -61,6 +59,7 @@ vi.mock("./session-accessor.sqlite-archive.js", async (importOriginal) => {
 });
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
 describe("SQLite reclamation admission races", () => {
   let storePath: string;
 
@@ -73,47 +72,9 @@ describe("SQLite reclamation admission races", () => {
     archiveMaterializationHook.beforeMaterialize = undefined;
     archiveMaterializationHook.beforeReclaim = undefined;
     archiveMaterializationHook.beforeCommitRequest = undefined;
-    archiveMaterializationHook.afterCommitRequest = undefined;
     vi.restoreAllMocks();
     closeOpenClawAgentDatabasesForTest();
   });
-
-  it.runIf(process.platform !== "win32")(
-    "keeps worker reclamation on the opened database after an alias retarget",
-    async () => {
-      const sessionKey = "agent:main:retargeted-reclamation";
-      const sessionId = "retargeted-reclamation";
-      const directory = tempDirs.make("reclamation-alias-");
-      const originalPath = path.join(directory, "original.sqlite");
-      const replacementPath = path.join(directory, "replacement.sqlite");
-      const alias = path.join(directory, "alias.sqlite");
-      await replaceSessionEntry(
-        { sessionKey, storePath: originalPath },
-        { sessionId, updatedAt: 1 },
-      );
-      // Close/checkpoint before copying so both files start with the same durable row and revision.
-      closeOpenClawAgentDatabasesForTest();
-      fs.copyFileSync(originalPath, replacementPath);
-      fs.symlinkSync(originalPath, alias);
-      expect(loadSessionEntry({ sessionKey, storePath: alias })).toMatchObject({ sessionId });
-      archiveMaterializationHook.beforeReclaim = async () => {
-        fs.unlinkSync(alias);
-        fs.symlinkSync(replacementPath, alias);
-      };
-
-      await expect(
-        deleteSessionEntryLifecycle({
-          archiveTranscript: false,
-          storePath: alias,
-          target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
-        }),
-      ).resolves.toMatchObject({ deleted: true });
-      expect(loadSessionEntry({ sessionKey, storePath: originalPath })).toBeUndefined();
-      expect(loadSessionEntry({ sessionKey, storePath: replacementPath })).toMatchObject({
-        sessionId,
-      });
-    },
-  );
 
   it("publishes the committed deletion after a recovered commit barrier close failure", async () => {
     const sessionKey = "agent:main:recovered-deletion";
@@ -162,14 +123,9 @@ describe("SQLite reclamation admission races", () => {
     }
   });
 
-  it.each([
-    { hasHistory: false, checkpoint: "prepare" },
-    { hasHistory: true, checkpoint: "prepare" },
-    { hasHistory: false, checkpoint: "commit" },
-    { hasHistory: true, checkpoint: "commit" },
-  ])(
-    "preserves session data when authority closes at $checkpoint (history: $hasHistory)",
-    async ({ hasHistory, checkpoint }) => {
+  it.each([false, true])(
+    "preserves session data when caller authority closes during reclamation (history: %s)",
+    async (hasHistory) => {
       const sessionKey = "agent:main:revoked-deletion";
       const sessionId = "revoked-deletion-current";
       const historicalSessionId = "revoked-deletion-history";
@@ -187,16 +143,10 @@ describe("SQLite reclamation admission races", () => {
         { type: "session", id: sessionId, content: "retained current transcript" },
       ]);
       let authorized = true;
-      if (checkpoint === "prepare") {
-        archiveMaterializationHook.beforeReclaim = async () => {
-          await Promise.resolve();
-          authorized = false;
-        };
-      } else {
-        archiveMaterializationHook.beforeCommitRequest = () => {
-          authorized = false;
-        };
-      }
+      archiveMaterializationHook.beforeReclaim = async () => {
+        await Promise.resolve();
+        authorized = false;
+      };
 
       await expect(
         deleteSessionEntryLifecycle({

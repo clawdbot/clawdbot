@@ -53,9 +53,9 @@ vi.mock("../config/io.js", () => ({
 
 vi.mock("../config/config.js", () => ({
   ConfigMutationConflictError: class ConfigMutationConflictError extends Error {},
-  replaceConfigFile: async ({ sourceConfig }: { sourceConfig: OpenClawConfig }) => {
-    configStore.set(configPath(), structuredClone(sourceConfig));
-    return { nextConfig: sourceConfig };
+  replaceConfigFile: async ({ nextConfig }: { nextConfig: OpenClawConfig }) => {
+    configStore.set(configPath(), structuredClone(nextConfig));
+    return { nextConfig };
   },
   resolveGatewayPort: (config: OpenClawConfig) => config.gateway?.port ?? 18789,
 }));

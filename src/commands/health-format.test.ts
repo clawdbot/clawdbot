@@ -186,21 +186,6 @@ describe("formatHealthChannelLines", () => {
       "auth stabilizing",
     ],
     [
-      "disabled account over configured metadata",
-      { enabled: false, stateReason: "disabled" },
-      "disabled",
-    ],
-    [
-      "disabled account over a stale successful probe",
-      { enabled: false, healthState: "healthy", probe: { ok: true, elapsedMs: 12 } },
-      "disabled",
-    ],
-    [
-      "disabled account over stale failure metadata",
-      { enabled: false, healthState: "blocked", probe: { ok: false, error: "old failure" } },
-      "disabled",
-    ],
-    [
       "disabled status over stale passive healthy state",
       { healthState: "healthy", statusState: "disabled" },
       "disabled",
@@ -241,29 +226,6 @@ describe("formatHealthChannelLines", () => {
 
     expect(formatHealthChannelLines(summary)).toStrictEqual([`Test: ${expected}`]);
   });
-
-  it.each(["default", "all"] as const)(
-    "renders a sole disabled configured account in %s health output",
-    (accountMode) => {
-      const account = {
-        accountId: "main",
-        enabled: false,
-        configured: true,
-        running: false,
-        stateReason: "disabled",
-        lastError: null,
-      };
-      const summary = createHealthSummary({
-        channels: { matrix: { ...account, accounts: { main: account } } },
-        channelOrder: ["matrix"],
-        channelLabels: { matrix: "Matrix" },
-      });
-
-      expect(formatHealthChannelLines(summary, { accountMode })).toStrictEqual([
-        "Matrix: disabled",
-      ]);
-    },
-  );
 
   it.each([
     ["blocked", { healthState: "blocked" }],
@@ -310,31 +272,26 @@ describe("formatHealthChannelLines", () => {
       expectedAll: "failed (unknown) - sync rejected",
     },
   ])(
-    "reports the $name active probe when the preferred account is inactive",
+    "reports the $name active probe when the preferred account is unconfigured",
     ({ probe, expected, expectedAll }) => {
-      for (const [inactive, scopedState] of [
-        [{ configured: false }, "not configured"],
-        [{ enabled: false }, "disabled"],
-      ] as const) {
-        const summary = createMultiAccountHealthSummary(
-          { healthState: "healthy", probe },
-          { ...inactive, linked: undefined, healthState: undefined, probe: undefined },
-        );
-        const accountIdsByChannel = { matrix: ["main"] };
+      const summary = createMultiAccountHealthSummary(
+        { healthState: "healthy", probe },
+        { configured: false, linked: undefined, healthState: undefined, probe: undefined },
+      );
+      const accountIdsByChannel = { matrix: ["main"] };
 
-        expect(formatHealthChannelLines(summary)).toStrictEqual([`Matrix: ${expected}`]);
-        expect(
-          formatHealthChannelLines(summary, { accountMode: "all", accountIdsByChannel }),
-        ).toStrictEqual([`Matrix: ${expectedAll}`]);
-        expect(
-          formatHealthChannelLines(summary, { accountMode: "default", accountIdsByChannel }),
-        ).toStrictEqual([`Matrix: ${scopedState}`]);
-        expect(
-          formatHealthChannelLines(summary, {
-            accountIdsByChannel: { matrix: ["alerts"] },
-          }),
-        ).toStrictEqual([`Matrix: ${expected}`]);
-      }
+      expect(formatHealthChannelLines(summary)).toStrictEqual([`Matrix: ${expected}`]);
+      expect(
+        formatHealthChannelLines(summary, { accountMode: "all", accountIdsByChannel }),
+      ).toStrictEqual([`Matrix: ${expectedAll}`]);
+      expect(
+        formatHealthChannelLines(summary, { accountMode: "default", accountIdsByChannel }),
+      ).toStrictEqual(["Matrix: not configured"]);
+      expect(
+        formatHealthChannelLines(summary, {
+          accountIdsByChannel: { matrix: ["alerts"] },
+        }),
+      ).toStrictEqual([`Matrix: ${expected}`]);
     },
   );
 

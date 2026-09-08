@@ -11,7 +11,6 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withServer } from "../plugin-sdk/test-helpers/http-test-server.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
-import { resolveRuntimeWorkerArgv } from "./runtime-worker-url.js";
 import type {
   ManagedRepairBoundary,
   ManagedServiceManagerBoundaryRunner,
@@ -45,7 +44,8 @@ export async function releaseManagedRepairInference(
 export function managedRepairConfig(baseUrl: string): OpenClawConfig {
   const modelRef = "repair-test/repair-model";
   return {
-    commands: { ownerAllowFrom: ["owner"] },
+    commands: { ownerAllowFrom: ["slack:owner"] },
+    channels: { slack: { enabled: true } },
     plugins: { slots: { memory: "none" } },
     agents: {
       defaults: {
@@ -84,13 +84,9 @@ export function managedRepairConfig(baseUrl: string): OpenClawConfig {
 }
 
 function managedRepairSpawnPreload(root: string): string {
-  const snapshotWorkerArgs = resolveRuntimeWorkerArgv(
-    new URL("./update-candidate-state.worker.ts", import.meta.url),
-  );
   return `const fs = require("node:fs");
     const childProcess = require("node:child_process");
     const spawn = childProcess.spawn;
-    const snapshotWorkerArgs = ${JSON.stringify(snapshotWorkerArgs)};
     childProcess.spawn = function(command, args, options) {
       // Rehearsal strips NODE_OPTIONS; carry the recorder only to its owned supervisor workers.
       if (command === process.execPath && Array.isArray(args) && args.length === 1 &&
@@ -98,9 +94,8 @@ function managedRepairSpawnPreload(root: string): string {
         args = ["--require", __filename, ...args];
       }
       // Source orchestration consumes the packaged SQLite worker from the completed build.
-      // Share the argv builder so its pinned source-loader URL cannot bypass this redirect.
-      if (Array.isArray(args) && args.length === snapshotWorkerArgs.length &&
-          args.every((arg, index) => arg === snapshotWorkerArgs[index])) {
+      if (Array.isArray(args) && args.length === 3 && args[0] === "--import" && args[1] === "tsx" &&
+          args[2] === ${JSON.stringify(path.resolve("src/infra/update-candidate-state.worker.ts"))}) {
         args = [${JSON.stringify(path.resolve("dist", runtimeProcessEntrypoints.updateCandidateState.distWorkerPath))}];
       }
       const script = Array.isArray(args) ? args.join(" ") : "";
@@ -297,7 +292,7 @@ export async function runManagedRepairAuthorityBoundary(
         result = await runBoundary("systemd", {
           controlDisconnect: "transferred",
           validationResult: "skipped",
-          requester: { channel: "synthetic", accountId: "primary", senderId: "owner" },
+          requester: { channel: "slack", accountId: "primary", senderId: "owner" },
           ledger: true,
           helperExitCode: revoke ? 1 : 0,
           repair: { phase, baseUrl, revoke, inferencePending, releaseInference },

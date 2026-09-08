@@ -177,6 +177,9 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
 }
 
 export const testing = {
+  DEFAULT_GATEWAY_SCHEMA_ERROR,
+  DEFAULT_RAW_SCHEMA_ERROR,
+  SUCCESS_MARKER,
   resolveGatewayPort,
   validateSuccessResult,
   validateRejectResult,

@@ -13,7 +13,6 @@ import {
   type GhConfigDiscoveryInput,
 } from "../skills/lifecycle/gh-config-discovery.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
-import { shouldAutoApproveDoctorFix } from "./doctor-repair-mode.js";
 import {
   collectUnavailableAgentSkills,
   disableUnavailableSkillsInConfig,
@@ -113,9 +112,6 @@ export async function maybeRepairSkillReadiness(params: {
     })),
   );
   const globallyUnavailableKeys = new Set(fleetUnavailable.map((skill) => skill.skillKey));
-  const willRepair = shouldAutoApproveDoctorFix(params.prompter.repairMode, {
-    blockDuringUpdate: true,
-  });
   for (const { agentId, report, unavailable: unavailableForAgent } of reports) {
     const prefix = agentIds.length > 1 ? `Agent "${agentId}":\n` : "";
     const githubHint = describeGhConfigDirHint(report.skills);
@@ -127,7 +123,7 @@ export async function maybeRepairSkillReadiness(params: {
         globallyUnavailableKeys.has(skill.skillKey),
       );
       note(
-        `${prefix}${formatUnavailableSkillDoctorLines(unavailableForAgent, includesGlobalCandidate && !willRepair).join("\n")}`,
+        `${prefix}${formatUnavailableSkillDoctorLines(unavailableForAgent, includesGlobalCandidate).join("\n")}`,
         "Skills",
       );
     }

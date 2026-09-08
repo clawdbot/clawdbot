@@ -4,6 +4,10 @@
  * through the barrel that re-exports them.
  */
 import type { ToolLoopWarning } from "@openclaw/agent-core";
+import type {
+  AuthorizationResult,
+  GatewayClassification,
+} from "../security/local-security-gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
 import type { DiagnosticToolTerminalReason } from "../infra/diagnostic-events.js";
@@ -99,7 +103,9 @@ export type HookBlockedReason =
   | "plugin-before-tool-call"
   | "plugin-approval"
   | "plugin-approval-unavailable"
-  | "tool-loop";
+  | "tool-loop"
+  | "security-gateway-blocked"
+  | "security-gateway-rejected";
 
 type HookBlockedOutcome = {
   blocked: true;
@@ -121,4 +127,6 @@ export type HookOutcome =
       approvalResolution?: PluginApprovalResolution;
       deferredApproval?: DeferredPluginToolApproval;
       loopWarning?: ToolLoopWarning;
+      gatewayClassification?: GatewayClassification;
+      gatewayAuthorizationResult?: AuthorizationResult;
     };

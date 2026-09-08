@@ -336,7 +336,9 @@ describe("cold dynamic-model effective inventory", () => {
         },
       });
       await withPluginRuntimeRegistryScope(registry, async () => {
-        expect(resolveProviderRuntimePlugin({ provider, config })).toBeUndefined();
+        expect(resolveProviderRuntimePlugin({ provider, config })).toMatchObject({
+          prepareDynamicModel: ambientHook,
+        });
         await expect(
           resolveEffectiveToolInventoryRuntimeModelContextAsync({
             ...fixture.inventoryParams,

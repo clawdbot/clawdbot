@@ -1,5 +1,3 @@
-import { webKitHostWindow } from "./native-webkit-bridge.ts";
-
 export type NativeGateway = {
   id: string;
   name: string;
@@ -10,8 +8,14 @@ export type NativeGateway = {
 };
 
 export type NativeGatewaysSnapshot = { gateways: NativeGateway[]; currentId: string };
+type NativeGatewaysMessage =
+  | { type: "select" | "open-window" | "set-primary"; id: string }
+  | { type: "open-settings" };
 type NativeGatewaysWindow = Window & {
   __OPENCLAW_NATIVE_GATEWAYS__?: unknown;
+  webkit?: {
+    messageHandlers?: { openclawGateways?: { postMessage(message: NativeGatewaysMessage): void } };
+  };
 };
 
 const NATIVE_GATEWAYS_CHANGED_EVENT = "openclaw:native-gateways-changed";
@@ -41,7 +45,7 @@ function createNativeGatewaysCapability(): NativeGatewaysCapability | null {
     return null;
   }
   const nativeWindow = window as NativeGatewaysWindow;
-  const handler = webKitHostWindow()?.webkit?.messageHandlers?.openclawGateways;
+  const handler = nativeWindow.webkit?.messageHandlers?.openclawGateways;
   if (!handler?.postMessage) {
     return null;
   }

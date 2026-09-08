@@ -542,16 +542,18 @@ export function toSanitizedMarkdownHtml(
   options: MarkdownRenderOptions = {},
 ): string {
   const renderOptions = normalizeMarkdownRenderOptions(options);
-  const renderInput = normalizeMarkdownLineBreaks(
+  const rawInput = normalizeMarkdownLineBreaks(
     stripUnsupportedCitationControlMarkers(markdownLocal),
   );
-  if (!renderInput.trim()) {
+  const input = rawInput.trim();
+  if (!input) {
     return "";
   }
-  if (renderInput.length > MARKDOWN_CACHE_MAX_CHARS) {
+  const renderInput = isMarkdownBlockArtText(rawInput) ? rawInput : input;
+  if (input.length > MARKDOWN_CACHE_MAX_CHARS) {
     return renderSanitizedMarkdown(renderInput, renderOptions);
   }
-  const cacheKey = `${i18n.getLocale()}\0${renderOptions.assistantTranscriptRoleHeaders}\0${renderOptions.codeBlockChrome}\0${renderOptions.codeBlockInteraction}\0${renderOptions.fileLinks}\0${JSON.stringify(renderOptions.githubRepo ? [renderOptions.githubRepo.owner, renderOptions.githubRepo.repo] : null)}\0${renderOptions.interactiveImages}\0${renderOptions.linkFavicons}\0${renderOptions.progressBars}\0${renderOptions.mode}\0${renderOptions.remoteImages}\0${renderOptions.sessionLinks}\0${renderOptions.tableInteractions}\0${renderInput}`;
+  const cacheKey = `${i18n.getLocale()}\0${renderOptions.assistantTranscriptRoleHeaders}\0${renderOptions.codeBlockChrome}\0${renderOptions.codeBlockInteraction}\0${renderOptions.fileLinks}\0${renderOptions.interactiveImages}\0${renderOptions.linkFavicons}\0${renderOptions.progressBars}\0${renderOptions.mode}\0${renderOptions.remoteImages}\0${renderOptions.sessionLinks}\0${renderOptions.tableInteractions}\0${renderInput}`;
   const cached = getCachedMarkdown(cacheKey);
   if (cached !== null) {
     return cached;
@@ -583,10 +585,11 @@ export function toStreamingMarkdownParts(
     return ["", renderSanitizedMarkdown(rawInput, renderOptions)];
   }
 
-  if (!rawInput.trim()) {
+  const trimmedInput = rawInput.trim();
+  if (!trimmedInput) {
     return ["", ""];
   }
-  const truncated = truncateText(rawInput, MARKDOWN_CHAR_LIMIT);
+  const truncated = truncateText(trimmedInput, MARKDOWN_CHAR_LIMIT);
   const input = appendMarkdownTruncationNotice(truncated);
 
   const { boundary, tailRepairStart } = splitStableStreamingMarkdown(

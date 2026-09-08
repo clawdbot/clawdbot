@@ -5,6 +5,7 @@ import {
   type StreamFn,
   type Usage,
 } from "@openclaw/llm-core";
+// Agent Core module implements compaction behavior.
 import {
   CHARS_PER_TOKEN_ESTIMATE,
   estimateStringChars,

@@ -1,7 +1,6 @@
 /** Integration coverage for breaker-safe startup SecretRef activation. */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "../secrets/runtime-telegram.test-support.ts";
-import { createInfoWarnErrorLogger } from "../../test/helpers/mock-logger.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.js";
 import {
   asConfig,
@@ -104,7 +103,11 @@ describe("gateway breaker SecretRef integration", () => {
               loadAuthStore: () => loadAuthStoreWithProfiles({}),
             });
           const activateRuntimeSecrets = createRuntimeSecretsActivator({
-            logSecrets: createInfoWarnErrorLogger(),
+            logSecrets: {
+              info: vi.fn(),
+              warn: vi.fn(),
+              error: vi.fn(),
+            },
             emitStateEvent: vi.fn(),
             prepareRuntimeSecretsSnapshot,
             activateRuntimeSecretsSnapshot: activateSecretsRuntimeSnapshot,

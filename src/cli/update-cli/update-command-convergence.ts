@@ -11,7 +11,10 @@ import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.j
 import { defaultRuntime } from "../../runtime.js";
 import { VERSION } from "../../version.js";
 import { readPackageVersion, type UpdateCommandOptions } from "./shared.js";
-import { preparePostCorePluginConfig } from "./update-command-config.js";
+import {
+  persistRequestedUpdateChannel,
+  restoreDroppedPreUpdateChannels,
+} from "./update-command-config.js";
 import { completePostCorePluginUpdate } from "./update-command-fresh-doctor.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-managed-context.js";
 import { updatePluginsAfterCoreUpdate } from "./update-command-plugins.js";
@@ -132,17 +135,26 @@ export async function convergeUpdatePlugins(params: {
 
       if (!pluginsUpdatedInFreshProcess) {
         postCorePluginUpdate = await withPluginLifecycleLease({}, async () => {
-          const preparedConfig = await preparePostCorePluginConfig({
-            requestedChannel: params.requestedChannel,
-            preUpdateConfig,
+          postUpdateConfigSnapshot = await readConfigFileSnapshot({
+            skipPluginValidation: true,
             suppressFutureVersionWarning: shouldResumePostCoreInFreshProcess,
           });
-          postUpdateConfigSnapshot = preparedConfig.configSnapshot;
+          postUpdateConfigSnapshot = await persistRequestedUpdateChannel({
+            configSnapshot: postUpdateConfigSnapshot,
+            requestedChannel: params.requestedChannel,
+          });
+          const restoredConfig = restoreDroppedPreUpdateChannels(
+            postUpdateConfigSnapshot,
+            preUpdateConfig,
+          );
+          postUpdateConfigSnapshot = restoredConfig.snapshot;
           const pluginInstallRecords = await loadInstalledPluginIndexInstallRecords();
           return await updatePluginsAfterCoreUpdate({
             root: postUpdateRoot,
             channel: params.channel,
-            ...preparedConfig,
+            configSnapshot: postUpdateConfigSnapshot,
+            configChanged: restoredConfig.changed,
+            restoredAuthoredChannels: restoredConfig.authoredChannels,
             json: params.opts.json,
             acceptCapabilities: params.opts.acceptCapabilities,
             timeoutMs: params.updateStepTimeoutMs,

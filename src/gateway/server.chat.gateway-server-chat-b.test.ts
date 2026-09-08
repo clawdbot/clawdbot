@@ -215,7 +215,6 @@ function createGatewayPluginMetadataSnapshot(config: OpenClawConfig): PluginMeta
     diagnostics: [],
     byPluginId: new Map(),
     normalizePluginId: (pluginId) => pluginId,
-    declaredProviderOwners: new Map(),
     owners: {
       channels: new Map(),
       channelConfigs: new Map(),

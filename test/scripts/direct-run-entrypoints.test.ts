@@ -52,6 +52,18 @@ const EXECUTABLE_ENTRYPOINTS = [
     status: 0,
   },
   {
+    args: ["--clawhub-release-security-mode", "2026.6.35"],
+    output: "absent",
+    script: "scripts/e2e/lib/package-compat.mjs",
+    status: 0,
+  },
+  {
+    args: ["--clawhub-release-security-mode", "2026.8.1"],
+    output: "required",
+    script: "scripts/e2e/lib/package-compat.mjs",
+    status: 0,
+  },
+  {
     args: [],
     output: "docker_e2e_count=",
     script: "scripts/plan-release-workflow-matrix.mjs",
@@ -431,7 +443,7 @@ process.exitCode = child.status ?? 1;
   });
 
   it.each(["hydrated", "primary"] as const)(
-    "requires explicit hydration to bootstrap from %s without local modules",
+    "resolves implementation dependencies from the %s toolchain without local modules",
     async (source) => {
       const result = await runShimFixture(TSX_SHIM_WRAPPERS[0], ({ checkoutRoot, fixtureRoot }) => {
         rmSync(path.join(checkoutRoot, "node_modules"), { recursive: true });
@@ -449,16 +461,7 @@ process.exitCode = child.status ?? 1;
         expect(initialized.status, initialized.stderr).toBe(0);
         return {};
       });
-      if (source === "hydrated") {
-        expectShimLoader(result, source);
-      } else {
-        expect(result.error, formatShimResult(result)).toBeUndefined();
-        expect(result.status, formatShimResult(result)).toBe(1);
-        expect(result.stdout).toBe("");
-        expect(result.stderr).toContain(
-          "Run pnpm install --frozen-lockfile in an independently owned checkout.",
-        );
-      }
+      expectShimLoader(result, source);
     },
   );
 

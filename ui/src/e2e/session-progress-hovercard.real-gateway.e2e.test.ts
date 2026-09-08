@@ -134,9 +134,7 @@ suite.define(() => {
           await page.goto(url.toString());
           const confirmation = page.locator("openclaw-gateway-url-confirmation");
           await confirmation.waitFor();
-          await confirmation
-            .getByRole("button", { name: `Switch to 127.0.0.1:${port}`, exact: true })
-            .click();
+          await confirmation.getByRole("button", { name: "Confirm", exact: true }).click();
 
           const row = page.locator(
             '[data-session-section="catalog:codex"] .sidebar-recent-session',

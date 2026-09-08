@@ -61,7 +61,6 @@ function trashFailure(pathname: string, error: unknown, runtime: RuntimeEnv): Mo
 export async function moveToTrashResult(
   pathname: string,
   runtime: RuntimeEnv,
-  assertCurrent?: () => void,
 ): Promise<MoveToTrashResult> {
   if (!pathname) {
     return { failed: { path: pathname, reason: "path is empty" } };
@@ -76,10 +75,9 @@ export async function moveToTrashResult(
   try {
     const targetPath = path.resolve(pathname);
     const sourcePath = await resolveMoveToTrashSourcePath(targetPath);
-    const allowedRoots = await resolveMoveToTrashAllowedRoots(sourcePath);
-    // Preparation can outlive its owner; revalidate immediately before Trash dispatch.
-    assertCurrent?.();
-    await movePathToTrash(sourcePath, { allowedRoots });
+    await movePathToTrash(sourcePath, {
+      allowedRoots: await resolveMoveToTrashAllowedRoots(sourcePath),
+    });
     runtime.log(`Moved to Trash: ${shortenHomePath(pathname)}`);
     return { removed: { path: pathname, method: "trash" } };
   } catch (error) {
@@ -88,12 +86,8 @@ export async function moveToTrashResult(
 }
 
 /** Moves a path to Trash when it exists, logging a manual-delete fallback on failure. */
-export async function moveToTrash(
-  pathname: string,
-  runtime: RuntimeEnv,
-  assertCurrent?: () => void,
-): Promise<boolean> {
-  return "removed" in (await moveToTrashResult(pathname, runtime, assertCurrent));
+export async function moveToTrash(pathname: string, runtime: RuntimeEnv): Promise<boolean> {
+  return "removed" in (await moveToTrashResult(pathname, runtime));
 }
 
 async function resolveMoveToTrashSourcePath(targetPath: string): Promise<string> {

@@ -141,18 +141,21 @@ describe("widget export", () => {
     expect(fetchDocument).not.toHaveBeenCalled();
   });
 
-  it.each([
-    ["  Quarterly / status: Q3?  ", "Quarterly-status-Q3.png"],
-    ["... <> ", "widget.png"],
-    [`${"a".repeat(119)}📊`, `${"a".repeat(119)}.png`],
-  ])("sanitizes PNG download filename %s", async (title, filename) => {
+  it("sanitizes PNG download filenames and falls back to widget", async () => {
     const frame = createWidgetFrame();
     const download = vi.fn();
-    await exportWidget("download", frame, title, {
+    await exportWidget("download", frame, "  Quarterly / status: Q3?  ", {
       requestSnapshot: () => Promise.resolve(PNG_DATA_URL),
       download,
     });
-    expect(download.mock.calls).toEqual([[PNG_DATA_URL, filename]]);
+    await exportWidget("download", frame, "... <> ", {
+      requestSnapshot: () => Promise.resolve(PNG_DATA_URL),
+      download,
+    });
+    expect(download.mock.calls).toEqual([
+      [PNG_DATA_URL, "Quarterly-status-Q3.png"],
+      [PNG_DATA_URL, "widget.png"],
+    ]);
   });
 
   it("rejects non-PNG and oversized snapshot replies", async () => {

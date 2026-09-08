@@ -2,7 +2,6 @@
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayClientRequestError } from "../../packages/gateway-client/src/request-error.js";
-import type { TransformConfigFileParams } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { GatewayTransportError } from "../gateway/transport-error.js";
 import { resolveInternalHookSelection } from "../hooks/configured.js";
@@ -42,16 +41,8 @@ vi.mock("../agents/agent-scope.js", () => ({
 
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: mocks.getRuntimeConfig,
-  transformConfigFile: async ({ transform }: TransformConfigFileParams<HookStatusEntry>) => {
-    const snapshot = await mocks.readConfigFileSnapshot();
-    const transformed = await transform(
-      snapshot.sourceConfig,
-      { snapshot, previousHash: snapshot.hash, attempt: 0 },
-      {},
-    );
-    await mocks.replaceConfigFile({ nextConfig: transformed.nextConfig, baseHash: snapshot.hash });
-    return transformed;
-  },
+  readConfigFileSnapshot: mocks.readConfigFileSnapshot,
+  replaceConfigFile: mocks.replaceConfigFile,
 }));
 
 vi.mock("../gateway/call.js", () => ({

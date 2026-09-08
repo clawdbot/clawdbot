@@ -26,20 +26,6 @@ class SessionWorkerPlacementMutationError extends Error {
   }
 }
 
-export class SessionWorkerPlacementStopError extends Error {
-  constructor(
-    readonly state: PlacementState,
-    action: "archive" | "delete" | "recover",
-    key: string,
-  ) {
-    const recovery =
-      state === "failed"
-        ? "Worker cleanup is still pending. Use Stop cloud worker to retry cleanup; if stopping fails, resolve the provider error before trying again."
-        : "Wait for the cloud worker transition to finish before trying again.";
-    super(`Session ${key} cannot ${action} while cloud worker placement is ${state}. ${recovery}`);
-  }
-}
-
 type SessionWorkerPlacementMutationGuard =
   | { status: "allowed" }
   | { status: "blocked"; error: SessionWorkerPlacementMutationError }
@@ -259,7 +245,9 @@ export function prepareSessionWorkerPlacementStop(params: {
     !isWorkerPlacementSafeForMutation(context, expected) &&
     expected.state !== "active"
   ) {
-    throw new SessionWorkerPlacementStopError(expected.state, params.action, sessionKey);
+    throw new Error(
+      `Session ${sessionKey} cannot ${params.action} while cloud worker placement is ${expected.state}.`,
+    );
   }
   const beforeDrain = () => {
     params.authorize?.();

@@ -3,26 +3,17 @@ import { vi } from "vitest";
 import type { MockFn } from "../test-utils/vitest-mock-fn.js";
 
 const readConfigFileSnapshotMock = vi.fn() as unknown as MockFn;
-const readConfigFileSnapshotForWriteMock = vi.fn(async () => {
-  const snapshot = await readConfigFileSnapshotMock();
-  return {
-    snapshot: { ...snapshot, sourceConfig: snapshot.sourceConfig ?? snapshot.config },
-    writeOptions: {},
-  };
-}) as unknown as MockFn;
 const writeConfigFileMock = vi.fn().mockResolvedValue(undefined) as unknown as MockFn;
-const replaceConfigFileMock = vi.fn(async (params: { sourceConfig: unknown }) => {
-  await writeConfigFileMock(params.sourceConfig);
+const replaceConfigFileMock = vi.fn(async (params: { nextConfig: unknown }) => {
+  await writeConfigFileMock(params.nextConfig);
 }) as unknown as MockFn;
 
 export const configMocks: {
   readConfigFileSnapshot: MockFn;
-  readConfigFileSnapshotForWrite: MockFn;
   writeConfigFile: MockFn;
   replaceConfigFile: MockFn;
 } = {
   readConfigFileSnapshot: readConfigFileSnapshotMock,
-  readConfigFileSnapshotForWrite: readConfigFileSnapshotForWriteMock,
   writeConfigFile: writeConfigFileMock,
   replaceConfigFile: replaceConfigFileMock,
 };
@@ -49,7 +40,6 @@ export const secretMocks = {
 
 vi.mock("../config/config.js", () => ({
   readConfigFileSnapshot: configMocks.readConfigFileSnapshot,
-  readConfigFileSnapshotForWrite: configMocks.readConfigFileSnapshotForWrite,
   writeConfigFile: configMocks.writeConfigFile,
   replaceConfigFile: configMocks.replaceConfigFile,
 }));

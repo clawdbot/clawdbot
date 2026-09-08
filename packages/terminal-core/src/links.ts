@@ -1,3 +1,4 @@
+// Terminal Core module implements links behavior.
 import { formatTerminalLink } from "./terminal-link.js";
 
 function resolveDocsRoot(): string {

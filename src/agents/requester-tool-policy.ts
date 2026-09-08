@@ -27,7 +27,10 @@ import {
 
 const MAX_DELEGATION_LINEAGE_DEPTH = 32;
 
-type RequesterToolPolicySource = "current-request" | "persisted-child" | "completion-handoff";
+export type RequesterToolPolicySource =
+  | "current-request"
+  | "persisted-child"
+  | "completion-handoff";
 
 type RequesterToolPolicyResolution = {
   delegated: boolean;

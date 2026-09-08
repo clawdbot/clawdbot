@@ -1,3 +1,4 @@
+// Markdown Core module implements frontmatter behavior.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { isAlias, isMap, isNode, isScalar, parseDocument } from "yaml";
 

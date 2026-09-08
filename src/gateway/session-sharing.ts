@@ -147,7 +147,6 @@ export function resolveSessionMutationAuthorization(params: {
   let lookupCaches: ReturnType<typeof createLookupCaches> | undefined;
   const resolveAuthorizedTarget = (
     targetRef: SessionMutationTarget,
-    targetCount: number,
   ): { target: SessionSharingTarget | null } | { error: ErrorShape } => {
     try {
       return {
@@ -156,7 +155,6 @@ export function resolveSessionMutationAuthorization(params: {
           sessionKey: targetRef.sessionKey,
           agentId: targetRef.agentId,
           ...(lookupCaches ??= createLookupCaches()),
-          exactRead: targetCount === 1,
         }),
       };
     } catch (error) {
@@ -206,7 +204,7 @@ export function resolveSessionMutationAuthorization(params: {
     : (talkTargets?.filter((target) => isIncognitoSessionKey(target.sessionKey)) ??
       resolveDirectIncognitoTargets(params.method, params.requestParams));
   for (const targetRef of protectedTargets) {
-    const resolved = resolveAuthorizedTarget(targetRef, protectedTargets.length);
+    const resolved = resolveAuthorizedTarget(targetRef);
     if ("error" in resolved) {
       return { error: resolved.error };
     }
@@ -260,7 +258,7 @@ export function resolveSessionMutationAuthorization(params: {
   }
   const authorizedTargets: AuthorizedSessionMutationTarget[] = [];
   for (const targetRef of targetRefs) {
-    const resolved = resolveAuthorizedTarget(targetRef, targetRefs.length);
+    const resolved = resolveAuthorizedTarget(targetRef);
     if ("error" in resolved) {
       return { error: resolved.error };
     }
@@ -364,7 +362,6 @@ export function resolveSessionMutationAuthorization(params: {
           sessionKey: targetRef.sessionKey,
           agentId: targetRef.agentId,
           ...currentLookupCaches,
-          exactRead: !currentLookupCaches || authorizedTargets.length === 1,
         });
         // The guarded ensure may mint this row/id. Its result permits only that
         // materialization, never a replacement of an already admitted session.
@@ -508,7 +505,6 @@ export function canReceiveSessionEvent(params: {
   const lookup: Omit<Parameters<typeof resolveSessionSharingTarget>[0], "sessionKey"> = {
     cfg,
     agentId: params.agentId,
-    exactRead: sessionKeys.length === 1,
     storeCache: new Map(),
     targetDiscoveryCache: new Map(),
   };

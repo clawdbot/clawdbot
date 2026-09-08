@@ -122,7 +122,7 @@ export interface SealOptions {
 }
 
 export interface OpenOptions {
-  envelope: Omit<Envelope, "v"> & { v: number };
+  envelope: Envelope;
   self: string;
   recipientEncryptionSecretKey: string;
   senderSigningPublicKey?: string;
@@ -318,7 +318,7 @@ export function validateMessageBody(value: unknown): asserts value is MessageBod
   }
 }
 
-function validateEnvelope(value: unknown): OpenOptions["envelope"] {
+function validateEnvelope(value: unknown): Envelope {
   if (!isExactObject(value, ["v", "id", "from", "to", "ts", "epk", "n", "ct", "sig"])) {
     throw new MalformedError();
   }
@@ -363,7 +363,7 @@ function validateEnvelope(value: unknown): OpenOptions["envelope"] {
   if (canonicalBytes(value).length > MAX_ENVELOPE_BYTES) {
     throw new TooLargeError();
   }
-  return value as OpenOptions["envelope"];
+  return value as unknown as Envelope;
 }
 
 function isExactObject(value: unknown, keys: string[]): value is Record<string, unknown> {

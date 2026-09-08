@@ -431,20 +431,17 @@ export async function authorizeGatewayConnectDevice(
           role === "node" &&
           scopes.length === 0 &&
           !existingPairedDevice;
-        const retryWhileControlUiApprovalPending =
-          state.isControlUi && role === "operator" && Boolean(recoveryRequestId);
-        // Retry detached node approvals and pending browser approvals without
-        // changing which connects require approval or what access they receive.
-        const retryWhileApprovalPending =
-          retryAfterBootstrapPairingApproval ||
-          sshVerifyStarted ||
-          retryWhileControlUiApprovalPending;
+        // Keep the node retrying while a detached approval can still land
+        // (bootstrap redemption or a running ssh-verify probe); default
+        // pairing-required behavior pauses the client reconnect loop.
+        const retryWhileDetachedApprovalPending =
+          retryAfterBootstrapPairingApproval || sshVerifyStarted;
         failPairingHandshake({
           message: buildPairingConnectErrorMessage(reason),
           details: buildPairingConnectErrorDetails({
             reason,
             requestId: recoveryRequestId,
-            ...(retryWhileApprovalPending
+            ...(retryWhileDetachedApprovalPending
               ? {
                   recommendedNextStep: "wait_then_retry",
                   retryable: true,

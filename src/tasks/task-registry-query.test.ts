@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { createInMemoryTaskRegistryStore } from "../test-utils/task-registry-store.js";
 import {
   getTaskById,
   listTaskRecordPage,
@@ -11,15 +10,15 @@ import { configureTaskRegistryRuntime } from "./task-registry.store.js";
 import type { TaskRecord } from "./task-registry.types.js";
 
 afterEach(() => {
-  resetTaskRegistryForTests();
+  resetTaskRegistryForTests({ persist: false });
 });
 
 function configureTaskSnapshot(tasks: Iterable<TaskRecord>): void {
   const snapshotTasks = new Map([...tasks].map((task) => [task.taskId, task]));
   configureTaskRegistryRuntime({
     store: {
-      ...createInMemoryTaskRegistryStore(),
       loadSnapshot: () => ({ tasks: snapshotTasks, deliveryStates: new Map() }),
+      saveSnapshot: () => {},
     },
   });
 }

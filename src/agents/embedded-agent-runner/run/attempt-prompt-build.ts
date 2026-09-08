@@ -401,6 +401,7 @@ export function prepareEmbeddedAttemptPromptContext(input: {
   isRawModelRun: boolean;
   messages: AgentMessage[];
   preparedUserTurnMessage?: AgentMessage;
+  heartbeatOutcomeContext?: string;
   prompt: PromptAssemblyContext;
   replaceSessionMessages: (messages: AgentMessage[]) => void;
   sessionAgentId: string;
@@ -501,6 +502,9 @@ export function prepareEmbeddedAttemptPromptContext(input: {
         ? [{ kind: "conversation-data" as const, text: attempt.currentInboundContext.text }]
         : [])),
     ...eventFragments,
+    ...(input.heartbeatOutcomeContext
+      ? [{ kind: "heartbeat-outcome" as const, text: input.heartbeatOutcomeContext }]
+      : []),
   ];
   const currentUserTimestampOverride =
     !input.isRawModelRun && typeof preparedUserTurnTimestamp === "number"

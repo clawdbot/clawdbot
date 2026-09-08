@@ -30,11 +30,6 @@ export function isSecretEgressProxyActive(): boolean {
   return getSecretEgressProxyRegistry().activeProxy !== undefined;
 }
 
-/** Reads current certificate health without reloading trust files or starting a proxy. */
-export function getSecretEgressCertificateStatus() {
-  return getSecretEgressProxyRegistry().activeProxy?.getCertificateStatus();
-}
-
 /** Returns the trusted subprocess environment for one exact admitted agent run. */
 export function registerSecretEgressProxyRun(
   run: Readonly<{ instanceId: string; runId: string }>,

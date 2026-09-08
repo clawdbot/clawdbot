@@ -2,7 +2,6 @@ import type {
   SessionCatalogSession,
   SessionCreatedActor,
 } from "../../../../packages/gateway-protocol/src/index.ts";
-import { presenceViewerLabel } from "../presence-users.ts";
 
 export type CatalogProjectGrouping = "project" | "person" | "none";
 
@@ -132,13 +131,7 @@ export function groupCatalogSessionsByPerson(sessions: readonly SessionCatalogSe
     const key = `person:${actorGroupId}`;
     let group = groupsById.get(key);
     if (!group) {
-      const label =
-        actor.identity.type === "profile"
-          ? presenceViewerLabel({
-              id: actor.identity.id,
-              name: actor.label?.trim() || actor.identity.id,
-            })
-          : actor.label?.trim() || actor.identity.id;
+      const label = actor.label?.trim() || actor.identity.id;
       group = {
         kind: "person",
         key,

@@ -87,7 +87,7 @@ async function runSetupWizardOnce(
   // Ordinary onboard reruns must preserve existing agents.list / bindings. Only
   // explicit reset or import flows are allowed to shrink the config — see issue
   // openclaw#84692.
-  const commitSetupConfigFile = async (
+  const writeSetupConfigFile = async (
     config: OpenClawConfig,
     optsLocal: { allowConfigSizeDrop?: boolean } = {},
   ) => {
@@ -95,7 +95,7 @@ async function runSetupWizardOnce(
       ...optsLocal,
       mergeBase: setupConfigMergeBase,
     });
-    setupConfigMergeBase = structuredClone(committed.nextConfig);
+    setupConfigMergeBase = structuredClone(committed);
     return committed;
   };
 
@@ -248,13 +248,11 @@ async function runSetupWizardOnce(
           if (!isDeepStrictEqual(latestConfig, expectedConfig)) {
             throw new ConfigMutationConflictError("config changed during migration promotion");
           }
-          return (
-            await writeWizardConfigFile(cfg, {
-              allowConfigSizeDrop: true,
-              baseSnapshot: latest,
-              ...(latest.hash !== undefined ? { baseHash: latest.hash } : {}),
-            })
-          ).nextConfig;
+          return await writeWizardConfigFile(cfg, {
+            allowConfigSizeDrop: true,
+            baseSnapshot: latest,
+            ...(latest.hash !== undefined ? { baseHash: latest.hash } : {}),
+          });
         },
         allowProviderBack: flowFromPrompt,
         continueOnboarding: true,
@@ -469,7 +467,7 @@ async function runSetupWizardOnce(
     nextConfig = opts.skipBootstrap ? applySkipBootstrapConfig(nextConfig) : nextConfig;
     nextConfig = onboardHelpers.applyWizardMetadata(nextConfig, { command: "onboard", mode });
     prompter.disableBackNavigation?.();
-    await commitSetupConfigFile(nextConfig, {
+    await writeSetupConfigFile(nextConfig, {
       allowConfigSizeDrop: false,
     });
     logConfigUpdated(runtime);
@@ -552,12 +550,10 @@ async function runSetupWizardOnce(
     config: gateway.nextConfig,
     workspace: workspaceDir,
     preserveCandidateRoster: usedImportFlow && hasAuthoredRoster,
-    // Pending setup choices must remain changes relative to the saved snapshot.
-    baseConfig: setupConfigMergeBase,
+    baseConfig,
     ...(firstAgent ? { firstAgent } : {}),
   });
   nextConfig = onboardingAgent.config;
-  setupConfigMergeBase = structuredClone(onboardingAgent.configBase);
   const migrationWarnings = onboardingAgent.sessionMigrationWarnings;
   await firstAgentOnboarding.showSessionMigrationWarnings(prompter, migrationWarnings);
 
@@ -587,7 +583,7 @@ async function runSetupWizardOnce(
       runtime,
       workspaceDir: verificationTarget.workspaceDir,
       writeConfig: async (config) =>
-        (await commitSetupConfigFile(config, { allowConfigSizeDrop: false })).nextConfig,
+        await writeSetupConfigFile(config, { allowConfigSizeDrop: false }),
       required: usedImportFlow && keepExistingModelConfig,
     });
     nextConfig = verification.config;
@@ -612,10 +608,9 @@ async function runSetupWizardOnce(
 
   if (!setupConfigPersisted) {
     // Persist gateway/roster decisions only after the interactive verification boundary.
-    const committed = await commitSetupConfigFile(nextConfig, {
+    nextConfig = await writeSetupConfigFile(nextConfig, {
       allowConfigSizeDrop: false,
     });
-    nextConfig = committed.nextConfig;
   }
 
   prompter.disableBackNavigation?.();
@@ -623,9 +618,9 @@ async function runSetupWizardOnce(
     await prompter.note(t("wizard.setup.skipChannels"), t("wizard.setup.channelsTitle"));
   } else {
     const { listChannelPlugins } = await import("../channels/plugins/index.js");
-    const { createChannelSetupHooks, setupChannels } =
+    const { createChannelSetupTransaction, setupChannels } =
       await import("../commands/onboard-channels.js");
-    const channelSetup = createChannelSetupHooks({ runtime });
+    const channelSetup = createChannelSetupTransaction({ runtime });
     const quickstartAllowFromChannels =
       flow === "quickstart"
         ? listChannelPlugins()
@@ -643,16 +638,16 @@ async function runSetupWizardOnce(
       secretInputMode: opts.secretInputMode,
       onPostWriteHook: (hook) => channelSetup.onPostWriteHook(hook),
     });
-    const committed = await commitSetupConfigFile(nextConfig, { allowConfigSizeDrop: false });
-    await channelSetup.runPostWriteHooks(committed.path);
-    nextConfig = committed.nextConfig;
+    nextConfig = await channelSetup.commit(
+      nextConfig,
+      async (config) => await writeSetupConfigFile(config, { allowConfigSizeDrop: false }),
+    );
   }
 
   if (opts.skipChannels) {
-    const committed = await commitSetupConfigFile(nextConfig, {
+    nextConfig = await writeSetupConfigFile(nextConfig, {
       allowConfigSizeDrop: false,
     });
-    nextConfig = committed.nextConfig;
   }
   let onboardingTarget = resolveOnboardingSetupTarget(nextConfig);
   const { logConfigUpdated } = await loadConfigLoggingModule();
@@ -721,10 +716,9 @@ async function runSetupWizardOnce(
   }
 
   nextConfig = onboardHelpers.applyWizardMetadata(nextConfig, { command: "onboard", mode });
-  const committed = await commitSetupConfigFile(nextConfig, {
+  nextConfig = await writeSetupConfigFile(nextConfig, {
     allowConfigSizeDrop: false,
   });
-  nextConfig = committed.nextConfig;
   onboardingTarget = resolveOnboardingSetupTarget(nextConfig);
   commitAppRecommendationResult?.();
 

@@ -49,7 +49,6 @@ import {
   applyAnthropicConfigDefaults,
   normalizeAnthropicProviderConfigForProvider,
 } from "./config-defaults.js";
-import { resolveFastModeSupport } from "./fast-mode-policy.js";
 import { acceptsAnthropicLiveModelContract } from "./live-model-contract-gate.js";
 import { anthropicMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
@@ -874,7 +873,6 @@ export function buildAnthropicProvider(): ProviderPlugin {
           });
     },
     wrapStreamFn: wrapAnthropicProviderStream,
-    resolveFastModeSupport,
     resolveUsageAuth: resolveAnthropicUsageAuth,
     fetchUsageSnapshot: fetchAnthropicUsage,
     isCacheTtlEligible: () => true,

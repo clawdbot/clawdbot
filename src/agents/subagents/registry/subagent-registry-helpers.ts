@@ -16,10 +16,6 @@ import { patchSessionEntryCore } from "../../../config/sessions/session-accessor
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { computeBackoff } from "../../../infra/backoff.js";
 import { defaultRuntime } from "../../../runtime.js";
-import {
-  recordGatewaySessionRunFailure,
-  resolveSessionRunError,
-} from "../../../sessions/session-run-error.js";
 import { truncateUtf8Prefix } from "../../../utils/utf8-truncate.js";
 import {
   getDeliveryAttemptCount,
@@ -131,10 +127,7 @@ export async function persistSubagentSessionTiming(
       : getSubagentSessionRuntimeMs(entry);
   const status = resolveSubagentSessionStatus(entry);
 
-  const lastRunError = status
-    ? resolveSessionRunError(entry.execution.outcome ?? {}, status)
-    : undefined;
-  const persisted = await patchSessionEntryCore(
+  await patchSessionEntryCore(
     { storePath, sessionKey: childSessionKey },
     (sessionEntry) => {
       // Recheck under the session-store write lock. A completion may have
@@ -183,11 +176,6 @@ export async function persistSubagentSessionTiming(
       } else {
         delete next.status;
       }
-      if (lastRunError) {
-        next.lastRunError = lastRunError;
-      } else if (status === "done") {
-        delete next.lastRunError;
-      }
       if (status && status !== "killed") {
         delete next.abortedLastRun;
       }
@@ -198,20 +186,6 @@ export async function persistSubagentSessionTiming(
       replaceEntry: true,
     },
   );
-  if (persisted && lastRunError) {
-    await recordGatewaySessionRunFailure({
-      target: {
-        agentId,
-        storePath,
-        sessionKey: childSessionKey,
-        sessionId: persisted.sessionId,
-        expectedLifecycleRevision: persisted.lifecycleRevision,
-      },
-      runId: entry.runId,
-      error: entry.execution.outcome?.error,
-      assertCommitAllowed: options?.assertCommitAllowed,
-    });
-  }
 }
 
 // Attachment cleanup must stay within the recorded root even if paths were

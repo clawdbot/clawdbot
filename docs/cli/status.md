@@ -42,16 +42,6 @@ security audit, plugin compatibility, and memory-vector probes are left to
 `openclaw status --all`, `openclaw status --deep`, `openclaw security audit`,
 and `openclaw memory status --deep`.
 
-## Skills diagnosis
-
-`status --all` reports eligible skills and skills with missing prerequisites for
-the workspace shown in the Skills row. Missing prerequisites use the same category as
-`openclaw skills check`: intentionally disabled skills and skills blocked by the
-bundled allowlist are excluded; agent allowlist exclusions remain independent.
-Unmet OS requirements are included in this count, although Doctor does not disable
-skills for OS incompatibility.
-Use `openclaw skills check --agent <id>` to inspect the missing requirements.
-
 ## Session and model resolution
 
 - Session status output separates `Execution:` from `Runtime:`. `Execution`
@@ -101,8 +91,6 @@ Use `openclaw skills check --agent <id>` to inspect the missing requirements.
 
 - Overview includes Gateway + node host service install/runtime status when
   available, plus compact Gateway process uptime and host system uptime.
-- On Linux, a readable installed node service remains listed when the service
-  manager is unavailable; its runtime status stays unknown.
 - Overview includes update channel + git SHA (for source checkouts).
 - Update info surfaces in the Overview; if an update is available, status
   prints a hint to run `openclaw update` (see [Updating](/install/updating)).

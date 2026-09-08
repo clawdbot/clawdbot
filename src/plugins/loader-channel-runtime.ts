@@ -15,7 +15,7 @@ import { recordPluginError } from "./loader-records.js";
 import type { PluginRegistrationPlan } from "./loader-registration-plan.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import { withProfile } from "./plugin-load-profile.js";
-import { resolvePluginRuntimeExecutionArtifact } from "./plugin-runtime-artifact-selection.js";
+import { resolveCanonicalDistRuntimeSource } from "./plugin-runtime-artifact-resolution.js";
 import type { createPluginRegistry, PluginRecord } from "./registry.js";
 import type { OpenClawPluginModule, PluginLogger } from "./types.js";
 
@@ -88,12 +88,13 @@ export function loadSetupRuntimeChannelCandidate(params: {
   });
   let mergedSetupRegistration = setupRegistration;
   let runtimeSetterApplied = false;
-  const runtimeEntry =
-    registrationPlan.loadSetupRuntimeEntry && setupRegistration.usesBundledSetupContract
-      ? resolvePluginRuntimeExecutionArtifact(runtimeCandidateEntry)
-      : undefined;
-  if (runtimeEntry && runtimeEntry.source !== params.safeSource) {
-    const { source: runtimeModuleSource, rootDir: runtimeModuleRoot } = runtimeEntry;
+  if (
+    registrationPlan.loadSetupRuntimeEntry &&
+    setupRegistration.usesBundledSetupContract &&
+    resolveCanonicalDistRuntimeSource(runtimeCandidateEntry.source) !== params.safeSource
+  ) {
+    const runtimeModuleSource = resolveCanonicalDistRuntimeSource(runtimeCandidateEntry.source);
+    const runtimeModuleRoot = resolveCanonicalDistRuntimeSource(runtimeCandidateEntry.rootDir);
     const runtimeOpened = openRootFileSync({
       absolutePath: runtimeModuleSource,
       rootPath: runtimeModuleRoot,

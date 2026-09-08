@@ -1,6 +1,6 @@
 import assertStrict from "node:assert/strict";
-import { execFileSync, spawnSync } from "node:child_process";
-import { createHash, randomUUID } from "node:crypto";
+import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 // Assertions for upgrade-survivor E2E scenarios.
 import fs from "node:fs";
 import path from "node:path";
@@ -15,16 +15,8 @@ import {
 import { assertUpgradeVolumeMigrated, seedUpgradeVolume } from "./sqlite-volume.mjs";
 
 const command = process.argv[2];
-// Keep unrelated packaged assertion commands independent of agent-turn helpers.
-const legacyOperator =
-  process.env.OPENCLAW_UPGRADE_SURVIVOR_SCENARIO === "legacy-operator-state" ||
-  command?.includes("legacy-operator")
-    ? await import("./legacy-operator-state.mjs")
-    : undefined;
 const SCENARIOS = new Set([
   "base",
-  "abandoned-update",
-  "legacy-operator-state",
   "mobile-pairing-reconnect",
   "acpx-openclaw-tools-bridge",
   "feishu-channel",
@@ -367,10 +359,6 @@ function seedState() {
   const stateDir = requireEnv("OPENCLAW_STATE_DIR");
   const workspace = requireEnv("OPENCLAW_TEST_WORKSPACE_DIR");
   const scenario = getScenario();
-  if (scenario === "legacy-operator-state") {
-    // The scenario has already authored its state with the baseline's own CLI.
-    return;
-  }
 
   write(
     path.join(workspace, "IDENTITY.md"),
@@ -483,12 +471,6 @@ function assertConfigSurvived() {
   const config = getConfig();
   const coverage = getCoverage();
   const scenario = getScenario();
-  if (scenario === "legacy-operator-state") {
-    legacyOperator.assertLegacyOperatorConfig(
-      process.env.OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE || "survival",
-    );
-    return;
-  }
   if (scenario === "meeting-transcripts-sqlite") {
     // This focused migration fixture proves state import/export across one published
     // baseline; the broad base scenario owns unrelated agent/channel config parity.
@@ -664,10 +646,6 @@ function assertStateSurvived() {
   const workspace = requireEnv("OPENCLAW_TEST_WORKSPACE_DIR");
   const scenario = getScenario();
   const stage = process.env.OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE || "survival";
-  if (scenario === "legacy-operator-state") {
-    legacyOperator.assertLegacyOperatorConfig(stage);
-    return;
-  }
   assert(fs.existsSync(path.join(workspace, "IDENTITY.md")), "workspace identity file missing");
   if (scenario === "watchos-direct-node" || scenario === "mobile-pairing-reconnect") {
     return;
@@ -677,7 +655,7 @@ function assertStateSurvived() {
     "legacy session file missing",
   );
   if (stage !== "baseline") {
-    assertSessionMetadataMigrated(stateDir, stage);
+    assertSessionMetadataMigrated(stateDir);
   }
   if (scenario === "meeting-transcripts-sqlite") {
     assertMeetingTranscriptsMigrated(stateDir, stage);
@@ -966,97 +944,7 @@ function assertMeetingTranscriptExport(stateDir) {
   );
 }
 
-async function assertRestartServingTurn(file) {
-  assert(file, "assert-restart-serving-turn requires an output path");
-  const sessionKey = "agent:main:main";
-  const marker = `OPENCLAW_E2E_SURVIVOR_${randomUUID().replaceAll("-", "").toUpperCase()}`;
-  const token = requireEnv("GATEWAY_AUTH_TOKEN_REF");
-  const deadline = Date.now() + 120_000;
-  const call = (method, params) => {
-    const remainingMs = deadline - Date.now();
-    assert(remainingMs > 0, "managed serving turn exceeded its two-minute budget");
-    const result = spawnSync(
-      "openclaw",
-      [
-        "gateway",
-        "call",
-        method,
-        "--url",
-        "ws://127.0.0.1:18789",
-        "--token",
-        token,
-        "--timeout",
-        String(remainingMs),
-        "--json",
-        "--params",
-        JSON.stringify(params),
-      ],
-      { timeout: remainingMs, maxBuffer: 2 * 1024 * 1024, encoding: "utf8" },
-    );
-    if (result.error || result.status !== 0) {
-      // Keep credential-bearing argv, stderr, and error objects out of failures.
-      throw new Error(
-        `${method} managed serving probe failed (status ${result.status ?? "unknown"})`,
-      );
-    }
-    return JSON.parse(result.stdout);
-  };
-  const accepted = call("chat.send", {
-    sessionKey,
-    message: `Reply with exactly ${marker} and no other text. Do not use tools.`,
-    idempotencyKey: randomUUID(),
-    thinking: "off",
-    deliver: false,
-    timeoutMs: 90_000,
-  });
-  assert(
-    accepted?.status === "started" &&
-      typeof accepted.runId === "string" &&
-      accepted.runId.length > 0,
-    "managed serving turn did not start",
-  );
-  let completion;
-  do {
-    completion = call("agent.wait", { runId: accepted.runId, timeoutMs: 90_000 });
-    assert(completion?.runId === accepted.runId, "managed serving wait changed the run identity");
-    if (completion.status === "pending" || completion.status === "timeout") {
-      await new Promise((resolve) => {
-        setTimeout(resolve, Math.min(500, Math.max(0, deadline - Date.now())));
-      });
-    }
-  } while (completion.status === "pending" || completion.status === "timeout");
-  assert(
-    completion?.runId === accepted.runId &&
-      completion.status === "ok" &&
-      Number.isFinite(completion.endedAt) &&
-      !completion.error,
-    "managed serving turn did not complete successfully",
-  );
-  const history = call("chat.history", { sessionKey, limit: 100 });
-  assert(
-    history?.sessionId === LEGACY_SESSION_MAIN_ID,
-    "serving turn changed the migrated main session",
-  );
-  const reply = history.messages?.find(
-    (message) =>
-      message?.role === "assistant" &&
-      (typeof message.content === "string"
-        ? message.content === marker
-        : Array.isArray(message.content) &&
-          message.content.some((block) => block?.type === "text" && block.text === marker)),
-  );
-  assert(reply, "managed serving reply was not persisted in migrated main history");
-  writeJson(file, {
-    sessionKey,
-    sessionId: history.sessionId,
-    marker,
-    runId: accepted.runId,
-    completion,
-    reply,
-  });
-}
-
-function assertSessionMetadataMigrated(stateDir, stage) {
+function assertSessionMetadataMigrated(stateDir) {
   const legacyStorePath = path.join(stateDir, "sessions", "sessions.json");
   const agentSessionsDir = path.join(stateDir, "agents", "main", "sessions");
   const targetStorePath = path.join(agentSessionsDir, "sessions.json");
@@ -1109,24 +997,10 @@ function assertSessionMetadataMigrated(stateDir, stage) {
       );
     }
   }
-  // Migration preserves the legacy prompt. A completed serving turn rebuilds
-  // that cache; durable session identity and history must survive both stages.
-  if (stage === "post-inference") {
-    const snapshot = main.skillsSnapshot;
-    assert(
-      typeof snapshot?.prompt === "string" &&
-        snapshot.prompt !== "legacy prompt survives as metadata" &&
-        Array.isArray(snapshot.skills) &&
-        Number.isSafeInteger(snapshot.promptFormatVersion) &&
-        snapshot.promptFormatVersion > 0,
-      "serving turn did not persist a valid refreshed skills snapshot",
-    );
-  } else {
-    assert(
-      main.skillsSnapshot?.prompt === "legacy prompt survives as metadata",
-      "legacy session metadata prompt was not preserved",
-    );
-  }
+  assert(
+    main.skillsSnapshot?.prompt === "legacy prompt survives as metadata",
+    "legacy session metadata prompt was not preserved",
+  );
   assert(
     main.skillsSnapshot?.resolvedSkills === undefined,
     "heavy resolvedSkills cache was persisted into migrated session metadata",
@@ -1206,16 +1080,6 @@ function readInstalledPluginIndex() {
   const index = readPluginInstallIndex({ stateDir });
   assert(index.installRecords, "installed plugin index missing");
   return index;
-}
-
-function assertBaselinePlugin([expectedVersion]) {
-  const record = readInstalledPluginIndex().installRecords.discord;
-  assert(record?.source === "npm", "baseline Discord plugin was not installed from npm");
-  assert(record.spec === "@openclaw/discord@latest", "baseline plugin selector became pinned");
-  const installed = readJson(path.join(resolveHomePath(record.installPath), "package.json"));
-  assert(installed.name === "@openclaw/discord", "baseline plugin package identity changed");
-  assert(installed.version === expectedVersion, "baseline plugin is not the baseline version");
-  console.log(`Baseline npm plugin: @openclaw/discord@${expectedVersion}, selector=latest.`);
 }
 
 function assertExternalPluginInstall(records, pluginId, packageName) {
@@ -1869,30 +1733,8 @@ if (command === "list-scenarios") {
   process.stdout.write(`${JSON.stringify([...SCENARIOS])}\n`);
 } else if (command === "seed") {
   seedState();
-} else if (command === "seed-legacy-operator") {
-  legacyOperator.seedLegacyOperatorState();
-} else if (command === "seed-legacy-operator-external-plugin") {
-  legacyOperator.seedLegacyOperatorExternalPlugin();
-} else if (command === "assert-legacy-operator-external-plugin") {
-  legacyOperator.assertLegacyOperatorExternalPlugin(process.argv[3]);
-} else if (command === "assert-baseline-plugin") {
-  assertBaselinePlugin(process.argv.slice(3));
-} else if (command === "seed-legacy-operator-default-cron") {
-  legacyOperator.seedLegacyOperatorDefaultCron();
-} else if (command === "seed-legacy-operator-agent") {
-  legacyOperator.seedLegacyOperatorAgent();
-} else if (command === "seed-legacy-operator-gateway") {
-  legacyOperator.seedLegacyOperatorGatewayState();
-} else if (command === "assert-legacy-operator-gateway") {
-  legacyOperator.assertLegacyOperatorGatewayState(process.argv[3] || "candidate");
-} else if (command === "legacy-operator-turn") {
-  legacyOperator.runLegacyOperatorTurn(process.argv[3]);
 } else if (command === "assert-exec-approvals") {
-  if (getScenario() === "legacy-operator-state") {
-    legacyOperator.assertLegacyOperatorApprovals(
-      process.env.OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE || "survival",
-    );
-  } else if (!["watchos-direct-node", "mobile-pairing-reconnect"].includes(getScenario())) {
+  if (!["watchos-direct-node", "mobile-pairing-reconnect"].includes(getScenario())) {
     assertExecApprovalPolicySurvived(
       requireEnv("OPENCLAW_STATE_DIR"),
       process.env.OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE || "survival",
@@ -1904,8 +1746,6 @@ if (command === "list-scenarios") {
   seedUpgradeVolume(stateDir);
 } else if (command === "assert-config") {
   assertConfigSurvived();
-} else if (command === "assert-restart-serving-turn") {
-  await assertRestartServingTurn(process.argv[3]);
 } else if (command === "assert-state") {
   assertStateSurvived();
   assertConfiguredPluginInstalls();

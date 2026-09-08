@@ -26,8 +26,6 @@ import {
 import { buildSlackInvalidBlocksTableProbe } from "./slack-live.invalid-blocks.js";
 import { loadSlackQaRuntime } from "./slack-plugin.runtime.js";
 
-const SLACK_QA_CHANNEL_HISTORY_LIMIT = 50;
-
 export async function getSlackIdentity(token: string): Promise<SlackAuthIdentity> {
   const { createSlackWebClient } = loadSlackQaRuntime();
   const client = createSlackWebClient(token, { timeout: SLACK_QA_WEB_API_TIMEOUT_MS });
@@ -73,7 +71,7 @@ export async function listSlackMessages(params: {
     await params.client.conversations.history({
       channel: params.channelId,
       inclusive: true,
-      limit: SLACK_QA_CHANNEL_HISTORY_LIMIT,
+      limit: 50,
       oldest: params.oldestTs,
     }),
   );
@@ -256,26 +254,20 @@ export async function waitForSlackStoredMessage(params: {
   client: WebClient;
   description: string;
   matchesMessage: (message: SlackMessage) => boolean;
-  messageId: string;
+  oldestTs: string;
   sutIdentity: SlackAuthIdentity;
   timeoutMs: number;
 }) {
   const startedAt = Date.now();
   while (true) {
-    // The capture owner supplies the successful post timestamp. Querying that exact
-    // boundary keeps concurrent shared-channel traffic from evicting the evidence.
-    const history = slackHistorySchema.parse(
-      await params.client.conversations.history({
-        channel: params.channelId,
-        inclusive: true,
-        latest: params.messageId,
-        limit: 1,
-      }),
-    );
-    const messages = history.messages ?? [];
+    const messages = await listSlackMessages({
+      channelId: params.channelId,
+      client: params.client,
+      oldestTs: params.oldestTs,
+    });
     const message = messages.find(
       (entry) =>
-        entry.ts === params.messageId &&
+        entry.ts !== params.oldestTs &&
         isSutSlackMessage(entry, params.sutIdentity) &&
         params.matchesMessage(entry),
     );

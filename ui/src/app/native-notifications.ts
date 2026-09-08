@@ -1,5 +1,3 @@
-import { webKitHostWindow } from "./native-webkit-bridge.ts";
-
 export type NativeNotificationsPermission = "granted" | "denied" | "notDetermined";
 
 export type NativeNotificationTestOutcome =
@@ -12,14 +10,29 @@ type NativeNotificationsSnapshot = {
   test: NativeNotificationTestOutcome | null;
 };
 
+type NativeNotificationsMessage =
+  | { type: "status" }
+  | { type: "request-permission" }
+  | { type: "send-test" }
+  | ({ type: "background-session-completed" } & NativeBackgroundSessionCompletion);
+
 type NativeBackgroundSessionCompletion = {
   runId: string;
   path: string;
   search?: string;
 };
 
+type WebKitNotificationsMessageHandler = {
+  postMessage(message: NativeNotificationsMessage): void;
+};
+
 type NativeNotificationsWindow = Window & {
   __OPENCLAW_NATIVE_NOTIFICATIONS__?: unknown;
+  webkit?: {
+    messageHandlers?: {
+      openclawNotifications?: WebKitNotificationsMessageHandler;
+    };
+  };
 };
 
 // Wire contract with the Mac app's dashboard bridge (DashboardWindowController+Notifications.swift).
@@ -64,8 +77,14 @@ function snapshotFrom(value: unknown): NativeNotificationsSnapshot | null {
   return null;
 }
 
-function getNativeNotificationsPoster() {
-  const handler = webKitHostWindow()?.webkit?.messageHandlers?.openclawNotifications;
+function getNativeNotificationsPoster():
+  | WebKitNotificationsMessageHandler["postMessage"]
+  | undefined {
+  if (typeof window === "undefined") {
+    return undefined;
+  }
+  const handler = (window as NativeNotificationsWindow).webkit?.messageHandlers
+    ?.openclawNotifications;
   return handler?.postMessage.bind(handler);
 }
 

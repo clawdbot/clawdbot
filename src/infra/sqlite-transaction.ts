@@ -107,8 +107,6 @@ export type SqliteTransactionOptions = {
   logger?: Pick<SubsystemLogger, "warn">;
   operationLabel?: string;
   slowTransactionHoldMs?: number;
-  /** Enclose the physical commit in an owner's synchronous authority guard. */
-  withCommit?: (commit: () => void) => void;
 };
 
 type SqliteTransactionStep = "begin" | "commit";
@@ -346,13 +344,7 @@ function runSqliteTransactionSync<T>(
       elapsedMs: Date.now() - transactionStartedAt,
       options,
     });
-    if (options?.withCommit) {
-      assertSyncTransactionResult(
-        options.withCommit(() => commitImmediateTransaction(db, options)),
-      );
-    } else {
-      commitImmediateTransaction(db, options);
-    }
+    commitImmediateTransaction(db, options);
     return result;
   } catch (error) {
     abortImmediateTransaction(db, error);

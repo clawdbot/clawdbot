@@ -90,7 +90,7 @@ function createContext(
     emitBlockReply,
     emitAssistantStreamData: vi.fn(),
     flushAssistantStream: vi.fn(),
-    releaseDeferredReplies: vi.fn(),
+    flushDeferredBlockReplies: vi.fn(),
     clearAssistantStream: vi.fn(),
     clearDeferredBlockReplies: vi.fn(),
     resolveCompactionRetry: vi.fn(),
@@ -1114,7 +1114,8 @@ describe("handleAgentEnd", () => {
       );
       expect(ctx.clearAssistantStream).not.toHaveBeenCalled();
       expect(ctx.clearDeferredBlockReplies).not.toHaveBeenCalled();
-      expect(ctx.releaseDeferredReplies).toHaveBeenCalledTimes(1);
+      expect(ctx.flushAssistantStream).toHaveBeenCalledTimes(1);
+      expect(ctx.flushDeferredBlockReplies).toHaveBeenCalledTimes(1);
       expect(ctx.flushBlockReplyBuffer).toHaveBeenCalledWith({ final: true });
       expect(ctx.resolveCompactionRetry).toHaveBeenCalledTimes(1);
       expect(ctx.maybeResolveCompactionWait).not.toHaveBeenCalled();

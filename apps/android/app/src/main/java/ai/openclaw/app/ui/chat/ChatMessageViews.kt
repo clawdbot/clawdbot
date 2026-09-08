@@ -16,7 +16,6 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -30,8 +29,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.relocation.BringIntoViewRequester
-import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -46,15 +43,14 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
@@ -72,6 +68,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.Locale
 
@@ -182,7 +179,6 @@ private fun ChatLinkPreview(
   }
   val uriHandler = LocalUriHandler.current
   val cardShape = RoundedCornerShape(ClawTheme.radii.sheet)
-  val metadataAnchor = rememberChatReaderAnchor(result)
   Surface(
     onClick = { uriHandler.openUri(url) },
     shape = cardShape,
@@ -191,21 +187,15 @@ private fun ChatLinkPreview(
   ) {
     Column(modifier = Modifier.fillMaxWidth()) {
       previewImage?.let { image ->
-        val imageAnchor = rememberChatReaderAnchor(imageUrl)
         Image(
           bitmap = image,
           contentDescription = null,
           contentScale = ContentScale.Crop,
-          modifier =
-            Modifier
-              .fillMaxWidth()
-              .heightIn(max = 120.dp)
-              .clip(cardShape)
-              .then(imageAnchor?.modifier ?: Modifier),
+          modifier = Modifier.fillMaxWidth().heightIn(max = 120.dp).clip(cardShape),
         )
       }
       Column(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 8.dp).then(metadataAnchor?.modifier ?: Modifier),
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 8.dp),
         verticalArrangement = Arrangement.spacedBy(3.dp),
       ) {
         Text(domain, style = ClawTheme.type.captionSmall, color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -465,7 +455,6 @@ private fun ChatImagePreview(
   description: String,
   stateKey: String,
 ) {
-  val anchor = rememberChatReaderAnchor(stateKey)
   var previewVisible by rememberSaveable(stateKey) { mutableStateOf(false) }
   Surface(
     onClick = { previewVisible = true },
@@ -479,7 +468,7 @@ private fun ChatImagePreview(
         bitmap = image,
         contentDescription = description,
         contentScale = ContentScale.Fit,
-        modifier = Modifier.fillMaxWidth().then(anchor?.modifier ?: Modifier),
+        modifier = Modifier.fillMaxWidth(),
       )
       Surface(
         modifier = Modifier.align(Alignment.BottomEnd).padding(8.dp).size(32.dp),
@@ -571,51 +560,27 @@ fun ChatCodeBlock(
       }
       if (ranges.size == 1) {
         SelectionContainer {
-          ChatCodeText(highlighted, rememberChatReaderAnchor())
+          ChatCodeText(highlighted)
         }
       } else {
         val scroll = rememberLazyListState()
-        val action = key(display) { rememberChatReaderAction() }
-        val requester = remember { BringIntoViewRequester() }
-        val viewportAnchor = rememberChatReaderAnchor(display)
+        val scope = rememberCoroutineScope()
         val context = LocalContext.current
-        LaunchedEffect(scroll, action) {
-          scroll.interactionSource.interactions.collect { interaction ->
-            if (interaction is DragInteraction.Start) action.pause()
-          }
-        }
+        val onManualNavigation = LocalChatReaderNavigation.current
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
           TextButton(onClick = {
-            action.launch {
-              scroll.scrollToItem(0)
-              val size = scroll.layoutInfo.viewportSize
-              requester.bringIntoView(Rect(0f, 0f, size.width.toFloat(), action.viewportHeight(size.height).toFloat()))
-            }
+            onManualNavigation()
+            scope.launch { scroll.scrollToItem(0) }
           }) { Text(nativeString("Start of code")) }
           TextButton(onClick = {
-            action.launch {
-              scroll.scrollToItem(ranges.size)
-              val layout = scroll.layoutInfo
-              // The measured terminal item follows the text. An oversized request can
-              // satisfy a short scroll parent while leaving the last line clipped.
-              val terminal = layout.visibleItemsInfo.first { it.index == ranges.size }
-              val top = terminal.offset.toFloat()
-              requester.bringIntoView(Rect(0f, top, layout.viewportSize.width.toFloat(), top + terminal.size))
-            }
+            onManualNavigation()
+            scope.launch { scroll.scrollToItem(ranges.size) }
           }) { Text(nativeString("End of code")) }
         }
         TextButton(onClick = { copyChatText(context, code) }) { Text(nativeString("Copy code")) }
         // Quoted Markdown asks for intrinsic height; the fixed viewport answers that
         // without forwarding an unsupported intrinsic query into the lazy layout.
-        LazyColumn(
-          state = scroll,
-          modifier =
-            Modifier
-              .fillMaxWidth()
-              .height(400.dp)
-              .bringIntoViewRequester(requester)
-              .then(viewportAnchor?.modifier ?: Modifier),
-        ) {
+        LazyColumn(state = scroll, modifier = Modifier.fillMaxWidth().height(400.dp)) {
           items(ranges.size) { index ->
             val range = ranges[index]
             val end = range.last + 1
@@ -654,10 +619,7 @@ fun ChatCodeBlock(
 }
 
 @Composable
-private fun ChatCodeText(
-  text: AnnotatedString,
-  anchor: ChatReaderAnchor? = null,
-) {
+private fun ChatCodeText(text: AnnotatedString) {
   Text(
     text = text,
     fontFamily = FontFamily.Monospace,
@@ -665,7 +627,5 @@ private fun ChatCodeText(
     // and last line would change spacing at otherwise invisible boundaries.
     style = ClawTheme.type.body.copy(lineHeightStyle = LineHeightStyle(LineHeightStyle.Alignment.Proportional, LineHeightStyle.Trim.None)),
     color = ClawTheme.colors.codeText,
-    modifier = anchor?.modifier ?: Modifier,
-    onTextLayout = anchor?.onTextLayout ?: {},
   )
 }

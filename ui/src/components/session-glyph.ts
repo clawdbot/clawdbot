@@ -18,9 +18,7 @@ export function renderSessionGlyph(options: {
   badge?: SessionGlyphContent;
 }): TemplateResult {
   const { content, running, queued = false, circular = false, badge = nothing } = options;
-  // A glyph-less row still owns its run state in the lead slot; the bare
-  // modifier lets CSS draw a compact ring there instead of a 24px empty circle.
-  const modifiers = `${circular ? " session-glyph--circular" : ""}${running ? " session-glyph--running" : ""}${content === nothing ? " session-glyph--bare" : ""}`;
+  const modifiers = `${circular ? " session-glyph--circular" : ""}${running ? " session-glyph--running" : ""}`;
   return html`<span class="session-glyph${modifiers}">
     <span class="session-glyph__content">${content}</span>
     ${

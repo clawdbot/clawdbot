@@ -16,12 +16,7 @@ import {
   type DiagnosticEventPrivateData,
 } from "../infra/diagnostic-events.js";
 import type { CliBackendPlugin } from "../plugins/cli-backend.types.js";
-import { parseAgentSessionKey } from "../routing/session-key.js";
 import { closeOpenClawAgentDatabaseByPath } from "../state/openclaw-agent-db.js";
-import {
-  prepareSystemAgentRunAdmission,
-  type PreparedAgentRunAdmission,
-} from "./admitted-run-context.js";
 import { createTestAdmittedRunContext } from "./admitted-run-context.test-support.js";
 import { resolveCliExecutionTarget } from "./cli-runner/execution-target.js";
 import type { PreparedCliRunContext, RunCliAgentParams } from "./cli-runner/types.js";
@@ -330,7 +325,6 @@ export async function expectPathMissing(targetPath: string) {
 type PrepareCliRun = (params: RunCliAgentParams) => Promise<PreparedCliRunContext>;
 
 export function createCliRunnerPrepareFixture(prepareCliRun: PrepareCliRun) {
-  const admissions: PreparedAgentRunAdmission[] = [];
   const tempDirs = new Set<string>();
   const hadStateDir = Object.hasOwn(process.env, "OPENCLAW_STATE_DIR");
   const originalStateDir = process.env.OPENCLAW_STATE_DIR;
@@ -370,7 +364,7 @@ export function createCliRunnerPrepareFixture(prepareCliRun: PrepareCliRun) {
       return getSession();
     },
     createSession,
-    async prepare(overrides: Partial<RunCliAgentParams> = {}) {
+    prepare(overrides: Partial<Omit<RunCliAgentParams, "admittedRunContext">> = {}) {
       const { dir, sessionFile, sessionTarget } = getSession();
       const defaults: Omit<RunCliAgentParams, "admittedRunContext"> = {
         sessionId: "session-test",
@@ -385,22 +379,12 @@ export function createCliRunnerPrepareFixture(prepareCliRun: PrepareCliRun) {
         config: {},
       };
       const prepared = Object.assign(defaults, overrides);
-      if (!prepared.preparedRunAdmission && !prepared.admittedRunContext) {
-        const admission = prepareSystemAgentRunAdmission(
-          prepared.config ?? {},
-          prepared.runId,
-          parseAgentSessionKey(prepared.sessionKey)?.agentId ??
-            prepared.agentId ??
-            sessionTarget.agentId,
-          "cli-prepare-fixture",
-        );
-        admissions.push(admission);
-        return prepareCliRun({
-          ...prepared,
-          admittedRunContext: await admission.admit("embedded"),
-        });
-      }
-      return prepareCliRun(prepared);
+      return prepareCliRun({
+        ...prepared,
+        ...(prepared.preparedRunAdmission
+          ? {}
+          : { admittedRunContext: createTestAdmittedRunContext(prepared.runId) }),
+      });
     },
     appendTranscript(entry: {
       id: string;
@@ -421,7 +405,6 @@ export function createCliRunnerPrepareFixture(prepareCliRun: PrepareCliRun) {
       }
     },
     cleanup() {
-      admissions.splice(0).forEach((admission) => admission.close());
       for (const databasePath of databasePaths) {
         closeOpenClawAgentDatabaseByPath(databasePath);
       }

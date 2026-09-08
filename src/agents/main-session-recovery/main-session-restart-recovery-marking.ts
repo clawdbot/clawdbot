@@ -8,7 +8,6 @@ import {
   applySessionEntryReplacements,
   listSessionEntriesReadOnly,
 } from "../../config/sessions/session-accessor.js";
-import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { RestartRecoveryCandidate } from "../../gateway/chat-abort.js";
 import type { GatewayContextResolver } from "../../gateway/server-methods/types.js";
@@ -29,18 +28,17 @@ import {
   normalizeMainSessionRecoveryRunFences,
   transitionMainSessionRecovery,
 } from "./main-session-recovery-state.js";
-import type { MainSessionRecoveryStoreTarget } from "./main-session-recovery-store.js";
 import {
-  discoverRestartRecoveryStoreTargets,
+  discoverRestartRecoveryStorePaths,
   hasCurrentProcessOwner,
   mainSessionRecoveryLog,
   normalizeFiniteTimestamp,
   normalizeStringSet,
+  resolveRestartRecoveryStorePaths,
 } from "./main-session-restart-recovery-shared.js";
 import { captureYieldedMainSessionContinuation } from "./main-session-restart-recovery-target.js";
 
 async function markRecoveryStore(params: {
-  agentId?: string;
   storePath: string;
   sessionKey?: string;
   assertCommitAllowed?: () => void;
@@ -62,7 +60,6 @@ async function markRecoveryStore(params: {
 }) {
   const yieldOwners: Array<() => boolean> = [];
   return await applySessionEntryReplacements<{ marked: number; skipped: number }>({
-    agentId: params.agentId,
     storePath: params.storePath,
     sessionKeys: params.sessionKey ? [params.sessionKey] : undefined,
     statuses: params.statuses,
@@ -142,29 +139,13 @@ export async function markRestartAbortedMainSessions(params: {
     return result;
   }
 
-  const storeTargets = new Map<
-    string,
-    Pick<MainSessionRecoveryStoreTarget, "agentId" | "storePath">
-  >();
-  const addStoreTarget = (
-    target: Pick<MainSessionRecoveryStoreTarget, "agentId" | "storePath">,
-  ) => {
-    const resolved = resolveSqliteTargetFromSessionStorePath(target.storePath, {
-      agentId: target.agentId,
-    });
-    // One logical scope can name multiple flat-store databases. Alias scopes still
-    // retain their own admission checks even when they reach the same database.
-    const key = JSON.stringify([target.storePath, resolved.path]);
-    if (!storeTargets.has(key)) {
-      storeTargets.set(key, target);
-    }
-  };
+  const storePaths = new Set<string>();
   const stateDir = params.stateDir ?? resolveStateDir(process.env);
   const configs = [params.cfg, ...(params.additionalCfgs ?? [])].filter(Boolean);
   for (const cfg of configs.length > 0 ? configs : [undefined]) {
     try {
-      for (const target of await discoverRestartRecoveryStoreTargets({ cfg, stateDir })) {
-        addStoreTarget(target);
+      for (const storePath of await discoverRestartRecoveryStorePaths({ cfg, stateDir })) {
+        storePaths.add(storePath);
       }
     } catch (err) {
       if (!cfg) {
@@ -177,13 +158,12 @@ export async function markRestartAbortedMainSessions(params: {
   }
 
   for (const storePath of activeAdmissions.targets.keys()) {
-    addStoreTarget({ storePath });
+    storePaths.add(storePath);
   }
-  for (const target of storeTargets.values()) {
-    const { storePath } = target;
+  for (const storePath of storePaths) {
     // Preselect read-only: ID-only admissions can own multiple persisted keys.
     // The per-key replacement below rereads the row and revalidates its owner.
-    const sessionKeys = listSessionEntriesReadOnly({ ...target, projection: "list", clone: false })
+    const sessionKeys = listSessionEntriesReadOnly({ storePath, projection: "list", clone: false })
       .filter(
         ({ sessionKey, entry }) =>
           activeRuns.some(
@@ -196,7 +176,7 @@ export async function markRestartAbortedMainSessions(params: {
       let isCurrent: (() => boolean) | undefined;
       try {
         const storeResult = await markRecoveryStore({
-          ...target,
+          storePath,
           sessionKey: selectedSessionKey,
           assertCommitAllowed: () => {
             if (isCurrent && !isCurrent()) {
@@ -227,7 +207,6 @@ export async function markRestartAbortedMainSessions(params: {
             }
             if (
               captureYieldedMainSessionContinuation({
-                storeAgentId: target.agentId,
                 cfg: params.cfg,
                 entry,
                 sessionKey,
@@ -314,17 +293,14 @@ export async function markStartupOrphanedMainSessionsForRecovery(params: {
   const resolveActiveSessionKeys = () =>
     providedActiveSessionKeys ?? normalizeStringSet(listActiveEmbeddedRunSessionKeys());
 
-  // A flat locator can name multiple agent stores; checkpoint each owner once.
-  // Publish checkpoints only after every marking write succeeds so failed scans retry safely.
-  const storeTargets = (
-    await discoverRestartRecoveryStoreTargets({ ...params, statuses: ["running"] })
-  ).filter(
-    (target) =>
-      !params.startupCheckedStorePaths?.has(JSON.stringify([target.agentId, target.storePath])),
+  // Check each store path once at startup so rows added later in that same path remain current.
+  // Add paths only after every marking write succeeds so a failed scan retries safely.
+  const storePaths = (await resolveRestartRecoveryStorePaths(params)).filter(
+    (storePath) => !params.startupCheckedStorePaths?.has(storePath),
   );
-  for (const target of storeTargets) {
+  for (const storePath of storePaths) {
     const storeResult = await markRecoveryStore({
-      ...target,
+      storePath,
       statuses: ["running"],
       assertCommitAllowed: () => assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration),
       plan: (entry, sessionKey) => {
@@ -350,11 +326,10 @@ export async function markStartupOrphanedMainSessionsForRecovery(params: {
           return undefined;
         }
         const continuation = captureYieldedMainSessionContinuation({
-          storeAgentId: target.agentId,
           cfg: params.cfg,
           entry,
           sessionKey,
-          storePath: target.storePath,
+          storePath,
         });
         if (continuation) {
           // A newer foreground start clears endedAt. Only an unclaimed waiting cycle
@@ -385,9 +360,7 @@ export async function markStartupOrphanedMainSessionsForRecovery(params: {
     result.marked += storeResult.marked;
     result.skipped += storeResult.skipped;
   }
-  storeTargets.forEach((target) =>
-    params.startupCheckedStorePaths?.add(JSON.stringify([target.agentId, target.storePath])),
-  );
+  storePaths.forEach((storePath) => params.startupCheckedStorePaths?.add(storePath));
 
   if (result.marked > 0) {
     mainSessionRecoveryLog.warn(

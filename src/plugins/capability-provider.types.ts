@@ -111,14 +111,6 @@ export type WorkerDesktopEndpoint = {
 /** Placement execution modes a worker provider can carry. */
 export type WorkerExecutionMode = "worker-turn" | "remote-exec";
 
-/** Grant-free identity of the runtime bytes a provider may retain in a prepared image. */
-export type WorkerNodeRuntimeIdentity = {
-  nodeBootstrapSha256: string;
-  executionMode: WorkerExecutionMode;
-  /** Present only when project preparation retains the independent worker archive. */
-  workerBundleSha256?: string;
-};
-
 type WorkerNodeBootstrapAccess = {
   /** Immutable node distribution prepared by the Gateway for this provision operation. */
   nodeBootstrap: {
@@ -260,7 +252,6 @@ export type WorkerProvider = {
       signal?: AbortSignal;
       executionMode?: WorkerExecutionMode;
       machineClass?: string;
-      nodeRuntimeIdentity?: WorkerNodeRuntimeIdentity;
       prepareNodeRuntime?: () => Promise<WorkerNodeRuntimePreparation>;
       beginNodeEnrollment?: () => Promise<WorkerNodeEnrollment>;
       project?: {

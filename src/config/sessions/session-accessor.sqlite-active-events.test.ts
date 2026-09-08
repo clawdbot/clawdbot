@@ -372,12 +372,8 @@ describe("SQLite active transcript event projection", () => {
     expect(page.events.map((entry) => entry.seq)).toEqual([2, 4, 5]);
     expect(page.totalMessages).toBe(3);
     expect(readSessionTranscriptMessageEventCount(scope)).toBe(3);
-    expect(readSessionTranscriptMessageEventById(scope, "old")).toMatchObject({
-      event: { id: "old" },
-    });
-    expect(readSessionTranscriptMessageEventById(scope, "kept-tool")).toMatchObject({
-      event: { id: "kept-tool" },
-    });
+    expect(readSessionTranscriptMessageEventById(scope, "old")).toBeUndefined();
+    expect(readSessionTranscriptMessageEventById(scope, "kept-tool")).toBeUndefined();
 
     const recent = readRecentSessionTranscriptMessageEvents(scope, {
       maxBytes: 1_024,
@@ -409,9 +405,7 @@ describe("SQLite active transcript event projection", () => {
     expect(readSessionTranscriptActivePathEntryRelation(scope, "newer-compaction")).toBe("exact");
     expect(readSessionTranscriptActivePathEntryRelation(scope, "post-reset")).toBe("ancestor");
     expect(readSessionTranscriptMessageEventCount(scope)).toBe(3);
-    expect(readSessionTranscriptMessageEventById(scope, "old")).toMatchObject({
-      event: { id: "old" },
-    });
+    expect(readSessionTranscriptMessageEventById(scope, "old")).toBeUndefined();
   });
 
   it("fails closed when the latest indexed reset payload is malformed", async () => {

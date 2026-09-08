@@ -5,22 +5,30 @@ import { en } from "./en.ts";
 const enLogin = {
   login: {
     heading: "Connect to OpenClaw",
-    lede: "Enter the Gateway URL and secret, or open the one-time link that openclaw dashboard prints on the Gateway host.",
+    lede: "Paste the Gateway URL and token, or open the one-time link that openclaw dashboard prints on the Gateway host.",
     gatewayUrl: "Gateway URL",
-    secret: "Gateway secret",
-    setupCodeHint:
-      "This is a device setup code for the OpenClaw mobile app, not the Gateway secret. Paste it in the app's Gateway settings instead; the Gateway secret comes from openclaw gateway auth-token --show on the Gateway host.",
-    secretPlaceholder: "Paste the token or type the password",
+    credential: "Credential",
+    credentialType: "Credential type",
+    modeToken: "Token",
+    modePassword: "Password",
+    tokenPlaceholder: "Paste the Gateway token",
+    passwordFieldPlaceholder: "Enter the Gateway password",
+    passwordHint: "Passwords are never stored in this browser.",
     runOnHost: "Run on the Gateway host",
     connection: {
       target: "Connecting to {host}",
-      secretEntered: "secret entered",
-      noSecret: "no secret",
+      tokenSaved: "token saved",
+      passwordEntered: "password entered",
+      noCredential: "no credential",
       change: "Change",
     },
-    showSecret: "Show Gateway secret",
-    hideSecret: "Hide Gateway secret",
-    toggleSecretVisibility: "Toggle Gateway secret visibility",
+    passwordPlaceholder: "optional",
+    showToken: "Show token",
+    hideToken: "Hide token",
+    toggleTokenVisibility: "Toggle token visibility",
+    showPassword: "Show password",
+    hidePassword: "Hide password",
+    togglePasswordVisibility: "Toggle password visibility",
     failure: {
       rawError: "Raw error",
       profileUnavailable: {
@@ -39,23 +47,26 @@ const enLogin = {
           "For trusted local operator access, use the shared Gateway token or password.",
       },
       authRequired: {
-        title: "This Gateway expects its token",
-        passwordTitle: "This Gateway expects its password",
+        title: "Token needed",
+        passwordTitle: "Password needed",
         summary:
           "The Gateway at {host} is reachable, but it needs a matching token or password before this browser can connect.",
-        stepPaste: "Paste the token from openclaw gateway auth-token --show into Gateway secret.",
-        stepPassword: "Type the configured Gateway password into Gateway secret.",
+        stepPaste:
+          "Paste the token from openclaw gateway auth-token --show or enter the configured password.",
         stepGenerate:
           "If no token is configured, run openclaw doctor --generate-gateway-token on the gateway host.",
-        stepConnect: "Click Connect again after updating the Gateway secret.",
+        stepConnect: "Click Connect again after updating the credential.",
       },
       authFailed: {
-        title: "Gateway secret rejected",
+        title: "Credential rejected",
         summary:
-          "{host} rejected the supplied Gateway secret. Check that it belongs to this Gateway and try again.",
+          "{host} rejected the supplied credential. The most common cause is a stale token or a token copied from another Gateway URL.",
         stepDashboard:
           "Run openclaw dashboard --no-open for a fresh URL, or openclaw gateway auth-token --show to recover the token.",
-        stepReplace: "Replace the Gateway secret with the token for this Gateway URL.",
+        stepReplace:
+          "Replace stale token/password values; do not reuse a token from another Gateway URL.",
+        stepMode:
+          "Use one matching auth mode at a time: gateway token for token mode, password for password mode.",
       },
       trustedProxy: {
         title: "Proxy authentication required",
@@ -89,9 +100,6 @@ const enLogin = {
         stepLatest:
           "That command prints the exact approve command for the newest pending request; run that one as well.",
         stepReconnect: "Once approved, click Connect.",
-        waiting:
-          "Waiting for approval… this page connects on its own once the request is approved.",
-        checkNow: "Check now",
       },
       insecure: {
         title: "Secure browser context required",
@@ -127,7 +135,7 @@ const enLogin = {
           "The browser could not reach {host}. Check the address and transport before retrying credentials.",
         stepGateway: "Confirm the Gateway is running with openclaw status or openclaw gateway run.",
         stepUrl:
-          "Check the Gateway URL and use wss:// when the Gateway is behind HTTPS/Tailscale Serve.",
+          "Check the WebSocket URL and use wss:// when the Gateway is behind HTTPS/Tailscale Serve.",
         stepDashboard:
           "Reopen the dashboard with openclaw dashboard --no-open to recopy the current URL and auth details.",
       },

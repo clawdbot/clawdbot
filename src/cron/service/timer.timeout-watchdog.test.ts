@@ -142,7 +142,7 @@ describe("cron service timer regressions", () => {
         nowMs: () => Date.now(),
         defaultAgentId: "main",
         resolveHeartbeatTimeoutMs,
-        requestHeartbeatAndWait: vi.fn(() => {
+        runHeartbeatOnce: vi.fn(() => {
           heartbeatStarted.resolve();
           return new Promise<never>(() => {});
         }),

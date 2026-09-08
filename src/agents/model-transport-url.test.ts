@@ -1,7 +1,7 @@
 import {
   formatModelTransportDebugBaseUrl,
   formatModelTransportDebugUrl,
-} from "@openclaw/ai/diagnostics";
+} from "@openclaw/ai/transports";
 /**
  * Regression coverage for model transport debug URL formatting.
  * Ensures credentials, query strings, and fragments stay out of diagnostics.

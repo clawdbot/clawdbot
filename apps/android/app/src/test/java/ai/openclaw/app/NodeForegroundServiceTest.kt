@@ -2,7 +2,6 @@ package ai.openclaw.app
 
 import ai.openclaw.app.gateway.DeviceAuthStore
 import ai.openclaw.app.gateway.DeviceIdentityStore
-import ai.openclaw.app.gateway.GatewayBootstrapHandoff
 import ai.openclaw.app.gateway.GatewayConnectOptions
 import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.GatewayRegistryEntryKind
@@ -1111,7 +1110,7 @@ class NodeForegroundServiceTest {
                   return this
                 }
 
-                override fun commit(): Boolean {
+                override fun apply() {
                   if (savesOperatorToken) {
                     operatorTokenWriteGate?.let { gate ->
                       if (gate.claimed.compareAndSet(false, true)) {
@@ -1120,9 +1119,8 @@ class NodeForegroundServiceTest {
                       }
                     }
                   }
-                  val committed = editor.commit()
-                  if (committed) operatorToken?.let { operatorTokenWrites.trySend(it) }
-                  return committed
+                  editor.apply()
+                  operatorToken?.let { operatorTokenWrites.trySend(it) }
                 }
               }
             }
@@ -1252,7 +1250,6 @@ class NodeForegroundServiceTest {
       password: String?,
       options: GatewayConnectOptions,
       tls: GatewayTlsParams?,
-      bootstrapHandoff: GatewayBootstrapHandoff?,
     ) {
       connectStarted?.complete(Unit)
       Shadow
@@ -1269,7 +1266,6 @@ class NodeForegroundServiceTest {
         ReflectionHelpers.ClassParameter.from(String::class.java, password),
         ReflectionHelpers.ClassParameter.from(GatewayConnectOptions::class.java, options),
         ReflectionHelpers.ClassParameter.from(GatewayTlsParams::class.java, tls),
-        ReflectionHelpers.ClassParameter.from(GatewayBootstrapHandoff::class.java, bootstrapHandoff),
       )
     }
 

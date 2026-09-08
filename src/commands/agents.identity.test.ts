@@ -19,9 +19,9 @@ const configMocks = vi.hoisted(() => {
   return {
     readConfigFileSnapshot: vi.fn(),
     writeConfigFile,
-    replaceConfigFile: vi.fn(async (params: { sourceConfig: unknown }) => {
-      await writeConfigFile(params.sourceConfig);
-      return { nextConfig: params.sourceConfig };
+    replaceConfigFile: vi.fn(async (params: { nextConfig: unknown }) => {
+      await writeConfigFile(params.nextConfig);
+      return { nextConfig: params.nextConfig };
     }),
   };
 });
@@ -29,13 +29,6 @@ const configMocks = vi.hoisted(() => {
 vi.mock("../config/config.js", async () => ({
   ...(await vi.importActual<typeof import("../config/config.js")>("../config/config.js")),
   readConfigFileSnapshot: configMocks.readConfigFileSnapshot,
-  readConfigFileSnapshotForWrite: async () => {
-    const snapshot = await configMocks.readConfigFileSnapshot();
-    return {
-      snapshot: { ...snapshot, sourceConfig: snapshot.sourceConfig ?? snapshot.config },
-      writeOptions: {},
-    };
-  },
   writeConfigFile: configMocks.writeConfigFile,
   replaceConfigFile: configMocks.replaceConfigFile,
 }));

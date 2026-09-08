@@ -1,3 +1,4 @@
+// Normalization Core module implements string normalization behavior.
 import { normalizeOptionalLowercaseString, normalizeOptionalString } from "./string-coerce.js";
 
 /** Detects C0 and DEL without rejecting C1 or other Unicode text. */

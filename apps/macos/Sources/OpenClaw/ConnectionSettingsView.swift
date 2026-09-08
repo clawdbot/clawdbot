@@ -33,12 +33,10 @@ struct ConnectionSettingsView: View {
             self.statusSection
             self.gatewayModeSection
 
-            // The Remote section owns this banner in remote mode; Local and Not configured
-            // still need to see conflicts and rejected saves.
             if self.state.connectionMode != .remote,
-               self.state.gatewayConfigConflict != nil || self.state.gatewayConfigSyncFailure != nil
+               self.state.gatewayConfigConflict != nil
             {
-                Section(self.state.gatewayConfigConflict != nil ? "Remote Access" : "Connection") {
+                Section("Remote Access") {
                     GatewayConfigConflictRecoveryView(state: self.state)
                 }
             }

@@ -13,7 +13,6 @@ import {
   getActiveSessionLifecycleMutationCount,
   getActiveSessionWorkAdmissionCount,
 } from "../sessions/session-lifecycle-admission.js";
-import { isBackgroundExecTask } from "../tasks/background-exec-task-contract.js";
 import { getInspectableActiveTaskRestartBlockers } from "../tasks/task-registry.maintenance.js";
 import {
   type ActiveTaskRestartBlocker,
@@ -55,7 +54,7 @@ export type GatewayActiveWorkBlocker = {
     | "terminal-session";
   count: number;
   message: string;
-  task?: Omit<ActiveTaskRestartBlocker, "taskKind">;
+  task?: ActiveTaskRestartBlocker;
 };
 
 export type GatewayActiveWorkSnapshot = {
@@ -203,11 +202,9 @@ export function createGatewayActiveWorkSnapshot(
       });
     } else {
       const shownTaskBlockers = taskBlockers.slice(0, 8);
-      for (const { taskKind, ...task } of shownTaskBlockers) {
+      for (const task of shownTaskBlockers) {
         blockers.push({
-          kind: isBackgroundExecTask({ runtime: task.runtime, taskKind })
-            ? "background-exec"
-            : "task",
+          kind: "task",
           count: 1,
           message: formatActiveTaskRestartBlocker(task),
           task,

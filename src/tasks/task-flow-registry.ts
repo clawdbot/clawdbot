@@ -318,9 +318,43 @@ export function reloadTaskFlowRegistryFromStore(): void {
   ensureTaskFlowRegistryReady();
 }
 
+function createFlowSnapshotWith(next?: TaskFlowRecord, deletedFlowId?: string) {
+  const snapshot = new Map(snapshotFlowRecords(flows).map((flow) => [flow.flowId, flow]));
+  if (deletedFlowId) {
+    snapshot.delete(deletedFlowId);
+  }
+  if (next) {
+    snapshot.set(next.flowId, cloneFlowRecord(next));
+  }
+  return snapshot;
+}
+
+function persistFlowRegistry(): boolean {
+  try {
+    getTaskFlowRegistryStore().saveSnapshot({
+      flows: createFlowSnapshotWith(),
+    });
+    return true;
+  } catch (error) {
+    log.warn("Failed to persist task-flow registry snapshot", { error });
+    return false;
+  }
+}
+
+function persistFlowUpsert(flow: TaskFlowRecord) {
+  const store = getTaskFlowRegistryStore();
+  if (store.upsertFlow) {
+    store.upsertFlow(cloneFlowRecord(flow));
+    return;
+  }
+  store.saveSnapshot({
+    flows: createFlowSnapshotWith(flow),
+  });
+}
+
 function tryPersistFlowUpsert(flow: TaskFlowRecord, operation: string): boolean {
   try {
-    getTaskFlowRegistryStore().upsertFlow(cloneFlowRecord(flow));
+    persistFlowUpsert(flow);
     return true;
   } catch (error) {
     log.warn("Failed to persist task-flow registry upsert", {
@@ -332,9 +366,20 @@ function tryPersistFlowUpsert(flow: TaskFlowRecord, operation: string): boolean 
   }
 }
 
+function persistFlowDelete(flowId: string) {
+  const store = getTaskFlowRegistryStore();
+  if (store.deleteFlow) {
+    store.deleteFlow(flowId);
+    return;
+  }
+  store.saveSnapshot({
+    flows: createFlowSnapshotWith(undefined, flowId),
+  });
+}
+
 function tryPersistFlowDelete(flowId: string): boolean {
   try {
-    getTaskFlowRegistryStore().deleteFlow(flowId);
+    persistFlowDelete(flowId);
     return true;
   } catch (error) {
     log.warn("Failed to persist task-flow registry delete", {
@@ -805,10 +850,13 @@ export function deleteTaskFlowRecordById(flowId: string): boolean {
   return true;
 }
 
-function resetTaskFlowRegistryForTests() {
+function resetTaskFlowRegistryForTests(opts?: { persist?: boolean }) {
   flows = new Map();
   taskFlowRegistryRestoreState = { status: "uninitialized" };
   resetTaskFlowRegistryRuntimeForTests();
+  if (opts?.persist !== false) {
+    persistFlowRegistry();
+  }
   getTaskFlowRegistryStore().close?.();
 }
 

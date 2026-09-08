@@ -360,7 +360,7 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
     prepare: async (record: WorkerEnvironmentRecord, operationSignal?: AbortSignal) => {
       const preflight = new AbortController();
       try {
-        const prepared = await prepare(
+        await prepare(
           record,
           AbortSignal.any([
             signal,
@@ -368,7 +368,6 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
             ...(operationSignal ? [operationSignal] : []),
           ]),
         );
-        return prepared.artifact.tarballSha256;
       } finally {
         // Preflight creates no transfer grant; release its artifact pin even on success.
         preflight.abort();

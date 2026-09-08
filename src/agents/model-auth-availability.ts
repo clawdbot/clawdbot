@@ -112,8 +112,6 @@ export type ModelAuthAvailabilityRef = {
 };
 export type ModelAuthAvailabilityEvaluation = {
   availability: ModelAuthAvailability;
-  /** A runtime-owned result must not fall back to provider-only registry auth. */
-  availabilityAuthoritative?: true;
   unavailableReason?: "missing-auth" | "auth-failed" | "cooldown";
   /** Earliest known retry time, in milliseconds since the Unix epoch. */
   unavailableUntil?: number;
@@ -141,15 +139,15 @@ export type ModelAuthAvailabilityResolver = {
   hasSyntheticAuth(provider: string): boolean;
 };
 
-function evaluateCliRuntimeModelAuthAvailability(
+function applyCliRuntimeModelAuthAvailability(
   params: CreateModelAuthAvailabilityResolverParams,
   provider: string,
   ref: ModelAuthAvailabilityRef,
   evaluation: ModelAuthAvailabilityEvaluation,
   evaluateProviderAuth: ModelAuthAvailabilityResolver["evaluateModelAuth"],
-): ModelAuthAvailabilityEvaluation | undefined {
+): ModelAuthAvailabilityEvaluation {
   if (evaluation.routeResolution !== null || normalizeProviderId(provider) === "openai") {
-    return undefined;
+    return evaluation;
   }
   const selectedProfileId = ref.pinnedProfileId?.trim() || ref.preferredProfileId?.trim();
   // Direct CLI refs have no alias, but still own plugin and selected-account checks.
@@ -199,7 +197,7 @@ function evaluateCliRuntimeModelAuthAvailability(
       : evaluation;
   }
   if (normalizeProviderId(runtimeProvider) === normalizeProviderId(provider)) {
-    return runtimeOwners?.length ? evaluation : undefined;
+    return evaluation;
   }
   const runtimeAuthMode =
     params.preparedRuntimeAuthModes?.[normalizeProviderIdForAuth(runtimeProvider)];
@@ -1397,16 +1395,13 @@ export function createModelAuthAvailabilityResolver(
       if (ref.requiredProfileId?.trim()) {
         return evaluation;
       }
-      const runtimeEvaluation = evaluateCliRuntimeModelAuthAvailability(
+      return applyCliRuntimeModelAuthAvailability(
         params,
         provider,
         ref,
         evaluation,
         evaluateModelAuth,
       );
-      return runtimeEvaluation
-        ? { ...runtimeEvaluation, availabilityAuthoritative: true }
-        : evaluation;
     },
     resolveProviderAuthAvailability,
     hasSyntheticAuth: (provider) =>

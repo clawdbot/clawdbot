@@ -8,10 +8,7 @@ import type { inspectGatewayTlsCertificate as InspectGatewayTlsCertificate } fro
 import type { RuntimeEnv } from "../runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { gatewayStatusCommand } from "./gateway-status.js";
-import {
-  createUnreachableGatewayProbe,
-  createSecretRefGatewayConfig,
-} from "./gateway-status/test-support.js";
+import { createSecretRefGatewayConfig } from "./gateway-status/test-support.js";
 
 const mocks = vi.hoisted(() => {
   const sshStop = vi.fn(async () => {});
@@ -603,9 +600,22 @@ describe("gateway-status command", () => {
     const { runtime, runtimeLogs, runtimeErrors } = createRuntimeCapture();
     const defaultProbeGateway = probeGateway.getMockImplementation();
     try {
-      probeGateway.mockImplementation(async (opts: { url: string }) =>
-        createUnreachableGatewayProbe(opts.url, "connection refused"),
-      );
+      probeGateway.mockImplementation(async (opts: { url: string }) => ({
+        ok: false,
+        url: opts.url,
+        connectLatencyMs: null,
+        error: "connection refused",
+        close: null,
+        auth: {
+          role: null,
+          scopes: [],
+          capability: "unknown",
+        },
+        health: null,
+        status: null,
+        presence: null,
+        configSnapshot: null,
+      }));
 
       await expect(runGatewayStatus(runtime, { timeout: "1000", json: true })).rejects.toThrow(
         "__exit__:1",
@@ -750,7 +760,22 @@ describe("gateway-status command", () => {
           mockLocalTokenEnvRefConfig();
           probeGateway.mockImplementation(async (opts: { url: string }) => {
             const { url } = opts;
-            return createUnreachableGatewayProbe(url, "connection refused");
+            return {
+              ok: false,
+              url,
+              connectLatencyMs: null,
+              error: "connection refused",
+              close: null,
+              auth: {
+                role: null,
+                scopes: [],
+                capability: "unknown",
+              },
+              health: null,
+              status: null,
+              presence: null,
+              configSnapshot: null,
+            };
           });
           await expect(runGatewayStatus(runtime, { timeout: "1000", json: true })).rejects.toThrow(
             "__exit__:1",

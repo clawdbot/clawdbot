@@ -221,12 +221,7 @@ describe("config mutate helpers", () => {
           auth: { mode: "token" },
         },
       },
-      {
-        baseSnapshot: snapshot,
-        expectedConfigPath: snapshot.path,
-        afterWrite: { mode: "auto" },
-        inputBase: "source",
-      },
+      { baseSnapshot: snapshot, expectedConfigPath: snapshot.path, afterWrite: { mode: "auto" } },
     );
   });
 
@@ -285,7 +280,6 @@ describe("config mutate helpers", () => {
       },
       {
         baseSnapshot: fresh,
-        inputBase: "source",
         expectedConfigPath: fresh.path,
         ownedConfigPathForWrite: initial.path,
         afterWrite: { mode: "auto" },
@@ -472,12 +466,7 @@ describe("config mutate helpers", () => {
           list: [{ id: "first" }, { id: "second" }],
         },
       },
-      {
-        baseSnapshot: fresh,
-        expectedConfigPath: fresh.path,
-        afterWrite: { mode: "auto" },
-        inputBase: "source",
-      },
+      { baseSnapshot: fresh, expectedConfigPath: fresh.path, afterWrite: { mode: "auto" } },
     );
   });
 

@@ -30,6 +30,10 @@ export function resolveCompletionsCacheControl(
   };
 }
 
+function contentBlocks(message: Record<string, unknown>): Record<string, unknown>[] {
+  return Array.isArray(message.content) ? message.content.filter(isRecord) : [];
+}
+
 /** Shared Chat Completions policy; repeated wrapper application preserves existing checkpoints. */
 export function applyCompletionsAnthropicCacheControl(
   payload: Record<string, unknown>,
@@ -44,9 +48,7 @@ export function applyCompletionsAnthropicCacheControl(
   shapedPayloads.add(payload);
   const messages = Array.isArray(payload.messages) ? payload.messages : [];
   const tools = Array.isArray(payload.tools) ? payload.tools.filter(isRecord) : [];
-  const blocks = messages
-    .filter(isRecord)
-    .flatMap((message) => (Array.isArray(message.content) ? message.content.filter(isRecord) : []));
+  const blocks = messages.filter(isRecord).flatMap(contentBlocks);
   // This policy owns at most three breakpoints: tools, stable system, history.
   for (const block of [...tools, ...blocks]) {
     delete block.cache_control;

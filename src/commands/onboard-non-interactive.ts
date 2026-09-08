@@ -78,7 +78,7 @@ async function runNonInteractiveMigrationImport(params: {
         throw new ConfigMutationConflictError("config changed during migration promotion");
       }
       const committed = await replaceConfigFile({
-        sourceConfig: config,
+        nextConfig: config,
         snapshot: latest,
         ...(latest.hash !== undefined ? { baseHash: latest.hash } : {}),
         writeOptions: { allowConfigSizeDrop: true },

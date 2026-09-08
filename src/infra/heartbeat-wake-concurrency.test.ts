@@ -6,7 +6,6 @@ import {
 import {
   getHeartbeatWakeAbortSignal,
   requestHeartbeat,
-  requestHeartbeatAndWait,
   setHeartbeatWakeHandler as setRuntimeHeartbeatWakeHandler,
 } from "./heartbeat-wake.js";
 
@@ -39,118 +38,299 @@ describe("heartbeat wake target concurrency", () => {
     vi.restoreAllMocks();
   });
 
-  it.each([
-    { reason: "requests-in-flight", delay: 1_000, siblingAllowed: false },
-    { reason: "cron-in-progress", delay: 4_500, siblingAllowed: false },
-    { reason: "throw", delay: 1_000, siblingAllowed: false },
-    { reason: "min-spacing", delay: 4_500, siblingAllowed: true },
-  ])(
-    "honors $reason before the remaining selected target work",
-    async ({ reason, delay, siblingAllowed }) => {
-      vi.useFakeTimers();
-      const target = { agentId: "main", sessionKey: "agent:main:main" };
-      let first = true;
-      const handler = vi.fn(async (request: WakeRequest) => {
-        if (request.intent === "event" && first) {
-          first = false;
-          if (reason === "throw") {
-            throw new Error("temporary admission failure");
-          }
-          return {
-            status: "skipped" as const,
-            reason,
-            ...(delay === 4_500 ? { retryAtMs: Date.now() + delay } : {}),
-          };
-        }
-        return { status: "ran" as const, durationMs: 1 };
-      });
-      setHeartbeatWakeHandler(handler);
-      const settled = vi.fn();
-      const event = requestHeartbeatAndWait({
-        ...target,
-        source: "exec-event",
-        intent: "event",
-        reason: "exec-event",
-        coalesceMs: 100,
-      }).then(settled);
-      await vi.advanceTimersByTimeAsync(1);
-      const task = requestHeartbeatAndWait({
-        ...target,
-        source: "interval",
-        intent: "task",
-        reason: "heartbeat-task:inbox",
-        tasks: [{ jobId: "inbox", name: "inbox", prompt: "Check inbox" }],
-        coalesceMs: 99,
-      }).then(settled);
-      await vi.advanceTimersByTimeAsync(99);
-      const initial = siblingAllowed ? ["event", "task"] : ["event"];
-      expect(handler.mock.calls.map(([request]) => request.intent)).toEqual(initial);
-      expect(settled).toHaveBeenCalledTimes(siblingAllowed ? 1 : 0);
-      await vi.advanceTimersByTimeAsync(delay - 1);
-      expect(handler.mock.calls.map(([request]) => request.intent)).toEqual(initial);
-      await vi.advanceTimersByTimeAsync(1);
-      expect(handler.mock.calls.map(([request]) => request.intent)).toEqual(
-        siblingAllowed ? ["event", "task", "event"] : ["event", "event", "task"],
-      );
-      await Promise.all([event, task]);
-      expect(settled).toHaveBeenCalledTimes(2);
-      expect(settled.mock.calls.map(([result]) => result)).toEqual([
-        { status: "ran", durationMs: 1 },
-        { status: "ran", durationMs: 1 },
-      ]);
-    },
-  );
+  it("holds a post-barrier target while an earlier unscoped wake coalesces", async () => {
+    vi.useFakeTimers();
+    const handler = vi.fn(async (_request: WakeRequest) => ({
+      status: "ran" as const,
+      durationMs: 1,
+    }));
+    setHeartbeatWakeHandler(handler);
 
-  it.each(["source", "reason"] as const)(
-    "retains retry event intent when a scheduled tick wins %s priority",
-    async (retryField) => {
-      vi.useFakeTimers();
-      const handler = vi
-        .fn()
-        .mockImplementationOnce(async () => ({
-          status: "skipped",
-          reason: "flood",
-          retryAtMs: Date.now() + 500,
-        }))
-        .mockResolvedValue({ status: "ran", durationMs: 1 });
-      setHeartbeatWakeHandler(handler);
-      const settled = vi.fn();
-      const target = { agentId: "main", sessionKey: "agent:main:main", coalesceMs: 100 };
-      const event = requestHeartbeatAndWait({
-        ...target,
-        source: retryField === "source" ? "retry" : "exec-event",
-        reason: retryField === "reason" ? "retry" : "exec-event",
-        intent: "event",
-      }).then(settled);
-      const scheduled = requestHeartbeatAndWait({
-        ...target,
-        source: "interval",
-        intent: "scheduled",
-        reason: "interval",
-        scheduledEveryMs: 5_000,
-      }).then(settled);
-      await vi.advanceTimersByTimeAsync(100);
-      expect(handler).toHaveBeenCalledOnce();
-      expect(settled).not.toHaveBeenCalled();
-      await vi.advanceTimersByTimeAsync(499);
-      expect(handler).toHaveBeenCalledOnce();
-      await vi.advanceTimersByTimeAsync(1);
-      expect(handler).toHaveBeenCalledTimes(2);
-      for (const [request] of handler.mock.calls) {
-        expect(request).toMatchObject({
-          intent: "event",
-          source: "interval",
-          reason: "interval",
-          scheduledEveryMs: 5_000,
-        });
+    requestHeartbeat({
+      source: "other",
+      intent: "immediate",
+      reason: "test-delayed-global-flush",
+      coalesceMs: 1_000,
+    });
+    requestHeartbeat({
+      source: "background-task",
+      intent: "immediate",
+      reason: "background-task",
+      agentId: "main",
+      sessionKey: "agent:main:guildchat:channel:123",
+    });
+    await vi.advanceTimersByTimeAsync(999);
+    expect(handler).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(handler.mock.calls.map(([request]) => request.reason)).toEqual([
+      "test-delayed-global-flush",
+    ]);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(handler.mock.calls.map(([request]) => request.reason)).toEqual([
+      "test-delayed-global-flush",
+      "background-task",
+    ]);
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
+  });
+
+  it("starts independent target wakes without waiting for a blocked agent", async () => {
+    vi.useFakeTimers();
+    let finishBlockedWake: (() => void) | undefined;
+    const blockedWake = new Promise<void>((resolve) => {
+      finishBlockedWake = resolve;
+    });
+    const handler = vi.fn(async (request: WakeRequest) => {
+      if (request.agentId === "blocked") {
+        await blockedWake;
       }
-      await Promise.all([event, scheduled]);
-      expect(settled.mock.calls.map(([result]) => result)).toEqual([
-        { status: "ran", durationMs: 1 },
-        { status: "ran", durationMs: 1 },
+      return { status: "ran" as const, durationMs: 1 };
+    });
+    setHeartbeatWakeHandler(handler);
+
+    for (const agentId of ["blocked", "ready-a", "ready-b"]) {
+      requestHeartbeat({
+        source: "cron",
+        intent: "event",
+        reason: `cron:${agentId}`,
+        agentId,
+        sessionKey: `agent:${agentId}:main`,
+        coalesceMs: 100,
+      });
+    }
+
+    try {
+      await vi.advanceTimersByTimeAsync(100);
+      expect(handler.mock.calls.map(([request]) => request.agentId)).toEqual([
+        "blocked",
+        "ready-a",
+        "ready-b",
       ]);
-    },
-  );
+      expect(getActiveGatewayRootWorkCount()).toBe(1);
+    } finally {
+      finishBlockedWake?.();
+      await vi.advanceTimersByTimeAsync(0);
+    }
+
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
+  });
+
+  it("starts newly requested target wakes while another agent remains blocked", async () => {
+    vi.useFakeTimers();
+    let finishBlockedWake: (() => void) | undefined;
+    const blockedWake = new Promise<void>((resolve) => {
+      finishBlockedWake = resolve;
+    });
+    const handler = vi.fn(async (request: WakeRequest) => {
+      if (request.agentId === "blocked") {
+        await blockedWake;
+      }
+      return { status: "ran" as const, durationMs: 1 };
+    });
+    setHeartbeatWakeHandler(handler);
+    requestHeartbeat({
+      source: "cron",
+      intent: "event",
+      reason: "cron:blocked",
+      agentId: "blocked",
+      sessionKey: "agent:blocked:main",
+      coalesceMs: 0,
+    });
+
+    try {
+      await vi.advanceTimersByTimeAsync(1);
+      requestHeartbeat({
+        source: "cron",
+        intent: "event",
+        reason: "cron:ready",
+        agentId: "ready",
+        sessionKey: "agent:ready:main",
+        coalesceMs: 0,
+      });
+      await vi.advanceTimersByTimeAsync(1);
+      expect(handler.mock.calls.map(([request]) => request.agentId)).toEqual(["blocked", "ready"]);
+      expect(getActiveGatewayRootWorkCount()).toBe(1);
+    } finally {
+      finishBlockedWake?.();
+      await vi.advanceTimersByTimeAsync(0);
+    }
+
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
+  });
+
+  it("serializes redundant agent-plus-session identity with the same canonical session", async () => {
+    vi.useFakeTimers();
+    let finishFirstWake: (() => void) | undefined;
+    const firstWakeFinished = new Promise<void>((resolve) => {
+      finishFirstWake = resolve;
+    });
+    const handler = vi.fn(async (request: WakeRequest) => {
+      if (request.reason === "session-only") {
+        await firstWakeFinished;
+      }
+      return { status: "ran" as const, durationMs: 1 };
+    });
+    setHeartbeatWakeHandler(handler);
+    const sessionKey = "agent:main:guildchat:channel:123";
+
+    requestHeartbeat({
+      source: "cron",
+      intent: "event",
+      reason: "session-only",
+      sessionKey,
+      coalesceMs: 0,
+    });
+    await vi.advanceTimersByTimeAsync(1);
+    requestHeartbeat({
+      source: "cron",
+      intent: "event",
+      reason: "redundant-agent",
+      agentId: "main",
+      sessionKey,
+      coalesceMs: 0,
+    });
+
+    try {
+      await vi.advanceTimersByTimeAsync(1);
+      expect(handler.mock.calls.map(([request]) => request.reason)).toEqual(["session-only"]);
+      expect(getActiveGatewayRootWorkCount()).toBe(1);
+    } finally {
+      finishFirstWake?.();
+      await vi.advanceTimersByTimeAsync(0);
+    }
+
+    expect(handler.mock.calls.map(([request]) => request.reason)).toEqual([
+      "session-only",
+      "redundant-agent",
+    ]);
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
+  });
+
+  it("runs an unscoped wake as an exclusive barrier between targeted groups", async () => {
+    vi.useFakeTimers();
+    let finishBeforeBarrier: (() => void) | undefined;
+    let finishBarrier: (() => void) | undefined;
+    const beforeBarrierFinished = new Promise<void>((resolve) => {
+      finishBeforeBarrier = resolve;
+    });
+    const barrierFinished = new Promise<void>((resolve) => {
+      finishBarrier = resolve;
+    });
+    const handler = vi.fn(async (request: WakeRequest) => {
+      if (request.reason === "before-barrier") {
+        await beforeBarrierFinished;
+      } else if (request.reason === "global-barrier") {
+        await barrierFinished;
+      }
+      return { status: "ran" as const, durationMs: 1 };
+    });
+    setHeartbeatWakeHandler(handler);
+
+    requestHeartbeat({
+      source: "cron",
+      intent: "event",
+      reason: "before-barrier",
+      sessionKey: "agent:main:main",
+      coalesceMs: 0,
+    });
+    await vi.advanceTimersByTimeAsync(1);
+    requestHeartbeat({
+      source: "other",
+      intent: "immediate",
+      reason: "global-barrier",
+      coalesceMs: 0,
+    });
+    for (const agentId of ["ops", "support"]) {
+      requestHeartbeat({
+        source: "cron",
+        intent: "event",
+        reason: `after-barrier:${agentId}`,
+        sessionKey: `agent:${agentId}:main`,
+        coalesceMs: 0,
+      });
+    }
+    await vi.advanceTimersByTimeAsync(1);
+    expect(handler.mock.calls.map(([request]) => request.reason)).toEqual(["before-barrier"]);
+    expect(getActiveGatewayRootWorkCount()).toBe(1);
+
+    finishBeforeBarrier?.();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(handler.mock.calls.map(([request]) => request.reason)).toEqual([
+      "before-barrier",
+      "global-barrier",
+    ]);
+    expect(getActiveGatewayRootWorkCount()).toBe(1);
+
+    finishBarrier?.();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(handler.mock.calls.map(([request]) => request.reason)).toEqual([
+      "before-barrier",
+      "global-barrier",
+      "after-barrier:ops",
+      "after-barrier:support",
+    ]);
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
+  });
+
+  it("bounds concurrent target wakes and starts queued targets as slots open", async () => {
+    vi.useFakeTimers();
+    const finishWakeByAgent = new Map<string, () => void>();
+    let peakActiveWakeCount = 0;
+    const handler = vi.fn(async (request: WakeRequest) => {
+      peakActiveWakeCount = Math.max(peakActiveWakeCount, getActiveGatewayRootWorkCount());
+      await new Promise<void>((resolve) => {
+        finishWakeByAgent.set(request.agentId ?? "", resolve);
+      });
+      return { status: "ran" as const, durationMs: 1 };
+    });
+    setHeartbeatWakeHandler(handler);
+
+    for (let index = 0; index < 9; index += 1) {
+      const agentId = `target-${index}`;
+      requestHeartbeat({
+        source: "cron",
+        intent: "event",
+        reason: `cron:${agentId}`,
+        agentId,
+        sessionKey: `agent:${agentId}:main`,
+        coalesceMs: 0,
+      });
+    }
+
+    try {
+      await vi.advanceTimersByTimeAsync(1);
+      expect(handler.mock.calls.map(([request]) => request.agentId)).toEqual([
+        "target-0",
+        "target-1",
+        "target-2",
+        "target-3",
+      ]);
+      expect(getActiveGatewayRootWorkCount()).toBe(4);
+
+      finishWakeByAgent.get("target-0")?.();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(handler.mock.calls.map(([request]) => request.agentId)).toEqual([
+        "target-0",
+        "target-1",
+        "target-2",
+        "target-3",
+        "target-4",
+      ]);
+      expect(getActiveGatewayRootWorkCount()).toBe(4);
+    } finally {
+      for (let index = 0; index < 9; index += 1) {
+        for (const finishWake of finishWakeByAgent.values()) {
+          finishWake();
+        }
+        await vi.advanceTimersByTimeAsync(0);
+      }
+    }
+
+    expect(handler).toHaveBeenCalledTimes(9);
+    expect(peakActiveWakeCount).toBe(4);
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
+  });
 
   it("preserves the target concurrency bound across heartbeat handler replacement", async () => {
     vi.useFakeTimers();
@@ -340,6 +520,126 @@ describe("heartbeat wake target concurrency", () => {
     }
 
     expect(handler.mock.calls.map(([request]) => request.intent)).toEqual(["task", "event"]);
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
+  });
+
+  it("does not apply an active target's old delay to a newly ready wake", async () => {
+    vi.useFakeTimers();
+    let finishBlockedWake: (() => void) | undefined;
+    const blockedWake = new Promise<void>((resolve) => {
+      finishBlockedWake = resolve;
+    });
+    const handler = vi.fn(async (request: WakeRequest) => {
+      if (request.reason === "cron:blocked") {
+        await blockedWake;
+      }
+      return { status: "ran" as const, durationMs: 1 };
+    });
+    setHeartbeatWakeHandler(handler);
+    requestHeartbeat({
+      source: "cron",
+      intent: "event",
+      reason: "cron:blocked",
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      coalesceMs: 30_000,
+    });
+
+    try {
+      await vi.advanceTimersByTimeAsync(30_000);
+      requestHeartbeat({
+        source: "manual",
+        intent: "manual",
+        reason: "manual",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        coalesceMs: 0,
+      });
+      await vi.advanceTimersByTimeAsync(1);
+      expect(handler).toHaveBeenCalledOnce();
+    } finally {
+      finishBlockedWake?.();
+      await vi.advanceTimersByTimeAsync(0);
+    }
+
+    expect(handler.mock.calls.map(([request]) => request.reason)).toEqual([
+      "cron:blocked",
+      "manual",
+    ]);
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
+  });
+
+  it("does not delay a ready target behind another target's deferred retry", async () => {
+    vi.useFakeTimers();
+    let finishBlockedWake: (() => void) | undefined;
+    const blockedWake = new Promise<void>((resolve) => {
+      finishBlockedWake = resolve;
+    });
+    let deferredAttempts = 0;
+    const handler = vi.fn(async (request: WakeRequest) => {
+      if (request.reason === "cron:blocked") {
+        await blockedWake;
+      }
+      if (request.agentId === "deferred" && deferredAttempts++ === 0) {
+        return {
+          status: "skipped" as const,
+          reason: "not-due",
+          retryAtMs: Date.now() + 30_000,
+        };
+      }
+      return { status: "ran" as const, durationMs: 1 };
+    });
+    setHeartbeatWakeHandler(handler);
+    requestHeartbeat({
+      source: "cron",
+      intent: "event",
+      reason: "cron:blocked",
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      coalesceMs: 0,
+    });
+
+    try {
+      await vi.advanceTimersByTimeAsync(1);
+      requestHeartbeat({
+        source: "exec-event",
+        intent: "event",
+        reason: "exec-event",
+        agentId: "deferred",
+        sessionKey: "agent:deferred:main",
+        coalesceMs: 0,
+      });
+      await vi.advanceTimersByTimeAsync(1);
+      requestHeartbeat({
+        source: "manual",
+        intent: "manual",
+        reason: "manual",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        coalesceMs: 0,
+      });
+      await vi.advanceTimersByTimeAsync(1);
+      expect(handler.mock.calls.map(([request]) => request.reason)).toEqual([
+        "cron:blocked",
+        "exec-event",
+      ]);
+    } finally {
+      finishBlockedWake?.();
+      await vi.advanceTimersByTimeAsync(0);
+    }
+
+    expect(handler.mock.calls.map(([request]) => request.reason)).toEqual([
+      "cron:blocked",
+      "exec-event",
+      "manual",
+    ]);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(handler.mock.calls.map(([request]) => request.reason)).toEqual([
+      "cron:blocked",
+      "exec-event",
+      "manual",
+      "exec-event",
+    ]);
     expect(getActiveGatewayRootWorkCount()).toBe(0);
   });
 });

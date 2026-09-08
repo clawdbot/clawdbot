@@ -16,7 +16,6 @@ import {
   resolveSqliteTranscriptReadScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
-import { normalizeVisibleMessageLimit } from "./session-accessor.sqlite-visible-cursor.js";
 import {
   resolveSqliteSessionTranscriptReadFence,
   SessionTranscriptReadFenceError,
@@ -39,6 +38,19 @@ type RawTranscriptCursor = {
 type SessionTranscriptRawDeltaPage = Extract<SessionTranscriptRawDeltaResult, { kind: "page" }>;
 
 type ResolvedTranscriptReadScope = ReturnType<typeof resolveSqliteTranscriptReadScope>;
+
+function normalizeRawDeltaLimit(
+  value: number | undefined,
+  fallback: number,
+  maximum: number,
+  name: string,
+): number {
+  const resolved = value ?? fallback;
+  if (!Number.isInteger(resolved) || resolved < 1 || resolved > maximum) {
+    throw new RangeError(`${name} must be an integer between 1 and ${String(maximum)}`);
+  }
+  return resolved;
+}
 
 function encodeRawTranscriptCursor(cursor: RawTranscriptCursor): string {
   return Buffer.from(JSON.stringify(cursor), "utf8").toString("base64url");
@@ -97,13 +109,13 @@ export function readTranscriptRawDelta(
   limits: SessionTranscriptRawDeltaLimits = {},
 ): SessionTranscriptRawDeltaResult {
   const resolved = resolveSqliteTranscriptReadScope(scope);
-  const maxEvents = normalizeVisibleMessageLimit(
+  const maxEvents = normalizeRawDeltaLimit(
     limits.maxEvents,
     DEFAULT_RAW_TRANSCRIPT_MAX_EVENTS,
     MAX_RAW_TRANSCRIPT_EVENTS,
     "maxEvents",
   );
-  const maxBytes = normalizeVisibleMessageLimit(
+  const maxBytes = normalizeRawDeltaLimit(
     limits.maxBytes,
     DEFAULT_RAW_TRANSCRIPT_MAX_BYTES,
     MAX_RAW_TRANSCRIPT_BYTES,

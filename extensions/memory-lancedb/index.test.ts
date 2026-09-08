@@ -1505,14 +1505,18 @@ describe("memory plugin e2e", () => {
         )?.[1];
         expect(beforePromptBuild).toBeTypeOf("function");
 
-        const currentUserText = `what editor should i use? ${"for a large TypeScript project ".repeat(10)}`;
-        const expectedRecallQuery = normalizeRecallQuery(currentUserText, 120);
+        const latestUserText = `what editor should i use? ${"with a very long channel metadata tail ".repeat(10)}`;
+        const expectedRecallQuery = normalizeRecallQuery(latestUserText, 120);
         const result = await beforePromptBuild?.(
           {
-            prompt: `[media attached: /tmp/editor.png (image/png)]\n${currentUserText}`,
+            prompt: `discord metadata ${"ignored ".repeat(100)}`,
             messages: [
-              { role: "user", content: "what seat should i book for a long flight?" },
-              { role: "assistant", content: "An aisle seat." },
+              { role: "user", content: "old preference question" },
+              { role: "assistant", content: "old answer" },
+              {
+                role: "user",
+                content: `[media attached: /tmp/what editor should i use.png (image/png)]\n${latestUserText}`,
+              },
             ],
           },
           withAllowedMemoryRecallAuthority({ agentId: "main" }),

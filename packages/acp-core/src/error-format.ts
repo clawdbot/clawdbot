@@ -1,3 +1,4 @@
+// ACP Core helper module supports error format behavior.
 import {
   CREDENTIAL_STYLE_HEADER_REDACT_PATTERN,
   HTTP_AUTH_HEADER_BOUNDARY_PATTERN,

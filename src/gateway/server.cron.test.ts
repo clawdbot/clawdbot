@@ -7,7 +7,6 @@ import { setImmediate as setImmediatePromise } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import type WebSocket from "ws";
-import { createInfoWarnErrorLogger } from "../../test/helpers/mock-logger.js";
 import { createOperationalRunInstanceRef } from "../agents/admitted-run-context.js";
 import { resetConfigRuntimeState } from "../config/config.js";
 import { loadCronStore, saveCronStore } from "../cron/store.js";
@@ -297,7 +296,11 @@ async function directCronReq(
       context: {
         cron: cronState.cron,
         cronStorePath: cronState.storePath,
-        logGateway: createInfoWarnErrorLogger(),
+        logGateway: {
+          info: vi.fn(),
+          warn: vi.fn(),
+          error: vi.fn(),
+        },
         getRuntimeConfig: cronState.getRuntimeConfig,
       } as never,
       client: options.client ?? null,

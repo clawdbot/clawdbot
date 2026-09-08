@@ -6,9 +6,7 @@ import * as apiProviderAuthChoices from "../../auth-choice.apply.api-providers.j
 import { commitNonInteractiveOnboardConfig } from "../config-write.js";
 import { applyNonInteractiveAuthChoice } from "./auth-choice.js";
 
-const writeWizardConfigFile = vi.hoisted(() =>
-  vi.fn(async (config: OpenClawConfig) => ({ path: "/tmp/openclaw.json", nextConfig: config })),
-);
+const writeWizardConfigFile = vi.hoisted(() => vi.fn(async (config: OpenClawConfig) => config));
 vi.mock("../../../wizard/setup.shared.js", () => ({ writeWizardConfigFile }));
 
 const formatAuthChoiceChoicesForCli = vi.hoisted(() =>
@@ -339,7 +337,6 @@ describe("applyNonInteractiveAuthChoice", () => {
     expect(result).not.toBeNull();
     await commitNonInteractiveOnboardConfig({
       nextConfig: result!,
-      baseConfig: nextConfig,
     });
 
     const persistedConfig = writeWizardConfigFile.mock.calls.at(-1)?.[0];

@@ -1,3 +1,4 @@
+// Memory Host SDK module implements batch upload behavior.
 import { buildBatchHeaders, type BatchHttpClientConfig } from "./batch-utils.js";
 import { resolveEmbeddingEndpointUrl } from "./embeddings-remote-client.js";
 import { formatErrorMessage } from "./error-utils.js";

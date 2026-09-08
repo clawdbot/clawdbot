@@ -249,9 +249,6 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
     requesterAccountId,
     gatewayClientScopes,
     deliveryRetryOwner,
-    onPlatformSendDispatch,
-    assertDirectAdapterHandoff,
-    skipQueue,
   }) => {
     const telegramAction = resolveTelegramMessageActionName(action);
     if (!telegramAction) {
@@ -287,9 +284,6 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
         inboundEventKind,
         gatewayClientScopes,
         deliveryRetryOwner,
-        onPlatformSendDispatch,
-        assertDirectAdapterHandoff,
-        skipQueue,
         ...(conversationReadOrigin ? { conversationReadOrigin } : {}),
         ...(requesterAccountId ? { requesterAccountId } : {}),
         ...(reply ? { reply } : {}),

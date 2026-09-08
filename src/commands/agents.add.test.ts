@@ -16,8 +16,6 @@ import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createQueuedWizardPrompter } from "../test-utils/plugin-setup-wizard.js";
-import { createAgentForAddCommandTest } from "./agents.add.test-fixtures.js";
-import { committedConfigFiles as configFiles } from "./committed-config.test-support.js";
 import { baseConfigSnapshot, createTestRuntime } from "./test-runtime-config-helpers.js";
 
 type SetupChannels = typeof import("./onboard-channels.js").setupChannels;
@@ -32,9 +30,9 @@ const replaceConfigFileMock = vi.hoisted(() =>
 const createAgentMock = vi.hoisted(() => vi.fn());
 const checkAgentCreationGateMock = vi.hoisted(() => vi.fn());
 const commitConfigWithPendingPluginInstallsMock = vi.hoisted(() =>
-  vi.fn(async (params: { sourceConfig: Record<string, unknown> }) => {
-    await writeConfigFileMock(params.sourceConfig);
-    return configFiles.write(params.sourceConfig);
+  vi.fn(async (params: { nextConfig: Record<string, unknown> }) => {
+    await writeConfigFileMock(params.nextConfig);
+    return { config: params.nextConfig };
   }),
 );
 const transformConfigWithPendingPluginInstallsMock = vi.hoisted(() =>
@@ -120,13 +118,6 @@ const onboardHelpersMocks = vi.hoisted(() => ({
 vi.mock("../config/config.js", async () => ({
   ...(await vi.importActual<typeof import("../config/config.js")>("../config/config.js")),
   readConfigFileSnapshot: readConfigFileSnapshotMock,
-  readConfigFileSnapshotForWrite: async () => {
-    const snapshot = await readConfigFileSnapshotMock();
-    return {
-      snapshot: { ...snapshot, sourceConfig: snapshot.sourceConfig ?? snapshot.config },
-      writeOptions: {},
-    };
-  },
   writeConfigFile: writeConfigFileMock,
   replaceConfigFile: replaceConfigFileMock,
 }));
@@ -205,7 +196,6 @@ describe("agents add command", () => {
   });
 
   beforeEach(() => {
-    configFiles.clear();
     readConfigFileSnapshotMock.mockClear();
     writeConfigFileMock.mockClear();
     replaceConfigFileMock.mockClear();
@@ -213,7 +203,50 @@ describe("agents add command", () => {
     transformConfigWithPendingPluginInstallsMock.mockClear();
     checkAgentCreationGateMock.mockReset().mockResolvedValue(undefined);
     createAgentMock.mockReset();
-    createAgentMock.mockImplementation(createAgentForAddCommandTest);
+    createAgentMock.mockImplementation(
+      async (params: {
+        name?: string;
+        workspace?: string;
+        entry?: { id: string; name?: string; workspace?: string; agentDir?: string };
+        bindingSpecs?: string[];
+        stagedConfig?: Record<string, unknown>;
+        prepareConfigCommit?: () => Promise<(() => void | Promise<void>) | void>;
+      }) => {
+        const name = params.name ?? params.entry?.name ?? params.entry?.id ?? "";
+        const agentId = (params.entry?.id ?? name).toLowerCase();
+        if (agentId === "openclaw" || agentId === "crestodian") {
+          return { status: "error", reason: "reserved-id", agentId };
+        }
+        const binding = params.bindingSpecs?.[0]
+          ? {
+              type: "route",
+              agentId,
+              match: { channel: params.bindingSpecs[0].split(":")[0] },
+            }
+          : undefined;
+        await params.prepareConfigCommit?.();
+        return {
+          status: "created" as const,
+          agentId,
+          name,
+          workspace: params.workspace ?? params.entry?.workspace ?? `/tmp/workspace-${agentId}`,
+          agentDir: params.entry?.agentDir ?? `/tmp/agent-${agentId}`,
+          bootstrapPending: true,
+          config: params.stagedConfig ?? {},
+          ...(binding
+            ? {
+                bindingResult: {
+                  config: {},
+                  added: [],
+                  updated: [],
+                  skipped: [],
+                  conflicts: [{ binding, existingAgentId: "other-agent" }],
+                },
+              }
+            : {}),
+        };
+      },
+    );
     wizardMocks.createClackPrompter.mockClear();
     pluginLifecycleMocks.withPluginLifecycleLease.mockClear();
     pluginLifecycleMocks.state.active = false;
@@ -759,12 +792,25 @@ describe("agents add command", () => {
       setConfigSnapshot({ agents: { list: [{ id: "main", default: true }] } });
       useFreshAgentWizard({ workspaceDir, confirmValues: [true] });
       stageGuidedAuth();
-      const create = createAgentMock.getMockImplementation()!;
-      createAgentMock.mockImplementationOnce(async (params) => {
-        expect(pluginLifecycleMocks.state.active).toBe(true);
-        expect(authProfileMocks.persistBatch).not.toHaveBeenCalled();
-        return await create(params);
-      });
+      createAgentMock.mockImplementationOnce(
+        async (params: {
+          stagedConfig?: Record<string, unknown>;
+          prepareConfigCommit?: () => Promise<(() => void | Promise<void>) | void>;
+        }) => {
+          expect(pluginLifecycleMocks.state.active).toBe(true);
+          expect(authProfileMocks.persistBatch).not.toHaveBeenCalled();
+          await params.prepareConfigCommit?.();
+          return {
+            status: "created" as const,
+            agentId: "work",
+            name: "work",
+            workspace: workspaceDir,
+            agentDir,
+            bootstrapPending: true,
+            config: params.stagedConfig ?? {},
+          };
+        },
+      );
 
       await agentsAddCommand({}, runtime);
 
@@ -781,10 +827,7 @@ describe("agents add command", () => {
       );
       expect(createAgentMock).toHaveBeenCalledWith(
         expect.objectContaining({
-          stagedConfig: expect.objectContaining({
-            config: expect.objectContaining({ auth: expect.any(Object) }),
-            writeSnapshot: expect.any(Object),
-          }),
+          stagedConfig: expect.objectContaining({ auth: expect.any(Object) }),
           prepareConfigCommit: expect.any(Function),
         }),
       );
@@ -841,7 +884,7 @@ describe("agents add command", () => {
       });
       expect(commitConfigWithPendingPluginInstallsMock).toHaveBeenCalledWith(
         expect.objectContaining({
-          sourceConfig: expect.objectContaining({ auth: expect.any(Object) }),
+          nextConfig: expect.objectContaining({ auth: expect.any(Object) }),
         }),
       );
       expect(createAgentMock).not.toHaveBeenCalled();
@@ -905,7 +948,6 @@ describe("agents add command", () => {
       agentDir: "/tmp/agent-work",
       bootstrapPending: true,
       config: persistedConfig,
-      configPath: configFiles.write(persistedConfig).path,
     });
 
     await agentsAddCommand({}, runtime);

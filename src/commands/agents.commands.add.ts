@@ -30,7 +30,7 @@ import { formatCliCommand } from "../cli/command-format.js";
 import { ExpectedCliError } from "../cli/failure-output.js";
 import { isTerminalInteractive } from "../cli/terminal-interactivity.js";
 import { logConfigUpdated } from "../config/logging.js";
-import { createChannelSetupHooks } from "../flows/channel-setup.js";
+import { createChannelSetupTransaction } from "../flows/channel-setup.js";
 import {
   commitConfigWithPendingPluginInstalls,
   transformConfigWithPendingPluginInstalls,
@@ -47,7 +47,7 @@ import { applyAgentBindings, buildChannelBindings, describeBinding } from "./age
 import { applyAgentConfig, listAgentEntries } from "./agents.config.js";
 import { promptAuthChoiceGrouped } from "./auth-choice-prompt.js";
 import { prepareAuthChoice, warnIfModelConfigLooksOff } from "./auth-choice.js";
-import { requireValidConfigForWrite } from "./config-validation.js";
+import { requireValidConfigFileSnapshot } from "./config-validation.js";
 import {
   ensureOnboardingAgentWorkspace,
   resolveOnboardingAgentTarget,
@@ -111,11 +111,12 @@ export async function agentsAddCommand(
     );
   }
 
-  const writeSnapshot = await requireValidConfigForWrite(runtime);
-  if (!writeSnapshot) {
+  const configSnapshot = await requireValidConfigFileSnapshot(runtime);
+  if (!configSnapshot) {
     return;
   }
-  const cfg = writeSnapshot.snapshot.sourceConfig;
+  const cfg = configSnapshot.sourceConfig ?? configSnapshot.config;
+  const baseHash = configSnapshot.hash;
 
   const workspaceFlag = opts.workspace?.trim();
   const nameInput = opts.name?.trim();
@@ -423,7 +424,7 @@ export async function agentsAddCommand(
       validateCatalog: false,
     });
 
-    const channelSetup = createChannelSetupHooks({ runtime: wizardRuntime });
+    const channelSetup = createChannelSetupTransaction({ runtime: wizardRuntime });
     let selection: ChannelChoice[] = [];
     const channelAccountIds: Partial<Record<ChannelChoice, string>> = {};
     nextConfig = await setupChannels(nextConfig, wizardRuntime, prompter, {
@@ -504,13 +505,13 @@ export async function agentsAddCommand(
         ? await persistProviderAuthProfileBatch(stagedAuthBatch)
         : undefined;
       try {
-        const committed = await commitConfigWithPendingPluginInstalls({
-          sourceConfig: nextConfig,
-          writeOptions: writeSnapshot.writeOptions,
-          baseHash: writeSnapshot.snapshot.hash,
+        nextConfig = await channelSetup.commit(nextConfig, async (configToCommit) => {
+          const committed = await commitConfigWithPendingPluginInstalls({
+            nextConfig: configToCommit,
+            ...(baseHash !== undefined ? { baseHash } : {}),
+          });
+          return committed.config;
         });
-        await channelSetup.runPostWriteHooks(committed.path);
-        nextConfig = committed.nextConfig;
       } catch (error) {
         authPersistence?.rollback();
         throw error;
@@ -528,7 +529,8 @@ export async function agentsAddCommand(
       const created = await withPluginLifecycleLease({}, async () => {
         return await createAgent({
           entry: { ...stagedEntry, id: agentId },
-          stagedConfig: { config: nextConfig, writeSnapshot },
+          expectedConfigHash: baseHash ?? null,
+          stagedConfig: nextConfig,
           transformConfig: transformConfigWithPendingPluginInstalls,
           ...(stagedAuthBatch
             ? {
@@ -549,7 +551,7 @@ export async function agentsAddCommand(
         workspace: created.workspace,
         agentDir: created.agentDir,
       };
-      await channelSetup.runPostWriteHooks(created.configPath);
+      await channelSetup.runPostWriteHooks(nextConfig);
     }
     await reportPortableAuthCopy?.();
     if (!opts.json) {

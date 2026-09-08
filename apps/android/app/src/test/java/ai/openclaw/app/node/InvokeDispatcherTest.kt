@@ -13,7 +13,6 @@ import ai.openclaw.app.protocol.OpenClawSmsCommand
 import ai.openclaw.app.protocol.OpenClawTalkCommand
 import android.content.Context
 import android.content.pm.PackageManager
-import android.location.Location
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -397,7 +396,8 @@ private class InvokeDispatcherFakeLocationDataSource : LocationDataSource {
     desiredProviders: List<String>,
     maxAgeMs: Long?,
     timeoutMs: Long,
-  ): Location {
+    isPrecise: Boolean,
+  ): LocationCaptureManager.Payload {
     error("unused in InvokeDispatcherTest")
   }
 }

@@ -593,7 +593,7 @@ describe("hosted model pricing", () => {
         const discoverySpies = allowPluginNormalization
           ? []
           : [
-              vi.spyOn(manifestNormalization, "resolveManifestModelIdNormalizationPolicies"),
+              vi.spyOn(manifestNormalization, "normalizeProviderModelIdWithManifest"),
               vi.spyOn(runtimeNormalization, "normalizeProviderModelIdWithRuntime"),
               vi.spyOn(pluginMetadata, "resolvePluginMetadataSnapshot"),
             ];

@@ -1,4 +1,3 @@
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, noChange, nothing } from "lit";
 import { AsyncDirective, directive } from "lit/async-directive.js";
 import { Directive } from "lit/directive.js";
@@ -602,13 +601,13 @@ async function readManagedOutgoingImageBlob(
 
 function imageDownloadFileName(title: string, mimeType: string): string {
   const extension = mimeType === "image/jpeg" ? "jpg" : mimeType.split("/", 2)[1] || "img";
-  const rawStem = Array.from(title, (character) =>
+  const stem = Array.from(title, (character) =>
     character.codePointAt(0)! <= 0x1f || '<>:"/\\|?*'.includes(character) ? "-" : character,
   )
     .join("")
     .replace(/\.[a-z0-9]{1,10}$/iu, "")
-    .replace(/[. -]+$/u, "");
-  const stem = truncateUtf16Safe(rawStem, 120);
+    .replace(/[. -]+$/u, "")
+    .slice(0, 120);
   return `${stem || "generated-image"}.${/^[a-z0-9.+-]{1,12}$/u.test(extension) ? extension : "img"}`;
 }
 

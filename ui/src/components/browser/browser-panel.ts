@@ -9,7 +9,6 @@
 import { nothing } from "lit";
 import { property } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { hasNativeBrowserBridge } from "../../app/native-browser-bridge.ts";
 import { t } from "../../i18n/index.ts";
 import { OpenClawLitElement } from "../../lit/openclaw-element.ts";
 import { scrollbarShadowStyles } from "../../lit/scrollbar-styles.ts";
@@ -35,8 +34,6 @@ class OpenClawBrowserPanel extends OpenClawLitElement implements BrowserPanelCon
   @property({ attribute: false }) client: GatewayBrowserClient | null = null;
   /** Whether the connected gateway advertises browser.request to this operator. */
   @property({ type: Boolean }) available = false;
-  /** Gateway browser features remain separately gated on native hosts. */
-  @property({ type: Boolean }) remoteAvailable = true;
   /** Full-page route takeovers (settings) own the viewport; the dock hides while one renders. */
   @property({ type: Boolean }) suppressed = false;
   /** Gateway HTTP resource mount used for the authenticated media fetch. */
@@ -104,7 +101,7 @@ class OpenClawBrowserPanel extends OpenClawLitElement implements BrowserPanelCon
     if (changed.has("suppressed")) {
       const restored = this.dockLayout.setSuppressed(this.suppressed);
       if (this.suppressed) {
-        this.browserPanelController.suspendView();
+        this.browserPanelController.hostDisconnected();
       } else if (restored && this.browserPanelIsOpen()) {
         void this.browserPanelController.refreshAll();
       }
@@ -117,9 +114,9 @@ class OpenClawBrowserPanel extends OpenClawLitElement implements BrowserPanelCon
     // pending toggle choose its route before any automatic follow or refresh.
     const followedPreferred = this.refreshOnPresentation && this.followPreferredTab();
     if (this.embedded) {
-      if (!this.presented || !this.available || (!this.client && !hasNativeBrowserBridge())) {
+      if (!this.presented || !this.available || !this.client) {
         if (presentationChanged || gatewayAvailabilityChanged) {
-          this.browserPanelController.suspendView();
+          this.browserPanelController.hostDisconnected();
         }
       } else if (
         this.refreshOnPresentation &&
@@ -144,7 +141,6 @@ class OpenClawBrowserPanel extends OpenClawLitElement implements BrowserPanelCon
         void this.browserPanelController.refreshAll();
       }
     }
-    this.browserPanelController.native.presentation.update();
     this.dockLayout.syncReservation();
     this.browserPanelController.paintOverlay();
     const viewportElement = this.renderRoot.querySelector(".bp-viewport");
@@ -241,10 +237,7 @@ class OpenClawBrowserPanel extends OpenClawLitElement implements BrowserPanelCon
       const normalizedRequestedUrl =
         typeof detail?.url === "string" ? normalizeBrowserUrlDraft(detail.url) : null;
       if (normalizedRequestedUrl) {
-        void this.browserPanelController.openUrl(normalizedRequestedUrl, {
-          newTab: true,
-          native: detail?.native,
-        });
+        void this.browserPanelController.openUrl(normalizedRequestedUrl, { newTab: true });
       } else if (browserTab) {
         // Consume the current result so it cannot replace this explicit card choice.
         this.consumedPreferredRevision = this.preferredRevision();
@@ -272,10 +265,7 @@ class OpenClawBrowserPanel extends OpenClawLitElement implements BrowserPanelCon
       const wasOpen = this.dockLayout.open;
       this.dockLayout.setOpen(true);
       if (normalizedRequestedUrl) {
-        void this.browserPanelController.openUrl(normalizedRequestedUrl, {
-          newTab: true,
-          native: detail?.native,
-        });
+        void this.browserPanelController.openUrl(normalizedRequestedUrl, { newTab: true });
       } else if (browserTab) {
         // Consume the current result so it cannot replace this explicit card choice.
         this.consumedPreferredRevision = this.preferredRevision();
@@ -291,7 +281,7 @@ class OpenClawBrowserPanel extends OpenClawLitElement implements BrowserPanelCon
   }
 
   private closePanel(): void {
-    this.browserPanelController.suspendView();
+    this.browserPanelController.hostDisconnected();
     this.dockLayout.setOpen(false);
   }
 
