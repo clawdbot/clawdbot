@@ -2,7 +2,9 @@
 import { describe, expect, it } from "vitest";
 import {
   buildSafeToolName,
+  couldMaterializeToolName,
   normalizeReservedToolNames,
+  safeToolNameGlob,
   sanitizeNodeIdFragment,
   sanitizeServerName,
   TOOL_NAME_SEPARATOR,
@@ -79,5 +81,47 @@ describe("agent bundle MCP names", () => {
 
     expect(safeToolName.startsWith(`memory${TOOL_NAME_SEPARATOR}`)).toBe(true);
     expect(safeToolName.length).toBeLessThanOrEqual(64);
+  });
+
+  it("recognizes the normalized names buildSafeToolName can emit", () => {
+    const reservedNames = new Set<string>();
+    for (const toolName of ["read_note", "1note", "-note", "n".repeat(80)]) {
+      const emitted = buildSafeToolName({ serverName: "memos", toolName, reservedNames });
+      expect(couldMaterializeToolName(emitted.toLowerCase(), "memos__")).toBe(true);
+    }
+    for (const name of ["memos__1note", "memos__-note", `memos__${"n".repeat(60)}`, "memos__"]) {
+      expect(couldMaterializeToolName(name, "memos__")).toBe(false);
+    }
+  });
+
+  it.each([
+    { pattern: "read_*", expected: "memos__read_*" },
+    { pattern: " Read Note ", expected: "memos__read-note" },
+    { pattern: "a**b", expected: "memos__a**b" },
+    { pattern: "*", expected: "memos__*" },
+    { pattern: "", expected: "memos__" },
+  ])(
+    "maps the tool-filter pattern $pattern onto normalized safe names",
+    ({ pattern, expected }) => {
+      expect(safeToolNameGlob("Memos", pattern)).toBe(expected);
+    },
+  );
+
+  it("maps a literal filter pattern onto the name buildSafeToolName gives that tool", () => {
+    const reservedNames = new Set<string>();
+    const emitted = buildSafeToolName({
+      serverName: "memos",
+      toolName: "Read Note",
+      reservedNames,
+    });
+    expect(safeToolNameGlob("memos", "Read Note")).toBe(emitted.toLowerCase());
+  });
+
+  it("maps a non-letter-led filter literal to a name buildSafeToolName never emits", () => {
+    // Accepted hide-side difference: the real name gains a `tool-` prefix.
+    const reservedNames = new Set<string>();
+    const emitted = buildSafeToolName({ serverName: "memos", toolName: "1note", reservedNames });
+    expect(emitted).toBe("memos__tool-1note");
+    expect(couldMaterializeToolName(safeToolNameGlob("memos", "1note"), "memos__")).toBe(false);
   });
 });

@@ -10,10 +10,8 @@ import {
 } from "@openclaw/normalization-core/string-normalization";
 import { getLoadedChannelPlugin } from "../channels/plugins/index.js";
 import { resolveSessionConversation } from "../channels/plugins/session-conversation.js";
-import {
-  markFrozenClawToolAllowPolicy,
-  resolveClawToolPolicyConsent,
-} from "../claws/tool-policy-runtime.js";
+import { markFrozenClawToolAllowPolicy } from "../claws/tool-policy-frozen.js";
+import { resolveClawToolPolicyConsent } from "../claws/tool-policy-runtime.js";
 import { resolveChannelGroupToolsPolicy } from "../config/group-policy.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AgentToolsConfig } from "../config/types.tools.js";

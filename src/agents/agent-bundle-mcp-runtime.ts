@@ -445,6 +445,20 @@ function createServerMcpRuntime(
 ): ServerMcpRuntime {
   const { loaded, fingerprint: computedFingerprint } = params.serverConfig;
   const serverName = params.serverName;
+  // The server's own tool filter and the session's denials for it ride on every
+  // diagnostic this runtime records, retirement included, so outage admission
+  // judges them with the tool policy as healthy discovery does, instead of
+  // naming a hidden server. Both are fixed for the runtime's lifetime: the
+  // manager fingerprints them and builds a new runtime when either changes.
+  const rawServerConfig = loaded.mcpServers[serverName];
+  const toolFilter = normalizeMcpToolFilter(
+    isRecord(rawServerConfig) ? rawServerConfig.toolFilter : undefined,
+  );
+  const denialMap = params.toolOverrides?.mcpToolsDeny;
+  const deniedToolNames = new Set(
+    denialMap && Object.hasOwn(denialMap, serverName) ? denialMap[serverName] : [],
+  );
+  const deniedToolList = [...deniedToolNames].toSorted();
   const configFingerprint = params.configFingerprint ?? computedFingerprint;
   const mcpAppsEnabled = params.cfg?.mcp?.apps?.enabled === true;
   const createdAt = Date.now();
@@ -478,6 +492,9 @@ function createServerMcpRuntime(
         safeServerName: server.safeServerName ?? serverName,
         launchSummary: server.launchSummary,
         message,
+        // Same runtime and config as the tools listed beside it: both are current.
+        ...(toolFilter ? { toolFilter } : {}),
+        ...(deniedToolList.length > 0 ? { deniedToolNames: deniedToolList } : {}),
       };
     } else {
       invalidateCatalog();
@@ -842,13 +859,6 @@ function createServerMcpRuntime(
           }
         }
         failIfDisposed();
-        const toolFilter = normalizeMcpToolFilter(
-          isRecord(rawServer) ? rawServer.toolFilter : undefined,
-        );
-        const denialMap = params.toolOverrides?.mcpToolsDeny;
-        const deniedToolNames = new Set(
-          denialMap && Object.hasOwn(denialMap, serverName) ? denialMap[serverName] : [],
-        );
         const normalizedTools = normalizeMcpToolCatalog(
           listedTools,
           schemaValidator,
@@ -881,7 +891,7 @@ function createServerMcpRuntime(
               }
             : {}),
           ...(toolFilter ? { toolFilter } : {}),
-          ...(deniedToolNames.size > 0 ? { deniedToolNames: [...deniedToolNames].toSorted() } : {}),
+          ...(deniedToolList.length > 0 ? { deniedToolNames: deniedToolList } : {}),
           codexApprovalMode: resolveProjectedMcpCodexToolApprovalMode(serverName, rawServer),
         };
         const toolEntries: McpCatalogTool[] = [];
@@ -946,6 +956,8 @@ function createServerMcpRuntime(
             safeServerName,
             launchSummary: launchDescription,
             message,
+            ...(toolFilter ? { toolFilter } : {}),
+            ...(deniedToolList.length > 0 ? { deniedToolNames: deniedToolList } : {}),
           },
         ];
         if (!session.connected) {
@@ -1148,6 +1160,11 @@ function createServerMcpRuntime(
               safeServerName: params.safeServerNamesByServer?.get(serverName) ?? serverName,
               launchSummary: serverName,
               message: "MCP server runtime retired; retry discovery on the next turn.",
+              // Retirement follows any config publication, not only one touching
+              // this server, so the run still holding this runtime's lease keeps
+              // judging the outage under the filter and denials it listed with.
+              ...(toolFilter ? { toolFilter } : {}),
+              ...(deniedToolList.length > 0 ? { deniedToolNames: deniedToolList } : {}),
             },
           ],
         };

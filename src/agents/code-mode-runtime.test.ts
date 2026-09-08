@@ -7,6 +7,10 @@ import {
 import { isCodeModeEngagedForModel, resolveCodeModeConfig } from "./code-mode-runtime.js";
 import { parseCodeModeScriptSyntax } from "./code-mode-script-syntax.js";
 import { prepareSource } from "./code-mode-source.js";
+import {
+  renderToolSearchControlText,
+  serializeToolSearchControlResult,
+} from "./tool-search-control-result.js";
 
 const config = resolveCodeModeConfig({ tools: { codeMode: true } } as never);
 
@@ -27,6 +31,28 @@ function projectResult(params: {
 }
 
 describe("Code Mode output bounding", () => {
+  it("fits a recorded MCP outage inside the network-content render of a result", () => {
+    const maxOutputBytes = 64 * 1024;
+    const outage = {
+      unavailableMcpServers: [{ server: "memos", error: "connect ECONNREFUSED" }],
+      note: 'MCP server "memos" failed for this run, so its tools are absent from this catalog.',
+    };
+    const state = new CodeModeOutputState(maxOutputBytes, undefined, outage);
+
+    // A 30,000-char value alone exceeds the 20,000-char network render cap: the
+    // fit must shrink the value around the outage rather than append it afterwards.
+    const result = state.takeResult(
+      { status: "completed" as const },
+      { value: captureCodeModeValue("v".repeat(30_000), maxOutputBytes) },
+      true,
+    );
+
+    expect(result).toMatchObject(outage);
+    expect(
+      renderToolSearchControlText(serializeToolSearchControlResult(result, true), true).truncated,
+    ).toBe(false);
+  });
+
   it("preserves Unicode output at its exact serialized byte limit", () => {
     const output = [{ type: "text", text: "😀 café".repeat(200) }];
     const maxOutputBytes = Buffer.byteLength(JSON.stringify(output), "utf8");

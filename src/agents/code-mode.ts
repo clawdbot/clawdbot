@@ -313,6 +313,7 @@ export function applyCodeModeCatalog(params: {
   catalogRef?: ToolSearchCatalogRef;
   toolHookContext?: HookContext;
   toolExecutionAllow?: ToolSearchToolContext["toolExecutionAllow"];
+  mcpDiagnostics?: Parameters<typeof applyToolCatalogCompaction>[0]["mcpDiagnostics"];
   directToolNames?: Iterable<string>;
   codeModeSkills?: CodeModeToolContext["codeModeSkills"];
 }) {

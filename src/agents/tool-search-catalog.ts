@@ -18,6 +18,7 @@ import {
   type CatalogSource,
   type CatalogTool,
   type CatalogVisibilityOptions,
+  type McpCatalogOutageRecord,
   type ToolSearchCatalogApplyResult,
   type ToolSearchCatalogCompactionParams,
   type ToolSearchCatalogEntry,
@@ -272,6 +273,7 @@ function registerToolSearchCatalog(params: {
   entries: ToolSearchCatalogEntry[];
   append?: boolean;
   toolExecutionAllow?: readonly string[];
+  mcpDiagnostics?: McpCatalogOutageRecord;
 }): void {
   const prior = params.append ? params.catalogRef.current : undefined;
   // Appending client definitions cannot widen the current run's execution policy.
@@ -282,8 +284,10 @@ function registerToolSearchCatalog(params: {
   for (const entry of params.entries) {
     byId.set(entry.id, entry);
   }
+  const mcpDiagnostics = params.mcpDiagnostics ?? prior?.mcpDiagnostics;
   const next = {
     entries: finalizeCatalogAvailability(Array.from(byId.values()), toolExecutionAllow),
+    ...(mcpDiagnostics?.diagnostics.length ? { mcpDiagnostics } : {}),
     // Appended client tools extend the same counter lifetime. A replacement
     // gets a new scope so telemetry consumers never infer resets from values.
     counterScope: prior?.counterScope ?? generateCounterScope(),
@@ -330,15 +334,31 @@ export function clearToolSearchCatalog(params: {
   }
 }
 
+function setCatalogMcpDiagnostics(
+  catalog: ToolSearchCatalogSession,
+  outage: McpCatalogOutageRecord,
+): void {
+  if (outage.diagnostics.length > 0) {
+    catalog.mcpDiagnostics = outage;
+  } else {
+    delete catalog.mcpDiagnostics;
+  }
+}
+
 /** Restricts a run-scoped catalog to an already-resolved set of concrete tool names. */
 export function restrictToolSearchCatalog(params: {
   catalogRef?: ToolSearchCatalogRef;
   allowedToolNames: ReadonlySet<string>;
   baselineEntries?: readonly ToolSearchCatalogEntry[];
+  /** Recorded outages that survive the same narrowing; a failed server has no entry to filter. */
+  mcpDiagnostics?: McpCatalogOutageRecord;
 }): number {
   const current = params.catalogRef?.current;
   if (!current) {
     return 0;
+  }
+  if (params.mcpDiagnostics) {
+    setCatalogMcpDiagnostics(current, params.mcpDiagnostics);
   }
   const metadata = catalogMetadata.get(current);
   const entries = finalizeCatalogAvailability(
@@ -498,11 +518,17 @@ export function applyToolCatalogCompaction(
       : undefined;
   if (existingCatalog && reboundEntries) {
     existingCatalog.entries = reboundEntries;
+    // Entries fingerprint equal means no failed server regained tools, but a
+    // zero-tool server can fail or recover without changing the entry set.
+    if (params.mcpDiagnostics) {
+      setCatalogMcpDiagnostics(existingCatalog, params.mcpDiagnostics);
+    }
   } else {
     registerToolSearchCatalog({
       catalogRef,
       entries: catalog,
       toolExecutionAllow: params.toolExecutionAllow,
+      mcpDiagnostics: params.mcpDiagnostics,
     });
   }
   return {

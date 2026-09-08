@@ -20,10 +20,17 @@ import {
   setToolSearchCodeModeSupportedForTest,
   setToolSearchMinCodeTimeoutMsForTest,
 } from "./tool-search-config.js";
+import { renderToolSearchControlText } from "./tool-search-control-result.js";
 import {
   applyToolSchemaDirectoryCatalog,
   MAX_TOOL_SCHEMA_DIRECTORY_PROMPT_CHARS,
 } from "./tool-search-directory.js";
+import {
+  describeUnavailableMcpServers,
+  MAX_UNAVAILABLE_MCP_ERROR_CHARS,
+  trimUnavailableMcpServerErrors,
+  type UnavailableMcpServersNote,
+} from "./tool-search-lookup-miss.js";
 import { readToolSearchRequest } from "./tool-search-request.js";
 import {
   formatToolSearchControlError,
@@ -148,10 +155,14 @@ function compactBatchCandidate(candidate: ToolSearchCandidate): ToolSearchCandid
   };
 }
 
-function boundToolSearchBatchResponse(results: ToolSearchBatchGroup[]): {
+function boundToolSearchBatchResponse(
+  results: ToolSearchBatchGroup[],
+  outage: UnavailableMcpServersNote | undefined,
+  networkContent: boolean,
+): {
   results: ToolSearchBatchGroup[];
   truncated?: true;
-} {
+} & Partial<UnavailableMcpServersNote> {
   const bounded: ToolSearchBatchGroup[] = results.map((result) => {
     const candidates = result.candidates
       .map(compactBatchCandidate)
@@ -164,8 +175,23 @@ function boundToolSearchBatchResponse(results: ToolSearchBatchGroup[]): {
     };
   });
   let truncated = bounded.some((result) => result.truncated);
-  const render = () => ({ results: bounded, ...(truncated ? { truncated: true as const } : {}) });
-  while (JSON.stringify(render(), null, 2).length > MAX_TOOL_SEARCH_BATCH_RESPONSE_CHARS) {
+  // The outage note is never dropped: it is the fact that stops a model from
+  // re-searching for tools that cannot appear. Hits give ground first; once
+  // every group is empty the per-server error text halves toward the cap while
+  // server names and the recovery guidance stay whole. The bound is the rendered
+  // control text, envelope included, because that is what the model reads; the
+  // envelope follows the runtime's network-content state (an earlier network
+  // call or a recorded outage), the same flag the final formatter reads.
+  let fitted = outage;
+  let outageErrorChars = MAX_UNAVAILABLE_MCP_ERROR_CHARS;
+  const render = () => ({
+    results: bounded,
+    ...(truncated ? { truncated: true as const } : {}),
+    ...fitted,
+  });
+  const renderedLength = () =>
+    renderToolSearchControlText(JSON.stringify(render(), null, 2), networkContent).text.length;
+  while (renderedLength() > MAX_TOOL_SEARCH_BATCH_RESPONSE_CHARS) {
     let removable: ToolSearchBatchGroup | undefined;
     for (const group of bounded) {
       if (group.candidates.length === 0) {
@@ -183,7 +209,12 @@ function boundToolSearchBatchResponse(results: ToolSearchBatchGroup[]): {
       }
     }
     if (!removable) {
-      break;
+      if (!fitted || outageErrorChars === 0) {
+        break;
+      }
+      outageErrorChars = Math.floor(outageErrorChars / 2);
+      fitted = trimUnavailableMcpServerErrors(fitted, outageErrorChars);
+      continue;
     }
     removable.candidates.pop();
     removable.truncated = true;
@@ -216,6 +247,7 @@ export function applyToolSearchCatalog(params: {
   runId?: string;
   catalogRef?: ToolSearchCatalogRef;
   toolHookContext?: HookContext;
+  mcpDiagnostics?: Parameters<typeof applyToolCatalogCompaction>[0]["mcpDiagnostics"];
   shouldCatalogTool?: (tool: AnyAgentTool) => boolean;
   directToolNames?: Iterable<string>;
 }) {
@@ -345,8 +377,15 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
       execute: async (_toolCallId: string, args: unknown): Promise<AgentToolResult<unknown>> => {
         const request = readToolSearchRequest(args, config);
         if (request.kind === "single") {
-          return jsonResult(
-            await runtime.search(request.search.query, { limit: request.search.limit }),
+          const candidates = await runtime.search(request.search.query, {
+            limit: request.search.limit,
+          });
+          // A plain array stays the no-outage shape. A recorded outage leads the
+          // payload so the network-content render clips hits, never the guidance.
+          const outage = describeUnavailableMcpServers(resolveCatalog(ctx));
+          return formatToolSearchControlResult(
+            outage ? { ...outage, candidates } : candidates,
+            runtime,
           );
         }
         const results = await Promise.all(
@@ -355,7 +394,14 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
             candidates: await runtime.search(search.query, { limit: search.limit }),
           })),
         );
-        return jsonResult(boundToolSearchBatchResponse(results));
+        return formatToolSearchControlResult(
+          boundToolSearchBatchResponse(
+            results,
+            describeUnavailableMcpServers(resolveCatalog(ctx)),
+            runtime.hasNetworkContent(),
+          ),
+          runtime,
+        );
       },
     },
     {

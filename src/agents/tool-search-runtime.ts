@@ -28,6 +28,7 @@ import {
   renderToolSearchControlText,
   serializeToolSearchControlResult,
 } from "./tool-search-control-result.js";
+import { formatToolLookupMissError } from "./tool-search-lookup-miss.js";
 import {
   buildLexicalIndex,
   readParameterText,
@@ -35,11 +36,7 @@ import {
   tokenizeDocument,
   tokenizeQuery,
 } from "./tool-search-ranking.js";
-import {
-  formatCatalogInputError,
-  formatUnknownToolIdError,
-  type ToolLookupErrorOptions,
-} from "./tool-search-recovery.js";
+import { formatCatalogInputError, type ToolLookupErrorOptions } from "./tool-search-recovery.js";
 import { readToolSearchLimit } from "./tool-search-request.js";
 import { runScheduledToolSearchCall } from "./tool-search-scheduling.js";
 import { snapshotToolSearchTargetTranscriptResult } from "./tool-search-transcript.js";
@@ -100,7 +97,7 @@ function findEntry(
   }
   const namedEntry = namedEntries[0];
   if (!namedEntry) {
-    throw new ToolInputError(formatUnknownToolIdError(needle, entries, options));
+    throw new ToolInputError(formatToolLookupMissError(needle, catalog, entries, options));
   }
   return namedEntry;
 }
@@ -114,7 +111,10 @@ function findEntryByExactId(
   const entry = catalog.entries.find((candidate) => candidate.id === needle);
   if (!entry) {
     throw new ToolInputError(
-      formatUnknownToolIdError(needle, catalog.entries, { ...errorOptions, exactIdOnly: true }),
+      formatToolLookupMissError(needle, catalog, catalog.entries, {
+        ...errorOptions,
+        exactIdOnly: true,
+      }),
     );
   }
   return entry;
@@ -476,9 +476,16 @@ export class ToolSearchRuntime {
     unwrapToolResultValue((await this.call(id, input, options)).result);
 
   hasNetworkContent(parentToolCallId?: string): boolean {
-    return parentToolCallId
-      ? this.networkInvocations.has(parentToolCallId)
-      : this.networkInvocations.size > 0;
+    if (parentToolCallId) {
+      return this.networkInvocations.has(parentToolCallId);
+    }
+    // A recorded MCP outage rides on every search and Code Mode result as
+    // server-controlled text, so those parent-less results are network content
+    // for the whole runtime, the same sticky scope a guest network call gets.
+    return (
+      this.networkInvocations.size > 0 ||
+      (this.ctx.catalogRef?.current?.mcpDiagnostics?.diagnostics.length ?? 0) > 0
+    );
   }
 
   takeTerminalTargetBatch(parentToolCallId?: string): boolean {

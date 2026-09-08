@@ -10,7 +10,6 @@ import {
 } from "./provenance-runtime-read.js";
 import { CLAW_INSTALL_RECORD_SCHEMA_VERSION } from "./provenance-schema-version.js";
 
-const frozenToolAllowPolicies = new WeakSet<object>();
 type PreparedClawToolPolicy =
   | { kind: "current" }
   | { kind: "legacy" }
@@ -23,16 +22,6 @@ let readPreparedSchemaVersions = readCachedClawInstallSchemaVersions;
 const uninitializedStateError = new Error(
   "OpenClaw state database has not initialized Claw consent provenance.",
 );
-
-export function markFrozenClawToolAllowPolicy(policy: object | undefined): void {
-  if (policy) {
-    frozenToolAllowPolicies.add(policy);
-  }
-}
-
-export function isFrozenClawToolAllowPolicy(policy: object | undefined): boolean {
-  return policy ? frozenToolAllowPolicies.has(policy) : false;
-}
 
 function applyPreparedClawToolPolicyConsent(): void {
   const snapshot = readPreparedSchemaVersions(preparedStateOptions);

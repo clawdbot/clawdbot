@@ -107,6 +107,11 @@ export type McpToolCatalogDiagnostic = {
   safeServerName: string;
   launchSummary: string;
   message: string;
+  // The failed server's own tool filter and the session's raw-name denials for
+  // it, carried so outage admission judges them with the tool policy, exactly as
+  // healthy discovery would, instead of naming a server no tool of which surfaces.
+  toolFilter?: McpServerToolFilterConfig;
+  deniedToolNames?: readonly string[];
 };
 
 export type McpRequestOptions = {

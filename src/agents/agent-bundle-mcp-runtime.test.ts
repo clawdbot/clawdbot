@@ -2191,22 +2191,49 @@ process.on("SIGINT", shutdown);`,
       listToolsJsonRpcErrorMessage: "Unknown method",
     });
 
-    const runtime = await makeStdioRuntime("session-tools-unknown-method", "notes", serverPath);
+    const runtime = await makeStdioRuntime("session-tools-unknown-method", "notes", serverPath, {
+      server: { toolFilter: { exclude: ["unused_*"] } },
+      toolOverrides: { mcpToolsDeny: { notes: ["denied_tool"] } },
+    });
 
     try {
       const catalog = await runtime.getCatalog();
 
       expect(catalog.servers).toEqual({});
       expect(catalog.tools).toEqual([]);
+      // The failure diagnostic carries the server's own tool filter and the
+      // session's denials so outage admission can judge them with the policy.
       expect(catalog.diagnostics?.[0]).toMatchObject({
         serverName: "notes",
         message: expect.stringContaining("Unknown method"),
+        toolFilter: { exclude: ["unused_*"] },
+        deniedToolNames: ["denied_tool"],
       });
       await waitForFileText(logPath, "recv tools/list", LIST_TOOLS_SERVER_LOG_TIMEOUT_MS);
     } finally {
       await runtime.dispose();
       await fs.rm(tempDir, { recursive: true, force: true });
     }
+  });
+
+  it("carries the tool filter and session denials on the retirement diagnostic", async () => {
+    const runtime = await makeStdioRuntime("session-retired-filter", "notes", "unused.mjs", {
+      server: { toolFilter: { exclude: ["unused_*"] } },
+      toolOverrides: { mcpToolsDeny: { notes: ["denied_tool"] } },
+    });
+
+    await runtime.dispose();
+
+    // Retirement follows any config publication, so the diagnostic must keep the
+    // filter and denials the runtime listed under or a hidden server gets named.
+    expect(runtime.peekCatalog()?.diagnostics).toEqual([
+      expect.objectContaining({
+        serverName: "notes",
+        message: expect.stringMatching(/retired/),
+        toolFilter: { exclude: ["unused_*"] },
+        deniedToolNames: ["denied_tool"],
+      }),
+    ]);
   });
 
   it("does not pause MCP servers for normal tool error results", async () => {

@@ -5,6 +5,7 @@
  */
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { isFrozenClawToolAllowPolicy } from "../claws/tool-policy-frozen.js";
 import { sanitizeServerName, TOOL_NAME_SEPARATOR } from "./agent-bundle-mcp-names.js";
 import { IMPLICIT_ALLOW_ALL_FROM_ALSO_ALLOW } from "./sandbox-tool-policy.js";
 import {
@@ -239,7 +240,11 @@ export function expandPolicyWithPluginGroups(
     return undefined;
   }
   return {
-    allow: expandPluginGroups(policy.allow, groups),
+    // A frozen Claw allowlist was consented as literal tool names, so no plugin
+    // group may widen it here; its deny entries still expand.
+    allow: isFrozenClawToolAllowPolicy(policy)
+      ? policy.allow
+      : expandPluginGroups(policy.allow, groups),
     deny: expandPluginGroups(policy.deny, groups),
   };
 }

@@ -15,7 +15,11 @@ import { replaceWithEffectiveToolAllowlist } from "../../tool-policy.js";
 import { filterRuntimeCompatibleTools } from "../../tool-schema-projection.js";
 import { logRuntimeToolSchemaQuarantine } from "../../tool-schema-quarantine.js";
 import { captureFinalEffectiveCronCreatorToolAllowlist } from "../../tools/cron-tool.js";
-import { applyFinalEffectiveToolPolicy } from "../effective-tool-policy.js";
+import {
+  applyFinalEffectiveToolPolicy,
+  buildBundleMcpPolicyLayers,
+  createBundleMcpServerPolicyMatcher,
+} from "../effective-tool-policy.js";
 import { log } from "../logger.js";
 import type { EmbeddedAttemptSetup } from "./attempt-setup.js";
 import {
@@ -153,16 +157,17 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
         disableTools: params.attempt.disableTools || params.isRawModelRun,
         toolsAllow: params.attempt.toolsAllow,
       });
+    const reservedToolNames = [
+      ...tools.map((tool) => tool.name),
+      ...(clientTools?.map((tool) => tool.function.name) ?? []),
+      ...(bundleMcpRuntime?.tools.map((tool) => tool.name) ?? []),
+    ];
     bundleLspRuntime = bundleLspEnabled
       ? await createBundleLspToolRuntime({
           workspaceDir: params.setup.effectiveWorkspace,
           cfg: params.attempt.config,
           manifestRegistry: bundleManifestRegistry,
-          reservedToolNames: [
-            ...tools.map((tool) => tool.name),
-            ...(clientTools?.map((tool) => tool.function.name) ?? []),
-            ...(bundleMcpRuntime?.tools.map((tool) => tool.name) ?? []),
-          ],
+          reservedToolNames,
         })
       : undefined;
     const allowedBundleMcpTools = applyEmbeddedAttemptToolsAllow(
@@ -239,10 +244,32 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
       return schemaProjection.tools;
     };
     const uncompactedEffectiveTools = projectTools(tools);
+    // Same allow/deny inputs the two passes above apply to materialized MCP
+    // tools, plus the names materialization had to avoid, resolved against the
+    // server namespace: a failed catalog load leaves that server's names unknown.
+    const mcpPolicyLayers = buildBundleMcpPolicyLayers({
+      conversationCapabilityProfile: runtimeCapabilityProfile,
+      toolsAllow: effectiveToolsAllow,
+      reservedToolNames,
+    });
+    const admitsMcpServer = createBundleMcpServerPolicyMatcher(mcpPolicyLayers);
     return {
       bundleLspRuntime,
       bundleMcpRuntime,
       clientTools,
+      // `bundleMcpRuntime` is the materializeBundleMcpToolsForRun result, whose
+      // `diagnostics` records which configured servers failed this run's catalog
+      // load. Carry that fact with the tools it explains so Tool Search can name
+      // the outage instead of reporting a bare miss; a server no tool of which
+      // the policy and its own tool filter could admit together stays hidden when
+      // it fails too. The layers ride along because a prompt hook narrows this
+      // surface again later, and only all layers together decide admission.
+      mcpDiagnostics: bundleMcpRuntime?.diagnostics && {
+        diagnostics: bundleMcpRuntime.diagnostics.filter((diagnostic) =>
+          admitsMcpServer(diagnostic),
+        ),
+        policyLayers: mcpPolicyLayers,
+      },
       tools,
       uncompactedEffectiveTools,
       refreshTools: () => {
