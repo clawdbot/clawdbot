@@ -3945,7 +3945,7 @@ export const en: TranslationMap & {
       title: "How to connect",
       step1: "Start the gateway on your host machine:",
       step2: "Get a tokenized dashboard URL:",
-      step3: "Paste the WebSocket URL and token above, or open the tokenized URL directly.",
+      step3: "Paste the Gateway URL and secret above, or open that URL directly.",
       docsLink: "Read the docs →",
       copyCommand: "Copy command",
       copyCommandAria: "Copy command: {command}",

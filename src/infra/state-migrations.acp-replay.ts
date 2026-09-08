@@ -1,6 +1,6 @@
 // Doctor-only import for the retired ACP replay JSON ledger.
 import { createHash } from "node:crypto";
-import fsSync from "node:fs";
+import fsSync, { type Stats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
@@ -17,6 +17,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
+import { legacyMigrationSourceSnapshotsMatch as sourceIdentityMatches } from "./state-migrations.source-snapshot.js";
 import type { LegacyStateDetection, MigrationMessages } from "./state-migrations.types.js";
 
 const LEGACY_LEDGER_VERSION = 1;
@@ -50,14 +51,6 @@ type LegacyAcpReplaySession = {
   updatedAt: number;
   nextSeq: number;
   events: LegacyAcpReplayEvent[];
-};
-
-type LegacySourceIdentity = {
-  dev: number | bigint;
-  ino: number | bigint;
-  mtimeMs: number | bigint;
-  sha256: string;
-  size: number | bigint;
 };
 
 type AcpReplayMigrationDatabase = Pick<
@@ -174,10 +167,7 @@ function parseLegacyLedger(raw: string): LegacyAcpReplaySession[] {
   );
 }
 
-function sourceIdentity(
-  stat: Awaited<ReturnType<typeof fs.lstat>>,
-  raw: string,
-): LegacySourceIdentity {
+function sourceIdentity(stat: Stats, raw: string) {
   return {
     dev: stat.dev,
     ino: stat.ino,
@@ -185,16 +175,6 @@ function sourceIdentity(
     sha256: createHash("sha256").update(raw).digest("hex"),
     size: stat.size,
   };
-}
-
-function sourceIdentityMatches(left: LegacySourceIdentity, right: LegacySourceIdentity): boolean {
-  return (
-    left.dev === right.dev &&
-    left.ino === right.ino &&
-    left.mtimeMs === right.mtimeMs &&
-    left.sha256 === right.sha256 &&
-    left.size === right.size
-  );
 }
 
 function reconcileCanonicalSession(db: DatabaseSync, session: LegacyAcpReplaySession): boolean {

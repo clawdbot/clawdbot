@@ -51,7 +51,7 @@ defineDiscordVoiceTests((harness) => {
       try {
         if (phase === "fresh") {
           await f.manager.leave({ guildId: "g1" });
-        } else if (phase === "replacement") {
+        } else {
           expect(
             await discordVoiceTranscriptsSourceProvider.start!({
               cfg: config,
@@ -80,11 +80,7 @@ defineDiscordVoiceTests((harness) => {
           expectConnectedStatus(f.manager, "1001");
           await f.audio("100000000000000001", 1);
           expect(realtimeSessionMock.sendAudio).not.toHaveBeenCalled();
-          if (phase === "replacement") {
-            expect(f.sink).toHaveBeenCalledOnce();
-          } else {
-            expect(transcribeAudioFileMock).not.toHaveBeenCalled();
-          }
+          expect(f.sink).toHaveBeenCalledOnce();
         }
       } finally {
         await discordVoiceTranscriptsSourceProvider.stop!({ sessionId: "first", source });

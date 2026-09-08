@@ -94,6 +94,33 @@ function normalizeOverrideValue(value: unknown): unknown {
   return value;
 }
 
+const NPM_PACKAGE_NAME_PATTERN = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/u;
+
+function pnpmOverridePackageName(selector: string): string | null {
+  const versionSeparator = selector.startsWith("@")
+    ? selector.indexOf("@", selector.indexOf("/") + 1)
+    : selector.indexOf("@");
+  const packageName = versionSeparator === -1 ? selector : selector.slice(0, versionSeparator);
+  const version = versionSeparator === -1 ? null : selector.slice(versionSeparator + 1);
+  return NPM_PACKAGE_NAME_PATTERN.test(packageName) && (version === null || version.length > 0)
+    ? packageName
+    : null;
+}
+
+function pnpmScopedOverrideSeparator(key: string): number {
+  for (let index = 1; index < key.length - 1; index += 1) {
+    if (key[index] !== ">" || /\s/u.test(key[index - 1]!) || /\s/u.test(key[index + 1]!)) {
+      continue;
+    }
+    const parentSelector = key.slice(0, index);
+    const childSelector = key.slice(index + 1);
+    if (pnpmOverridePackageName(parentSelector) && pnpmOverridePackageName(childSelector)) {
+      return index;
+    }
+  }
+  return -1;
+}
+
 function normalizeOverrides(overrides: unknown): OverrideMap {
   if (!overrides || typeof overrides !== "object" || Array.isArray(overrides)) {
     return {};
@@ -105,7 +132,7 @@ function normalizeOverrides(overrides: unknown): OverrideMap {
     if (value === "-") {
       continue;
     }
-    const scopedSeparator = key.indexOf(">");
+    const scopedSeparator = pnpmScopedOverrideSeparator(key);
     if (scopedSeparator > 0) {
       const parentSelector = key.slice(0, scopedSeparator).trim();
       const dependencyName = key.slice(scopedSeparator + 1).trim();

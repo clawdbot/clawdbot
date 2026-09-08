@@ -5,7 +5,12 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { PluginCapabilityConsentReview } from "../../plugins/capability-summary.js";
 import { recordInstalledPluginIndexInstallOwner } from "../../plugins/installed-plugin-index-install-owner.js";
 import { ManagedPluginLifecycleError } from "../../plugins/management-lifecycle-error.js";
-import { createInstalledPluginIndexSnapshot } from "../../plugins/status.test-fixtures.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import {
+  createInstalledPluginIndexSnapshot,
+  createPluginRecord,
+} from "../../plugins/status.test-fixtures.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { handlePluginsCommand } from "./commands-plugins.js";
 import { buildPluginsCommandParams, type ConfigSnapshotMock } from "./commands.test-harness.js";
 
@@ -14,7 +19,9 @@ const loadPluginMetadataSnapshotMock = vi.hoisted(() => vi.fn());
 const validateConfigObjectWithPluginsMock = vi.hoisted(() => vi.fn());
 const replaceConfigFileMock = vi.hoisted(() => vi.fn(async (_params: unknown) => undefined));
 const buildPluginRegistrySnapshotReportMock = vi.hoisted(() => vi.fn());
-const buildPluginDiagnosticsReportMock = vi.hoisted(() => vi.fn());
+const withPluginDiagnosticsReportForInspectionMock = vi.hoisted(() =>
+  vi.fn<typeof import("../../plugins/status.js").withPluginDiagnosticsReportForInspection>(),
+);
 const buildPluginInspectReportMock = vi.hoisted(() => vi.fn());
 const buildAllPluginInspectReportsMock = vi.hoisted(() => vi.fn());
 const formatPluginCompatibilityNoticeMock = vi.hoisted(() => vi.fn(() => "ok"));
@@ -117,7 +124,7 @@ vi.mock("../../plugins/plugin-metadata-snapshot.js", async (importOriginal) => (
 
 vi.mock("../../plugins/status.js", () => ({
   buildAllPluginInspectReports: buildAllPluginInspectReportsMock,
-  buildPluginDiagnosticsReport: buildPluginDiagnosticsReportMock,
+  withPluginDiagnosticsReportForInspection: withPluginDiagnosticsReportForInspectionMock,
   buildPluginInspectReport: buildPluginInspectReportMock,
   buildPluginRegistrySnapshotReport: buildPluginRegistrySnapshotReportMock,
   formatPluginCompatibilityNotice: formatPluginCompatibilityNoticeMock,
@@ -238,18 +245,24 @@ describe("handlePluginsCommand", () => {
         },
       ],
     });
-    buildPluginDiagnosticsReportMock.mockReturnValue({
-      workspaceDir: "/tmp/plugins-workspace",
-      plugins: [
-        {
-          id: "superpowers",
-          name: "superpowers",
-          status: "disabled",
-          format: "openclaw",
-          bundleFormat: "claude",
-        },
-      ],
-    });
+    withPluginDiagnosticsReportForInspectionMock
+      .mockReset()
+      .mockImplementation(async (_params, formatReport) =>
+        formatReport({
+          ...createEmptyPluginRegistry(),
+          workspaceScope: "selected",
+          workspaceDir: "/tmp/plugins-workspace",
+          plugins: [
+            createPluginRecord({
+              id: "superpowers",
+              name: "superpowers",
+              status: "disabled",
+              format: "openclaw",
+              bundleFormat: "claude",
+            }),
+          ],
+        }),
+      );
     buildPluginInspectReportMock.mockReturnValue({
       plugin: {
         id: "superpowers",
@@ -265,6 +278,72 @@ describe("handlePluginsCommand", () => {
       },
     ]);
   });
+
+  it.each(["inspect", "inspect superpowers", "inspect all", "inspect missing"])(
+    "waits for inspection cleanup before returning the %s reply",
+    async (action) => {
+      const entered = createDeferredCore();
+      const finish = createDeferredCore();
+      if (action === "inspect missing") {
+        buildPluginInspectReportMock.mockReturnValue(null);
+      }
+      withPluginDiagnosticsReportForInspectionMock.mockImplementation(
+        async (_params, formatReport) => {
+          const text = formatReport({
+            ...createEmptyPluginRegistry(),
+            workspaceScope: "selected",
+            workspaceDir: "/tmp/plugins-workspace",
+          });
+          entered.resolve();
+          await finish.promise;
+          return text;
+        },
+      );
+      let returned = false;
+      const command = handlePluginsCommand(
+        buildPluginsParams(`/plugins ${action}`, buildCfg()),
+        true,
+      ).then((result) => {
+        returned = true;
+        return result;
+      });
+      try {
+        await entered.promise;
+        expect(returned).toBe(false);
+        expect(replaceConfigFileMock).not.toHaveBeenCalled();
+        expect(refreshPluginRegistryAfterConfigMutationMock).not.toHaveBeenCalled();
+      } finally {
+        finish.resolve();
+        await command;
+      }
+      expect(withPluginDiagnosticsReportForInspectionMock).toHaveBeenCalledTimes(1);
+      expect((await command)?.shouldContinue).toBe(false);
+      expect(withPluginDiagnosticsReportForInspectionMock.mock.calls[0]?.[0]).toEqual({
+        config: buildCfg(),
+        workspaceDir: "/tmp/plugins-workspace",
+        metadataSnapshot: { index: createInstalledPluginIndexSnapshot([]) },
+      });
+    },
+  );
+
+  it.each(["load", "format", "dispose"])(
+    "propagates %s failure without a successful reply",
+    async (phase) => {
+      const failure = new Error(`inspection ${phase} failed`);
+      if (phase === "format") {
+        buildPluginInspectReportMock.mockImplementation(() => {
+          throw failure;
+        });
+      } else {
+        withPluginDiagnosticsReportForInspectionMock.mockRejectedValue(failure);
+      }
+      await expect(
+        handlePluginsCommand(buildPluginsParams("/plugins inspect superpowers", buildCfg()), true),
+      ).rejects.toBe(failure);
+      expect(replaceConfigFileMock).not.toHaveBeenCalled();
+      expect(refreshPluginRegistryAfterConfigMutationMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("lists discovered plugins and inspects plugin details", async () => {
     const listResult = await handlePluginsCommand(
@@ -344,7 +423,7 @@ describe("handlePluginsCommand", () => {
         reports.map((inspect) => ({ inspect, compatibilityWarnings: [], install })),
       );
     }
-    expect(buildPluginDiagnosticsReportMock).toHaveBeenCalled();
+    expect(withPluginDiagnosticsReportForInspectionMock).toHaveBeenCalled();
     expect(buildPluginRegistrySnapshotReportMock).not.toHaveBeenCalled();
   });
 
@@ -354,7 +433,7 @@ describe("handlePluginsCommand", () => {
       true,
     );
     expect(result?.reply?.text).toContain("superpowers");
-    expect(buildPluginDiagnosticsReportMock).toHaveBeenCalledTimes(1);
+    expect(withPluginDiagnosticsReportForInspectionMock).toHaveBeenCalledTimes(1);
     expect(buildPluginRegistrySnapshotReportMock).not.toHaveBeenCalled();
   });
 
@@ -369,7 +448,7 @@ describe("handlePluginsCommand", () => {
         true,
       );
       expect(result?.reply?.text).toBe("⚠️ Config file is invalid; fix it before using /plugins.");
-      expect(buildPluginDiagnosticsReportMock).not.toHaveBeenCalled();
+      expect(withPluginDiagnosticsReportForInspectionMock).not.toHaveBeenCalled();
       expect(buildPluginRegistrySnapshotReportMock).not.toHaveBeenCalled();
       expect(replaceConfigFileMock).not.toHaveBeenCalled();
     },
@@ -607,7 +686,7 @@ describe("handlePluginsCommand", () => {
     const result = await handlePluginsCommand(params, true);
     expect(result?.reply?.text).toContain('Plugin "superpowers" enabled');
     expect(buildPluginRegistrySnapshotReportMock).toHaveBeenCalledTimes(1);
-    expect(buildPluginDiagnosticsReportMock).not.toHaveBeenCalled();
+    expect(withPluginDiagnosticsReportForInspectionMock).not.toHaveBeenCalled();
   });
 
   it("returns an explicit unauthorized reply for native /plugins list", async () => {

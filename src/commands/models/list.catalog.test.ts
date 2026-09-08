@@ -1,8 +1,10 @@
 // Model list row tests cover rendered row construction for model listing output.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
-import type { ModelRow } from "./list.types.js";
+import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
+import type { ModelRegistry } from "../../llm/model-registry.js";
+import type { Model } from "../../llm/types.js";
+import type { ConfiguredEntry, ModelRow } from "./list.types.js";
 
 const mocks = vi.hoisted(() => ({
   loadModelCatalogSnapshot: vi.fn(),
@@ -33,15 +35,7 @@ vi.mock("../../plugins/provider-public-artifacts.js", () => ({
   resolveBundledProviderPolicySurface: mocks.resolveBundledProviderPolicySurface,
 }));
 
-import {
-  appendAuthenticatedCatalogRows,
-  appendConfiguredRows,
-  appendConfiguredProviderRows,
-  appendDiscoveredRows,
-  appendPreparedModelCatalogRows,
-  loadListModelCatalogSnapshot,
-  type RowBuilderContext,
-} from "./list.rows.js";
+import { buildModelListRows, type ModelListContext } from "./list.rows.js";
 
 const authIndex = {
   evaluateModelAuth: (provider: string) => ({
@@ -55,8 +49,8 @@ function authEvaluation(availability: boolean | undefined) {
 }
 
 function createRowContext(
-  overrides: Pick<RowBuilderContext, "authIndex"> & Partial<RowBuilderContext>,
-): RowBuilderContext {
+  overrides: Pick<ModelListContext, "authIndex"> & Partial<ModelListContext>,
+): ModelListContext {
   return {
     cfg: {},
     agentDir: "/tmp/openclaw-agent",
@@ -77,14 +71,41 @@ function requireOnlyRow(rows: ModelRow[]): ModelRow {
   return row;
 }
 
+async function readCatalog(params: {
+  includePreparedCatalog: boolean;
+  rows: ModelRow[];
+  context: ModelListContext;
+  entries?: ConfiguredEntry[];
+  models?: Model[];
+  registryModels?: Model[];
+  modelRegistry?: ModelRegistry;
+  catalogSnapshot?: ModelCatalogSnapshot;
+}) {
+  if (params.catalogSnapshot) {
+    const load = params.context.providerDiscoveryProviderIds
+      ? mocks.loadScopedModelCatalogSnapshot
+      : mocks.loadModelCatalogSnapshot;
+    load.mockResolvedValueOnce(params.catalogSnapshot);
+  }
+  params.rows.push(
+    ...(await buildModelListRows({
+      includePreparedCatalog: params.includePreparedCatalog,
+      entries: params.entries ?? [],
+      registryModels: params.registryModels ?? params.models,
+      modelRegistry: params.modelRegistry,
+      context: params.context,
+    })),
+  );
+}
+
 async function appendCommittedProviderCatalogRows(params: {
   rows: ModelRow[];
-  seenKeys: Set<string>;
   catalogModels: ModelCatalogEntry[];
-  context: RowBuilderContext;
+  context: ModelListContext;
 }): Promise<void> {
   const { catalogModels, ...projection } = params;
-  await appendPreparedModelCatalogRows({
+  await readCatalog({
+    includePreparedCatalog: true,
     ...projection,
     catalogSnapshot: {
       entries: catalogModels,
@@ -95,9 +116,13 @@ async function appendCommittedProviderCatalogRows(params: {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.loadModelCatalogSnapshot.mockReset().mockResolvedValue({ entries: [], routeVariants: [] });
+  mocks.loadScopedModelCatalogSnapshot
+    .mockReset()
+    .mockResolvedValue({ entries: [], routeVariants: [] });
 });
 
-describe("appendPreparedModelCatalogRows", () => {
+describe("prepared catalog view", () => {
   it("projects the committed OpenAI route variants without rediscovering the catalog", async () => {
     const platform = {
       id: "gpt-5.5",
@@ -132,9 +157,9 @@ describe("appendPreparedModelCatalogRows", () => {
     }));
     const rows: ModelRow[] = [];
 
-    await appendPreparedModelCatalogRows({
+    await readCatalog({
+      includePreparedCatalog: true,
       rows,
-      seenKeys: new Set(),
       catalogSnapshot: {
         entries: [platform],
         routeVariants: [platform, chatgpt],
@@ -160,7 +185,7 @@ describe("appendPreparedModelCatalogRows", () => {
         { api: chatgpt.api, baseUrl: chatgpt.baseUrl },
       ],
     });
-    expect(mocks.loadModelCatalogSnapshot).not.toHaveBeenCalled();
+    expect(mocks.loadModelCatalogSnapshot).toHaveBeenCalledOnce();
   });
 
   it("projects static-only provider hooks from the same committed generation", async () => {
@@ -175,9 +200,9 @@ describe("appendPreparedModelCatalogRows", () => {
     const evaluateModelAuth = vi.fn(() => authEvaluation(true));
     const rows: ModelRow[] = [];
 
-    await appendPreparedModelCatalogRows({
+    await readCatalog({
+      includePreparedCatalog: true,
       rows,
-      seenKeys: new Set(),
       catalogSnapshot: {
         entries: [],
         routeVariants: [],
@@ -198,7 +223,7 @@ describe("appendPreparedModelCatalogRows", () => {
       modelId: "nemotron-static",
       observedRoutes: [{ api: entry.api, baseUrl: entry.baseUrl }],
     });
-    expect(mocks.loadModelCatalogSnapshot).not.toHaveBeenCalled();
+    expect(mocks.loadModelCatalogSnapshot).toHaveBeenCalledOnce();
   });
 
   it("filters and deduplicates local rows from the committed generation", async () => {
@@ -210,12 +235,11 @@ describe("appendPreparedModelCatalogRows", () => {
       input: ["text"] as "text"[],
     };
     const rows: ModelRow[] = [];
-    const seenKeys = new Set<string>();
     const params = {
+      includePreparedCatalog: true,
       rows,
-      seenKeys,
       catalogSnapshot: {
-        entries: [local, { ...local, id: "remote", baseUrl: "https://models.example/v1" }],
+        entries: [local, local, { ...local, id: "remote", baseUrl: "https://models.example/v1" }],
         routeVariants: [local],
       },
       context: createRowContext({
@@ -224,15 +248,14 @@ describe("appendPreparedModelCatalogRows", () => {
       }),
     };
 
-    await appendPreparedModelCatalogRows(params);
-    await appendPreparedModelCatalogRows(params);
+    await readCatalog(params);
 
     expect(requireOnlyRow(rows)).toMatchObject({
       key: "ollama/qwen2.5:7b",
       local: true,
       available: true,
     });
-    expect(seenKeys).toEqual(new Set(["ollama/qwen2.5:7b"]));
+    expect(rows.map((row) => row.key)).toEqual(["ollama/qwen2.5:7b"]);
   });
 
   it("acquires exactly one read-only prepared generation when none was supplied", async () => {
@@ -248,9 +271,9 @@ describe("appendPreparedModelCatalogRows", () => {
     });
     const rows: ModelRow[] = [];
 
-    await appendPreparedModelCatalogRows({
+    await readCatalog({
+      includePreparedCatalog: true,
       rows,
-      seenKeys: new Set(),
       context: createRowContext({
         agentId: "worker",
         agentDir: "/tmp/openclaw-worker",
@@ -282,11 +305,15 @@ describe("appendPreparedModelCatalogRows", () => {
   });
 });
 
-describe("loadListModelCatalogSnapshot", () => {
+describe("catalog acquisition", () => {
   it("opts the unscoped model list into stale catalog refresh", async () => {
     mocks.loadModelCatalogSnapshot.mockResolvedValue({ entries: [], routeVariants: [] });
 
-    await loadListModelCatalogSnapshot(createRowContext({ authIndex }));
+    await readCatalog({
+      includePreparedCatalog: false,
+      rows: [],
+      context: createRowContext({ authIndex }),
+    });
 
     expect(mocks.loadModelCatalogSnapshot).toHaveBeenCalledWith(
       expect.objectContaining({ readOnly: true, refreshFullCatalog: "stale" }),
@@ -294,11 +321,12 @@ describe("loadListModelCatalogSnapshot", () => {
   });
 });
 
-describe("appendDiscoveredRows", () => {
+describe("registry catalog view", () => {
   it("does not borrow provider registry auth when an OpenAI route is unknown", async () => {
     const rows: ModelRow[] = [];
 
-    await appendDiscoveredRows({
+    await readCatalog({
+      includePreparedCatalog: true,
       rows,
       models: [
         {
@@ -332,7 +360,8 @@ describe("appendDiscoveredRows", () => {
     };
     const rows: ModelRow[] = [];
 
-    await appendDiscoveredRows({
+    await readCatalog({
+      includePreparedCatalog: true,
       rows,
       models: [
         {
@@ -384,7 +413,8 @@ describe("appendDiscoveredRows", () => {
   it("omits physical capabilities while managed route selection is unresolved", async () => {
     const rows: ModelRow[] = [];
 
-    await appendDiscoveredRows({
+    await readCatalog({
+      includePreparedCatalog: true,
       rows,
       models: [
         {
@@ -421,11 +451,12 @@ describe("appendDiscoveredRows", () => {
   });
 });
 
-describe("appendConfiguredRows", () => {
+describe("configured reference view", () => {
   it("does not borrow discovered registry auth when an OpenAI route is unknown", async () => {
     const rows: ModelRow[] = [];
 
-    await appendConfiguredRows({
+    await readCatalog({
+      includePreparedCatalog: false,
       rows,
       entries: [
         {
@@ -485,7 +516,8 @@ describe("appendConfiguredRows", () => {
       input: ["text" as const],
     };
 
-    await appendConfiguredRows({
+    await readCatalog({
+      includePreparedCatalog: false,
       rows,
       entries: [
         {
@@ -520,7 +552,6 @@ describe("prepared provider catalog projection", () => {
 
     await appendCommittedProviderCatalogRows({
       rows,
-      seenKeys: new Set(),
       catalogModels: [
         {
           id: "gpt-5.3-codex-spark",
@@ -565,7 +596,6 @@ describe("prepared provider catalog projection", () => {
 
     await appendCommittedProviderCatalogRows({
       rows,
-      seenKeys: new Set(),
       catalogModels: [
         {
           id: "gpt-5.5",
@@ -624,7 +654,6 @@ describe("prepared provider catalog projection", () => {
 
     await appendCommittedProviderCatalogRows({
       rows,
-      seenKeys: new Set(),
       catalogModels: [
         {
           id: "gpt-5.5",
@@ -655,7 +684,6 @@ describe("prepared provider catalog projection", () => {
 
     await appendCommittedProviderCatalogRows({
       rows,
-      seenKeys: new Set(),
       catalogModels: [
         {
           id: "claude-sonnet-4-6",
@@ -686,7 +714,6 @@ describe("prepared provider catalog projection", () => {
 
     await appendCommittedProviderCatalogRows({
       rows,
-      seenKeys: new Set(),
       catalogModels: [
         {
           id: "gpt-5.5",
@@ -711,16 +738,16 @@ describe("prepared provider catalog projection", () => {
   });
 });
 
-describe("appendConfiguredProviderRows", () => {
+describe("authored provider view", () => {
   it("skips provider runtime normalization when lightweight policy proves the row canonical", async () => {
     mocks.resolveBundledProviderPolicySurface.mockReturnValueOnce({
       projectConfiguredModelRow: () => null,
     } as never);
     const rows: ModelRow[] = [];
 
-    await appendConfiguredProviderRows({
+    await readCatalog({
+      includePreparedCatalog: false,
       rows,
-      seenKeys: new Set(),
       context: createRowContext({
         cfg: {
           models: {
@@ -762,9 +789,9 @@ describe("appendConfiguredProviderRows", () => {
     } as never);
     const rows: ModelRow[] = [];
 
-    await appendConfiguredProviderRows({
+    await readCatalog({
+      includePreparedCatalog: false,
       rows,
-      seenKeys: new Set(),
       context: createRowContext({
         cfg: {
           models: {
@@ -803,9 +830,9 @@ describe("appendConfiguredProviderRows", () => {
     const rows: ModelRow[] = [];
     const evaluateModelAuth = vi.fn(() => authEvaluation(false));
 
-    await appendConfiguredProviderRows({
+    await readCatalog({
+      includePreparedCatalog: false,
       rows,
-      seenKeys: new Set(),
       context: createRowContext({
         cfg: {
           models: {
@@ -857,9 +884,9 @@ describe("appendConfiguredProviderRows", () => {
     const rows: ModelRow[] = [];
     const evaluateModelAuth = vi.fn(() => authEvaluation(true));
 
-    await appendConfiguredProviderRows({
+    await readCatalog({
+      includePreparedCatalog: false,
       rows,
-      seenKeys: new Set(),
       context: createRowContext({
         cfg: {
           models: {
@@ -899,13 +926,13 @@ describe("appendConfiguredProviderRows", () => {
   });
 });
 
-describe("appendAuthenticatedCatalogRows", () => {
+describe("authenticated default view", () => {
   it("does not append authenticated catalog rows in replace mode", async () => {
     const rows: ModelRow[] = [];
 
-    await appendAuthenticatedCatalogRows({
+    await readCatalog({
+      includePreparedCatalog: false,
       rows,
-      seenKeys: new Set(),
       context: createRowContext({
         cfg: { models: { mode: "replace" } },
         authIndex: {
@@ -940,9 +967,9 @@ describe("appendAuthenticatedCatalogRows", () => {
     });
     const rows: ModelRow[] = [];
 
-    await appendAuthenticatedCatalogRows({
+    await readCatalog({
+      includePreparedCatalog: false,
       rows,
-      seenKeys: new Set(),
       context: createRowContext({
         workspaceDir: "/tmp/openclaw-workspace",
         providerDiscoveryProviderIds: ["local-openai"],
@@ -991,9 +1018,9 @@ describe("appendAuthenticatedCatalogRows", () => {
     mocks.loadModelCatalogSnapshot.mockResolvedValueOnce({ entries, routeVariants: entries });
     const rows: ModelRow[] = [];
 
-    await appendAuthenticatedCatalogRows({
+    await readCatalog({
+      includePreparedCatalog: false,
       rows,
-      seenKeys: new Set(),
       context: createRowContext({
         authIndex: {
           evaluateModelAuth: () => ({ availability: undefined, routeResolution: null }),

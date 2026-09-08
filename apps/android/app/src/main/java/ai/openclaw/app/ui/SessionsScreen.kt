@@ -63,6 +63,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -102,7 +103,7 @@ internal fun SessionsScreen(
   var filter by rememberSaveable { mutableStateOf(SessionFilter.Recent) }
   var compactLayout by rememberSaveable { mutableStateOf(false) }
   var recentFirst by rememberSaveable { mutableStateOf(true) }
-  var sessionStatusNowMs by remember { mutableStateOf(System.currentTimeMillis()) }
+  var sessionStatusNowMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
   var collapsedSessionKeys by
     rememberSaveable(activeGatewayStableId, stateSaver = CollapsedSessionKeysSaver) {
       mutableStateOf<Set<String>>(emptySet())

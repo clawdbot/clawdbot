@@ -52,6 +52,18 @@ pnpm's isolated linker, which keeps dependencies in `node_modules/.pnpm` and lin
 them into each workspace package. On supported macOS volumes, this also lets pnpm
 reuse whole-package APFS clones instead of importing every file separately.
 
+Give each source checkout its own physical dependency installation. Tooling does
+not automatically link a missing `node_modules` to another checkout. Existing
+borrowed installs can still serve direct Node tooling. Normal pnpm install checks
+the checkout-root `node_modules`, the explicitly configured root module directory,
+and their `.pnpm` directories before reconciliation, refusing borrowed links there.
+Preserve that donor and create an independently owned install instead of removing
+or reinstalling through its link. Explicit hydrated module directories remain
+supported when the workspace link points to the configured physical directory.
+This admission check runs through `pnpm:devPreinstall`; `--ignore-scripts` skips
+it. The check does not lock paths against concurrent replacement, inspect every
+workspace package's dependencies, or validate every alternate pnpm directory setting.
+
 When updating a checkout that used the hoisted layout, stop builds, tests, and
 watchers using that checkout's dependencies before running the install command.
 Do not change the linker while other jobs are using the same `node_modules`.

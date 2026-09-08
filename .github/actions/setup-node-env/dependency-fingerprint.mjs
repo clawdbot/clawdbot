@@ -24,6 +24,7 @@ const FILTERED_SCRIPT_CONTRACTS = new Map([
   [
     "package.json",
     {
+      "pnpm:devPreinstall": "node scripts/check-install-dependency-ownership.mjs",
       postinstall: "node scripts/postinstall-bundled-plugins.mjs",
       preinstall: "node scripts/preinstall-package-manager-warning.mjs",
       prepare: "node scripts/prepare-git-hooks.mjs",
@@ -41,6 +42,7 @@ const INSTALL_INPUT_FILES = [
   ".github/actions/setup-node-env/dependency-fingerprint.mjs",
   ".github/actions/setup-node-env/install-dependencies.sh",
   "node-version.mjs",
+  "scripts/check-install-dependency-ownership.mjs",
   "scripts/postinstall-bundled-plugins.mjs",
   "scripts/lib/package-dist-imports.mjs",
   "scripts/lib/package-lifecycle-marker.mjs",

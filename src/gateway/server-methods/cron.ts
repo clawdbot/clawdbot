@@ -39,6 +39,7 @@ import type { CronRuntimeAuthority } from "../../cron/runtime-authority.js";
 import { CRON_JOB_SCRATCH_MAX_BYTES } from "../../cron/scratch-contract.js";
 import { resolveFailureAlert } from "../../cron/service/failure-alerts.js";
 import { applyJobPatch } from "../../cron/service/jobs.js";
+import type { CronListPageResult } from "../../cron/service/list-page-types.js";
 import {
   isInvalidCronSessionTargetIdError,
   resolveCronSessionTargetSessionKey,
@@ -89,6 +90,7 @@ import {
 } from "./cron-caller-scope.js";
 import { isCronInvalidRequestError } from "./cron-error-classification.js";
 import { listCronPageWithVisibility } from "./cron-list-caller-scope.js";
+import { startCronListDiagnostics } from "./cron-list-diagnostics.js";
 import { cronRunLogPageFilters, filterCronRunLogJobsByAgent } from "./cron-run-log-filters.js";
 import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
 import type {
@@ -580,69 +582,96 @@ export const cronHandlers: GatewayRequestHandlers = {
     });
     respond(true, result, undefined);
   },
-  "cron.list": async ({ params, respond, context, client }) => {
-    if (!assertValidParams(params, validateCronListParams, "cron.list", respond)) {
-      return;
+  "cron.list": async ({ params, respond: originalRespond, context, client }) => {
+    const diagnostics = startCronListDiagnostics(context.logGateway, originalRespond);
+    const respond = diagnostics?.respond ?? originalRespond;
+    let handlerOutcome: "returned" | "threw" = "returned";
+    try {
+      if (!assertValidParams(params, validateCronListParams, "cron.list", respond)) {
+        return;
+      }
+      const p = params as CronListParams;
+      const admittedScope = readCronCallerScope(client);
+      const callerScope = admittedScope?.manageAll ? undefined : admittedScope;
+      const requestedAgentId = p.agentId ? normalizeAgentId(p.agentId) : undefined;
+      if (callerScope && requestedAgentId && requestedAgentId !== callerScope.agentId) {
+        respondInvalidCronParams(respond, "cron.list", "agentId outside caller scope");
+        return;
+      }
+      const listOptions = {
+        includeDisabled: p.includeDisabled,
+        limit: p.limit,
+        offset: p.offset,
+        query: p.query,
+        enabled: p.enabled,
+        scheduleKind: p.scheduleKind,
+        lastRunStatus: p.lastRunStatus,
+        trigger: p.trigger,
+        sortBy: p.sortBy,
+        sortDir: p.sortDir,
+        // Owners retain visibility when execution is retargeted to another agent.
+        agentId: callerScope ? undefined : p.agentId,
+      };
+      const cronVisibility = resolveCronSessionVisibility(client, context.getRuntimeConfig());
+      const defaultAgentId = context.cron.getDefaultAgentId();
+      diagnostics?.setRequestMode({
+        compact: p.compact === true,
+        previewsRequested: p.compact !== true && p.includeDeliveryPreviews !== false,
+        scopeApplied: Boolean(callerScope || cronVisibility),
+      });
+      diagnostics?.mark("listing");
+      let page: CronListPageResult;
+      if (callerScope || cronVisibility) {
+        page = await listCronPageWithVisibility({
+          context,
+          options: listOptions,
+          diagnostics,
+          matchesJob: (job) =>
+            cronJobMatchesCallerScope({
+              job,
+              callerScope,
+              defaultAgentId,
+              allowCurrentJob: true,
+            }) && cronJobIsVisible(job, cronVisibility, defaultAgentId),
+        });
+      } else {
+        const finishPage = diagnostics?.startSourcePage();
+        try {
+          page = await context.cron.listPage(listOptions);
+        } finally {
+          finishPage?.();
+        }
+      }
+      diagnostics?.setReturnedCount(page.jobs.length);
+      diagnostics?.mark("projection");
+      const jobs = page.jobs.map((job) => ({
+        ...(p.compact === true ? compactCronListJob(job) : cronJobReadView(job)),
+        effectiveAgentId: tryResolveCronJobEffectiveAgentId(job, defaultAgentId) ?? null,
+      }));
+      if (p.compact === true) {
+        respond(true, { ...page, jobs }, undefined);
+        return;
+      }
+      if (p.includeDeliveryPreviews === false) {
+        // Full job rows are the default because editors need their payloads. Delivery
+        // previews are independently suppressible so list-only callers avoid per-job I/O
+        // without weakening the shipped full-response default.
+        respond(true, { ...page, jobs }, undefined);
+        return;
+      }
+      diagnostics?.mark("previews");
+      const deliveryPreviews = await resolveCronDeliveryPreviews({
+        cfg: context.getRuntimeConfig(),
+        defaultAgentId: context.cron.getDefaultAgentId(),
+        jobs: page.jobs,
+      });
+      respond(true, { ...page, jobs, deliveryPreviews }, undefined);
+    } catch (error) {
+      handlerOutcome = "threw";
+      throw error;
+    } finally {
+      diagnostics?.finish(handlerOutcome);
     }
-    const p = params as CronListParams;
-    const admittedScope = readCronCallerScope(client);
-    const callerScope = admittedScope?.manageAll ? undefined : admittedScope;
-    const requestedAgentId = p.agentId ? normalizeAgentId(p.agentId) : undefined;
-    if (callerScope && requestedAgentId && requestedAgentId !== callerScope.agentId) {
-      respondInvalidCronParams(respond, "cron.list", "agentId outside caller scope");
-      return;
-    }
-    const listOptions = {
-      includeDisabled: p.includeDisabled,
-      limit: p.limit,
-      offset: p.offset,
-      query: p.query,
-      enabled: p.enabled,
-      scheduleKind: p.scheduleKind,
-      lastRunStatus: p.lastRunStatus,
-      trigger: p.trigger,
-      sortBy: p.sortBy,
-      sortDir: p.sortDir,
-      // Owners retain visibility when execution is retargeted to another agent.
-      agentId: callerScope ? undefined : p.agentId,
-    };
-    const cronVisibility = resolveCronSessionVisibility(client, context.getRuntimeConfig());
-    const defaultAgentId = context.cron.getDefaultAgentId();
-    const page =
-      callerScope || cronVisibility
-        ? await listCronPageWithVisibility({
-            context,
-            options: listOptions,
-            matchesJob: (job) =>
-              cronJobMatchesCallerScope({
-                job,
-                callerScope,
-                defaultAgentId,
-                allowCurrentJob: true,
-              }) && cronJobIsVisible(job, cronVisibility, defaultAgentId),
-          })
-        : await context.cron.listPage(listOptions);
-    const jobs = page.jobs.map((job) => ({
-      ...(p.compact === true ? compactCronListJob(job) : cronJobReadView(job)),
-      effectiveAgentId: tryResolveCronJobEffectiveAgentId(job, defaultAgentId) ?? null,
-    }));
-    if (p.compact === true) {
-      respond(true, { ...page, jobs }, undefined);
-      return;
-    }
-    if (p.includeDeliveryPreviews === false) {
-      // Full job rows are the default because editors need their payloads. Delivery
-      // previews are independently suppressible so list-only callers avoid per-job I/O
-      // without weakening the shipped full-response default.
-      respond(true, { ...page, jobs }, undefined);
-      return;
-    }
-    const deliveryPreviews = await resolveCronDeliveryPreviews({
-      cfg: context.getRuntimeConfig(),
-      defaultAgentId: context.cron.getDefaultAgentId(),
-      jobs: page.jobs,
-    });
-    respond(true, { ...page, jobs, deliveryPreviews }, undefined);
   },
   "cron.status": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateCronStatusParams, "cron.status", respond)) {

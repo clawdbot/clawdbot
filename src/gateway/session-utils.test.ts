@@ -735,7 +735,7 @@ describe("gateway session utils", () => {
         "agent:main:dashboard:root": { sessionId: "root", updatedAt: 30 },
         [key]: { sessionId: "child", updatedAt: 10, pinnedAt: 40, ...lineage },
       };
-      for (const limit of [undefined, 2]) {
+      for (const limit of [2, 201]) {
         const listed = await listSessionFixture({ cfg, storePath: "", store, opts: { limit } });
         const child = listed.sessions.find((row) => row.key === key);
         expect.soft(child?.pinned).toBe(false);

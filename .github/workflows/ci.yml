@@ -1665,18 +1665,18 @@ jobs:
                   // current isolated and Docker catalogs exclude the Go owner.
                   return (plan.shard_name ?? plan.shardName).startsWith("core-tooling");
                 }),
-                requires_ripgrep:
-                  shard.targets?.includes("src/agents/sessions/tools/index.test.ts") ||
-                  shard.includePatterns?.includes("src/agents/sessions/tools/index.test.ts") ||
-                  (shard.shardName === "agentic-agents-support" && !shard.includePatterns) ||
-                  shard.groups?.some(
-                    (group) =>
-                      group.includePatterns?.includes(
-                        "src/agents/sessions/tools/index.test.ts",
-                      ) ||
-                      (group.shard_name === "agentic-agents-support" &&
-                        !group.includePatterns),
-                   ),
+                requires_ripgrep: (shard.groups ?? [shard]).some((plan) => {
+                  const patterns = plan.targets ?? plan.includePatterns;
+                  if (patterns) {
+                    return patterns.some((pattern) => [
+                      "src/agents/sessions/tools/index.test.ts",
+                      "src/agents/filesystem-tools-output-contract.test.ts",
+                    ].some((test) => matchesGlob(test, pattern)));
+                  }
+                  return ["agentic-agents-support", "agentic-agents-core-runtime"].includes(
+                    plan.shard_name ?? plan.shardName,
+                  );
+                }),
               };
             });
           const nodeTestNonDistShards = nodeTestShards.filter((shard) => !shard.requires_dist);
