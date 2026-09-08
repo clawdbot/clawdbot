@@ -53,6 +53,11 @@ export function resolveOpenAIStrictToolSetting(
   if (resolvesToNativeOpenAIStrictTools(model, options?.transport ?? "stream")) {
     return true;
   }
+  // Responses can normalize an omitted strict flag into strict mode. Explicitly
+  // opt Copilot out so optional tool fields stay optional, rather than nullable.
+  if (model.provider === "github-copilot" && model.api === "openai-responses") {
+    return false;
+  }
   if (options?.supportsStrictMode) {
     return false;
   }
