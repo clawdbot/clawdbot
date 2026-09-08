@@ -1,3 +1,4 @@
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
 /**
  * Tests that session abort requests stay scoped to the targeted agent.
  */
