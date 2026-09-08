@@ -156,6 +156,80 @@ afterEach(() => {
 });
 
 describe("follow-up delivery channel boundary", () => {
+  it.each<{
+    name: string;
+    payload?: ReplyPayload;
+    provenance?: AdmittedFollowupTurn["queued"]["run"]["inputProvenance"];
+    sourceChannel?: string;
+    targetChannel?: string;
+    omitMessageId?: boolean;
+    expectedReply: string | null;
+  }>([
+    { name: "implicit current inbound", expectedReply: "new-inbound" },
+    {
+      name: "explicit external provenance",
+      provenance: { kind: "external_user" },
+      expectedReply: "new-inbound",
+    },
+    {
+      name: "explicit reply target",
+      payload: { text: "queued answer", replyToId: "explicit-target" },
+      expectedReply: "explicit-target",
+    },
+    {
+      name: "restart sentinel",
+      provenance: { kind: "internal_system", sourceTool: "restart-sentinel" },
+      expectedReply: null,
+    },
+    {
+      name: "child announcement",
+      provenance: { kind: "inter_session", sourceTool: "subagent_announce" },
+      expectedReply: null,
+    },
+    { name: "different source channel", sourceChannel: "discord", expectedReply: null },
+    { name: "another channel", targetChannel: "imessage", expectedReply: null },
+    { name: "no inbound id", omitMessageId: true, expectedReply: null },
+  ])("passes queued origin message facts to the channel resolver: $name", async (testCase) => {
+    const source = createChannelPlugin("slack");
+    source.threading = {
+      resolveReplyTransport: ({ currentMessageId, replyToId }) => ({
+        replyToId: replyToId ?? currentMessageId,
+      }),
+    };
+    setActivePluginRegistry(
+      createTestRegistry([
+        { pluginId: "slack", plugin: source, source: "test" },
+        { pluginId: "imessage", plugin: createChannelPlugin("imessage"), source: "test" },
+      ]),
+    );
+    const channel = testCase.targetChannel ?? "slack";
+    const turn = createTurn({
+      messageProvider: testCase.sourceChannel ?? channel,
+      originatingChannel: channel,
+    });
+    turn.queued.originatingTo = "dm:qa-peer";
+    turn.queued.messageId = testCase.omitMessageId ? undefined : "new-inbound";
+    turn.queued.originatingChatType = "direct";
+    turn.queued.run.inputProvenance = testCase.provenance;
+    const payload = testCase.payload ?? { text: "queued answer" };
+    channelState.outcomes = ["delivered"];
+    await deliverFollowupDecision({
+      decision: { kind: "deliver", payloads: [payload] },
+      turn,
+      defaults: createDefaults(vi.fn(async () => {})),
+      runId: "run-1",
+      runFollowup: vi.fn(async () => {}),
+    });
+    expect(channelState.deliver).toHaveBeenCalledOnce();
+    expect(channelState.deliver).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel,
+        to: "dm:qa-peer",
+        replyToId: testCase.expectedReply,
+      }),
+    );
+  });
+
   it.each([true, false])(
     "carries current-reply intent (%s) through queued status delivery",
     async (replyToCurrent) => {

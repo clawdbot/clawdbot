@@ -55,6 +55,7 @@ type ReplyRunState = {
   followupAdmissionBarriersByKey: Map<string, ReplyRunAdmissionBarrier>;
   successorAdmissionBarriersByKey: Map<string, ReplyRunAdmissionBarrier>;
   evictOperationByOperation?: WeakMap<ReplyOperation, () => void>;
+  clearOperationByOperation?: WeakMap<ReplyOperation, () => void>;
   executionStartedOperations?: WeakSet<ReplyOperation>;
   lifecycleAdmissionByOperation?: WeakMap<ReplyOperation, ReplyOperationAdmission>;
 };
@@ -111,6 +112,10 @@ export function prepareReplyRunKeyUpdate(
   }
   return { sessionKey: nextKey, agentId: nextAgentId };
 }
+
+// Retain the owning closure across transformed SDK module graphs.
+export const clearReplyOperationByOperation = (replyRunState.clearOperationByOperation ??=
+  new WeakMap<ReplyOperation, () => void>());
 
 export const evictReplyOperationByOperation =
   replyRunState.evictOperationByOperation ??
@@ -234,6 +239,22 @@ export function expireStaleReplyOperation(
   options?: ReplyOperationStaleExpiryOptions,
 ): boolean {
   return expireReplyOperationByOperation.get(operation)?.(reason, options) ?? false;
+}
+
+export function forceClearReplyOperation(operation: ReplyOperation, cause?: unknown): boolean {
+  if (replyRunState.activeRunsByKey.get(operation.key) !== operation) {
+    return false;
+  }
+  // Reclaim the bounded slot without claiming the delivery/persistence owner
+  // finished. Only its completion call can settle ownerSettlement, possibly
+  // with a barrier registered after this forced release.
+  const clearState = clearReplyOperationByOperation.get(operation);
+  if (!clearState) {
+    return false;
+  }
+  operation.fail("run_failed", cause);
+  clearState();
+  return true;
 }
 
 // Committed output belongs to the bounded finalization owner. Stale recovery

@@ -90,7 +90,7 @@ export async function runChannelsAddWizardFlow(params: ChannelsAddWizardFlowPara
     import("../agents.config.js"),
     import("../onboard-channels.js"),
   ]);
-  const channelSetup = onboardChannels.createChannelSetupTransaction({
+  const channelSetup = onboardChannels.createChannelSetupHooks({
     runtime,
     ...(params.beforePersistentEffect
       ? { beforePersistentEffect: params.beforePersistentEffect }
@@ -126,21 +126,21 @@ export async function runChannelsAddWizardFlow(params: ChannelsAddWizardFlowPara
     },
   });
   const commitWizardConfig = async (config: OpenClawConfig) => {
-    return await channelSetup.commit(config, async (configToCommit) => {
-      const committed = await commitConfigWithPendingPluginInstalls({
-        sourceConfig: configToCommit,
-        writeOptions: writeSnapshot.writeOptions,
-        ...(baseHash !== undefined ? { baseHash } : {}),
-      });
-      if (committed.movedInstallRecords) {
-        await refreshPluginRegistryAfterConfigMutation({
-          reason: "source-changed",
-          installRecords: committed.installRecords,
-          logger: { warn: (message) => runtime.log(message) },
-        });
-      }
-      return committed.config;
+    await params.beforePersistentEffect?.();
+    const committed = await commitConfigWithPendingPluginInstalls({
+      sourceConfig: config,
+      writeOptions: writeSnapshot.writeOptions,
+      ...(baseHash !== undefined ? { baseHash } : {}),
     });
+    if (committed.movedInstallRecords) {
+      await refreshPluginRegistryAfterConfigMutation({
+        reason: "source-changed",
+        installRecords: committed.installRecords,
+        logger: { warn: (message) => runtime.log(message) },
+      });
+    }
+    await channelSetup.runPostWriteHooks(committed.path);
+    return committed.nextConfig;
   };
   if (selection.length === 0) {
     if (nextConfig !== cfg) {

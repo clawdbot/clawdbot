@@ -35,6 +35,7 @@ const MAX_STAGED_NAME_BYTES = 180;
 const PORTABLE_NAME_FORBIDDEN = new RegExp(String.raw`[\u0000-\u001f\u007f<>:"/\\|?*%!]`, "g");
 const WINDOWS_RESERVED_NAME = /^(?:con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³])(?:\.|$)/iu;
 const uploadLocks = createFileLockManager("openclaw.terminal-upload");
+const pendingUploadLockReleases = new Map<string, () => Promise<void>>();
 const uploadQueue = new BoundedSerialQueue({
   maxPendingCount: MAX_RETAINED_DIRECTORIES,
   maxPendingWeight: Math.ceil(MAX_RETAINED_BYTES / 3) * 4,
@@ -160,6 +161,7 @@ async function withUploadLock<T>(
   });
   const lockDirectory = path.join(privateRoot, "terminal-upload-lock");
   await mkdir(lockDirectory, { recursive: true, mode: 0o700 });
+  await pendingUploadLockReleases.get(root)?.();
   const staleOwner = ({ payload }: { payload: unknown }) =>
     isLockOwnerDefinitelyStale({ payload: asNullableRecord(payload) });
   const lock = await uploadLocks
@@ -176,10 +178,16 @@ async function withUploadLock<T>(
     })
     .catch((error: unknown) => {
       if (hasErrnoCode(error, "file_lock_timeout") || hasErrnoCode(error, "file_lock_stale")) {
+        const relativeLockDirectory = path.relative(root, lockDirectory);
+        const recoveryLocation =
+          process.platform === "win32"
+            ? `${path.join(".openclaw", "tmp", relativeLockDirectory)} under the home directory of the account running this terminal's Gateway or node host`
+            : `${relativeLockDirectory} under the system temporary directory used by this terminal's Gateway or node-host process`;
         throw new Error(
           "terminal upload staging is busy; retry after other uploads finish. " +
-            "If it stays blocked after a crash, stop all Gateway and node-host processes using " +
-            `this staging directory, remove the lock directory ${lockDirectory}, then restart them.`,
+            `If it stays blocked after a crash, locate ${recoveryLocation}. ` +
+            "Stop all Gateway and node-host processes using that staging root, " +
+            "remove only this lock directory, then restart them.",
           { cause: error },
         );
       }
@@ -192,7 +200,16 @@ async function withUploadLock<T>(
       }
     });
   } finally {
-    await lock.release();
+    // A failed release retains fs-safe's held entry. Only finished callbacks
+    // publish a retry, so recovery can never release an active upload or scan.
+    const release = async () => {
+      await lock.release();
+      if (pendingUploadLockReleases.get(root) === release) {
+        pendingUploadLockReleases.delete(root);
+      }
+    };
+    pendingUploadLockReleases.set(root, release);
+    await release();
   }
 }
 

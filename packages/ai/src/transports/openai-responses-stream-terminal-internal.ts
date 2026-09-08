@@ -31,7 +31,10 @@ import {
 } from "./openai-responses-contracts.js";
 import { encodeTextSignatureV1 } from "./openai-responses-replay-internal.js";
 import type { ResponsesOutputTracker } from "./openai-responses-stream-slots-internal.js";
-import { parseTerminalToolCallArguments } from "./transport-stream-shared.js";
+import {
+  IncompleteToolCallError,
+  parseTerminalToolCallArguments,
+} from "./transport-stream-shared.js";
 
 export type ResponsesEventSink = { push(event: AssistantMessageEvent): void };
 export type TextBlockReference = {
@@ -85,7 +88,9 @@ export function resolveCompletedResponsesToolCall(
   streamed?: { name?: string; arguments?: string },
 ): Pick<ToolCall, "name" | "arguments"> {
   if (item.status && item.status !== "completed") {
-    throw new Error("Responses stream completed with an incomplete terminal tool call");
+    throw new IncompleteToolCallError(
+      "Responses stream completed with an incomplete terminal tool call",
+    );
   }
   const streamedName = streamed?.name?.trim() || undefined;
   const completedName = typeof item.name === "string" ? item.name.trim() || undefined : undefined;

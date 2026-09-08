@@ -51,6 +51,17 @@ describe("renderAssistantRequestFailureCopy", () => {
     },
   );
 
+  it("preserves an incomplete tool-call diagnosis without exposing provider text", () => {
+    const error = makeAssistantMessageFixture({
+      ...target,
+      errorCode: "incomplete_tool_call",
+      errorMessage: "PRIVATE_PROVIDER_DETAIL",
+    });
+    expect(formatUserFacingAssistantErrorText(error)).toBe(
+      "⚠️ The provider returned an unfinished tool call. Earlier actions may have completed; verify their results before continuing.",
+    );
+  });
+
   it("keeps provider bodies containing SQLite text redacted", () => {
     const errorMessage = '{"error":{"message":"database is locked PRIVATE_CANARY"}}';
     expect(

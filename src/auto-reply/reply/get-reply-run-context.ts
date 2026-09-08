@@ -222,15 +222,11 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
   const isDirectedTurn = isDirectedSourceReplyTurn(ctx, cfg, isDirectChat, inboundEventKind);
   const isAmbientRoomEvent = inboundEventKind === "room_event" && !isDirectedTurn;
   const allowEmptyAssistantReplyAsSilent =
-    isGroupChat &&
-    !isDirectedTurn &&
-    (isAmbientRoomEvent || silentReplySettings.policy === "allow");
-  // Heartbeats retain the embedded runner's trigger-owned optional default.
-  const terminalReplyExpectation = isHeartbeat
-    ? undefined
-    : isAmbientRoomEvent
-      ? "optional"
-      : "required";
+    isHeartbeat ||
+    (isGroupChat &&
+      !isDirectedTurn &&
+      (isAmbientRoomEvent || silentReplySettings.policy === "allow"));
+  const terminalReplyExpectation = isHeartbeat || isAmbientRoomEvent ? "optional" : "required";
   const groupSystemPrompt = normalizeOptionalString(promptSessionCtx.GroupSystemPrompt) ?? "";
   const inboundMetaPrompt = buildInboundMetaSystemPrompt(
     isNewSession ? promptSessionCtx : { ...promptSessionCtx, ThreadStarterBody: undefined },

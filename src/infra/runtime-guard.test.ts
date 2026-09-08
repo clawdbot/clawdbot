@@ -163,6 +163,27 @@ describe("runtime-guard", () => {
     expect(runtime.error).not.toHaveBeenCalled();
   });
 
+  it("reports a SQLite selection failure through the runtime diagnostic sink", () => {
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+    const sqliteSelectionError =
+      "Cannot use SQLite library /nonexistent.dylib: missing file. " +
+      "Fix or unset OPENCLAW_SQLITE_LIBRARY; install a supported library with brew install sqlite.";
+    assertSupportedRuntime(runtime, {
+      kind: "bun",
+      version: "1.4.2",
+      execPath: "/usr/bin/bun",
+      pathEnv: "/usr/bin",
+      hasNodeSqlite: true,
+      sqliteVersion: "3.53.4",
+      sqliteSelectionError,
+    });
+    expect(runtime.error).toHaveBeenCalledExactlyOnceWith(
+      `${sqliteSelectionError}\nDetected: bun 1.4.2 (exec: /usr/bin/bun).`,
+    );
+    expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
+    expect(runtime.log).not.toHaveBeenCalled();
+  });
+
   it("rejects Bun when it does not provide node:sqlite", () => {
     const runtime = {
       log: vi.fn(),

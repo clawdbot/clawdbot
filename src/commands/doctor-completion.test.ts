@@ -257,7 +257,7 @@ describe("doctorShellCompletion", () => {
     installCompletionMock.mockResolvedValue(undefined);
     const noteSpy = vi.spyOn(noteModule, "note");
 
-    await doctorShellCompletion({} as never, mockPrompter());
+    await doctorShellCompletion(mockPrompter());
 
     expect(installCompletionMock).toHaveBeenCalledWith("bash", true, "openclaw");
     expect(noteSpy).toHaveBeenCalledWith(
@@ -284,7 +284,7 @@ describe("doctorShellCompletion", () => {
     installCompletionMock.mockResolvedValue(undefined);
     const noteSpy = vi.spyOn(noteModule, "note");
 
-    await doctorShellCompletion({} as never, mockPrompter());
+    await doctorShellCompletion(mockPrompter());
 
     expect(installCompletionMock).toHaveBeenCalledWith(testCase.shell, true, "openclaw");
     expect(noteSpy).toHaveBeenCalledWith(
@@ -336,7 +336,7 @@ describe("doctorShellCompletion", () => {
     installCompletionMock.mockRejectedValue(wrappedFsError(testCase.code, failedPath));
     const noteSpy = vi.spyOn(noteModule, "note");
 
-    await expect(doctorShellCompletion({} as never, mockPrompter())).resolves.not.toThrow();
+    await expect(doctorShellCompletion(mockPrompter())).resolves.not.toThrow();
 
     const command = formatCompletionReloadCommand(
       "bash",
@@ -354,6 +354,6 @@ describe("doctorShellCompletion", () => {
     const profilePath = await setupDoctorCompletionTest(true);
     installCompletionMock.mockRejectedValue(wrappedFsError("ENOSPC", profilePath));
 
-    await expect(doctorShellCompletion({} as never, mockPrompter())).rejects.toThrow("ENOSPC");
+    await expect(doctorShellCompletion(mockPrompter())).rejects.toThrow("ENOSPC");
   });
 });

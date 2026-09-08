@@ -24,11 +24,6 @@ const userAgent =
 const timeoutMs = 30_000;
 const FETCH_HTML_MAX_BYTES = 5 * 1024 * 1024;
 
-type FetchHtmlOptions = {
-  fetchImpl?: typeof fetch;
-  maxBytes?: number;
-};
-
 function truncate(value: string, max = 180): string {
   if (!value) {
     return "";
@@ -38,7 +33,7 @@ function truncate(value: string, max = 180): string {
 
 async function fetchHtml(
   url: string,
-  options: FetchHtmlOptions = {},
+  fetchImpl: typeof fetch = fetch,
 ): Promise<{
   ok: boolean;
   status: number;
@@ -48,7 +43,6 @@ async function fetchHtml(
 }> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
-  const fetchImpl = options.fetchImpl ?? fetch;
   try {
     const res = await fetchImpl(url, {
       method: "GET",
@@ -56,12 +50,9 @@ async function fetchHtml(
       signal: controller.signal,
     });
     const contentType = res.headers.get("content-type") ?? "application/octet-stream";
-    const body = await readBoundedResponseText(
-      res,
-      "local HTML fetch",
-      options.maxBytes ?? FETCH_HTML_MAX_BYTES,
-      { signal: controller.signal },
-    );
+    const body = await readBoundedResponseText(res, "local HTML fetch", FETCH_HTML_MAX_BYTES, {
+      signal: controller.signal,
+    });
     return {
       ok: res.ok,
       status: res.status,
