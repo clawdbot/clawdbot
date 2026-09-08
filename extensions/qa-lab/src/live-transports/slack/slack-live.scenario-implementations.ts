@@ -26,16 +26,11 @@ import {
   buildSlackProgressCommentaryRun,
 } from "./slack-live.scenario-fixtures.js";
 
-function requireCapturedMessageId(params: {
-  description: string;
+function findCapturedMessageId(params: {
   messages: readonly SlackObservedMessage[];
   marker: string;
 }) {
-  const messageId = params.messages.find((message) => message.text.includes(params.marker))?.ts;
-  if (!messageId) {
-    throw new Error(`Slack ${params.description} write capture did not retain its message id`);
-  }
-  return messageId;
+  return params.messages.find((message) => message.text.includes(params.marker))?.ts;
 }
 
 export const slackQaCanaryScenario: SlackQaScenarioImplementation = {
@@ -351,12 +346,9 @@ export const slackQaChartPresentationNativeScenario: SlackQaScenarioImplementati
         `After the chart send succeeds, reply with only this exact marker: ${finalMarker}`,
       ].join(" "),
       matchText: finalMarker,
-      verifyObserved: ({ messages }) => {
-        messageId = requireCapturedMessageId({
-          description: "native chart",
-          marker: summaryText,
-          messages,
-        });
+      captureBeforeReply: (messages) => {
+        messageId = findCapturedMessageId({ marker: summaryText, messages });
+        return messageId !== undefined;
       },
       afterReply: async (_message, context) => {
         if (!messageId) {
@@ -383,6 +375,7 @@ export const slackQaTablePresentationNativeScenario: SlackQaScenarioImplementati
   buildRun: (sutUserId) => {
     const suffix = randomUUID().slice(0, 8).toUpperCase();
     const summaryText = `SLACK_QA_TABLE_SUMMARY_${suffix}`;
+    const finalMarker = `SLACK_QA_TABLE_DONE_${suffix}`;
     const messageToolArgs = buildSlackTableMessageToolArgs(summaryText);
     let messageId: string | undefined;
     return {
@@ -390,14 +383,12 @@ export const slackQaTablePresentationNativeScenario: SlackQaScenarioImplementati
       input: [
         `<@${sutUserId}> Slack native table QA check ${summaryText}.`,
         `Call the message tool exactly once with these exact arguments: ${JSON.stringify(messageToolArgs)}.`,
+        `After the table send succeeds, reply with only this exact marker: ${finalMarker}`,
       ].join(" "),
-      matchText: summaryText,
-      verifyObserved: ({ messages }) => {
-        messageId = requireCapturedMessageId({
-          description: "native table",
-          marker: summaryText,
-          messages,
-        });
+      matchText: finalMarker,
+      captureBeforeReply: (messages) => {
+        messageId = findCapturedMessageId({ marker: summaryText, messages });
+        return messageId !== undefined;
       },
       afterReply: async (_message, context) => {
         if (!messageId) {
