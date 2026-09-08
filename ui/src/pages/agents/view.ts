@@ -491,6 +491,7 @@ export function renderAgents(props: AgentsProps) {
                   ${
                     props.activePanel === "cron"
                       ? renderAgentCron({
+                          basePath: props.basePath,
                           context: buildAgentContext(
                             selectedAgent,
                             props.config.form,
