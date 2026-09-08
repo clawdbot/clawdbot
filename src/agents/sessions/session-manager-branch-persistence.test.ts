@@ -109,10 +109,12 @@ describe("SessionManager SQLite branch persistence", () => {
       expect.objectContaining({ id: user.messageId, type: "message" }),
       expect.objectContaining({ id: assistant.messageId, type: "message" }),
     ]);
+    expect(() => sessionManager.prepareTranscriptRewrite()).not.toThrow();
 
     expect(sessionManager.removeTrailingEntries((entry) => entry.id === assistant.messageId)).toBe(
       1,
     );
+    expect(() => sessionManager.prepareTranscriptRewrite()).not.toThrow();
     await expect(
       loadTranscriptEvents({
         agentId: "main",

@@ -356,10 +356,18 @@ describe("SessionManager stale-parent rebase", () => {
 
     const sideId = manager.appendMessage({ role: "user", content: "side", timestamp: 3 });
 
-    const persisted = (
-      (await loadTranscriptEvents(target)) as Array<SessionMessageEntry & { type?: string }>
-    ).find((entry) => entry.type === "message" && entry.id === sideId);
+    const events = (await loadTranscriptEvents(target)) as Array<
+      SessionMessageEntry & { type?: string }
+    >;
+    const persisted = events.find((entry) => entry.type === "message" && entry.id === sideId);
     expect(persisted).toMatchObject({ parentId: base.messageId });
+    expect(manager.getEntries()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "concurrent-tail" }),
+        expect.objectContaining({ id: sideId }),
+      ]),
+    );
+    expect(() => manager.prepareTranscriptRewrite()).not.toThrow();
   });
 
   it("retries a stale deliberate branch against an unchanged explicit parent", async () => {

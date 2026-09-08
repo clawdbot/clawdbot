@@ -161,8 +161,9 @@ export class SessionManagerEntries extends SessionManagerPersistence {
       }
       canonicalEntry.id = persistenceResult.adoptedMessageId;
     } else if (
-      persistenceResult?.effectiveParentId !== undefined &&
-      persistenceResult.effectiveParentId !== canonicalEntry.parentId
+      persistenceResult?.reloadAfterAppend ||
+      (persistenceResult?.effectiveParentId !== undefined &&
+        persistenceResult.effectiveParentId !== canonicalEntry.parentId)
     ) {
       if (admittedUserId) {
         if (this.transcriptMutationAt === undefined) {

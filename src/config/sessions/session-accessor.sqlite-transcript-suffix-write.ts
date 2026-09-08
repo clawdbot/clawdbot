@@ -1,4 +1,5 @@
 import {
+  deferOpenClawAgentPostCommitPublication,
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
@@ -12,7 +13,10 @@ import {
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
 import type { ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
-import { readTranscriptMutationStateInTransaction } from "./session-accessor.sqlite-transcript-state.js";
+import {
+  readTranscriptContextVersionInTransaction,
+  type SessionTranscriptContextVersion,
+} from "./session-accessor.sqlite-transcript-state.js";
 import {
   prepareSqliteTranscriptSuffixMutation,
   replaceSqliteTranscriptSuffixInTransaction,
@@ -49,7 +53,7 @@ export function replaceTranscriptSuffixEventsSync(
   nextEvents: readonly TranscriptEvent[],
   prefixLength = 0,
   expectedMutationAt?: number | null,
-  captureMutationAtInTransaction?: (mutationAt: number | null) => void,
+  captureVersionInTransaction?: (version: SessionTranscriptContextVersion) => void,
   eventsStartAtPersistedPrefix = false,
 ): boolean {
   const fencedScope = withOwnedSessionTranscriptWriterFence(scope);
@@ -71,10 +75,17 @@ export function replaceTranscriptSuffixEventsSync(
     if (!transcriptWriteScopeIsCurrent(fresh, resolved, fencedScope)) {
       return;
     }
+    let committedVersion: SessionTranscriptContextVersion;
+    if (
+      captureVersionInTransaction &&
+      !deferOpenClawAgentPostCommitPublication(database, () =>
+        captureVersionInTransaction(committedVersion),
+      )
+    ) {
+      throw new Error("Transcript suffix replacement requires a commit publication");
+    }
     replaceSqliteTranscriptSuffixInTransaction(database, resolved, plan);
-    captureMutationAtInTransaction?.(
-      readTranscriptMutationStateInTransaction(database, resolved.sessionId).updatedAt,
-    );
+    committedVersion = readTranscriptContextVersionInTransaction(database, resolved.sessionId);
     replaced = true;
   }, toDatabaseOptions(resolved));
   if (fencedScope.expectedWriterRunId !== undefined && !replaced) {

@@ -39,6 +39,7 @@ type PersistRecordResult =
       appended: boolean;
       adoptedMessageId?: string;
       effectiveParentId: string | null;
+      reloadAfterAppend?: boolean;
     };
 
 type PersistRecordOptions = AppendPersistenceOptions & {
@@ -263,6 +264,10 @@ export class SessionManagerPersistence extends SessionManagerCore {
     const removedEntries = removableIndexes.map(
       (index) => prepared.fileEntries[index] as SessionEntry,
     );
+    const persistedBoundaryCount = this.persistedBoundaryCount;
+    const removedBoundaryCount = removedEntries.filter(
+      (entry) => entry.type === "compaction" || entry.type === "reset",
+    ).length;
     const removedParentById = new Map(
       removedEntries.map((entry) => [entry.id, entry.parentId] as const),
     );
@@ -359,44 +364,50 @@ export class SessionManagerPersistence extends SessionManagerCore {
       useFullTranscriptFallback = true;
     }
     const replacementEvents = useFullTranscriptFallback ? events : suffixEvents;
-    let committedMutationAt: number | null | undefined;
-    if (
-      this.persistenceTarget &&
-      !replaceTranscriptSuffixEventsSync(
-        this.persistenceTarget,
-        expectedPersistedEntries,
-        replacementEvents,
-        useFullTranscriptFallback ? 0 : persistedPrefixLength,
-        this.transcriptMutationAt,
-        (mutationAt) => {
-          committedMutationAt = mutationAt;
-        },
-        persistedSuffixStartSeq !== undefined && !useFullTranscriptFallback,
-      )
-    ) {
-      throw new Error(`SQLite session changed before trimming ${this.sessionId}`);
-    }
-    // Adopt the detached tree after commit without parsing rows outside the bounded suffix.
-    this.fileEntries = prepared.fileEntries;
-    this.opaqueFileEntries = prepared.opaqueFileEntries;
-    this.buildIndex();
-    for (const [id, parentId] of prepared.opaqueParentsById) {
-      if (!this.byId.has(id) && !this.opaqueParentsById.has(id)) {
-        this.opaqueParentsById.set(id, parentId);
+    const adoptPrepared = (version?: typeof this.transcriptVersion) => {
+      // Publish the detached tree before later post-commit observers can append through this manager.
+      this.fileEntries = prepared.fileEntries;
+      this.opaqueFileEntries = prepared.opaqueFileEntries;
+      this.buildIndex();
+      for (const [id, parentId] of prepared.opaqueParentsById) {
+        if (!this.byId.has(id) && !this.opaqueParentsById.has(id)) {
+          this.opaqueParentsById.set(id, parentId);
+        }
       }
+      this.leafId = prepared.leafId;
+      this.appendParentId = prepared.appendParentId;
+      this.appendMode = prepared.appendMode;
+      this.pendingDeliberateAppend = prepared.pendingDeliberateAppend;
+      this.boundedContextIncomplete = Boolean(this.boundedContextLimits && this.persistenceTarget);
+      this.persistedBoundaryCount =
+        persistedBoundaryCount === undefined
+          ? undefined
+          : Math.max(0, persistedBoundaryCount - removedBoundaryCount);
+      this.persistedSuffixStartSeq = this.boundedContextIncomplete
+        ? retainedContextPrefix.length > 0
+          ? this.persistedSuffixStartSeq
+          : persistedSuffixStartSeq
+        : undefined;
+      this.transcriptVersion = version;
+      this.transcriptMutationAt = version?.updatedAt;
+    };
+    if (this.persistenceTarget) {
+      if (
+        !replaceTranscriptSuffixEventsSync(
+          this.persistenceTarget,
+          expectedPersistedEntries,
+          replacementEvents,
+          useFullTranscriptFallback ? 0 : persistedPrefixLength,
+          this.transcriptMutationAt,
+          adoptPrepared,
+          persistedSuffixStartSeq !== undefined && !useFullTranscriptFallback,
+        )
+      ) {
+        throw new Error(`SQLite session changed before trimming ${this.sessionId}`);
+      }
+    } else {
+      adoptPrepared();
     }
-    this.leafId = prepared.leafId;
-    this.appendParentId = prepared.appendParentId;
-    this.appendMode = prepared.appendMode;
-    this.pendingDeliberateAppend = prepared.pendingDeliberateAppend;
-    this.boundedContextIncomplete = Boolean(this.boundedContextLimits && this.persistenceTarget);
-    this.persistedBoundaryCount = undefined;
-    this.persistedSuffixStartSeq = this.boundedContextIncomplete
-      ? retainedContextPrefix.length > 0
-        ? this.persistedSuffixStartSeq
-        : persistedSuffixStartSeq
-      : undefined;
-    this.transcriptMutationAt = committedMutationAt;
     return removedEntries.length;
   }
 
@@ -512,6 +523,7 @@ export class SessionManagerPersistence extends SessionManagerCore {
       parentId: entry.parentId,
       ...(options?.appendIntent === "active-branch" ? { appendIntent: options.appendIntent } : {}),
     } satisfies Parameters<typeof appendTranscriptMessageSnapshotSync>[1]);
+    const loadedVersion = this.transcriptVersion;
     const outcome = appendTranscriptMessageSnapshotSync(scope, appendOptions);
     if (!outcome.ok) {
       throw new Error(`Session transcript message was not persisted: ${entry.id}`, {
@@ -560,10 +572,16 @@ export class SessionManagerPersistence extends SessionManagerCore {
     if (result.effectiveParentId === undefined) {
       throw new Error(`Session transcript append parent was not returned: ${entry.id}`);
     }
+    const reloadAfterAppend =
+      result.appended &&
+      loadedVersion !== undefined &&
+      (outcome.value.before.generation !== loadedVersion.generation ||
+        outcome.value.before.rawSeq !== loadedVersion.rawSeq);
     return {
       ...(result.anchor ? { anchor: result.anchor } : {}),
       appended: result.appended,
       effectiveParentId: result.effectiveParentId,
+      ...(reloadAfterAppend ? { reloadAfterAppend: true } : {}),
     };
   }
 }

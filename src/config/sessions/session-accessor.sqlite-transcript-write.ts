@@ -47,7 +47,6 @@ import {
   readNextTranscriptSeq,
   readTranscriptGenerationInTransaction,
   readTranscriptContextVersionInTransaction,
-  readTranscriptMutationStateInTransaction,
   type SessionTranscriptContextVersion,
 } from "./session-accessor.sqlite-transcript-state.js";
 import {
@@ -149,7 +148,7 @@ export async function replaceSessionWithBranchedTranscript(
   branch: { sessionId: string; events: TranscriptEvent[] },
   onCommitted: (
     target: SessionTranscriptRuntimeTarget,
-    transcriptMutationAt: number | null,
+    version: SessionTranscriptContextVersion,
   ) => void,
   assertActive?: () => void,
 ): Promise<void> {
@@ -198,14 +197,11 @@ export async function replaceSessionWithBranchedTranscript(
           previous,
           readSessionIdentitySnapshot(database, identityKeys),
         ),
-        transcriptMutationAt: readTranscriptMutationStateInTransaction(
-          database,
-          nextResolved.sessionId,
-        ).updatedAt,
+        version: readTranscriptContextVersionInTransaction(database, nextResolved.sessionId),
       };
     }, databaseOptions);
     try {
-      onCommitted(nextScope, committed.transcriptMutationAt);
+      onCommitted(nextScope, committed.version);
     } finally {
       committed.publish();
     }
