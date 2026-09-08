@@ -45,6 +45,29 @@ describe("zaloPlugin pairing.notifyApproval", () => {
     ).rejects.toThrow("Failed to send message");
   });
 
+  it("reports the selected account's token fields when approval credentials are missing", async () => {
+    await expect(
+      zaloPlugin.pairing!.notifyApproval!({
+        cfg: {
+          channels: {
+            zalo: {
+              defaultAccount: "alpha",
+              accounts: {
+                alpha: { botToken: "token-alpha" },
+                beta: {},
+              },
+            },
+          },
+        },
+        id: "paired-user",
+        accountId: "beta",
+      }),
+    ).rejects.toThrow(
+      "Zalo token not configured for account beta (set channels.zalo.accounts.beta.botToken or channels.zalo.accounts.beta.tokenFile)",
+    );
+    expect(hoisted.sendMessage).not.toHaveBeenCalled();
+  });
+
   it("uses the approved account's configured proxy", async () => {
     const fetcher = vi.fn();
     hoisted.proxyFetch.mockReturnValue(fetcher);

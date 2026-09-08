@@ -96,6 +96,7 @@ async function runZaloSend(
 function resolveSendContext(options: ZaloSendOptions): {
   token: string;
   fetcher?: ZaloFetch;
+  missingTokenError: string;
 } {
   if (options.cfg) {
     const account = resolveZaloAccount({
@@ -104,21 +105,30 @@ function resolveSendContext(options: ZaloSendOptions): {
     });
     const token = options.token || account.token;
     const proxy = options.proxy ?? account.config.proxy;
-    return { token, fetcher: resolveZaloProxyFetch(proxy) };
+    const accountPath = `channels.zalo.accounts.${account.accountId}`;
+    return {
+      token,
+      fetcher: resolveZaloProxyFetch(proxy),
+      missingTokenError: `Zalo token not configured for account ${account.accountId} (set ${accountPath}.botToken or ${accountPath}.tokenFile)`,
+    };
   }
 
   const token = options.token ?? resolveZaloToken(undefined, options.accountId).token;
   const proxy = options.proxy;
-  return { token, fetcher: resolveZaloProxyFetch(proxy) };
+  return {
+    token,
+    fetcher: resolveZaloProxyFetch(proxy),
+    missingTokenError: "No Zalo bot token configured",
+  };
 }
 
 function resolveValidatedSendContext(
   chatId: string,
   options: ZaloSendOptions,
 ): { ok: true; chatId: string; token: string; fetcher?: ZaloFetch } | { ok: false; error: string } {
-  const { token, fetcher } = resolveSendContext(options);
+  const { token, fetcher, missingTokenError } = resolveSendContext(options);
   if (!token) {
-    return { ok: false, error: "No Zalo bot token configured" };
+    return { ok: false, error: missingTokenError };
   }
   const trimmedChatId = normalizeZaloSendChatId(chatId);
   if (!trimmedChatId) {
