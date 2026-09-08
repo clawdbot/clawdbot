@@ -478,6 +478,58 @@ struct ApplicationRelocatorTests {
     }
 
     @Test
+    func `nested path detection rejects staging inside source bundle`() {
+        let source = URL(fileURLWithPath: "/private/var/folders/x/AppTranslocation/y/d/OpenClaw.app")
+
+        // A staging path that is genuinely inside the source bundle.
+        let stagingInside = source.appendingPathComponent(".OpenClaw.app.installing-abc")
+        // A staging path that is a sibling of the source .app — not nested.
+        let stagingSibling = source.deletingLastPathComponent()
+            .appendingPathComponent(".OpenClaw.app.installing-abc")
+        // A staging path in a completely different location.
+        let stagingElsewhere = URL(fileURLWithPath: "/Applications/.OpenClaw.app.installing-abc")
+
+        #expect(ApplicationRelocator.isPath(stagingInside, nestedIn: source) == true)
+        #expect(ApplicationRelocator.isPath(stagingSibling, nestedIn: source) == false)
+        #expect(ApplicationRelocator.isPath(stagingElsewhere, nestedIn: source) == false)
+    }
+
+    @Test
+    func `nested path detection handles identical paths and relative segments`() {
+        let root = URL(fileURLWithPath: "/Applications/OpenClaw.app")
+
+        // Identical path counts as nested.
+        #expect(ApplicationRelocator.isPath(root, nestedIn: root) == true)
+        // Direct child.
+        #expect(ApplicationRelocator.isPath(
+            root.appendingPathComponent("Contents"),
+            nestedIn: root) == true)
+        // Grandchild.
+        #expect(ApplicationRelocator.isPath(
+            root.appendingPathComponent("Contents/MacOS/OpenClaw"),
+            nestedIn: root) == true)
+        // Sibling is not nested.
+        #expect(ApplicationRelocator.isPath(
+            URL(fileURLWithPath: "/Applications/Safari.app"),
+            nestedIn: root) == false)
+        // ".." segments are collapsed before comparison.
+        #expect(ApplicationRelocator.isPath(
+            URL(fileURLWithPath: "/Applications/OpenClaw.app/Contents/../Contents/MacOS"),
+            nestedIn: root) == true)
+        // A path that escapes via ".." is not nested.
+        #expect(ApplicationRelocator.isPath(
+            URL(fileURLWithPath: "/Applications/OpenClaw.app/../Safari.app"),
+            nestedIn: root) == false)
+        // /var and /private/var are different literal strings; standardizedFileURL
+        // does not resolve this symlink, so they are treated as distinct paths.
+        // This documents the known limitation, not a bypass of production logic
+        // (production staging paths are always absolute and explicit).
+        #expect(ApplicationRelocator.isPath(
+            URL(fileURLWithPath: "/var/OpenClaw.app/Contents"),
+            nestedIn: URL(fileURLWithPath: "/private/var/OpenClaw.app")) == false)
+    }
+
+    @Test
     func `launch at login hydration does not persist the current bundle path`() {
         #expect(!AppState.shouldPersistLaunchAtLoginChange(
             isInitializing: false,

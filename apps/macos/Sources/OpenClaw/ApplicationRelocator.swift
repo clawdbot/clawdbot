@@ -45,6 +45,10 @@ enum ApplicationRelocator {
 
     enum LaunchDisposition: Equatable, Sendable {
         case continueLaunch(startUpdater: Bool)
+        /// A self-install is running in the background. The caller must not start
+        /// gateway, menu, onboarding, or other services from the transient bundle;
+        /// the app will relaunch from the installed location once the copy finishes.
+        case installing
         case terminating
     }
 
@@ -281,19 +285,52 @@ enum ApplicationRelocator {
             guard confirmInstall(replacing: replacing) else {
                 return .continueLaunch(startUpdater: false)
             }
-            do {
-                try install(
-                    source: environment.bundleURL,
-                    destination: destination,
-                    replacing: replacing,
-                    fileManager: fileManager)
-                return relaunchAndTerminate(at: destination)
-            } catch {
-                self.logger.error("Could not install app: \(error.localizedDescription, privacy: .public)")
-                showFailure(
-                    "OpenClaw couldn’t be installed in Applications. Move it there manually, then open that copy.")
-                return .continueLaunch(startUpdater: false)
+            // Perform the bundle copy asynchronously so the main thread stays
+            // responsive (a multi-gigabyte copy on the main thread blocks
+            // applicationDidFinishLaunching and makes the process unkillable by
+            // SIGTERM — see issue #134736). Return .installing so the caller
+            // does not start gateway, menu, onboarding, or CLI services from the
+            // transient bundle; the app relaunches from the installed copy once
+            // the copy completes.
+            let progressWindow = makeInstallProgressWindow(replacing: replacing)
+            progressWindow.makeKeyAndOrderFront(nil)
+            Task { @MainActor in
+                defer { progressWindow.close() }
+                do {
+                    try await install(
+                        source: environment.bundleURL,
+                        destination: destination,
+                        replacing: replacing,
+                        fileManager: fileManager)
+                    let disposition = relaunchAndTerminate(at: destination)
+                    // relaunchAndTerminate returns .continueLaunch only when it
+                    // could not spawn the relaunch helper (it already showed the
+                    // "open it manually" alert). Since we returned .installing and
+                    // the caller skipped menu bar, dock, and gateway startup,
+                    // continuing would leave a headless LSUIElement process.
+                    // Terminate instead of resuming a full transient session.
+                    if case .continueLaunch = disposition {
+                        AppDelegate.requestTermination()
+                    }
+                } catch {
+                    if let unsafeError = error as? UnsafeCopyDestinationError {
+                        self.logger.error(
+                            "Refusing unsafe copy: source=\(unsafeError.source.path, privacy: .public), "
+                            + "staging=\(unsafeError.staging.path, privacy: .public)")
+                    } else {
+                        self.logger.error("Could not install app: \(error.localizedDescription, privacy: .public)")
+                    }
+                    showFailure(
+                        "OpenClaw couldn’t be installed in Applications. Move it there manually, then open that copy.")
+                    // Install failed (disk full, permissions, etc.). The caller
+                    // returned .installing and never started the status item or
+                    // dock icon. Leaving the process alive would create an
+                    // invisible LSUIElement ghost the user cannot Cmd-Tab to.
+                    // Terminate after the alert is dismissed.
+                    AppDelegate.requestTermination()
+                }
             }
+            return .installing
         case .cannotInstall:
             let message =
                 "OpenClaw is running from a temporary location. " +
@@ -983,28 +1020,79 @@ extension ApplicationRelocator {
         return fileManager.isWritableFile(atPath: ancestor.path)
     }
 
+    /// Error thrown when the requested copy would recurse into the source bundle.
+    struct UnsafeCopyDestinationError: Error, Equatable, Sendable {
+        let source: URL
+        let staging: URL
+    }
+
     private static func install(
         source: URL,
         destination: URL,
         replacing: Bool,
-        fileManager: FileManager) throws
+        fileManager: FileManager) async throws
     {
         let parent = destination.deletingLastPathComponent()
         try fileManager.createDirectory(at: parent, withIntermediateDirectories: true)
         let staging = parent.appendingPathComponent(".\(destination.lastPathComponent).installing-\(UUID().uuidString)")
-        defer { try? fileManager.removeItem(at: staging) }
-        try fileManager.copyItem(at: source, to: staging)
 
-        if replacing {
-            let backupName = ".\(destination.lastPathComponent).backup-\(UUID().uuidString)"
-            _ = try fileManager.replaceItemAt(
-                destination,
-                withItemAt: staging,
-                backupItemName: backupName)
-            try? fileManager.removeItem(at: parent.appendingPathComponent(backupName))
-        } else {
-            try fileManager.moveItem(at: staging, to: destination)
+        // Defensive guard: refuse to copy when the staging directory resolves
+        // inside the source bundle. Production destinations (/Applications,
+        // ~/Applications) are never nested inside a translocated/Downloads
+        // source, so this is belt-and-suspenders rather than the reported
+        // failure path (the 2 GB / 40 s write is the large bundle copy itself).
+        guard !isPath(staging, nestedIn: source) else {
+            throw UnsafeCopyDestinationError(source: source, staging: staging)
         }
+
+        // The bundle can exceed 2 GB. Copying it synchronously on the main thread
+        // blocks applicationDidFinishLaunching, prevents any UI from appearing,
+        // and leaves the process unresponsive to SIGTERM because the main thread
+        // is stuck in a kernel write(). Run the copy on a background queue.
+        do {
+            try await Task.detached(priority: .userInitiated) {
+                try FileManager().copyItem(at: source, to: staging)
+            }.value
+        } catch {
+            // Remove a partial copy off the main thread. Await the deletion so
+            // it actually completes before the process exits (the app quits
+            // ~2 s after a failure alert, which would abandon a fire-and-forget
+            // multi-GB cleanup).
+            try? await Task.detached { try? FileManager().removeItem(at: staging) }.value
+            throw error
+        }
+
+        do {
+            if replacing {
+                let backupName = ".\(destination.lastPathComponent).backup-\(UUID().uuidString)"
+                let backupURL = parent.appendingPathComponent(backupName)
+                _ = try fileManager.replaceItemAt(
+                    destination,
+                    withItemAt: staging,
+                    backupItemName: backupName)
+                // The backup is the previous installed bundle (potentially
+                // multi-GB). Remove it off the main thread and await completion
+                // so the relaunch that follows does not abandon a large leftover.
+                try? await Task.detached { try? FileManager().removeItem(at: backupURL) }.value
+            } else {
+                try fileManager.moveItem(at: staging, to: destination)
+            }
+        } catch {
+            // replace/move failed while staging still exists. Clean up off-main
+            // and await it before surfacing the error.
+            try? await Task.detached { try? FileManager().removeItem(at: staging) }.value
+            throw error
+        }
+    }
+
+    /// Returns true when `nested` is the same path as `root` or lies inside its
+    /// directory tree. Uses standardizedFileURL, which collapses `.` / `..` and
+    /// extra slashes but does **not** resolve symlinks. This is a lightweight
+    /// structural check, not a security boundary.
+    static func isPath(_ nested: URL, nestedIn root: URL) -> Bool {
+        let nestedPath = nested.standardizedFileURL.path
+        let rootPath = root.standardizedFileURL.path
+        return isInside(nestedPath, root: rootPath)
     }
 
     private static func confirmInstall(replacing: Bool) -> Bool {
@@ -1378,6 +1466,45 @@ extension ApplicationRelocator {
         alert.alertStyle = .warning
         alert.addButton(withTitle: "OK")
         alert.runModal()
+    }
+
+    /// A small non-modal window shown while the app copies itself to Applications.
+    /// It stays on screen during the background copy and is closed by the caller
+    /// (in a `defer`) once the install succeeds or fails.
+    private static func makeInstallProgressWindow(replacing: Bool) -> NSWindow {
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 360, height: 120),
+            styleMask: [.titled, .fullSizeContentView],
+            backing: .buffered,
+            defer: false)
+        window.title = "OpenClaw"
+        window.level = .floating
+        window.isReleasedWhenClosed = false
+        window.center()
+
+        let container = NSView(frame: window.contentLayoutRect)
+        container.autoresizingMask = [.width, .height]
+
+        let spinner = NSProgressIndicator(frame: NSRect(x: 20, y: 40, width: 32, height: 32))
+        spinner.style = .spinning
+        spinner.controlSize = .regular
+        spinner.startAnimation(nil)
+        spinner.autoresizingMask = [.maxXMargin, .maxYMargin]
+        container.addSubview(spinner)
+
+        let text = NSTextField(frame: NSRect(x: 64, y: 44, width: 280, height: 32))
+        text.stringValue = replacing
+            ? "Replacing OpenClaw in Applications…"
+            : "Copying OpenClaw to Applications…"
+        text.isBezeled = false
+        text.isEditable = false
+        text.drawsBackground = false
+        text.font = .systemFont(ofSize: 13)
+        text.autoresizingMask = [.width, .maxYMargin]
+        container.addSubview(text)
+
+        window.contentView = container
+        return window
     }
 
     private static func compareBuild(_ lhs: String, _ rhs: String) -> ComparisonResult {
