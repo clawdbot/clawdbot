@@ -24,6 +24,19 @@ import type {
   MaybeCreateDiscordAutoThreadParams,
 } from "./threading.types.js";
 
+type DiscordAutoThreadReplyPlanParams = MaybeCreateDiscordAutoThreadParams & {
+  replyToMode: ReplyToMode;
+  agentId: string;
+  channel: string;
+  cfg: OpenClawConfig;
+  parentSessionKey: string;
+  groupScope?: "main" | "per-group";
+  threadParentInheritanceEnabled?: boolean;
+  threadParentId?: string;
+  threadParentName?: string;
+  threadParentType?: ChannelType;
+};
+
 function resolveTrimmedDiscordMessageChannelId(params: {
   message: DiscordMessageEvent["message"];
   messageChannelId?: string;
@@ -77,19 +90,12 @@ export function resolveDiscordAutoThreadContext(params: {
 }
 
 export async function resolveDiscordAutoThreadReplyPlan(
-  params: MaybeCreateDiscordAutoThreadParams & {
-    replyToMode: ReplyToMode;
-    agentId: string;
-    channel: string;
-    cfg: OpenClawConfig;
-    parentSessionKey: string;
-    groupScope?: "main" | "per-group";
-    threadParentInheritanceEnabled?: boolean;
-  },
+  params: DiscordAutoThreadReplyPlanParams,
 ): Promise<DiscordAutoThreadReplyPlan> {
   const messageChannelId = resolveTrimmedDiscordMessageChannelId(params);
   const targetChannelId = params.threadChannel?.id ?? (messageChannelId || "unknown");
   const originalReplyTarget = `channel:${targetChannelId}`;
+  maybeRenameDiscordForumPost(params);
   const createdThreadId = await maybeCreateDiscordAutoThread({
     client: params.client,
     message: params.message,
@@ -124,6 +130,50 @@ export async function resolveDiscordAutoThreadReplyPlan(
       })
     : null;
   return { ...deliveryPlan, createdThreadId, autoThreadContext };
+}
+
+function maybeRenameDiscordForumPost(params: DiscordAutoThreadReplyPlanParams): void {
+  const isForumParent =
+    params.threadParentType === ChannelType.GuildForum ||
+    params.threadParentType === ChannelType.GuildMedia;
+  if (
+    !params.isGuildMessage ||
+    !isForumParent ||
+    params.channelConfig?.autoThreadName !== "generated" ||
+    !params.threadChannel ||
+    params.message.id !== params.threadChannel.id ||
+    !params.threadParentId ||
+    !params.channel ||
+    !params.agentId
+  ) {
+    return;
+  }
+
+  const sourceText = params.baseText || params.combinedBody;
+  if (!sourceText.trim()) {
+    return;
+  }
+  const threadId = params.threadChannel.id;
+  const currentName = normalizeOptionalString(params.threadChannel.name) ?? "";
+  const modelRef = resolveDiscordThreadTitleModelRef({
+    cfg: params.cfg,
+    channel: params.channel,
+    agentId: params.agentId,
+    threadId,
+    messageChannelId: params.threadParentId,
+    channelName: params.threadParentName,
+  });
+  void maybeRenameDiscordThread({
+    client: params.client,
+    threadId,
+    currentName,
+    fallbackId: params.message.id,
+    sourceText,
+    modelRef,
+    channelName: params.threadParentName,
+    cfg: params.cfg,
+    agentId: params.agentId,
+  });
 }
 
 export async function maybeCreateDiscordAutoThread(
@@ -206,7 +256,7 @@ export async function maybeCreateDiscordAutoThread(
         messageChannelId,
         channelName: params.channelName,
       });
-      void maybeRenameDiscordAutoThread({
+      void maybeRenameDiscordThread({
         client: params.client,
         threadId: createdId,
         currentName: threadName,
@@ -277,7 +327,7 @@ function resolveDiscordThreadTitleModelRef(params: {
   return channelOverride?.model;
 }
 
-async function maybeRenameDiscordAutoThread(params: {
+async function maybeRenameDiscordThread(params: {
   client: Client;
   threadId: string;
   currentName: string;
@@ -310,6 +360,8 @@ async function maybeRenameDiscordAutoThread(params: {
       body: { name: nextName },
     });
   } catch (err) {
-    logVerbose(`discord: autoThread rename failed for ${params.threadId}: ${String(err)}`);
+    logVerbose(
+      `discord: generated thread title rename failed for ${params.threadId}: ${String(err)}`,
+    );
   }
 }

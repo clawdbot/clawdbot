@@ -5,6 +5,8 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChannelType } from "../internal/discord.js";
 import { EMPTY_DISCORD_TEST_CONFIG } from "../test-support/config.js";
 type MaybeCreateDiscordAutoThreadFn = typeof import("./threading.js").maybeCreateDiscordAutoThread;
+type ResolveDiscordAutoThreadReplyPlanFn =
+  typeof import("./threading.js").resolveDiscordAutoThreadReplyPlan;
 
 const { generateThreadTitleMock } = vi.hoisted(() => ({
   generateThreadTitleMock: vi.fn(),
@@ -15,6 +17,7 @@ vi.mock("./thread-title.js", () => ({
 }));
 
 let maybeCreateDiscordAutoThread: MaybeCreateDiscordAutoThreadFn;
+let resolveDiscordAutoThreadReplyPlan: ResolveDiscordAutoThreadReplyPlanFn;
 
 const postMock = vi.fn();
 const getMock = vi.fn();
@@ -85,7 +88,8 @@ function expectGeneratedTitleField(field: string, expected: unknown) {
 }
 
 beforeAll(async () => {
-  ({ maybeCreateDiscordAutoThread } = await import("./threading.js"));
+  ({ maybeCreateDiscordAutoThread, resolveDiscordAutoThreadReplyPlan } =
+    await import("./threading.js"));
 });
 
 beforeEach(() => {
@@ -388,5 +392,75 @@ describe("maybeCreateDiscordAutoThread autoThreadName", () => {
     );
     expect(result).toBeUndefined();
     expect(postMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("resolveDiscordAutoThreadReplyPlan forum autoThreadName", () => {
+  it("renames a forum post from its starter message when generated mode is enabled", async () => {
+    patchMock.mockResolvedValueOnce({});
+    generateThreadTitleMock.mockResolvedValueOnce("Daily expense sync");
+
+    const cfg = { agents: { defaults: { model: "anthropic/claude-opus-4-6" } } } as OpenClawConfig;
+    const plan = await resolveDiscordAutoThreadReplyPlan({
+      client: mockClient,
+      message: createMockMessage({ id: "forum-thread-1", channelId: "forum-thread-1" }),
+      messageChannelId: "forum-thread-1",
+      channel: "discord",
+      isGuildMessage: true,
+      channelConfig: { allowed: true, autoThreadName: "generated" },
+      threadChannel: { id: "forum-thread-1", name: "m", parentId: "forum-1" },
+      threadParentId: "forum-1",
+      threadParentName: "finance",
+      threadParentType: ChannelType.GuildForum,
+      channelType: ChannelType.PublicThread,
+      channelName: "m",
+      baseText: "Reflect MoneyForward expenses into daily memory notes",
+      combinedBody: "Reflect MoneyForward expenses into daily memory notes",
+      replyToMode: "off",
+      agentId: "main",
+      cfg,
+      parentSessionKey: "agent:main:discord:channel:forum-thread-1",
+    });
+
+    expect(plan.createdThreadId).toBeUndefined();
+    await flushAsyncWork();
+    expectGeneratedTitleField("agentId", "main");
+    expectGeneratedTitleField(
+      "messageText",
+      "Reflect MoneyForward expenses into daily memory notes",
+    );
+    expectGeneratedTitleField("channelName", "finance");
+    expectRestBodyField(patchMock, "name", "Daily expense sync");
+  });
+
+  it("does not rename later replies in a forum post", async () => {
+    await resolveDiscordAutoThreadReplyPlan({
+      client: mockClient,
+      message: createMockMessage({ id: "reply-1", channelId: "forum-thread-1" }),
+      messageChannelId: "forum-thread-1",
+      channel: "discord",
+      isGuildMessage: true,
+      channelConfig: { allowed: true, autoThreadName: "generated" },
+      threadChannel: {
+        id: "forum-thread-1",
+        name: "Existing title",
+        parentId: "forum-1",
+      },
+      threadParentId: "forum-1",
+      threadParentName: "finance",
+      threadParentType: ChannelType.GuildForum,
+      channelType: ChannelType.PublicThread,
+      channelName: "Existing title",
+      baseText: "A later reply",
+      combinedBody: "A later reply",
+      replyToMode: "off",
+      agentId: "main",
+      cfg: EMPTY_DISCORD_TEST_CONFIG,
+      parentSessionKey: "agent:main:discord:channel:forum-thread-1",
+    });
+
+    await flushAsyncWork();
+    expect(generateThreadTitleMock).not.toHaveBeenCalled();
+    expect(patchMock).not.toHaveBeenCalled();
   });
 });

@@ -632,6 +632,31 @@ This surprises people who add one channel to give it special settings and find t
 
 Channel entries override guild-level values, so a channel entry with `users: ["*"]` opens that one room to any sender even when the guild `users` list is narrow. Entries match by channel ID, name, or slug, and a thread falls back to its parent channel's entry.
 
+### Automatic thread titles
+
+Set `autoThreadName: "generated"` on a channel entry to replace the initial thread name with a concise model-generated title. OpenClaw uses the routed agent's utility model when configured and keeps the original name if title generation or the Discord rename fails.
+
+For normal text channels, use this with `autoThread: true`; OpenClaw creates the thread from the incoming message and renames it asynchronously. For Discord Forum and Media channels, configure `autoThreadName` on the parent channel entry. Discord creates the post thread, and OpenClaw renames it once from the starter message without requiring `autoThread`.
+
+```json5
+{
+  channels: {
+    discord: {
+      guilds: {
+        YOUR_SERVER_ID: {
+          channels: {
+            YOUR_FORUM_CHANNEL_ID: {
+              enabled: true,
+              autoThreadName: "generated",
+            },
+          },
+        },
+      },
+    },
+  },
+}
+```
+
 ### Role-based agent routing
 
 Use `bindings[].match.roles` to route Discord guild members to different agents by role ID. Role-based bindings accept role IDs only and are evaluated after peer or parent-peer bindings and before guild-only bindings. If a binding also sets other match fields (for example `peer` + `guildId` + `roles`), all configured fields must match.

@@ -120,8 +120,9 @@ export async function buildDiscordMessageProcessContext(params: {
   const threadChannelId = threadChannel?.id;
   const threadParentInheritanceEnabled = discordConfig?.thread?.inheritParent ?? false;
   const isForumStarter =
-    Boolean(threadChannelId && isForumParent && forumParentSlug) && message.id === threadChannelId;
-  const forumContextLine = isForumStarter ? `[Forum parent: #${forumParentSlug}]` : null;
+    Boolean(threadChannelId && isForumParent) && message.id === threadChannelId;
+  const forumContextLine =
+    isForumStarter && forumParentSlug ? `[Forum parent: #${forumParentSlug}]` : null;
   const groupChannel = isGuildMessage && displayChannelSlug ? `#${displayChannelSlug}` : undefined;
   const senderName = sender.isPluralKit
     ? (sender.name ?? author.username)
@@ -318,6 +319,9 @@ export async function buildDiscordMessageProcessContext(params: {
     isGuildMessage,
     channelConfig: ctx.inboundEventKind === "room_event" ? null : channelConfig,
     threadChannel,
+    threadParentId,
+    threadParentName,
+    threadParentType,
     channelType: channelInfo?.type,
     channelName: channelInfo?.name,
     channelDescription: channelInfo?.topic,
