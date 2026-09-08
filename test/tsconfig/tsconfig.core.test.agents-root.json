@@ -12,6 +12,8 @@
     "../../dist",
     "../../**/dist/**",
     "../../src/agents/bash-tools.exec-runtime*.test.ts",
-    "../../src/agents/bash-tools.exec-runtime*.test.tsx"
+    "../../src/agents/bash-tools.exec-runtime*.test.tsx",
+    "../../src/agents/embedded-*.test.ts",
+    "../../src/agents/embedded-*.test.tsx"
   ]
 }

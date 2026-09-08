@@ -7,6 +7,11 @@ export const TSGO_CORE_TEST_SHARDS = [
     config: "test/tsconfig/tsconfig.core.test.agents-root.json",
   },
   {
+    name: "agents-embedded-root",
+    group: "src",
+    config: "test/tsconfig/tsconfig.core.test.agents-embedded-root.json",
+  },
+  {
     name: "agents-other",
     group: "src",
     config: "test/tsconfig/tsconfig.core.test.agents-other.json",
