@@ -4,6 +4,7 @@ import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { hasErrnoCode } from "../infra/errno.js";
+import { replaceFileAtomic } from "../infra/replace-file.js";
 import { getWindowsCmdExePath } from "../infra/windows-install-roots.js";
 import {
   decodeWindowsLauncherScript,
@@ -405,3 +406,34 @@ export function buildHiddenLauncherScript(params: {
 }
 
 export { encodeWindowsLauncherScript };
+
+/**
+ * Publishes a generated Windows launcher script (`.cmd` / `.vbs`) atomically.
+ *
+ * A torn direct write used to truncate the previous launcher while the existing
+ * task or login entry still pointed at it (#141002); the replacement only
+ * takes over after every byte is staged, so a failed rewrite (ENOSPC, EPERM
+ * rename, power loss) keeps the prior complete script available.
+ */
+export async function publishWindowsLauncherScript(params: {
+  filePath: string;
+  format: "cmd" | "vbs";
+  content: string;
+}): Promise<void> {
+  const directory = path.dirname(params.filePath);
+  await fs.mkdir(directory, { recursive: true });
+  await replaceFileAtomic({
+    filePath: params.filePath,
+    content: encodeWindowsLauncherScript({ format: params.format, content: params.content }),
+    // New launchers keep the previous fs.writeFile default create mode; an
+    // existing launcher keeps its current mode across the rewrite.
+    mode: 0o666 & ~process.umask(),
+    preserveExistingMode: true,
+    // Keep the launcher directory's current mode instead of the 0o700 default.
+    dirMode: (await fs.stat(directory)).mode & 0o777,
+    // An orphaned staging file is identifiable as a launcher publication leftover.
+    tempPrefix: ".openclaw-launcher-replace",
+    syncTempFile: true,
+    syncParentDir: true,
+  });
+}
