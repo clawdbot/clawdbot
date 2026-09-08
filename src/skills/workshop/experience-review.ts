@@ -27,6 +27,7 @@ import { resolveSkillWorkshopConfig } from "./config.js";
 import { buildSkillExperienceReviewPrompt } from "./experience-review-prompt.js";
 import type { ExperienceReviewCandidate } from "./experience-review-scheduler.js";
 import { SKILL_WORKSHOP_MAINTENANCE_TOOLS } from "./maintenance-prompt.js";
+import { resolveSkillWorkshopReviewModel } from "./review-model.js";
 import { assertSkillReviewRunSucceeded } from "./review-outcome.js";
 import { runSkillWorkshopReview } from "./review-run.js";
 import { resolveWorkshopSkillsDir } from "./skills-root.js";
@@ -124,6 +125,15 @@ async function runSkillExperienceReviewInner(candidate: ExperienceReviewCandidat
   if (mode === "off") {
     return;
   }
+  const reviewModel = resolveSkillWorkshopReviewModel({
+    config,
+    agentId: foregroundPromptContext.agentId,
+    fallback: { provider: candidate.ctx.modelProviderId, model: candidate.ctx.modelId },
+  });
+  // The foreground auth profile belongs to the foreground provider/model only.
+  const keepsForegroundModel =
+    reviewModel.provider === candidate.ctx.modelProviderId &&
+    reviewModel.model === candidate.ctx.modelId;
   const executionRoot =
     mode === "auto" ? resolveWorkshopSkillsDir(config, foregroundPromptContext.agentId) : undefined;
   const runId = `skill-workshop-review:${randomUUID()}`;
@@ -219,6 +229,12 @@ async function runSkillExperienceReviewInner(candidate: ExperienceReviewCandidat
         preparedRunAdmission,
         sessionId: reviewSession.sessionId,
         sessionKey: reviewSession.sessionKey,
+        // The cloned transcript must render the foreground Runtime identity so the
+        // system prompt prefix stays byte-identical for content-addressed caches.
+        promptSessionIdentity: {
+          sessionKey: candidate.source.sessionKey,
+          sessionId: candidate.source.sessionId,
+        },
         // Delivery authority closes with the foreground turn and cannot be reused by this fork.
         messageActionTurnCapability: undefined,
         sessionManager,
@@ -230,9 +246,9 @@ async function runSkillExperienceReviewInner(candidate: ExperienceReviewCandidat
         config,
         abortSignal,
         prompt: buildSkillExperienceReviewPrompt({ ...candidate, existingSkills }, mode),
-        provider: candidate.ctx.modelProviderId,
-        model: candidate.ctx.modelId,
-        ...(candidate.ctx.authProfileId
+        provider: reviewModel.provider,
+        model: reviewModel.model,
+        ...(keepsForegroundModel && candidate.ctx.authProfileId
           ? { authProfileId: candidate.ctx.authProfileId, authProfileIdSource: "user" as const }
           : {}),
         timeoutMs: resolveAgentTimeoutMs({ cfg: config }),

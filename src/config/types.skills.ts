@@ -69,6 +69,11 @@ export type SkillsWorkshopConfig = {
   maxPending?: number;
   /** Maximum generated skill proposal size in bytes. */
   maxSkillBytes?: number;
+  /**
+   * Provider/model ref or alias for background Workshop reviews (experience
+   * review, history scan). Defaults to the reviewed run's model.
+   */
+  model?: string;
 };
 
 /** Top-level skills config block in openclaw config. */

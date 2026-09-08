@@ -108,6 +108,13 @@ export type RunEmbeddedAgentParams = {
   lifecycleGeneration?: string;
   /** Provider prompt-cache affinity key; distinct from transcript/session identity. */
   promptCacheKey?: string;
+  /**
+   * Session identity rendered into the system prompt's Runtime section. A detached
+   * helper run that replays another session's transcript mirrors that session here
+   * so the prompt prefix stays byte-identical for content-addressed provider caches;
+   * storage, policy, and delivery still use sessionId/sessionKey.
+   */
+  promptSessionIdentity?: { sessionKey?: string; sessionId?: string };
   /** Session-like key for sandbox and tool-policy resolution. Defaults to sessionKey. */
   sandboxSessionKey?: string;
   /** Explicit sandbox and tool-policy owner when the policy session key is unscoped. */

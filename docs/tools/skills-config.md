@@ -389,6 +389,15 @@ proposal-only permissions, and troubleshooting.
   in discovery and listing output.
 </ParamField>
 
+<ParamField path="skills.workshop.model" type="string">
+  Provider/model ref or alias for background Workshop reviews: the experience
+  review that follows a deep turn and history scans. Unset, each review uses the
+  reviewed turn's own model so its cloned transcript can reuse that provider's
+  prompt cache. Point it at a cheaper or hosted model to keep review traffic off
+  a local inference server. An unresolvable ref logs a warning and falls back to
+  the default.
+</ParamField>
+
 See [Skill Workshop](/tools/skill-workshop) for the proposal lifecycle, CLI
 commands, agent tool parameters, and Gateway methods this config controls.
 

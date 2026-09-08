@@ -13,6 +13,17 @@ describe("resolveSkillWorkshopConfig", () => {
     ).toBe(mode);
   });
 
+  it("reads a configured review model ref and ignores blank values", () => {
+    expect(
+      resolveSkillWorkshopConfig({ skills: { workshop: { model: " openrouter/deepseek/x " } } })
+        .model,
+    ).toBe("openrouter/deepseek/x");
+    expect(resolveSkillWorkshopConfig({ skills: { workshop: { model: "  " } } }).model).toBe(
+      undefined,
+    );
+    expect(resolveSkillWorkshopConfig().model).toBeUndefined();
+  });
+
   it("does not read the retired boolean key at runtime", () => {
     expect(
       resolveSkillWorkshopConfig({
