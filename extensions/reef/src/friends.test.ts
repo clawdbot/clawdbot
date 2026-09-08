@@ -90,6 +90,10 @@ function transport(friend: RelayFriend) {
   return {
     handle: "me",
     listFriends: vi.fn(async () => ({ friendships: [friend] })),
+    setInboundAllowed: vi.fn(async (_peer: string, inboundAllowed: boolean) => ({
+      peer: friend.peer,
+      inbound_allowed: inboundAllowed,
+    })),
     requestFriend: vi.fn(async () => ({ status: "pending" })),
     respondFriend: vi.fn(async (candidate: RelayFriend, accept: boolean) => {
       candidate.status = accept ? "active" : "blocked";
@@ -191,6 +195,42 @@ describe("ReefFriendManager pairing", () => {
     const reopened = trust();
     expect(reopened.get("alice")).toMatchObject({ autonomy: "bounded" });
     expect(fs.existsSync(path.join(stateDir, "requested.json"))).toBe(false);
+  });
+
+  it("updates only the caller-owned inbound direction and lists both relay directions", async () => {
+    const active = relayFriend("alice", "active");
+    active.inbound_allowed = false;
+    active.outbound_allowed = true;
+    const relay = transport(active);
+    const manager = new ReefFriendManager(
+      relay as unknown as ReefTransportClient,
+      trust(),
+      approvals(),
+    );
+
+    await manager.setInboundAllowed("@ALICE", true);
+    await expect(manager.list()).resolves.toEqual([
+      expect.objectContaining({
+        peer: "alice",
+        inbound_allowed: false,
+        outbound_allowed: true,
+      }),
+    ]);
+
+    expect(relay.setInboundAllowed).toHaveBeenCalledWith("alice", true, undefined);
+  });
+
+  it("treats permissions omitted by an older relay as the legacy bidirectional allow", async () => {
+    const active = relayFriend("alice", "active");
+    const manager = new ReefFriendManager(
+      transport(active) as unknown as ReefTransportClient,
+      trust(),
+      approvals(),
+    );
+
+    await expect(manager.list()).resolves.toEqual([
+      expect.objectContaining({ inbound_allowed: true, outbound_allowed: true }),
+    ]);
   });
 
   it("preserves ambiguous outbound intent when account authority closes during a relay request", async () => {

@@ -45,6 +45,7 @@ openclaw reef friend code
 openclaw reef friend request @friend --code CODE
 openclaw reef friend list --json
 openclaw reef friend autonomy @friend extended
+openclaw reef friend inbound @friend block
 openclaw reef friend remove @friend
 ```
 
@@ -110,7 +111,7 @@ openclaw pairing list reef
 openclaw pairing approve reef <CODE>
 ```
 
-`/reef friend list` shows friendships with status, key epoch, fingerprint, and autonomy tier.
+`/reef friend list` shows friendships with status, key epoch, fingerprint, autonomy tier, and the current inbound and outbound permissions.
 
 Change the local autonomy tier without editing config:
 
@@ -119,6 +120,14 @@ Change the local autonomy tier without editing config:
 ```
 
 The headless equivalent is `openclaw reef friend autonomy @friend notify-only`. If an active relay friendship has no matching local pin (for example, after restoring keys without the shared state database), Reef surfaces a new pairing request and stays fail-closed until you compare the fingerprint and approve it.
+
+Block new inbound messages from one friend without removing the friendship or preventing your claw from sending to them:
+
+```text
+/reef friend inbound @friend block
+```
+
+Use `allow` to restore that direction. The headless equivalent is `openclaw reef friend inbound @friend block`. The receiving owner controls this permission; `outbound=block` in your friend list means the peer has blocked new messages from your claw. Messages whose relay authorization check began before a block may still be delivered, and delivery receipts remain enabled in both directions.
 
 ## Sending and receiving
 

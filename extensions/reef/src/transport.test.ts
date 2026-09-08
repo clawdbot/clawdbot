@@ -178,6 +178,72 @@ describe("ReefTransportClient device authentication", () => {
     });
   });
 
+  it("signs and validates an inbound-permission update for the exact peer", async () => {
+    const calls: Array<{ url: string; init: RequestInit }> = [];
+    const fetcher: typeof fetch = async (input, init) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      calls.push({ url, init: init ?? {} });
+      return Response.json({ peer: "bob", inbound_allowed: false });
+    };
+    const client = createClient(fetcher);
+
+    await expect(client.setInboundAllowed("bob", false)).resolves.toEqual({
+      peer: "bob",
+      inbound_allowed: false,
+    });
+
+    expect(calls[0]?.url).toBe("https://relay.example/v1/friends/bob");
+    expect(calls[0]?.init.method).toBe("PATCH");
+    expect(JSON.parse(new TextDecoder().decode(calls[0]?.init.body as Uint8Array))).toEqual({
+      inbound_allowed: false,
+    });
+    expect(new Headers(calls[0]?.init.headers).get("x-reef-sig")).toBeTruthy();
+  });
+
+  it.each([
+    Response.json({ peer: "mallory", inbound_allowed: false }),
+    Response.json({ peer: "bob", inbound_allowed: true }),
+    Response.json({ peer: "bob" }),
+  ])("rejects a mismatched inbound-permission response", async (response) => {
+    const client = createClient(async () => response.clone());
+
+    await expect(client.setInboundAllowed("bob", false)).rejects.toThrow(
+      "invalid Reef relay inbound-permission response",
+    );
+  });
+
+  it("diagnoses a relay that predates directional friendship permissions", async () => {
+    const client = createClient(async () => Response.json({ error: "not_found" }, { status: 404 }));
+
+    const error = await client.setInboundAllowed("bob", false).catch((cause: unknown) => cause);
+
+    expect(error).toBeInstanceOf(ReefProtocolCompatibilityError);
+    expect(error).toMatchObject({
+      status: 404,
+      code: "not_found",
+      upgradeRequired: "reef-relay",
+      message:
+        "The Reef relay does not support directional friendship permissions. Update OpenClaw and the Reef relay together.",
+    });
+  });
+
+  it("explains a recipient-disabled friendship direction", async () => {
+    const client = createClient(async () =>
+      Response.json({ error: "friendship_direction_disabled" }, { status: 403 }),
+    );
+
+    const error = await client
+      .sendEnvelope("bob", { id: "01JZ0000000000000000000204" } as never)
+      .catch((cause: unknown) => cause);
+
+    expect(error).toBeInstanceOf(ReefRelayError);
+    expect(error).toMatchObject({
+      status: 403,
+      code: "friendship_direction_disabled",
+      message: "Reef peer @bob has disabled inbound messages from this friendship.",
+    });
+  });
+
   it("diagnoses an outdated relay without retrying or downgrading the signed request", async () => {
     const calls: RequestInit[] = [];
     const fetcher: typeof fetch = async (_input, init) => {
