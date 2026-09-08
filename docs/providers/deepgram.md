@@ -115,6 +115,9 @@ Flux supports `eager_eot_threshold`, `eot_threshold`, `eot_timeout_ms`,
 `keyterm`, `language_hint`, `mip_opt_out`, `numerals`, `profanity_filter`,
 `redact`, and `tag` in `providerOptions.deepgram`. OpenClaw ignores batch-only
 options such as `detect_language`, `punctuate`, and `smart_format` on Flux.
+Language hints apply only to `flux-general-multi`: OpenClaw maps the model entry's
+`language` setting to `language_hint`, with an explicit provider option taking
+precedence. Both settings are ignored for the English-only `flux-general-en` model.
 
 ## Voice Call streaming STT
 

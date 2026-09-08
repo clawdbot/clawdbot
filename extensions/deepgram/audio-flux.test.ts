@@ -170,75 +170,85 @@ describe("Deepgram Flux audio", () => {
     expect(isDeepgramFluxModel("nova-3")).toBe(false);
   });
 
-  it("uses resolved auth and Flux protocol fields through the guarded socket", async () => {
-    const pcm = Buffer.alloc(6000, 1);
-    mockDecodedPcm(pcm);
-    let requestUrl: URL | undefined;
-    let authorization: string | string[] | undefined;
-    const server = await createFluxServer({
-      onRequest: (url, headers) => {
-        requestUrl = url;
-        authorization = headers.authorization;
-      },
-      onCloseStream: (socket) => {
-        socket.send(
-          JSON.stringify({ type: "TurnInfo", event: "EndOfTurn", transcript: "life moves" }),
-        );
-        socket.send(
-          JSON.stringify({ type: "TurnInfo", event: "EndOfTurn", transcript: "pretty fast" }),
-        );
-        socket.close();
-      },
-    });
-
-    const result = await transcribeDeepgramAudio(
-      fluxRequest(server.baseUrl, {
-        language: " en ",
-        query: {
-          eot_threshold: 0.7,
-          numerals: true,
-          profanity_filter: true,
-          smart_format: true,
+  it.each([
+    { model: "flux-general-multi", language: " en ", queryLanguage: undefined, expectedHint: "en" },
+    { model: "flux-general-multi", language: "en", queryLanguage: "fr", expectedHint: "fr" },
+    { model: "flux-general-en", language: " en ", queryLanguage: undefined, expectedHint: null },
+    { model: "flux-general-en", language: undefined, queryLanguage: "en", expectedHint: null },
+  ])(
+    "uses valid protocol fields for $model with language=$language and query=$queryLanguage",
+    async ({ model, language, queryLanguage, expectedHint }) => {
+      const pcm = Buffer.alloc(6000, 1);
+      mockDecodedPcm(pcm);
+      let requestUrl: URL | undefined;
+      let authorization: string | string[] | undefined;
+      const server = await createFluxServer({
+        onRequest: (url, headers) => {
+          requestUrl = url;
+          authorization = headers.authorization;
         },
-        request: {
-          allowPrivateNetwork: true,
-          auth: {
-            mode: "header",
-            headerName: "authorization",
-            value: "Token configured-key",
+        onCloseStream: (socket) => {
+          socket.send(
+            JSON.stringify({ type: "TurnInfo", event: "EndOfTurn", transcript: "life moves" }),
+          );
+          socket.send(
+            JSON.stringify({ type: "TurnInfo", event: "EndOfTurn", transcript: "pretty fast" }),
+          );
+          socket.close();
+        },
+      });
+
+      const result = await transcribeDeepgramAudio(
+        fluxRequest(server.baseUrl, {
+          model,
+          language,
+          query: {
+            language_hint: queryLanguage,
+            eot_threshold: 0.7,
+            numerals: true,
+            profanity_filter: true,
+            smart_format: true,
           },
-        },
-      }),
-    );
+          request: {
+            allowPrivateNetwork: true,
+            auth: {
+              mode: "header",
+              headerName: "authorization",
+              value: "Token configured-key",
+            },
+          },
+        }),
+      );
 
-    expect(result).toEqual({ model: "flux-general-multi", text: "life moves pretty fast" });
-    expect(authorization).toBe("Token configured-key");
-    expect(requestUrl?.pathname).toBe("/v2/listen");
-    expect(requestUrl?.searchParams.get("encoding")).toBe("linear16");
-    expect(requestUrl?.searchParams.get("sample_rate")).toBe("16000");
-    expect(requestUrl?.searchParams.get("language_hint")).toBe("en");
-    expect(requestUrl?.searchParams.get("eot_threshold")).toBe("0.7");
-    expect(requestUrl?.searchParams.get("numerals")).toBe("true");
-    expect(requestUrl?.searchParams.get("profanity_filter")).toBe("true");
-    expect(requestUrl?.searchParams.has("smart_format")).toBe(false);
-    expect(server.audioFrames.map((frame) => frame.byteLength)).toEqual([2560, 2560, 880]);
-    expect(Buffer.concat(server.audioFrames)).toEqual(pcm);
-    expect(runCommandBuffered).toHaveBeenCalledWith(
-      expect.arrayContaining([
-        "/usr/bin/ffmpeg",
-        "-t",
-        "1200",
-        "-c:a",
-        "pcm_s16le",
-        "-ar",
-        "16000",
-      ]),
-      expect.objectContaining({
-        maxOutputBytes: { stdout: 38_400_000, stderr: 65_536 },
-        terminateOnOutputError: true,
-      }),
-    );
-  });
+      expect(result).toEqual({ model, text: "life moves pretty fast" });
+      expect(authorization).toBe("Token configured-key");
+      expect(requestUrl?.pathname).toBe("/v2/listen");
+      expect(requestUrl?.searchParams.get("encoding")).toBe("linear16");
+      expect(requestUrl?.searchParams.get("sample_rate")).toBe("16000");
+      expect(requestUrl?.searchParams.get("language_hint")).toBe(expectedHint);
+      expect(requestUrl?.searchParams.get("eot_threshold")).toBe("0.7");
+      expect(requestUrl?.searchParams.get("numerals")).toBe("true");
+      expect(requestUrl?.searchParams.get("profanity_filter")).toBe("true");
+      expect(requestUrl?.searchParams.has("smart_format")).toBe(false);
+      expect(server.audioFrames.map((frame) => frame.byteLength)).toEqual([2560, 2560, 880]);
+      expect(Buffer.concat(server.audioFrames)).toEqual(pcm);
+      expect(runCommandBuffered).toHaveBeenCalledWith(
+        expect.arrayContaining([
+          "/usr/bin/ffmpeg",
+          "-t",
+          "1200",
+          "-c:a",
+          "pcm_s16le",
+          "-ar",
+          "16000",
+        ]),
+        expect.objectContaining({
+          maxOutputBytes: { stdout: 38_400_000, stderr: 65_536 },
+          terminateOnOutputError: true,
+        }),
+      );
+    },
+  );
 
   it.each(["null", "[]", "42"])("rejects valid non-object server JSON: %s", async (payload) => {
     mockDecodedPcm(Buffer.alloc(10, 1));

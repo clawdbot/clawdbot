@@ -75,10 +75,13 @@ function buildDeepgramFluxUrl(params: {
   url.searchParams.set("model", params.model);
   url.searchParams.set("encoding", "linear16");
   url.searchParams.set("sample_rate", String(DEEPGRAM_FLUX_SAMPLE_RATE));
-  if (params.language?.trim()) {
-    url.searchParams.set("language_hint", params.language.trim());
-  }
-  for (const [key, value] of Object.entries(params.query ?? {})) {
+  const query = { ...params.query };
+  // Deepgram's v2 contract permits language hints only on its multilingual model.
+  query.language_hint =
+    params.model === "flux-general-multi"
+      ? (query.language_hint ?? (params.language?.trim() || undefined))
+      : undefined;
+  for (const [key, value] of Object.entries(query)) {
     if (value !== undefined && DEEPGRAM_FLUX_QUERY_KEYS.has(key)) {
       url.searchParams.set(key, String(value));
     }
