@@ -260,6 +260,33 @@ describe("runDiscordGatewayLifecycle", () => {
     expect(lifecycleParams.voiceManagerRef.current).toBeNull();
   });
 
+  it("reconciles auto-join after READY when startup began disconnected", async () => {
+    vi.useFakeTimers();
+    try {
+      const { gateway } = createGatewayHarness();
+      const { lifecycleParams } = createLifecycleHarness({ gateway });
+      const autoJoin = vi.fn(async () => undefined);
+      const destroy = vi.fn(async () => undefined);
+      const voiceManager = {
+        autoJoin,
+        destroy,
+      } as unknown as NonNullable<LifecycleParams["voiceManager"]>;
+      lifecycleParams.voiceManager = voiceManager;
+      lifecycleParams.voiceManagerRef.current = voiceManager;
+
+      const lifecyclePromise = runDiscordGatewayLifecycle(lifecycleParams);
+      gateway.isConnected = true;
+      await vi.advanceTimersByTimeAsync(250);
+      await expect(lifecyclePromise).resolves.toBeUndefined();
+
+      expect(autoJoin).toHaveBeenCalledTimes(1);
+      expect(destroy).toHaveBeenCalledTimes(1);
+      expect(lifecycleParams.voiceManagerRef.current).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("pushes connected status when gateway is already connected at lifecycle start", async () => {
     const { emitter, gateway } = createGatewayHarness();
     gateway.isConnected = true;

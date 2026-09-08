@@ -5,6 +5,7 @@ import {
   REALTIME_VOICE_AGENT_CONTROL_FAILURE_MESSAGE,
 } from "./agent-run-control-shared.js";
 import type {
+  RealtimeVoiceAgentConsultRunner,
   RealtimeVoiceBridge,
   RealtimeVoiceBridgeCallbacks,
   RealtimeVoiceAudioClearReason,
@@ -76,6 +77,7 @@ export type RealtimeVoiceBridgeSessionParams = {
   markStrategy?: RealtimeVoiceMarkStrategy;
   triggerGreetingOnReady?: boolean;
   tools?: RealtimeVoiceTool[];
+  runAgentConsult?: RealtimeVoiceAgentConsultRunner;
   onTranscript?: (role: RealtimeVoiceRole, text: string, isFinal: boolean) => void;
   handleDelegationInput?: RealtimeVoiceBridgeCallbacks["handleDelegationInput"];
   onEvent?: (event: RealtimeVoiceBridgeEvent) => void;
@@ -203,6 +205,7 @@ export function createRealtimeVoiceBridgeSession(
     autoRespondToAudio: params.autoRespondToAudio,
     interruptResponseOnInputAudio: params.interruptResponseOnInputAudio,
     tools: params.tools,
+    runAgentConsult: params.runAgentConsult,
     onAudio: (audio, metadata) => {
       if (canSendAudio()) {
         params.audioSink.sendAudio(audio, metadata);
