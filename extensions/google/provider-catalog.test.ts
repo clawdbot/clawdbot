@@ -27,8 +27,16 @@ describe("google provider catalog", () => {
         "gemini-3.5-flash-lite",
         "gemini-3.6-flash",
         "gemini-3.7-flash",
+        "gemini-3.8-flash",
       ]),
     );
+    expect(provider.models.find((model) => model.id === "gemini-3.8-flash")).toMatchObject({
+      contextWindow: 1_048_576,
+      maxTokens: 65_536,
+      reasoning: true,
+      input: ["text", "image"],
+      thinkingLevelMap: { minimal: null },
+    });
     expect(provider.models.find((model) => model.id === "gemini-3.7-flash")).toMatchObject({
       contextWindow: 1_048_576,
       maxTokens: 65_536,
@@ -87,6 +95,14 @@ describe("google provider catalog", () => {
                   {
                     name: "models/gemini-3.7-flash",
                     displayName: "Gemini 3.7 Flash",
+                    inputTokenLimit: 1_048_576,
+                    outputTokenLimit: 65_536,
+                    supportedGenerationMethods: ["generateContent"],
+                    thinking: true,
+                  },
+                  {
+                    name: "models/gemini-3.8-flash",
+                    displayName: "Gemini 3.8 Flash",
                     inputTokenLimit: 1_048_576,
                     outputTokenLimit: 65_536,
                     supportedGenerationMethods: ["generateContent"],
@@ -155,7 +171,15 @@ describe("google provider catalog", () => {
         contextWindow: 1_048_576,
         maxTokens: 65_536,
         input: ["text", "image", "video"],
-        compat: { codeMode: "preferred" },
+        thinkingLevelMap: { minimal: null },
+      }),
+      expect.objectContaining({
+        id: "gemini-3.8-flash",
+        name: "Gemini 3.8 Flash",
+        reasoning: true,
+        contextWindow: 1_048_576,
+        maxTokens: 65_536,
+        input: ["text", "image", "video"],
         thinkingLevelMap: { minimal: null },
       }),
       expect.objectContaining({

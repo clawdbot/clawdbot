@@ -134,7 +134,8 @@ describe("google manifest model catalog", () => {
       api: "google-generative-ai",
       baseUrl: "https://generativelanguage.googleapis.com/v1beta",
     });
-    expect(modelIds).toHaveLength(10);
+    expect(modelIds).toHaveLength(11);
+    expect(modelIds).toContain("gemini-3.8-flash");
     expect(modelIds).not.toContain(undefined);
     expect(new Set(modelIds).size).toBe(modelIds.length);
   });
