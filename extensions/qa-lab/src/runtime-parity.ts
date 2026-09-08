@@ -130,12 +130,12 @@ export type RuntimeParityScenarioExecution = {
 };
 
 export function runtimeParityCellStatus(
-  cell: RuntimeParityCell | undefined,
-): "pass" | "fail" | "missing" {
+  cell: RuntimeParityResultCell | undefined,
+): RuntimeParityStatus | "missing" {
   if (!cell) {
     return "missing";
   }
-  return cell.runtimeErrorClass || cell.transportErrorClass ? "fail" : "pass";
+  return isRuntimeParityCellPassable(cell) ? cell.status : "fail";
 }
 
 export function isRuntimeParityResultPass(result: RuntimeParityResult) {

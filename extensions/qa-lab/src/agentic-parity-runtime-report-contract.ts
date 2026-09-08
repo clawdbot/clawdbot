@@ -9,8 +9,8 @@ export type QaRuntimeParityScenarioReport = {
   runtimeParityUsage: RuntimeParityUsagePolicy;
   drift: RuntimeParityDrift | "missing";
   driftDetails?: string;
-  openclawStatus: "pass" | "fail" | "missing";
-  codexStatus: "pass" | "fail" | "missing";
+  openclawStatus: "pass" | "fail" | "skip" | "missing";
+  codexStatus: "pass" | "fail" | "skip" | "missing";
   openclawTokens: number;
   codexTokens: number;
   openclawUsage: QaRuntimeParityCacheUsage | null;
