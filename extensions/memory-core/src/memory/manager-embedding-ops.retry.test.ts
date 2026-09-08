@@ -157,9 +157,9 @@ describe.each(["text", "structured"])("memory embedding batch retry boundary (%s
       await expect(manager.embedBatchWithRetry(batchInputs(items))).resolves.toEqual(
         items.map((_, index) => [index]),
       );
-      expect(embedBatch.mock.calls.map(([texts]) => texts.length)).toEqual([
-        33, 17, 9, 8, 16, 8, 8,
-      ]);
+      const payloadCounts = embedBatch.mock.calls.map(([texts]) => texts.length);
+      expect(payloadCounts).toEqual([33, 10, 10, 10, 3]);
+      expect(payloadCounts.reduce((total, count) => total + count, 0)).toBe(66);
       expect(manager.waitForEmbeddingRetry).not.toHaveBeenCalled();
       expect(manager.markLocalEmbeddingProviderDegraded).not.toHaveBeenCalled();
     },
