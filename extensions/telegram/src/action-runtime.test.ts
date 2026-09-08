@@ -1562,7 +1562,12 @@ describe("handleTelegramAction", () => {
         content: "Hello with local media",
       },
       telegramConfig(),
-      { mediaLocalRoots: ["/tmp/agent-root"] },
+      {
+        mediaAccess: {
+          localRoots: ["/tmp/agent-root"],
+          workspaceDir: "/tmp/agent-root/workspace",
+        },
+      },
     );
     const call = mockCall(sendMessageTelegram, 0, "local media roots");
     expect(call[0]).toBe("@testchannel");
@@ -1570,6 +1575,15 @@ describe("handleTelegramAction", () => {
     expect(requireRecord(call[2], "local media roots options").mediaLocalRoots).toEqual([
       "/tmp/agent-root",
     ]);
+    expect(
+      requireRecord(
+        requireRecord(
+          mockCall(sendDurableMessageBatch, 0, "workspace media delivery")[0],
+          "workspace media delivery",
+        ).mediaAccess,
+        "workspace media access",
+      ).workspaceDir,
+    ).toBe("/tmp/agent-root/workspace");
   });
 
   it("forwards gateway client scopes into Telegram send target resolution", async () => {

@@ -1,4 +1,5 @@
 // Matrix type declarations define plugin contracts.
+import type { OutboundMediaAccess } from "openclaw/plugin-sdk/media-runtime";
 import type { CoreConfig } from "../../types.js";
 import { MATRIX_REACTION_EVENT_TYPE } from "../reaction-common.js";
 import type { MatrixClient, MessageEventContent } from "../sdk.js";
@@ -31,6 +32,7 @@ export type MatrixActionClientOpts = {
   client?: MatrixClient;
   cfg?: CoreConfig;
   mediaLocalRoots?: readonly string[];
+  mediaAccess?: OutboundMediaAccess;
   timeoutMs?: number;
   accountId?: string | null;
   readiness?: "none" | "prepared" | "started";
