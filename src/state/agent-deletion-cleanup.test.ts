@@ -11,6 +11,7 @@ import {
 import { purgeAgentSessionStoreEntries } from "../config/sessions/cleanup-service.js";
 import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import * as integrityWorker from "../infra/sqlite-integrity-worker.js";
 import { beginAgentDeletionJournal, removeAgentDeletionJournal } from "./agent-deletion-journal.js";
@@ -500,6 +501,27 @@ describe("agent deletion database cleanup authority", () => {
           expect(getOpenClawAgentDatabaseIfOpen(sharedOptions)).toBeUndefined();
         }
       });
+    },
+  );
+
+  it.each([false, true])(
+    "purges the deleted agent's own default fenced store under its journal cleanup authority (scope: %s)",
+    async (scoped) => {
+      const f = fixture();
+      const cfg = {
+        agents: { ownership: "explicit", entries: { worker: {}, kept: {} } },
+      } satisfies OpenClawConfig;
+      const deletion = f.begin();
+      // The default (agent-fenced) store lives beneath the agent directory the journal
+      // itself fences. Without the deletion cleanup authority the purge open is rejected
+      // (#138676); with it the same open is admitted and only the target rows are removed.
+      const purgeFailed = await purgeAgentSessionStoreEntries(cfg, "worker", {
+        env: f.options.env,
+        ...(scoped ? { runDatabaseCleanup: deletion.runDatabaseCleanup } : {}),
+      });
+      expect(purgeFailed).toBe(!scoped);
+      expect(f.read()).toBe(scoped ? undefined : "before");
+      deletion.rollback();
     },
   );
 });
