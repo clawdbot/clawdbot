@@ -122,6 +122,24 @@ describe("executable path helpers", () => {
     },
   );
 
+  it("prefers a PATHEXT match over an extensionless shim of the same name", async () => {
+    // A global npm install drops a POSIX shim next to the real launcher, so `claude` and
+    // `claude.cmd` share a directory on PATH. Windows cannot CreateProcess the bare shim,
+    // so probing it first made every spawn fail.
+    await withMockedPlatform("win32", async () => {
+      await withTestDir({ prefix: "openclaw-exec-shim-" }, async (binDir) => {
+        const shimPath = path.join(binDir, "claude");
+        const commandPath = path.join(binDir, "claude.cmd");
+        await fs.writeFile(shimPath, "#!/bin/sh\nexec node run.js\n");
+        await fs.writeFile(commandPath, "@echo off\n");
+
+        expect(
+          resolveExecutableFromPathEnv("claude", binDir, { PATHEXT: ".COM;.EXE;.BAT;.CMD" }),
+        ).toBe(commandPath);
+      });
+    });
+  });
+
   it("slides PATH hit and miss expiry for steady pollers", async () => {
     await withTestDir({ prefix: "openclaw-exec-path-" }, async (base) => {
       const binDir = path.join(base, "bin");

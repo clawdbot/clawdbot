@@ -46,7 +46,10 @@ function resolveWindowsExecutableExtensions(
     return [""];
   }
   const extensions = [...resolveWindowsExecutableExtSet(env)];
-  return includeExtensionless ? ["", ...extensions] : extensions;
+  // Windows cannot CreateProcess an extensionless file, and a global npm install drops a
+  // POSIX shim beside the real launcher (`claude` next to `claude.cmd`). Probing the bare
+  // name first matched that shim and the spawn failed, so PATHEXT candidates come first.
+  return includeExtensionless ? [...extensions, ""] : extensions;
 }
 
 function resolveWindowsExecutableExtSet(env: NodeJS.ProcessEnv | undefined): Set<string> {
