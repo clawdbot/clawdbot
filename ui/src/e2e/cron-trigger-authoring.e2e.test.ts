@@ -89,9 +89,7 @@ async function captureTriggerCapabilityProof(page: Page, name: string) {
 }
 
 async function selectSeconds(page: Page) {
-  const unit = page.locator("wa-select").filter({
-    has: page.locator('[slot="label"]', { hasText: "Unit" }),
-  });
+  const unit = page.getByRole("button", { name: /^Unit: /u });
   await unit.click();
   await page.getByRole("option", { name: "Seconds", exact: true }).click();
 }

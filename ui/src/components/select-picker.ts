@@ -174,16 +174,20 @@ export class SelectPicker<
   };
 
   private readonly handleKeydown = (event: KeyboardEvent) => {
+    const editing = event.target instanceof HTMLInputElement;
+    const printable = event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey;
+    const opensMenu = ["ArrowDown", "ArrowUp", "Enter", " "].includes(event.key);
+    if (this.mode === "closed" && !opensMenu && !printable) {
+      return;
+    }
     event.stopPropagation();
     if (event.isComposing || this.params.disabled) {
       return;
     }
-    const editing = event.target instanceof HTMLInputElement;
-    const printable = event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey;
     const now = performance.now();
     const typing = now - this.typeaheadAt < 1000 ? this.typeahead : "";
     if (this.mode === "closed") {
-      if (["ArrowDown", "ArrowUp", "Enter", " "].includes(event.key)) {
+      if (opensMenu) {
         event.preventDefault();
         this.openMenu(event.key === "ArrowUp");
         return;
@@ -257,7 +261,7 @@ export class SelectPicker<
           id=${this.params.id ?? nothing}
           class="picker-select__trigger"
           type="button"
-          aria-label=${this.params.label}
+          aria-label=${selected ? `${this.params.label}: ${selected.label}` : this.params.label}
           aria-haspopup="listbox"
           aria-expanded=${String(open)}
           aria-controls=${this.listboxId}

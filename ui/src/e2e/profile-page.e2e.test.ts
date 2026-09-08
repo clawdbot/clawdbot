@@ -672,24 +672,24 @@ suite.define(() => {
           signInAttempt += 1;
           await section.getByRole("button", { name: "Add account", exact: true }).click();
           const picker = section.locator(".profile-auth-provider");
-          await picker.click();
+          await picker.locator(".picker-select__trigger").click();
           if (captureUiProof) {
-            await expect(picker.locator('wa-option[value="xai"]')).toBeVisible();
+            await expect(picker.locator('[role="option"][data-value="xai"]')).toBeVisible();
             // Web Awesome exposes the options before the owning popup finishes fading in.
             await writeFile(
               path.join(proofDir, `connected-accounts-providers-${signInAttempt}.png`),
               await takeControlUiViewportScreenshot(
                 page,
                 picker.locator('wa-popup [part="popup"]'),
-                [picker.locator('wa-option[value="xai"]')],
+                [picker.locator('[role="option"][data-value="xai"]')],
               ),
             );
           }
-          await picker.locator(`wa-option[value="${providerId}"]`).click();
+          await picker.locator(`[role="option"][data-value="${providerId}"]`).click();
           if (providerId === "openai") {
             const methods = section.locator(".profile-auth-method");
-            await methods.click();
-            await methods.locator('wa-option[value="browser"]').click();
+            await methods.locator(".picker-select__trigger").click();
+            await methods.locator('[role="option"][data-value="browser"]').click();
           }
           await expect(section.locator(".profile-auth-connect-start")).toHaveText("Sign in");
           await section.locator(".profile-auth-connect-start").click();

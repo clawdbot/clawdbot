@@ -75,7 +75,11 @@ suite.define(() => {
           .filter({ hasText: "Agent configuration unavailable" });
         await expect.poll(() => error.isVisible()).toBe(true);
         await expect
-          .poll(() => agentsPage.locator(".model-picker__select").getAttribute("disabled"))
+          .poll(() =>
+            agentsPage
+              .locator(".model-picker__select .picker-select__trigger")
+              .getAttribute("disabled"),
+          )
           .not.toBeNull();
 
         await gateway.setMethodResponse("config.get", {
@@ -92,7 +96,11 @@ suite.define(() => {
         await gateway.waitForRequest("config.get", { after: readsBefore });
         await expect.poll(() => error.count()).toBe(0);
         await expect
-          .poll(() => agentsPage.locator(".model-picker__select").getAttribute("disabled"))
+          .poll(() =>
+            agentsPage
+              .locator(".model-picker__select .picker-select__trigger")
+              .getAttribute("disabled"),
+          )
           .toBeNull();
       },
     );

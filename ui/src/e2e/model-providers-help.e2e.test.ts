@@ -1,6 +1,6 @@
 // Control UI tests cover the Models settings help affordances against a mocked Gateway.
 import path from "node:path";
-import { chromium, type Browser, type Locator } from "playwright";
+import { chromium, type Browser } from "playwright";
 import { beforeEach, afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
@@ -10,6 +10,7 @@ import {
   startControlUiE2eServer,
   type ControlUiE2eServer,
 } from "../test-helpers/control-ui-e2e.ts";
+import { pickerValue as modelPickerValue } from "../test-helpers/select-picker-e2e.ts";
 
 const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
 const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
@@ -34,10 +35,6 @@ let server: ControlUiE2eServer;
 
 function providerConfig(value: string): { apiKey: string } {
   return Object.fromEntries([["apiKey", value]]) as { apiKey: string };
-}
-
-function modelPickerValue(locator: Locator) {
-  return locator.evaluate((element) => String((element as HTMLElement & { value?: string }).value));
 }
 
 describeControlUiE2e("Control UI Models help mocked Gateway E2E", () => {
@@ -103,12 +100,12 @@ describeControlUiE2e("Control UI Models help mocked Gateway E2E", () => {
         await utilityField.waitFor();
         expect(await utilityLabel.evaluate((node) => getComputedStyle(node).columnGap)).toBe("8px");
         await expect
-          .poll(() => modelPickerValue(utilityField.locator("wa-select")))
+          .poll(() => modelPickerValue(utilityField.locator("openclaw-select-picker")))
           .toBe("__openclaw_automatic_utility__");
         await expect
           .poll(() =>
             utilityField
-              .locator('wa-option[value="__openclaw_automatic_utility__"]')
+              .locator('[role="option"][data-value="__openclaw_automatic_utility__"]')
               .textContent()
               .then((value) => value?.trim()),
           )

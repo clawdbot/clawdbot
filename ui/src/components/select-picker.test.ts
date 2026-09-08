@@ -66,6 +66,32 @@ async function mount(overrides: Partial<PickerParams<PickerOption>> = {}) {
 }
 
 describe("renderPicker", () => {
+  it("leaves closed-trigger Escape to the page after dismissing the menu without a write", async () => {
+    const p = await mount();
+    const pageKey = vi.fn();
+    p.container.addEventListener("keydown", pageKey);
+    p.trigger.focus();
+    p.trigger.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    expect(pageKey).toHaveBeenCalledOnce();
+    pageKey.mockClear();
+    await p.open();
+    await p.key("Escape");
+    expect(pageKey).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(p.trigger);
+    p.trigger.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    expect(pageKey).toHaveBeenCalledOnce();
+    expect(p.params.onChange).not.toHaveBeenCalled();
+  });
+
+  it("names the field and current selection when the closed trigger receives focus", async () => {
+    const p = await mount();
+    p.trigger.focus();
+    expect(p.trigger.getAttribute("aria-label")).toBe("Model: Anchor");
+    await p.update({ value: "fixture/aurora-large" });
+    expect(p.trigger.getAttribute("aria-label")).toBe("Model: Aurora Large");
+    expect(p.params.onChange).not.toHaveBeenCalled();
+  });
+
   it("retains the current short-menu choice when typeahead has no match", async () => {
     const p = await mount({
       options: [

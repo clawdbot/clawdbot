@@ -81,15 +81,17 @@ suite.define(() => {
         await page.locator(".channels-detail").getByRole("button", { name: "Run setup" }).click();
 
         const wizard = page.locator(".channels-wizard");
-        const picker = wizard.locator("wa-select");
-        await picker.click();
-        await expect.poll(() => picker.getAttribute("open")).not.toBeNull();
+        const picker = wizard.locator("openclaw-select-picker");
+        await picker.locator(".picker-select__trigger").click();
+        await expect
+          .poll(() => picker.locator(".picker-select__trigger").getAttribute("aria-expanded"))
+          .toBe("true");
 
-        const activeOption = wizard.locator("wa-option").filter({
+        const activeOption = wizard.locator('[role="option"]').filter({
           has: page.getByText("Primary iMessage connection", { exact: true }),
         });
         await expect
-          .poll(() => activeOption.evaluate((option) => option.matches(":state(current)")))
+          .poll(() => activeOption.evaluate((option) => option.hasAttribute("data-active")))
           .toBe(true);
         const colors = await activeOption.evaluate((option) => {
           const label = option.querySelector<HTMLElement>(".picker-select__label");
@@ -122,7 +124,15 @@ suite.define(() => {
         await page.keyboard.press("ArrowDown");
         const nextOption = picker.getByRole("option", { name: "Add another iMessage account" });
         await expect
-          .poll(() => nextOption.evaluate((option) => option.matches(":focus-visible")))
+          .poll(async () => {
+            const activeId = await picker
+              .getByRole("listbox")
+              .getAttribute("aria-activedescendant");
+            return (
+              activeId === (await nextOption.getAttribute("id")) &&
+              (await picker.getByRole("listbox").evaluate((list) => list.matches(":focus-visible")))
+            );
+          })
           .toBe(true);
         expect(
           await nextOption.evaluate((option) => {
