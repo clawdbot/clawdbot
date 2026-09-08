@@ -298,8 +298,10 @@ describe("subagent registry persistence resume", () => {
         expect(announceSpy, "replayed announcement delivered").toHaveBeenCalledOnce();
         expect(readPersistedRun(run.runId), "delivered row awaits real settlement").toMatchObject({
           delivery: { status: "delivered" },
-          requesterSettleWake: { retireAfterSettle: true },
+          requesterSettleWake: { status: "pending" },
         });
+        const persisted = loadSubagentRegistryFromSqlite().get(run.runId);
+        expect(persisted?.requesterSettleWake?.retireAfterSettle).toBeUndefined();
         expect(announceSpy).toHaveBeenCalledWith(
           expect.objectContaining({
             childSessionKey: run.childSessionKey,
@@ -312,17 +314,15 @@ describe("subagent registry persistence resume", () => {
         );
         await settlement.release();
         expect(settlement.run).toHaveBeenCalledOnce();
-        expect(
-          loadSubagentRegistryFromSqlite().has(run.runId),
-          "settlement retired delivered row",
-        ).toBe(false);
+        expect(loadSubagentRegistryFromSqlite().has(run.runId)).toBe(true);
         await settleSubagentRegistryPersistenceWork();
 
+        announceSpy.mockClear();
         mod.resetSubagentRegistryForTests({ persist: false });
         mod.initSubagentRegistry();
         activateRegistry();
         await settleSubagentRegistryPersistenceWork();
-        expect(announceSpy, "retired completion is not replayed again").toHaveBeenCalledOnce();
+        expect(announceSpy, "delivered completion is not replayed again").not.toHaveBeenCalled();
       } finally {
         await settlement.release();
       }

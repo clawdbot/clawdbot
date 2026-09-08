@@ -289,6 +289,7 @@ export function resolveRuntimeChildSessionKeys(
   controllerSessionKey: string,
   now = Date.now(),
   subagentRuns?: SessionListRowContext["subagentRuns"],
+  store?: Record<string, SessionEntry>,
 ): string[] | undefined {
   const childSessionKeys = new Set<string>();
   const controllerKey = controllerSessionKey.trim();
@@ -317,6 +318,7 @@ export function resolveRuntimeChildSessionKeys(
         activeDescendants: subagentRuns
           ? subagentRuns.countActiveDescendantRuns(childSessionKey)
           : countActiveDescendantRuns(childSessionKey),
+        childSessionExists: store ? store[childSessionKey] !== undefined : undefined,
         now,
       })
     ) {
@@ -418,6 +420,7 @@ function resolveStoreChildSessionKeysFromCandidates(params: {
           activeDescendants: params.subagentRuns
             ? params.subagentRuns.countActiveDescendantRuns(childKey)
             : countActiveDescendantRuns(childKey),
+          childSessionExists: true,
           now: params.now,
         }) ||
         (latestControllerSessionKey && !matchesOwner)

@@ -378,6 +378,47 @@ describe("subagent announce seam flow", () => {
     expect(sessionsDeleteSpy).not.toHaveBeenCalled();
   });
 
+  it("reports a session-changed delete so the cleanup owner can release the dispatch fence", async () => {
+    loadSessionStoreMock.mockReturnValue({
+      "agent:main:subagent:test": {
+        sessionId: "child-session-id",
+        lifecycleRevision: "child-lifecycle-revision",
+      },
+    });
+    callGatewayMock.mockImplementation(async (request: unknown) => {
+      const typed = request as AgentCallRequest;
+      if (typed.method === "sessions.delete") {
+        sessionsDeleteSpy(typed);
+        throw Object.assign(new Error("session changed"), {
+          name: "GatewayClientRequestError",
+          gatewayCode: "INVALID_REQUEST",
+          details: { reason: "session-changed" },
+        });
+      }
+      return {};
+    });
+    const onChildSessionDeleteOutcome = vi.fn();
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-session-changed-delete",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "do thing",
+      timeoutMs: 10,
+      cleanup: "delete",
+      waitForCompletion: false,
+      outcome: { status: "ok" },
+      roundOneReply: "ANNOUNCE_SKIP",
+      onBeforeDeleteChildSession: () => true,
+      onChildSessionDeleteOutcome,
+    });
+
+    expect(didAnnounce).toBe("delivered");
+    expect(sessionsDeleteSpy).toHaveBeenCalledTimes(1);
+    expect(onChildSessionDeleteOutcome).toHaveBeenCalledWith("changed");
+  });
+
   it("delivers frozen terminal facts while child-session effects stay suppressed", async () => {
     const didAnnounce = await runSubagentAnnounceFlow({
       childSessionKey: "agent:main:subagent:retired",

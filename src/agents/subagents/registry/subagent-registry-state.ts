@@ -162,8 +162,12 @@ function projectSubagentRunForSessionList(entry: SubagentRunRecord): SubagentRun
       ? { runTimeoutSeconds: entry.runTimeoutSeconds }
       : {}),
     ...(entry.endedReason ? { endedReason: entry.endedReason } : {}),
+    cleanup: entry.cleanup,
     ...(entry.cleanupCompletedAt !== undefined
       ? { cleanupCompletedAt: entry.cleanupCompletedAt }
+      : {}),
+    ...(entry.deleteCleanupDispatchedAt !== undefined
+      ? { deleteCleanupDispatchedAt: entry.deleteCleanupDispatchedAt }
       : {}),
     ...(entry.delivery
       ? {

@@ -11,7 +11,7 @@ type CallGateway = (options: {
   params: SessionsDeleteParams;
   timeoutMs: number;
 }) => Promise<unknown>;
-type SubagentSessionCleanupOutcome = "deleted" | "changed" | "failed";
+export type SubagentSessionCleanupOutcome = "deleted" | "changed" | "failed";
 
 function isSessionLifecycleChangedGatewayError(error: unknown): boolean {
   if (!(error instanceof Error) || error.name !== "GatewayClientRequestError") {
@@ -62,4 +62,25 @@ export async function deleteSubagentSessionForCleanup(params: {
     params.onError?.(error);
     return "failed";
   }
+}
+
+/** Delete a subagent session while preserving ordinary error propagation for retry owners. */
+export async function deleteSubagentSessionForCleanupOrThrow(
+  params: Parameters<typeof deleteSubagentSessionForCleanup>[0],
+): Promise<Exclude<SubagentSessionCleanupOutcome, "failed">> {
+  let failure: unknown;
+  const outcome = await deleteSubagentSessionForCleanup({
+    ...params,
+    onError: (error) => {
+      failure = error;
+      params.onError?.(error);
+    },
+  });
+  if (outcome !== "failed") {
+    return outcome;
+  }
+  if (failure instanceof Error) {
+    throw failure;
+  }
+  throw new Error("sessions.delete failed without an error detail", { cause: failure });
 }

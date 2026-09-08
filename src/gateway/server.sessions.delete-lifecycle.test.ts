@@ -33,6 +33,7 @@ import {
   directSessionReq,
 } from "./test/server-sessions.test-helpers.js";
 import { createWorkerInferenceDrainService } from "./worker-environments/inference-control.test-helpers.js";
+import "./server.subagent-delete-cleanup-retention.gateway.test-support.js";
 
 const {
   createConfiguredGlobalAgentSessionStore,

@@ -278,8 +278,17 @@ export type SubagentRunRecord = {
   endedHookEmittedAt?: number;
   /** Set after cleanupBrowserSessionsForLifecycleEnd has been dispatched once. */
   browserCleanupDispatchedAt?: number;
-  /** Set immediately before irreversible sessions.delete cleanup is dispatched. */
+  /** Set immediately before irreversible sessions.delete cleanup is dispatched. Cleared when Gateway confirms the session changed. */
   deleteCleanupDispatchedAt?: number;
+  /**
+   * Exact child session identity captured with the dispatch stamp.
+   * Restart recovery must retry delete only against this identity; a live
+   * successor at the same key is a durable no-delete outcome.
+   */
+  deleteCleanupTarget?: {
+    sessionId: string;
+    lifecycleRevision: string;
+  };
   /** Durable outbox marker for parent/external completion delivery. */
   delivery?: SubagentCompletionDeliveryState;
   /** Durable top-level requester wake obligation, replayed after restart. */
@@ -334,9 +343,14 @@ export type SubagentRunReadRecord = Pick<
   | "accumulatedRuntimeMs"
   | "runTimeoutSeconds"
   | "endedReason"
+  // Delete-cleanup facts let lightweight session-list projections distinguish
+  // an unfinished handoff from a completed targeted deletion.
   | "cleanupCompletedAt"
+  | "deleteCleanupDispatchedAt"
+  | "deleteCleanupTarget"
   | "delivery"
 > & {
+  cleanup?: SubagentRunRecord["cleanup"];
   execution: Pick<SubagentExecutionState, "status" | "startedAt" | "endedAt" | "outcome">;
   collectorCompletion?: Pick<SwarmCollectorCompletion, "status">;
 };

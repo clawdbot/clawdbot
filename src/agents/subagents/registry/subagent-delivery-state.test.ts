@@ -1,6 +1,10 @@
 // Subagent delivery-state tests cover current registry record normalization.
 import { describe, expect, it } from "vitest";
-import { normalizeSubagentRunState } from "./subagent-delivery-state.js";
+import {
+  normalizeSubagentRunState,
+  persistChangedDeleteCleanupFence,
+  persistSuppressedSubagentSessionEffects,
+} from "./subagent-delivery-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 function baseRun(overrides: Partial<SubagentRunRecord> = {}): SubagentRunRecord {
@@ -22,6 +26,34 @@ function baseRun(overrides: Partial<SubagentRunRecord> = {}): SubagentRunRecord 
   };
 }
 
+describe("delete-cleanup persistence fences", () => {
+  it("rolls back a missing-identity fence when durable persistence fails", () => {
+    const entry = baseRun({ cleanup: "delete" });
+    expect(() =>
+      persistSuppressedSubagentSessionEffects(entry, () => {
+        throw new Error("registry store boom");
+      }),
+    ).toThrow("registry store boom");
+    expect(entry.execution.suppressSessionEffects).toBeUndefined();
+  });
+
+  it("keeps a session-changed fence in memory when durable persistence fails", () => {
+    const entry = baseRun({
+      cleanup: "delete",
+      deleteCleanupDispatchedAt: 200,
+      deleteCleanupTarget: { sessionId: "child", lifecycleRevision: "revision" },
+    });
+    expect(() =>
+      persistChangedDeleteCleanupFence(entry, () => {
+        throw new Error("registry store boom");
+      }),
+    ).toThrow("registry store boom");
+    expect(entry.execution.suppressSessionEffects).toBe(true);
+    expect(entry.deleteCleanupDispatchedAt).toBeUndefined();
+    expect(entry.deleteCleanupTarget).toBeUndefined();
+  });
+});
+
 describe("normalizeSubagentRunState", () => {
   it("normalizes durable task ownership and generation metadata", () => {
     const entry = normalizeSubagentRunState(
@@ -42,11 +74,39 @@ describe("normalizeSubagentRunState", () => {
   });
 
   it("normalizes the durable delete-dispatch boundary", () => {
-    const valid = normalizeSubagentRunState(baseRun({ deleteCleanupDispatchedAt: 200 }));
-    const malformed = normalizeSubagentRunState(baseRun({ deleteCleanupDispatchedAt: Number.NaN }));
+    const valid = normalizeSubagentRunState(
+      baseRun({
+        deleteCleanupDispatchedAt: 200,
+        deleteCleanupTarget: {
+          sessionId: "  child-session-id  ",
+          lifecycleRevision: "  child-revision  ",
+        },
+      }),
+    );
+    const malformedStamp = normalizeSubagentRunState(
+      baseRun({ deleteCleanupDispatchedAt: Number.NaN }),
+    );
+    const orphanTarget = normalizeSubagentRunState(
+      baseRun({
+        deleteCleanupTarget: { sessionId: "child-session-id", lifecycleRevision: "child-revision" },
+      }),
+    );
+    const incompleteTarget = normalizeSubagentRunState(
+      baseRun({
+        deleteCleanupDispatchedAt: 200,
+        deleteCleanupTarget: { sessionId: "child-session-id", lifecycleRevision: "  " },
+      }),
+    );
 
     expect(valid.deleteCleanupDispatchedAt).toBe(200);
-    expect(malformed.deleteCleanupDispatchedAt).toBeUndefined();
+    expect(valid.deleteCleanupTarget).toEqual({
+      sessionId: "child-session-id",
+      lifecycleRevision: "child-revision",
+    });
+    expect(malformedStamp.deleteCleanupDispatchedAt).toBeUndefined();
+    expect(malformedStamp.deleteCleanupTarget).toBeUndefined();
+    expect(orphanTarget.deleteCleanupTarget).toBeUndefined();
+    expect(incompleteTarget.deleteCleanupTarget).toBeUndefined();
   });
 
   it("preserves valid killed reconciliation ownership metadata", () => {

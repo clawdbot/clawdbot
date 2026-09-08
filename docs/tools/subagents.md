@@ -489,7 +489,7 @@ remain spawnable while inheriting defaults.
 
 - Sub-agent sessions are automatically archived after `agents.defaults.subagents.archiveAfterMinutes` (default `60`).
 - Archive uses `sessions.delete` and renames the transcript to `*.deleted.<timestamp>` (same folder).
-- `cleanup: "delete"` archives immediately after announce (still keeps the transcript via rename).
+- `cleanup: "delete"` archives immediately after announce (still keeps the transcript via rename). Its registry entry is kept until the same `archiveAfterMinutes` deadline, so `subagents` and other list consumers still show the finished run.
 - Auto-archive is best-effort; pending timers are lost if the gateway restarts.
 - Configured run timeouts do **not** auto-archive; they only stop the run. The session remains until auto-archive.
 - Auto-archive applies equally at every sub-agent depth.

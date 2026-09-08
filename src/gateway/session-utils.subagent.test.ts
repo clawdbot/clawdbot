@@ -369,6 +369,102 @@ describe("session list subagent metadata", () => {
     expect(failed?.runtimeMs).toBe(5_000);
   });
 
+  test("does not link a retained delete-cleanup run whose child session is gone", async () => {
+    const now = Date.now();
+    const parentKey = "agent:main:main";
+    const childSessionKey = "agent:main:subagent:deleted-child";
+    // Delete cleanup removed the child session row; the registry row survives
+    // until its archive deadline so recent-run listings keep the finished run.
+    const store: Record<string, SessionEntry> = {
+      [parentKey]: {
+        sessionId: "sess-main",
+        updatedAt: now,
+      } as SessionEntry,
+    };
+
+    addSubagentRunForTests({
+      runId: "run-deleted-child",
+      childSessionKey,
+      controllerSessionKey: parentKey,
+      requesterSessionKey: parentKey,
+      requesterDisplayKey: "main",
+      task: "deleted child task",
+      cleanup: "delete",
+      createdAt: now - 5_000,
+      startedAt: now - 4_000,
+      endedAt: now - 1_000,
+      outcome: { status: "ok" },
+      deleteCleanupDispatchedAt: now - 600,
+      cleanupCompletedAt: now - 500,
+      archiveAtMs: now + 30 * 60 * 1_000,
+    });
+
+    const parent = (
+      await listSessionFixture({
+        cfg,
+        storePath: "/tmp/sessions.json",
+        store,
+        opts: {},
+      })
+    ).sessions.find((session) => session.key === parentKey);
+    // No expandable toggle, because expanding it resolves to nothing.
+    expect(parent?.childSessions).toBeUndefined();
+    expect(
+      (
+        await listSessionFixture({
+          cfg,
+          storePath: "/tmp/sessions.json",
+          store,
+          opts: { spawnedBy: parentKey },
+        })
+      ).sessions,
+    ).toEqual([]);
+  });
+
+  test("still links a retained delete-cleanup run whose child session survived a rejected delete", async () => {
+    const now = Date.now();
+    const parentKey = "agent:main:main";
+    const childSessionKey = "agent:main:subagent:rejected-delete-child";
+    const store: Record<string, SessionEntry> = {
+      [parentKey]: {
+        sessionId: "sess-main",
+        updatedAt: now,
+      } as SessionEntry,
+      [childSessionKey]: {
+        sessionId: "sess-rejected-delete-child",
+        updatedAt: now,
+        spawnedBy: parentKey,
+        lifecycleRevision: "rev-successor",
+      } as SessionEntry,
+    };
+
+    addSubagentRunForTests({
+      runId: "run-rejected-delete-child",
+      childSessionKey,
+      controllerSessionKey: parentKey,
+      requesterSessionKey: parentKey,
+      requesterDisplayKey: "main",
+      task: "rejected delete child task",
+      cleanup: "delete",
+      createdAt: now - 5_000,
+      startedAt: now - 4_000,
+      endedAt: now - 1_000,
+      outcome: { status: "ok" },
+      cleanupCompletedAt: now - 500,
+      archiveAtMs: now + 30 * 60 * 1_000,
+    });
+
+    const parent = (
+      await listSessionFixture({
+        cfg,
+        storePath: "/tmp/sessions.json",
+        store,
+        opts: {},
+      })
+    ).sessions.find((session) => session.key === parentKey);
+    expect(parent?.childSessions).toEqual([childSessionKey]);
+  });
+
   test("does not show stale registry-only subagent runs as actively running", async () => {
     const now = Date.now();
     const childSessionKey = "agent:main:subagent:stale-display";

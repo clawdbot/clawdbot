@@ -713,16 +713,17 @@ describe("subagent registry persistence", () => {
         "held settlement still owns root work",
       ).toBeGreaterThan(0);
       if (cleanup === "delete") {
-        expect(
-          delivered?.requesterSettleWake?.retireAfterSettle,
-          "delete waits for real settlement",
-        ).toBe(true);
+        // Archive retention owns retirement; settlement must not drop the row.
+        expect(delivered?.requesterSettleWake?.retireAfterSettle).toBeUndefined();
+        expect(delivered?.archiveAtMs).toBeGreaterThan(Date.now());
       }
       await settlement.release();
       expect(settlement.run).toHaveBeenCalledOnce();
       const afterSecond = readPersistedRegistry();
       if (cleanup === "delete") {
-        expect(afterSecond.runs[runId], "settled delete retires its durable row").toBeUndefined();
+        expect(afterSecond.runs[runId]).toMatchObject({
+          delivery: { status: "delivered" },
+        });
       } else {
         expect(afterSecond.runs[runId]?.cleanupCompletedAt).toBeGreaterThanOrEqual(beforeRetry);
       }

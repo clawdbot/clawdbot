@@ -123,6 +123,7 @@ export function resolveChildSessionKeys(
     controllerSessionKey,
     now,
     subagentRuns,
+    store,
   );
   const storeChildSessions = buildStoreChildSessionIndex({
     store,

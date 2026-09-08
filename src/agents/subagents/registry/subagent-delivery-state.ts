@@ -1,9 +1,80 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeAgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.js";
 import type {
   SubagentCompletionDeliveryState,
   SubagentCompletionState,
   SubagentRunRecord,
 } from "./subagent-registry.types.js";
+
+export type SubagentDeleteCleanupTarget = {
+  sessionId: string;
+  lifecycleRevision: string;
+};
+
+/** Returns a complete guarded delete identity, or undefined when either half is missing. */
+export function normalizeDeleteCleanupTarget(
+  value: unknown,
+): SubagentDeleteCleanupTarget | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const sessionId = typeof value.sessionId === "string" ? value.sessionId.trim() : "";
+  const lifecycleRevision =
+    typeof value.lifecycleRevision === "string" ? value.lifecycleRevision.trim() : "";
+  if (!sessionId || !lifecycleRevision) {
+    return undefined;
+  }
+  return { sessionId, lifecycleRevision };
+}
+
+/** Binds the irreversible delete handoff to the exact session identity being deleted. */
+export function assignDeleteCleanupDispatch(
+  entry: SubagentRunRecord,
+  target: SubagentDeleteCleanupTarget,
+): void {
+  entry.deleteCleanupDispatchedAt ??= Date.now();
+  entry.deleteCleanupTarget ??= target;
+}
+
+/** Releases a confirmed session-changed rejection so restart cannot retry that delete. */
+function clearDeleteCleanupDispatch(entry: SubagentRunRecord): void {
+  entry.deleteCleanupDispatchedAt = undefined;
+  entry.deleteCleanupTarget = undefined;
+}
+
+/** Durably fences a cleanup from mutating a child session, rolling back on persistence failure. */
+export function persistSuppressedSubagentSessionEffects(
+  entry: SubagentRunRecord,
+  persistOrThrow: () => void,
+): void {
+  if (entry.execution.suppressSessionEffects === true) {
+    return;
+  }
+  const previousExecution = entry.execution;
+  entry.execution = { ...entry.execution, suppressSessionEffects: true };
+  try {
+    persistOrThrow();
+  } catch (error) {
+    entry.execution = previousExecution;
+    throw error;
+  }
+}
+
+/** Durably converts a rejected targeted delete into a no-delete fence. */
+export function persistChangedDeleteCleanupFence(
+  entry: SubagentRunRecord,
+  persistOrThrow: () => void,
+): void {
+  if (
+    entry.deleteCleanupDispatchedAt === undefined &&
+    entry.execution.suppressSessionEffects === true
+  ) {
+    return;
+  }
+  clearDeleteCleanupDispatch(entry);
+  entry.execution = { ...entry.execution, suppressSessionEffects: true };
+  persistOrThrow();
+}
 
 export function normalizeSubagentRunState(entry: SubagentRunRecord): SubagentRunRecord {
   const taskRunId = typeof entry.taskRunId === "string" ? entry.taskRunId.trim() : "";
@@ -24,6 +95,12 @@ export function normalizeSubagentRunState(entry: SubagentRunRecord): SubagentRun
   entry.deleteCleanupDispatchedAt = Number.isFinite(entry.deleteCleanupDispatchedAt)
     ? entry.deleteCleanupDispatchedAt
     : undefined;
+  const deleteCleanupTarget = normalizeDeleteCleanupTarget(entry.deleteCleanupTarget);
+  if (deleteCleanupTarget && entry.deleteCleanupDispatchedAt !== undefined) {
+    entry.deleteCleanupTarget = deleteCleanupTarget;
+  } else {
+    entry.deleteCleanupTarget = undefined;
+  }
   entry.suppressCompletionDelivery = entry.suppressCompletionDelivery === true ? true : undefined;
   entry.terminalOwner =
     entry.terminalOwner === "interrupted-recovery" &&

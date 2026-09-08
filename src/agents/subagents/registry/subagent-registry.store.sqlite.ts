@@ -35,7 +35,11 @@ type SubagentRunReadSqliteRow = Pick<
   accumulated_runtime_ms: number | null;
   ended_at: number | null;
   ended_reason: string | null;
+  cleanup: string | null;
   cleanup_completed_at: number | null;
+  delete_cleanup_dispatched_at: number | null;
+  delete_cleanup_target_session_id: string | null;
+  delete_cleanup_target_lifecycle_revision: string | null;
   generation: number | null;
   outcome_status: string | null;
   delivery_status: string | null;
@@ -288,7 +292,17 @@ function readSubagentSessionListRows(): SubagentRunReadSqliteRow[] {
         ),
         subagentPayloadJsonValue<number | null>("$.execution.endedAt").as("ended_at"),
         subagentPayloadJsonValue<string | null>("$.endedReason").as("ended_reason"),
+        subagentPayloadJsonValue<string | null>("$.cleanup").as("cleanup"),
         subagentPayloadJsonValue<number | null>("$.cleanupCompletedAt").as("cleanup_completed_at"),
+        subagentPayloadJsonValue<number | null>("$.deleteCleanupDispatchedAt").as(
+          "delete_cleanup_dispatched_at",
+        ),
+        subagentPayloadJsonValue<string | null>("$.deleteCleanupTarget.sessionId").as(
+          "delete_cleanup_target_session_id",
+        ),
+        subagentPayloadJsonValue<string | null>("$.deleteCleanupTarget.lifecycleRevision").as(
+          "delete_cleanup_target_lifecycle_revision",
+        ),
         subagentPayloadJsonValue<number | null>("$.generation").as("generation"),
         subagentPayloadJsonValue<string | null>("$.execution.outcome.status").as("outcome_status"),
         subagentPayloadJsonValue<string | null>("$.delivery.status").as("delivery_status"),
@@ -324,6 +338,8 @@ function rowToSubagentRunReadRecord(row: SubagentRunReadSqliteRow): SubagentRunR
     : undefined;
   const startedAt = normalizeFiniteNumber(row.started_at);
   const endedAt = normalizeFiniteNumber(row.ended_at);
+  const deleteCleanupTargetSessionId = row.delete_cleanup_target_session_id?.trim();
+  const deleteCleanupTargetLifecycleRevision = row.delete_cleanup_target_lifecycle_revision?.trim();
   return Object.fromEntries(
     Object.entries({
       runId,
@@ -348,7 +364,16 @@ function rowToSubagentRunReadRecord(row: SubagentRunReadSqliteRow): SubagentRunR
       accumulatedRuntimeMs: normalizeFiniteNumber(row.accumulated_runtime_ms),
       runTimeoutSeconds: normalizeFiniteNumber(row.run_timeout_seconds),
       endedReason: row.ended_reason || undefined,
+      cleanup: row.cleanup === "delete" ? "delete" : "keep",
       cleanupCompletedAt: normalizeFiniteNumber(row.cleanup_completed_at),
+      deleteCleanupDispatchedAt: normalizeFiniteNumber(row.delete_cleanup_dispatched_at),
+      deleteCleanupTarget:
+        deleteCleanupTargetSessionId && deleteCleanupTargetLifecycleRevision
+          ? {
+              sessionId: deleteCleanupTargetSessionId,
+              lifecycleRevision: deleteCleanupTargetLifecycleRevision,
+            }
+          : undefined,
       delivery: deliveryStatus
         ? {
             status: deliveryStatus,

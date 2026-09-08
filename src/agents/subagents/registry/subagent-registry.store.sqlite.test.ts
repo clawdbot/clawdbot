@@ -340,9 +340,34 @@ describe("subagent registry sqlite store", () => {
         accumulatedRuntimeMs: 90,
         runTimeoutSeconds: 7_200,
         endedReason: "subagent-error",
+        cleanup: "keep",
         cleanupCompletedAt: 300,
         delivery: { status: "suspended", suspendedAt: 275 },
       });
+    });
+  });
+
+  it("projects delete cleanup mode so child-link suppression survives restart", async () => {
+    await withTempStateEnv(async () => {
+      // The session-list projection defaults unknown cleanup modes to "keep",
+      // so only a delete round-trip proves the column is still selected.
+      const run = createRun({ cleanup: "delete", cleanupCompletedAt: 300 });
+      saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
+
+      expect(loadSubagentSessionListRunsFromSqlite().get(run.runId)?.cleanup).toBe("delete");
+    });
+  });
+
+  it("projects the delete dispatch stamp so an interrupted cleanup stays unlinked", async () => {
+    await withTempStateEnv(async () => {
+      // A restart between sessions.delete dispatch and the completion stamp
+      // leaves only this column to tell the session list the child is gone.
+      const run = createRun({ cleanup: "delete", deleteCleanupDispatchedAt: 300 });
+      saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
+
+      expect(
+        loadSubagentSessionListRunsFromSqlite().get(run.runId)?.deleteCleanupDispatchedAt,
+      ).toBe(300);
     });
   });
 

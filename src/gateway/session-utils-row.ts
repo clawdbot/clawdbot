@@ -190,7 +190,7 @@ export function buildGatewaySessionRow(params: {
   });
   const childSessions = params.storeChildSessionsByKey
     ? mergeChildSessionKeys(
-        resolveRuntimeChildSessionKeys(key, now, rowContext?.subagentRuns),
+        resolveRuntimeChildSessionKeys(key, now, rowContext?.subagentRuns, store),
         params.storeChildSessionsByKey.get(key),
       )
     : resolveChildSessionKeys(key, store, now, rowContext?.subagentRuns);

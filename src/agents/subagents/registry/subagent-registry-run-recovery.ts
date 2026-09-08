@@ -177,6 +177,7 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
       endedHookEmittedAt: undefined,
       browserCleanupDispatchedAt: undefined,
       deleteCleanupDispatchedAt: undefined,
+      deleteCleanupTarget: undefined,
       wakeOnDescendantSettle: undefined,
       requesterSettleWake: sourceRequesterSettleWake
         ? remapRequesterSettleWake(sourceRequesterSettleWake)
