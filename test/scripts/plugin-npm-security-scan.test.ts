@@ -284,13 +284,15 @@ describe("scripts/lib/plugin-npm-security-scan.mts", () => {
   });
 
   it("matches the recorded 2026.7.33 inert package scan inventory exactly", () => {
+    // syntheticResultsForFindings returns freshly built results that nothing else
+    // holds, so these are assigned in place rather than respread per element.
     const packageResults = syntheticResultsForFindings(frozen2026_7_33ReviewedFindings()).map(
-      (result) => ({
-        ...result,
-        expectedReviewedCriticalFindings: result.reviewedCriticalFindings.filter((finding) =>
-          finding.includes(".test.ts"),
-        ),
-      }),
+      (result) => {
+        result.expectedReviewedCriticalFindings = result.reviewedCriticalFindings.filter(
+          (finding) => finding.includes(".test.ts"),
+        );
+        return result;
+      },
     );
     const frozen = buildPluginNpmSecurityScanReport({
       candidateSha: CANDIDATE_SHA,
@@ -305,13 +307,16 @@ describe("scripts/lib/plugin-npm-security-scan.mts", () => {
       layout: "extended-stable-2026.7.33",
       status: "pass",
     });
-    const legacyPackageResults = packageResults.map((result) => ({
-      ...result,
-      expectedReviewedCriticalFindings:
-        result.packageName === "@openclaw/acpx"
-          ? result.expectedReviewedCriticalFindings.slice(0, 1)
-          : result.expectedReviewedCriticalFindings,
-    }));
+    // packageResults stays live for the assertion above, so this derives copies
+    // instead of mutating the elements in place.
+    const legacyPackageResults = packageResults.map((result) =>
+      Object.assign({}, result, {
+        expectedReviewedCriticalFindings:
+          result.packageName === "@openclaw/acpx"
+            ? result.expectedReviewedCriticalFindings.slice(0, 1)
+            : result.expectedReviewedCriticalFindings,
+      }),
+    );
     expect(
       buildPluginNpmSecurityScanReport({
         candidateSha: CANDIDATE_SHA,

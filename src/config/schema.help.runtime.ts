@@ -177,8 +177,9 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Allow/deny tool policy applied when agents run in sandboxed execution environments. Keep policies minimal so sandbox tasks cannot escalate into unnecessary external actions.",
   talk: "Talk-mode voice synthesis settings for voice identity, model selection, output format, and interruption behavior. Use this section to tune human-facing voice UX while controlling latency and cost.",
   "gateway.auth.token":
-    "Required by default for gateway access (unless using Tailscale Serve identity); required for non-loopback binds.",
-  "gateway.auth.password": "Required for Tailscale funnel.",
+    "Shared secret selected by gateway.auth.mode=token, the default for new local onboarding. Clients may send it in either auth.token or auth.password. Non-loopback binds require an enabled authentication mode.",
+  "gateway.auth.password":
+    "Shared secret selected by gateway.auth.mode=password. Clients may send it in either auth.token or auth.password. Password mode is required for Tailscale Funnel.",
   "agents.defaults.sandbox.browser.network":
     'Docker network for sandbox browser containers (default: openclaw-sandbox-browser). Use the dedicated default or a custom bridge network; "none" is unsupported because browser control requires published CDP ports.',
   "agents.entries.*.sandbox.browser.network":

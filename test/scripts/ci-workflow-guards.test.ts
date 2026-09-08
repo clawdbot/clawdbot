@@ -7137,6 +7137,7 @@ server.listen(0, "127.0.0.1", () => {
         name: "fixture",
         openclaw: { schemaVersions: { agent: 17, state: 6 } },
         scripts: {
+          "pnpm:devPreinstall": "node scripts/check-install-dependency-ownership.mjs",
           postinstall: "node scripts/postinstall-bundled-plugins.mjs",
           preinstall: "node scripts/preinstall-package-manager-warning.mjs",
           prepare: "node scripts/prepare-git-hooks.mjs",
@@ -7171,6 +7172,7 @@ server.listen(0, "127.0.0.1", () => {
       for (const relativePath of [
         "node-version.mjs",
         ".github/actions/setup-node-env/install-dependencies.sh",
+        "scripts/check-install-dependency-ownership.mjs",
         "scripts/prepare-git-hooks.mjs",
         "scripts/lib/package-lifecycle-marker.mjs",
       ]) {
@@ -7189,6 +7191,7 @@ server.listen(0, "127.0.0.1", () => {
         scripts: {
           test: "vitest run --reporter=dot",
           prepare: "node scripts/prepare-git-hooks.mjs",
+          "pnpm:devPreinstall": "node scripts/check-install-dependency-ownership.mjs",
           postinstall: "node scripts/postinstall-bundled-plugins.mjs",
           preinstall: "node scripts/preinstall-package-manager-warning.mjs",
         },
@@ -7202,6 +7205,7 @@ server.listen(0, "127.0.0.1", () => {
         name: "fixture",
         openclaw: { schemaVersions: { agent: 17, state: 7 } },
         scripts: {
+          "pnpm:devPreinstall": "node scripts/check-install-dependency-ownership.mjs",
           postinstall: "node scripts/postinstall-bundled-plugins.mjs",
           preinstall: "node scripts/preinstall-package-manager-warning.mjs",
           prepare: "node scripts/prepare-git-hooks.mjs",
@@ -7214,6 +7218,7 @@ server.listen(0, "127.0.0.1", () => {
       writeManifest({
         name: "fixture",
         scripts: {
+          "pnpm:devPreinstall": "node scripts/check-install-dependency-ownership.mjs",
           postinstall: "node scripts/postinstall-bundled-plugins.mjs",
           preinstall: "node scripts/preinstall-package-manager-warning.mjs",
           prepare: "node scripts/prepare-git-hooks.mjs",
@@ -7234,6 +7239,7 @@ server.listen(0, "127.0.0.1", () => {
       writeManifest({
         name: "fixture",
         scripts: {
+          "pnpm:devPreinstall": "node scripts/check-install-dependency-ownership.mjs",
           postinstall: "node scripts/postinstall-bundled-plugins.mjs",
           preinstall: "node scripts/preinstall-package-manager-warning.mjs",
           prepare: "node scripts/prepare-git-hooks.mjs",
@@ -7257,6 +7263,7 @@ server.listen(0, "127.0.0.1", () => {
       writeManifest({
         name: "fixture",
         scripts: {
+          "pnpm:devPreinstall": "node scripts/check-install-dependency-ownership.mjs",
           postinstall: "node scripts/postinstall-bundled-plugins.mjs",
           preinstall: "node scripts/preinstall-package-manager-warning.mjs",
           prepare: "node scripts/prepare-git-hooks.mjs",

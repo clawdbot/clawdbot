@@ -94,7 +94,8 @@ async function startConfigRpcGateway() {
   const port = await getFreePort();
   server = await startGatewayServerCore(port, {
     auth: { mode: "token", token: GATEWAY_TOKEN },
-    controlUiEnabled: true,
+    // These config RPCs do not exercise browser asset serving or preparation.
+    controlUiEnabled: false,
     hotReloadRecovery,
   });
   const connected = createDeferredCore();

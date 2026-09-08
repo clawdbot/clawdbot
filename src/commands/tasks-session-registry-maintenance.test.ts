@@ -1,14 +1,19 @@
 // Covers session-registry sweep isolation: unreadable cron facts fail the whole
 // sweep closed, while completed agent deletions are reported as per-store skips.
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { beginAgentDeletion } from "../agents/agent-lifecycle-registry.js";
 import { resetConfigRuntimeState } from "../config/config.js";
 import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { RuntimeEnv } from "../runtime.js";
+import {
+  beginAgentDeletionJournal,
+  completeAgentDeletionJournalInDatabase,
+} from "../state/agent-deletion-journal.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import * as taskRegistryMaintenance from "../tasks/task-registry.maintenance.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -38,15 +43,18 @@ function writeAgentDeletion(
   agentId: string,
   cleanupCompleted: boolean,
 ): void {
-  const deletion = beginAgentDeletion({
+  const deletion = beginAgentDeletionJournal({
     agentId,
+    operationId: randomUUID(),
     agentDir: state.agentDir(agentId),
     workspaceDir: state.path(`workspace-${agentId}`),
     sessionsDir: state.sessionsDir(agentId),
     deleteFiles: false,
   });
   if (cleanupCompleted) {
-    deletion.finish();
+    runOpenClawStateWriteTransaction((database) =>
+      completeAgentDeletionJournalInDatabase(database, deletion.agentId, deletion.operationId),
+    );
   }
 }
 

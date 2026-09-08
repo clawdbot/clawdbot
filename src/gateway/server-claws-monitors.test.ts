@@ -4,7 +4,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { beginAgentDeletion, isAgentDeletionBlocked } from "../agents/agent-lifecycle-registry.js";
+import {
+  withAgentDeletion,
+  isAgentDeletionBlocked,
+  type AgentDeletionOperation,
+} from "../agents/agent-lifecycle-registry.js";
 import { listAgentEntries } from "../agents/agent-scope.js";
 import { applyClawAddPlan } from "../claws/add.js";
 import type { ClawRemoveApplyOptions } from "../claws/lifecycle-remove-contract.js";
@@ -36,7 +40,10 @@ import {
   releaseLocalCronRunReceiptOwnership,
 } from "../cron/store/run-receipt-store.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
-import { readAgentDeletionJournal } from "../state/agent-deletion-journal.js";
+import {
+  beginAgentDeletionJournal,
+  readAgentDeletionJournal,
+} from "../state/agent-deletion-journal.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -243,6 +250,18 @@ async function fixture(
       });
     },
     getConfig: () => config,
+    withDeletion: <T>(run: (deletion: AgentDeletionOperation) => Promise<T>) =>
+      withAgentDeletion("worker", async (begin) =>
+        run(
+          begin({
+            agentId: "worker",
+            agentDir: state.agentDir("worker"),
+            workspaceDir,
+            sessionsDir: state.sessionsDir("worker"),
+            deleteFiles: false,
+          }),
+        ),
+      ),
     setReloadSettled: (value: boolean) => {
       reloadSettled = value;
     },
@@ -254,28 +273,25 @@ describe("Claw serving monitor cleanup", () => {
     "retains a configured agent without a Claw install during %s",
     async (phase) => {
       const current = await fixture(false);
-      const deletion = beginAgentDeletion({
-        agentId: "worker",
-        agentDir: current.state.agentDir("worker"),
-        workspaceDir: current.workspaceDir,
-        sessionsDir: current.state.sessionsDir("worker"),
-        deleteFiles: false,
+      await current.withDeletion(async (deletion) => {
+        openOpenClawStateDatabase()
+          .db.prepare("DELETE FROM claw_installs WHERE agent_id = ?")
+          .run("worker");
+        await expect(
+          current.invoke({
+            phase,
+            agentId: "worker",
+            operationId: deletion.entry.operationId,
+            ...(phase === "quiesce" ? { monitors: await current.gateway.inspect("worker") } : {}),
+          }),
+        ).rejects.toThrow("configuration changed");
+        expect(listAgentEntries(current.getConfig()).some((agent) => agent.id === "worker")).toBe(
+          true,
+        );
+        await expect(
+          fs.access(path.join(current.workspaceDir, "SOUL.md")),
+        ).resolves.toBeUndefined();
       });
-      openOpenClawStateDatabase()
-        .db.prepare("DELETE FROM claw_installs WHERE agent_id = ?")
-        .run("worker");
-      await expect(
-        current.invoke({
-          phase,
-          agentId: "worker",
-          operationId: deletion.entry.operationId,
-          ...(phase === "quiesce" ? { monitors: await current.gateway.inspect("worker") } : {}),
-        }),
-      ).rejects.toThrow("configuration changed");
-      expect(listAgentEntries(current.getConfig()).some((agent) => agent.id === "worker")).toBe(
-        true,
-      );
-      await expect(fs.access(path.join(current.workspaceDir, "SOUL.md"))).resolves.toBeUndefined();
     },
   );
 
@@ -374,35 +390,29 @@ describe("Claw serving monitor cleanup", () => {
       const current = await fixture(false);
       const database = openOpenClawAgentDatabase({ agentId: "worker" });
       const monitors = await current.gateway.inspect("worker");
-      const target = {
-        agentId: "worker",
-        agentDir: current.state.agentDir("worker"),
-        workspaceDir: current.workspaceDir,
-        sessionsDir: current.state.sessionsDir("worker"),
-        deleteFiles: false,
-      };
-      const deletion = beginAgentDeletion(target);
-      const originalList = current.cron.list.bind(current.cron);
-      const list = vi.spyOn(current.cron, "list").mockImplementationOnce(async (opts) => {
-        const jobs = await originalList(opts);
-        if (changedOwner === "operation") {
-          beginAgentDeletion(target);
-        } else {
-          current.replaceCron();
+      await current.withDeletion(async (deletion) => {
+        const originalList = current.cron.list.bind(current.cron);
+        const list = vi.spyOn(current.cron, "list").mockImplementationOnce(async (opts) => {
+          const jobs = await originalList(opts);
+          if (changedOwner === "operation") {
+            beginAgentDeletionJournal({ ...deletion.entry, operationId: "replacement" });
+          } else {
+            current.replaceCron();
+          }
+          return jobs;
+        });
+        try {
+          await expect(
+            current.gateway.quiesce("worker", deletion.entry.operationId, monitors),
+          ).rejects.toThrow(changedOwner === "operation" ? "deletion fence" : "changing");
+          expect(database.db.prepare("SELECT 1 AS alive").get()).toEqual({ alive: 1 });
+          await expect(
+            fs.access(path.join(current.workspaceDir, "SOUL.md")),
+          ).resolves.toBeUndefined();
+        } finally {
+          list.mockRestore();
         }
-        return jobs;
       });
-      try {
-        await expect(
-          current.gateway.quiesce("worker", deletion.entry.operationId, monitors),
-        ).rejects.toThrow(changedOwner === "operation" ? "deletion fence" : "changing");
-        expect(database.db.prepare("SELECT 1 AS alive").get()).toEqual({ alive: 1 });
-        await expect(
-          fs.access(path.join(current.workspaceDir, "SOUL.md")),
-        ).resolves.toBeUndefined();
-      } finally {
-        list.mockRestore();
-      }
     },
   );
 
@@ -479,30 +489,25 @@ describe("Claw serving monitor cleanup", () => {
     const current = await fixture(false);
     const database = openOpenClawAgentDatabase({ agentId: "worker" });
     const monitors = await current.gateway.inspect("worker");
-    const deletion = beginAgentDeletion({
-      agentId: "worker",
-      agentDir: current.state.agentDir("worker"),
-      workspaceDir: current.workspaceDir,
-      sessionsDir: current.state.sessionsDir("worker"),
-      deleteFiles: false,
+    await current.withDeletion(async (deletion) => {
+      await current.gateway.quiesce("worker", deletion.entry.operationId, monitors);
+      expect(() => database.db.prepare("SELECT 1")).toThrow();
+      const config = current.getConfig();
+      config.agents = { ...config.agents, entries: undefined, list: listAgentEntries(config) };
+      for (const monitor of monitors) {
+        await current.cron.remove(monitor.id, { systemOwned: true });
+      }
+      expect(
+        (await current.cron.list({ includeDisabled: true })).filter(
+          (job) => job.agentId === "worker",
+        ),
+      ).toEqual([]);
+      expect(listAgentEntries(current.getConfig()).map((agent) => agent.id)).toContain("worker");
+      await expect(current.gateway.drain("worker", deletion.entry.operationId)).rejects.toThrow(
+        "config convergence is incomplete",
+      );
+      await expect(fs.access(path.join(current.workspaceDir, "SOUL.md"))).resolves.toBeUndefined();
     });
-    await current.gateway.quiesce("worker", deletion.entry.operationId, monitors);
-    expect(() => database.db.prepare("SELECT 1")).toThrow();
-    const config = current.getConfig();
-    config.agents = { ...config.agents, entries: undefined, list: listAgentEntries(config) };
-    for (const monitor of monitors) {
-      await current.cron.remove(monitor.id, { systemOwned: true });
-    }
-    expect(
-      (await current.cron.list({ includeDisabled: true })).filter(
-        (job) => job.agentId === "worker",
-      ),
-    ).toEqual([]);
-    expect(listAgentEntries(current.getConfig()).map((agent) => agent.id)).toContain("worker");
-    await expect(current.gateway.drain("worker", deletion.entry.operationId)).rejects.toThrow(
-      "config convergence is incomplete",
-    );
-    await expect(fs.access(path.join(current.workspaceDir, "SOUL.md"))).resolves.toBeUndefined();
     expect(await current.apply(await current.plan())).toMatchObject({ status: "complete" });
   });
 

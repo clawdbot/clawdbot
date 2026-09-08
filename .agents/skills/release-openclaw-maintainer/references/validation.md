@@ -22,9 +22,11 @@ pnpm test:install:smoke
 Use existing equivalent exact-SHA release evidence; do not repeat successful
 checks solely because this list mentions them. Required source CI includes
 `pnpm check` and `pnpm check:test-types`. Root Dockerfile/install-smoke and Linux
-cross-OS proof must pass on Code SHA before changelog or tagging. Release SHA
-reuses product evidence only through the exact changelog-only policy and still
-qualifies its changed package bytes.
+cross-OS proof must pass before tagging. Code SHA and Release SHA may be the
+same commit when it contains final notes; the same successful full parent
+qualifies that source and its exact publication bytes. Only a later
+CHANGELOG-only descendant may reuse earlier product evidence through the
+changelog-only policy, while qualifying its changed package bytes.
 
 `release:fast-pretag-check` protects package-root README, plugin-local runtime,
 and npm/ClawHub metadata contracts. Fix real packaging defects before tagging.

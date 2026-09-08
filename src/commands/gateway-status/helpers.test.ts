@@ -13,7 +13,7 @@ import {
   resolveTargets,
   sanitizeSshTarget,
 } from "./helpers.js";
-import { createSecretRefGatewayConfig } from "./test-support.js";
+import { createUnreachableGatewayProbe, createSecretRefGatewayConfig } from "./test-support.js";
 
 describe("extractConfigSummary", () => {
   it("marks SecretRef-backed gateway auth credentials as configured", () => {
@@ -313,22 +313,7 @@ describe("probe reachability classification", () => {
   });
 
   it("keeps failed-before-connect probes unreachable", () => {
-    const probe = {
-      ok: false,
-      url: "ws://127.0.0.1:18789",
-      connectLatencyMs: null,
-      error: "timeout",
-      close: null,
-      auth: {
-        role: null,
-        scopes: [],
-        capability: "unknown" as const,
-      },
-      health: null,
-      status: null,
-      presence: null,
-      configSnapshot: null,
-    };
+    const probe = createUnreachableGatewayProbe("ws://127.0.0.1:18789", "timeout");
 
     expect(isPostConnectProbeFailure(probe)).toBe(false);
     expect(isProbeReachable(probe)).toBe(false);

@@ -1,8 +1,128 @@
 import { describe, expect, it } from "vitest";
 import type { ModelCatalogEntry } from "../../api/types.ts";
-import { resolveChatThinkingSelectState, resolveThinkingLevelInput } from "./thinking.ts";
+import {
+  formatThinkingCommandOptionsForSession,
+  isThinkingLevelOptionForSession,
+  resolveChatThinkingSelectState,
+  resolveThinkingCommandArgOptionsForSession,
+  resolveThinkingLevelInput,
+} from "./thinking.ts";
 
 describe("chat thinking helpers", () => {
+  it("keeps a ready empty thinking profile empty for the selected model", () => {
+    const model: ModelCatalogEntry = {
+      provider: "metadata-fixture",
+      id: "no-effort",
+      name: "No selectable effort",
+      reasoning: true,
+      agentRuntime: { id: "openclaw", source: "model" },
+      thinkingLevels: [],
+      thinkingDefault: "off",
+    };
+    const session = {
+      modelProvider: model.provider,
+      model: model.id,
+      agentRuntime: model.agentRuntime,
+      thinkingLevels: model.thinkingLevels,
+      thinkingOptions: [],
+      thinkingDefault: model.thinkingDefault,
+    };
+    const state = resolveChatThinkingSelectState({
+      catalog: [model],
+      session,
+      sessionKey: "agent:main:main",
+      sessionsResult: null,
+    });
+
+    expect({
+      options: state.options.map((option) => option.value),
+      acceptsHigh: isThinkingLevelOptionForSession(session, undefined, "high", [model]),
+      inherited: state.inherited.value,
+    }).toEqual({ options: [], acceptsHigh: false, inherited: "off" });
+    expect(formatThinkingCommandOptionsForSession(session, undefined, [model])).toBe("default");
+    expect(resolveThinkingCommandArgOptionsForSession(session, undefined, [model])).toEqual([]);
+  });
+
+  it.each(["catalog", "defaults", "session labels", "default labels"] as const)(
+    "preserves explicitly empty %s metadata",
+    (source) => {
+      const model: ModelCatalogEntry = {
+        provider: "metadata-fixture",
+        id: "no-effort",
+        name: "No selectable effort",
+        reasoning: true,
+        agentRuntime: { id: "openclaw", source: "model" },
+        thinkingDefault: "off",
+        ...(source === "catalog" ? { thinkingLevels: [] } : {}),
+      };
+      const session = {
+        modelProvider: model.provider,
+        model: model.id,
+        agentRuntime: model.agentRuntime,
+        thinkingDefault: model.thinkingDefault,
+        ...(source === "session labels" ? { thinkingOptions: [] } : {}),
+      };
+      const defaults = {
+        modelProvider: model.provider,
+        model: model.id,
+        agentRuntime: model.agentRuntime,
+        contextTokens: null,
+        thinkingDefault: model.thinkingDefault,
+        ...(source === "defaults" ? { thinkingLevels: [] } : {}),
+        ...(source === "default labels" ? { thinkingOptions: [] } : {}),
+      };
+      const state = resolveChatThinkingSelectState({
+        catalog: [model],
+        defaults,
+        session,
+        sessionKey: "agent:main:main",
+        sessionsResult: null,
+      });
+
+      expect(state.options).toEqual([]);
+      expect(isThinkingLevelOptionForSession(session, defaults, "high", [model])).toBe(false);
+    },
+  );
+
+  it("retains generic choices while thinking metadata is missing", () => {
+    const state = resolveChatThinkingSelectState({
+      catalog: [],
+      session: { modelProvider: "metadata-fixture", model: "loading" },
+      sessionKey: "agent:main:main",
+      sessionsResult: null,
+    });
+
+    expect(state.options.map((option) => option.value)).toEqual([
+      "off",
+      "minimal",
+      "low",
+      "medium",
+      "high",
+    ]);
+  });
+
+  it("keeps non-reasoning Off-only metadata distinct from an empty profile", () => {
+    const model: ModelCatalogEntry = {
+      provider: "metadata-fixture",
+      id: "plain",
+      name: "Plain model",
+      reasoning: false,
+      thinkingLevels: [{ id: "off", label: "off" }],
+      thinkingDefault: "off",
+    };
+    const session = { modelProvider: model.provider, model: model.id };
+    const state = resolveChatThinkingSelectState({
+      catalog: [model],
+      session,
+      sessionKey: "agent:main:main",
+      sessionsResult: null,
+    });
+
+    expect(state.options).toEqual([]);
+    expect(isThinkingLevelOptionForSession(session, undefined, "off", [model])).toBe(true);
+    expect(isThinkingLevelOptionForSession(session, undefined, "high", [model])).toBe(false);
+  });
+
   const lunaModel: ModelCatalogEntry = {
     id: "gpt-5.6-luna",
     name: "GPT-5.6 Luna",

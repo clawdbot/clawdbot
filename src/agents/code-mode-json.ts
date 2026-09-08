@@ -1,7 +1,10 @@
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
 import { toolResultFitsBudget, type ToolResultBudget } from "./tool-result-limits.js";
-import { renderToolSearchControlText } from "./tool-search-control-result.js";
+import {
+  renderToolSearchControlText,
+  serializeToolSearchControlResult,
+} from "./tool-search-control-result.js";
 
 export function toCodeModeJsonSafe(value: unknown): unknown {
   if (value === undefined) {
@@ -211,7 +214,7 @@ export class CodeModeOutputState {
     const project = this.createProjector(params);
     const fits = (candidate: ReturnType<typeof project>) => {
       const rendered = renderToolSearchControlText(
-        JSON.stringify({ ...metadata, ...candidate.channels }, null, 2),
+        serializeToolSearchControlResult({ ...metadata, ...candidate.channels }, true),
         networkContent,
       );
       return !rendered.truncated && toolResultFitsBudget(rendered.text, this.modelBudget);

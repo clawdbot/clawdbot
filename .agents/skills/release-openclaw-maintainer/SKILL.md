@@ -51,11 +51,14 @@ successful child artifacts, approved changes, phase and next action. Latest
 operator steering replaces superseded scope. Completed evidence stays complete
 until a named change invalidates it.
 
-For regular releases, freeze product-complete **Code SHA** before generating
-the changelog. Require its Full Release Validation decision, then create
-**Release SHA** with a complete delta of exactly `CHANGELOG.md`. The
-`changelog-only-release-v1` policy reuses product proof while qualifying fresh
-publication bytes. Any other source delta returns to the Code SHA loop.
+For regular releases, prepare complete notes before freezing **Code SHA** when
+possible. If those notes are final, **Code SHA and Release SHA are the same
+commit**: one successful fresh full qualification can supply both roles and
+their exact publication bytes. Do not create another commit or run solely to
+separate the labels. If notes change after qualification, a descendant whose
+complete delta is exactly `CHANGELOG.md` may use `changelog-only-release-v1`
+to reuse product proof while qualifying new publication bytes. Any other
+source delta returns to the Code SHA loop.
 Keep trusted **Tooling SHA** separate; tooling or infrastructure failures do
 not justify changing the candidate.
 
