@@ -894,7 +894,7 @@ export const configHandlers: GatewayRequestHandlers = {
     }
     respond(true, result, undefined);
   },
-  "config.set": async ({ params, respond, context }) => {
+  "config.set": async ({ params, respond, context, sessionMutationCommitGuard }) => {
     if (!assertValidParams(params, validateConfigSetParams, "config.set", respond)) {
       return;
     }
@@ -938,6 +938,7 @@ export const configHandlers: GatewayRequestHandlers = {
       writeOptions,
       nextConfig: parsed.writeConfig,
       context,
+      commitGuard: sessionMutationCommitGuard,
       respond,
     });
     if (!writeResult) {
@@ -961,7 +962,7 @@ export const configHandlers: GatewayRequestHandlers = {
     );
     writeResult.queueFollowUp();
   },
-  "config.patch": async ({ params, respond, client, context }) => {
+  "config.patch": async ({ params, respond, client, context, sessionMutationCommitGuard }) => {
     if (!assertValidParams(params, validateConfigPatchParams, "config.patch", respond)) {
       return;
     }
@@ -1148,6 +1149,7 @@ export const configHandlers: GatewayRequestHandlers = {
       writeOptions,
       nextConfig: writeConfig,
       context,
+      commitGuard: sessionMutationCommitGuard,
       disconnectSharedAuthClients,
       awaitRuntimeApplication: shouldAwaitGatewayConfigApplication({
         changedPaths,
@@ -1174,7 +1176,7 @@ export const configHandlers: GatewayRequestHandlers = {
       preparedSecretsSnapshot,
     });
   },
-  "config.apply": async ({ params, respond, client, context }) => {
+  "config.apply": async ({ params, respond, client, context, sessionMutationCommitGuard }) => {
     if (!assertValidParams(params, validateConfigApplyParams, "config.apply", respond)) {
       return;
     }
@@ -1226,6 +1228,7 @@ export const configHandlers: GatewayRequestHandlers = {
       writeOptions,
       nextConfig: parsed.writeConfig,
       context,
+      commitGuard: sessionMutationCommitGuard,
       disconnectSharedAuthClients,
       awaitRuntimeApplication: shouldAwaitGatewayConfigApplication({
         changedPaths,

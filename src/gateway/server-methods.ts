@@ -25,6 +25,7 @@ import {
   tryBeginGatewayPreparedRestartRootWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
+import { admitChannelAdministratorRequest } from "./channel-administrator-authority.js";
 import { formatControlPlaneActor, resolveControlPlaneActor } from "./control-plane-audit.js";
 import {
   consumeControlPlaneWriteBudget,
@@ -37,6 +38,7 @@ import {
   authorizeOperatorScopesForRequiredScope,
   resolveLeastPrivilegeOperatorScopesForMethod,
 } from "./method-scopes.js";
+import { resolveCoreChannelAdministratorMethodPolicy } from "./methods/core-descriptors.js";
 import {
   createCoreGatewayMethodDescriptors,
   createGatewayMethodDescriptorsFromHandlers,
@@ -492,19 +494,80 @@ export async function handleGatewayRequest(
   },
   diagnostics?: GatewayRpcDiagnostics,
 ): Promise<void> {
+  // Prefer the attached registry when it owns the method; otherwise refresh
+  // process-root metadata so late plugin methods remain reachable (#94127).
+  // Seal dispatch ownership before projecting authority: an override cannot
+  // borrow a reviewed core name or replace its selected handler across awaits.
+  const methodRegistry =
+    opts.methodRegistry?.getHandler(opts.req.method) !== undefined
+      ? opts.methodRegistry
+      : createRequestGatewayMethodRegistry(opts.extraHandlers);
+  const handler = methodRegistry.getHandler(opts.req.method) as GatewayRequestHandler | undefined;
+  const administratorPolicy = resolveCoreChannelAdministratorMethodPolicy(opts.req.method);
+  const administrator = (() => {
+    try {
+      if (opts.client?.internal?.agentRuntimeIdentity?.channelAdministratorGrant) {
+        const descriptor = methodRegistry
+          .descriptors()
+          .find((candidate) => candidate.name === opts.req.method);
+        if (
+          !administratorPolicy ||
+          descriptor?.owner.kind !== "core" ||
+          descriptor.handler !== handler ||
+          handler !== coreGatewayHandlers[opts.req.method]
+        ) {
+          throw new Error(
+            `Trusted channel administrator authority is not supported for this handler: ${opts.req.method}. Use the method's ordinary authorization or an authenticated Control UI administrator request.`,
+          );
+        }
+      }
+      return admitChannelAdministratorRequest(opts.client, opts.req.method);
+    } catch (error) {
+      opts.respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, String(error)));
+      return false;
+    }
+  })();
+  if (administrator === false) {
+    return;
+  }
+  let effectiveOpts = opts;
+  if (administrator) {
+    const original = opts;
+    const assertCurrent = () => {
+      administrator.assertActive();
+      original.sessionMutationCommitGuard?.();
+    };
+    effectiveOpts = {
+      ...opts,
+      client: administrator.client,
+      sessionMutationCommitGuard: assertCurrent,
+      respond: (...args) => {
+        // Mutation owners fence their commit; never turn an already-committed
+        // effect (including self-revocation) into a retryable failure.
+        if (args[0] && administratorPolicy === "read") {
+          try {
+            assertCurrent();
+          } catch (error) {
+            original.respond(
+              false,
+              undefined,
+              errorShape(ErrorCodes.INVALID_REQUEST, String(error)),
+            );
+            return;
+          }
+        }
+        original.respond(...args);
+      },
+    };
+    opts.context.logGateway.info(
+      `channel administrator request method=${opts.req.method} runId=${opts.client?.internal?.agentRuntimeIdentity?.operationalRunInstance.runId}`,
+    );
+  }
   const { req, respond, client, isWebchatConnect, context, signal, hasCurrentClientAuthority } =
-    opts;
-  const entry = opts.requestEntry ?? context.requestEntryLifetime?.enter(opts);
+    effectiveOpts;
+  const entry = effectiveOpts.requestEntry ?? context.requestEntryLifetime?.enter(effectiveOpts);
   try {
     entry?.assertOpen();
-    // Prefer the caller-attached registry when it owns the requested method so plugin dispatch
-    // metadata newer than global runtime state still authorizes and dispatches correctly. When the
-    // attached snapshot does not own the method, rebuild from the process-root registry so late
-    // methods remain reachable (#94127).
-    const methodRegistry =
-      opts.methodRegistry?.getHandler(req.method) !== undefined
-        ? opts.methodRegistry
-        : createRequestGatewayMethodRegistry(opts.extraHandlers);
     const authorization = await authorizeGatewayRequestPreDispatch({
       method: req.method,
       requestParams: req.params,
@@ -517,7 +580,6 @@ export async function handleGatewayRequest(
       respond(false, undefined, authorization.error);
       return;
     }
-    const handler = methodRegistry.getHandler(req.method) as GatewayRequestHandler | undefined;
     if (!handler) {
       const error = errorShape(ErrorCodes.INVALID_REQUEST, `unknown method: ${req.method}`);
       respond(false, undefined, error);
@@ -527,7 +589,7 @@ export async function handleGatewayRequest(
     // host lifetime here so individual handlers cannot lose it across an await.
     const sessionMutationAuthorization = withSessionMutationCommitGuard(
       authorization.sessionMutationAuthorization,
-      opts.sessionMutationCommitGuard,
+      effectiveOpts.sessionMutationCommitGuard,
     );
     const invokeHandler = async () => {
       const preparedHandler = await prepareGatewayRequestHandler(handler, entry);
@@ -540,10 +602,10 @@ export async function handleGatewayRequest(
         context,
         signal,
         ...(hasCurrentClientAuthority ? { hasCurrentClientAuthority } : {}),
-        sessionMutationCommitGuard: opts.sessionMutationCommitGuard,
+        sessionMutationCommitGuard: effectiveOpts.sessionMutationCommitGuard,
         sessionMutationAuthorization,
       };
-      opts.sessionMutationCommitGuard?.();
+      effectiveOpts.sessionMutationCommitGuard?.();
       entry?.assertOpen();
       if (signal?.aborted) {
         return;
@@ -560,12 +622,12 @@ export async function handleGatewayRequest(
       isWebchatConnect,
       methodRegistry,
       requestParams: req.params,
-      admission: opts.admission,
+      admission: effectiveOpts.admission,
       reject: (error) => respond(false, undefined, error),
     });
   } finally {
     // Transport/import owners retain failures through their response and logging paths.
-    if (!opts.requestEntry) {
+    if (!effectiveOpts.requestEntry) {
       entry?.release();
     }
   }

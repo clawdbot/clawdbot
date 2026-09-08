@@ -23,14 +23,17 @@ import { evaluateSupplementalContextVisibility } from "openclaw/plugin-sdk/secur
 import { readSessionUpdatedAt, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveDiscordConversationIdentity } from "../conversation-identity.js";
-import { ChannelType } from "../internal/discord.js";
+import { ChannelType, MessageReferenceType } from "../internal/discord.js";
 import { normalizeDiscordAllowList, normalizeDiscordSlug } from "./allow-list.js";
 import { resolveTimestampMs } from "./format.js";
 import {
   buildDiscordInboundAccessContext,
   createDiscordSupplementalContextAccessChecker,
 } from "./inbound-context.js";
-import { resolveDiscordMessageStickers } from "./message-forwarded.js";
+import {
+  resolveDiscordMessageSnapshots,
+  resolveDiscordMessageStickers,
+} from "./message-forwarded.js";
 import {
   createDiscordHistorySenderProvenance,
   filterDiscordHistoryEntriesForContext,
@@ -43,6 +46,7 @@ import type { DiscordMediaInfo } from "./message-media.js";
 import { resolveDiscordMessageText } from "./message-text.js";
 import { buildDirectLabel, buildGuildLabel, resolveReplyContext } from "./reply-context.js";
 import { buildDiscordRoutePeer } from "./route-resolution.js";
+import { resolveDiscordWebhookId } from "./sender-identity.js";
 import { resolveDiscordAutoThreadReplyPlan, resolveDiscordThreadStarter } from "./threading.js";
 import {
   DISCORD_ATTACHMENT_IDLE_TIMEOUT_MS,
@@ -380,6 +384,15 @@ export async function buildDiscordMessageProcessContext(params: {
       sessionKey: effectiveSessionKey,
       messageId: canonicalMessageId ?? message.id,
       inboundEventKind: ctx.inboundEventKind,
+      ...(!author.bot &&
+      !resolveDiscordWebhookId(message) &&
+      !sender.isPluralKit &&
+      sender.id === author.id &&
+      // A human forwarding someone else's content does not attest its authorship.
+      message.messageReference?.type !== MessageReferenceType.Forward &&
+      resolveDiscordMessageSnapshots(message).length === 0
+        ? { nativeHumanSource: { senderId: author.id, conversationId: messageChannelId } }
+        : {}),
     },
     {
       parentId: conversationParentId,

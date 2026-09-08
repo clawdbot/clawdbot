@@ -74,6 +74,7 @@ import type { OpenClawCodingToolConstructionPlan } from "./core-tool-factory-des
 import {
   bindActiveCronCreatorAuthorityResolver,
   bindCronManagementGrant,
+  bindChannelAdministratorAuthority,
 } from "./cron-creator-authority-context.js";
 import { applyDelegationCapability, type DelegationCapability } from "./delegation-capability.js";
 import { pinExecToolTarget } from "./exec-tool-target-pinning.js";
@@ -764,6 +765,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
     options && executionAgentId && executionSessionKey?.trim()
       ? {
           agentId: executionAgentId,
+          channelAdministrator: bindChannelAdministratorAuthority(options.runId),
           sessionKey: executionSessionKey.trim(),
           ...(options.abortSignal ? { approvalSignals: [options.abortSignal] } : {}),
           turnSourceChannel: resolveGatewayMessageChannel(

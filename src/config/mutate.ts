@@ -793,7 +793,7 @@ async function tryWriteIncludeOwnedConfigMutation(params: {
     return null;
   }
   const { nextConfig, boundaryPath, includePath } = includeWrite;
-  if (params.writeOptions?.beforeCommit) {
+  if (params.writeOptions?.beforeCommit || params.writeOptions?.commitGuard) {
     // The pinned include writer cannot revalidate an async authority at publication.
     throw new Error(GUARDED_CONFIG_INCLUDE_WRITE_ERROR);
   }

@@ -119,7 +119,7 @@ export const pluginMutationHandlers: GatewayRequestHandlers = {
       );
     }
   },
-  "plugins.setEnabled": async ({ params, respond, context }) => {
+  "plugins.setEnabled": async ({ params, respond, context, sessionMutationCommitGuard }) => {
     if (
       !assertValidParams(params, validatePluginsSetEnabledParams, "plugins.setEnabled", respond)
     ) {
@@ -129,6 +129,7 @@ export const pluginMutationHandlers: GatewayRequestHandlers = {
       const result = await setManagedPluginEnabled({
         pluginId: params.pluginId,
         enabled: params.enabled,
+        ...(sessionMutationCommitGuard ? { commitGuard: sessionMutationCommitGuard } : {}),
         ...(params.acknowledgeCapabilities
           ? { acknowledgeCapabilities: params.acknowledgeCapabilities }
           : {}),

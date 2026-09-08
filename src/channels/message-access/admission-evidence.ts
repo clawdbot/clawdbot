@@ -11,6 +11,11 @@ import {
   ownDataValue,
   publicResultScopeKey,
 } from "./admission-evidence-scope-key.js";
+import {
+  bindAuthenticatedChannelAdministratorSource,
+  copyAuthenticatedChannelAdministratorSource,
+  prepareAuthenticatedChannelAdministratorSource,
+} from "./authenticated-administrator-source.js";
 import { readChannelIngressHostOwner, type ChannelIngressHostOwner } from "./ingress-host-owner.js";
 import type {
   ChannelIngressContextBinding,
@@ -132,11 +137,9 @@ function mintChannelAdmissionEvidence(
   return evidence;
 }
 
-function scopedParticipantRef(params: {
-  channelId: string;
-  accountId?: string;
-  rawPrincipalRef: string | number | null | undefined;
-}): string | undefined {
+function scopedParticipantRef(
+  params: Pick<ChannelIngressResolutionBinding, "channelId" | "accountId" | "rawPrincipalRef">,
+): string | undefined {
   const channelId = params.channelId;
   const accountId = params.accountId || "default";
   const rawPrincipalRef = params.rawPrincipalRef == null ? "" : String(params.rawPrincipalRef);
@@ -149,11 +152,9 @@ function scopedParticipantRef(params: {
   return scoped.length <= 4_096 ? scoped : undefined;
 }
 
-function participantContribution(params: {
-  channelId: string;
-  accountId?: string;
-  rawPrincipalRef: string | number | null | undefined;
-}): ChannelAdmissionContribution {
+function participantContribution(
+  params: Pick<ChannelIngressResolutionBinding, "channelId" | "accountId" | "rawPrincipalRef">,
+): ChannelAdmissionContribution {
   const rawPrincipalRef = scopedParticipantRef(params);
   return Object.freeze(
     rawPrincipalRef
@@ -184,6 +185,7 @@ function snapshotContextBinding(
   const messageId = ownDataValue(value, "messageId");
   const nativeChannelId = ownDataValue(value, "nativeChannelId");
   const inboundEventKind = ownDataValue(value, "inboundEventKind");
+  const nativeHumanSource = ownDataValue(value, "nativeHumanSource");
   if (
     typeof agentId !== "string" ||
     typeof sessionKey !== "string" ||
@@ -193,7 +195,34 @@ function snapshotContextBinding(
   ) {
     return undefined;
   }
-  return Object.freeze({ agentId, sessionKey, messageId, nativeChannelId, inboundEventKind });
+  const nativeSenderId =
+    nativeHumanSource && typeof nativeHumanSource === "object"
+      ? ownDataValue(nativeHumanSource, "senderId")
+      : undefined;
+  const nativeConversationId =
+    nativeHumanSource && typeof nativeHumanSource === "object"
+      ? ownDataValue(nativeHumanSource, "conversationId")
+      : undefined;
+  return Object.freeze({
+    agentId,
+    sessionKey,
+    messageId,
+    nativeChannelId,
+    inboundEventKind,
+    ...(typeof nativeSenderId === "string" &&
+    nativeSenderId.length > 0 &&
+    nativeSenderId.length <= 512 &&
+    typeof nativeConversationId === "string" &&
+    nativeConversationId.length > 0 &&
+    nativeConversationId.length <= 512
+      ? {
+          nativeHumanSource: Object.freeze({
+            senderId: nativeSenderId,
+            conversationId: nativeConversationId,
+          }),
+        }
+      : {}),
+  });
 }
 
 export function recordChannelIngressResolution(params: {
@@ -201,12 +230,16 @@ export function recordChannelIngressResolution(params: {
   channelId: string;
   accountId?: string;
   rawPrincipalRef: string | number | null | undefined;
+  owner: ChannelIngressHostOwner | undefined;
   participantOutcomeAffecting: boolean;
   identifierAuthentication: "affected" | "evaluated" | "not-evaluated";
   scope: ChannelIngressResolutionScope;
 }): ResolvedChannelMessageIngress {
-  const owner = readChannelIngressHostOwner(params.channelId);
-  const activeOwner = owner?.isLive() === true ? owner : undefined;
+  const owner = params.owner;
+  const activeOwner =
+    owner?.isLive() === true && readChannelIngressHostOwner(params.channelId) === owner
+      ? owner
+      : undefined;
   state.resolutionByIngress.set(
     params.result,
     Object.freeze({
@@ -437,6 +470,36 @@ export function prepareHostChannelContextAdmissionEvidence(params: {
   if (valid && params.owner?.resolveGatewayContext) {
     state.gatewayResolverByPreparation.set(preparation, params.owner.resolveGatewayContext);
   }
+  const firstBinding = validBindings[0];
+  const nativeSource = firstBinding?.contextBinding?.nativeHumanSource;
+  if (
+    valid &&
+    params.owner &&
+    firstBinding &&
+    nativeSource &&
+    validBindings.every(
+      (binding) =>
+        binding.contextBinding?.inboundEventKind === "user_request" &&
+        binding.contextBinding.messageId !== undefined &&
+        binding.rawPrincipalRef === nativeSource.senderId &&
+        binding.scope?.conversation.id === nativeSource.conversationId &&
+        binding.contextBinding.nativeHumanSource?.senderId === nativeSource.senderId &&
+        binding.contextBinding.nativeHumanSource?.conversationId === nativeSource.conversationId &&
+        binding.channelId === firstBinding.channelId &&
+        binding.accountId === firstBinding.accountId,
+    )
+  ) {
+    prepareAuthenticatedChannelAdministratorSource({
+      preparation,
+      source: {
+        channel: firstBinding.channelId,
+        accountId: firstBinding.accountId || "default",
+        senderId: nativeSource.senderId,
+        conversationId: nativeSource.conversationId,
+      },
+      owner: params.owner,
+    });
+  }
   return preparation;
 }
 
@@ -450,6 +513,7 @@ export function bindHostChannelContextAdmissionEvidence(params: {
   state.evidenceByPreparation.delete(params.preparation);
   state.gatewayResolverByPreparation.delete(params.preparation);
   const scopeKey = finalizedContextScopeKey(params.context);
+  bindAuthenticatedChannelAdministratorSource({ ...params, scopeKey });
   if (gatewayContextResolver && scopeKey !== undefined) {
     state.gatewayResolverByContext.set(params.context, gatewayContextResolver);
     state.scopeByContext.set(params.context, scopeKey);
@@ -485,7 +549,8 @@ export function readChannelContextGatewayContextResolver(
 export function copyChannelParticipantAdmissionEvidence(source: object, target: object): void {
   const evidence = state.evidenceByContext.get(source);
   const gatewayContextResolver = state.gatewayResolverByContext.get(source);
-  if (!evidence && !gatewayContextResolver) {
+  const hasNativeHumanSource = copyAuthenticatedChannelAdministratorSource(source, target);
+  if (!evidence && !gatewayContextResolver && !hasNativeHumanSource) {
     return;
   }
   const sourceScope = state.scopeByContext.get(source);
@@ -540,10 +605,7 @@ export function combineChannelAdmissionEvidence(
     return evidence[0];
   }
   if (evidence.length > CHANNEL_ADMISSION_EVIDENCE_MAX_CONTRIBUTIONS) {
-    return mintChannelAdmissionEvidence({
-      kind: "leaf",
-      contribution: Object.freeze({ participant: { state: "unknown" } }),
-    });
+    return unknownChannelAdmissionEvidence();
   }
   return mintChannelAdmissionEvidence({ kind: "aggregate", sources: Object.freeze([...evidence]) });
 }
@@ -608,11 +670,7 @@ function consumeContributions(params: {
     : [{ participant: { state: "unknown" } }];
 }
 
-function freezeConsumed(
-  value: Omit<ConsumedChannelAdmissionEvidence, "invoker"> & {
-    invoker: ConsumedChannelAdmissionEvidence["invoker"];
-  },
-): ConsumedChannelAdmissionEvidence {
+function freezeConsumed(value: ConsumedChannelAdmissionEvidence): ConsumedChannelAdmissionEvidence {
   return Object.freeze({
     ...value,
     invoker: Object.freeze(value.invoker),
@@ -678,13 +736,8 @@ export function consumeChannelAdmissionEvidence(
 }
 
 /** Queue the channel decision after its exact identity tuple on the shared audit FIFO. */
-export function recordChannelAdmissionDecision(params: {
-  contextId: ChannelAdmissionDecisionReceiptInput["contextId"];
-  executionId: ChannelAdmissionDecisionReceiptInput["executionId"];
-  runId: ChannelAdmissionDecisionReceiptInput["runId"];
-  occurredAt: ChannelAdmissionDecisionReceiptInput["occurredAt"];
-  coverageState: ChannelAdmissionDecisionReceiptInput["coverageState"];
-  identifierAuthentication: ChannelAdmissionDecisionReceiptInput["identifierAuthentication"];
-}): boolean {
+export function recordChannelAdmissionDecision(
+  params: ChannelAdmissionDecisionReceiptInput,
+): boolean {
   return state.decisionSink?.(createChannelAdmissionDecisionReceipt(params)) ?? false;
 }

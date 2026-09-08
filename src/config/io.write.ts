@@ -433,6 +433,7 @@ export async function writeConfigFileFromContext(
 
   try {
     const beforeCommit = options.beforeCommit;
+    const guarded = Boolean(beforeCommit || options.commitGuard);
     const result = await replaceFileAtomic({
       filePath: configPath,
       content: json,
@@ -441,13 +442,18 @@ export async function writeConfigFileFromContext(
       tempPrefix: path.basename(configPath),
       // fs-safe's copy fallback has no final authority hook. Guarded operations
       // must publish by rename so a failed attempt cannot continue under stale authority.
-      copyFallbackOnPermissionError: !beforeCommit,
-      fileSystem: beforeCommit
+      copyFallbackOnPermissionError: !guarded,
+      fileSystem: guarded
         ? {
             promises: {
               ...deps.fs.promises,
               rename: async (source, destination) => {
-                await beforeCommit();
+                // Synchronous authority checks must not yield before publication.
+                const pending = beforeCommit?.();
+                if (pending) {
+                  await pending;
+                }
+                options.commitGuard?.();
                 options.assertConfigPathForWrite?.();
                 if (options.baseSnapshot) {
                   assertBaseSnapshotStillCurrent(snapshot, configPath, deps.fs);

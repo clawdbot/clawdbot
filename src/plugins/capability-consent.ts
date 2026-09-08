@@ -136,6 +136,8 @@ export async function resolvePluginCapabilityConsent(params: {
   onCapabilityConsent?: PluginCapabilityConsentHandler;
   beforePersistentEffect?: () => void | Promise<void>;
   metadata?: PluginMetadataSnapshot;
+  /** Current request authority, checked inside the durable acceptance transaction. */
+  commitGuard?: () => void;
 }): Promise<void> {
   const env = params.env ?? process.env;
   return await withPluginLifecycleLease({ env }, async (lease) => {
@@ -223,7 +225,18 @@ export async function resolvePluginCapabilityConsent(params: {
         ...records,
         [installOwner]: acceptManagedPluginDeclaredSurface(persistedRecord, currentDeclared),
       },
-      { env, config: params.config, lease },
+      {
+        env,
+        config: params.config,
+        lease: params.commitGuard
+          ? {
+              assertOwnedInTransaction: (database) => {
+                lease.assertOwnedInTransaction(database);
+                params.commitGuard?.();
+              },
+            }
+          : lease,
+      },
     );
     pendingPluginCapabilityReviews.delete(pluginId);
   });

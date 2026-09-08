@@ -10,6 +10,8 @@ import {
   type AgentRunDelegatedAuthority,
 } from "../infra/agent-run-registry.js";
 import type { AgentRuntimeIdentity } from "./agent-runtime-identity-token.js";
+import { createChannelAdministratorAuthority } from "./channel-administrator-authority.js";
+import type { ChannelAdministratorAuthority } from "./channel-administrator-authority.types.js";
 import type { CronCreatorAuthorityGrant } from "./cron-creator-authority-grant.types.js";
 
 export const CRON_MANAGEMENT_METHODS = [
@@ -31,6 +33,7 @@ export type CronCreatorAuthorityRunScope = {
   readonly signal: AbortSignal;
   readonly grantTokens: Set<string>;
   readonly controlUiAdmin?: true;
+  readonly channelAdministrator?: ChannelAdministratorAuthority;
   active: boolean;
   abort: () => void;
 };
@@ -58,6 +61,7 @@ export function createCronCreatorAuthorityRunScope(
   runId: string,
   callerOrigin: CronScheduledToolCallerOrigin = { kind: "unknown" },
   controlUiAdmin?: true,
+  channelAdministratorPolicy?: () => void,
 ): CronCreatorAuthorityRunScope {
   const abortController = new AbortController();
   return {
@@ -66,6 +70,15 @@ export function createCronCreatorAuthorityRunScope(
     signal: abortController.signal,
     grantTokens: new Set(),
     ...(controlUiAdmin ? { controlUiAdmin } : {}),
+    ...(channelAdministratorPolicy
+      ? {
+          channelAdministrator: createChannelAdministratorAuthority(
+            runId,
+            abortController.signal,
+            channelAdministratorPolicy,
+          ),
+        }
+      : {}),
     active: true,
     abort: () => abortController.abort(expiredAuthorityError()),
   };

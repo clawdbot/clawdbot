@@ -20,6 +20,7 @@ import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayContextResolver,
 } from "../../plugins/runtime/gateway-request-scope.js";
+import { prepareChannelAdministratorRequest } from "./channel-administrator.js";
 import {
   getGatewayToolCallerIdentity,
   withoutGatewayToolCallerIdentity,
@@ -188,8 +189,10 @@ async function callAgentToolGatewayRequestBound<T>(
   resolveGatewayContext: GatewayContextResolver | undefined,
   runtimeIdentity: AgentRuntimeIdentity | undefined,
   assertCallerCurrent: (() => void) | undefined,
+  assertAdministratorCurrent?: () => void,
 ): Promise<T> {
   assertCallerCurrent?.();
+  assertAdministratorCurrent?.();
   const boundGateway = resolveGatewayContext
     ? bindInProcessGatewayContext(request.method, resolveGatewayContext)
     : undefined;
@@ -246,7 +249,14 @@ async function callAgentToolGatewayRequestBound<T>(
     ...(request.signal ? { signal: request.signal } : {}),
     ...(timeoutMs !== undefined ? { timeoutMs } : {}),
     ...(boundGateway ? { resolveGatewayContext: boundGateway.resolve } : {}),
-    ...(assertCallerCurrent ? { sessionMutationCommitGuard: assertCallerCurrent } : {}),
+    ...(assertCallerCurrent || assertAdministratorCurrent
+      ? {
+          sessionMutationCommitGuard: () => {
+            assertCallerCurrent?.();
+            assertAdministratorCurrent?.();
+          },
+        }
+      : {}),
   };
   return await runBoundInProcessGatewayCall(
     boundGateway,
@@ -263,11 +273,18 @@ async function callAgentToolGatewayRequestBound<T>(
 export const callAgentToolGatewayRequest: AgentToolGatewayRequestCaller = async <T>(
   request: AgentToolGatewayRequest,
 ): Promise<T> => {
-  return await callAgentToolGatewayRequestBound(
-    request,
-    callerGatewayContextResolver(),
+  const administrator = prepareChannelAdministratorRequest(
+    request.method,
+    request.signal,
     agentToolGatewayRuntimeIdentities.get(request),
-    captureGatewayToolCallerAssertion(),
+  );
+  const assertCaller = captureGatewayToolCallerAssertion();
+  return await callAgentToolGatewayRequestBound(
+    administrator ? { ...request, scopes: ["operator.admin"] } : request,
+    callerGatewayContextResolver(),
+    administrator?.identity ?? agentToolGatewayRuntimeIdentities.get(request),
+    assertCaller,
+    administrator?.assertCurrent,
   );
 };
 
@@ -279,15 +296,21 @@ async function callInProcessGatewayToolBound<T>(
   },
   fallback: (scopes: ReturnType<typeof resolveLeastPrivilegeOperatorScopesForMethod>) => Promise<T>,
 ): Promise<T> {
-  const assertCallerCurrent = captureGatewayToolCallerAssertion();
+  const administrator = prepareChannelAdministratorRequest(method, options.signal);
+  const assertCaller = captureGatewayToolCallerAssertion();
+  const assertCallerCurrent = assertCaller;
   assertCallerCurrent?.();
-  const sessionMutationCommitGuard = assertCallerCurrent
-    ? () => {
-        assertCallerCurrent();
-        options.sessionMutationCommitGuard?.();
-      }
-    : options.sessionMutationCommitGuard;
-  const scopes = resolveLeastPrivilegeOperatorScopesForMethod(method, params);
+  const sessionMutationCommitGuard =
+    assertCallerCurrent || administrator
+      ? () => {
+          assertCallerCurrent?.();
+          administrator?.assertCurrent();
+          options.sessionMutationCommitGuard?.();
+        }
+      : options.sessionMutationCommitGuard;
+  const scopes = administrator
+    ? ["operator.admin" as const]
+    : resolveLeastPrivilegeOperatorScopesForMethod(method, params);
   const resolveGatewayContext = callerGatewayContextResolver(options.resolveGatewayContext);
   const boundGateway = resolveGatewayContext
     ? bindInProcessGatewayContext(method, resolveGatewayContext)
@@ -296,18 +319,25 @@ async function callInProcessGatewayToolBound<T>(
     return await runBoundInProcessGatewayCall(
       boundGateway,
       async (boundResolver) =>
-        await dispatchGatewayMethodInProcess<T>(method, params, {
-          forceSyntheticClient: true,
-          operatorRoleActor: { kind: "system" as const },
-          syntheticScopes: scopes,
-          ...(options.sessionCreation ? { sessionCreation: options.sessionCreation } : {}),
-          ...(sessionMutationCommitGuard ? { sessionMutationCommitGuard } : {}),
-          ...(options.signal ? { signal: options.signal } : {}),
-          ...(options.timeoutMs !== undefined && options.timeoutMs !== null
-            ? { timeoutMs: options.timeoutMs }
-            : {}),
-          ...(boundResolver ? { resolveGatewayContext: boundResolver } : {}),
-        }),
+        await dispatchGatewayMethodInProcess<T>(
+          method,
+          params,
+          withInProcessAgentRuntimeIdentity(
+            {
+              forceSyntheticClient: true,
+              operatorRoleActor: { kind: "system" as const },
+              syntheticScopes: scopes,
+              ...(options.sessionCreation ? { sessionCreation: options.sessionCreation } : {}),
+              ...(sessionMutationCommitGuard ? { sessionMutationCommitGuard } : {}),
+              ...(options.signal ? { signal: options.signal } : {}),
+              ...(options.timeoutMs !== undefined && options.timeoutMs !== null
+                ? { timeoutMs: options.timeoutMs }
+                : {}),
+              ...(boundResolver ? { resolveGatewayContext: boundResolver } : {}),
+            },
+            administrator?.identity,
+          ),
+        ),
       assertCallerCurrent,
     );
   }

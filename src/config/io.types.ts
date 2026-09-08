@@ -80,8 +80,10 @@ export type ConfigWriteOptions = {
   lastTouchedVersionOverride?: string;
   /** Optional runtime candidate preflight; the runtime writer composes its own preflight. */
   preCommitRuntimePreflight?: (sourceConfig: OpenClawConfig) => Promise<unknown>;
-  /** Revalidate authority at the final root-file publication; requires atomic rename. */
+  /** Optional asynchronous prerequisite for final root-file publication. */
   beforeCommit?: () => void | Promise<void>;
+  /** Synchronous authority fence after all prerequisites, immediately before atomic rename. */
+  commitGuard?: () => void;
   /** Snapshot-time hashes for include files that mutation writers may update. */
   includeFileHashesForWrite?: Record<string, string>;
   /** Snapshot-time canonical include targets that writers may update. */

@@ -6,5 +6,9 @@
   "include": [
     "../../src/gateway/*.test.ts",
     "../../src/gateway/*.test.tsx"
+  ],
+  "exclude": [
+    "../../src/gateway/server.*.test.ts",
+    "../../src/gateway/server.*.test.tsx"
   ]
 }

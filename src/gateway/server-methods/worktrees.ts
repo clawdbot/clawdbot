@@ -87,11 +87,15 @@ export function createWorktreesHandlers(service: WorktreeService): GatewayReques
           ownerKind: "manual",
           // Repository hooks and .openclaw/worktree-setup.sh execute repo code.
           runSetupScript: scopes.includes(ADMIN_SCOPE),
+          ...(opts.sessionMutationCommitGuard
+            ? { commitGuard: opts.sessionMutationCommitGuard }
+            : {}),
+          ...(opts.signal ? { signal: opts.signal } : {}),
         }),
         undefined,
       );
     },
-    "worktrees.remove": async ({ params, respond }) => {
+    "worktrees.remove": async ({ params, respond, sessionMutationCommitGuard, signal }) => {
       if (!validateWorktreesRemoveParams(params)) {
         invalidParams(respond);
         return;
@@ -101,6 +105,8 @@ export function createWorktreesHandlers(service: WorktreeService): GatewayReques
           id: params.id,
           reason: "manual-delete",
           allowSnapshotLoss: params.force,
+          ...(sessionMutationCommitGuard ? { commitGuard: sessionMutationCommitGuard } : {}),
+          ...(signal ? { signal } : {}),
         });
         respond(
           true,
@@ -121,12 +127,20 @@ export function createWorktreesHandlers(service: WorktreeService): GatewayReques
         respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(error)));
       }
     },
-    "worktrees.restore": async ({ params, respond }) => {
+    "worktrees.restore": async ({ params, respond, sessionMutationCommitGuard, signal }) => {
       if (!validateWorktreesRestoreParams(params)) {
         invalidParams(respond);
         return;
       }
-      respond(true, await service.restore({ id: params.id }), undefined);
+      respond(
+        true,
+        await service.restore({
+          id: params.id,
+          ...(sessionMutationCommitGuard ? { commitGuard: sessionMutationCommitGuard } : {}),
+          ...(signal ? { signal } : {}),
+        }),
+        undefined,
+      );
     },
     "worktrees.branches": async (opts) => {
       const { params, respond } = opts;
@@ -145,7 +159,7 @@ export function createWorktreesHandlers(service: WorktreeService): GatewayReques
         : await service.listRepositoryBranches(repoRoot);
       respond(true, result, undefined);
     },
-    "worktrees.gc": async ({ params, respond, context }) => {
+    "worktrees.gc": async ({ params, respond, context, sessionMutationCommitGuard, signal }) => {
       if (!validateWorktreesGcParams(params)) {
         invalidParams(respond);
         return;
@@ -157,6 +171,8 @@ export function createWorktreesHandlers(service: WorktreeService): GatewayReques
         await service.gc({
           limits,
           ...createManagedWorktreeOwnerPolicy(cfg),
+          ...(sessionMutationCommitGuard ? { commitGuard: sessionMutationCommitGuard } : {}),
+          ...(signal ? { signal } : {}),
         }),
         undefined,
       );

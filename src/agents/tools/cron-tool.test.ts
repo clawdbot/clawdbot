@@ -749,7 +749,9 @@ describe("cron tool", () => {
       expect(result.details).toEqual({
         ...page,
         scope: "caller",
-        scopeHint: expect.stringContaining("fresh authenticated Control UI administrator turn"),
+        scopeHint: expect.stringMatching(
+          /Restricted automation inventory.*fresh authorized administrator turn.*Automations page/,
+        ),
       });
     }
   });
