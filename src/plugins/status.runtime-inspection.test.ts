@@ -4,6 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { handlePluginsCommand } from "../auto-reply/reply/commands-plugins.js";
 import { buildPluginsCommandParams } from "../auto-reply/reply/commands.test-harness.js";
+import { runPluginsDoctorCommand } from "../cli/plugins-cli.runtime.js";
 import { runPluginsInspectCommand } from "../cli/plugins-inspect-command.js";
 import { readConfigFileSnapshotForWrite, writeConfigFile } from "../config/config.js";
 import { defaultRuntime } from "../runtime.js";
@@ -52,10 +53,26 @@ describe("plugin runtime inspection", () => {
     cleanupPluginLoaderFixturesForTest();
   });
 
-  it.each(["inspect", "inspect native-chat-inspection", "inspect all", "inspect missing"])(
-    "releases chat inspection while the active native registration stays usable: %s",
+  it.each([
+    "inspect",
+    "inspect native-chat-inspection",
+    "inspect all",
+    "inspect missing",
+    "doctor",
+    "doctor-json",
+  ])(
+    "releases inspection while the active native registration stays usable: %s",
     async (selection) => {
       const stateDir = makePluginLoaderTempDir();
+      const doctor = selection.startsWith("doctor");
+      const previousExitCode = process.exitCode;
+      const output: string[] = [];
+      const log = vi.spyOn(defaultRuntime, "log").mockImplementation((value) => {
+        output.push(String(value));
+      });
+      const writeStdout = vi.spyOn(defaultRuntime, "writeStdout").mockImplementation((value) => {
+        output.push(value);
+      });
       const key = `__openclaw_chat_inspection_${selection}`;
       const started = createDeferredCore();
       const finish = createDeferredCore();
@@ -105,12 +122,24 @@ module.exports = { id: "native-chat-inspection", register(api) {
             useNoBundledPlugins();
             const config = {
               commands: { text: true, plugins: true },
+              ...(doctor
+                ? {
+                    agents: {
+                      defaults: { systemAgent: { agentId: "main" } },
+                      entries: { main: { workspace: stateDir } },
+                    },
+                  }
+                : {}),
               plugins: {
                 allow: [plugin.id],
                 load: { paths: [plugin.file] },
                 slots: { memory: "none" },
               },
             };
+            if (doctor) {
+              // Existing configs preserve omitted catalog preferences; fresh installs initialize stock catalogs.
+              fs.writeFileSync(path.join(stateDir, "openclaw.json"), "{}");
+            }
             await writeConfigFile(config);
             const active = loadAndActivateRootPluginRegistry({
               config,
@@ -127,15 +156,20 @@ module.exports = { id: "native-chat-inspection", register(api) {
               activeConnection?.database.prepare("SELECT value FROM owned").get();
             expect(readActive()).toEqual({ value: 42 });
             let replied = false;
+            if (doctor) {
+              process.exitCode = 7;
+            }
             command = withPluginRuntimeRegistryScope(active, () =>
-              handlePluginsCommand(
-                buildPluginsCommandParams({
-                  commandBodyNormalized: `/plugins ${selection}`,
-                  cfg: config,
-                  workspaceDir: stateDir,
-                }),
-                true,
-              ),
+              doctor
+                ? runPluginsDoctorCommand({ json: selection === "doctor-json" }).then(() => null)
+                : handlePluginsCommand(
+                    buildPluginsCommandParams({
+                      commandBodyNormalized: `/plugins ${selection}`,
+                      cfg: config,
+                      workspaceDir: stateDir,
+                    }),
+                    true,
+                  ),
             ).then((result) => {
               replied = true;
               return result;
@@ -147,20 +181,41 @@ module.exports = { id: "native-chat-inspection", register(api) {
             expect(inspection?.disposals).toBe(1);
             expect(inspection?.database.isOpen).toBe(true);
             expect(replied).toBe(false);
+            if (doctor) {
+              expect(output).toEqual([]);
+              expect(process.exitCode).toBe(7);
+            }
             expect(readActive()).toEqual({ value: 42 });
             expect(getActivePluginRegistry()).toBe(active);
             expect(capturePluginRegistryLifecycleEpoch(active)).toBe(epoch);
             expect(signal?.aborted).toBe(false);
             finish.resolve();
             const result = await command;
-            expect(result?.shouldContinue).toBe(false);
-            expect(result?.reply?.text).toContain(
-              selection === "inspect missing"
-                ? 'No plugin named "missing" found.'
-                : selection === "inspect"
-                  ? "Plugins ("
-                  : "```json",
-            );
+            if (doctor) {
+              expect(output).toHaveLength(1);
+              expect(process.exitCode, output.join("\n")).toBe(0);
+              if (selection === "doctor-json") {
+                expect(JSON.parse(output[0] ?? "")).toMatchObject({
+                  ok: true,
+                  pluginErrors: [],
+                  diagnostics: [],
+                  configurationWarnings: [],
+                });
+              } else {
+                expect(output[0]).toContain(
+                  "Plugin discovery, module loading, compatibility, and configuration checks passed.",
+                );
+              }
+            } else {
+              expect(result?.shouldContinue).toBe(false);
+              expect(result?.reply?.text).toContain(
+                selection === "inspect missing"
+                  ? 'No plugin named "missing" found.'
+                  : selection === "inspect"
+                    ? "Plugins ("
+                    : "```json",
+              );
+            }
             expect(inspection?.database.isOpen).toBe(false);
             expect(inspection?.disposals).toBe(1);
             expect(activeConnection?.disposals).toBe(0);
@@ -182,6 +237,9 @@ module.exports = { id: "native-chat-inspection", register(api) {
             }
           }
           Reflect.deleteProperty(globalThis, key);
+          log.mockRestore();
+          writeStdout.mockRestore();
+          process.exitCode = previousExitCode;
         }
       }
     },
