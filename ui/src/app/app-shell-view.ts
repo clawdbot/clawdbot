@@ -304,6 +304,7 @@ export function renderApplicationShell(host: ShellViewHost) {
           activeSearch: host.routeState.location?.search ?? "",
           activeHash: host.routeState.location?.hash ?? "",
           offline: gatewaySnapshot.offlineStable,
+          phase: gatewaySnapshot.phase,
           restartPending: gatewaySnapshot.restartPending,
           suspensionPhase: gatewaySnapshot.suspensionPhase,
           queuedOutboxCount: storedOutboxes?.total ?? 0,

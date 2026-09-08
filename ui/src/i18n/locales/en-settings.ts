@@ -23,6 +23,8 @@ const enSettings = {
       gatewayUrlHint: "Use wss:// when the Gateway sits behind HTTPS or Tailscale Serve.",
       secret: "Gateway secret",
       secretPlaceholder: "Paste the token or type the password",
+      setupCodeHint:
+        "This is a device setup code for the OpenClaw mobile app, not the Gateway secret. Paste it in the app's Gateway settings instead; the Gateway secret comes from openclaw gateway auth-token --show on the Gateway host.",
       secretHint: "Tokens are saved for this tab after connecting. Passwords are never stored.",
       tokenHint: "This Gateway expects its token. Saved for this tab after connecting.",
       passwordHint: "This Gateway expects its password. Passwords are never stored.",

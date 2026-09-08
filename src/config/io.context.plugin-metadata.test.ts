@@ -7,6 +7,7 @@ import type { InstalledPluginIndex } from "../plugins/installed-plugin-index-typ
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { restorePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { buildDeclaredProviderOwnerIndex } from "../plugins/provider-owner-index.js";
 
 const mocks = vi.hoisted(() => ({
   resolvePluginMetadataSnapshot: vi.fn(),
@@ -89,6 +90,7 @@ function workspaceSnapshot(
     plugins,
     diagnostics: [],
     byPluginId: new Map(plugins.map((plugin) => [plugin.id, plugin])),
+    declaredProviderOwners: buildDeclaredProviderOwnerIndex(plugins),
     owners: {
       channels: new Map(),
       channelConfigs: new Map(),

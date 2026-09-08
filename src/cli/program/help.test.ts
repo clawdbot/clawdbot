@@ -36,11 +36,6 @@ vi.mock("../../infra/git-commit.js", () => ({
   resolveCommitHash: resolveCommitHashMock,
 }));
 
-vi.mock("../cli-name.js", () => ({
-  resolveCliName: () => "openclaw",
-  replaceCliName: (cmd: string) => cmd,
-}));
-
 vi.mock("./command-registry.js", () => ({
   getCoreCliCommandsWithSubcommands: () => ["models", "message"],
 }));

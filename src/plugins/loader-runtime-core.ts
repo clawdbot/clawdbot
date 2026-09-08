@@ -32,6 +32,7 @@ import { pluginLoaderCacheState } from "./registry-lifecycle.js";
 import { getPluginRegistryRuntime } from "./registry-runtime-binding.js";
 import { createPluginRegistry, type PluginRegistry } from "./registry.js";
 import { getActivePluginRegistry } from "./runtime.js";
+import { setPluginRuntimeLoadContext } from "./runtime/load-context.js";
 import type { PluginRuntime } from "./runtime/types.js";
 
 type PluginModuleLoaderOverrides = Pick<
@@ -176,6 +177,23 @@ export function loadOpenClawPluginsCore(
         emitWarning: context.shouldActivate,
         warningCacheKey: context.cacheKey,
       });
+    // Raw and prepared loads share one owner; absent workspace means shared-root scope.
+    setPluginRuntimeLoadContext(
+      registry,
+      {
+        rawConfig: options.config ?? {},
+        config: context.cfg,
+        activationSourceConfig: context.activationSourceConfig,
+        autoEnabledReasons: context.autoEnabledReasons,
+        workspaceDir: options.workspaceDir,
+        env: context.env,
+        logger,
+        manifestRegistry,
+        installRecords: context.installRecords,
+        preferBuiltPluginArtifacts: options.preferBuiltPluginArtifacts,
+      },
+      context.registrationConfigKey,
+    );
     const selectedMiddlewareOwnerManifests = new Map<
       string,
       (typeof manifestRegistry.plugins)[number]

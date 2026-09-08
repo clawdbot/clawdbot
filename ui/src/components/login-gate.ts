@@ -9,6 +9,7 @@ import "../lib/toast.ts";
 import { registerLoginEnglish } from "../i18n/locales/en-login.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
 import { formatGatewayHost } from "../lib/gateway-host.ts";
+import { classifyGatewaySecret } from "../lib/gateway-secret-shape.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import { renderConnectCommand } from "./connect-command.ts";
 import { icons } from "./icons.ts";
@@ -144,6 +145,7 @@ function renderForm(params: {
   withSubmit: boolean;
 }) {
   const { props, feedback } = params;
+  const isSetupCode = classifyGatewaySecret(props.secret) === "setup-code";
   const invalidField = feedback?.placement === "form" ? feedback.field : undefined;
   const submitOnEnter = (e: KeyboardEvent) => {
     if (e.key === "Enter") {
@@ -182,6 +184,7 @@ function renderForm(params: {
             spellcheck="false"
             enterkeyhint="go"
             aria-invalid=${invalidField === "credential" ? "true" : nothing}
+            aria-describedby=${isSetupCode ? "login-gate-secret-hint" : nothing}
             .value=${props.secret}
             @input=${(e: Event) => {
               props.onSecretChange((e.target as HTMLInputElement).value);
@@ -195,6 +198,7 @@ function renderForm(params: {
             props.onToggleGatewaySecret,
           )}
         </span>
+        ${isSetupCode ? html`<p id="login-gate-secret-hint" class="muted" role="status">${t("login.setupCodeHint")}</p>` : nothing}
       </div>
       ${
         params.withSubmit

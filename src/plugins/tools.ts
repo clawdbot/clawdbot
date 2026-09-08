@@ -10,7 +10,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   getLoadedRuntimePluginRegistry,
-  registryMatchesManifestPluginIds,
+  createRuntimePluginManifestLookup,
 } from "./active-runtime-registry.js";
 import {
   isBundledConversationReadToolRegistration,
@@ -639,15 +639,16 @@ function registryHasScopedPluginTools(
   if (pluginIds === undefined) {
     return (registry.tools?.length ?? 0) > 0;
   }
-  const scopedPluginIds = new Set(pluginIds);
-  if (scopedPluginIds.size === 0) {
+  if (pluginIds.length === 0) {
     return true;
   }
   const registryPluginIds = new Set(registry.tools.map((entry) => entry.pluginId));
-  return (
-    Array.from(scopedPluginIds).every((pluginId) => registryPluginIds.has(pluginId)) &&
-    (manifestPlugins === undefined ||
-      registryMatchesManifestPluginIds(registry, manifestPlugins, pluginIds))
+  const isOwnerEligible = manifestPlugins
+    ? createRuntimePluginManifestLookup(registry, manifestPlugins)
+    : undefined;
+  return pluginIds.every(
+    (pluginId) =>
+      registryPluginIds.has(pluginId) && (!isOwnerEligible || Boolean(isOwnerEligible(pluginId))),
   );
 }
 

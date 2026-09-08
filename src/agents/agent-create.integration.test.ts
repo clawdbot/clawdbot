@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -20,21 +21,27 @@ import {
   releaseAgentRunDelegatedAuthority,
   validateAgentRunDelegatedAuthority,
 } from "../infra/agent-run-registry.js";
-import { readAgentDeletionJournal } from "../state/agent-deletion-journal.js";
+import {
+  beginAgentDeletionJournal,
+  completeAgentDeletionJournalInDatabase,
+  readAgentDeletionJournal,
+} from "../state/agent-deletion-journal.js";
 import { readAgentProvenance } from "../state/agent-provenance.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   runOpenClawAgentWriteTransaction,
 } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  runOpenClawStateWriteTransaction,
+} from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { executeSystemAgentOperation } from "../system-agent/operations-execute.js";
 import { createSystemAgentTestRuntime } from "../system-agent/system-agent.runtime.test-support.js";
 import { nodeFilePath } from "../test-utils/node-file-path.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createAgent } from "./agent-create.js";
-import { beginAgentDeletion } from "./agent-lifecycle-registry.js";
 import { resolveSharedAuthStorePath } from "./auth-profiles/path-resolve.js";
 import { resolveAuthProfileDatabasePath } from "./auth-profiles/sqlite.js";
 import { readWorkspaceStateSnapshot } from "./workspace-state-store.js";
@@ -208,14 +215,17 @@ it("finishes creation bookkeeping when delegated authority closes after successf
     runId: "published",
   });
   const workspace = state.path("published-workspace");
-  const deletion = beginAgentDeletion({
+  const deletion = beginAgentDeletionJournal({
     agentId: "published",
+    operationId: randomUUID(),
     agentDir: state.agentDir("published"),
     workspaceDir: workspace,
     sessionsDir: state.sessionsDir("published"),
     deleteFiles: false,
   });
-  deletion.finish();
+  runOpenClawStateWriteTransaction((database) =>
+    completeAgentDeletionJournalInDatabase(database, deletion.agentId, deletion.operationId),
+  );
   const rollback = vi.fn();
   try {
     const created = await createAgent({
@@ -242,7 +252,6 @@ it("finishes creation bookkeeping when delegated authority closes after successf
     expect(readAgentProvenance("published")).toMatchObject({ createdVia: "operator" });
     expect(rollback).not.toHaveBeenCalled();
   } finally {
-    deletion.rollback();
     releaseAgentRunDelegatedAuthority(authority);
     closeOpenClawStateDatabaseForTest();
     await state.cleanup();

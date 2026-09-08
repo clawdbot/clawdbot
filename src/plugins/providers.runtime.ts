@@ -1,3 +1,6 @@
 import { nativePluginBindings } from "./loader-runtime-load.js";
-export const { isPluginProvidersLoadInFlight, resolvePluginProvidersCore } =
-  nativePluginBindings.providerRegistry;
+export const {
+  isPluginProvidersLoadInFlight,
+  resolvePluginProviderRegistryCore,
+  resolvePluginProvidersCore,
+} = nativePluginBindings.providerRegistry;

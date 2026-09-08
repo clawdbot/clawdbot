@@ -14,6 +14,7 @@ vi.mock("../../config/config.js", () => ({
     const loaded = await mocks.readConfigFileSnapshot();
     const snapshot = {
       path: "/tmp/openclaw.json",
+      parsed: loaded.sourceConfig ?? loaded.config,
       runtimeConfig: loaded.config,
       ...loaded,
     };

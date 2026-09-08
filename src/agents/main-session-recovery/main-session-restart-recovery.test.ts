@@ -1,4 +1,5 @@
 // Verifies restart recovery marks and resumes interrupted main-agent sessions.
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -63,6 +64,10 @@ import {
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
 import {
+  beginAgentDeletionJournal,
+  removeAgentDeletionJournal,
+} from "../../state/agent-deletion-journal.js";
+import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
@@ -70,7 +75,6 @@ import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { buildCurrentRunRestartRecoveryClaim } from "../agent-command-restart-recovery.js";
-import { beginAgentDeletion } from "../agent-lifecycle-registry.js";
 import { deliverAgentCommandResult } from "../command/delivery.js";
 import { setActiveEmbeddedRunLifecycleGeneration } from "../embedded-agent-runner/run-state.js";
 import {
@@ -729,8 +733,9 @@ describe("main-session-restart-recovery", () => {
         sessionKey: "agent:retired-probe:main",
       });
       closeOpenClawAgentDatabasesForTest();
-      const deletion = beginAgentDeletion({
+      const deletion = beginAgentDeletionJournal({
         agentId: "retired-probe",
+        operationId: randomUUID(),
         agentDir: path.join(tmpDir, "agents", "retired-probe", "agent"),
         workspaceDir: path.join(tmpDir, "workspace-retired-probe"),
         sessionsDir: staleSessionsDir,
@@ -765,7 +770,7 @@ describe("main-session-restart-recovery", () => {
         });
       } finally {
         admission?.release();
-        deletion.rollback();
+        removeAgentDeletionJournal(deletion.agentId, deletion.operationId);
         closeOpenClawAgentDatabasesForTest();
         closeOpenClawStateDatabaseForTest();
       }

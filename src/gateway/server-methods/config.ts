@@ -707,6 +707,7 @@ async function respondWithConfigRestartWrite(params: {
         ? { hash: params.context.configRevisionProjector.projectRawHash(params.writeResult.hash) }
         : {}),
       config: redactConfigObject(params.writeResult.config, params.uiHints),
+      ...(params.mode === "config.patch" ? { changedPaths: params.changedPaths } : {}),
       ...preparedSecretDegradationPayload(params.preparedSecretsSnapshot),
       restart,
       sentinel: {
@@ -751,6 +752,7 @@ function respondConfigPatchNoop(params: {
     {
       ok: true,
       noop: true,
+      changedPaths: [],
       path: resolveGatewayConfigPath(params.snapshot),
       config: redactConfigObject(params.config, params.uiHints),
     },
