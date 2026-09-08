@@ -8,6 +8,7 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { FILE_LOCK_TIMEOUT_ERROR_CODE, resetFileLockStateForTest } from "../../infra/file-lock.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -357,6 +358,9 @@ describe("resolveApiKeyForProfile openai refresh fallback", () => {
     expect(message.match(/OAuth refresh failed \(refresh_contention\)/g)).toHaveLength(1);
     expect(message).not.toContain(lockPath);
     expect(message).not.toContain("file lock timeout");
+    const formattedFailure = formatErrorMessage(failure);
+    expect(formattedFailure).not.toContain(lockPath);
+    expect(formattedFailure).not.toContain("file lock timeout");
   });
 
   it("does not fill an explicit empty default profile beside managed OpenAI OAuth", async () => {
@@ -1068,12 +1072,13 @@ describe("resolveApiKeyForProfile openai refresh fallback", () => {
     ).rejects.toThrow(/OAuth token refresh failed for openai/);
   });
 
-  it("adopts fresher stored credentials after refresh_token_reused", async () => {
+  it("adopts same-account fresher stored credentials after refresh_token_reused", async () => {
     const profileId = "openai:default";
     saveAuthProfileStore(
       createExpiredOauthStore({
         profileId,
         provider: "openai",
+        accountId: "acct-same",
       }),
       agentDir,
     );
@@ -1088,6 +1093,7 @@ describe("resolveApiKeyForProfile openai refresh fallback", () => {
               access: "reloaded-access-token",
               refresh: "reloaded-refresh-token",
               expires: Date.now() + 10 * 60_000,
+              accountId: "acct-same",
             },
           },
         },

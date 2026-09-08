@@ -119,6 +119,14 @@ function readOAuthRefreshInitiatingError(error: unknown): unknown {
     : error;
 }
 
+function createOAuthRefreshUserFacingCause(cause: unknown): unknown {
+  if (cause instanceof Error && "code" in cause && cause.code === "refresh_contention") {
+    // The structured error retains diagnostics; public cause traversal must not expose lock paths.
+    return new Error(cause.message);
+  }
+  return cause;
+}
+
 /** Refresh failure that preserves a redacted refreshed store and credential. */
 export class OAuthManagerRefreshError extends OAuthRefreshFailureError {
   override readonly profileId: string;
@@ -139,13 +147,7 @@ export class OAuthManagerRefreshError extends OAuthRefreshFailureError {
       typeof initiatingCause === "object" && initiatingCause !== null
         ? (initiatingCause as { code?: unknown; lockPath?: unknown; cause?: unknown })
         : undefined;
-    const isRefreshContention = structuredCause?.code === "refresh_contention";
-    // Keep the file-lock cause on structured fields only. Flattening it here
-    // exposes local lock paths in user-facing auth diagnostics.
-    const surfacedCause =
-      isRefreshContention && initiatingCause instanceof Error
-        ? new Error(initiatingCause.message)
-        : initiatingCause;
+    const surfacedCause = createOAuthRefreshUserFacingCause(initiatingCause);
     const storedCredential = params.refreshedStore.profiles[params.profileId];
     const secrets = collectOAuthCredentialSecrets(
       params.credential,
@@ -289,10 +291,11 @@ function createRedactedOAuthRefreshCause(cause: unknown, secrets: string[]): Err
     sanitized.name = cause.name;
     return sanitized;
   }
-  const redacted = formatRedactedOAuthRefreshError(cause, secrets);
+  const surfacedCause = createOAuthRefreshUserFacingCause(cause);
+  const redacted = formatRedactedOAuthRefreshError(surfacedCause, secrets);
   const sanitized = new Error(redacted);
-  if (cause instanceof Error && cause.name) {
-    sanitized.name = cause.name;
+  if (surfacedCause instanceof Error && surfacedCause.name) {
+    sanitized.name = surfacedCause.name;
   }
   return sanitized;
 }
