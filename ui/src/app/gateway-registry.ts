@@ -3,7 +3,7 @@ import { safeParseJson } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { getSafeLocalStorage } from "../local-storage.ts";
 
-export const GATEWAY_REGISTRY_STORAGE_KEY = "openclaw.control.gateway-registry.v1";
+const GATEWAY_REGISTRY_STORAGE_KEY = "openclaw.control.gateway-registry.v1";
 
 export type GatewayProfile = {
   id: string;
@@ -21,8 +21,8 @@ type PersistedGatewayRegistry = {
   activeGatewayId?: unknown;
 };
 
-const MAX_GATEWAY_NAME_LENGTH = 80;
-export const GATEWAY_REGISTRY_MAX_PROFILES = 20;
+export const GATEWAY_NAME_MAX_LENGTH = 80;
+const GATEWAY_REGISTRY_MAX_PROFILES = 20;
 
 export class GatewayRegistryPersistenceError extends Error {
   constructor() {
@@ -40,12 +40,12 @@ function defaultGatewayName(url: string): string {
 }
 
 function normalizeGatewayName(name: unknown, url: string): string {
-  const normalized = normalizeOptionalString(name)?.slice(0, MAX_GATEWAY_NAME_LENGTH);
+  const normalized = normalizeOptionalString(name)?.slice(0, GATEWAY_NAME_MAX_LENGTH);
   return normalized || defaultGatewayName(url);
 }
 
 /** Normalize a user-entered Gateway WebSocket URL without retaining fragments. */
-export function normalizeGatewayUrl(value: unknown): string | null {
+function normalizeGatewayUrl(value: unknown): string | null {
   const raw = normalizeOptionalString(value);
   if (!raw) {
     return null;
@@ -62,7 +62,7 @@ export function normalizeGatewayUrl(value: unknown): string | null {
   }
 }
 
-export function gatewayProfileId(url: string): string {
+function gatewayProfileId(url: string): string {
   return gatewayCredentialScope(url);
 }
 
@@ -85,6 +85,7 @@ function normalizePersistedGateway(value: unknown): GatewayProfile | null {
   if (!value || typeof value !== "object") {
     return null;
   }
+  // SAFETY: the object guard above makes property reads safe; each field stays unknown until normalized.
   const record = value as { name?: unknown; url?: unknown; gatewayUrl?: unknown };
   return createGatewayProfile({ name: record.name, url: record.url ?? record.gatewayUrl });
 }
@@ -110,6 +111,7 @@ function readStoredRegistry(): GatewayRegistry | null {
     if (!raw) {
       return null;
     }
+    // SAFETY: persisted fields remain unknown and are validated below before use.
     const parsed = safeParseJson(raw) as PersistedGatewayRegistry | undefined;
     if (!parsed || !Array.isArray(parsed.gateways)) {
       return null;
@@ -172,7 +174,7 @@ export function loadGatewayRegistryForGateway(url: string): GatewayRegistry {
     : registry;
 }
 
-export function saveGatewayRegistry(registry: GatewayRegistry): GatewayRegistry {
+function saveGatewayRegistry(registry: GatewayRegistry): GatewayRegistry {
   const normalized = normalizedRegistry(registry);
   const serialized = JSON.stringify(normalized);
   try {
@@ -214,6 +216,22 @@ export function selectGatewayProfile(id: string, fallback?: { url: string }): Ga
     return current;
   }
   return saveGatewayRegistry({ ...current, activeGatewayId: id });
+}
+
+export function renameGatewayProfile(
+  id: string,
+  name: unknown,
+  fallback?: { url: string },
+): GatewayRegistry {
+  const current = loadGatewayRegistry(fallback);
+  const profile = current.gateways.find((gateway) => gateway.id === id);
+  if (!profile) {
+    return current;
+  }
+  const gateways = current.gateways.map((gateway) =>
+    gateway.id === id ? { ...gateway, name: normalizeGatewayName(name, profile.url) } : gateway,
+  );
+  return saveGatewayRegistry({ ...current, gateways });
 }
 
 export function removeGatewayProfile(id: string, fallback?: { url: string }): GatewayRegistry {

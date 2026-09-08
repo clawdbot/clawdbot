@@ -3,19 +3,19 @@ import { describe, expect, it, vi } from "vitest";
 import { installSettingsStorageLifecycle, setTestLocation } from "../test-helpers/settings-node.ts";
 import {
   createGatewayProfile,
-  GATEWAY_REGISTRY_MAX_PROFILES,
-  GATEWAY_REGISTRY_STORAGE_KEY,
   GatewayRegistryPersistenceError,
-  gatewayProfileId,
   loadGatewayRegistry,
   loadGatewayRegistryForGateway,
-  normalizeGatewayUrl,
   removeGatewayProfile,
+  renameGatewayProfile,
   selectGatewayProfile,
   upsertGatewayProfile,
   type GatewayProfile,
 } from "./gateway-registry.ts";
 import { loadSettings, saveSettings } from "./settings.ts";
+
+const TEST_GATEWAY_REGISTRY_STORAGE_KEY = "openclaw.control.gateway-registry.v1";
+const EXPECTED_GATEWAY_CAPACITY = 20;
 
 describe("gateway registry", () => {
   installSettingsStorageLifecycle();
@@ -23,12 +23,12 @@ describe("gateway registry", () => {
   it("normalizes URLs and keeps query-scoped gateways distinct", () => {
     setTestLocation({ protocol: "https:", host: "control.example", pathname: "/" });
 
-    expect(normalizeGatewayUrl("wss://team.example/openclaw/#ignored")).toBe(
+    expect(createGatewayProfile({ url: "wss://team.example/openclaw/#ignored" })?.url).toBe(
       "wss://team.example/openclaw",
     );
-    expect(normalizeGatewayUrl("https://team.example/openclaw")).toBeNull();
-    expect(gatewayProfileId("wss://team.example?account=personal")).not.toBe(
-      gatewayProfileId("wss://team.example?account=team"),
+    expect(createGatewayProfile({ url: "https://team.example/openclaw" })).toBeNull();
+    expect(createGatewayProfile({ url: "wss://team.example?account=personal" })?.id).not.toBe(
+      createGatewayProfile({ url: "wss://team.example?account=team" })?.id,
     );
   });
 
@@ -55,7 +55,7 @@ describe("gateway registry", () => {
     selectGatewayProfile(team.id);
     expect(loadGatewayRegistry().activeGatewayId).toBe(team.id);
 
-    const persisted = localStorage.getItem(GATEWAY_REGISTRY_STORAGE_KEY) ?? "";
+    const persisted = localStorage.getItem(TEST_GATEWAY_REGISTRY_STORAGE_KEY) ?? "";
     expect(persisted).not.toContain("token");
     expect(persisted).not.toContain("password");
 
@@ -66,9 +66,26 @@ describe("gateway registry", () => {
     });
   });
 
+  it("renames a saved gateway without changing its URL or active selection", () => {
+    const team = createGatewayProfile({ name: "Team", url: "wss://team.example/" });
+    expect(team).not.toBeNull();
+    if (!team) {
+      throw new Error("test fixture must produce a gateway profile");
+    }
+    upsertGatewayProfile(team, { select: true });
+
+    const renamed = renameGatewayProfile(team.id, "  Team Claw MGSC 310  ");
+
+    expect(renamed).toEqual({
+      gateways: [{ ...team, name: "Team Claw MGSC 310" }],
+      activeGatewayId: team.id,
+    });
+    expect(loadGatewayRegistry()).toEqual(renamed);
+  });
+
   it("ignores malformed entries and repairs an invalid active selection", () => {
     localStorage.setItem(
-      GATEWAY_REGISTRY_STORAGE_KEY,
+      TEST_GATEWAY_REGISTRY_STORAGE_KEY,
       JSON.stringify({
         gateways: [
           { name: "Personal", url: "wss://personal.example/" },
@@ -85,7 +102,7 @@ describe("gateway registry", () => {
   });
 
   it("rejects a new profile when the registry is at capacity", () => {
-    const profiles = Array.from({ length: GATEWAY_REGISTRY_MAX_PROFILES }, (_, index) =>
+    const profiles = Array.from({ length: EXPECTED_GATEWAY_CAPACITY }, (_, index) =>
       createGatewayProfile({
         name: `Gateway ${index}`,
         url: `wss://gateway-${index}.example/`,
@@ -108,7 +125,7 @@ describe("gateway registry", () => {
     const after = upsertGatewayProfile(extra, { select: true });
 
     expect(after).toEqual(before);
-    expect(after.gateways).toHaveLength(GATEWAY_REGISTRY_MAX_PROFILES);
+    expect(after.gateways).toHaveLength(EXPECTED_GATEWAY_CAPACITY);
     expect(after.gateways.some((gateway) => gateway.id === extra.id)).toBe(false);
     expect(loadGatewayRegistry()).toEqual(before);
   });
@@ -146,6 +163,10 @@ describe("gateway registry", () => {
   it("migrates the legacy selected gateway into the registry on the next settings save", () => {
     setTestLocation({ protocol: "https:", host: "control.example", pathname: "/" });
     const teamUrl = "wss://team.example/openclaw";
+    const team = createGatewayProfile({ url: teamUrl });
+    if (!team) {
+      throw new Error("test fixture must produce a gateway profile");
+    }
     localStorage.setItem("openclaw.control.currentGateway.v1:wss://control.example", teamUrl);
     localStorage.setItem(
       `openclaw.control.settings.v1:${teamUrl}`,
@@ -155,7 +176,7 @@ describe("gateway registry", () => {
     expect(loadSettings().gatewayUrl).toBe(teamUrl);
     saveSettings(loadSettings());
     expect(loadGatewayRegistry()).toMatchObject({
-      activeGatewayId: gatewayProfileId(teamUrl),
+      activeGatewayId: team.id,
       gateways: [{ url: teamUrl }],
     });
   });

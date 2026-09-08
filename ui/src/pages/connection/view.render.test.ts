@@ -161,7 +161,52 @@ describe("connection view rendering", () => {
       [...container.querySelectorAll<HTMLButtonElement>(".gateway-registry__actions button")].map(
         (button) => button.getAttribute("aria-label"),
       ),
-    ).toEqual(["Personal is active", "Remove Personal", "Switch to Team", "Remove Team"]);
+    ).toEqual([
+      "Personal is active",
+      "Rename Personal",
+      "Remove Personal",
+      "Switch to Team",
+      "Rename Team",
+      "Remove Team",
+    ]);
+  });
+
+  it("renders keyboard-operable controls while renaming a gateway", async () => {
+    const container = document.createElement("div");
+    const team = createGatewayProfile({ name: "Team", url: "ws://team.example" });
+    if (!team) {
+      throw new Error("test fixture must produce a gateway profile");
+    }
+    let saved = 0;
+    let cancelled = 0;
+    render(
+      renderConnection(
+        createConnectionProps({
+          gatewayRegistry: { gateways: [team], activeGatewayId: team.id },
+          renamingGatewayId: team.id,
+          renamingGatewayName: "Team Claw MGSC 310",
+          onSaveGatewayName: () => saved++,
+          onCancelRenameGateway: () => cancelled++,
+        }),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    const input = container.querySelector<HTMLInputElement>(
+      'input[aria-label="New name for Team"]',
+    );
+    expect(input?.value).toBe("Team Claw MGSC 310");
+    expect(
+      [...container.querySelectorAll<HTMLButtonElement>(".gateway-registry__actions button")].map(
+        (button) => button.getAttribute("aria-label"),
+      ),
+    ).toEqual(["Save name for Team", "Cancel renaming Team"]);
+
+    input?.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    input?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    expect(saved).toBe(1);
+    expect(cancelled).toBe(1);
   });
 
   it.each(["token", "password"] as const)(

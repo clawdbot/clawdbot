@@ -314,9 +314,9 @@ function renderGatewayMenuRows(params: SidebarIdentityMenuParams) {
       const active = gateway.id === params.gatewayRegistry.activeGatewayId;
       return html`
         <wa-dropdown-item
-          class="sidebar-customize-menu__item sidebar-identity-menu__gateway ${active
-            ? "sidebar-identity-menu__gateway--active"
-            : ""}"
+          class="sidebar-customize-menu__item sidebar-identity-menu__gateway ${
+            active ? "sidebar-identity-menu__gateway--active" : ""
+          }"
           value=${`${GATEWAY_VALUE_PREFIX}${encodeURIComponent(gateway.id)}`}
           type="checkbox"
           role="menuitemradio"

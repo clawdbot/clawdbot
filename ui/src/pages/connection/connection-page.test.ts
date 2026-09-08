@@ -49,6 +49,16 @@ function control(page: ConnectionPage, selector: string) {
   return element;
 }
 
+function buttonByText(page: ConnectionPage, label: string) {
+  const button = [...page.querySelectorAll<HTMLButtonElement>("button")].find(
+    (candidate) => candidate.textContent?.trim() === label,
+  );
+  if (!button) {
+    throw new Error(`Missing Connection button: ${label}`);
+  }
+  return button;
+}
+
 afterEach(() => {
   document.body.replaceChildren();
   vi.restoreAllMocks();
@@ -92,7 +102,7 @@ describe("ConnectionPage credentials", () => {
     editInput(page, "Gateway URL", "wss://other-gateway.example/openclaw");
     await settleLitElement(page);
     expect(control(page, 'input[aria-label="Gateway secret"]').value).toBe("");
-    control(page, "button.btn.primary").click();
+    buttonByText(page, "Connect").click();
     expect(connect).toHaveBeenCalledWith(
       expect.objectContaining({
         gatewayUrl: "wss://other-gateway.example/openclaw",
@@ -118,7 +128,7 @@ describe("ConnectionPage credentials", () => {
       expect(page.querySelectorAll(".settings-secret input")).toHaveLength(1);
       expect(secret().value).toBe(displayed);
       expect(page.querySelector('[role="radiogroup"]')).toBeNull();
-      control(page, ".settings-row__control > button.btn").click();
+      buttonByText(page, "Connect").click();
       expect(connect).toHaveBeenLastCalledWith(expect.objectContaining({ token, password }));
 
       editInput(page, "Gateway secret", "");
@@ -126,7 +136,7 @@ describe("ConnectionPage credentials", () => {
       expect(secret().value).toBe("");
       editInput(page, "Gateway secret", "edited-secret");
       await settleLitElement(page);
-      control(page, "button.btn.primary").click();
+      buttonByText(page, "Connect").click();
       expect(connect).toHaveBeenLastCalledWith(
         expect.objectContaining({ token: "edited-secret", password: "" }),
       );
@@ -138,12 +148,9 @@ describe("ConnectionPage credentials", () => {
       request: vi.fn().mockResolvedValue(deviceSystemInfo),
     } as unknown as GatewayBrowserClient);
     const { page } = await mount(current.gateway);
-    const actions = () => [
-      ...page.querySelectorAll<HTMLButtonElement>(".settings-row__control > button.btn"),
-    ];
-    const connectButton = () => control(page, ".settings-row__control > button.btn");
+    const connectButton = () => buttonByText(page, "Connect");
     const hint = "Unsaved changes apply when you connect.";
-    expect(actions().map((button) => button.textContent?.trim())).toEqual(["Connect"]);
+    expect(connectButton().textContent?.trim()).toBe("Connect");
     expect(connectButton().className).toBe("btn");
     expect(page.textContent).not.toContain(hint);
     editInput(page, "Gateway secret", "draft-token");
