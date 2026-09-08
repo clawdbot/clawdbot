@@ -1,6 +1,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { hasSessionAutoModelFallbackProvenance } from "../../agents/agent-scope.js";
 import { hasVisibleCommittedMessagingToolDeliveryEvidence } from "../../agents/embedded-agent-runner/delivery-evidence.js";
+import { resolveFailoverStatus } from "../../agents/failover-error.js";
 import type { ModelRef } from "../../agents/model-ref-shared.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
@@ -28,6 +29,7 @@ import type { TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import type { RuntimeFallbackAttempt } from "./agent-runner-execution.types.js";
 import {
   buildKnownAgentRunFailureReplyPayload,
   buildTerminalAgentRunFailureReplyPayload,
@@ -75,9 +77,28 @@ export function markBeforeAgentRunBlockedPayloads(payloads: ReplyPayload[]): Rep
   );
 }
 
+// "Couldn't reach" is only true when an attempt failed before the backend could
+// answer: 5xx classes plus request timeout. A 4xx-mapped reason (format, auth,
+// billing, ...) or an unmapped one (empty response, unknown) reached the
+// backend, and reporting unreachability sends operators auditing connectivity
+// for a provider that answered.
+const UNREACHABLE_FAILOVER_STATUSES = new Set([408, 500, 502, 503]);
+
+function everyFallbackAttemptUnreachable(attempts: readonly RuntimeFallbackAttempt[]): boolean {
+  if (attempts.length === 0) {
+    // No recorded attempt carries no reason evidence; keep the historical wording.
+    return true;
+  }
+  return attempts.every((attempt) => {
+    const status = resolveFailoverStatus(attempt.reason);
+    return status !== undefined && UNREACHABLE_FAILOVER_STATUSES.has(status);
+  });
+}
+
 export function buildSilentFallbackFailurePayload(params: {
   fallbackTransition: ReturnType<typeof resolveFallbackTransition>;
   fallbackFailureKnown: boolean;
+  fallbackAttempts: readonly RuntimeFallbackAttempt[];
   isHeartbeat: boolean;
   hasSuccessfulTerminalDelivery: boolean;
   allowEmptyAssistantReplyAsSilent?: boolean;
@@ -95,10 +116,13 @@ export function buildSilentFallbackFailurePayload(params: {
   ) {
     return undefined;
   }
+  const backendUnreachable = everyFallbackAttemptUnreachable(params.fallbackAttempts);
   return markReplyPayloadForSourceSuppressionDelivery({
-    text:
-      `⚠️ I couldn't reach the configured model backend ${params.fallbackTransition.selectedModelRef}. ` +
-      `Fallback used ${params.fallbackTransition.activeModelRef}, but it produced no visible reply.`,
+    text: backendUnreachable
+      ? `⚠️ I couldn't reach the configured model backend ${params.fallbackTransition.selectedModelRef}. ` +
+        `Fallback used ${params.fallbackTransition.activeModelRef}, but it produced no visible reply.`
+      : `⚠️ The configured model backend ${params.fallbackTransition.selectedModelRef} responded without a usable reply. ` +
+        `Fallback used ${params.fallbackTransition.activeModelRef}, but it produced no visible reply.`,
     isError: true,
   });
 }
