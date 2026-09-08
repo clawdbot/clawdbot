@@ -11,6 +11,7 @@ import {
   pluginSdkEntrypoints,
   publicPluginSdkEntrypoints,
 } from "./scripts/lib/plugin-sdk-entries.mjs";
+import { createRuntimeDependencyOwnershipBuildPlugin } from "./scripts/lib/runtime-dependency-ownership-build-plugin.mts";
 import { tsdownPackageOutputRoot } from "./scripts/lib/tsdown-output-roots.mjs";
 
 type InputOptionsFactory = Extract<NonNullable<UserConfig["inputOptions"]>, Function>;
@@ -787,6 +788,7 @@ const configs = [
     clean: true,
     dts: TSDOWN_DECLARATIONS,
     entry: buildUnifiedDistEntries(),
+    plugins: [createRuntimeDependencyOwnershipBuildPlugin()],
     deps: {
       alwaysBundle: shouldAlwaysBundleDependency,
       neverBundle: shouldNeverBundleDependency,
