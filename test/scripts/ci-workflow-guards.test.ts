@@ -4385,7 +4385,7 @@ NODE
       "CodeQL macOS Xcode selection",
     );
 
-    expect(codeqlJob["runs-on"]).toBe("blacksmith-12vcpu-macos-26");
+    expect(codeqlJob["runs-on"]).toBe("macos-26");
     expect(codeqlSelect.run).toContain("/Applications/Xcode_26.6.app/Contents/Developer");
     expect(codeqlSelect.run).toContain('if [[ "$xcode_version" != 26.6* ]]; then');
 
