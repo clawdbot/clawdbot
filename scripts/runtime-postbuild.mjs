@@ -1,5 +1,6 @@
 // Generates postbuild runtime artifacts: plugin metadata, SDK aliases, stable
 // runtime aliases, static assets, and compatibility chunks for live upgrades.
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
@@ -7,6 +8,10 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { copyBundledPluginMetadata } from "./copy-bundled-plugin-metadata.mjs";
 import { copyPluginSdkRootAlias } from "./copy-plugin-sdk-root-alias.mjs";
 import { escapeRegExp } from "./lib/regexp.mjs";
+import {
+  readRuntimeDependencyOwnership,
+  RUNTIME_DEPENDENCY_OWNERSHIP_RELATIVE_PATH,
+} from "./lib/runtime-dependency-ownership-contract.mts";
 import {
   copyStaticExtensionAssets,
   copyStaticExtensionAssetsToRuntimeOverlay,
@@ -338,6 +343,15 @@ function buildRuntimeAliasSource(params) {
   );
 }
 
+function writeRuntimeDependencyOwnership(rootDir, ownership, fsImpl) {
+  if (ownership) {
+    fsImpl.writeFileSync(
+      path.join(rootDir, RUNTIME_DEPENDENCY_OWNERSHIP_RELATIVE_PATH),
+      `${JSON.stringify({ chunks: Object.fromEntries(Object.entries(ownership.chunks).toSorted(([a], [b]) => a.localeCompare(b))) })}\n`,
+    );
+  }
+}
+
 /**
  * Writes stable aliases for current hashed runtime chunks.
  */
@@ -347,6 +361,7 @@ export function writeStableRootRuntimeAliases(params = {}) {
   const fsImpl = params.fs ?? fs;
   const candidatesByAlias = collectStableRootRuntimeAliasCandidates({ distDir, fs: fsImpl });
 
+  const ownership = readRuntimeDependencyOwnership(rootDir, fsImpl);
   for (const [aliasFileName, candidates] of candidatesByAlias) {
     const aliasPath = path.join(distDir, aliasFileName);
     const candidate = resolveStableRootRuntimeAliasCandidate({
@@ -357,13 +372,30 @@ export function writeStableRootRuntimeAliases(params = {}) {
     });
     if (!candidate) {
       fsImpl.rmSync?.(aliasPath, { force: true });
+      if (ownership) {
+        delete ownership.chunks[aliasFileName];
+      }
       continue;
     }
-    writeTextFileIfChanged(
-      aliasPath,
-      buildRuntimeAliasSource({ distDir, fsImpl, targetFileName: candidate }),
-    );
+    const source = buildRuntimeAliasSource({ distDir, fsImpl, targetFileName: candidate });
+    const owner = ownership?.chunks[candidate];
+    if (ownership && owner) {
+      const targetSource = fsImpl.readFileSync(path.join(distDir, candidate));
+      if (createHash("sha256").update(targetSource).digest("hex") !== owner.sha256) {
+        throw new Error(
+          `runtime dependency ownership no longer matches ${candidate}; rebuild dist`,
+        );
+      }
+      ownership.chunks[aliasFileName] = {
+        extensions: owner.extensions,
+        sha256: createHash("sha256").update(source).digest("hex"),
+      };
+    } else if (ownership) {
+      delete ownership.chunks[aliasFileName];
+    }
+    writeTextFileIfChanged(aliasPath, source);
   }
+  writeRuntimeDependencyOwnership(rootDir, ownership, fsImpl);
 }
 
 /**
@@ -412,6 +444,7 @@ export function rewriteRootRuntimeImportsToStableAliases(params = {}) {
     return;
   }
 
+  const ownership = readRuntimeDependencyOwnership(rootDir, fsImpl);
   for (const entry of entries) {
     if (!entry.isFile() || !entry.name.endsWith(".js")) {
       continue;
@@ -434,9 +467,21 @@ export function rewriteRootRuntimeImportsToStableAliases(params = {}) {
       },
     );
     if (rewritten !== source) {
+      const owner = ownership?.chunks[entry.name];
+      // Carry the producer's proof through this exact transformation; never
+      // rehash unknown or independently modified build outputs.
+      if (owner) {
+        if (createHash("sha256").update(source).digest("hex") !== owner.sha256) {
+          throw new Error(
+            `runtime dependency ownership no longer matches ${entry.name}; rebuild dist`,
+          );
+        }
+        owner.sha256 = createHash("sha256").update(rewritten).digest("hex");
+      }
       writeTextFileIfChanged(filePath, rewritten);
     }
   }
+  writeRuntimeDependencyOwnership(rootDir, ownership, fsImpl);
 }
 
 function resolveRootRuntimeCandidateByMarkers(params) {
