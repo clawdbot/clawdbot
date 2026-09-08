@@ -239,10 +239,11 @@ async function promptPluginFields(params: {
       continue;
     }
 
-    // Handle enum fields with select
+    // Handle enum fields with select. Option values are the member's numeric
+    // index, mapped back to a structured clone of the original member to preserve its JSON type.
     if (schemaProp?.enum && Array.isArray(schemaProp.enum)) {
-      const options = schemaProp.enum.map((v) => ({
-        value: String(v),
+      const options = schemaProp.enum.map((v, i) => ({
+        value: String(i),
         label: String(v),
       }));
       if (hasValue) {
@@ -257,8 +258,11 @@ async function promptPluginFields(params: {
         initialValue: hasValue ? "__keep__" : undefined,
       });
       if (selected !== "__keep__") {
-        setPathCreateStrict(updatedConfig, pathSegments, selected);
-        changed = true;
+        const index = Number(selected);
+        if (Number.isInteger(index) && index >= 0 && index < schemaProp.enum.length) {
+          setPathCreateStrict(updatedConfig, pathSegments, structuredClone(schemaProp.enum[index]));
+          changed = true;
+        }
       }
       continue;
     }
