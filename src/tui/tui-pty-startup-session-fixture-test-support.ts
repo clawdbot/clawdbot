@@ -2,9 +2,9 @@ import { expect } from "vitest";
 import {
   hasHistoricalSynchronizedFrameRow,
   readFixtureLog,
+  type StartTuiPtyFixture,
   waitForSynchronizedFrameRows,
 } from "./tui-pty-harness-assertion-test-support.js";
-import type { startTuiFixture } from "./tui-pty-harness-fixture-test-support.js";
 
 // Injects delayed session restore and history controls into the real-runTui PTY fixture.
 export const TUI_PTY_STARTUP_SESSION_FIXTURE = {
@@ -52,7 +52,9 @@ export const TUI_PTY_STARTUP_SESSION_FIXTURE = {
 } as const;
 
 export async function exerciseStartupHistoryRendering(
-  fixture: Awaited<ReturnType<typeof startTuiFixture>>,
+  fixture: Awaited<ReturnType<StartTuiPtyFixture>> & {
+    releaseStartupHistory: () => Promise<void>;
+  },
   timeoutMs: number,
 ) {
   try {
