@@ -19,9 +19,10 @@ await installDiscordOutboundModuleSpies(hoisted);
 
 async function withWebhookServer(
   reply: (content: string, index: number) => { status?: number; body: unknown },
-  run: (contents: string[]) => Promise<void>,
+  run: (contents: string[], references: Array<string | undefined>) => Promise<void>,
 ) {
   const contents: string[] = [];
+  const references: Array<string | undefined> = [];
   await withServer(
     (request, response) => {
       let body = "";
@@ -30,7 +31,11 @@ async function withWebhookServer(
         body += part;
       });
       request.on("end", () => {
-        const { content } = JSON.parse(body) as { content: string };
+        const { content, message_reference } = JSON.parse(body) as {
+          content: string;
+          message_reference?: { message_id: string };
+        };
+        references.push(message_reference?.message_id);
         contents.push(content);
         const next = reply(content, contents.length);
         response.writeHead(next.status ?? 200, { "content-type": "application/json" });
@@ -48,7 +53,7 @@ async function withWebhookServer(
         return realFetch(target, init);
       });
       try {
-        await run(contents);
+        await run(contents, references);
       } finally {
         fetchSpy.mockRestore();
       }
@@ -63,6 +68,23 @@ describe("Discord webhook delivery", () => {
     resetDiscordOutboundMocks(hoisted);
     hoisted.sendWebhookMessageDiscordMock.mockImplementation((...args) =>
       realWebhookSend(...(args as Parameters<typeof realWebhookSend>)),
+    );
+  });
+
+  it("leaves already-planned tall webhook text intact when chunk options are omitted", async () => {
+    const text = Array.from({ length: 20 }, (_, index) => `line-${index}`).join("\n");
+    await withWebhookServer(
+      (_content, index) => ({ body: { id: String(index), channel_id: "thread-1" } }),
+      async (contents, references) => {
+        await realWebhookSend(text, {
+          cfg,
+          webhookId: "fixture",
+          webhookToken: "fixture-token",
+          replyTo: "legacy-reply",
+        });
+        expect(contents).toEqual([text]);
+        expect(references).toEqual(["legacy-reply"]);
+      },
     );
   });
 
