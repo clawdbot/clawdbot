@@ -1,4 +1,5 @@
 // Launchd tests cover macOS service plist generation and command handling.
+import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import { PassThrough } from "node:stream";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -2047,6 +2048,50 @@ describe("launchd install", () => {
     expect(state.files.has(envFilePath)).toBe(false);
     expect(state.files.has(wrapperPath)).toBe(false);
     expect(launchctlCommandNames()).toEqual(["print", "print", "enable", "bootstrap", "print"]);
+  });
+
+  it("keeps the prior environment file when its rewrite fails to publish", async () => {
+    const env = createDefaultLaunchdEnv();
+    const envFilePath = "/Users/test/.openclaw/service-env/ai.openclaw.gateway.env";
+    const originalEnv = "export OPENCLAW_GATEWAY_TOKEN='original-token'\n";
+    state.files.set(envFilePath, originalEnv);
+    vi.mocked(fs.rename).mockRejectedValueOnce(
+      Object.assign(new Error("ENOSPC: no space left on device, rename"), { code: "ENOSPC" }),
+    );
+
+    const error = await stageLaunchAgent(
+      defaultLaunchAgentFixture(env, {
+        environment: { OPENCLAW_GATEWAY_PORT: "19000" },
+      }),
+    ).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(Error);
+    expect(error).toMatchObject({ code: "ENOSPC" });
+    expect(state.files.get(envFilePath)).toBe(originalEnv);
+    expect([...state.files.keys()].filter((key) => key.includes(".tmp"))).toEqual([]);
+  });
+
+  it("cleans up the temporary environment file when its write fails mid-write", async () => {
+    const env = createDefaultLaunchdEnv();
+    const envFilePath = "/Users/test/.openclaw/service-env/ai.openclaw.gateway.env";
+    const originalEnv = "export OPENCLAW_GATEWAY_TOKEN='original-token'\n";
+    state.files.set(envFilePath, originalEnv);
+    vi.mocked(fs.writeFile).mockImplementationOnce(async (p, data) => {
+      assert(typeof p === "string" && typeof data === "string");
+      state.files.set(p, data.slice(0, 16));
+      throw Object.assign(new Error("EFBIG: file too large, write"), { code: "EFBIG" });
+    });
+
+    const error = await stageLaunchAgent(
+      defaultLaunchAgentFixture(env, {
+        environment: { OPENCLAW_GATEWAY_PORT: "19000" },
+      }),
+    ).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(Error);
+    expect(error).toMatchObject({ code: "EFBIG" });
+    expect(state.files.get(envFilePath)).toBe(originalEnv);
+    expect([...state.files.keys()].filter((key) => key.includes(".tmp"))).toEqual([]);
   });
 
   it("fails closed when rollback cannot determine the replacement state", async () => {

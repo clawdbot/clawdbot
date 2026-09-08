@@ -149,10 +149,18 @@ async function prepareLaunchAgentProgramArguments(params: {
   const wrapperPath = resolveLaunchAgentEnvWrapperPath(params.env, params.label);
   const generatedWrapper = buildLaunchAgentEnvironmentWrapper();
   await ensureSecureDirectory(envDir, LAUNCH_AGENT_PRIVATE_DIR_MODE);
-  await fs.writeFile(envFilePath, buildLaunchAgentEnvironmentFile(entries), {
-    encoding: "utf8",
-    mode: LAUNCH_AGENT_ENV_FILE_MODE,
-  });
+  // A failed credential rotation must leave the previous service environment usable.
+  const envTemporaryPath = `${envFilePath}.openclaw-${randomUUID()}.tmp`;
+  try {
+    await fs.writeFile(envTemporaryPath, buildLaunchAgentEnvironmentFile(entries), {
+      encoding: "utf8",
+      flag: "wx",
+      mode: LAUNCH_AGENT_ENV_FILE_MODE,
+    });
+    await fs.rename(envTemporaryPath, envFilePath);
+  } finally {
+    await fs.unlink(envTemporaryPath).catch(() => undefined);
+  }
   await fs.chmod(envFilePath, LAUNCH_AGENT_ENV_FILE_MODE).catch(() => undefined);
   const overwriteWarnings = await resolveLaunchAgentEnvironmentWrapperOverwriteWarnings({
     wrapperPath,
