@@ -1569,5 +1569,134 @@ describe("buildInboundUserContextPrefix", () => {
     );
     expect(text).not.toContain("Chat history since last reply: ⟦openclaw:ctx⟧\n```json");
   });
+
+  it("bounds the total assembled context across many structured entries", () => {
+    // Each entry individually passes the per-block sanitizer budget (~1.4k
+    // chars for a 20-contact directory page), but the entry count itself is
+    // unbounded, so the assembly must own a cumulative total budget.
+    const contacts = Array.from({ length: 20 }, (_, index) => ({
+      id: `contact-${index}`,
+      name: `Contact Name ${index}`,
+      phone: `+1555${String(index).padStart(7, "0")}`,
+    }));
+    const text = buildInboundUserContextPrefix({
+      ChatType: "direct",
+      OriginatingChannel: "whatsapp",
+      ChannelStructuredContext: Array.from({ length: 500 }, (_, index) => ({
+        label: `Directory page ${index}`,
+        source: "whatsapp",
+        type: "directory",
+        payload: { contacts },
+      })),
+    } as TemplateContext);
+
+    expect(text.length).toBeLessThanOrEqual(150_000);
+    expect(text).toContain("…[truncated: inbound context budget exhausted]");
+  });
+
+  it("bounds a channel-controlled structured-context label before it reaches the prompt", () => {
+    // `label` is channel/plugin text. It is normalized on the way to the block
+    // formatter but never length-bounded, and the block renders it whole. One
+    // oversized label still fits under the assembly's total budget, so the
+    // assembly accepts a single block larger than the per-block cap.
+    const label = `Directory ${"L".repeat(60_000)}`;
+    const text = buildInboundUserContextPrefix({
+      ChatType: "direct",
+      OriginatingChannel: "whatsapp",
+      ChannelStructuredContext: [
+        { label, source: "whatsapp", type: "directory", payload: { contacts: ["alice"] } },
+      ],
+    } as TemplateContext);
+
+    expect(text.length).toBeLessThanOrEqual(50_000);
+    expect(text).not.toContain("L".repeat(3_000));
+    // The truncated label keeps the provenance marker strippers key on.
+    expect(text).toContain("…[truncated] ⟦openclaw:ctx⟧");
+  });
+
+  it("charges the block separators and the exhaustion marker to the total budget", () => {
+    // Separator-dominated shape: thousands of tiny blocks make the "\n\n" that
+    // `join` renders between them, plus the marker appended on exhaustion, the
+    // dominant unbudgeted cost rather than the block payloads themselves.
+    const text = buildInboundUserContextPrefix({
+      ChatType: "direct",
+      OriginatingChannel: "whatsapp",
+      ChannelStructuredContext: Array.from({ length: 6_000 }, (_, index) => ({
+        label: `Tiny ${index}`,
+        source: "whatsapp",
+        type: "tiny",
+        payload: { a: index },
+      })),
+    } as TemplateContext);
+
+    expect(text).toContain("…[truncated: inbound context budget exhausted]");
+    expect(text.length).toBeLessThanOrEqual(150_000);
+  });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
+
+describe("current reply target under a saturated context budget", () => {
+  // Regression: the current Telegram reply target is emitted last and also
+  // suppresses the reply-chain fallback, so a large channel-supplied structured
+  // payload could exhaust the shared budget and drop the only quoted text the
+  // model needs to answer. The reply target must survive saturation.
+  it("keeps the current reply target when structured context fills the budget", () => {
+    const context = {
+      Provider: "telegram",
+      OriginatingChannel: "telegram",
+      Surface: "telegram",
+      ChatType: "group",
+      MessageSid: "5150",
+      ReplyToQuoteText: "the quoted sentence the model must answer",
+      ChannelStructuredContext: Array.from({ length: 200 }, (_, index) => ({
+        label: `Bulky channel payload ${index}`,
+        source: "telegram",
+        type: "directory",
+        payload: { blob: "x".repeat(60_000) },
+      })),
+    } as unknown as TemplateContext;
+
+    const prefix = buildInboundUserContextPrefix(context);
+
+    // Before the fix the saturated payload consumed the budget and this block
+    // was dropped behind the exhaustion marker.
+    expect(prefix).toContain("Current message:");
+    expect(prefix).toContain("the quoted sentence the model must answer");
+    expect(prefix).toContain("#5150:");
+  });
+});
+
+describe("structured context work after budget exhaustion", () => {
+  // Regression: entries past the exhausted budget were still serialized before
+  // pushContextBlock discarded them, letting a long tail of channel-supplied
+  // payloads burn CPU without ever reaching the model.
+  it("stops formatting structured entries once the budget is exhausted", () => {
+    let formatted = 0;
+    const structured = Array.from({ length: 200 }, (_, index) => ({
+      label: `Bulky channel payload ${index}`,
+      source: "telegram",
+      type: "directory",
+      // Counting getter: reading `payload` means this entry was formatted.
+      get payload() {
+        formatted += 1;
+        return { blob: "x".repeat(60_000) };
+      },
+    }));
+
+    const prefix = buildInboundUserContextPrefix({
+      Provider: "telegram",
+      OriginatingChannel: "telegram",
+      Surface: "telegram",
+      ChatType: "group",
+      MessageSid: "5150",
+      ReplyToQuoteText: "the quoted sentence the model must answer",
+      ChannelStructuredContext: structured,
+    } as unknown as TemplateContext);
+
+    expect(prefix).toContain("…[truncated: inbound context budget exhausted]");
+    // The reply-target reservation must still survive the early break.
+    expect(prefix).toContain("Current message:");
+    // Before the fix every one of the 200 entries was serialized.
+    expect(formatted).toBeLessThan(structured.length);
+  });
+});

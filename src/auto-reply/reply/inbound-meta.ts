@@ -21,6 +21,19 @@ import {
 import { markInboundContextLabel } from "./inbound-context-marker.js";
 
 const MAX_UNTRUSTED_HISTORY_ENTRIES = 20;
+// Cumulative budget for the whole assembled user-role context prefix (labels +
+// every structured block). The largest measured first-party assembly — group
+// Conversation info, a 10-link reply chain at the per-string cap, forwarded /
+// thread-starter / location blocks, and a 20-entry chat history — totals ~43k
+// chars; 150k leaves ~3.5x headroom while bounding channel-supplied structured
+// entries, whose count is unbounded (one block per entry).
+const MAX_INBOUND_CONTEXT_TOTAL_CHARS = 150_000;
+// `blocks.join("\n\n")` renders this many chars before every block after the
+// first; the budget charges them so the separators cannot escape the cap.
+const BLOCK_SEPARATOR_CHARS = 2;
+const CONTEXT_BUDGET_EXHAUSTED_BLOCK = markInboundContextLabel(
+  "…[truncated: inbound context budget exhausted]",
+);
 const MAX_UNTRUSTED_TRANSCRIPT_FIELD_CHARS = 500;
 const MAX_ACTIVE_GOAL_OBJECTIVE_CHARS = 200;
 const ACTIVE_GOAL_CONTEXT_PREFIX = "Active goal: ";
@@ -613,6 +626,30 @@ export function buildInboundUserContextPrefix(
   sessionEntry?: SessionEntry,
 ): string {
   const blocks: string[] = [];
+  // Reserve the exhaustion marker and its own separator up front so the budget
+  // can always render it; whatever is left pays for blocks and their framing.
+  let contextBudgetRemaining =
+    MAX_INBOUND_CONTEXT_TOTAL_CHARS -
+    (CONTEXT_BUDGET_EXHAUSTED_BLOCK.length + BLOCK_SEPARATOR_CHARS);
+  let contextBudgetExhausted = false;
+  // One cumulative budget for the whole assembly: once it is spent, later
+  // blocks are dropped behind a single explicit marker (marked like any other
+  // injected header so strippers recognize it). Blocks are charged the
+  // separator `join` renders before them as well as their own length, so the
+  // returned prefix never exceeds MAX_INBOUND_CONTEXT_TOTAL_CHARS.
+  const pushContextBlock = (block: string) => {
+    if (contextBudgetExhausted) {
+      return;
+    }
+    const renderedLength = block.length + (blocks.length > 0 ? BLOCK_SEPARATOR_CHARS : 0);
+    if (renderedLength > contextBudgetRemaining) {
+      contextBudgetExhausted = true;
+      blocks.push(CONTEXT_BUDGET_EXHAUSTED_BLOCK);
+      return;
+    }
+    contextBudgetRemaining -= renderedLength;
+    blocks.push(block);
+  };
   const chatType = normalizeChatType(ctx.ChatType);
   const isDirect = !chatType || chatType === "direct";
   const directChannelValue = resolveInboundChannel(ctx);
@@ -642,6 +679,14 @@ export function buildInboundUserContextPrefix(
       : Boolean(replyToId && chatWindowMessageIds.has(replyToId));
   const chatWindowCoversHistory = structuredContext.some(isChatWindowHistoryContext);
   const currentMessageContext = formatTelegramCurrentMessageContext(ctx);
+  // The current reply target is the one block the model cannot reply correctly
+  // without, and it is emitted last while also suppressing the reply-chain
+  // fallback. Reserve its cost up front, the same way the exhaustion marker is
+  // reserved, so optional structured context cannot starve it.
+  const reservedCurrentMessageChars = currentMessageContext
+    ? currentMessageContext.length + BLOCK_SEPARATOR_CHARS
+    : 0;
+  contextBudgetRemaining -= reservedCurrentMessageChars;
   const senderId = normalizePromptMetadataString(ctx.SenderId);
   const senderE164 = normalizePromptMetadataString(ctx.SenderE164);
   const senderIdDigits = senderId?.replace(/\D/gu, "");
@@ -687,14 +732,14 @@ export function buildInboundUserContextPrefix(
     history_truncated: inboundHistory.length > MAX_UNTRUSTED_HISTORY_ENTRIES ? true : undefined,
   };
   if (Object.values(conversationInfo).some((v) => v !== undefined)) {
-    blocks.push(
+    pushContextBlock(
       formatContextJsonBlock(markInboundContextLabel("Conversation info:"), conversationInfo),
     );
   }
 
   const threadStarterBody = sanitizePromptBody(ctx.ThreadStarterBody);
   if (threadStarterBody) {
-    blocks.push(
+    pushContextBlock(
       formatContextJsonBlock(markInboundContextLabel("Thread starter:"), {
         body: threadStarterBody,
       }),
@@ -706,14 +751,14 @@ export function buildInboundUserContextPrefix(
   const replyToSender = normalizePromptMetadataString(ctx.ReplyToSender);
   const hasReplyTargetMetadata = Boolean(replyToId || replyToSender || replyToBody);
   if (replyChainPayload.length > 0 && !chatWindowCoversReplyContext && !currentMessageContext) {
-    blocks.push(
+    pushContextBlock(
       formatContextJsonBlock(
         markInboundContextLabel("Reply chain of current user message (nearest first):"),
         replyChainPayload,
       ),
     );
   } else if (hasReplyTargetMetadata && !chatWindowCoversReplyContext && !currentMessageContext) {
-    blocks.push(
+    pushContextBlock(
       formatContextJsonBlock(markInboundContextLabel("Reply target of current user message:"), {
         message_id: replyToId,
         sender_label: replyToSender,
@@ -734,7 +779,7 @@ export function buildInboundUserContextPrefix(
     date_ms: typeof ctx.ForwardedDate === "number" ? ctx.ForwardedDate : undefined,
   };
   if (forwardedFrom) {
-    blocks.push(
+    pushContextBlock(
       formatContextJsonBlock(
         markInboundContextLabel("Forwarded message context:"),
         forwardedContext,
@@ -744,19 +789,25 @@ export function buildInboundUserContextPrefix(
 
   const locationContext = buildLocationContextPayload(ctx);
   if (locationContext) {
-    blocks.push(formatContextJsonBlock(markInboundContextLabel("Location:"), locationContext));
+    pushContextBlock(formatContextJsonBlock(markInboundContextLabel("Location:"), locationContext));
   }
 
   for (const entry of structuredContext) {
     if (!entry || typeof entry !== "object") {
       continue;
     }
+    // Formatting a structured entry serializes a channel-supplied payload, so
+    // once the budget is spent that work is pure waste: `pushContextBlock`
+    // would discard the result. Stop before formatting rather than after.
+    if (contextBudgetExhausted) {
+      break;
+    }
     const chatWindow = formatChatWindowStructuredContext(entry, envelope);
     if (chatWindow) {
-      blocks.push(chatWindow);
+      pushContextBlock(chatWindow);
       continue;
     }
-    blocks.push(
+    pushContextBlock(
       formatContextJsonBlock(
         markInboundContextLabel(formatChannelStructuredContextLabel(entry.label)),
         {
@@ -790,7 +841,7 @@ export function buildInboundUserContextPrefix(
       return line ? [line] : [];
     });
     if (historyLines.length > 0) {
-      blocks.push(
+      pushContextBlock(
         [markInboundContextLabel("Chat history since last reply:"), ...historyLines].join("\n"),
       );
     }
@@ -798,11 +849,15 @@ export function buildInboundUserContextPrefix(
 
   const activeGoalContext = formatActiveGoalContext(sessionEntry);
   if (activeGoalContext) {
-    blocks.push(activeGoalContext);
+    pushContextBlock(activeGoalContext);
   }
 
   if (currentMessageContext) {
-    blocks.push(currentMessageContext);
+    // Hand the reservation back so the block can always be charged and pushed,
+    // even when everything before it exhausted the shared budget.
+    contextBudgetRemaining += reservedCurrentMessageChars;
+    contextBudgetExhausted = false;
+    pushContextBlock(currentMessageContext);
   }
 
   return blocks.filter(Boolean).join("\n\n");
