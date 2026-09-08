@@ -13,6 +13,7 @@ import {
 } from "./shared-client.js";
 import { createClientHarness, createCodexTestModel } from "./test-support.js";
 import { startOrResumeThread as startOrResumeThreadImpl } from "./thread-lifecycle.js";
+import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
 type NativeFixtureThread = {
   response: Record<string, unknown>;
@@ -52,7 +53,7 @@ export function createCodexLifecycleHarness(options: {
     const threadId = typeof params.threadId === "string" ? params.threadId : "";
     const current = threads.get(threadId);
     if (request.method === "initialize") {
-      return { userAgent: "codex-cli/0.151.0" };
+      return { userAgent: `codex-cli/${CODEX_APP_SERVER_VERSION}` };
     }
     if (request.method === "thread/start") {
       const response = await options.respond(request.method, request.params);

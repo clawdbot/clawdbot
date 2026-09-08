@@ -56,6 +56,18 @@ export async function forkCanonicalCodexSession(params: {
       "Canonical Codex forks require the verified local rollout on its selected connection. Fork an original imported message instead.",
     );
   }
+  if (sourceBinding.projectInstructionsUnavailableToGateway === true) {
+    throw new Error(
+      "This canonical Codex source has environment-owned project instructions that cannot be replayed. Fork an original imported message or use a host-local source instead.",
+    );
+  }
+  const sourceAgentWorkspaceDeveloperInstructions =
+    sourceBinding.agentWorkspaceDeveloperInstructions;
+  if (sourceAgentWorkspaceDeveloperInstructions === undefined) {
+    throw new Error(
+      "This canonical Codex source has no replayable project-instruction authority. Create a new host-local OpenClaw session before forking.",
+    );
+  }
   const model = normalizeOptionalString(resolved.canonical.thread.model);
   const modelProvider = normalizeOptionalString(resolved.canonical.thread.modelProvider);
   if (!model || !modelProvider) {
@@ -166,6 +178,7 @@ export async function forkCanonicalCodexSession(params: {
             modelProvider,
             sandbox: fork.sandbox,
             dynamicTools: sourceCatalog,
+            agentWorkspaceDeveloperInstructions: sourceAgentWorkspaceDeveloperInstructions,
           });
           assertCurrent();
           await snapshot.assertUnchanged();

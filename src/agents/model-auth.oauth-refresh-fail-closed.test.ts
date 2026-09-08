@@ -15,6 +15,17 @@ vi.mock("./auth-profiles.js", async (importActual) => {
   };
 });
 
+vi.mock("../plugins/provider-runtime.js", () => ({
+  buildProviderMissingAuthMessageWithPlugin: () => undefined,
+  resolveExternalAuthProfilesWithPlugins: () => [],
+  resolveProviderDeprecatedAuthProfileIds: () => [],
+  shouldDeferProviderSyntheticProfileAuthWithPlugin: () => false,
+}));
+
+vi.mock("../plugins/providers.js", () => ({
+  resolveOwningPluginIdsForProviderRef: () => [],
+}));
+
 const { resolveApiKeyForProviderCore } = await import("./model-auth.js");
 
 function withEnv<T>(key: string, value: string, fn: () => Promise<T>): Promise<T> {

@@ -625,7 +625,7 @@ describe("dispatchReplyFromConfig", () => {
         Body: "/stop",
         SessionKey: "agent:main:telegram:direct:123",
       }),
-      cfg: emptyConfig,
+      cfg: { messages: { visibleReplies: "automatic" } },
       dispatcher: createDispatcher(),
       fastAbortResolver: mocks.tryFastAbortFromMessage,
       formatAbortReplyTextResolver: () => "⚙️ Agent was aborted.",

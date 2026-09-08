@@ -126,9 +126,31 @@ export async function prepareCodexThreadLifecyclePreflight(params: CodexStartOrR
   const legacyUserMcpServersFingerprint =
     legacyFingerprintUserMcpServersConfigPatch(userMcpServersConfigPatch);
   const userMcpServersFingerprint = fingerprintUserMcpServersConfigPatch(userMcpServersConfigPatch);
-  const environmentSelectionFingerprint = fingerprintEnvironmentSelection(
+  const selectedEnvironmentFingerprint = fingerprintEnvironmentSelection(
     params.environmentSelection,
   );
+  // Native instruction paths reported by a selected or remote app-server are
+  // meaningful only inside that execution owner. Persist a bounded, secret-free
+  // identity even when there is no explicit sandbox selection so a later host
+  // run cannot mistake a remote absolute path for Gateway-owned authority.
+  const environmentSelectionFingerprint =
+    params.projectInstructionsUnavailableToGateway === true
+      ? hashCodexAppServerBindingFingerprint(
+          JSON.stringify({
+            version: 1,
+            selectedEnvironment: selectedEnvironmentFingerprint ?? null,
+            connection: {
+              class: params.appServer.connectionClass,
+              transport: params.appServer.start.transport,
+              command: params.appServer.start.command,
+              args: params.appServer.start.args,
+              cwd: params.appServer.start.cwd ?? null,
+              url: params.appServer.start.url ?? null,
+              remoteWorkspaceRoot: params.appServer.remoteWorkspaceRoot ?? null,
+            },
+          }),
+        )
+      : selectedEnvironmentFingerprint;
   const hostSystemAgentActive =
     params.hostSystemAgentActive ?? isHostScopedAgentToolActive("openclaw");
   const ringZeroActive =

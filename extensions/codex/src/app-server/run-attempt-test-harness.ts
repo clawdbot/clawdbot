@@ -35,7 +35,6 @@ import {
 } from "./codex-app-server.test-fixtures.js";
 import * as codexRequirements from "./config-requirements.js";
 import { dynamicToolBuildState } from "./dynamic-tool-build-state.js";
-import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
 import { setManagedCodexPluginRoot } from "./managed-binary.js";
 import { nativeHookRelayUnregisterQueue } from "./native-hook-relay-state.js";
 import { defaultCodexPluginMetadataCache } from "./plugin-metadata-cache.js";
@@ -62,6 +61,7 @@ export {
   extractGenerationFromThreadRequest,
   extractRelayIdFromThreadRequest,
 } from "./run-attempt-hook-test-support.js";
+export { createRuntimeDynamicTool } from "./run-attempt-dynamic-tool.test-support.js";
 
 const execApprovalsRuntimeMocks = vi.hoisted(() => ({
   loadExecApprovals: vi.fn<() => ExecApprovalsFile>(() => ({ version: 1, agents: {} })),
@@ -402,14 +402,20 @@ export function mockCall(mock: unknown, label: string, index = 0): unknown[] {
 }
 
 export function getMockRuntimeIdentity() {
-  return { serverVersion: CODEX_APP_SERVER_VERSION };
+  return {
+    serverVersion: CODEX_APP_SERVER_VERSION,
+    userAgent: `codex-cli/${CODEX_APP_SERVER_VERSION}`,
+  };
 }
 
 export { mockClientRuntimeMethods, turnStartResult } from "./codex-app-server.test-fixtures.js";
 
-export function threadStartResult(threadId = "thread-1", options: { cwd?: string } = {}) {
+export function threadStartResult(
+  threadId = "thread-1",
+  options: { cwd?: string; instructionSources?: string[] } = {},
+) {
   const cwd = options.cwd ?? tempDir ?? "/tmp/openclaw-codex-test";
-  return createThreadStartResult(threadId, cwd);
+  return createThreadStartResult(threadId, cwd, options.instructionSources);
 }
 
 export function rateLimitsUpdated(resetsAt: number): CodexServerNotification {
@@ -627,7 +633,7 @@ export function createStartedThreadHarness(
       return { requirements: null };
     }
     if (method === "config/read") {
-      return { config: {}, origins: {} };
+      return { config: {}, origins: {}, layers: [] };
     }
     if (method === "thread/start") {
       return threadStartResult();
@@ -642,21 +648,27 @@ export function createStartedThreadHarness(
   }, options);
 }
 
-export function createResumeHarness(threadId = "thread-existing") {
+export function createResumeHarness(
+  options: string | { threadId?: string; instructionSources?: string[] } = "thread-existing",
+) {
+  const threadId = typeof options === "string" ? options : (options.threadId ?? "thread-existing");
+  const instructionSources = typeof options === "string" ? undefined : options.instructionSources;
   return createAppServerHarness(
     async (method, params) => {
       if (method === "configRequirements/read") {
         return { requirements: null };
       }
       if (method === "config/read") {
-        return { config: {}, origins: {} };
+        return { config: {}, origins: {}, layers: [] };
       }
       if (method === "thread/resume") {
         // Resume must echo the requested thread; a different id is rejected as
         // an unsafe subscription.
         const resumeParams = params as { threadId?: string; modelProvider?: string };
         return {
-          ...threadStartResult(resumeParams.threadId ?? "thread-existing"),
+          ...threadStartResult(resumeParams.threadId ?? "thread-existing", {
+            instructionSources,
+          }),
           ...(resumeParams.modelProvider ? { modelProvider: resumeParams.modelProvider } : {}),
         };
       }
@@ -667,27 +679,6 @@ export function createResumeHarness(threadId = "thread-existing") {
     },
     { persistedThreads: [threadId] },
   );
-}
-
-type RuntimeDynamicToolForTest = Parameters<
-  typeof createCodexDynamicToolBridge
->[0]["tools"][number];
-
-export function createRuntimeDynamicTool(name: string): RuntimeDynamicToolForTest {
-  return {
-    name,
-    label: name,
-    description: name + " test tool",
-    parameters: {
-      type: "object",
-      properties: {},
-      additionalProperties: false,
-    },
-    execute: vi.fn(async () => ({
-      content: [{ type: "text" as const, text: name + " done" }],
-      details: {},
-    })),
-  };
 }
 
 export function setupRunAttemptTestHooks(): void {

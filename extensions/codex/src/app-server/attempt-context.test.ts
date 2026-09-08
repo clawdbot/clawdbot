@@ -95,6 +95,9 @@ describe("Codex app-server attempt context", () => {
         bootstrapFiles: [],
         contextFiles: [],
         inheritsAgentWorkspace: false,
+        agentWorkspaceDeveloperInstructionsAllowed: false,
+        nativeProjectDocNeedsOpenClawCarrier: false,
+        nativeProjectInstructionSnapshotAllowed: false,
         promptContextFiles: [],
       },
       skillsPrompt: "",
@@ -143,6 +146,7 @@ describe("Codex app-server attempt context", () => {
           sessionAgentId: "main",
           memoryToolNames: ["memory_search", "memory_get"],
           ringZeroActive: false,
+          nativeProjectInstructionSourcesHostLocal: true,
         });
 
         expect(context.memoryReferenceFiles).toEqual([]);
@@ -187,6 +191,7 @@ describe("Codex app-server attempt context", () => {
         memoryToolNames: ["memory_search", "memory_get"],
         ringZeroActive: false,
         sandboxed: true,
+        nativeProjectInstructionSourcesHostLocal: true,
       });
 
       expect(context.memoryToolRouted).toBe(true);
@@ -225,6 +230,7 @@ describe("Codex app-server attempt context", () => {
         sessionAgentId: "main",
         memoryToolNames: ["memory_search", "memory_get"],
         ringZeroActive: false,
+        nativeProjectInstructionSourcesHostLocal: true,
       });
 
       expect(context.threadDeveloperInstructions).toContain("Canonical agent instructions");
@@ -245,6 +251,57 @@ describe("Codex app-server attempt context", () => {
       await fs.rm(workspaceDir, { recursive: true, force: true });
       await fs.rm(executionDir, { recursive: true, force: true });
     }
+  });
+
+  it("does not classify remote native instruction sources as Gateway-local", async () => {
+    await withTempDir("codex-remote-workspace-", async (workspaceDir) => {
+      await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "Remote-owned instructions");
+      const context = await buildCodexWorkspaceBootstrapContext({
+        params: {
+          sessionId: "session-1",
+          sessionKey: "agent:main:session-1",
+          config: { agents: { defaults: { workspace: workspaceDir } } },
+        } as EmbeddedRunAttemptParams,
+        resolvedWorkspace: workspaceDir,
+        executionWorkspace: workspaceDir,
+        effectiveWorkspace: workspaceDir,
+        sessionKey: "agent:main:session-1",
+        sessionAgentId: "main",
+        memoryToolNames: [],
+        ringZeroActive: false,
+        nativeProjectInstructionSourcesHostLocal: false,
+      });
+
+      expect(context.nativeProjectDocNeedsOpenClawCarrier).toBe(false);
+      expect(context.nativeProjectInstructionSnapshotAllowed).toBe(false);
+      expect(context.threadDeveloperInstructions).toBeUndefined();
+    });
+  });
+
+  it("keeps host-local native sources capturable inside a local sandbox", async () => {
+    await withTempDir("codex-local-sandbox-workspace-", async (workspaceDir) => {
+      await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "Host-local instructions");
+      const context = await buildCodexWorkspaceBootstrapContext({
+        params: {
+          sessionId: "session-1",
+          sessionKey: "agent:main:session-1",
+          config: { agents: { defaults: { workspace: workspaceDir } } },
+        } as EmbeddedRunAttemptParams,
+        resolvedWorkspace: workspaceDir,
+        executionWorkspace: workspaceDir,
+        effectiveWorkspace: workspaceDir,
+        sessionKey: "agent:main:session-1",
+        sessionAgentId: "main",
+        memoryToolNames: [],
+        ringZeroActive: false,
+        sandboxed: true,
+        nativeProjectInstructionSourcesHostLocal: true,
+      });
+
+      expect(context.nativeProjectDocNeedsOpenClawCarrier).toBe(false);
+      expect(context.nativeProjectInstructionSnapshotAllowed).toBe(true);
+      expect(context.threadDeveloperInstructions).toBeUndefined();
+    });
   });
 
   it("keeps ambient workspace instructions out of overlapping ring-zero restrictions", async () => {
@@ -268,6 +325,7 @@ describe("Codex app-server attempt context", () => {
         sessionAgentId: "openclaw",
         memoryToolNames: [],
         ringZeroActive: true,
+        nativeProjectInstructionSourcesHostLocal: true,
       });
 
       expect(context.threadDeveloperInstructions).toBeUndefined();

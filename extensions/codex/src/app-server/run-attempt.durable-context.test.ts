@@ -13,6 +13,7 @@ import {
   turnStartResult,
 } from "./run-attempt-test-harness.js";
 import {
+  CODEX_FROZEN_EMPTY_PROJECT_DOCS_AUTHORITY,
   readCodexAppServerBinding,
   writeCodexAppServerBinding,
 } from "./session-binding.test-helpers.js";
@@ -57,6 +58,7 @@ it.each(["started", "resumed"] as const)(
         model: params.modelId,
         modelProvider: "openai",
         dynamicToolsFingerprint: "[]",
+        agentWorkspaceDeveloperInstructions: CODEX_FROZEN_EMPTY_PROJECT_DOCS_AUTHORITY,
         historyCoveredThrough: new Date(cutoff).toISOString(),
         webSearchThreadConfigFingerprint: JSON.stringify({
           "features.standalone_web_search": false,

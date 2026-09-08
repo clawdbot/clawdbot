@@ -618,6 +618,13 @@ describe("Codex app-server dynamic tool build", () => {
       expected: undefined,
     },
     {
+      name: "native with a frozen local project-instruction owner",
+      environment: undefined,
+      nativeToolSurfaceEnabled: true,
+      localProjectInstructionCwd: "/repo",
+      expected: [{ environmentId: "local", cwd: "/repo" }],
+    },
+    {
       name: "native with a sandbox",
       environment: sandboxEnvironment,
       nativeToolSurfaceEnabled: true,
@@ -628,6 +635,7 @@ describe("Codex app-server dynamic tool build", () => {
       resolveCodexSandboxEnvironmentSelection(
         testCase.environment,
         testCase.nativeToolSurfaceEnabled,
+        "localProjectInstructionCwd" in testCase ? testCase.localProjectInstructionCwd : undefined,
       ),
     ).toEqual(testCase.expected);
   });

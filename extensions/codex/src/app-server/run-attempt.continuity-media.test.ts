@@ -18,7 +18,10 @@ import {
   setupRunAttemptTestHooks,
   tempDir,
 } from "./run-attempt-test-harness.js";
-import { writeCodexAppServerBinding } from "./session-binding.test-helpers.js";
+import {
+  CODEX_FROZEN_EMPTY_PROJECT_DOCS_AUTHORITY,
+  writeCodexAppServerBinding,
+} from "./session-binding.test-helpers.js";
 import { attachSqliteSessionTarget } from "./sqlite-session.test-helpers.js";
 
 setupRunAttemptTestHooks();
@@ -79,6 +82,7 @@ describe("Codex attachment continuity", () => {
       modelProvider: "openai",
       historyCoveredThrough: new Date(cutoff).toISOString(),
       dynamicToolsFingerprint: "[]",
+      agentWorkspaceDeveloperInstructions: CODEX_FROZEN_EMPTY_PROJECT_DOCS_AUTHORITY,
       webSearchThreadConfigFingerprint: JSON.stringify({
         "features.standalone_web_search": false,
         web_search: "disabled",
@@ -241,6 +245,7 @@ describe("Codex attachment continuity", () => {
         modelProvider: "openai",
         historyCoveredThrough: new Date(cutoff).toISOString(),
         dynamicToolsFingerprint: "[]",
+        agentWorkspaceDeveloperInstructions: CODEX_FROZEN_EMPTY_PROJECT_DOCS_AUTHORITY,
         webSearchThreadConfigFingerprint: JSON.stringify({
           "features.standalone_web_search": false,
           web_search: "disabled",

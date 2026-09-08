@@ -1,5 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+vi.mock("../plugins/provider-runtime.js", () => ({
+  buildProviderMissingAuthMessageWithPlugin: () => undefined,
+  resolveExternalAuthProfilesWithPlugins: () => [],
+  resolveProviderDeprecatedAuthProfileIds: () => [],
+  resolveProviderSyntheticAuthWithPlugin: () => undefined,
+  shouldDeferProviderSyntheticProfileAuthWithPlugin: () => false,
+}));
+
+vi.mock("../plugins/providers.js", () => ({
+  resolveOwningPluginIdsForProviderRef: () => [],
+}));
+
 let resolveApiKeyForProviderCore: typeof import("../agents/model-auth.js").resolveApiKeyForProviderCore;
 let closeOpenClawAgentDatabasesForTest: typeof import("../state/openclaw-agent-db.js").closeOpenClawAgentDatabasesForTest;
 let withOpenClawTestState: typeof import("../test-utils/openclaw-test-state.js").withOpenClawTestState;

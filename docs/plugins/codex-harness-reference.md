@@ -1044,11 +1044,32 @@ See [Hook boundaries](/plugins/codex-harness-runtime#hook-boundaries) for recove
 Codex normally handles `AGENTS.md` itself through native project-doc discovery.
 OpenClaw does not write synthetic Codex project-doc files or depend on Codex
 fallback filenames for persona files, because Codex fallbacks only apply when
-`AGENTS.md` is missing. Ordinary policy-restricted turns have no native
-filesystem environment, so OpenClaw instead sends the bounded workspace
-`AGENTS.md` snapshot as thread-level developer instructions. Ring-zero,
-lightweight, message-only, and tool-disabled internal turns suppress that
-carrier.
+`AGENTS.md` is missing. For every ordinary eligible native Codex thread,
+OpenClaw preserves the established project-instruction hierarchy at developer
+authority without sending its contents twice. On an initial same-workspace
+start, Codex discovers that hierarchy natively and OpenClaw sends no workspace-
+instruction directive or duplicate file contents. After the native thread
+starts, OpenClaw captures the exact host-local sources Codex selected and
+freezes their bounded root-to-working-directory snapshot in the thread binding,
+including across resume and supervised branch materialization. If an established
+file later changes, appears, or disappears, OpenClaw disables fresh native
+discovery for that existing thread and replays the complete frozen hierarchy.
+For an experimental sandbox exec-server thread, Codex reads the hierarchy inside
+the selected execution environment and app-server exposes only source paths, not
+the authoritative bytes. When Codex reports a nonempty instruction-source
+selection, OpenClaw records environment-owned project instructions, allows warm
+reuse only while that same environment-backed thread is live, and rejects
+physical cold resume or replacement of that thread before provider I/O,
+including replacement under the same environment fingerprint. Continue the live
+sandbox thread or start a new session. If Codex selects no instruction sources,
+OpenClaw records a frozen-empty snapshot instead. That thread can cold-resume in
+the sandbox or on the host with native project-document discovery disabled.
+When execution uses another folder or ordinary policy restrictions remove native
+filesystem discovery from the outset, OpenClaw carries only the configured
+workspace's bounded root `AGENTS.md` snapshot; the execution folder's native
+hierarchy remains independently owned by Codex. Ring-zero, lightweight, message-
+only, and tool-disabled internal turns suppress both fresh and persisted
+instructions.
 
 For OpenClaw workspace parity, local tool notes live in the `## Tools` section
 of `AGENTS.md` and normally ride Codex's native project-doc discovery. The

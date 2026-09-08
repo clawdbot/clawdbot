@@ -1676,6 +1676,162 @@ describe("Codex app-server thread lifecycle bindings", () => {
     });
   });
 
+  it("rejects same-environment physical rotation when project instructions are environment-owned", async () => {
+    const sessionFile = path.join(tempDir, "environment-owned-rotation-session.jsonl");
+    const workspaceDir = path.join(tempDir, "environment-owned-rotation-workspace");
+    let starts = 0;
+    const request = vi.fn(async (method: string) => {
+      if (method === "config/read") {
+        return { config: {}, origins: {}, layers: [] };
+      }
+      if (method === "configRequirements/read") {
+        return { requirements: null };
+      }
+      if (method === "thread/start") {
+        starts += 1;
+        return threadStartResult(`thread-environment-owned-${starts}`, {
+          cwd: "/workspace",
+          instructionSources: ["/workspace/AGENTS.md"],
+        });
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const client = {
+      getInstanceId: () => "client-environment-owned",
+      request,
+      addNotificationHandler: () => () => undefined,
+      addRequestHandler: () => () => undefined,
+      addCloseHandler: () => () => undefined,
+    } as never;
+    ensureCodexAppServerClientRuntime(client, { agentDir: workspaceDir });
+    const environmentSelection = [{ environmentId: "sandbox-a", cwd: "/workspace" }];
+    const common = {
+      client,
+      params: createParams(sessionFile, workspaceDir),
+      cwd: "/workspace",
+      appServer: createThreadLifecycleAppServerOptions(),
+      userMcpServersEnabled: false,
+      environmentSelection,
+      projectInstructionsUnavailableToGateway: true,
+    };
+
+    const started = await startOrResumeThread({ ...common, dynamicTools: [] });
+    const originalBinding = await readCodexAppServerBinding(sessionFile);
+    expect(started).toMatchObject({
+      threadId: "thread-environment-owned-1",
+      projectInstructionsUnavailableToGateway: true,
+    });
+    expect(originalBinding).toMatchObject({
+      threadId: "thread-environment-owned-1",
+      projectInstructionsUnavailableToGateway: true,
+      environmentSelectionFingerprint: expect.stringMatching(/^sha256:[a-f0-9]{64}$/u),
+    });
+
+    await expect(
+      startOrResumeThread({
+        ...common,
+        dynamicTools: [createNamedDynamicTool("replacement-tool")],
+      }),
+    ).rejects.toThrow("original project instructions belong to an unavailable environment");
+
+    expect(starts).toBe(1);
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "config/read",
+      "configRequirements/read",
+      "thread/start",
+      "config/read",
+      "configRequirements/read",
+    ]);
+    await expect(readCodexAppServerBinding(sessionFile)).resolves.toEqual(originalBinding);
+  });
+
+  it("rejects live native-model incognito reuse after its instruction environment changes", async () => {
+    const sessionFile = path.join(tempDir, "incognito-environment-owner-session.jsonl");
+    const workspaceDir = path.join(tempDir, "incognito-environment-owner-workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    params.sessionKey = "agent:main:dashboard:incognito-environment-owner";
+    let starts = 0;
+    const request = vi.fn(async (method: string) => {
+      if (method === "config/read") {
+        return { config: {}, origins: {}, layers: [] };
+      }
+      if (method === "configRequirements/read") {
+        return { requirements: null };
+      }
+      if (method === "thread/start") {
+        starts += 1;
+        return threadStartResult(`thread-incognito-environment-${starts}`, {
+          cwd: "/workspace",
+          instructionSources: ["/workspace/AGENTS.md"],
+        });
+      }
+      if (method === "thread/unsubscribe") {
+        return { status: "unsubscribed" };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const client = {
+      getInstanceId: () => "client-incognito-environment-owner",
+      request,
+      addNotificationHandler: () => () => undefined,
+      addRequestHandler: () => () => undefined,
+      addCloseHandler: () => () => undefined,
+    } as never;
+    ensureCodexAppServerClientRuntime(client, { agentDir: workspaceDir });
+    const firstSelection = [{ environmentId: "sandbox-a", cwd: "/workspace" }];
+    const common = {
+      client,
+      params,
+      cwd: "/workspace",
+      dynamicTools: [],
+      appServer: createThreadLifecycleAppServerOptions(),
+      userMcpServersEnabled: false,
+      environmentSelection: firstSelection,
+      projectInstructionsUnavailableToGateway: true,
+    };
+    const started = await startOrResumeThread(common);
+    const ordinaryBinding = await readCodexAppServerBinding(sessionFile);
+    if (!ordinaryBinding) {
+      throw new Error("expected incognito binding");
+    }
+    await writeRawCodexAppServerBinding(sessionFile, {
+      ...ordinaryBinding,
+      preserveNativeModel: true,
+      environmentSelectionFingerprint: `sha256:${"a".repeat(64)}`,
+    });
+    await retainCodexAppServerLiveThread(
+      client,
+      started.threadId,
+      undefined,
+      started.liveThreadConfigFingerprint,
+      null,
+      started.liveThreadEphemeralPolicy,
+    );
+    const preservedBinding = await readCodexAppServerBinding(sessionFile);
+    expect(preservedBinding).toMatchObject({
+      preserveNativeModel: true,
+      projectInstructionsUnavailableToGateway: true,
+      environmentSelectionFingerprint: `sha256:${"a".repeat(64)}`,
+    });
+
+    await expect(
+      startOrResumeThread({
+        ...common,
+        environmentSelection: [{ environmentId: "sandbox-b", cwd: "/workspace" }],
+      }),
+    ).rejects.toThrow("original project instructions belong to an unavailable environment");
+
+    expect(starts).toBe(1);
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "config/read",
+      "configRequirements/read",
+      "thread/start",
+      "config/read",
+      "configRequirements/read",
+    ]);
+    await expect(readCodexAppServerBinding(sessionFile)).resolves.toEqual(preservedBinding);
+  });
+
   it("rebinds a resumed thread to its replacement physical client before warm reuse", async () => {
     const sessionFile = path.join(tempDir, "replacement-client-session.jsonl");
     const workspaceDir = path.join(tempDir, "replacement-client-workspace");
@@ -1777,6 +1933,43 @@ describe("Codex app-server thread lifecycle bindings", () => {
           "thread/resume",
           "thread/inject_items",
         ]);
+      } finally {
+        fixture.close();
+      }
+    },
+  );
+
+  it.each([
+    {
+      label: "host capture",
+      overrides: {
+        agentWorkspaceDeveloperInstructionsAllowed: true,
+        captureNativeProjectInstructions: true,
+      },
+    },
+    {
+      label: "environment-owned",
+      overrides: {
+        agentWorkspaceDeveloperInstructionsAllowed: true,
+        projectInstructionsUnavailableToGateway: true,
+        environmentSelection: [{ environmentId: "sandbox-a", cwd: "/workspace" }],
+      },
+    },
+  ])(
+    "preserves an authorityless pending manual resume when project-instruction authority cannot be established: $label",
+    async ({ overrides }) => {
+      const fixture = await createManualResumeFixture();
+      const before = await readCodexAppServerBinding(fixture.sessionFile);
+      try {
+        await expect(fixture.start(overrides)).rejects.toThrow(
+          "project-instruction authority was not established when it was attached",
+        );
+        expect(await readCodexAppServerBinding(fixture.sessionFile)).toEqual(before);
+        expect(
+          fixture.request.mock.calls
+            .map(([method]) => method)
+            .filter((method) => method !== "skills/list"),
+        ).toEqual(["thread/read", "thread/resume", "config/read", "configRequirements/read"]);
       } finally {
         fixture.close();
       }

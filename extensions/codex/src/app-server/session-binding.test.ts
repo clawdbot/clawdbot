@@ -13,10 +13,12 @@ import {
   upsertSessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { z } from "zod";
 import { createLazyCodexAppServerBindingStore } from "./session-binding-store.js";
 import {
   bindingStoreKey,
   CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
+  CODEX_FROZEN_EMPTY_PROJECT_DOCS_AUTHORITY,
   createCodexAppServerBindingStore,
   createStoredCodexAppServerBinding,
   hashCodexAppServerBindingFingerprint,
@@ -70,6 +72,41 @@ afterEach(() => {
 });
 
 describe("Codex app-server binding store", () => {
+  it("keeps the explicit empty snapshot readable by the prior binding schema", async () => {
+    const { state } = createStateStore();
+    const store = createCodexAppServerBindingStore(state);
+    const identity = { kind: "conversation" as const, bindingId: "frozen-empty" };
+    await store.mutate(identity, {
+      kind: "set",
+      binding: {
+        threadId: "thread-frozen-empty",
+        cwd: "/repo",
+        agentWorkspaceDeveloperInstructions: CODEX_FROZEN_EMPTY_PROJECT_DOCS_AUTHORITY,
+      },
+    });
+
+    const stored = state.lookup(bindingStoreKey(identity));
+    expect(stored?.state).toBe("active");
+    if (stored?.state !== "active") {
+      throw new Error("expected an active stored binding");
+    }
+    // This is the exact field contract shipped before the nullable experiment.
+    // Keeping the minimal row strict catches any incompatible representation.
+    const priorBindingSchema = z
+      .object({
+        threadId: z.string().refine((value) => Boolean(value.trim())),
+        cwd: z.string(),
+        agentWorkspaceDeveloperInstructions: z
+          .string()
+          .refine((value) => Boolean(value.trim()))
+          .optional()
+          .catch(undefined),
+      })
+      .strict();
+    expect(priorBindingSchema.parse(stored.binding)).toEqual(stored.binding);
+    expect(store.read(identity)).toEqual(stored.binding);
+  });
+
   it("rechecks resume authority after the lazy store resolves and before writing", async () => {
     const { state } = createStateStore();
     const store = createLazyCodexAppServerBindingStore(state);
@@ -99,7 +136,7 @@ describe("Codex app-server binding store", () => {
     expect(store.read(identity)).toEqual(binding);
   });
 
-  it("deletes only the requested stable owner and restores it on transaction rollback", async () => {
+  it("deletes an oversized inline workspace snapshot only on transaction commit", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-binding-delete-"));
     try {
       const state = createPluginStateSyncKeyedStoreForTests<StoredCodexAppServerBinding>("codex", {
@@ -116,12 +153,15 @@ describe("Codex app-server binding store", () => {
         sessionKey: "agent:main:cron:job",
       };
       const run = { ...base, sessionKey: `${base.sessionKey}:run:one` };
+      const frozenWorkspaceInstructions = "workspace policy\n".repeat(5_000);
+      expect(Buffer.byteLength(frozenWorkspaceInstructions, "utf8")).toBeGreaterThan(65_536);
       for (const identity of [base, run]) {
         await store.mutate(identity, {
           kind: "set",
           binding: {
             threadId: identity.sessionKey,
             cwd: "/repo",
+            agentWorkspaceDeveloperInstructions: frozenWorkspaceInstructions,
           },
         });
       }
@@ -129,7 +169,8 @@ describe("Codex app-server binding store", () => {
       await store.withSessionDeletion(
         run,
         () => {},
-        async (_binding, mutation) => {
+        async (binding, mutation) => {
+          expect(binding?.agentWorkspaceDeveloperInstructions).toBe(frozenWorkspaceInstructions);
           mutation.commit();
           expect(state.lookup(bindingStoreKey(run))).toBeUndefined();
           expect(state.lookup(bindingStoreKey(base))).toMatchObject({ state: "active" });
@@ -137,6 +178,9 @@ describe("Codex app-server binding store", () => {
         },
       );
       expect(state.lookup(bindingStoreKey(run))).toEqual(original);
+      expect(store.read(run)).toMatchObject({
+        agentWorkspaceDeveloperInstructions: frozenWorkspaceInstructions,
+      });
       let retainedCommit: (() => void) | undefined;
       await store.withSessionDeletion(
         run,

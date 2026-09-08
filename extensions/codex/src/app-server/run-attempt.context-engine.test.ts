@@ -34,6 +34,7 @@ import {
   turnStartResult,
   userMessage,
 } from "./run-attempt-test-harness.js";
+import { CODEX_FROZEN_EMPTY_PROJECT_DOCS_AUTHORITY } from "./session-binding.js";
 import {
   readCodexAppServerBinding,
   writeCodexAppServerBinding as writeRawCodexAppServerBinding,
@@ -131,6 +132,7 @@ function writeCodexAppServerBinding(...args: Parameters<typeof writeRawCodexAppS
   return writeRawCodexAppServerBinding(
     sessionFile,
     {
+      agentWorkspaceDeveloperInstructions: CODEX_FROZEN_EMPTY_PROJECT_DOCS_AUTHORITY,
       webSearchThreadConfigFingerprint: DISABLED_CODEX_WEB_SEARCH_THREAD_CONFIG_FINGERPRINT,
       ...binding,
     },
@@ -645,6 +647,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     expect(firstHarness.requests.map((request) => request.method)).toEqual([
       "config/read",
       "configRequirements/read",
+      "config/read",
       "thread/start",
       "turn/start",
       "config/read",
@@ -854,6 +857,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     expect(harness.requests.map((request) => request.method)).toEqual([
       "config/read",
       "configRequirements/read",
+      "config/read",
       "thread/start",
       "turn/start",
     ]);
@@ -945,6 +949,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     expect(harness.requests.map((request) => request.method)).toEqual([
       "config/read",
       "configRequirements/read",
+      "config/read",
       "thread/start",
       "turn/start",
     ]);
@@ -1806,6 +1811,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     expect(harness.requests.map((request) => request.method)).toEqual([
       "config/read",
       "configRequirements/read",
+      "config/read",
       "thread/start",
       "turn/start",
     ]);
@@ -1850,6 +1856,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     expect(harness.requests.map((request) => request.method)).toEqual([
       "config/read",
       "configRequirements/read",
+      "config/read",
       "thread/start",
       "turn/start",
       "thread/unsubscribe",
