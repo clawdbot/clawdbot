@@ -5891,6 +5891,21 @@ grep -Fxq preserved "$TMPDIR/caller-fd"
     );
   });
 
+  it("uses each authorized frozen release's shipped scenario assertions", () => {
+    for (const [runnerPath, assertionPath] of [
+      [CODEX_ON_DEMAND_DOCKER_E2E_PATH, "scripts/e2e/lib/codex-on-demand/assertions.mjs"],
+      [
+        NPM_ONBOARD_CHANNEL_AGENT_DOCKER_E2E_PATH,
+        "scripts/e2e/lib/npm-onboard-channel-agent/assertions.mjs",
+      ],
+      [UPGRADE_SURVIVOR_DOCKER_E2E_PATH, "scripts/e2e/lib/upgrade-survivor/assertions.mjs"],
+    ]) {
+      const runner = readFileSync(runnerPath, "utf8");
+      expect(runner).toContain(`openclaw_frozen_target_source_has_path`);
+      expect(runner).toContain(`${assertionPath}:ro`);
+    }
+  });
+
   it("serves the version-matched Codex candidate during package onboarding", () => {
     const runner = readFileSync(CODEX_ON_DEMAND_DOCKER_E2E_PATH, "utf8");
     const registryHelper = readFileSync(PREPUBLISH_PLUGIN_REGISTRY_HELPER_PATH, "utf8");
@@ -6922,6 +6937,13 @@ process.exit(73);
     expect(runner).not.toContain(
       'run_logged gateway-network-client timeout "$CLIENT_TIMEOUT" docker run --rm',
     );
+  });
+
+  it("uses the selected release's legacy gateway client only after frozen authorization", () => {
+    const runner = readFileSync(GATEWAY_NETWORK_DOCKER_E2E_PATH, "utf8");
+    expect(runner).toContain('[[ "$FROZEN_CONTEXT" == "1" ]]');
+    expect(runner).toContain("scripts/e2e/lib/gateway-network/client.mjs");
+    expect(runner).toContain("node /tmp/openclaw-gateway-network-client.mjs");
   });
 
   it("proves gateway suspension across a same-container process restart", () => {
