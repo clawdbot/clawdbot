@@ -356,6 +356,31 @@ async function handleDesktopAct(
               : desktopParams.action === "triple_click"
                 ? 3
                 : 1;
+          const modifier = normalizeModifiers(desktopParams.modifiers, platform);
+          if (platform === "linux" && modifier.length > 0) {
+            // The typed ClickInput has no modifier field (SDK 0.22.2). The raw
+            // `click` tool accepts desktop target + modifier and, on X11, holds
+            // the modifier via XTest for the duration of the click (confirmed
+            // with a real X11 event capture). Unsupported
+            // environments (native Wayland) return a structured refusal.
+            const point = scalePoint(frame, desktopParams.x, desktopParams.y, desktopParams.action);
+            assertToolSuccess(
+              await driver.callTool(
+                "click",
+                {
+                  x: point.x,
+                  y: point.y,
+                  button: ["left", "right", "middle"][button],
+                  count,
+                  modifier,
+                  target: { kind: "desktop", display_id: "primary" },
+                },
+                signal,
+              ),
+              "click",
+            );
+            break;
+          }
           assertToolSuccess(
             await driver.click(clickArgs(platform, frame, desktopParams, button, count), signal),
             "click",

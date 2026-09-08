@@ -4,6 +4,7 @@ import {
   CUA_DRIVER_CONTRACT_FIXTURES,
   cuaToolResult,
 } from "./cua-driver-contract.test-fixtures.js";
+import { ClickButton } from "./driver-client.js";
 
 const platforms = [
   { platform: "darwin", command: "cmd" },
@@ -132,7 +133,6 @@ describe("cua-computer platform modifiers", () => {
   it.each(
     platforms.flatMap(({ platform }) =>
       [
-        { action: "left_click", scope: "desktop" },
         { action: "scroll", scope: "desktop" },
         { action: "scroll", scope: "window" },
       ].map((input) => Object.assign({ platform }, input)),
@@ -216,6 +216,110 @@ describe("cua-computer platform modifiers", () => {
       ).rejects.toThrow("COMPUTER_INVALID_REQUEST");
       expect(native.callTool).toHaveBeenCalledTimes(2);
       expect(native.drag).not.toHaveBeenCalled();
+    } finally {
+      await computer.close("completion");
+    }
+  });
+
+  it.each([
+    { action: "left_click", button: "left", count: 1 },
+    { action: "right_click", button: "right", count: 1 },
+    { action: "middle_click", button: "middle", count: 1 },
+    { action: "double_click", button: "left", count: 2 },
+    { action: "triple_click", button: "left", count: 3 },
+  ] as const)(
+    "routes modifier-held desktop $action through raw click on Linux",
+    async ({ action, button, count }) => {
+      const native = driver();
+      const computer = await execution(native.session, "linux");
+      try {
+        const screen = JSON.parse(await computer.snapshot('{"format":"png","maxWidth":100}')) as {
+          displayFrameId: string;
+          width: number;
+        };
+        await computer.act(
+          JSON.stringify({
+            action,
+            displayFrameId: screen.displayFrameId,
+            refWidth: screen.width,
+            x: 20,
+            y: 30,
+            modifiers: "Command+Ctrl+Shift",
+          }),
+        );
+        expect(native.callTool).toHaveBeenLastCalledWith(
+          "click",
+          {
+            x: 20,
+            y: 30,
+            button,
+            count,
+            modifier: ["meta", "ctrl", "shift"],
+            target: { kind: "desktop", display_id: "primary" },
+          },
+          undefined,
+        );
+        expect(native.click).not.toHaveBeenCalled();
+      } finally {
+        await computer.close("completion");
+      }
+    },
+  );
+
+  it.each(platforms.filter(({ platform }) => platform !== "linux"))(
+    "preserves unsupported modifier-held desktop click on $platform",
+    async ({ platform }) => {
+      const native = driver();
+      const computer = await execution(native.session, platform);
+      try {
+        const screen = JSON.parse(await computer.snapshot('{"format":"png","maxWidth":100}')) as {
+          displayFrameId: string;
+          width: number;
+        };
+        await expect(
+          computer.act(
+            JSON.stringify({
+              action: "left_click",
+              displayFrameId: screen.displayFrameId,
+              refWidth: screen.width,
+              x: 20,
+              y: 30,
+              modifiers: "Command+Shift",
+            }),
+          ),
+        ).rejects.toThrow(
+          "COMPUTER_UNSUPPORTED_ACTION: modifier-held desktop clicks are unsupported by cua-driver",
+        );
+        expect(native.click).not.toHaveBeenCalled();
+        expect(native.callTool).not.toHaveBeenCalled();
+      } finally {
+        await computer.close("completion");
+      }
+    },
+  );
+
+  it.each(platforms)("keeps unmodified desktop click typed on $platform", async ({ platform }) => {
+    const native = driver();
+    const computer = await execution(native.session, platform);
+    try {
+      const screen = JSON.parse(await computer.snapshot('{"format":"png","maxWidth":100}')) as {
+        displayFrameId: string;
+        width: number;
+      };
+      await computer.act(
+        JSON.stringify({
+          action: "left_click",
+          displayFrameId: screen.displayFrameId,
+          refWidth: screen.width,
+          x: 20,
+          y: 30,
+        }),
+      );
+      expect(native.click).toHaveBeenLastCalledWith(
+        { x: 20, y: 30, button: ClickButton.Left, count: 1 },
+        undefined,
+      );
+      expect(native.callTool).not.toHaveBeenCalled();
     } finally {
       await computer.close("completion");
     }
