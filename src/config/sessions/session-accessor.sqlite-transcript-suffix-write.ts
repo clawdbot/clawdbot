@@ -75,7 +75,11 @@ export function replaceTranscriptSuffixEventsSync(
     if (!transcriptWriteScopeIsCurrent(fresh, resolved, fencedScope)) {
       return;
     }
-    let committedVersion: SessionTranscriptContextVersion;
+    replaceSqliteTranscriptSuffixInTransaction(database, resolved, plan);
+    const committedVersion = readTranscriptContextVersionInTransaction(
+      database,
+      resolved.sessionId,
+    );
     if (
       captureVersionInTransaction &&
       !deferOpenClawAgentPostCommitPublication(database, () =>
@@ -84,8 +88,6 @@ export function replaceTranscriptSuffixEventsSync(
     ) {
       throw new Error("Transcript suffix replacement requires a commit publication");
     }
-    replaceSqliteTranscriptSuffixInTransaction(database, resolved, plan);
-    committedVersion = readTranscriptContextVersionInTransaction(database, resolved.sessionId);
     replaced = true;
   }, toDatabaseOptions(resolved));
   if (fencedScope.expectedWriterRunId !== undefined && !replaced) {
