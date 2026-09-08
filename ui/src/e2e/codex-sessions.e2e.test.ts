@@ -97,7 +97,7 @@ suite.define(() => {
     await page.close();
   });
 
-  it("separates native catalogs from live Coding rows", async () => {
+  it("separates native catalogs from live Coding rows and aligns collapsed counts", async () => {
     const page = await suite.browser.newPage({
       deviceScaleFactor: 2,
       viewport: { height: 900, width: 1280 },
@@ -145,7 +145,12 @@ suite.define(() => {
             {
               id: "codex",
               label: "Codex",
-              capabilities: { continueSession: true, archive: true, createSession: true },
+              capabilities: {
+                continueSession: true,
+                archive: true,
+                createSession: true,
+                startTerminal: true,
+              },
               hosts: [
                 {
                   hostId: "gateway:local",
@@ -243,6 +248,20 @@ suite.define(() => {
           path: path.join(uiProofArtifactDir, "06-coding-catalog-spacing.png"),
         });
       }
+
+      await catalog.locator(".sidebar-session-group-toggle").click();
+      await claudeCatalog.locator(".sidebar-session-group-toggle").click();
+      const [catalogCountBox, claudeCountBox] = await Promise.all([
+        catalog.locator(".sidebar-session-group-count").boundingBox(),
+        claudeCatalog.locator(".sidebar-session-group-count").boundingBox(),
+      ]);
+      if (!catalogCountBox || !claudeCountBox) {
+        throw new Error("Expected visible collapsed catalog counts");
+      }
+      expect(catalogCountBox.x + catalogCountBox.width).toBeCloseTo(
+        claudeCountBox.x + claudeCountBox.width,
+        1,
+      );
     } finally {
       await page.close();
     }

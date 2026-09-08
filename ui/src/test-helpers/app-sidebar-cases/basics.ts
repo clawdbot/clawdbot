@@ -169,6 +169,7 @@ describe("AppSidebar new session navigation", () => {
     await sidebar.updateComplete;
 
     const link = sidebar.querySelector<HTMLAnchorElement>(".sidebar-session-catalog-new")!;
+    expect(sidebar.querySelector(".sidebar-session-catalog-new-spacer")).toBeNull();
     expect(link.getAttribute("aria-label")).toBe("New session — Claude Code");
     expect(link.getAttribute("href")).toBe("/new?agent=research&catalog=claude");
     const contextMenu = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });

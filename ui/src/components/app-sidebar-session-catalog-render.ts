@@ -337,7 +337,7 @@ export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
                     disabledReason: params.newSessionDisabledReason,
                     onOpen: params.onOpenNewSession,
                   })
-                : nothing
+                : html`<span class="sidebar-session-catalog-new-spacer" aria-hidden="true"></span>`
             }
           `,
         })}
