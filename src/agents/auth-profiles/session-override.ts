@@ -1,4 +1,5 @@
 /** Keeps automatic auth profiles stable within sessions while rotating at lifecycle boundaries. */
+import { findNormalizedProviderValue } from "@openclaw/model-catalog-core/provider-id";
 import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -21,6 +22,7 @@ import {
 import { isProfileInCooldown } from "../auth-profiles/usage.js";
 import { splitTrailingAuthProfile } from "../model-ref-profile.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../openai-routing.js";
+import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
 import { resolveProviderModelRouteAuthRequirement } from "../provider-model-route-auth.js";
 import { ensureAuthProfileStore } from "./store-runtime.js";
 
@@ -454,10 +456,17 @@ async function resolveSessionAuthProfileOverride(params: {
     typeof sessionEntry.authProfileOverrideCompactionCount === "number"
       ? sessionEntry.authProfileOverrideCompactionCount
       : compactionCount;
+  const rotationPolicy =
+    findNormalizedProviderValue(
+      cfg.auth?.rotation,
+      resolveProviderIdForAuth(provider, { config: cfg }),
+    ) ?? findNormalizedProviderValue(cfg.auth?.rotation, provider);
+  const compactionRotationDue =
+    compactionCount > storedCompaction && rotationPolicy?.onCompaction !== false;
   // A healthy automatic fallback yields when an explicit preference is eligible to retry,
   // preventing a metered backup from staying pinned. The real request proves recovery.
   const retryableHigherPriorityProfile =
-    source === "auto" && !currentUnavailable && compactionCount <= storedCompaction && current
+    source === "auto" && !currentUnavailable && !compactionRotationDue && current
       ? orderResolutions
           .filter((resolution) => resolution.hasExplicitOrder)
           .flatMap((resolution) => {
@@ -473,9 +482,7 @@ async function resolveSessionAuthProfileOverride(params: {
   const shouldRotateCurrent =
     Boolean(current) &&
     !isNewSession &&
-    (currentUnavailable ||
-      compactionCount > storedCompaction ||
-      retryableHigherPriorityProfile !== undefined);
+    (currentUnavailable || compactionRotationDue || retryableHigherPriorityProfile !== undefined);
 
   // Provider artifacts own persisted route stickiness; runtime planning owns cross-route failover.
   const routeResolution =

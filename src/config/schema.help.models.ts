@@ -151,6 +151,9 @@ export const MODEL_FIELD_HELP: Record<string, string> = {
     "Require @mention in channels before responding (default: true).",
   "auth.profiles": "Named auth profiles (provider + mode + optional email).",
   "auth.order": "Ordered auth profile IDs per provider (used for automatic failover).",
+  "auth.rotation": "Automatic auth-profile rotation policy per provider.",
+  "auth.rotation.*.onCompaction":
+    "Rotate automatic session auth profiles after compaction (default: true). Set false to keep a healthy profile across compactions; failure-driven rotation, cooldown recovery, and new-session selection remain unchanged.",
   "agents.defaults.workspace":
     "Default agent workspace for bootstrap and memory files. Also used as the working directory when agents.defaults.cwd is unset. Set this explicitly when running from wrappers so path resolution stays deterministic.",
   "agents.defaults.cwd":

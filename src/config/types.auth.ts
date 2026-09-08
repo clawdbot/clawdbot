@@ -21,4 +21,12 @@ export type AuthConfig = {
   profiles?: Record<string, AuthProfileConfig>;
   /** Preferred profile order per provider id. */
   order?: Record<string, string[]>;
+  /** Automatic auth-profile rotation policy per provider id. */
+  rotation?: Record<
+    string,
+    {
+      /** Rotate after compaction (default: true). Does not disable failure-driven rotation. */
+      onCompaction?: boolean;
+    }
+  >;
 };
