@@ -118,6 +118,8 @@ export function createReasoningTagTextPartitioner(): ReasoningTagTextPartitioner
   let nonFinalFullParses = 0;
   let nonFinalCodeSpans: Array<[number, number]> | undefined;
   let nonFinalCodeSpansEnd = 0;
+  /** Source length when block-incremental ownership was last parsed. */
+  let nonFinalParseEnd = 0;
   let nonFinalOpenEndedCode = false;
   let nonFinalRetainStart = 0;
   let nonFinalCloseReparseUsed = false;
@@ -135,6 +137,7 @@ export function createReasoningTagTextPartitioner(): ReasoningTagTextPartitioner
     nonFinalFullParses = 0;
     nonFinalCodeSpans = undefined;
     nonFinalCodeSpansEnd = 0;
+    nonFinalParseEnd = 0;
     nonFinalOpenEndedCode = false;
     nonFinalRetainStart = 0;
     nonFinalCloseReparseUsed = false;
@@ -248,6 +251,7 @@ export function createReasoningTagTextPartitioner(): ReasoningTagTextPartitioner
         const ownership = parseMarkdownOwnership(source.slice(0, limit));
         nonFinalCodeSpans = ownership.codeSpans;
         nonFinalCodeSpansEnd = limit;
+        nonFinalParseEnd = limit;
         nonFinalOpenEndedCode = nonFinalCodeSpans.some(([, spanEnd]) => spanEnd === limit);
         nonFinalRetainStart = ownership.retainStart;
         fastPathCodeSafe =
@@ -489,6 +493,22 @@ export function createReasoningTagTextPartitioner(): ReasoningTagTextPartitioner
           completedBlankBlock &&
           (!retainedContainerContext || appendedStartsTopLevelBlock) &&
           !nonFinalOpenEndedCode;
+        // Only a backtick can close the inline span or fence that keeps a hold open.
+        // One that arrived after the last ownership parse earns one more parse;
+        // without it the stale open-ended verdict refuses every later paragraph
+        // boundary and the hold survives until the stream ends. Containers retain
+        // their whole prefix, so there the reparse waits for geometric growth to
+        // keep total parse work linear in the stream.
+        if (
+          nonFinalFullParses >= 1 &&
+          reusableCodeSpans === undefined &&
+          (heldBacktick || nonFinalOpenEndedCode) &&
+          source.lastIndexOf("`") >= nonFinalParseEnd &&
+          (!retainedContainerContext ||
+            (source.length - nonFinalParseEnd) * 4 >= nonFinalParseEnd - nonFinalRetainStart)
+        ) {
+          nonFinalFullParses = 0;
+        }
         if (
           (shouldTryParser || mayResolveHeldReasoning) &&
           !tableLookaheadPending &&
@@ -501,6 +521,9 @@ export function createReasoningTagTextPartitioner(): ReasoningTagTextPartitioner
             nonFinalFullParses += 1;
           }
           const ownership = reusableCodeSpans ? undefined : parseMarkdownOwnership(source);
+          if (ownership) {
+            nonFinalParseEnd = source.length;
+          }
           nonFinalCloseReparseUsed ||= mayResolveHeldReasoning;
           const codeSpans = reusableCodeSpans ?? ownership?.codeSpans ?? [];
           const retainStart = reusableCodeSpans
@@ -520,11 +543,23 @@ export function createReasoningTagTextPartitioner(): ReasoningTagTextPartitioner
             if (stableNonDelimiter || mayCloseTopLevelBlock) {
               processEnd = source.length;
             } else if (stableCode && heldCodeSpan) {
+              // Release everything this parse already proved: plain text, line
+              // breaks, and every later closed code span. Stop at a tag opener
+              // outside code, at a backtick no closed span owns, or at the span
+              // still open at the end of the source.
               processEnd = heldCodeSpan[1];
               while (processEnd < source.length) {
                 const char = source.charAt(processEnd);
-                if (char === "\r" || char === "\n" || char === "<" || char === "`") {
+                if (char === "<") {
                   break;
+                }
+                if (char === "`") {
+                  const span = codeSpans.find(([spanStart]) => spanStart === processEnd);
+                  if (!span || span[1] === source.length) {
+                    break;
+                  }
+                  processEnd = span[1];
+                  continue;
                 }
                 processEnd += 1;
               }
@@ -560,6 +595,7 @@ export function createReasoningTagTextPartitioner(): ReasoningTagTextPartitioner
       ) {
         nonFinalFullParses += 1;
         const ownership = parseMarkdownOwnership(source);
+        nonFinalParseEnd = source.length;
         const codeSpans = ownership.codeSpans;
         nonFinalRetainStart = ownership.retainStart;
         nonFinalOpenEndedCode = codeSpans.some(([, spanEnd]) => spanEnd === source.length);

@@ -278,6 +278,62 @@ describe("createReasoningTagTextPartitioner", () => {
     expect(Date.now() - startedAt).toBeLessThan(10_000);
   });
 
+  function streamChunked(input: string, size: number) {
+    const partitioner = createReasoningTagTextPartitioner();
+    let emittedBeforeFlush = "";
+    for (let start = 0; start < input.length; start += size) {
+      for (const delta of partitioner.pushVisible(input.slice(start, start + size))) {
+        if (delta.kind === "text") {
+          emittedBeforeFlush += delta.text;
+        }
+      }
+    }
+    const flushed = partitioner
+      .flush()
+      .filter((delta) => delta.kind === "text")
+      .map((delta) => delta.text)
+      .join("");
+    return { emittedBeforeFlush, flushed };
+  }
+
+  it("releases prose after a second inline code span before the stream ends", () => {
+    const input =
+      "Use `cpu.weight` (formerly `cpu.shares`) to set it, then keep streaming this trailing prose.\n\nNext paragraph.\n";
+
+    for (const size of [1, 3, 4, 7]) {
+      const { emittedBeforeFlush, flushed } = streamChunked(input, size);
+      expect(emittedBeforeFlush + flushed).toBe(input);
+      expect(emittedBeforeFlush).toContain("then keep streaming this trailing prose.");
+    }
+  });
+
+  it("releases prose after a fenced block with an info string before the stream ends", () => {
+    const input =
+      "Intro paragraph.\n\n```c\n/* blank lines inside the block spend the parse budget while it is open */\nstatic int pick(struct rq *rq) {\n    int n = rq->nr_running;\n\n    return n < 2;\n}\n```\n\nAfter the block, prose that should stream.\n\nAnother paragraph.\n";
+
+    for (const size of [1, 4, 16]) {
+      const { emittedBeforeFlush, flushed } = streamChunked(input, size);
+      expect(emittedBeforeFlush + flushed).toBe(input);
+      expect(emittedBeforeFlush).toContain("After the block, prose that should stream.");
+    }
+  });
+
+  it("keeps releasing inline code inside a long list with bounded parse work", () => {
+    const items = Array.from(
+      { length: 40 },
+      (_, index) =>
+        `- Use \`option_${index}\` to control thing ${index}, then verify with \`check_${index}\`.\n`,
+    );
+    const input = `${items.join("")}\nTrailing paragraph after the list.\n`;
+    const startedAt = Date.now();
+
+    const { emittedBeforeFlush, flushed } = streamChunked(input, 4);
+
+    expect(emittedBeforeFlush + flushed).toBe(input);
+    expect(emittedBeforeFlush.length).toBeGreaterThan(input.length * 0.8);
+    expect(Date.now() - startedAt).toBeLessThan(5_000);
+  });
+
   it("does not repeatedly reparse a growing list container", () => {
     const partitioner = createReasoningTagTextPartitioner();
     const startedAt = Date.now();
