@@ -1203,7 +1203,7 @@ Slack channel id like `Cxxxxxxxxxx`. See
 and scope provisioning.
 
 Operational env vars and the Convex broker endpoint contract live in
-[Testing → Shared Telegram credentials via Convex](/help/testing#shared-telegram-credentials-via-convex-v1)
+[Testing → Shared Telegram credentials via Convex](/help/testing/qa-runners#shared-telegram-credentials-via-convex-v1)
 (the section name predates the multi-channel pool; the lease semantics are
 shared across kinds).
 

@@ -2514,5 +2514,29 @@
   {
     "source": "Automation troubleshooting",
     "target": "自动化故障排查"
+  },
+  {
+    "source": "Test suites and commands",
+    "target": "测试套件与命令"
+  },
+  {
+    "source": "Live and Docker/Parallels workflows",
+    "target": "Live 与 Docker/Parallels 工作流"
+  },
+  {
+    "source": "Docker test runners",
+    "target": "Docker 测试运行器"
+  },
+  {
+    "source": "QA-specific runners",
+    "target": "QA 专用运行器"
+  },
+  {
+    "source": "Contract tests",
+    "target": "契约测试"
+  },
+  {
+    "source": "Writing and adding tests",
+    "target": "编写与添加测试"
   }
 ]
