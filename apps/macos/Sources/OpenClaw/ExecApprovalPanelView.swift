@@ -93,41 +93,61 @@ struct ExecApprovalPanelView: View {
     }
 
     private var context: some View {
-        HStack(alignment: .top, spacing: 10) {
-            if let cwd = ExecApprovalsPromptPresenter.sanitizedContextValue(self.request.cwd) {
-                Image(systemName: "folder")
-                    .foregroundStyle(.secondary)
-                    .accessibilityHidden(true)
-                ScrollView {
-                    Text(verbatim: cwd)
-                        .font(.system(size: 12, design: .monospaced))
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .accessibilityLabel(Text(verbatim: String(
-                            format: String(localized: "Working directory: %@"), cwd)))
-                }
-                .scrollBounceBehavior(.basedOnSize)
-                .frame(maxHeight: 44)
-            } else {
-                Spacer(minLength: 0)
-            }
-            if let executable = ExecApprovalsPromptPresenter.sanitizedContextValue(self.request.resolvedPath) {
-                Button("Details") { self.showingDetails.toggle() }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.secondary)
-                    .popover(isPresented: self.$showingDetails) {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Resolved executable").font(.headline)
-                            ScrollView {
-                                Text(verbatim: executable)
-                                    .font(.system(size: 12, design: .monospaced))
-                                    .textSelection(.enabled)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                            }
-                            .frame(width: 360, height: 60)
-                        }
-                        .padding(16)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .top, spacing: 10) {
+                if let cwd = ExecApprovalsPromptPresenter.sanitizedContextValue(self.request.cwd) {
+                    Image(systemName: "folder")
+                        .foregroundStyle(.secondary)
+                        .accessibilityHidden(true)
+                    ScrollView {
+                        Text(verbatim: cwd)
+                            .font(.system(size: 12, design: .monospaced))
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .accessibilityLabel(Text(verbatim: String(
+                                format: String(localized: "Working directory: %@"), cwd)))
                     }
+                    .scrollBounceBehavior(.basedOnSize)
+                    .frame(maxHeight: 44)
+                } else {
+                    Spacer(minLength: 0)
+                }
+                if let executable = ExecApprovalsPromptPresenter.sanitizedContextValue(self.request.resolvedPath) {
+                    Button("Details") { self.showingDetails.toggle() }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.secondary)
+                        .popover(isPresented: self.$showingDetails) {
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("Resolved executable").font(.headline)
+                                ScrollView {
+                                    Text(verbatim: executable)
+                                        .font(.system(size: 12, design: .monospaced))
+                                        .textSelection(.enabled)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                }
+                                .frame(width: 360, height: 60)
+                            }
+                            .padding(16)
+                        }
+                }
+            }
+            if let session = ExecApprovalsPromptPresenter.sanitizedContextValue(self.request.sessionKey) {
+                HStack(alignment: .top, spacing: 10) {
+                    Image(systemName: "bubble.left")
+                        .foregroundStyle(.secondary)
+                        .accessibilityHidden(true)
+                    Text("Session:")
+                        .foregroundStyle(.secondary)
+                    ScrollView(.horizontal) {
+                        Text(verbatim: session)
+                            .font(.system(size: 12, design: .monospaced))
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .scrollBounceBehavior(.basedOnSize)
+                    .frame(maxHeight: 28)
+                    .accessibilityLabel(Text(verbatim: String(format: String(localized: "Session: %@"), session)))
+                }
             }
         }
         .font(.system(size: 12))

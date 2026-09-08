@@ -149,7 +149,10 @@ enum ExecApprovalsPromptPresenter {
             options: [.usesLineFragmentOrigin, .usesFontLeading],
             attributes: [.font: NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)])
         let decisions = self.allowedPromptDecisions(request)
-        let chromeHeight: CGFloat = 320 + (decisions.contains(.allowAlways) ? 30 : 0)
+        let chromeHeight: CGFloat =
+            320 +
+            (decisions.contains(.allowAlways) ? 30 : 0) +
+            (self.sanitizedContextValue(request.sessionKey) == nil ? 0 : 36)
         let commandHeight = min(240, max(56, ceil(commandBounds.height) + 28))
         let size = NSSize(width: width, height: min(chromeHeight + commandHeight, screenSize.height - 80))
         let panel = ExecApprovalPanel(
