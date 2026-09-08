@@ -457,6 +457,7 @@ export async function refreshSessionCatalogsLive(params: {
       agentId: params.agentId,
       pageDepths: params.pageDepths,
       isCurrent: revisionIsCurrent,
+      canRequestPage: () => revisionIsCurrent() && document.visibilityState !== "hidden",
     });
     if (!revisionIsCurrent()) {
       return;

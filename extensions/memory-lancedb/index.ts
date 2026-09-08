@@ -26,9 +26,8 @@ import {
   createEmbeddings,
   isMemoryRecallTimeoutError,
   MemoryRecallEmbeddingError,
-  runWithTimeout,
 } from "./embeddings.js";
-import { MemoryDB, type MemoryEntry, type MemorySearchResult } from "./lancedb-store.js";
+import { MemoryDB, type MemoryEntry } from "./lancedb-store.js";
 import { sanitizeForMemoryCapture } from "./memory-capture-sanitization.js";
 import { registerMemoryCli } from "./memory-cli.js";
 import {
@@ -44,6 +43,7 @@ import {
   prepareAutoCaptureMessages,
   shouldCapture,
 } from "./memory-policy.js";
+import { startMemoryRecall } from "./recall-service.js";
 
 const loadMemoryHostCoreModule = createLazyRuntimeModule(
   () => import("openclaw/plugin-sdk/memory-host-core"),
@@ -62,7 +62,7 @@ type AutoCaptureSession = {
   completedTexts: Set<string>;
 };
 
-export { normalizeEmbeddingVector, testing } from "./embeddings.js";
+export { normalizeEmbeddingVector } from "./embeddings.js";
 export { parseMemoryCliFilter } from "./memory-cli.js";
 export {
   looksLikeEnvelopeSludge,
@@ -260,33 +260,23 @@ export default definePluginEntry({
             if (cooldown) {
               return buildMemoryRecallUnavailableResult(cooldown.error);
             }
-            let recallPhase: "embedding" | "search" = "embedding";
-            let recall: Awaited<ReturnType<typeof runWithTimeout<MemorySearchResult[]>>>;
+            const recallOperation = startMemoryRecall({
+              timeoutMs: DEFAULT_TOOL_RECALL_TIMEOUT_MS,
+              embed: (timeoutMs) =>
+                embeddings.embed(
+                  agentId,
+                  normalizeRecallQuery(query, recallMaxChars),
+                  currentCfg.embedding,
+                  timeoutMs(),
+                ),
+              search: (vector, timeoutMs) =>
+                db.search(agentId, vector, limit + DEFAULT_TOOL_RECALL_OVERFETCH_EXTRA, 0.1, {
+                  timeoutMs,
+                }),
+            });
+            let recall: Awaited<typeof recallOperation.result>;
             try {
-              recall = await runWithTimeout({
-                timeoutMs: DEFAULT_TOOL_RECALL_TIMEOUT_MS,
-                task: async (deadlineAtMs) => {
-                  let vector: number[];
-                  try {
-                    vector = await embeddings.embed(
-                      agentId,
-                      normalizeRecallQuery(query, recallMaxChars),
-                      currentCfg.embedding,
-                      Math.max(1, deadlineAtMs - Date.now()),
-                    );
-                  } catch (error) {
-                    throw new MemoryRecallEmbeddingError(error);
-                  }
-                  recallPhase = "search";
-                  return await db.search(
-                    agentId,
-                    vector,
-                    limit + DEFAULT_TOOL_RECALL_OVERFETCH_EXTRA,
-                    0.1,
-                    { timeoutMs: Math.max(0, deadlineAtMs - Date.now()) },
-                  );
-                },
-              });
+              recall = await recallOperation.result;
             } catch (error) {
               if (!(error instanceof MemoryRecallEmbeddingError)) {
                 throw error;
@@ -302,7 +292,7 @@ export default definePluginEntry({
             }
             if (recall.status === "timeout") {
               const message = `memory_recall timed out after ${Math.round(DEFAULT_TOOL_RECALL_TIMEOUT_MS / 1000)}s`;
-              if (recallPhase === "embedding") {
+              if (recallOperation.phase === "embedding") {
                 recordMemoryRecallCooldown(agentId, message);
               }
               api.logger.warn?.(

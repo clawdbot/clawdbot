@@ -13,6 +13,7 @@ const resolveDefaultAccountId = () => DEFAULT_ACCOUNT_ID;
 const mocks = vi.hoisted(() => ({
   loadConfig: vi.fn(),
   readConfigFileSnapshot: vi.fn(),
+  readConfigFileSnapshotForWrite: vi.fn(),
   resolveCommandSecretRefsViaGateway: vi.fn(),
   replaceConfigFile: vi.fn<(params: Parameters<typeof replaceConfigFile>[0]) => Promise<void>>(),
   refreshPluginRegistryAfterConfigMutation: vi.fn(async () => undefined),
@@ -45,6 +46,7 @@ vi.mock("../../config/config.js", async () => {
     ...actual,
     getRuntimeConfig: mocks.loadConfig,
     readConfigFileSnapshot: mocks.readConfigFileSnapshot,
+    readConfigFileSnapshotForWrite: mocks.readConfigFileSnapshotForWrite,
     replaceConfigFile: mocks.replaceConfigFile,
   };
 });
@@ -123,12 +125,24 @@ describe("channelsCapabilitiesCommand", () => {
       resolvedConfig: config,
       diagnostics: [],
     }));
+    mocks.readConfigFileSnapshotForWrite.mockImplementation(async () => ({
+      snapshot: await mocks.readConfigFileSnapshot(),
+      writeOptions: {},
+    }));
     mocks.replaceConfigFile.mockResolvedValue(undefined);
     mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([]);
     mocks.resolveInstallableChannelPlugin.mockResolvedValue({
       cfg: { channels: {} },
       configChanged: false,
     });
+  });
+
+  it.each([undefined, "all"])("keeps %s capabilities listing read-only", async (channel) => {
+    await channelsCapabilitiesCommand({ channel }, runtime);
+    expect(mocks.readConfigFileSnapshot).toHaveBeenCalledOnce();
+    expect(mocks.readConfigFileSnapshotForWrite).not.toHaveBeenCalled();
+    expect(mocks.resolveInstallableChannelPlugin).not.toHaveBeenCalled();
+    expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
   });
 
   it("prints Slack bot + user scopes when user token is configured", async () => {
@@ -501,9 +515,9 @@ describe("channelsCapabilitiesCommand", () => {
       configChanged: true,
       pluginInstalled: true,
     }));
-    mocks.replaceConfigFile.mockImplementation(async ({ nextConfig }) => {
+    mocks.replaceConfigFile.mockImplementation(async ({ sourceConfig: writtenSource }) => {
       runtimeConfig = {
-        ...nextConfig,
+        ...writtenSource,
         messages: { responsePrefix: "runtime-default" },
       };
     });
@@ -520,11 +534,11 @@ describe("channelsCapabilitiesCommand", () => {
       1,
       expect.objectContaining({ baseHash: "config-1" }),
     );
-    expect(mocks.replaceConfigFile.mock.calls[0]?.[0].nextConfig).toStrictEqual({
+    expect(mocks.replaceConfigFile.mock.calls[0]?.[0].sourceConfig).toStrictEqual({
       channels: { slack: { botToken: tokenRef } },
       plugins: { entries: { slack: { enabled: true } } },
     });
-    expect(mocks.replaceConfigFile.mock.calls[0]?.[0].nextConfig).not.toHaveProperty("messages");
+    expect(mocks.replaceConfigFile.mock.calls[0]?.[0].sourceConfig).not.toHaveProperty("messages");
     expect(mocks.resolveCommandSecretRefsViaGateway).toHaveBeenCalledTimes(2);
     expect(mocks.resolveCommandSecretRefsViaGateway.mock.calls[0]?.[0].commandName).toBe(
       "channels",

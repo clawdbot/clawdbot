@@ -29,7 +29,7 @@ type CliRespawnPlan = {
 };
 
 type CliRespawnRuntime = RespawnChildRuntime & {
-  writeError: (message: string, error?: unknown) => void;
+  writeError: (message: string, error?: unknown) => void | Promise<void>;
 };
 
 function pathModuleForPlatform(platform: NodeJS.Platform): typeof path.posix {
@@ -180,7 +180,7 @@ export function runCliRespawnPlan(
     detachForProcessTree: plan.detachForProcessTree,
     runtime: resolvedRuntime,
     onError: (error) => {
-      resolvedRuntime.writeError(
+      return resolvedRuntime.writeError(
         "[openclaw] Failed to respawn CLI:",
         error instanceof Error ? (error.stack ?? error.message) : error,
       );

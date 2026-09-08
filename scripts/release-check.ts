@@ -117,6 +117,26 @@ const PACKED_PLUGIN_SDK_TYPESCRIPT_SMOKE_FIXTURE = new URL(
   "./fixtures/packed-plugin-sdk-type-smoke.ts",
   import.meta.url,
 );
+const PACKED_BUNDLED_CHANNEL_ENTRY_SMOKE_ENTRYPOINTS = [
+  "scripts/test-built-bundled-channel-entry-smoke.mts",
+  "scripts/test-built-bundled-channel-entry-smoke.mjs",
+] as const;
+
+export function resolvePackedBundledChannelEntrySmokeCommand(
+  fileExists: (path: string) => boolean = existsSync,
+  nodeExecPath = process.execPath,
+) {
+  const entrypoint = PACKED_BUNDLED_CHANNEL_ENTRY_SMOKE_ENTRYPOINTS.find(fileExists);
+  if (!entrypoint) {
+    throw new Error(
+      "release-check: target does not provide scripts/test-built-bundled-channel-entry-smoke.mts or .mjs",
+    );
+  }
+  return {
+    command: nodeExecPath,
+    args: [...(entrypoint.endsWith(".mts") ? ["--import", "tsx"] : []), entrypoint],
+  };
+}
 
 export function runReleaseCheckCommand(
   invocation: ReleaseCheckCommandInvocation,
@@ -953,16 +973,11 @@ function runPackedBundledChannelEntrySmoke(tarballPath: string, packedRoot: stri
     runPackedBundledPluginActivationSmoke(packageRoot, tmpRoot);
     runPackedTaskRegistryControlRuntimeSmoke(packageRoot);
     runPackedPluginSdkTypescriptSmoke(tarballPath, tmpRoot, localPackageTarballs);
+    const bundledChannelEntrySmoke = resolvePackedBundledChannelEntrySmokeCommand();
     runReleaseCheckCommand(
       {
-        command: process.execPath,
-        args: [
-          "--import",
-          "tsx",
-          resolve("scripts/test-built-bundled-channel-entry-smoke.mts"),
-          "--package-root",
-          packageRoot,
-        ],
+        ...bundledChannelEntrySmoke,
+        args: [...bundledChannelEntrySmoke.args, "--package-root", packageRoot],
       },
       {
         stdio: "inherit",

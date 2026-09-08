@@ -23,6 +23,7 @@ import {
 } from "../../../cron/store.js";
 import type { CronJob } from "../../../cron/types.js";
 import { formatErrorMessage as errorMessage } from "../../../infra/errors.js";
+import { markLegacyMigrationSourceRemoved } from "../../../infra/state-migrations.receipts.js";
 import { parseAgentSessionKey } from "../../../routing/session-key.js";
 import { shortenHomePath } from "../../../utils.js";
 import type { LegacyCodexModelIdentity } from "../shared/codex-route-model-ref.js";
@@ -52,7 +53,6 @@ import {
   acquireLegacyCronMigrationReceipt,
   hasLegacyCronMigrationReceipt,
   hasLegacyCronMigrationReceiptReadOnly,
-  markLegacyCronMigrationSourceRemoved,
 } from "./migration-ledger.js";
 import { mergeLegacyCronJobs, mergeRuntimeEntryIntoConfigJob } from "./repair-plan.js";
 import { planCronCodexRefRewriteAgainstPersistedConfig } from "./runtime-policy-migration.js";
@@ -449,7 +449,7 @@ export async function applyLegacyCronStoreRepair(params: {
     if (archiveResult.ok) {
       if (state.legacyMigrationSource) {
         try {
-          markLegacyCronMigrationSourceRemoved(state.legacyMigrationSource);
+          markLegacyMigrationSourceRemoved(state.legacyMigrationSource.sourceKey, process.env);
         } catch (err) {
           rethrowSqliteSchemaVersionError(err);
           warnings.push(

@@ -1,5 +1,5 @@
 // web_fetch extraction utility tests cover HTML entity decoding.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   extractBasicHtmlContent,
   htmlToMarkdown,
@@ -89,6 +89,33 @@ describe("web-fetch-utils htmlToMarkdown entity decoding", () => {
     );
 
     expect(rendered.text).toBe("[Read](/real)After");
+  });
+
+  it("bounds raw-text searches for many short quoted attributes", () => {
+    const html = `<div${' a=""'.repeat(1_024)}>Visible</div>`;
+    // oxlint-disable-next-line typescript/unbound-method -- called below with the intercepted string receiver.
+    const originalIndexOf = String.prototype.indexOf;
+    let searchedSpanUnits = 0;
+    const indexOf = vi
+      .spyOn(String.prototype, "indexOf")
+      .mockImplementation(function (this: string, search, position) {
+        const found = originalIndexOf.call(this, search, position);
+        if (search === "<") {
+          const start = Math.min(this.length, Math.max(0, position ?? 0));
+          searchedSpanUnits += (found < 0 ? this.length : found + 1) - start;
+        }
+        return found;
+      });
+    let text = "";
+    try {
+      text = htmlToMarkdown(html).text;
+    } finally {
+      indexOf.mockRestore();
+    }
+
+    expect(text).toBe("Visible");
+    // Bound logical search spans without depending on machine timing or exact call counts.
+    expect(searchedSpanUnits).toBeLessThanOrEqual(html.length * 16);
   });
 
   it("re-enters raw-text parsing when an invalid tag span contains a raw-text opener", () => {

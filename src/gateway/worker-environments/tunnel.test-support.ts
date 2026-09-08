@@ -200,6 +200,7 @@ class FakeProcess implements WorkerSshProcess {
   readonly ready = this.readyDeferred.promise;
   readonly exited = this.exitDeferred.promise;
   stopCount = 0;
+  private stopPromise?: Promise<void>;
   private stopBarrier: Promise<void> | undefined;
 
   becomeReady() {
@@ -219,11 +220,13 @@ class FakeProcess implements WorkerSshProcess {
     this.stopBarrier = barrier;
   }
 
-  async stop() {
-    this.stopCount += 1;
-    await this.stopBarrier;
-    this.readyDeferred.reject(new Error("stopped"));
-    this.exitDeferred.resolve({ code: null, signal: "SIGTERM" });
+  stop() {
+    return (this.stopPromise ??= (async () => {
+      this.stopCount += 1;
+      await this.stopBarrier;
+      this.readyDeferred.reject(new Error("stopped"));
+      this.exitDeferred.resolve({ code: null, signal: "SIGTERM" });
+    })());
   }
 }
 

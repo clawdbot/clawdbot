@@ -287,6 +287,7 @@ describe("provider replay helpers", () => {
 
   it("builds Gemini replay helpers and tagged reasoning mode", () => {
     expectFields(buildGoogleGeminiReplayPolicy(), {
+      appendOnlyRuntimeContext: false,
       validateGeminiTurns: true,
       allowSyntheticToolResults: true,
     });

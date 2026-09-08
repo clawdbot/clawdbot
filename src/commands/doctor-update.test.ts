@@ -204,7 +204,7 @@ describe("maybeOfferUpdateBeforeDoctor", () => {
     },
   );
 
-  it.each(["healthy", "exited", "old-version", "http-unready", "missing-boot"] as const)(
+  it.each(["healthy", "exited", "old-version", "http-unready"] as const)(
     "verifies doctor update restart readiness: %s",
     async (outcome) => {
       const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
@@ -219,10 +219,9 @@ describe("maybeOfferUpdateBeforeDoctor", () => {
         after: { version: "2026.4.24", buildId: "new-build" },
       });
       mocks.waitForHealthyRestart.mockResolvedValue({
-        healthy: outcome === "healthy" || outcome === "http-unready" || outcome === "missing-boot",
+        healthy: outcome === "healthy" || outcome === "http-unready",
         runtime: { status: outcome === "exited" ? "stopped" : "running" },
         gatewayVersion: outcome === "old-version" ? "2026.4.23" : "2026.4.24",
-        gatewayBootId: outcome === "missing-boot" ? undefined : "doctor-boot",
         versionMismatch: outcome === "old-version",
         staleGatewayPids: [],
       });
@@ -253,7 +252,6 @@ describe("maybeOfferUpdateBeforeDoctor", () => {
           config: {},
         }),
       );
-      expect(mocks.verifyUpdateServing).toHaveBeenCalledTimes(outcome === "healthy" ? 1 : 0);
       expect(mocks.doctorCommand).not.toHaveBeenCalled();
       if (outcome === "healthy") {
         expect(runtime.exit).not.toHaveBeenCalled();

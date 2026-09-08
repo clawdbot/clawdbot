@@ -4,7 +4,7 @@ import { buildAssistantMessage, buildUsageWithNoCost } from "../../agents/stream
 import { setReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
 import { projectChatDisplayMessage } from "../chat-display-projection.js";
-import { buildAssistantDisplayContentFromReplyPayloads } from "./chat-assistant-content.js";
+import { buildAssistantReplyContent } from "./chat-assistant-content.js";
 import {
   buildTranscriptReplyText,
   createChatSendReplyDispatch,
@@ -17,11 +17,13 @@ describe("buildTranscriptReplyText", () => {
       const payloads = [{ text: "First instruction" }, { text: controlText }, { text: "Done" }];
       expect(buildTranscriptReplyText(payloads)).toBe("First instruction\n\nDone");
       expect(
-        await buildAssistantDisplayContentFromReplyPayloads({
-          sessionKey: "agent:main:main",
-          agentId: "main",
-          payloads,
-        }),
+        (
+          await buildAssistantReplyContent({
+            sessionKey: "agent:main:main",
+            agentId: "main",
+            payloads,
+          })
+        ).assistantContent,
       ).toEqual([{ type: "text", text: "First instruction\n\nDone" }]);
     },
   );
@@ -89,7 +91,7 @@ describe("createChatSendReplyDispatch", () => {
         cfg: {},
         clientRunId: "run-media",
         sessionKey: "agent:main:main",
-        sessionLoadOptions: undefined,
+        sessionLoadOptions: { agentId: "main" },
       },
       userTurnRecorder: { markBlocked: vi.fn() },
     });
@@ -144,7 +146,7 @@ describe("createChatSendReplyDispatch", () => {
         cfg: {},
         clientRunId: "run-1",
         sessionKey: "agent:main:main",
-        sessionLoadOptions: undefined,
+        sessionLoadOptions: { agentId: "main" },
       },
       userTurnRecorder: { markBlocked },
     });
@@ -195,7 +197,7 @@ describe("createChatSendReplyDispatch", () => {
         cfg: {},
         clientRunId: "run-command",
         sessionKey: "agent:main:main",
-        sessionLoadOptions: undefined,
+        sessionLoadOptions: { agentId: "main" },
       },
       userTurnRecorder: { markBlocked: vi.fn() },
     });
@@ -241,7 +243,7 @@ describe("createChatSendReplyDispatch", () => {
         cfg: {},
         clientRunId: "run-cancel",
         sessionKey: "agent:main:main",
-        sessionLoadOptions: undefined,
+        sessionLoadOptions: { agentId: "main" },
       },
       userTurnRecorder: { markBlocked },
     });
@@ -286,7 +288,7 @@ describe("createChatSendReplyDispatch", () => {
         cfg: {},
         clientRunId: "run-finalize",
         sessionKey: "agent:main:main",
-        sessionLoadOptions: undefined,
+        sessionLoadOptions: { agentId: "main" },
       },
       userTurnRecorder: { markBlocked: vi.fn() },
     });

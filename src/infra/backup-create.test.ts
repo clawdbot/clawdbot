@@ -506,43 +506,6 @@ describe("writeTarArchiveWithRetry", () => {
     expect(runTar).toHaveBeenCalledTimes(3);
   });
 
-  it("lets callers reset per-attempt counters so retries report the final attempt's count, not a running sum", async () => {
-    // Simulate the caller's pattern: a closure counter populated by a filter
-    // that tar.c invokes while walking the tree. Each attempt re-walks the
-    // same tree, so the runTar closure must reset the counter before calling
-    // tar.c -- otherwise the reported count accumulates across attempts.
-    let skippedVolatileCount = 0;
-    const volatileFilesSeenPerAttempt = 5;
-    let attempt = 0;
-
-    const eofErr = Object.assign(new Error("did not encounter expected EOF"), {
-      path: "/state/sessions/s-abc/transcript.jsonl",
-    });
-
-    const runTar = vi.fn<() => Promise<void>>().mockImplementation(async () => {
-      attempt += 1;
-      skippedVolatileCount = 0;
-      for (let i = 0; i < volatileFilesSeenPerAttempt; i += 1) {
-        skippedVolatileCount += 1;
-      }
-      if (attempt < 3) {
-        throw eofErr;
-      }
-    });
-    const sleep = vi.fn<(ms: number) => Promise<void>>().mockResolvedValue(undefined);
-
-    await writeTarArchiveWithRetry({
-      tempArchivePath: "/tmp/backup.tar.gz.tmp",
-      runTar,
-      sleepMs: sleep,
-    });
-
-    expect(runTar).toHaveBeenCalledTimes(3);
-    // Without the reset, this would be 15 (5 * 3 attempts). With the reset,
-    // it equals the count from the final (successful) attempt.
-    expect(skippedVolatileCount).toBe(volatileFilesSeenPerAttempt);
-  });
-
   it("does not retry on non-EOF errors", async () => {
     const runTar = vi.fn<() => Promise<void>>().mockRejectedValue(new Error("permission denied"));
     const sleep = vi.fn<(ms: number) => Promise<void>>().mockResolvedValue(undefined);

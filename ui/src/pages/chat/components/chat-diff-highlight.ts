@@ -9,8 +9,7 @@ class DiffHighlightDirective extends AsyncDirective {
   private oldPath?: string;
   private highlighted: ReadonlyMap<DiffLine, unknown> = new Map();
   private renderDiff?: RenderDiff;
-  private readonly renderLine = (line: DiffLine) =>
-    this.highlighted.get(line) ?? (line.text || " ");
+  private readonly renderLine = (line: DiffLine) => this.highlighted.get(line) ?? line.text;
 
   override render(lines: readonly DiffLine[], file: DiffFilePaths, renderDiff: RenderDiff) {
     const { path, oldPath = path } = file;

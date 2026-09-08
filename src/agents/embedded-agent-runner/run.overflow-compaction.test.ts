@@ -357,6 +357,13 @@ describe("compactEmbeddedRunForRecovery", () => {
     "keeps committed context chronology when the backend is %s",
     async (outcome) => {
       const state = createEmbeddedRunContextRecoveryState();
+      const requestBudget = {
+        contextWindow: 32_768,
+        reserveTokens: 8_192,
+        fixedTokens: 4_000,
+        pendingTokens: 100,
+      };
+      state.compactionRequestBudget = requestBudget;
       const controller = new AbortController();
       const error = new Error("backend settled after the committed replacement");
       const usageAccumulator = createUsageAccumulator();
@@ -364,8 +371,10 @@ describe("compactEmbeddedRunForRecovery", () => {
       const compact = vi.fn<ContextEngine["compact"]>(async ({ runtimeContext }) => {
         progressReset = runtimeContext?.compactionTimeoutReset;
         const recorder = readCompactionAccountingRecorder(runtimeContext);
-        recorder?.recordUsage({ input: 100, output: 50, total: 150 });
-        recorder?.recordCompaction(40);
+        expect(recorder?.requestBudget).toBe(requestBudget);
+        expect(runtimeContext).not.toHaveProperty("requestBudget");
+        recorder?.recordUsage?.({ input: 100, output: 50, total: 150 });
+        recorder?.recordCompaction?.(40);
         state.observeContextAccounting({ kind: "model", contextTokens: 20 });
         if (outcome === "failed") {
           throw error;
@@ -452,7 +461,7 @@ describe("compactEmbeddedRunForRecovery", () => {
       if (!usage) {
         throw new Error("expected normalized usage");
       }
-      readCompactionAccountingRecorder(params.runtimeContext)?.recordUsage(usage);
+      readCompactionAccountingRecorder(params.runtimeContext)?.recordUsage?.(usage);
       return { ok: false as const, compacted: false as const, reason: "invalid summary" };
     });
     const usageAccumulator = createUsageAccumulator();
@@ -563,6 +572,32 @@ describe("createEmbeddedRunCompactionRuntime", () => {
     });
     expect(fixture.sessionPromptState.sessionId).toBe("rotated-session");
     expect(fixture.sessionPromptState.committedCompactionSuccessor).toBeUndefined();
+  });
+
+  it("retires MCP predecessors when an in-memory compaction rotates identity", async () => {
+    const fixture = await createRuntime();
+    const { getOrCreateSessionMcpRuntime } =
+      await import("../agent-bundle-mcp-manager.test-support.js");
+    const { getSessionMcpRuntimeManagerForTesting } =
+      await import("../agent-bundle-mcp-manager-api.js");
+    const manager = getSessionMcpRuntimeManagerForTesting();
+    const create = (sessionId: string) =>
+      getOrCreateSessionMcpRuntime({
+        sessionId,
+        sessionKey: fixture.currentTarget.sessionKey,
+        workspaceDir: path.dirname(fixture.currentTarget.storePath),
+        cfg: { mcp: { servers: {} } },
+        manifestRegistry: { plugins: [] },
+      });
+    try {
+      await create(fixture.currentTarget.sessionId);
+      const successor = await create("rotated-session");
+      await fixture.runtime.adoptCompactionTranscript(fixture.compactResult);
+      expect(manager.peekSession({ sessionId: fixture.currentTarget.sessionId })).toBeUndefined();
+      expect(manager.peekSession({ sessionId: successor.sessionId })).toBe(successor);
+    } finally {
+      await manager.disposeAll();
+    }
   });
 
   it("fires ownership hooks against the rotated compacted transcript", async () => {

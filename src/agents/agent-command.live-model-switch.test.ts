@@ -49,6 +49,7 @@ import {
   resolveTestModelRefFromString,
 } from "./agent-command.live-model-switch.test-helpers.js";
 import type { FailoverReason } from "./failover/signal.js";
+import { formatAgentInternalEventsForPrompt, type AgentInternalEvent } from "./internal-events.js";
 import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
@@ -244,6 +245,9 @@ vi.mock("./command/cli-compaction.js", () => ({
 }));
 
 vi.mock("../auto-reply/reply/agent-runner-memory.js", () => ({
+  // Model-switch fixtures have no context pressure; required preflight preserves their session.
+  runSessionCompactionIfNeeded: async (params: { sessionEntry?: SessionEntry }) =>
+    params.sessionEntry,
   runMemoryFlushIfNeeded: (params: { sessionEntry?: SessionEntry }) =>
     state.runMemoryFlushIfNeededMock(params),
 }));
@@ -627,7 +631,15 @@ vi.mock("./auth-profiles.js", () => ({
 }));
 
 vi.mock("./auth-profiles/store-runtime.js", () => ({
-  ensureAuthProfileStore: () => state.authProfileStoreMock,
+  ensureAuthProfileStore: vi.fn(() => state.authProfileStoreMock),
+}));
+
+vi.mock("./auth-profiles/store.js", async (importOriginal) => ({
+  // Native loader bootstrap still needs the real auth-store factory exports.
+  ...(await importOriginal<typeof import("./auth-profiles/store.js")>()),
+  getRuntimeAuthProfileStoreSnapshot: () => state.authProfileStoreMock,
+  findPersistedAuthProfileCredential: ({ profileId }: { profileId: string }) =>
+    state.authProfileStoreMock.profiles[profileId],
 }));
 
 vi.mock("./auth-profiles/session-override.js", () => ({
@@ -1839,10 +1851,10 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     ["restart abort", "agent run aborted for restart"],
     ["lifecycle replacement", "Agent run belongs to a stale gateway lifecycle"],
   ] as const)(
-    "does not start memory maintenance when %s closes after persistence",
+    "does not run CLI compaction when %s closes after persistence",
     async (mode, error) => {
       setupSingleAttemptFallback();
-      setupStoredSession();
+      setupStoredSession({ contextTokens: 32_768 });
       const controller = new AbortController();
       const result = makeSuccessResult("openai", "gpt-5.4") as ReturnType<
         typeof makeSuccessResult
@@ -1854,6 +1866,14 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
         winnerModel: "gpt-5.4",
       };
       state.runAgentAttemptMock.mockResolvedValue(result);
+      const compact = vi.fn();
+      state.runCliTurnCompactionLifecycleMock.mockImplementationOnce(
+        async (params: { sessionEntry?: SessionEntry }, host: { assertActive?: () => void }) => {
+          expectDefined(host.assertActive, "compaction authority")();
+          compact();
+          return params.sessionEntry;
+        },
+      );
       state.persistCliTurnTranscriptMock.mockImplementationOnce(
         async (params: { sessionEntry?: SessionEntry }) => {
           if (mode === "restart abort") {
@@ -1877,7 +1897,8 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
 
       expect(state.persistCliTurnTranscriptMock).toHaveBeenCalledOnce();
       expect(state.runMemoryFlushIfNeededMock).not.toHaveBeenCalled();
-      expect(state.runCliTurnCompactionLifecycleMock).not.toHaveBeenCalled();
+      expect(state.runCliTurnCompactionLifecycleMock).toHaveBeenCalledOnce();
+      expect(compact).not.toHaveBeenCalled();
       expect(state.deliverAgentCommandResultMock).not.toHaveBeenCalled();
     },
   );
@@ -1885,9 +1906,10 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
   it.each([
     ["restart abort", "agent run aborted for restart"],
     ["lifecycle replacement", "Agent run belongs to a stale gateway lifecycle"],
-  ] as const)("stops finalization when memory maintenance sees a %s", async (mode, error) => {
+  ] as const)("stops finalization when CLI compaction sees a %s", async (mode, error) => {
     setupSingleAttemptFallback();
     const { store } = setupStoredSession({
+      contextTokens: 32_768,
       authProfileOverride: "openai:work",
       authProfileOverrideSource: "user",
     });
@@ -1902,7 +1924,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       winnerModel: "gpt-5.4",
     };
     state.runAgentAttemptMock.mockResolvedValue(result);
-    state.runMemoryFlushIfNeededMock.mockImplementationOnce(async (params) => {
+    state.runCliTurnCompactionLifecycleMock.mockImplementationOnce(async (params) => {
       if (mode === "restart abort") {
         controller.abort(createAgentRunRestartAbortError());
       } else {
@@ -1910,7 +1932,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
           throw new Error(error);
         });
       }
-      return { sessionEntry: params.sessionEntry, outcome: "failed" as const };
+      return params.sessionEntry;
     });
 
     await expect(
@@ -1921,15 +1943,15 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       }),
     ).rejects.toThrow(error);
 
-    expect(state.runMemoryFlushIfNeededMock).toHaveBeenCalledOnce();
-    const flushParams = state.runMemoryFlushIfNeededMock.mock.calls[0]?.[0] as
-      | { followupRun?: { run?: Record<string, unknown> } }
-      | undefined;
-    const flushRun = flushParams?.followupRun?.run;
-    expect(flushRun).toBeDefined();
-    expect(flushRun).toMatchObject({
-      authProfileId: "openai:work",
-      authProfileIdSource: "user",
+    expect(state.runMemoryFlushIfNeededMock).not.toHaveBeenCalled();
+    expect(state.runCliTurnCompactionLifecycleMock).toHaveBeenCalledOnce();
+    const compactionParams = requireRecord(
+      mockCallArg(state.runCliTurnCompactionLifecycleMock),
+      "CLI compaction parameters",
+    );
+    expect(compactionParams.sessionEntry).toMatchObject({
+      authProfileOverride: "openai:work",
+      authProfileOverrideSource: "user",
     });
     for (const field of [
       "runtimePluginToolGrant",
@@ -1937,9 +1959,8 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       "trustedInternalHandoff",
       "bashElevated",
     ]) {
-      expect(flushRun).not.toHaveProperty(field);
+      expect(compactionParams).not.toHaveProperty(field);
     }
-    expect(state.runCliTurnCompactionLifecycleMock).not.toHaveBeenCalled();
     expect(state.deliverAgentCommandResultMock).not.toHaveBeenCalled();
     expect(store["agent:main:main"]?.pendingFinalDelivery).toBeUndefined();
   });
@@ -2070,6 +2091,9 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
   });
 
   it("passes explicit timeout overrides into agent attempts", async () => {
+    // Freeze preflight elapsed time to keep the forwarding assertions exact.
+    const now = Date.now();
+    vi.spyOn(Date, "now").mockReturnValue(now);
     setupSingleAttemptFallback();
     state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "gpt-5.4"));
 
@@ -4881,6 +4905,49 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expect(autoProbeWrites).toHaveLength(0);
   });
 
+  it.each([
+    { source: "user" as const, profileProvider: "openai", preserve: true },
+    { source: "auto" as const, profileProvider: "openai", preserve: false },
+    { source: "user" as const, profileProvider: "anthropic", preserve: false },
+  ])(
+    "handles removed $source $profileProvider selections without replacing explicit same-provider intent",
+    async ({ source, profileProvider, preserve }) => {
+      const profileId = `${profileProvider}:selected`;
+      state.sessionEntryMock = createCommandSessionEntry({
+        sessionId: "session-1",
+        updatedAt: Date.now(),
+        providerOverride: "openai",
+        modelOverride: "gpt-future",
+        authProfileOverride: profileId,
+        authProfileOverrideSource: source,
+        skillsSnapshot: { prompt: "", skills: [], version: 0 },
+      });
+      state.runtimeConfigMock = {
+        agents: { defaults: { models: { "openai/gpt-future": {} } } },
+      };
+      setupSingleAttemptFallback();
+      state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "gpt-future"));
+      state.authProfileStoreMock = {
+        profiles: { [profileId]: { type: "api_key", provider: profileProvider, key: "synthetic" } },
+      };
+      await runBasicAgentCommand();
+      if (profileProvider === "openai") {
+        expect(state.clearSessionAuthProfileOverrideMock).not.toHaveBeenCalled();
+      }
+      state.clearSessionAuthProfileOverrideMock.mockClear();
+      state.authProfileStoreMock = { profiles: {} };
+
+      await runBasicAgentCommand();
+
+      expect(state.clearSessionAuthProfileOverrideMock).toHaveBeenCalledTimes(preserve ? 0 : 1);
+      const { ensureAuthProfileStore } = await import("./auth-profiles/store-runtime.js");
+      expect(ensureAuthProfileStore).toHaveBeenCalledWith(
+        "/tmp/agent",
+        expect.objectContaining({ profileId, allowKeychainPrompt: false }),
+      );
+    },
+  );
+
   it("keeps aliased session auth profiles for codex-cli runs", async () => {
     let capturedAuthProfileProvider: string | undefined;
     const sessionEntry = {
@@ -5230,28 +5297,24 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
   it("sends internal completion wakes to ACP sessions as plain prompt text", async () => {
     setupAcpSession();
 
+    const internalEvents: AgentInternalEvent[] = [
+      {
+        type: "task_completion",
+        source: "subagent",
+        childSessionKey: "agent:main:subagent:child",
+        childSessionId: "child-session-id",
+        announceType: "subagent task",
+        taskLabel: "inspect ACP delivery",
+        status: "ok",
+        statusLabel: "completed successfully",
+        result: "child output",
+        replyInstruction: "Summarize the result for the user.",
+      },
+    ];
     await agentCommand({
-      message: [
-        INTERNAL_RUNTIME_CONTEXT_BEGIN,
-        "OpenClaw runtime context (internal):",
-        "hidden task completion event",
-        INTERNAL_RUNTIME_CONTEXT_END,
-      ].join("\n"),
+      message: formatAgentInternalEventsForPrompt(internalEvents),
       sessionKey: "agent:main:main",
-      internalEvents: [
-        {
-          type: "task_completion",
-          source: "subagent",
-          childSessionKey: "agent:main:subagent:child",
-          childSessionId: "child-session-id",
-          announceType: "subagent task",
-          taskLabel: "inspect ACP delivery",
-          status: "ok",
-          statusLabel: "completed successfully",
-          result: "child output",
-          replyInstruction: "Summarize the result for the user.",
-        },
-      ],
+      internalEvents,
     });
 
     expect(state.acpRunTurnMock).toHaveBeenCalledTimes(1);

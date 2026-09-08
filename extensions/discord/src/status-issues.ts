@@ -96,7 +96,12 @@ export function collectDiscordStatusIssues(
 ): ChannelStatusIssue[] {
   const issues: ChannelStatusIssue[] = [];
   for (const entry of accounts) {
-    const account = readAccountStatusSnapshot(entry, ["application", "audit"]);
+    const account = readAccountStatusSnapshot(entry, [
+      "application",
+      "audit",
+      "groupPolicy",
+      "guildsConfigured",
+    ]);
     if (!account) {
       continue;
     }
@@ -106,6 +111,21 @@ export function collectDiscordStatusIssues(
     }
 
     const app = readDiscordApplicationSummary(account.application);
+    if (account.groupPolicy === "allowlist" && account.guildsConfigured === 0) {
+      const guildGuidance =
+        accountId === "default"
+          ? "Add your server under channels.discord.guilds. If channels.discord.accounts.default.guilds is set, add it there instead."
+          : `Add your server under channels.discord.accounts.${accountId}.guilds.`;
+      issues.push({
+        channel: "discord",
+        accountId,
+        kind: "config",
+        message:
+          'Discord guild messages are blocked: effective groupPolicy is "allowlist", but no guilds are configured.',
+        fix: `${guildGuidance} Refresh channel status after the configuration reload applies.`,
+      });
+    }
+
     const messageContent = app.intents?.messageContent;
     if (messageContent === "disabled") {
       issues.push({

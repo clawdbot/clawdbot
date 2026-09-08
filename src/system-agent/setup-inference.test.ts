@@ -59,28 +59,28 @@ import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { WizardCancelledError, WizardNavigationError } from "../wizard/prompts.js";
 import { cleanupSystemAgentSession, createSystemAgentSession } from "./agent-turn.js";
-import { runSystemAgentTurnWithDeps } from "./agent-turn.test-support.js";
-import { resolveSystemAgentConfiguredRouteFromConfig } from "./inference-route.js";
+import { runSystemAgentTurnWithDeps as runSystemAgentTurnWithDepsImpl } from "./agent-turn.test-support.js";
+import { resolveSystemAgentConfiguredRouteFromConfig as resolveSystemAgentConfiguredRouteFromConfigImpl } from "./inference-route.js";
 import { setupInferenceLog, type ActivateSetupInferenceDeps } from "./setup-inference-core.js";
 import { resolveSetupInferenceProbeStreamParams } from "./setup-inference-probe.js";
-import { runSetupInferenceTest } from "./setup-inference-test.js";
+import { runSetupInferenceTest as runSetupInferenceTestImpl } from "./setup-inference-test.js";
 import {
   SetupInferenceActivationIndeterminateError,
   activateSetupInference as activateSetupInferenceImpl,
   type BoundVerifySetupInferenceResult,
-  detectSetupInference,
-  listManualSetupInferenceOptions,
+  detectSetupInference as detectSetupInferenceImpl,
+  listManualSetupInferenceOptions as listManualSetupInferenceOptionsImpl,
   listSetupInferenceAuthOptions,
   listSetupInferenceManualProviders,
   listSetupInferencePrepareOptions,
-  resolvePersistentApplyInference,
+  resolvePersistentApplyInference as resolvePersistentApplyInferenceImpl,
   type VerifySetupInferenceResult,
   verifySetupInference as verifySetupInferenceImpl,
   verifySetupInferenceConfig as verifySetupInferenceConfigImpl,
 } from "./setup-inference.js";
-import { applySystemAgentModelSelection } from "./setup-model-selection.js";
+import { applySystemAgentModelSelection as applySystemAgentModelSelectionImpl } from "./setup-model-selection.js";
 import {
-  installSystemAgentPluginMetadataTestSnapshot,
+  createSystemAgentPluginMetadataTestSnapshot,
   type SystemAgentPluginMetadataTestSnapshot,
 } from "./system-agent.test-helpers.js";
 import {
@@ -104,6 +104,7 @@ vi.mock("../agents/runtime-plugins.js", () => ({
 
 vi.mock("../plugins/registry-refresh.js", () => ({
   refreshPluginRegistryAfterConfigMutation: mocks.refreshPluginRegistryAfterConfigMutation,
+  refreshPluginRegistryForPreparedConfig: mocks.refreshPluginRegistryAfterConfigMutation,
 }));
 
 vi.mock("../config/config.js", async (importOriginal) => {
@@ -162,10 +163,36 @@ const suiteTempRootTracker = createSuiteTempRootTracker({
   prefix: "setup-inference-test-",
 });
 let pluginMetadataSnapshot: SystemAgentPluginMetadataTestSnapshot | undefined;
+
+const runSystemAgentTurnWithDeps: typeof runSystemAgentTurnWithDepsImpl = (...args) =>
+  pluginMetadataSnapshot!.run(() => runSystemAgentTurnWithDepsImpl(...args));
+
+const resolveSystemAgentConfiguredRouteFromConfig: typeof resolveSystemAgentConfiguredRouteFromConfigImpl =
+  (...args) =>
+    pluginMetadataSnapshot!.run(
+      () => resolveSystemAgentConfiguredRouteFromConfigImpl(...args),
+      args[0],
+    );
+
+const resolvePersistentApplyInference: typeof resolvePersistentApplyInferenceImpl = (...args) =>
+  pluginMetadataSnapshot!.run(() => resolvePersistentApplyInferenceImpl(...args));
+
+const detectSetupInference: typeof detectSetupInferenceImpl = (...args) =>
+  pluginMetadataSnapshot!.run(() => detectSetupInferenceImpl(...args));
+
+const listManualSetupInferenceOptions: typeof listManualSetupInferenceOptionsImpl = (...args) =>
+  pluginMetadataSnapshot!.run(() => listManualSetupInferenceOptionsImpl(...args));
+
+const runSetupInferenceTest: typeof runSetupInferenceTestImpl = (...args) =>
+  pluginMetadataSnapshot!.run(() => runSetupInferenceTestImpl(...args));
+
+const applySystemAgentModelSelection: typeof applySystemAgentModelSelectionImpl = (...args) =>
+  pluginMetadataSnapshot!.run(() => applySystemAgentModelSelectionImpl(...args));
+
 let inMemoryAuthProfileStores = new Map<string, AuthProfileStore>();
 
 beforeAll(async () => {
-  pluginMetadataSnapshot = installSystemAgentPluginMetadataTestSnapshot(
+  pluginMetadataSnapshot = createSystemAgentPluginMetadataTestSnapshot(
     materializedMainRuntimeConfig,
   );
   cliBackendsTesting.setDepsForTest({
@@ -203,13 +230,12 @@ afterAll(async () => {
     }
   } finally {
     cliBackendsTesting.resetDepsForTest();
-    pluginMetadataSnapshot?.restore();
   }
 });
 
 beforeEach(() => {
   inMemoryAuthProfileStores = new Map();
-  pluginMetadataSnapshot?.rebindForCurrentEnv();
+  pluginMetadataSnapshot?.bindForConfig(materializedMainRuntimeConfig);
 });
 
 async function createMainAgentFixture() {
@@ -415,14 +441,16 @@ async function activateSetupInference(
       } as never);
     }) as typeof deps.transformConfigWithPendingPluginInstalls;
   }
-  return activateSetupInferenceImpl({
-    runtime,
-    surface: "gateway",
-    ...activationParams,
-    // Most activation tests isolate commit mechanics from the verified-owner
-    // implementation. Owner-CAS regressions opt back into the real helper.
-    deps,
-  });
+  return pluginMetadataSnapshot!.run(() =>
+    activateSetupInferenceImpl({
+      runtime,
+      surface: "gateway",
+      ...activationParams,
+      // Most activation tests isolate commit mechanics from the verified-owner
+      // implementation. Owner-CAS regressions opt back into the real helper.
+      deps,
+    }),
+  );
 }
 
 type TestVerifySetupInferenceParams = Omit<
@@ -443,11 +471,13 @@ function verifySetupInference(
   params: TestVerifySetupInferenceParams & { bindSession?: boolean },
 ): Promise<VerifySetupInferenceResult | BoundVerifySetupInferenceResult> {
   const { useRealAuthProfileStore = false, ...verifyParams } = params;
-  return verifySetupInferenceImpl({
-    runtime,
-    ...verifyParams,
-    deps: withSuiteFixtures(verifyParams.deps, useRealAuthProfileStore),
-  } as never);
+  return pluginMetadataSnapshot!.run(() =>
+    verifySetupInferenceImpl({
+      runtime,
+      ...verifyParams,
+      deps: withSuiteFixtures(verifyParams.deps, useRealAuthProfileStore),
+    } as never),
+  );
 }
 
 async function verifySetupInferenceConfig(
@@ -458,11 +488,13 @@ async function verifySetupInferenceConfig(
 ): ReturnType<typeof verifySetupInferenceConfigImpl> {
   const { useRealAuthProfileStore = false, ...verifyParams } = params;
   pluginMetadataSnapshot?.bind({ config: verifyParams.config, env: process.env });
-  return verifySetupInferenceConfigImpl({
-    runtime,
-    ...verifyParams,
-    deps: withSuiteFixtures(verifyParams.deps, useRealAuthProfileStore),
-  });
+  return pluginMetadataSnapshot!.run(() =>
+    verifySetupInferenceConfigImpl({
+      runtime,
+      ...verifyParams,
+      deps: withSuiteFixtures(verifyParams.deps, useRealAuthProfileStore),
+    }),
+  );
 }
 
 type SuccessfulRunParams = {
@@ -562,6 +594,7 @@ function activateCodexSetup(params: Omit<TestSetupInferenceActivationParams, "ki
       ensureCodexRuntimePlugin: mockCodexRuntimeInstall(),
       runEmbeddedAgent: vi.fn(successfulRunner("openai", "gpt-5.6-sol")) as never,
       refreshPluginRegistryAfterConfigMutation: vi.fn(async () => {}) as never,
+      refreshPluginRegistryForPreparedConfig: vi.fn(async () => {}) as never,
       ...params.deps,
     },
   });
@@ -1530,6 +1563,7 @@ async function runCodexSetupWithFinalConfig(params: {
       readConfigFileSnapshot: readConfigFileSnapshot as never,
       transformConfigWithPendingPluginInstalls: transformConfig as never,
       refreshPluginRegistryAfterConfigMutation: refreshPluginRegistry as never,
+      refreshPluginRegistryForPreparedConfig: refreshPluginRegistry as never,
     },
   });
   return { result, persistedConfig, refreshPluginRegistry, transformConfig };
@@ -2732,6 +2766,7 @@ describe("activateSetupInference", () => {
         ensureCodexRuntimePlugin: ensureCodexRuntimePlugin as never,
         transformConfigWithPendingPluginInstalls: configHarness.transform as never,
         refreshPluginRegistryAfterConfigMutation: refreshPluginRegistry as never,
+        refreshPluginRegistryForPreparedConfig: refreshPluginRegistry as never,
         runCliAgent: runCliAgent as never,
       },
     });
@@ -4766,6 +4801,7 @@ describe("activateSetupInference", () => {
         markRetainedManagedNpmInstall: markRetainedInstall,
         transformConfigWithPendingPluginInstalls: transformConfig as never,
         refreshPluginRegistryAfterConfigMutation: refreshPluginRegistry as never,
+        refreshPluginRegistryForPreparedConfig: refreshPluginRegistry as never,
       },
     });
     expect(result).toMatchObject({ ok: true, gatewayRestartRequired: true });
@@ -4846,7 +4882,6 @@ describe("activateSetupInference", () => {
       expect.not.objectContaining({ afterWrite: expect.anything() }),
     );
     expect(refreshPluginRegistry).toHaveBeenCalledWith({
-      config: persistedConfig,
       reason: "source-changed",
       workspaceDir: "/tmp/openclaw-workspace",
       logger: expect.objectContaining({ warn: expect.any(Function) }),
@@ -4983,6 +5018,7 @@ describe("activateSetupInference", () => {
         readConfigFileSnapshot: configHarness.readSnapshot as never,
         ensureCodexRuntimePlugin: ensureCodex as never,
         refreshPluginRegistryAfterConfigMutation: refreshPluginRegistryAfterConfigMutation as never,
+        refreshPluginRegistryForPreparedConfig: refreshPluginRegistryAfterConfigMutation as never,
         runEmbeddedAgent: runEmbeddedAgent as never,
         transformConfigWithPendingPluginInstalls: configHarness.transform as never,
       },
@@ -5167,7 +5203,6 @@ describe("activateSetupInference", () => {
       );
     } finally {
       clearCurrentPluginMetadataSnapshot();
-      pluginMetadataSnapshot?.rebindForCurrentEnv();
     }
     expect(getPluginRuntimeGatewayRequestScope()).toBeUndefined();
     expect(ownerArtifactRegistry).toBe(stagedRegistry);
@@ -5357,6 +5392,7 @@ describe("activateSetupInference", () => {
         runEmbeddedAgent: runEmbeddedAgent as never,
         transformConfigWithPendingPluginInstalls: transformConfig as never,
         refreshPluginRegistryAfterConfigMutation: refreshPluginRegistry as never,
+        refreshPluginRegistryForPreparedConfig: refreshPluginRegistry as never,
       },
     });
 
@@ -5392,6 +5428,7 @@ describe("activateSetupInference", () => {
         clearPluginMetadataLifecycleCaches: clearMetadata,
         invalidatePluginRuntimeDiscoveryAfterConfigMutation: clearDiscovery as never,
         refreshPluginRegistryAfterConfigMutation: refreshPluginRegistry as never,
+        refreshPluginRegistryForPreparedConfig: refreshPluginRegistry as never,
       },
     });
 
@@ -5407,7 +5444,6 @@ describe("activateSetupInference", () => {
     expect(clearMetadata).toHaveBeenCalledTimes(2);
     expect(clearDiscovery).toHaveBeenCalledTimes(2);
     expect(refreshPluginRegistry).toHaveBeenCalledWith({
-      config: {},
       reason: "source-changed",
       workspaceDir: "/tmp/openclaw-workspace",
       logger: expect.objectContaining({ warn: expect.any(Function) }),
@@ -5449,6 +5485,7 @@ describe("activateSetupInference", () => {
           clearPluginMetadataLifecycleCaches: vi.fn(),
           invalidatePluginRuntimeDiscoveryAfterConfigMutation: vi.fn(async () => {}) as never,
           refreshPluginRegistryAfterConfigMutation: refreshPluginRegistry as never,
+          refreshPluginRegistryForPreparedConfig: refreshPluginRegistry as never,
           createTempDir: async () => {
             tempDir = await suiteTempRootTracker.make("case");
             return tempDir;
@@ -5563,6 +5600,7 @@ describe("activateSetupInference", () => {
         runEmbeddedAgent: runEmbeddedAgent as never,
         transformConfigWithPendingPluginInstalls: transformConfig as never,
         refreshPluginRegistryAfterConfigMutation: refreshPluginRegistry as never,
+        refreshPluginRegistryForPreparedConfig: refreshPluginRegistry as never,
       },
     });
 
@@ -5602,6 +5640,7 @@ describe("activateSetupInference", () => {
           transformConfigWithPendingPluginInstalls: configHarness.transform as never,
           readPersistedInstalledPluginIndexInstallRecords: vi.fn(async () => ({})),
           refreshPluginRegistryAfterConfigMutation: refreshPluginRegistry as never,
+          refreshPluginRegistryForPreparedConfig: refreshPluginRegistry as never,
         },
       });
 
@@ -5736,6 +5775,7 @@ describe("activateSetupInference", () => {
       transformConfigWithPendingPluginInstalls: transformConfig as never,
       readConfigFileSnapshot: readConfigFileSnapshot as never,
       refreshPluginRegistryAfterConfigMutation: vi.fn(async () => {}) as never,
+      refreshPluginRegistryForPreparedConfig: vi.fn(async () => {}) as never,
       readPersistedInstalledPluginIndexInstallRecords: vi.fn(async () => ({})),
       markRetainedManagedNpmInstall: markRetained,
       clearLoadInstalledPluginIndexInstallRecordsCache: clearInstallRecords,
@@ -5859,6 +5899,7 @@ describe("resolvePersistentApplyInference", () => {
     const execution = {
       runner: "embedded" as const,
       runConfig: { agents: { defaults: { model: "openai/gpt-5.5" } } },
+      sourceConfig: { agents: { defaults: { model: "openai/gpt-5.5" } } },
       modelLabel: "openai/gpt-5.5",
       provider: "openai",
       model: "gpt-5.5",

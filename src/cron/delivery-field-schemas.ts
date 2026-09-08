@@ -52,8 +52,8 @@ export function parseDeliveryInput(input: Record<string, unknown>): ParsedDelive
   };
 }
 
-/** Returns a parsed field value only when the supplied schema accepts it. */
+/** Parses present optional fields, returning undefined for missing or invalid values. */
 export function parseOptionalField<T>(schema: ZodType<T>, value: unknown): T | undefined {
-  const parsed = schema.safeParse(value);
-  return parsed.success ? parsed.data : undefined;
+  const parsed = value === undefined ? undefined : schema.safeParse(value);
+  return parsed?.success ? parsed.data : undefined;
 }

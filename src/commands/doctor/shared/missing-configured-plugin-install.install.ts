@@ -8,7 +8,6 @@ import { parseClawHubPluginSpec } from "../../../infra/clawhub-spec.js";
 import { parseRegistryNpmSpec } from "../../../infra/npm-registry-spec.js";
 import {
   comparePackageUpdateVersions,
-  expectedIntegrityForUpdate,
   readInstalledPackageVersion,
 } from "../../../infra/package-update-utils.js";
 import type { UpdateChannel } from "../../../infra/update-channels.js";
@@ -48,6 +47,10 @@ import {
   resolveLegacyNpmPackageInstallPath,
   resolveNpmPackageInstallPath,
 } from "./missing-configured-plugin-install.records.js";
+import {
+  resolveRecordedInstallCandidate,
+  type InstallCandidateRepairReason,
+} from "./missing-configured-plugin-install.targets.js";
 
 export function isActionableClawHubSkippedOutcome(outcome: {
   status: string;
@@ -60,8 +63,6 @@ export function isClawHubReviewNotice(message: string): boolean {
   const audit = stripAnsi(message);
   return audit.includes("ClawHub Security Audit") && audit.includes("Outcome: Review");
 }
-
-type InstallCandidateRepairReason = "stale-version-bound-runtime";
 
 function formatInstalledConfiguredPluginChange(params: {
   pluginId: string;
@@ -130,35 +131,11 @@ async function installCandidatePackage(
   const recordedSource =
     record?.source === "npm" || record?.source === "clawhub" ? record.source : undefined;
   const staleRuntimeRepair = params.repairReason === "stale-version-bound-runtime";
-  const declaredSource = recordedSource
-    ? resolvePluginInstallSources(params.candidate, recordedSource)[0]
-    : undefined;
-  // Only the admitted cohort repair replaces a recorded target. Its new artifact
-  // uses the declared source's integrity; ordinary payload repair retains both pins.
-  const recordedSpec = staleRuntimeRepair
-    ? declaredSource?.spec
-    : (record?.spec ?? declaredSource?.spec);
-  const candidate =
-    record && recordedSource
-      ? {
-          ...params.candidate,
-          defaultChoice: recordedSource,
-          ...(recordedSource === "npm"
-            ? { npmSpec: recordedSpec, clawhubSpec: undefined }
-            : { clawhubSpec: recordedSpec, npmSpec: undefined }),
-          expectedIntegrity: staleRuntimeRepair
-            ? declaredSource?.expectedIntegrity
-            : expectedIntegrityForUpdate(record.spec, record.integrity),
-          trustedSourceLinkedOfficialInstall:
-            params.candidate.trustedSourceLinkedOfficialInstall &&
-            (!record.spec ||
-              (recordedSource === "npm"
-                ? parseRegistryNpmSpec(record.spec)?.name ===
-                  parseRegistryNpmSpec(params.candidate.npmSpec ?? "")?.name
-                : parseClawHubPluginSpec(record.spec)?.name ===
-                  parseClawHubPluginSpec(params.candidate.clawhubSpec ?? "")?.name)),
-        }
-      : params.candidate;
+  const candidate = resolveRecordedInstallCandidate({
+    candidate: params.candidate,
+    record,
+    repairReason: params.repairReason,
+  });
   const extensionsDir = resolveDefaultPluginExtensionsDir(params.env);
   const warnings: string[] = [];
   // A channel fallback changes which artifact the operator gets, so it must stay

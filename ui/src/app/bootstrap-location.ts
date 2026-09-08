@@ -148,6 +148,21 @@ export function normalizeInitialApplicationLocation(
   return { ...location, pathname: options.pathname, search: search.size ? `?${search}` : "" };
 }
 
+export function createInitialApplicationLocationResolver(params: {
+  fallback: RouteLocation;
+  signal: AbortSignal;
+  resolve: () => Promise<RouteLocation>;
+}): () => Promise<RouteLocation> {
+  let ready: Promise<RouteLocation> | null = null;
+  return () =>
+    (ready ??= params.resolve().catch((error: unknown) => {
+      if (params.signal.aborted) {
+        return params.fallback;
+      }
+      throw error;
+    }));
+}
+
 export async function resolveInitialApplicationLocation(params: {
   location: RouteLocation;
   basePath: string;
@@ -173,19 +188,18 @@ export async function resolveInitialApplicationLocation(params: {
     hello: params.gateway.snapshot.hello,
   };
   let sessionKey = params.sessionKey.trim() || params.gateway.snapshot.sessionKey;
-  const defaultAgentId = resolveUiDefaultAgentId(initialDefaults);
+  let defaultAgentId = resolveUiDefaultAgentId(initialDefaults);
   let agentId =
     parseAgentSessionKey(sessionKey)?.agentId ??
     resolvePersistedAgentId(params.selectedAgentId, agentsList) ??
     defaultAgentId;
 
-  if (normalizeAgentId(agentId) !== normalizeAgentId(defaultAgentId) && !agentsList) {
-    agentsList = (await params.ensureAgentsList?.()) ?? null;
-    params.signal.throwIfAborted();
-    if (params.gateway.snapshot.client !== client || params.gateway.snapshot.hello !== hello) {
-      return resolveInitialApplicationLocation(params);
-    }
+  agentsList = (await params.ensureAgentsList?.()) ?? agentsList;
+  params.signal.throwIfAborted();
+  if (params.gateway.snapshot.client !== client || params.gateway.snapshot.hello !== hello) {
+    return resolveInitialApplicationLocation(params);
   }
+  defaultAgentId = resolveUiDefaultAgentId({ agentsList, hello });
   if (agentsList && !resolvePersistedAgentId(agentId, agentsList)) {
     agentId = resolvePersistedAgentId(params.selectedAgentId, agentsList) ?? defaultAgentId;
     sessionKey = buildAgentMainSessionKey({

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { createNodeDuplexEndpoint } from "./node-duplex-framing.js";
 
 const FRAGMENT_BYTES = 8 * 1024;
@@ -27,14 +28,16 @@ describe("node duplex message framing", () => {
     const rightMessages: Uint8Array[] = [];
     const left = createNodeDuplexEndpoint({
       sendFrame(frame) {
-        outboundFrames.push(frame);
-        right.receive(frame);
+        const serialized = JSON.stringify(frame);
+        outboundFrames.push(serialized);
+        right.receive(serialized);
       },
     });
     const right = createNodeDuplexEndpoint({
       sendFrame(frame) {
-        inboundFrames.push(frame);
-        left.receive(frame);
+        const serialized = JSON.stringify(frame);
+        inboundFrames.push(serialized);
+        left.receive(serialized);
       },
     });
     left.onMessage((message) => {
@@ -73,13 +76,36 @@ describe("node duplex message framing", () => {
     const sender = createNodeDuplexEndpoint({
       async sendFrame(frame) {
         await Promise.resolve();
-        receiver.receive(frame);
+        receiver.receive(JSON.stringify(frame));
       },
     });
 
     await Promise.all([sender.send(first), sender.send(second)]);
 
     expect(received).toEqual([first, second]);
+  });
+
+  it("snapshots each fragment before its transport serializes it", async () => {
+    const entered = createDeferred();
+    const released = createDeferred();
+    const received = vi.fn();
+    const receiver = createNodeDuplexEndpoint({ sendFrame: () => {} });
+    receiver.onMessage(received);
+    const sender = createNodeDuplexEndpoint({
+      async sendFrame(frame) {
+        entered.resolve();
+        await released.promise;
+        receiver.receive(JSON.stringify(frame));
+      },
+    });
+    const input = Uint8Array.of(1, 2, 3);
+    const pending = sender.send(input);
+    await entered.promise;
+    input.fill(9);
+    released.resolve();
+    await pending;
+
+    expect(received).toHaveBeenCalledExactlyOnceWith(Uint8Array.of(1, 2, 3));
   });
 
   it("serializes framed readiness ahead of a concurrent message", async () => {
@@ -94,7 +120,7 @@ describe("node duplex message framing", () => {
     const sender = createNodeDuplexEndpoint({
       async sendFrame(frame) {
         await Promise.resolve();
-        receiver.receive(frame);
+        receiver.receive(JSON.stringify(frame));
       },
     });
 
@@ -127,7 +153,9 @@ describe("node duplex message framing", () => {
     receiver.onMessage((message) => {
       received.push(message);
     });
-    const sender = createNodeDuplexEndpoint({ sendFrame: (frame) => receiver.receive(frame) });
+    const sender = createNodeDuplexEndpoint({
+      sendFrame: (frame) => receiver.receive(JSON.stringify(frame)),
+    });
 
     await sender.send(new Uint8Array());
     await sender.send(Uint8Array.of(7));
@@ -227,7 +255,7 @@ describe("node duplex message framing", () => {
     const bytesError = vi.fn();
     const bytesBounded = createNodeDuplexEndpoint({ sendFrame: () => {}, onError: bytesError });
     const sender = createNodeDuplexEndpoint({
-      sendFrame: (frame) => bytesBounded.receive(frame),
+      sendFrame: (frame) => bytesBounded.receive(JSON.stringify(frame)),
     });
     await sender.send(new Uint8Array(600_000));
     await expect(sender.send(new Uint8Array(600_000))).rejects.toThrow(/pending/i);
@@ -254,7 +282,9 @@ describe("node duplex message framing", () => {
     const received = vi.fn();
     const receiver = createNodeDuplexEndpoint({ sendFrame: () => {} });
     receiver.onMessage(received);
-    const sender = createNodeDuplexEndpoint({ sendFrame: (frame) => receiver.receive(frame) });
+    const sender = createNodeDuplexEndpoint({
+      sendFrame: (frame) => receiver.receive(JSON.stringify(frame)),
+    });
     const message = new Uint8Array(1024 * 1024 + 1);
 
     await sender.send(message);
@@ -461,7 +491,7 @@ describe("node duplex message framing", () => {
       return deliveriesFinished;
     });
     const sender = createNodeDuplexEndpoint({
-      sendFrame: (frame) => receiver.receive(frame),
+      sendFrame: (frame) => receiver.receive(JSON.stringify(frame)),
       maxMessageBytes,
       maxOutstandingDeliveryBytes,
     });

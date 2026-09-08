@@ -67,6 +67,7 @@ function createTestRuntime(params: Parameters<CreateSessionMcpRuntime>[0]): Sess
       isError: false,
     }),
     dispose: async () => {},
+    joinCleanup: async () => {},
   };
 }
 

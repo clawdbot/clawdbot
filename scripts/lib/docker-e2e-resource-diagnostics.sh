@@ -121,7 +121,8 @@ docker_e2e_docker_run_with_resource_diagnostics() {
     return
   fi
 
-  "$tail_bin" -c 65536 <"$capture_fifo" >"$stderr_file" &
+  # Some tail implementations reopen named FIFOs passed through stdin and wait for a new writer.
+  "$tail_bin" -c 65536 "$capture_fifo" >"$stderr_file" &
   local tail_pid="$!"
   "$tee_bin" "$capture_fifo" <"$stderr_fifo" >&2 &
   local tee_pid="$!"

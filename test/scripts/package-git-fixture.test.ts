@@ -131,6 +131,15 @@ describe("package git fixture", () => {
       "{}\n",
     );
     writeFileSync(path.join(root, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n");
+    for (const destination of ["dist", "node_modules"]) {
+      const staging = path.join(
+        root,
+        `${destination}.openclaw-update-00000000-0000-4000-8000-000000000000.tmp`,
+      );
+      mkdirSync(staging);
+      writeFileSync(path.join(staging, "candidate"), "staged runtime");
+    }
+    writeFileSync(path.join(root, "operator-notes.tmp"), "keep visible");
     expect(spawnSync("git", ["init", "-q", root], { encoding: "utf8" }).status).toBe(0);
     expect(spawnSync("git", ["-C", root, "add", "-A"], { encoding: "utf8" }).status).toBe(0);
     const staged = spawnSync("git", ["-C", root, "diff", "--cached", "--name-only"], {
@@ -139,6 +148,8 @@ describe("package git fixture", () => {
     expect(staged.status).toBe(0);
     expect(staged.stdout).not.toContain("node_modules");
     expect(staged.stdout).not.toContain("pnpm-lock.yaml");
+    expect(staged.stdout).not.toContain(".openclaw-update-");
+    expect(staged.stdout).toContain("operator-notes.tmp");
   });
 
   it("uses the packed entrypoint without a bundled ai runtime", () => {

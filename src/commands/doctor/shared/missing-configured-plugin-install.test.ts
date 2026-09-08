@@ -874,6 +874,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     // The doctor module owns a broad install/catalog graph. Its cold import is
     // suite setup; individual cases measure detection and repair behavior.
     await import("./missing-configured-plugin-install.js");
+    await import("../../../cli/update-cli/update-command-plugin-preflight.js");
   });
 
   beforeEach(() => {
@@ -1687,6 +1688,114 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       resolvedSpec: `@openclaw/diagnostics-otel@${VERSION}`,
     });
   });
+
+  it.each([
+    { source: "official", installed: false, expectedVersion: "2026.9.3" },
+    { source: "external", installed: false, expectedVersion: "2026.9.4" },
+    { source: "official", installed: true, expectedVersion: "2026.8.1" },
+  ])(
+    "preserves the selected release while repairing $source plugins (installed=$installed)",
+    async ({ source, installed, expectedVersion }) => {
+      const pluginId = "duckduckgo";
+      const packageName = "@openclaw/duckduckgo-plugin";
+      const coreVersion = "2026.9.3";
+      const latestVersion = "2026.9.4";
+      const config: OpenClawConfig = {
+        update: { channel: "stable" },
+        plugins: { entries: { [pluginId]: { enabled: true } } },
+      };
+      const env = { ...testEnv, OPENCLAW_COMPATIBILITY_HOST_VERSION: coreVersion };
+      const installPath = tempDirs.make("openclaw-doctor-pinned-duckduckgo-");
+      const records = installed
+        ? installedRecords(pluginId, {
+            spec: `${packageName}@2026.8.1`,
+            resolvedVersion: "2026.8.1",
+            installPath,
+          })
+        : {};
+      if (installed) {
+        createColdPluginFixture({
+          rootDir: installPath,
+          pluginId,
+          packageName,
+          packageVersion: "2026.8.1",
+        });
+        mocks.loadPluginMetadataSnapshot.mockReturnValue({
+          plugins: [
+            {
+              id: pluginId,
+              origin: "global",
+              packageName,
+              rootDir: installPath,
+              source: path.join(installPath, "index.cjs"),
+              channels: [],
+            },
+          ],
+          diagnostics: [],
+        });
+      }
+      mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue(records);
+      mocks.listOfficialExternalPluginCatalogEntries.mockReturnValue([
+        officialPluginEntry({
+          id: pluginId,
+          npmSpec: packageName,
+          overrides: { name: packageName, source },
+        }),
+      ]);
+      const versionForSpec = (spec: string) =>
+        spec === packageName ? latestVersion : spec.slice(packageName.length + 1);
+      mocks.resolveNpmSpecMetadata.mockImplementation(async ({ spec }: { spec: string }) => ({
+        ok: true,
+        metadata: {
+          name: packageName,
+          version: versionForSpec(spec),
+          resolvedSpec: `${packageName}@${versionForSpec(spec)}`,
+        },
+      }));
+      mocks.installPluginFromNpmSpec.mockImplementation(async ({ spec }: { spec: string }) =>
+        successfulInstall({ pluginId, npmSpec: packageName, version: versionForSpec(spec) }),
+      );
+      const { preflightConfiguredNpmPluginTargets } =
+        await import("../../../cli/update-cli/update-command-plugin-preflight.js");
+      await preflightConfiguredNpmPluginTargets({
+        config,
+        env,
+        targetVersion: coreVersion,
+        channel: "stable",
+        timeoutMs: 1000,
+      });
+      const expectedSpec =
+        source === "external" ? packageName : `${packageName}@${expectedVersion}`;
+      expect(mocks.resolveNpmSpecMetadata).toHaveBeenCalledWith({
+        spec: expectedSpec,
+        timeoutMs: 1000,
+      });
+      expect(mocks.installPluginFromNpmSpec).not.toHaveBeenCalled();
+      expect(mocks.writePersistedInstalledPluginIndexInstallRecords).not.toHaveBeenCalled();
+
+      const result = await repairConfiguredPlugins(config, env);
+      expect(result.warnings).toEqual([]);
+      if (installed) {
+        expect(result.records).toEqual(records);
+        expect(mocks.installPluginFromNpmSpec).not.toHaveBeenCalled();
+        expect(mocks.writePersistedInstalledPluginIndexInstallRecords).not.toHaveBeenCalled();
+      } else {
+        expectRecordFields(mockCallArg(mocks.installPluginFromNpmSpec), {
+          spec: expectedSpec,
+          expectedPluginId: pluginId,
+        });
+        expectRecordFields(result.records[pluginId], {
+          spec: packageName,
+          resolvedVersion: expectedVersion,
+          resolvedSpec: `${packageName}@${expectedVersion}`,
+        });
+        expect(mocks.writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith(
+          result.records,
+          { config, env },
+        );
+      }
+    },
+  );
 
   it("does not install disabled configured plugin entries", async () => {
     mocks.listOfficialExternalPluginCatalogEntries.mockReturnValue([
@@ -3115,6 +3224,150 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     ]);
     expect(result.warnings).toStrictEqual([]);
   });
+
+  it.each([
+    {
+      availability: "missing version",
+      channel: "stable",
+      error: "Package not found on npm: @openclaw/codex@2026.9.3.",
+    },
+    { availability: "registry outage", channel: "stable", error: "registry connection timed out" },
+    { availability: "published version", channel: "stable" },
+    { availability: "already-current floating package", channel: "stable" },
+    { availability: "beta-only package", channel: "beta" },
+    { availability: "unknown core version", channel: "stable" },
+  ] as const)(
+    "preflights Codex with $availability before any plugin mutation",
+    async ({ availability, channel, ...outcome }) => {
+      const alreadyCurrent = availability === "already-current floating package";
+      const installedVersion = alreadyCurrent ? "2026.9.3" : "2026.9.1";
+      if (alreadyCurrent) {
+        useManifestCatalogResolvers();
+      }
+      const installDir = tempDirs.make("openclaw-plugin-availability-");
+      createColdPluginFixture({
+        rootDir: installDir,
+        pluginId: "codex",
+        packageName: "@openclaw/codex",
+        packageVersion: installedVersion,
+      });
+      const packageFile = path.join(installDir, "package.json");
+      const originalPackage = fs.readFileSync(packageFile, "utf8");
+      const records = installedRecords("codex", {
+        spec: alreadyCurrent ? "@openclaw/codex" : "@openclaw/codex@2026.9.1",
+        resolvedVersion: installedVersion,
+        installPath: installDir,
+      });
+      const config: OpenClawConfig = { plugins: { entries: { codex: { enabled: true } } } };
+      const originalConfig = structuredClone(config);
+      const originalRecords = structuredClone(records);
+      mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue(records);
+      mocks.loadPluginMetadataSnapshot.mockReturnValue({
+        plugins: [{ id: "codex", packageVersion: installedVersion, channels: [] }],
+        diagnostics: [],
+      });
+      mocks.listOfficialExternalPluginCatalogEntries.mockReturnValue([
+        officialPluginEntry({ id: "codex", npmSpec: "@openclaw/codex" }),
+      ]);
+      mocks.resolveNpmSpecMetadata.mockImplementation(async ({ spec }: { spec: string }) => {
+        if (spec === "@openclaw/codex@2026.9.3" && "error" in outcome) {
+          return { ok: false, error: outcome.error };
+        }
+        if (availability === "beta-only package" && spec === "@openclaw/codex@latest") {
+          return { ok: false, error: "No latest release for @openclaw/codex." };
+        }
+        const version =
+          spec === "@openclaw/codex"
+            ? "2026.9.2"
+            : spec.endsWith("@beta")
+              ? "2026.9.3-beta.1"
+              : spec.split("@").at(-1);
+        return {
+          ok: true,
+          metadata: {
+            name: "@openclaw/codex",
+            version,
+            resolvedSpec: `@openclaw/codex@${version}`,
+          },
+        };
+      });
+      const { preflightConfiguredNpmPluginTargets } =
+        await import("../../../cli/update-cli/update-command-plugin-preflight.js");
+      const result = preflightConfiguredNpmPluginTargets({
+        config,
+        env: testEnv,
+        targetVersion: availability === "unknown core version" ? null : "2026.9.3",
+        channel,
+        timeoutMs: 1000,
+      });
+      if (availability === "unknown core version") {
+        await expect(result).rejects.toMatchObject({
+          reason: "plugin-target-unavailable",
+          message: expect.stringContaining("target core version is unknown"),
+        });
+      } else if ("error" in outcome) {
+        await expect(result).rejects.toMatchObject({
+          reason: "plugin-target-unavailable",
+          message: expect.stringContaining(
+            `Plugin "codex" requires @openclaw/codex@2026.9.3 for core 2026.9.3: ${outcome.error}`,
+          ),
+        });
+      } else {
+        await expect(result).resolves.toBeUndefined();
+      }
+      expect(
+        mocks.resolveNpmSpecMetadata.mock.calls
+          .map(([params]) => params.spec)
+          .toSorted((left, right) => left.localeCompare(right)),
+      ).toEqual(
+        availability === "unknown core version"
+          ? []
+          : channel === "beta"
+            ? ["@openclaw/codex@beta", "@openclaw/codex@latest"]
+            : ["@openclaw/codex@2026.9.3"],
+      );
+      expect(config).toEqual(originalConfig);
+      expect(records).toEqual(originalRecords);
+      expect(fs.readFileSync(packageFile, "utf8")).toBe(originalPackage);
+      expect(mocks.installPluginFromNpmSpec).not.toHaveBeenCalled();
+      expect(mocks.installPluginFromClawHub).not.toHaveBeenCalled();
+      expect(mocks.updateNpmInstalledPlugins).not.toHaveBeenCalled();
+      expect(mocks.writePersistedInstalledPluginIndexInstallRecords).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["disabled", "path", "bundled", "local npm archive"] as const)(
+    "does not query npm while preflighting a %s configured plugin",
+    async (kind) => {
+      const records = installedRecords("fixture", {
+        source: kind === "path" ? "path" : "npm",
+        spec: kind === "local npm archive" ? "file:/tmp/fixture.tgz" : "@example/fixture@1.0.0",
+        installPath: process.cwd(),
+      });
+      mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue(records);
+      mocks.loadPluginMetadataSnapshot.mockReturnValue({
+        plugins: [{ id: "fixture", channels: [] }],
+        diagnostics: [],
+      });
+      if (kind === "bundled") {
+        mockCurrentBundledPlugin("fixture", "@example/fixture");
+      }
+      const { preflightConfiguredNpmPluginTargets } =
+        await import("../../../cli/update-cli/update-command-plugin-preflight.js");
+      await expect(
+        preflightConfiguredNpmPluginTargets({
+          config: { plugins: { entries: { fixture: { enabled: kind !== "disabled" } } } },
+          env: testEnv,
+          targetVersion: "2026.9.3",
+          channel: "stable",
+          timeoutMs: 1000,
+        }),
+      ).resolves.toBeUndefined();
+      expect(mocks.resolveNpmSpecMetadata).not.toHaveBeenCalled();
+      expect(mocks.installPluginFromNpmSpec).not.toHaveBeenCalled();
+      expect(mocks.writePersistedInstalledPluginIndexInstallRecords).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
     {

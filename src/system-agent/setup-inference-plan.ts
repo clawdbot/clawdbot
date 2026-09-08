@@ -31,7 +31,10 @@ import type { ProviderAuthResult } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createPluginCapabilityConsentPrompter } from "../wizard/plugin-capability-consent.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
-import { resolveSystemAgentConfiguredRouteFromConfig } from "./inference-route.js";
+import {
+  resolveSystemAgentConfiguredRouteFromConfig,
+  type SystemAgentConfigSnapshot,
+} from "./inference-route.js";
 import { createQuickstartNotePrompter } from "./setup-apply.js";
 import {
   supportsSetupManualSecret,
@@ -104,6 +107,7 @@ export async function buildTestPlan(params: {
   apiKey?: string;
   cfg: OpenClawConfig;
   sourceCfg: OpenClawConfig;
+  configSnapshot?: SystemAgentConfigSnapshot;
   workspaceDir: string;
   pluginWorkspaceDir: string;
   agentDir: string;
@@ -187,21 +191,11 @@ export async function buildTestPlan(params: {
         config: enableResult.config,
         result,
       });
-      const matchingProfile = result.profiles.find(
-        (profile) =>
-          normalizeProviderId(profile.credential.provider) === normalizeProviderId(ref.provider),
-      );
-      if (result.profiles.length > 0 && !matchingProfile) {
-        return {
-          error: `${choice.choiceLabel} did not return credentials for its detected model.`,
-        };
-      }
       return buildPreparedProviderTestPlan({
         cfg,
         sourceCfg: params.sourceCfg,
         preparedConfig,
         profiles: result.profiles,
-        selectedProfileId: matchingProfile?.profileId,
         modelRef,
         pluginId: choice.pluginId,
         agentDir: params.agentDir,
@@ -217,9 +211,12 @@ export async function buildTestPlan(params: {
     case "existing-model": {
       let route;
       try {
-        route = await resolveSystemAgentConfiguredRouteFromConfig(cfg, params.routeAgentId, {
-          loadAuthProfileStoreForRuntime: params.deps.loadAuthProfileStoreForRuntime,
-        });
+        route = await resolveSystemAgentConfiguredRouteFromConfig(
+          cfg,
+          params.routeAgentId,
+          { loadAuthProfileStoreForRuntime: params.deps.loadAuthProfileStoreForRuntime },
+          params.configSnapshot,
+        );
       } catch (error) {
         if (error instanceof CliExecutionAuthProfileError) {
           return { error: error.message, status: "auth" as const };
@@ -491,7 +488,6 @@ export async function buildTestPlan(params: {
           sourceCfg: params.sourceCfg,
           preparedConfig: prepared.config,
           profiles: prepared.authProfiles,
-          selectedProfileId: prepared.authProfiles[0]?.profileId,
           providerPlugin: prepared.provider,
           modelRef,
           pluginId: managedWizardChoice.pluginId,
@@ -660,21 +656,11 @@ export async function buildTestPlan(params: {
           error: `${resolved.provider.label} returned an invalid starter model.`,
         };
       }
-      const matchingProfile = result.profiles.find(
-        (profile) =>
-          normalizeProviderId(profile.credential.provider) === normalizeProviderId(ref.provider),
-      );
-      if (result.profiles.length > 0 && !matchingProfile) {
-        return {
-          error: `${resolved.provider.label} did not return credentials for its starter model.`,
-        };
-      }
       return buildPreparedProviderTestPlan({
         cfg,
         sourceCfg: params.sourceCfg,
         preparedConfig,
         profiles: result.profiles,
-        selectedProfileId: matchingProfile?.profileId,
         modelRef,
         pluginId: resolved.provider.pluginId,
         ...(interactive && choice.appGuidedDiscovery === true

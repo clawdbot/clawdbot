@@ -72,6 +72,10 @@ function createSkill(
     blockedByAllowlist: false,
     blockedByAgentFilter: options.blockedByAgentFilter ?? false,
     eligible: true,
+    platformIncompatible: false,
+    modelVisible: !options.blockedByAgentFilter,
+    userInvocable: true,
+    commandVisible: !options.blockedByAgentFilter,
     requirements: { bins: [], anyBins: [], env: [], config: [], os: [] },
     missing: { bins: [], anyBins: [], env: [], config: [], os: [] },
     configChecks: [],
@@ -993,18 +997,12 @@ describe("agents skills panel (browser)", () => {
   it("explains an unsatisfied one-of binary requirement", async () => {
     const container = document.createElement("div");
     const skill: SkillStatusEntry = {
+      ...createSkill("coding-agent", { source: "openclaw-bundled", bundled: true }),
       name: "Coding Agent",
       description: "Delegate coding work to an available coding CLI.",
-      source: "openclaw-bundled",
-      bundled: true,
-      filePath: "/tmp/skills/coding-agent/SKILL.md",
-      baseDir: "/tmp/skills/coding-agent",
-      skillKey: "coding-agent",
-      always: false,
-      disabled: false,
-      blockedByAllowlist: false,
-      blockedByAgentFilter: false,
       eligible: false,
+      modelVisible: false,
+      commandVisible: false,
       requirements: {
         bins: [],
         anyBins: ["claude", "codex", "opencode"],
@@ -1019,7 +1017,6 @@ describe("agents skills panel (browser)", () => {
         config: [],
         os: [],
       },
-      configChecks: [],
       install: [{ id: "node-codex", kind: "node", label: "Install Codex CLI", bins: ["codex"] }],
     };
 

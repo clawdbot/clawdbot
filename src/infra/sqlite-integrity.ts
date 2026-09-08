@@ -1,3 +1,4 @@
+import { performance } from "node:perf_hooks";
 import type { DatabaseSync } from "node:sqlite";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
@@ -17,6 +18,37 @@ export type SqliteIntegrityOperation<T> = Generator<
   T,
   void
 >;
+
+export type SqliteIntegrityDiagnostics = {
+  integrityGateMs?: number;
+  integrityGateOutcome?: "healthy" | "failed";
+  canonicalIndexMs?: number;
+  repairedIndexCount?: number;
+};
+
+/** The gate includes the driver's check, awaited lifetime, and admission revalidation. */
+export function* sqliteIntegrityCheckSteps(
+  database: DatabaseSync,
+  databaseLabel: string,
+  diagnostics?: SqliteIntegrityDiagnostics,
+): SqliteIntegrityOperation<void> {
+  const startedAt = performance.now();
+  try {
+    yield { database, databaseLabel };
+    if (diagnostics) {
+      diagnostics.integrityGateOutcome = "healthy";
+    }
+  } catch (error) {
+    if (diagnostics) {
+      diagnostics.integrityGateOutcome = "failed";
+    }
+    throw error;
+  } finally {
+    if (diagnostics) {
+      diagnostics.integrityGateMs = Math.floor(performance.now() - startedAt);
+    }
+  }
+}
 
 /** Run the same admission steps synchronously when the caller cannot yield. */
 export function runSqliteIntegrityOperationSync<T>(operation: SqliteIntegrityOperation<T>): T {
@@ -228,7 +260,7 @@ function runSqliteForeignKeyCheck(database: DatabaseSync, databaseLabel: string)
     // table-valued pragma name and make a corrupt database appear clean.
     const statement = database.prepare("PRAGMA foreign_key_check;");
     statement.setReadBigInts(true);
-    // OpenClaw's Node >=22.22.3 floor includes iterate(), added in Node 22.13.
+    // OpenClaw's Node >=24.16.0 floor includes iterate(), added in Node 22.13.
     for (const violation of statement.iterate() as Iterable<SqliteForeignKeyViolation>) {
       violationCount += 1;
       retainSortedForeignKeyViolation(violations, violation);

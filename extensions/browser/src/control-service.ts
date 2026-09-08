@@ -97,6 +97,8 @@ export async function stopBrowserControlService(): Promise<void> {
     const { disposeGatewayExtensionRelay } =
       await import("./browser/extension-relay/gateway-relay-route.js");
     disposeGatewayExtensionRelay();
+    const { stopBrowserScreencasts } = await import("./browser/screencast/session.js");
+    await stopBrowserScreencasts();
   }
 }
 

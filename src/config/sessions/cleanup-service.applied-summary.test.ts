@@ -2,12 +2,15 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
+import { resolveSessionWorkStartError } from "./lifecycle.js";
 
 const cleanupRace = vi.hoisted(() => ({
   afterPreview: undefined as (() => void) | undefined,
@@ -37,10 +40,15 @@ import { runSessionsCleanup } from "./cleanup-service.js";
 import {
   appendTranscriptEventSync,
   appendTranscriptMessageSync,
+  applySessionEntryLifecycleMutation,
   loadSessionEntry,
+  listSessionEntriesCore,
+  loadTranscriptEventsSync,
   replaceSessionEntry,
+  replaceSessionEntrySync,
 } from "./session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
+import type { SessionEntry } from "./types.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -49,6 +57,188 @@ describe("sessions cleanup applied summary", () => {
     cleanupRace.afterPreview = undefined;
     cleanupRace.postCommitFailureStorePath = undefined;
     closeOpenClawAgentDatabasesForTest();
+  });
+
+  it.each(["age", "count"] as const)(
+    "archives durable conversations under %s pressure and agrees with its preview after reopening",
+    async (pressure) => {
+      await withOpenClawTestState({}, async (state) => {
+        const storePath = path.join(state.sessionsDir(), "sessions.json");
+        const cfg = {
+          session: {
+            maintenance: {
+              mode: "enforce",
+              archiveDashboardAfter: false,
+              maxDiskBytes: false,
+              maxEntries: pressure === "count" ? 1 : 5,
+              pruneAfter: pressure === "age" ? "30d" : "365d",
+            },
+          },
+        } satisfies OpenClawConfig;
+        await state.writeConfig(cfg);
+        const now = Date.now();
+        const old = now - 31 * 24 * 60 * 60_000;
+        const scope = (name: string) => ({
+          sessionKey: `agent:main:${name}`,
+          sessionId: name,
+          storePath,
+        });
+        for (const [name, updatedAt, archivedAt] of [
+          ["existing-archive", old - 2, old],
+          ["hook:disposable", old - 1, undefined],
+          ["conversation", old, undefined],
+          ["recent", now, undefined],
+        ] as const) {
+          replaceSessionEntrySync(scope(name), { sessionId: name, updatedAt, archivedAt });
+        }
+        appendTranscriptMessageSync(scope("conversation"), {
+          eventId: "retained-message",
+          message: { role: "user", content: [{ type: "text", text: "Keep my conversation" }] },
+        });
+        const history = loadTranscriptEventsSync(scope("conversation"));
+        const run = () =>
+          runSessionsCleanup({
+            cfg,
+            opts: { enforce: true },
+            targets: [{ agentId: "main", storePath }],
+          });
+        const activeCount = () =>
+          listSessionEntriesCore({ storePath }).filter(
+            ({ entry }) => entry.archivedAt === undefined,
+          ).length;
+        expect(activeCount()).toBe(3);
+        const result = await run();
+        expect(activeCount()).toBe(1);
+        const expected = {
+          beforeCount: 4,
+          afterCount: 3,
+          archived: pressure === "age" ? 1 : 0,
+          capArchived: pressure === "count" ? 1 : 0,
+          pruned: pressure === "age" ? 1 : 0,
+          capped: pressure === "count" ? 2 : 0,
+          wouldMutate: true,
+        };
+        expect(result.previewResults[0]?.summary).toMatchObject(expected);
+        expect(result.appliedSummaries[0]).toMatchObject(expected);
+        expect(loadSessionEntry(scope("hook:disposable"))).toBeUndefined();
+        closeOpenClawAgentDatabasesForTest();
+        expect(loadSessionEntry(scope("conversation"))).toMatchObject({
+          sessionId: "conversation",
+          archivedAt: expect.any(Number),
+          archiveReason: pressure === "age" ? "age-retention" : "active-session-cap",
+        });
+        expect(loadTranscriptEventsSync(scope("conversation"))).toEqual(history);
+        const repeated = await run();
+        for (const summary of [repeated.previewResults[0]?.summary, repeated.appliedSummaries[0]]) {
+          expect(summary).toMatchObject({
+            beforeCount: 3,
+            afterCount: 3,
+            archived: 0,
+            pruned: 0,
+            capped: 0,
+            wouldMutate: false,
+          });
+        }
+        expect(loadTranscriptEventsSync(scope("conversation"))).toEqual(history);
+      });
+    },
+  );
+
+  it("skips protected conversations and restores usable history under continuing cap pressure", async () => {
+    await withOpenClawTestState({}, async (state) => {
+      const storePath = path.join(state.sessionsDir(), "sessions.json");
+      const old = Date.now() - 31 * 24 * 60 * 60_000;
+      const protectedEntries: Record<string, Partial<SessionEntry>> = {
+        main: {},
+        running: { status: "running" },
+        pinned: { pinnedAt: old },
+        locked: { modelSelectionLocked: true },
+        "custom:direct:peer": {},
+        "direct:peer": {},
+        routed: {
+          delivery: normalizeSessionDeliveryState({
+            context: { channel: "custom", to: "peer" },
+            origin: { chatType: "direct" },
+          }),
+        },
+        admitted: {},
+      };
+      const scope = (name: string) => ({
+        sessionKey: `agent:main:${name}`,
+        sessionId: name,
+        storePath,
+      });
+      for (const [name, extra] of Object.entries({ ...protectedEntries, conversation: {} })) {
+        replaceSessionEntrySync(scope(name), { sessionId: name, updatedAt: old, ...extra });
+      }
+      appendTranscriptMessageSync(scope("conversation"), {
+        eventId: "original-message",
+        message: { role: "user", content: "Original conversation" },
+      });
+      const history = loadTranscriptEventsSync(scope("conversation"));
+      const admission = await beginSessionWorkAdmission({
+        scope: storePath,
+        identities: [scope("admitted").sessionKey],
+        assertAllowed: () => {},
+      });
+      const maintenanceOverride = {
+        mode: "enforce" as const,
+        maxEntries: 1,
+        archiveDashboardAfterMs: null,
+      };
+      try {
+        const activeCount = () =>
+          listSessionEntriesCore({ storePath }).filter(
+            ({ entry }) => entry.archivedAt === undefined,
+          ).length;
+        expect(activeCount()).toBe(9);
+        const result = await applySessionEntryLifecycleMutation({ storePath, maintenanceOverride });
+        expect(activeCount()).toBe(8);
+        expect(result).toMatchObject({
+          archived: 1,
+          pruned: 0,
+          capped: 0,
+          beforeCount: 9,
+          afterCount: 9,
+        });
+        for (const name of Object.keys(protectedEntries)) {
+          expect(
+            resolveSessionWorkStartError(scope(name).sessionKey, loadSessionEntry(scope(name))),
+          ).toBeUndefined();
+        }
+        const archived = loadSessionEntry(scope("conversation"))!;
+        expect(archived.archivedAt).toEqual(expect.any(Number));
+        await applySessionEntryLifecycleMutation({
+          storePath,
+          activeSessionKey: scope("conversation").sessionKey,
+          upserts: [
+            {
+              sessionKey: scope("conversation").sessionKey,
+              entry: { ...archived, archivedAt: undefined, updatedAt: Date.now() },
+            },
+          ],
+          maintenanceOverride,
+        });
+        expect(
+          resolveSessionWorkStartError(
+            scope("conversation").sessionKey,
+            loadSessionEntry(scope("conversation")),
+          ),
+        ).toBeUndefined();
+        expect(loadSessionEntry(scope("conversation"))?.archiveReason).toBeUndefined();
+        expect(loadSessionEntry(scope("conversation"))?.archivedBy).toBeUndefined();
+        appendTranscriptMessageSync(scope("conversation"), {
+          eventId: "restored-message",
+          message: { role: "user", content: [{ type: "text", text: "Continue after restore" }] },
+        });
+        expect(loadTranscriptEventsSync(scope("conversation"))).toEqual([
+          ...history,
+          expect.objectContaining({ id: "restored-message" }),
+        ]);
+      } finally {
+        admission.release();
+      }
+    });
   });
 
   it.each([true, false])(
@@ -103,7 +293,7 @@ describe("sessions cleanup applied summary", () => {
       await state.writeConfig(cfg);
       const scopes = ["main", "beta"].map((agentId) => ({
         agentId,
-        sessionKey: `agent:${agentId}:stale`,
+        sessionKey: `agent:${agentId}:hook:stale`,
         storePath,
       }));
       const updatedAt = Date.now() - 2 * 24 * 60 * 60_000;

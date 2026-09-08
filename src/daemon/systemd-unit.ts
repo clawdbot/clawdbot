@@ -82,9 +82,7 @@ export function buildSystemdUnit({
     "Restart=always",
     "RestartSec=5",
     "RestartPreventExitStatus=78",
-    // Must cover the gateway's SIGTERM drain budget (five minutes) plus its
-    // teardown reserve. Otherwise systemd kills the embedded model/tool
-    // process before the gateway can finish the cooperative drain.
+    // Cover the gateway's five-minute SIGTERM drain plus its teardown reserve.
     "TimeoutStopSec=330",
     "TimeoutStartSec=30",
     "SuccessExitStatus=0 143",
@@ -92,9 +90,9 @@ export function buildSystemdUnit({
     // gateway. Keep the service running when that happens; the child surface is
     // already responsible for reporting the failed command/session.
     "OOMPolicy=continue",
-    // Keep service children in the same lifecycle so restarts do not leave
-    // orphan ACP/runtime workers behind.
-    "KillMode=control-group",
+    // Signal only the gateway during drain; systemd still kills remaining
+    // children when the gateway exits or TimeoutStopSec expires.
+    "KillMode=mixed",
     workingDirLine,
     ...environmentFileLines,
     ...envLines,

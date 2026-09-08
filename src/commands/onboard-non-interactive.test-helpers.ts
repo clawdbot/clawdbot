@@ -251,17 +251,23 @@ export function createOnboardGatewayTimeoutCapture() {
   };
 }
 
-export async function mockOnboardingAgent(params: { config: OpenClawConfig; workspace: string }) {
+export async function mockOnboardingAgent(params: {
+  config: OpenClawConfig;
+  baseConfig?: OpenClawConfig;
+  workspace: string;
+}) {
   const roster = listAgentEntries(params.config);
   const existing = roster.find((entry) => entry.default === true) ?? roster[0];
   if (existing) {
     return {
       config: params.config,
+      configBase: params.baseConfig ?? params.config,
       agentId: existing.id,
       bootstrapPending: false,
     };
   }
   return {
+    configBase: params.baseConfig ?? params.config,
     config: {
       ...params.config,
       agents: {

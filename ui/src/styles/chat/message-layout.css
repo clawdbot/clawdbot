@@ -760,7 +760,7 @@
 
 @media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
   .chat {
-    --chat-thread-gutter: 16px;
+    --chat-thread-gutter: var(--chat-mobile-edge-inset);
     --chat-thread-side-inset: 0px;
     --chat-mobile-edge-inset: 4px;
   }

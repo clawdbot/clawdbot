@@ -10,15 +10,18 @@ import {
   type SessionGoalOperationResult,
 } from "../../config/sessions/goals-operations.js";
 import type { PrepareAssistantTranscriptMessage } from "../../config/sessions/transcript-assistant-delivery.js";
+import { logVerbose } from "../../globals.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
 import { emitDiagnosticsTimelineEvent } from "../../infra/diagnostics-timeline.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import {
   recordSessionCreated,
   recordSessionGoalChanged,
 } from "../../sessions/session-state-events.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { SkillWorkshopProposalRevisionConstraint } from "../../skills/workshop/types.js";
 import { isOperatorUiClient } from "../../utils/message-channel.js";
 import { discardPreparedInboundMedia } from "../chat-attachments.js";
@@ -64,6 +67,10 @@ type ChatSendInternalOptions = {
   toolsAllow?: string[];
   skillWorkshopProposalRevision?: SkillWorkshopProposalRevisionConstraint;
 };
+
+const mediaDocumentContextLoader = createLazyImportLoader(
+  () => import("../../media-understanding/file-context.js"),
+);
 
 async function handleChatSendWithOptions(
   {
@@ -390,6 +397,33 @@ async function handleChatSendWithOptions(
         client?.internal?.syntheticClient ? undefined : client?.authenticatedUserProfile?.profileId,
       );
     }
+    // Rendering can fail independently of admission; preserve the raw steer on failure.
+    const steerDocumentContext =
+      messageInjectionTarget && !isInternalTextSlashCommandTurn && ctx.media?.length
+        ? await mediaDocumentContextLoader
+            .load()
+            .then(async (runtime) => ({
+              status: "rendered" as const,
+              ...(await runtime.renderInboundDocumentContext({
+                ctx,
+                cfg: preparedSession.value.cfg,
+              })),
+            }))
+            .catch((err: unknown) => {
+              // A poisoned lazy import must not be served to later steers.
+              mediaDocumentContextLoader.clear();
+              logVerbose(
+                `steer document render failed, injecting raw content: ${formatErrorMessage(err)}`,
+              );
+              return { status: "failed" as const };
+            })
+        : undefined;
+    if (activeRunAbort.controller.signal.aborted) {
+      return finishAbortedChatSend();
+    }
+    if (sessionRoutingChanged(context.getRuntimeConfig())) {
+      return admitted.value.rejectSessionRoutingChanged();
+    }
     const beginCapturedMessageInjection = createChatSendMessageInjectionStarter({
       target: messageInjectionTarget,
       request: normalizedRequest.value,
@@ -397,6 +431,7 @@ async function handleChatSendWithOptions(
       admittedSessionSettings: admitted.value.admittedSessionSettings,
       turn: preparedUserTurn,
       imageOrder,
+      documentContext: steerDocumentContext,
       userTurnTranscriptRecorder: userTurnRecorder,
     });
     const preAckReplyContextPromise =

@@ -4,6 +4,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { buildControlUiSessionPath } from "@openclaw/session-url-contract";
 import type { WebPushNotificationCategory } from "../../packages/gateway-protocol/src/schema/push.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createCronExecutionId } from "../cron/run-id.js";
 import {
   WEB_PUSH_USER_PREFERENCES_KEY,
   isWebPushQuietHours,
@@ -41,6 +42,7 @@ type EventNotification = {
   body: string;
   identifiedBody?: string;
   tag: string;
+  path?: string;
 };
 
 export type HumanMentionWebPush = {
@@ -63,16 +65,19 @@ function resolveEventWebPushNotification(
   }
   if (event === "question.requested") {
     const id = normalizeWebPushDisplayLabel(value.id) ?? "pending";
+    const questionId = normalizeOptionalString(value.id);
     return {
       category: "agent-question",
       title: "OpenClaw needs an answer",
       body: "An agent has a question for you.",
       tag: `openclaw-question-${id}`,
+      ...(questionId ? { path: `ask/${encodeURIComponent(questionId)}` } : {}),
     };
   }
   if (
     event === "chat" &&
     value.state === "final" &&
+    value.yielded !== true &&
     !isTranscriptOnlyOpenClawAssistantMessage(value.message)
   ) {
     const runId = normalizeWebPushDisplayLabel(value.runId) ?? "finished";
@@ -85,7 +90,7 @@ function resolveEventWebPushNotification(
   }
   if (event === "task" && value.action === "upserted") {
     const task = isRecord(value.task) ? value.task : null;
-    if (task?.status !== "failed" && task?.status !== "timed_out") {
+    if ((task?.status !== "failed" && task?.status !== "timed_out") || task.runtime === "cron") {
       return null;
     }
     const taskId = normalizeWebPushDisplayLabel(task.id) ?? "failed";
@@ -100,14 +105,30 @@ function resolveEventWebPushNotification(
   }
   if (event === "cron" && value.action === "finished" && value.status === "error") {
     const job = isRecord(value.job) ? value.job : null;
-    const jobId = normalizeWebPushDisplayLabel(value.jobId) ?? "failed";
+    const jobId = normalizeOptionalString(value.jobId);
+    const jobTag = normalizeWebPushDisplayLabel(jobId) ?? "failed";
     const jobName = normalizeWebPushDisplayLabel(job?.name);
+    const query = new URLSearchParams();
+    if (jobId) {
+      query.set("job", jobId);
+      const runId =
+        normalizeOptionalString(value.runId) ??
+        (typeof value.runAtMs === "number" &&
+        Number.isSafeInteger(value.runAtMs) &&
+        value.runAtMs >= 0
+          ? createCronExecutionId(jobId, value.runAtMs)
+          : undefined);
+      if (runId) {
+        query.set("run", runId);
+      }
+    }
     return {
       category: "scheduled-task-failed",
       title: "OpenClaw scheduled task failed",
       body: "A scheduled task needs attention.",
       ...(jobName ? { identifiedBody: `${jobName} needs attention.` } : {}),
-      tag: `openclaw-cron-failed-${jobId}`,
+      tag: `openclaw-cron-failed-${jobTag}`,
+      path: `automations${query.size ? `?${query}` : ""}`,
     };
   }
   return null;
@@ -152,11 +173,16 @@ export function createEventWebPushDelivery(params: {
       if (mention && !recipientProfileId) {
         return;
       }
-      const sessionPath = mention
+      const agentId = normalizeOptionalString(
+        opts?.agentId ?? (isRecord(payload) ? payload.agentId : undefined),
+      );
+      const sessionKeys = opts?.sessionKeys ?? [];
+      const sessionKey = mention?.sessionKey ?? sessionKeys[0];
+      const sessionPath = sessionKey
         ? buildControlUiSessionPath({
             namespace: "chat",
-            sessionKey: mention.sessionKey,
-            fallbackAgentId: mention.agentId,
+            sessionKey,
+            fallbackAgentId: agentId,
             mainKey: cfg.session?.mainKey,
             exactKey: true,
           })
@@ -164,7 +190,11 @@ export function createEventWebPushDelivery(params: {
       if (mention && !sessionPath) {
         return;
       }
-      const url = sessionPath ? resolveControlUiWebPushUrl(cfg, sessionPath.slice(1)) : undefined;
+      const path =
+        notification.path ??
+        sessionPath?.slice(1) ??
+        (notification.category === "background-task-failed" ? "tasks" : "sessions");
+      const url = resolveControlUiWebPushUrl(cfg, path);
       const targets = listCurrentWebPushTargets({
         cfg,
         requiredScopes:
@@ -172,9 +202,6 @@ export function createEventWebPushDelivery(params: {
         ...(mention ? { visibilityScopes: [ADMIN_SCOPE] } : {}),
         stateDir: params.stateDir,
       });
-      const agentId = normalizeOptionalString(
-        opts?.agentId ?? (isRecord(payload) ? payload.agentId : undefined),
-      );
       const agentLabel = normalizeWebPushDisplayLabel(agentId);
       const groups = new Map<
         string,
@@ -192,7 +219,6 @@ export function createEventWebPushDelivery(params: {
         ) {
           continue;
         }
-        const sessionKeys = opts?.sessionKeys ?? [];
         if (
           sessionKeys.length > 0 &&
           !canReceiveSessionEvent({
@@ -238,7 +264,7 @@ export function createEventWebPushDelivery(params: {
                 body: group.body,
                 tag: notification.tag,
                 renotify: false,
-                ...(url ? { url } : {}),
+                url,
               },
               deliveryOptions: {
                 TTL: EVENT_PUSH_TTL_SECONDS,

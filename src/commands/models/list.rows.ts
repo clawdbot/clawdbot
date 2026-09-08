@@ -182,6 +182,7 @@ function buildRow(params: {
     authAvailability: params.authEvaluation.availability,
     authAvailabilityAuthoritative:
       params.allowAuthAvailabilityOverride === true ||
+      params.authEvaluation.availabilityAuthoritative === true ||
       normalizeProviderIdForAuth(params.model.provider) === "openai" ||
       params.authEvaluation.routeResolution !== null,
   });

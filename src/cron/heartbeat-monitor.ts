@@ -1,4 +1,5 @@
 /** Canonical projection from heartbeat config to system-owned cron monitor jobs. */
+import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { isDeepStrictEqual } from "node:util";
 import { DEFAULT_HEARTBEAT_EVERY } from "../auto-reply/heartbeat.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -171,6 +172,10 @@ export async function applyHeartbeatMonitorJobs(params: {
   const applied: HeartbeatMonitorChange[] = [];
   const failures: HeartbeatMonitorReconcileResult["failures"] = [];
   for (const change of changes) {
+    // Settled CRUD promises do not yield to I/O; reject a superseded pass
+    // after the event-loop turn, before entering its next mutation wrapper.
+    await yieldToEventLoop();
+    params.commitGuard?.();
     try {
       if (change.kind === "remove") {
         await params.cron.remove(change.job.id, {

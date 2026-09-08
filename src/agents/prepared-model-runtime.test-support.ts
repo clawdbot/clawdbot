@@ -1,11 +1,11 @@
 type PreparedModelRuntimeTestApi = {
-  resetPreparedModelRuntimeSnapshotsForTest(): void;
+  resetPreparedModelRuntimeSnapshotsForTest(): Promise<void>;
 };
 
 /** Clears prepared model owners when the production module is loaded in this test worker. */
-export function resetPreparedModelRuntimeSnapshotsForTest(): void {
+export async function resetPreparedModelRuntimeSnapshotsForTest(): Promise<void> {
   const api = (globalThis as Record<PropertyKey, unknown>)[
     Symbol.for("openclaw.preparedModelRuntimeTestApi")
   ] as PreparedModelRuntimeTestApi | undefined;
-  api?.resetPreparedModelRuntimeSnapshotsForTest();
+  await api?.resetPreparedModelRuntimeSnapshotsForTest();
 }

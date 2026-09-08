@@ -138,7 +138,7 @@ internal fun ClawPrimaryButton(
       Icon(imageVector = icon, contentDescription = null, modifier = Modifier.size(16.dp))
       Spacer(modifier = Modifier.width(6.dp))
     }
-    Text(text = text, style = ClawTheme.type.label, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    Text(text = text, style = ClawTheme.type.label)
   }
 }
 
@@ -169,7 +169,7 @@ internal fun ClawSecondaryButton(
         Icon(imageVector = icon, contentDescription = null, modifier = Modifier.size(16.dp))
         Spacer(modifier = Modifier.width(6.dp))
       }
-      Text(text = text, style = ClawTheme.type.label, maxLines = 1, overflow = TextOverflow.Ellipsis)
+      Text(text = text, style = ClawTheme.type.label)
     }
   }
 }
@@ -533,8 +533,6 @@ internal fun ClawSegmentedControl(
                   enabled -> ClawTheme.colors.textMuted
                   else -> ClawTheme.colors.textSubtle
                 },
-              maxLines = 1,
-              overflow = TextOverflow.Ellipsis,
             )
           }
         }

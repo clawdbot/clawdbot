@@ -97,6 +97,8 @@ suite.define(() => {
         );
         const firstConnect = connectParams((await gateway.waitForRequest("connect")).params);
         expect(firstConnect.auth).toMatchObject({ bootstrapToken: "e2e-first-grant" });
+        await page.locator(".model-setup-provider-select__trigger").click();
+        await page.locator('[data-manual-provider="openai"]').click();
         const apiKey = page.locator('.model-setup__manual input[type="password"]');
         await apiKey.fill("invalid-test-key");
         await page.getByRole("button", { name: "Connect & verify" }).click();

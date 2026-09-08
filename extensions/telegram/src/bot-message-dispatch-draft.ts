@@ -13,7 +13,6 @@ import type {
 } from "./bot-message-dispatch.types.js";
 import { resolveTelegramDraftStreamingChunking } from "./draft-chunking.js";
 import { createTelegramDraftStream, type TelegramDraftPreview } from "./draft-stream.js";
-import { renderTelegramHtmlText } from "./format.js";
 import type { DraftLaneState, LaneName } from "./lane-delivery-text-deliverer.js";
 import { TELEGRAM_TEXT_CHUNK_LIMIT } from "./outbound-adapter.js";
 import { recordOutboundMessageForPromptContext } from "./outbound-message-context.js";
@@ -49,8 +48,7 @@ function renderStreamText(
         }),
       }
     : {
-        text: renderTelegramHtmlText(text, { tableMode: turn.tableMode }),
-        parseMode: "HTML",
+        text,
         markdownSource: { text, tableMode: turn.tableMode },
       };
 }
@@ -564,7 +562,7 @@ export async function cleanupDrafts(turn: Turn, superseded: boolean): Promise<vo
       continue;
     }
     if (superseded) {
-      await (typeof stream.discard === "function" ? stream.discard() : stream.stop());
+      await stream.discard();
     } else if (lane.finalized) {
       await stream.stop();
     } else {

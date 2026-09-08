@@ -6,8 +6,10 @@ import type { prepareEmbeddedAttemptTimeout } from "./attempt-timeout-prepare.js
 export type PreparedStreamRuntime = {
   abortable: <T>(promise: Promise<T>) => Promise<T>;
   cache: {
-    observabilityEnabled: boolean;
-    promptTools: ReturnType<typeof installEmbeddedAttemptStreamGuards>["promptCacheTools"];
+    onModelRequest?: ReturnType<typeof installEmbeddedAttemptStreamGuards>["onModelRequest"];
+    getObservation?: ReturnType<
+      typeof installEmbeddedAttemptStreamGuards
+    >["getPromptCacheObservation"];
   };
   history: Awaited<ReturnType<typeof prepareEmbeddedAttemptHistory>>;
   isProbeSession: boolean;

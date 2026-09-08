@@ -22,11 +22,10 @@ import { runEmbeddedAttemptSettledPhase } from "./attempt-settle.js";
 import { prepareEmbeddedAttemptStream } from "./attempt-stream-prepare.js";
 import { installEmbeddedAttemptStreamGuards } from "./attempt-stream.js";
 import { prepareEmbeddedAttemptTimeout } from "./attempt-timeout-prepare.js";
-import type { EmbeddedRunAttemptInternalParams } from "./internal-params.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
 
 export async function runEmbeddedAttemptExecutionPhase(
-  input: EmbeddedAttemptExecutionPhaseInput & { attempt: EmbeddedRunAttemptInternalParams },
+  input: EmbeddedAttemptExecutionPhaseInput,
 ): Promise<EmbeddedRunAttemptResult> {
   const { attempt, state } = input;
   const { sessionRuntime, systemPrompt, toolBase } = input.prepared;
@@ -58,16 +57,14 @@ export async function runEmbeddedAttemptExecutionPhase(
   };
 
   const idleTimeoutTriggerRef: { current?: (error: Error) => void } = {};
-  const { cacheObservabilityEnabled, promptCacheTools } = installEmbeddedAttemptStreamGuards(
-    input,
-    {
+  const { onModelRequest, onModelUsage, getPromptCacheObservation } =
+    installEmbeddedAttemptStreamGuards(input, {
       onRejectedProviderReplayRepaired: () => {
         repairedRejectedProviderReplay = true;
       },
       onIdleTimeout: (error) => idleTimeoutTriggerRef.current?.(error),
       diagnosticOwner,
-    },
-  );
+    });
   input.setup.prepStages.mark("stream-setup");
   input.setup.emitPrepStageSummary("stream-ready");
 
@@ -138,6 +135,7 @@ export async function runEmbeddedAttemptExecutionPhase(
     : undefined;
   const preparedStream = prepareEmbeddedAttemptStream({
     attempt,
+    onModelUsage,
     applyPermissionMode: input.lifecycle.applyPermissionMode,
     activeSession,
     runAbortController: input.runAbortController,
@@ -197,8 +195,8 @@ export async function runEmbeddedAttemptExecutionPhase(
   const preparedStreamRuntime = {
     abortable,
     cache: {
-      observabilityEnabled: cacheObservabilityEnabled,
-      promptTools: promptCacheTools,
+      onModelRequest,
+      getObservation: getPromptCacheObservation,
     },
     history: preparedHistory,
     isProbeSession,

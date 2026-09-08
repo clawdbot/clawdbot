@@ -547,12 +547,12 @@ export function applyConfiguredProviderOverrides(params: {
     workspaceDir: params.workspaceDir,
     runtimeHooks: params.runtimeHooks,
   });
-  const resolvedContextWindow = metadataOverrideModel?.contextWindow;
+  const contextWindow = metadataOverrideModel?.contextWindow ?? discoveredModel.contextWindow;
   const configuredMaxTokens = metadataOverrideModel?.maxTokens ?? providerConfig.maxTokens;
   const resolvedMaxTokens = configuredMaxTokens ?? discoveredModel.maxTokens;
   const normalizedResolvedMaxTokens = clampModelMaxTokensToContextWindow(
     resolvedMaxTokens,
-    resolvedContextWindow,
+    contextWindow,
   );
   const catalogCompat = mergeModelCompat(
     configuredStaticCatalogModel?.compat,
@@ -620,7 +620,7 @@ export function applyConfiguredProviderOverrides(params: {
             configuredModel: metadataOverrideModel,
             catalogCost: discoveredModel.cost,
           }),
-          contextWindow: resolvedContextWindow ?? discoveredModel.contextWindow,
+          contextWindow,
           contextTokens: metadataOverrideModel?.contextTokens ?? discoveredModel.contextTokens,
           ...(normalizedResolvedMaxTokens !== undefined
             ? {

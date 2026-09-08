@@ -1,4 +1,5 @@
 // Read-only session queries.
+import { performance } from "node:perf_hooks";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -19,6 +20,7 @@ import {
   resolveSessionStorePathCore,
   runSessionsCleanup,
   serializeSessionCleanupResult,
+  type SessionEntry,
 } from "../../config/sessions.js";
 import {
   listSessionEntriesReadOnly,
@@ -50,6 +52,7 @@ import {
 } from "../session-sharing.js";
 import { resolveSessionStoreAgentId } from "../session-store-key.js";
 import { readSessionPreviewItemsFromTranscript } from "../session-transcript-readers.js";
+import type { SessionListActiveRunProjector } from "../session-utils-contracts.js";
 import { projectGatewaySessionActiveRun } from "../session-utils-display.js";
 import {
   listSessionsFromStoreAsync,
@@ -247,6 +250,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
             rowRepairAttempted?: boolean;
           } = {},
         ): Promise<Awaited<ReturnType<typeof listSessionsFromStoreAsync>>> {
+          const workStartedAt = performance.now();
           let loaded = options.loaded;
           if (!loaded) {
             const loadedStore = measureDiagnosticsTimelineSpanSync(
@@ -256,6 +260,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
                   agentId: p.agentId,
                   configuredAgentsOnly,
                   projection: "list",
+                  ...(p.activeOnly === true ? { preserveSentinelOwners: true } : {}),
                 }),
               {
                 config: cfg,
@@ -269,15 +274,39 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
             loaded = { ...loadedStore, modelCatalogByAgent: preparedModelCatalogByAgent };
           }
           const { targetsBySessionKey, durableStorePath, modelCatalogByAgent, storePath } = loaded;
-          const entryFilter = listFilter({ p, loaded, client, cfg, options });
-          const selectionRuns = p.search?.trim()
-            ? createVisibleActiveSessionRunProjector(context)
+          const visibleEntryFilter = listFilter({ p, loaded, client, cfg, options });
+          const selectionRuns =
+            p.activeOnly === true || p.search?.trim()
+              ? createVisibleActiveSessionRunProjector(context)
+              : undefined;
+          const projectSelectionRun: SessionListActiveRunProjector | undefined = selectionRuns
+            ? (key, entry, agentId) => {
+                const storeKey = targetsBySessionKey.get(key)?.storeKey ?? key;
+                return selectionRuns({
+                  requestedKey: storeKey,
+                  canonicalKey: storeKey,
+                  sessionId: entry.sessionId,
+                  agentId,
+                  defaultAgentId: tryResolveSessionCompatibilityOwnerAgentId(cfg, storeKey),
+                });
+              }
             : undefined;
+          const entryFilter =
+            p.activeOnly === true && projectSelectionRun
+              ? (key: string, entry: SessionEntry) =>
+                  (visibleEntryFilter?.(key, entry) ?? true) &&
+                  projectSelectionRun(
+                    key,
+                    entry,
+                    expectDefined(targetsBySessionKey.get(key), "active row owner").agentId,
+                  ).active
+              : visibleEntryFilter;
           const result = await measureDiagnosticsTimelineSpan(
             "gateway.sessions.list.rows",
             () =>
               listSessionsFromStoreAsync({
                 cfg,
+                workStartedAt,
                 durableStorePath,
                 ...(entryFilter ? { entryFilter } : {}),
                 storePath,
@@ -285,18 +314,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
                 targetsBySessionKey,
                 modelCatalog: modelCatalogByAgent,
                 opts: p,
-                ...(selectionRuns
-                  ? {
-                      projectActiveRun: (key, entry, agentId) =>
-                        selectionRuns({
-                          requestedKey: key,
-                          canonicalKey: key,
-                          sessionId: entry.sessionId,
-                          agentId,
-                          defaultAgentId: tryResolveSessionCompatibilityOwnerAgentId(cfg, key),
-                        }),
-                    }
-                  : {}),
+                ...(projectSelectionRun ? { projectActiveRun: projectSelectionRun } : {}),
                 ...(p.involvingMe === true && identityId ? { involvingActorId: identityId } : {}),
                 ...(p.ownerFirst === true && identityId ? { ownerFirstActorId: identityId } : {}),
               }),
@@ -318,28 +336,30 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
               // Logical owners can share a physical database. Keep that exact store
               // through the fresh read; public aliases may reject or redirect these rows.
               const entries = loadExactSessionEntryCandidatesReadOnlyBatch(
-                targets.map(({ key, storeTarget }) => ({
+                targets.map(({ key, storeKey, storeTarget }) => ({
                   ...storeTarget,
-                  sessionKeys: [key],
+                  sessionKeys: [storeKey ?? key],
                   projection: "list",
                   clone: false,
                 })),
               );
-              const resolvedSharingTargets = targets.map(({ key, agentId, storeTarget }, index) => {
-                const current = expectDefined(entries[index], "sharing row read");
-                const entry = current.ok ? current.value[0]?.entry : undefined;
-                return entry
-                  ? {
-                      agentId,
-                      canonicalKey: key,
-                      entry,
-                      storeKey: key,
-                      storeKeys: [key],
-                      storePath: storeTarget.storePath,
-                      storeTarget,
-                    }
-                  : null;
-              });
+              const resolvedSharingTargets = targets.map(
+                ({ key, agentId, storeKey, storeTarget }, index) => {
+                  const current = expectDefined(entries[index], "sharing row read");
+                  const entry = current.ok ? current.value[0]?.entry : undefined;
+                  return entry
+                    ? {
+                        agentId,
+                        canonicalKey: storeKey ?? key,
+                        entry,
+                        storeKey: storeKey ?? key,
+                        storeKeys: [storeKey ?? key],
+                        storePath: storeTarget.storePath,
+                        storeTarget,
+                      }
+                    : null;
+                },
+              );
               const resolvedMembershipKeys = new Set<string>();
               if (identityId && !isGatewayAdmin(client)) {
                 const groups = new Map<
@@ -408,12 +428,13 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
                 const visibility = sharingTarget
                   ? resolveSessionVisibility(sharingTarget.entry)
                   : "shared";
+                const storeKey = targetsBySessionKey.get(session.key)?.storeKey ?? session.key;
                 const activeRunState = projectActiveRun({
-                  requestedKey: session.key,
-                  canonicalKey: session.key,
+                  requestedKey: storeKey,
+                  canonicalKey: storeKey,
                   sessionId: session.sessionId,
                   agentId: session.agentId,
-                  defaultAgentId: tryResolveSessionCompatibilityOwnerAgentId(cfg, session.key),
+                  defaultAgentId: tryResolveSessionCompatibilityOwnerAgentId(cfg, storeKey),
                 });
                 Object.assign(session, {
                   visibility,
@@ -442,15 +463,27 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
               },
             },
           );
-          // Reapply the canonical policy to freshly resolved rows after awaits:
-          // visibility, ownership, membership, and operator roles may all drift.
+          // Reapply current visibility and activity after awaits; selected work may
+          // settle or change ownership while its row is projected.
           const currentVisibilityFilter = sharing.entryFilter;
-          const visibleSessions = currentVisibilityFilter
-            ? result.sessions.filter((_, index) => {
-                const target = sharingTargets[index];
-                return target ? currentVisibilityFilter(target.storeKey, target.entry) : false;
-              })
-            : result.sessions;
+          const visibleSessions =
+            currentVisibilityFilter || p.activeOnly === true
+              ? result.sessions.filter((session, index) => {
+                  const target = sharingTargets[index];
+                  if (
+                    p.activeOnly === true &&
+                    (session.hasActiveRun !== true ||
+                      !target ||
+                      target.entry.sessionId !== session.sessionId)
+                  ) {
+                    return false;
+                  }
+                  if (!currentVisibilityFilter) {
+                    return true;
+                  }
+                  return target ? currentVisibilityFilter(target.storeKey, target.entry) : false;
+                })
+              : result.sessions;
           if (visibleSessions.length !== result.sessions.length) {
             const visibleKeys = new Set(visibleSessions.map((session) => session.key));
             const excludedKeys = new Set(options.excludedKeys);
@@ -474,9 +507,25 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
               // page. One full reload is the last resort; repeated drift below fails closed.
               return await listVisibleSessions({ allowFullReload: false });
             }
-            return { ...result, count: visibleSessions.length, sessions: visibleSessions };
           }
-          return { ...result, sessions: visibleSessions };
+          return {
+            ...result,
+            count: visibleSessions.length,
+            // Sentinel rows stay distinct during filtering and repair. Their public
+            // identity is the actual session key together with the captured agent.
+            sessions: visibleSessions.map((session) => {
+              const storeKey = targetsBySessionKey.get(session.key)?.storeKey;
+              if (!storeKey) {
+                return session;
+              }
+              session.key = storeKey;
+              // Legacy child links omit the parent agent. Keep only direct activity
+              // and requester-agent-scoped swarm facts on these new owner-specific rows.
+              delete session.childSessions;
+              delete session.hasActiveSubagentRun;
+              return session;
+            }),
+          };
         },
         {
           config: cfg,

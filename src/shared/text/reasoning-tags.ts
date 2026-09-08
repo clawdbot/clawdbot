@@ -3,8 +3,7 @@ import {
   stripReasoningTagsFromMarkdown,
 } from "../../../packages/markdown-core/src/reasoning-tags.js";
 // Reasoning tag helpers find and remove model reasoning tag blocks from text.
-import { findCodeRegions, isInsideCode } from "./code-regions.js";
-import { findFinalTagMatches } from "./final-tags.js";
+import { findFinalTagMatches, stripFinalTags } from "./final-tags.js";
 export type ReasoningTagMode = "strict" | "preserve";
 export type ReasoningTagTrim = "none" | "start" | "both";
 export type ReasoningTagScope = "all" | "leading";
@@ -42,16 +41,7 @@ export function stripReasoningTagsFromText(
     return text;
   }
   if (matches.length > 0) {
-    const preCodeRegions = findCodeRegions(cleaned);
-    let visible = "";
-    let lastIndex = 0;
-    for (const match of matches) {
-      if (!isInsideCode(match.index, preCodeRegions)) {
-        visible += cleaned.slice(lastIndex, match.index);
-        lastIndex = match.index + match.text.length;
-      }
-    }
-    cleaned = visible + cleaned.slice(lastIndex);
+    cleaned = stripFinalTags(cleaned);
   }
 
   const stripped = stripReasoningTagsFromMarkdown(cleaned, {

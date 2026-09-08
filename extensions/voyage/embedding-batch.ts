@@ -1,6 +1,5 @@
 // Voyage plugin module implements embedding batch behavior.
 import {
-  applyEmbeddingBatchOutputLine,
   buildBatchHeaders,
   buildEmbeddingBatchGroupOptions,
   EMBEDDING_BATCH_ENDPOINT,
@@ -8,11 +7,8 @@ import {
   formatBatchErrorDetail,
   formatUnavailableBatchError,
   postJsonWithRetry,
-  readEmbeddingBatchJsonl,
   resolveEmbeddingEndpointUrl,
-  resolveCompletedBatchResult,
-  runEmbeddingBatchGroups,
-  throwIfBatchCompletionError,
+  runEmbeddingBatches,
   type EmbeddingBatchExecutionParams,
   type EmbeddingBatchStatus,
   type ProviderBatchOutputLine,
@@ -160,106 +156,50 @@ export async function runVoyageEmbeddingBatches(
     requests: VoyageBatchRequest[];
   } & EmbeddingBatchExecutionParams,
 ): Promise<Map<string, number[]>> {
-  return await runEmbeddingBatchGroups({
+  return await runEmbeddingBatches({
+    provider: "voyage",
     ...buildEmbeddingBatchGroupOptions(params, {
       maxRequests: VOYAGE_BATCH_MAX_REQUESTS,
       debugLabel: "memory embeddings: voyage batch submit",
     }),
-    runGroup: async ({ group, groupIndex, groups, byCustomId, pollIntervalMs, timeoutMs }) => {
-      const batchInfo = await submitVoyageBatch({
-        client: params.client,
-        requests: group,
-        agentId: params.agentId,
-      });
-      if (!batchInfo.id) {
-        throw new Error("voyage batch create failed: missing batch id");
-      }
+    submit: (group) =>
+      submitVoyageBatch({ client: params.client, requests: group, agentId: params.agentId }),
+    readError: (errorFileId) => readVoyageBatchError({ client: params.client, errorFileId }),
+    readOutput: (fileId, read) =>
+      withRemoteHttpResponse(
+        buildVoyageBatchRequest({
+          client: params.client,
+          path: `files/${fileId}/content`,
+          onResponse: async (response) => {
+            await assertOkOrThrowProviderError(response, "voyage.batch-file-content");
+            await read(response);
+          },
+        }),
+      ),
+    waitForBatch: async (batchInfo, pollIntervalMs, timeoutMs) => {
       const batchId = batchInfo.id;
-
-      params.debug?.("memory embeddings: voyage batch created", {
-        batchId: batchInfo.id,
-        status: batchInfo.status,
-        group: groupIndex + 1,
-        groups,
-        requests: group.length,
+      const client = params.client;
+      const wait = params.wait;
+      const debug = params.debug;
+      const deadline = createProviderOperationDeadline({
+        label: `voyage batch ${batchId}`,
+        timeoutMs,
       });
-
-      await throwIfBatchCompletionError({
+      return await waitForEmbeddingBatch({
         provider: "voyage",
-        status: batchInfo,
-        readError: async (errorFileId) =>
-          await readVoyageBatchError({ client: params.client, errorFileId }),
+        batchId,
+        wait,
+        pollIntervalMs,
+        timeoutMs,
+        debug,
+        initial: batchInfo,
+        fetchStatus: (signal) => fetchVoyageBatchStatus({ client, batchId, signal }),
+        resolveTimeoutMs: () =>
+          resolveProviderOperationTimeoutMs({ deadline, defaultTimeoutMs: timeoutMs }),
+        waitForPoll: (delayMs) =>
+          waitProviderOperationPollInterval({ deadline, pollIntervalMs: delayMs }),
+        readError: async (errorFileId) => await readVoyageBatchError({ client, errorFileId }),
       });
-
-      const completed = await resolveCompletedBatchResult({
-        provider: "voyage",
-        status: batchInfo,
-        wait: params.wait,
-        waitForBatch: async () => {
-          const client = params.client;
-          const wait = params.wait;
-          const debug = params.debug;
-          const deadline = createProviderOperationDeadline({
-            label: `voyage batch ${batchId}`,
-            timeoutMs,
-          });
-          return await waitForEmbeddingBatch({
-            provider: "voyage",
-            batchId,
-            wait,
-            pollIntervalMs,
-            timeoutMs,
-            debug,
-            initial: batchInfo,
-            fetchStatus: (signal) => fetchVoyageBatchStatus({ client, batchId, signal }),
-            resolveTimeoutMs: () =>
-              resolveProviderOperationTimeoutMs({ deadline, defaultTimeoutMs: timeoutMs }),
-            waitForPoll: (delayMs) =>
-              waitProviderOperationPollInterval({ deadline, pollIntervalMs: delayMs }),
-            readError: async (errorFileId) => await readVoyageBatchError({ client, errorFileId }),
-          });
-        },
-      });
-
-      const errors: string[] = [];
-      const remaining = new Set(group.map((request) => request.custom_id));
-
-      await withRemoteHttpResponse({
-        url: resolveEmbeddingEndpointUrl(
-          params.client.baseUrl,
-          `files/${completed.outputFileId}/content`,
-        ),
-        ssrfPolicy: params.client.ssrfPolicy,
-        init: {
-          headers: buildBatchHeaders(params.client, { json: true }),
-        },
-        onResponse: async (contentRes) => {
-          await assertOkOrThrowProviderError(contentRes, "voyage.batch-file-content");
-
-          await readEmbeddingBatchJsonl<VoyageBatchOutputLine>(contentRes, {
-            label: "voyage.batch-file-content",
-            maxRecords: group.length,
-            onRecord: (line) => {
-              // Only the first response for a submitted id may mutate results.
-              if (line.custom_id && remaining.has(line.custom_id)) {
-                applyEmbeddingBatchOutputLine({ line, remaining, errors, byCustomId });
-              }
-              return errors.length === 0 && remaining.size > 0;
-            },
-          });
-        },
-      });
-
-      if (errors.length > 0) {
-        throw new Error(
-          `voyage batch ${batchInfo.id} failed: ${formatBatchErrorDetail(errors[0]) ?? "unknown error"}`,
-        );
-      }
-      if (remaining.size > 0) {
-        throw new Error(
-          `voyage batch ${batchInfo.id} missing ${remaining.size} embedding responses`,
-        );
-      }
     },
   });
 }

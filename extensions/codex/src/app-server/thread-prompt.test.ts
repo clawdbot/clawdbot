@@ -136,7 +136,7 @@ describe("buildDeveloperInstructions credential guidance", () => {
       expect(instructions).toContain("Native shell/sandbox/node: no protected injection");
       expect(instructions).toContain("late saves need next turn");
       expect(instructions).toContain(
-        "no_answer: report blocker or continue with best judgment; never ask in chat",
+        "no_answer: continue independent work; if the credential blocks progress, explain the missing setup",
       );
     },
   );

@@ -5,7 +5,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 // Fail-closed security gates must out-wait cold starts; this bound only stops true hangs.
 export const WINDOWS_POWERSHELL_COLD_SPAWN_TIMEOUT_MS = 60_000;
 
-export function sanitizePowerShellOutputText(text: string): string {
+function sanitizePowerShellOutputText(text: string): string {
   return truncateUtf16Safe(
     text
       .split(/\r?\n/u)

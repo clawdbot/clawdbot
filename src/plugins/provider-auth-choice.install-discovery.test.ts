@@ -11,7 +11,6 @@ import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snap
 import { enableExplicitlySelectedPluginInConfig } from "./enable.js";
 import { clearLoadInstalledPluginIndexInstallRecordsCache } from "./installed-plugin-index-record-reader.js";
 import { recordPluginInstall } from "./installs.js";
-import * as loader from "./loader.js";
 import { resetPluginLoaderTestStateForTest } from "./loader.test-fixtures.js";
 import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import { prepareAuthChoiceLoadedPluginProvider } from "./provider-auth-choice.js";
@@ -109,7 +108,6 @@ it.each([false, true])(
         });
         const runningRegistry = createEmptyPluginRegistry();
         setActivePluginRegistry(runningRegistry);
-        const loaded = vi.spyOn(loader, "loadOpenClawPlugins");
         install.mockImplementation(async (params) => {
           // The initial provider lookup has already populated its lease's metadata
           // cache. Package acquisition and execution-runtime preparation are stubbed;
@@ -208,13 +206,6 @@ it.each([false, true])(
             }
             const trusted = prepared?.pendingPluginInstalls?.["installed-provider"];
             expect(trusted).toMatchObject(trustedRecord);
-            expect(
-              loaded.mock.calls.some(
-                ([options]) =>
-                  options?.installRecords?.["installed-provider"]?.acceptedSurfaceIntegrity ===
-                  trustedRecord.integrity,
-              ),
-            ).toBe(true);
             expect(getActivePluginRegistry()).toBe(runningRegistry);
             expect(getCurrentPluginMetadataSnapshot({ config, env, workspaceDir })).toBe(
               runningMetadata,

@@ -1,5 +1,8 @@
 // Codex tests cover dynamic tool execution plugin behavior.
-import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  embeddedAgentLog,
+  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   handleDynamicToolCallWithTimeout,
@@ -759,6 +762,52 @@ describe("dynamic tool execution helpers", () => {
     });
   });
 
+  it("preserves a successful bridge result when its observer throws an unreadable error", async () => {
+    const observerError = Object.defineProperty(new Error(), "message", {
+      get() {
+        throw new Error("observer message getter escaped");
+      },
+    });
+    const onAgentToolResult = vi.fn(() => {
+      throw observerError;
+    });
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => {});
+    warn.mockClear();
+    const successful = {
+      success: true,
+      contentItems: [{ type: "inputText" as const, text: "committed effect" }],
+      executionStarted: true,
+      sideEffectEvidence: true,
+    };
+    const completedAction = vi.fn(async () => successful);
+    const result = await handleDynamicToolCallWithTimeout({
+      call: { ...dynamicCallContext, callId: "observer-success", tool: "exec", arguments: {} },
+      toolBridge: {
+        handleToolCall: async (_call, options) => {
+          const response = await completedAction();
+          options?.onAgentToolResult?.({
+            toolName: "exec",
+            result: { content: [{ type: "text", text: "committed effect" }], details: {} },
+            isError: false,
+          });
+          return response;
+        },
+      },
+      signal: new AbortController().signal,
+      timeoutMs: 1000,
+      onAgentToolResult,
+    });
+    expect(completedAction).toHaveBeenCalledOnce();
+    expect(onAgentToolResult).toHaveBeenCalledOnce();
+    expect(result).toBe(successful);
+    expect(result.success).toBe(true);
+    expect(result.sideEffectEvidence).toBe(true);
+    expect(result.diagnosticTerminalReason).toBeUndefined();
+    expect(warn).toHaveBeenCalledExactlyOnceWith(
+      "onAgentToolResult handler failed: tool=exec error=Error",
+    );
+  });
+
   it("contains hostile rejected values while notifying the private observer", async () => {
     const hostileError = Object.defineProperty(new Error(), "message", {
       get() {
@@ -784,12 +833,26 @@ describe("dynamic tool execution helpers", () => {
       onAgentToolResult,
     });
 
-    expect(result).toMatchObject({
+    const protocolResponse = {
       success: false,
-      diagnosticTerminalReason: "failed",
-      contentItems: [{ type: "inputText", text: "OpenClaw dynamic tool call failed." }],
+      contentItems: [{ type: "inputText", text: "Error" }],
+    };
+    expect(result.diagnosticTerminalReason).toBe("failed");
+    expect(result).toMatchObject({
+      ...protocolResponse,
+      diagnosticTerminalType: "error",
+      executionStarted: true,
+      sideEffectEvidence: true,
     });
-    expect(onAgentToolResult).toHaveBeenCalledOnce();
+    expect(toCodexDynamicToolProtocolResponse(result)).toEqual(protocolResponse);
+    expect(onAgentToolResult).toHaveBeenCalledExactlyOnceWith({
+      toolName: "memory_search",
+      result: {
+        content: [{ type: "text", text: "Error" }],
+        details: { status: "failed", error: "Error" },
+      },
+      isError: true,
+    });
   });
 
   it("contains hostile abort reasons while notifying the private observer", async () => {

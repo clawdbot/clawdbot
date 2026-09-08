@@ -262,7 +262,7 @@ export class OpenClawBoardDocument extends OpenClawLightDomElement {
 
   private renderState() {
     if (this.documentState === "loading") {
-      return renderPanelLoadingSkeleton("discussion", t("common.loading"));
+      return renderPanelLoadingSkeleton("board", t("common.loading"));
     }
     if (this.documentState === "missing-session") {
       return html`<div class="board-document__state" role="status">

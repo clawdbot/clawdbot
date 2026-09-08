@@ -6,10 +6,7 @@ import {
   makeRegistry,
 } from "../config/plugin-auto-enable.test-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  installTemporaryCurrentPluginMetadataSnapshot,
-  withPluginMetadataSnapshotScope,
-} from "../plugins/current-plugin-metadata-snapshot.js";
+import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import {
   captureActivePluginRegistrySnapshot,
@@ -189,11 +186,14 @@ describe("transcript library capture health", () => {
         },
       });
       setActivePluginRegistry(registry);
-      const lease = installTemporaryCurrentPluginMetadataSnapshot(metadata, { config: cfg });
       try {
         const store = new TranscriptsStore(path.join(state.stateDir, "transcripts"));
         const importedBefore = listImportedRuntimePluginIds();
-        const result = await readTranscriptLibraryStatus(store, cfg);
+        const result = await withPluginMetadataSnapshotScope(
+          metadata,
+          () => readTranscriptLibraryStatus(store, cfg),
+          { config: cfg },
+        );
         expect(result.providers).toEqual(
           expect.arrayContaining([
             expect.objectContaining({ providerId: "declared-source", availability: "enabled" }),
@@ -226,7 +226,6 @@ describe("transcript library capture health", () => {
         expect(status).not.toHaveBeenCalled();
         expect(listImportedRuntimePluginIds()).toEqual(importedBefore);
       } finally {
-        lease.release();
         restoreActivePluginRegistrySnapshot(previous);
       }
     });
@@ -252,28 +251,23 @@ describe("transcript library capture health", () => {
       });
       const scoped = { ...metadata, pluginIds: ["limited-scope"] };
       // An agent-scoped metadata generation cannot establish Gateway-wide absence.
-      const lease = installTemporaryCurrentPluginMetadataSnapshot(scoped, { config: cfg });
-      try {
-        const result = await withPluginMetadataSnapshotScope(
-          scoped,
-          () => readTranscriptLibraryStatus(store, cfg),
-          { config: cfg, trustConfigIdentity: immutable },
-        );
-        expect(result.configuredSources).toHaveLength(100);
-        expect(result.providers).toHaveLength(100);
-        expect(result.omitted).toMatchObject({
-          configuredSources: 2,
-          providers: expect.any(Number),
-        });
-        expect(
-          result.providers
-            .filter((provider) => provider.providerId.startsWith("missing-"))
-            .every((provider) => provider.availability === "unknown"),
-        ).toBe(true);
-        expect(result.latestTranscript).toBeNull();
-      } finally {
-        lease.release();
-      }
+      const result = await withPluginMetadataSnapshotScope(
+        scoped,
+        () => readTranscriptLibraryStatus(store, cfg),
+        { config: cfg, trustConfigIdentity: immutable },
+      );
+      expect(result.configuredSources).toHaveLength(100);
+      expect(result.providers).toHaveLength(100);
+      expect(result.omitted).toMatchObject({
+        configuredSources: 2,
+        providers: expect.any(Number),
+      });
+      expect(
+        result.providers
+          .filter((provider) => provider.providerId.startsWith("missing-"))
+          .every((provider) => provider.availability === "unknown"),
+      ).toBe(true);
+      expect(result.latestTranscript).toBeNull();
     },
   );
 });

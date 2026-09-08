@@ -68,6 +68,13 @@ function isScopedBlockedHostExecEnvVarName(rawKey: string): boolean {
   return key ? (scopedBlockedInheritedEnvKeys.getStore()?.has(key.toUpperCase()) ?? false) : false;
 }
 
+function isNoPagerOverride(key: string, value: string): boolean {
+  return (
+    (key.toUpperCase() === "GIT_PAGER" || key.toUpperCase() === "PAGER") &&
+    (value === "" || value === "cat")
+  );
+}
+
 function isShellWrapperAllowedOverrideEnvVarName(rawKey: string): boolean {
   const key = normalizeEnvVarKey(rawKey, { portable: true });
   if (!key) {
@@ -264,6 +271,12 @@ function sanitizeHostEnvOverridesWithDiagnostics(params?: {
       rejectedBlocked.push(upper);
       continue;
     }
+    // Git treats exact cat/empty as no pager. Never forward cat: generic PAGER consumers
+    // can resolve it through PATH/cwd. Empty carries no executable override. Do not trim values.
+    if (isNoPagerOverride(upper, value)) {
+      acceptedOverrides[normalized] = "";
+      continue;
+    }
     if (isDangerousHostEnvVarName(upper) || isDangerousHostEnvOverrideVarName(upper)) {
       rejectedBlocked.push(upper);
       continue;
@@ -347,6 +360,10 @@ export function sanitizeSystemRunEnvOverrides(params?: {
   }
   const filtered: Record<string, string> = {};
   for (const [key, value] of listNormalizedEnvEntries(overrides, { portable: true })) {
+    if (isNoPagerOverride(key, value) && !isScopedBlockedHostExecEnvVarName(key)) {
+      filtered[key] = "";
+      continue;
+    }
     if (!isShellWrapperAllowedOverrideEnvVarName(key)) {
       continue;
     }

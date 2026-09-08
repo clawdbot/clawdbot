@@ -4,6 +4,7 @@ import { detectMime } from "openclaw/plugin-sdk/media-mime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { FileChooser, Locator, Page } from "playwright-core";
+import { getImageMetadata } from "../media/media-services.js";
 import { ACT_MAX_WAIT_TIME_MS, resolveActWaitTimeoutMs } from "./act-policy.js";
 import { DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS } from "./constants.js";
 import { normalizeBrowserEvaluateFunctionSource } from "./evaluate-source.js";
@@ -36,6 +37,7 @@ import {
   type CoordinateSpace,
   planAnnotations,
   type RawAnnotationInput,
+  scaleAnnotations,
 } from "./screenshot-annotate.js";
 
 const DEFAULT_UPLOAD_MIME_TYPE = "application/octet-stream";
@@ -286,7 +288,11 @@ function screenshotLocator(page: Page, ref?: string, element?: string): Locator 
   return ref ? refLocator(page, ref) : element ? page.locator(element).first() : undefined;
 }
 
-async function capturePageScreenshot(page: Page, opts: ScreenshotOptions, locator?: Locator) {
+async function capturePageScreenshot(
+  page: Page,
+  opts: ScreenshotOptions,
+  locator?: Locator,
+): Promise<{ buffer: Buffer; clip?: { x: number; y: number; width: number } }> {
   opts.signal?.throwIfAborted();
   if (locator && opts.fullPage) {
     throw new Error("fullPage is not supported for element screenshots");
@@ -307,9 +313,11 @@ async function capturePageScreenshot(page: Page, opts: ScreenshotOptions, locato
     if (!owner) {
       // The outer deadline owns cancellation. Playwright's timeout rejects
       // before native capture/restoration finishes, releasing the queue too early.
-      return await (element
-        ? element.screenshot({ type, timeout: 0 })
-        : page.screenshot({ type, fullPage: Boolean(opts.fullPage), timeout: 0 }));
+      return {
+        buffer: await (element
+          ? element.screenshot({ type, timeout: 0 })
+          : page.screenshot({ type, fullPage: Boolean(opts.fullPage), timeout: 0 })),
+      };
     }
 
     const box = element ? await element.boundingBox() : undefined;
@@ -317,16 +325,16 @@ async function capturePageScreenshot(page: Page, opts: ScreenshotOptions, locato
       throw new Error("Cannot take a screenshot of an element that is not visible or has no size");
     }
     const metrics = await owner.session.send("Page.getLayoutMetrics");
-    const visual = metrics.visualViewport;
+    const visual = metrics.cssVisualViewport;
     let clip = { ...metrics.cssContentSize, scale: 1 };
     if (box) {
-      const x = Math.floor(box.x + metrics.cssLayoutViewport.pageX);
-      const y = Math.floor(box.y + metrics.cssLayoutViewport.pageY);
+      const x = Math.floor(box.x + visual.pageX);
+      const y = Math.floor(box.y + visual.pageY);
       clip = {
         x,
         y,
-        width: Math.ceil(box.x + metrics.cssLayoutViewport.pageX + box.width) - x,
-        height: Math.ceil(box.y + metrics.cssLayoutViewport.pageY + box.height) - y,
+        width: Math.ceil(box.x + visual.pageX + box.width) - x,
+        height: Math.ceil(box.y + visual.pageY + box.height) - y,
         scale: 1,
       };
     } else if (!opts.fullPage) {
@@ -350,7 +358,7 @@ async function capturePageScreenshot(page: Page, opts: ScreenshotOptions, locato
       clip,
       captureBeyondViewport,
     });
-    return Buffer.from(result.data, "base64");
+    return { buffer: Buffer.from(result.data, "base64"), clip };
   } finally {
     try {
       if (emulation?.touch) {
@@ -372,13 +380,12 @@ export async function takeScreenshotViaPlaywright(
   const page = await getPageForTargetId(opts);
   return await runScreenshotOperation(page, opts, async (signal) => {
     restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
-    return {
-      buffer: await capturePageScreenshot(
-        page,
-        { ...opts, signal },
-        screenshotLocator(page, opts.ref, opts.element),
-      ),
-    };
+    const { buffer } = await capturePageScreenshot(
+      page,
+      { ...opts, signal },
+      screenshotLocator(page, opts.ref, opts.element),
+    );
+    return { buffer };
   });
 }
 
@@ -421,17 +428,28 @@ async function screenshotWithLabelsOnPage(
       ? "element"
       : "viewport";
 
-  // Read scroll + viewport size. Scroll converts Playwright's viewport-space
-  // boundingBoxes into document-space inputs; the viewport size lets the helper
-  // restore the shipped `labelsSkipped` semantics by counting off-viewport refs
-  // as skipped (in viewport capture mode).
-  const view = await page.evaluate(() => ({
-    x: window.scrollX || 0,
-    y: window.scrollY || 0,
-    width: window.innerWidth || 0,
-    height: window.innerHeight || 0,
-  }));
-  const scroll = { x: view.x, y: view.y };
+  // DOM boxes use the visual viewport, including pan during mobile zoom.
+  // Mixing the layout viewport here can produce negative element clips.
+  const view = await page.evaluate(
+    (viewportWidth) => ({
+      x: window.visualViewport!.pageLeft,
+      y: window.visualViewport!.pageTop,
+      width: window.visualViewport!.width,
+      height: window.visualViewport!.height,
+      nativeCaptureWidth: Math.floor(
+        (viewportWidth ?? window.innerWidth) / window.visualViewport!.scale + 1e-3,
+      ),
+      fullWidth: Math.max(
+        document.body?.scrollWidth ?? 0,
+        document.documentElement.scrollWidth,
+        document.body?.offsetWidth ?? 0,
+        document.documentElement.offsetWidth,
+        document.body?.clientWidth ?? 0,
+        document.documentElement.clientWidth,
+      ),
+    }),
+    page.viewportSize()?.width,
+  );
 
   let elementRect: { x: number; y: number; width: number; height: number } | undefined;
   if (space === "element") {
@@ -445,8 +463,8 @@ async function screenshotWithLabelsOnPage(
     }
     // Convert viewport-space bbox to document space.
     elementRect = {
-      x: box.x + scroll.x,
-      y: box.y + scroll.y,
+      x: box.x + view.x,
+      y: box.y + view.y,
       width: box.width,
       height: box.height,
     };
@@ -476,19 +494,20 @@ async function screenshotWithLabelsOnPage(
       role: refInfo.role,
       name: refInfo.name,
       doc: {
-        x: box.x + scroll.x,
-        y: box.y + scroll.y,
+        x: box.x + view.x,
+        y: box.y + view.y,
         width: box.width,
         height: box.height,
       },
     });
   }
 
+  const origin = space === "element" ? elementRect! : space === "viewport" ? view : { x: 0, y: 0 };
   const plan = planAnnotations({
     inputs,
     space,
-    scroll,
-    viewport: { width: view.width, height: view.height },
+    scroll: origin,
+    viewport: view,
     elementRect,
     maxLabels,
   });
@@ -496,18 +515,42 @@ async function screenshotWithLabelsOnPage(
   try {
     opts.signal?.throwIfAborted();
     if (plan.overlayItems.length > 0) {
-      const captureY = space === "element" ? elementRect?.y : space === "viewport" ? scroll.y : 0;
-      await page.evaluate(buildOverlayInjectionScript({ items: plan.overlayItems, captureY }));
+      await page.evaluate(
+        buildOverlayInjectionScript({ items: plan.overlayItems, captureY: origin.y }),
+      );
     }
-    const buffer = await capturePageScreenshot(page, opts, locator);
+    const capture = await capturePageScreenshot(page, opts, locator);
+    // Native viewport captures include classic scrollbars and use page scale;
+    // the visual viewport still owns element positioning and visibility.
+    const clip =
+      capture.clip ??
+      (space === "viewport"
+        ? { ...view, width: view.nativeCaptureWidth }
+        : {
+            x: Math.floor(origin.x + 1e-3),
+            y: Math.floor(origin.y + 1e-3),
+            width: elementRect
+              ? Math.ceil(elementRect.x + elementRect.width - 1e-3) - Math.floor(origin.x + 1e-3)
+              : view.fullWidth,
+          });
+    const image = await getImageMetadata(capture.buffer);
+    if (!image) {
+      throw new Error("Cannot determine screenshot dimensions for label annotations");
+    }
+    // Attached Playwright sessions can capture at a different density from
+    // window.devicePixelRatio. The actual image and clip own this transform.
+    const scale = image.width / clip.width;
     return {
       // `labels` reports overlay boxes actually drawn on the captured image
       // (in-viewport, within budget); off-viewport refs are surfaced via
       // `annotations` but not drawn, and are reflected in `skipped`.
-      buffer,
+      buffer: capture.buffer,
       labels: plan.overlayItems.length,
       skipped: plan.skipped + skippedRefs,
-      annotations: plan.annotations,
+      annotations: scaleAnnotations(plan.annotations, scale, scale, {
+        x: clip.x - origin.x,
+        y: clip.y - origin.y,
+      }),
     };
   } finally {
     await page.evaluate(buildOverlayClearScript()).catch(() => {});

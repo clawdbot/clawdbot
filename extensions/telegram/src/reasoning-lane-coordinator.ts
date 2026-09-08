@@ -1,7 +1,5 @@
-// Telegram plugin module implements reasoning lane coordinator behavior.
 import { formatReasoningMessage } from "openclaw/plugin-sdk/agent-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   findCodeRegions,
   isInsideCode,
@@ -17,7 +15,6 @@ const REASONING_MESSAGE_RE = /^🧠\s+_/u;
 // "Thinking" header. Telegram renders durable thoughts with the 🧠 marker
 // (Discord parity), so this header must be rewritten channel-side.
 const CORE_THINKING_HEADER_RE = /^Thinking\.{0,3}\s*\n+/u;
-const LEGACY_REASONING_MESSAGE_PREFIX = "Reasoning:\n";
 
 // Rewrite core's "Thinking\n\n_body_" into "🧠 _body_": strip the header word
 // and prefix the first italic line with 🧠. Keeps the italic body intact so
@@ -71,14 +68,14 @@ function extractThinkingFromTaggedStreamOutsideCode(text: string): string {
 }
 
 function isPartialReasoningTagPrefix(text: string): boolean {
-  const trimmed = normalizeLowercaseStringOrEmpty(text.trimStart());
+  const trimmed = text.trim().replace(/^<\s*(\/?)\s+/u, "<$1");
   if (!trimmed.startsWith("<")) {
     return false;
   }
   if (trimmed.includes(">")) {
     return false;
   }
-  return REASONING_TAG_PREFIXES.some((prefix) => prefix.startsWith(trimmed));
+  return REASONING_TAG_PREFIXES.some((prefix) => prefix.startsWith(trimmed.toLowerCase()));
 }
 
 type TelegramReasoningSplit = {
@@ -110,13 +107,6 @@ export function splitTelegramReasoningText(
   if (CORE_THINKING_HEADER_RE.test(trimmed)) {
     return { reasoningText: markReasoningMessage(trimmed) };
   }
-  if (
-    trimmed.startsWith(LEGACY_REASONING_MESSAGE_PREFIX) &&
-    trimmed.length > LEGACY_REASONING_MESSAGE_PREFIX.length
-  ) {
-    return { reasoningText: trimmed };
-  }
-
   const taggedReasoning = extractThinkingFromTaggedStreamOutsideCode(text);
   const strippedAnswer = stripReasoningTagsFromText(text, { mode: "strict", trim: "both" });
   const reasoningText = taggedReasoning || strippedAnswer;

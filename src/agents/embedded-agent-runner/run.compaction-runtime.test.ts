@@ -396,7 +396,7 @@ describe("embedded compaction recovery authority", () => {
           if (!recorder) {
             throw new Error("Recovery must attach its private accounting recorder");
           }
-          recorder.recordCompaction(committed.result?.tokensAfter);
+          recorder.recordCompaction?.(committed.result?.tokensAfter);
           fixture.updates.mockClear();
           childSignal = params.abortSignal;
           if (failure === "throw") {

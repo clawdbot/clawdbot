@@ -463,11 +463,11 @@ async function deliverTelegramProgressModeFinalAnswer(
   assertPlatformSendAuthorized?: () => void,
   bindPendingFinalDelivery?: <T extends ReplyPayload>(payload: T) => T,
 ): Promise<LaneDeliveryResult> {
-  const afterAcceptedDraft = turn.answerLane.stream?.hasConsumedReplyTarget?.() === true;
+  const afterAcceptedDraft = turn.answerLane.stream?.hasConsumedReplyTarget() === true;
   // Seal pending preview updates before the durable final send. This bounds
   // final latency to one in-flight edit and prevents stale progress overtaking it.
   await cleanupProgressWithoutBlockingFinal("discard", async () => {
-    await turn.answerLane.stream?.discard?.();
+    await turn.answerLane.stream?.discard();
   });
   if (payload.isError === true) {
     await cleanupProgressWithoutBlockingFinal("teardown", async () => {

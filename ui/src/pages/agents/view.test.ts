@@ -4,45 +4,16 @@ import { describe, expect, it, vi } from "vitest";
 import { flattenTranslations } from "../../../../scripts/lib/control-ui-i18n-sync-plan.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ChannelAccountSnapshot, CronJob } from "../../api/types.ts";
+import type { MultiSelect } from "../../components/multi-select.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import { zh_CN } from "../../i18n/locales/zh-CN.ts";
 import { createInitialCronState, loadCronJobsPage } from "../../lib/cron/index.ts";
 import { formatNextRun } from "../../lib/presenter.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
+import { createSkill } from "../skills/view.test-support.ts";
 import { createAgentViewTestProps as createProps } from "./agents-view.test-helpers.ts";
 import { renderAgentChannels, renderAgentFiles } from "./panels-status-files.ts";
 import { renderAgents } from "./view.ts";
-
-function createSkill() {
-  return {
-    name: "Repo Skill",
-    description: "Skill description",
-    source: "workspace",
-    filePath: "/tmp/skill",
-    baseDir: "/tmp",
-    skillKey: "repo-skill",
-    always: false,
-    disabled: false,
-    blockedByAllowlist: false,
-    eligible: true,
-    requirements: {
-      anyBins: [],
-      bins: [],
-      env: [],
-      config: [],
-      os: [],
-    },
-    missing: {
-      anyBins: [],
-      bins: [],
-      env: [],
-      config: [],
-      os: [],
-    },
-    configChecks: [],
-    install: [],
-  };
-}
 
 function createCronJob(id: string, overrides: Partial<CronJob> = {}): CronJob {
   return {
@@ -122,26 +93,6 @@ describe("renderAgents", () => {
       container.querySelector<HTMLInputElement>(".agent-identity-editor__fields input")?.value,
     ).toBe("Fetched Beta");
     expect(container.querySelector(".agent-identity-editor__avatar-text")?.textContent).toBe("🦊");
-  });
-
-  it("shows a model-catalog failure and lets the operator retry", () => {
-    const container = document.createElement("div");
-    const onModelCatalogRetry = vi.fn();
-    render(
-      renderAgents(
-        createProps({ modelCatalogError: "model catalog unavailable", onModelCatalogRetry }),
-      ),
-      container,
-    );
-
-    const alert = container.querySelector('[role="alert"]');
-    expect(alert?.textContent).toContain("model catalog unavailable");
-    const retry = Array.from(alert?.querySelectorAll("button") ?? []).find(
-      (button) => button.textContent?.trim() === t("common.retry"),
-    );
-    retry?.click();
-
-    expect(onModelCatalogRetry).toHaveBeenCalledOnce();
   });
 
   it("renders and counts a server-scoped default-agent cron job without an explicit agentId", () => {
@@ -476,10 +427,8 @@ describe("renderAgents", () => {
       container,
     );
 
-    expect(container.querySelectorAll(".agent-chip-input .chip")).toHaveLength(0);
-    expect(container.querySelector<HTMLInputElement>(".agent-chip-input input")?.placeholder).toBe(
-      "provider/model",
-    );
+    const field = container.querySelector<MultiSelect>("openclaw-multi-select.agent-fallbacks");
+    expect(field?.value).toEqual([]);
   });
 
   it("remounts overview model controls when switching selected agents", async () => {

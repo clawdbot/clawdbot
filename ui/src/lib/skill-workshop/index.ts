@@ -1,13 +1,10 @@
-import type { SkillsProposalsListResultSchema } from "@openclaw/gateway-protocol";
-import type { Static } from "typebox";
-import type { computeLineDiff } from "../chat/tool-call-diff.ts";
+import type {
+  SkillProposalEvaluation,
+  SkillsProposalsListResult,
+} from "@openclaw/gateway-protocol";
+import type { computeSkillWorkshopDiff } from "./diff.ts";
 
-export type SkillWorkshopProposalStatus =
-  | "pending"
-  | "applied"
-  | "rejected"
-  | "quarantined"
-  | "stale";
+export type SkillWorkshopProposalStatus = SkillsProposalsListResult["proposals"][number]["status"];
 
 type SkillWorkshopFile = {
   path: string;
@@ -15,23 +12,14 @@ type SkillWorkshopFile = {
   contents: string;
 };
 
-export type SkillWorkshopEvaluationFinding = {
-  ruleId: string;
-  severity: "info" | "warn" | "critical";
-  message: string;
-  file?: string;
-  line?: number;
-};
+type SkillWorkshopEvaluationResult = Extract<
+  SkillProposalEvaluation["outcomes"][number],
+  { status: "completed" }
+>["result"];
 
-type SkillWorkshopEvaluationResult = {
-  summary?: string;
-  findings?: SkillWorkshopEvaluationFinding[];
-  metrics?: Record<string, string | number | boolean>;
-  evaluatorVersion?: string;
-  mode?: string;
-  decision?: "pass" | "revise" | "block";
-  decisionReason?: string;
-};
+export type SkillWorkshopEvaluationFinding = NonNullable<
+  SkillWorkshopEvaluationResult["findings"]
+>[number];
 
 export type SkillWorkshopEvaluationOutcome = {
   pluginId: string;
@@ -42,15 +30,7 @@ export type SkillWorkshopEvaluationOutcome = {
   error?: string;
 };
 
-export type SkillWorkshopEvaluation = {
-  id: string;
-  proposedVersion: string;
-  revisionHash: string;
-  trigger: "manual" | "apply";
-  startedAt: string;
-  completedAt: string;
-  correlationId?: string;
-  targetTreeSha256?: string;
+export type SkillWorkshopEvaluation = Omit<SkillProposalEvaluation, "outcomes"> & {
   outcomes: SkillWorkshopEvaluationOutcome[];
 };
 
@@ -68,6 +48,7 @@ export type SkillWorkshopProposal = {
    */
   bodyLoaded: boolean;
   status: SkillWorkshopProposalStatus;
+  degradedState?: SkillsProposalsListResult["proposals"][number]["degradedState"];
   origin?: {
     agentId?: string;
     sessionKey?: string;
@@ -87,13 +68,13 @@ export type SkillWorkshopProposal = {
 export type SkillWorkshopAction = "apply" | "evaluate" | "revise" | "reject";
 export type SkillWorkshopMode = "skills" | "suggestions";
 
-export type SkillWorkshopInstalledSkill = Static<
-  typeof SkillsProposalsListResultSchema
->["installedSkills"][number] & { read?: SkillWorkshopInstalledSelection };
+export type SkillWorkshopInstalledSkill = SkillsProposalsListResult["installedSkills"][number] & {
+  read?: SkillWorkshopInstalledSelection;
+};
 
 export type SkillWorkshopInstalledSelection =
   | { status: "idle" }
-  | { status: "loading"; name: string }
+  | { status: "loading"; name: string; content?: string }
   | {
       status: "ready";
       name: string;
@@ -101,7 +82,7 @@ export type SkillWorkshopInstalledSelection =
       savedVersions: Array<{
         key: string;
         appliedAt?: string;
-        diff: ReturnType<typeof computeLineDiff>;
+        diff: ReturnType<typeof computeSkillWorkshopDiff>;
       }>;
       savedVersionsError?: string;
     }
@@ -110,12 +91,7 @@ export type SkillWorkshopInstalledSelection =
 export function changedSkillWorkshopVersion(read: SkillWorkshopInstalledSelection | undefined) {
   return read?.status === "ready"
     ? read.savedVersions.find(
-        (version) =>
-          // computeLineDiff marks unequal full inputs as truncated even when its
-          // bounded preview contains none of the edits.
-          version.diff.kind === "truncated" ||
-          version.diff.stat.added > 0 ||
-          version.diff.stat.removed > 0,
+        (version) => version.diff.stat.added > 0 || version.diff.stat.removed > 0,
       )
     : undefined;
 }

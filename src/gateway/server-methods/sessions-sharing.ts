@@ -35,6 +35,7 @@ import {
   loadPublicSessionShareTokenCodec,
   type PublicSessionShareTokenCodec,
 } from "../control-ui-public-session-token.js";
+import { bumpGatewayAccessRevision } from "../gateway-access-revision.js";
 import { getGatewayLocalUserIngress } from "../local-user-ingress.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import {
@@ -237,7 +238,8 @@ function knownSessionIdentities(params: {
   if (params.actor.state === "present") {
     remember(params.actor.actor);
   }
-  for (const entry of Object.values(loadCombinedSessionStoreForGatewayCore(params.cfg).store)) {
+  const { store } = loadCombinedSessionStoreForGatewayCore(params.cfg, { projection: "list" });
+  for (const entry of Object.values(store)) {
     remember(entry.createdActor ?? null);
   }
   for (const profile of listProfiles()) {
@@ -247,11 +249,7 @@ function knownSessionIdentities(params: {
       ...(profile.displayName ? { label: profile.displayName } : {}),
     });
   }
-  return [...identities.values()].toSorted(
-    (left, right) =>
-      (left.label ?? left.id).localeCompare(right.label ?? right.id) ||
-      left.id.localeCompare(right.id),
-  );
+  return [...identities.values()];
 }
 
 function publishSharingChange(params: {
@@ -260,6 +258,7 @@ function publishSharingChange(params: {
   event: Omit<SessionSharingEvidenceEvent, "actorState">;
   agentId: string;
 }): void {
+  bumpGatewayAccessRevision();
   invalidateSessionSharingSnapshot(params.event.sessionKey);
   const eventOptions = {
     sessionKeys: [params.event.sessionKey],

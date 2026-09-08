@@ -19,6 +19,22 @@ export function withCliProcessScope<T>(run: () => T): T {
   return scope.run("process", run);
 }
 
+export function hasCliProcessScope(): boolean {
+  return scope.getStore() !== undefined;
+}
+
+/** Finalizers own their Windows descendants until executable process exit. */
+export async function retainCliProcessJobUntilExit(): Promise<void> {
+  if (process.platform !== "win32" || !hasCliProcessScope()) {
+    return;
+  }
+  const [{ default: koffi }, { retainWindowsProcessJobUntilExit }] = await Promise.all([
+    import("koffi"),
+    import("../process/supervisor/service-child-windows-job-native.js"),
+  ]);
+  retainWindowsProcessJobUntilExit(koffi);
+}
+
 export function withCliCommandCleanup<T>(
   gatewayRun: boolean,
   run: (cleanup?: CliHarnessCleanup) => T,

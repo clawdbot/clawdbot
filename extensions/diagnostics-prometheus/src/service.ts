@@ -6,6 +6,7 @@ import {
   normalizeDiagnosticLane,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { asNonNegativeFiniteNumber as numericValue } from "openclaw/plugin-sdk/number-runtime";
+import { getPluginRuntimeGatewayRequestScope } from "openclaw/plugin-sdk/plugin-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type {
   DiagnosticEventMetadata,
@@ -94,11 +95,8 @@ function createPrometheusMetricStore() {
   const histograms = new Map<string, HistogramSample>();
   let droppedSeries = 0;
 
-  const canCreateSeries = <T>(map: Map<string, T>, key: string, metricName: string): boolean => {
+  const canCreateSeries = <T>(map: Map<string, T>, key: string): boolean => {
     if (map.has(key)) {
-      return true;
-    }
-    if (metricName === DROPPED_SERIES_COUNTER_NAME) {
       return true;
     }
     if (counters.size + gauges.size + histograms.size < MAX_PROMETHEUS_SERIES) {
@@ -113,7 +111,7 @@ function createPrometheusMetricStore() {
       return;
     }
     const key = metricKey(name, labels);
-    if (!canCreateSeries(counters, key, name)) {
+    if (!canCreateSeries(counters, key)) {
       return;
     }
     const existing = counters.get(key);
@@ -129,7 +127,7 @@ function createPrometheusMetricStore() {
       return;
     }
     const key = metricKey(name, labels);
-    if (!canCreateSeries(gauges, key, name)) {
+    if (!canCreateSeries(gauges, key)) {
       return;
     }
     gauges.set(key, { help, labels, value });
@@ -146,7 +144,7 @@ function createPrometheusMetricStore() {
       return;
     }
     const key = metricKey(name, labels);
-    if (!canCreateSeries(histograms, key, name)) {
+    if (!canCreateSeries(histograms, key)) {
       return;
     }
     let sample = histograms.get(key);
@@ -682,23 +680,25 @@ function recordDiagnosticEvent(
         harnessLabels(evt),
       );
       return;
-    case "message.processed":
-      store.counter("openclaw_message_processed_total", "Inbound messages processed by outcome.", {
+    case "message.processed": {
+      const labels = {
         channel: normalizeDiagnosticValue(evt.channel),
         outcome: evt.outcome,
         reason: normalizeDiagnosticValue(evt.reason, "none"),
-      });
+      };
+      store.counter(
+        "openclaw_message_processed_total",
+        "Inbound messages processed by outcome.",
+        labels,
+      );
       store.histogram(
         "openclaw_message_processed_duration_seconds",
         "Inbound message processing duration in seconds.",
-        {
-          channel: normalizeDiagnosticValue(evt.channel),
-          outcome: evt.outcome,
-          reason: normalizeDiagnosticValue(evt.reason, "none"),
-        },
+        labels,
         seconds(evt.durationMs),
       );
       return;
+    }
     case "webhook.received":
       store.counter(
         "openclaw_webhook_received_total",
@@ -747,59 +747,50 @@ function recordDiagnosticEvent(
         },
       );
       return;
-    case "message.dispatch.completed":
+    case "message.dispatch.completed": {
+      const labels = {
+        channel: normalizeDiagnosticValue(evt.channel),
+        outcome: evt.outcome,
+        reason: normalizeDiagnosticValue(evt.reason, "none"),
+        source: normalizeDiagnosticValue(evt.source),
+      };
       store.counter(
         "openclaw_message_dispatch_completed_total",
         "Inbound message dispatch attempts completed by outcome.",
-        {
-          channel: normalizeDiagnosticValue(evt.channel),
-          outcome: evt.outcome,
-          reason: normalizeDiagnosticValue(evt.reason, "none"),
-          source: normalizeDiagnosticValue(evt.source),
-        },
+        labels,
       );
       store.histogram(
         "openclaw_message_dispatch_duration_seconds",
         "Inbound message dispatch duration in seconds.",
-        {
-          channel: normalizeDiagnosticValue(evt.channel),
-          outcome: evt.outcome,
-          reason: normalizeDiagnosticValue(evt.reason, "none"),
-          source: normalizeDiagnosticValue(evt.source),
-        },
+        labels,
         seconds(evt.durationMs),
       );
       return;
+    }
     case "message.delivery.completed":
-    case "message.delivery.error":
+    case "message.delivery.error": {
+      const labels = {
+        channel: normalizeDiagnosticValue(evt.channel),
+        delivery_kind: normalizeDiagnosticValue(evt.deliveryKind, "other"),
+        error_category:
+          evt.type === "message.delivery.error"
+            ? normalizeDiagnosticValue(evt.errorCategory, "other")
+            : "none",
+        outcome: evt.type === "message.delivery.error" ? "error" : "completed",
+      };
       store.counter(
         "openclaw_message_delivery_total",
         "Outbound message delivery attempts by outcome.",
-        {
-          channel: normalizeDiagnosticValue(evt.channel),
-          delivery_kind: normalizeDiagnosticValue(evt.deliveryKind, "other"),
-          error_category:
-            evt.type === "message.delivery.error"
-              ? normalizeDiagnosticValue(evt.errorCategory, "other")
-              : "none",
-          outcome: evt.type === "message.delivery.error" ? "error" : "completed",
-        },
+        labels,
       );
       store.histogram(
         "openclaw_message_delivery_duration_seconds",
         "Outbound message delivery duration in seconds.",
-        {
-          channel: normalizeDiagnosticValue(evt.channel),
-          delivery_kind: normalizeDiagnosticValue(evt.deliveryKind, "other"),
-          error_category:
-            evt.type === "message.delivery.error"
-              ? normalizeDiagnosticValue(evt.errorCategory, "other")
-              : "none",
-          outcome: evt.type === "message.delivery.error" ? "error" : "completed",
-        },
+        labels,
         seconds(evt.durationMs),
       );
       return;
+    }
     case "talk.event":
       store.counter("openclaw_talk_event_total", "Talk events emitted by type.", talkLabels(evt));
       store.histogram(
@@ -886,24 +877,18 @@ function recordDiagnosticEvent(
       });
       return;
     case "diagnostic.memory.sample":
-      store.gauge(
-        "openclaw_memory_bytes",
-        "Latest process memory usage by memory kind.",
-        { kind: "rss" },
-        evt.memory.rssBytes,
-      );
-      store.gauge(
-        "openclaw_memory_bytes",
-        "Latest process memory usage by memory kind.",
-        { kind: "heap_total" },
-        evt.memory.heapTotalBytes,
-      );
-      store.gauge(
-        "openclaw_memory_bytes",
-        "Latest process memory usage by memory kind.",
-        { kind: "heap_used" },
-        evt.memory.heapUsedBytes,
-      );
+      for (const [kind, field] of [
+        ["rss", "rssBytes"],
+        ["heap_total", "heapTotalBytes"],
+        ["heap_used", "heapUsedBytes"],
+      ] as const) {
+        store.gauge(
+          "openclaw_memory_bytes",
+          "Latest process memory usage by memory kind.",
+          { kind },
+          evt.memory[field],
+        );
+      }
       store.histogram(
         "openclaw_memory_rss_bytes",
         "RSS memory sample distribution in bytes.",
@@ -928,24 +913,14 @@ function recordDiagnosticEvent(
         "Diagnostic liveness warning events.",
         livenessLabels(evt),
       );
-      store.gauge(
-        "openclaw_liveness_sessions",
-        "Latest session counts reported with diagnostic liveness warnings.",
-        { state: "active" },
-        numericValue(evt.active),
-      );
-      store.gauge(
-        "openclaw_liveness_sessions",
-        "Latest session counts reported with diagnostic liveness warnings.",
-        { state: "waiting" },
-        numericValue(evt.waiting),
-      );
-      store.gauge(
-        "openclaw_liveness_sessions",
-        "Latest session counts reported with diagnostic liveness warnings.",
-        { state: "queued" },
-        numericValue(evt.queued),
-      );
+      for (const state of ["active", "waiting", "queued"] as const) {
+        store.gauge(
+          "openclaw_liveness_sessions",
+          "Latest session counts reported with diagnostic liveness warnings.",
+          { state },
+          numericValue(evt[state]),
+        );
+      }
       store.histogram(
         "openclaw_liveness_event_loop_delay_p99_seconds",
         "P99 event-loop delay reported by diagnostic liveness warnings in seconds.",
@@ -974,34 +949,20 @@ function recordDiagnosticEvent(
       );
       return;
     case "diagnostic.async_queue.dropped":
-      store.counter(
-        "openclaw_diagnostic_async_queue_dropped_total",
-        "Async diagnostic queue drops by dropped event class.",
-        { drop_class: "total" },
-        numericValue(evt.droppedEvents),
-      );
-      if (evt.droppedTrustedEvents !== undefined) {
+      for (const [dropClass, field] of [
+        ["total", "droppedEvents"],
+        ["trusted", "droppedTrustedEvents"],
+        ["untrusted", "droppedUntrustedEvents"],
+        ["priority", "droppedPriorityEvents"],
+      ] as const) {
+        if (field !== "droppedEvents" && evt[field] === undefined) {
+          continue;
+        }
         store.counter(
           "openclaw_diagnostic_async_queue_dropped_total",
           "Async diagnostic queue drops by dropped event class.",
-          { drop_class: "trusted" },
-          numericValue(evt.droppedTrustedEvents),
-        );
-      }
-      if (evt.droppedUntrustedEvents !== undefined) {
-        store.counter(
-          "openclaw_diagnostic_async_queue_dropped_total",
-          "Async diagnostic queue drops by dropped event class.",
-          { drop_class: "untrusted" },
-          numericValue(evt.droppedUntrustedEvents),
-        );
-      }
-      if (evt.droppedPriorityEvents !== undefined) {
-        store.counter(
-          "openclaw_diagnostic_async_queue_dropped_total",
-          "Async diagnostic queue drops by dropped event class.",
-          { drop_class: "priority" },
-          numericValue(evt.droppedPriorityEvents),
+          { drop_class: dropClass },
+          numericValue(evt[field]),
         );
       }
       store.gauge(
@@ -1038,8 +999,34 @@ function recordDiagnosticEvent(
   }
 }
 
+// Gateway authentication applies the caller's named-role scope ceiling, but the route's own
+// read authorization belongs to this plugin. Mirror the Gateway read implication set so a
+// scope-narrowed operator identity cannot scrape diagnostics it may not read.
+const METRICS_READ_SCOPE = "operator.read";
+const METRICS_READ_IMPLYING_SCOPES = [
+  METRICS_READ_SCOPE,
+  "operator.write",
+  "operator.admin",
+] as const;
+
+function hasMetricsReadScope(): boolean {
+  const runtimeScopes = getPluginRuntimeGatewayRequestScope()?.client?.connect?.scopes;
+  const scopes = Array.isArray(runtimeScopes) ? runtimeScopes : [];
+  return METRICS_READ_IMPLYING_SCOPES.some((scope) => scopes.includes(scope));
+}
+
 function createMetricsHandler(store: PrometheusMetricStore): OpenClawPluginHttpRouteHandler {
   return (req: IncomingMessage, res: ServerResponse) => {
+    // Fail closed before any metric rendering, including for HEAD probes that would
+    // otherwise disclose the document size to an unauthorized caller.
+    if (!hasMetricsReadScope()) {
+      res.statusCode = 403;
+      res.setHeader("Cache-Control", "no-store");
+      res.setHeader("Content-Type", "text/plain; charset=utf-8");
+      res.end(`missing scope: ${METRICS_READ_SCOPE}`);
+      return true;
+    }
+
     if (req.method !== "GET" && req.method !== "HEAD") {
       res.statusCode = 405;
       res.setHeader("Allow", "GET, HEAD");

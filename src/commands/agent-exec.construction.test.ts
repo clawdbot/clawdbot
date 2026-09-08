@@ -109,14 +109,14 @@ describe("agent exec command composition", () => {
           commandPid = await waitForPidFile(pidPath, 3_000, realDelay);
           expect(isProcessAlive(commandPid)).toBe(true);
           expect(createSecretData).toHaveBeenCalledOnce();
-          expect(input).toMatchObject({
-            mode: "child",
-            timeoutMs: 1_000,
-          });
+          expect(input).toMatchObject({ mode: "child" });
+          const remainingMs = expectDefined(input.timeoutMs, "remaining construction deadline");
+          expect(remainingMs).toBeGreaterThan(0);
+          expect(remainingMs).toBeLessThanOrEqual(1_000);
           const processRun = expectDefined(pendingRun, "admitted supervisor process");
           const settled = vi.fn();
           void processRun.then(settled, settled);
-          await vi.advanceTimersByTimeAsync(999);
+          await vi.advanceTimersByTimeAsync(remainingMs - 1);
           expect(settled).not.toHaveBeenCalled();
           await vi.advanceTimersByTimeAsync(1);
           const managed = await processRun;

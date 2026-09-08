@@ -78,10 +78,11 @@ vi.mock("./update-command-config.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./update-command-config.js")>()),
   persistRequestedUpdateChannel: async (params: { configSnapshot: unknown }) =>
     params.configSnapshot,
-  restoreDroppedPreUpdateChannels: (snapshot: unknown) => ({
-    snapshot,
-    changed: false,
-    authoredChannels: [],
+  preparePostCorePluginConfig: async () => ({
+    configSnapshot: await mocks.readConfig(),
+    configWriteOptions: {},
+    configChanged: false,
+    restoredAuthoredChannels: [],
   }),
 }));
 vi.mock("./update-command-fresh-doctor.js", () => ({

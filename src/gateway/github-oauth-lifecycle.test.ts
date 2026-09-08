@@ -1,8 +1,8 @@
+import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ToolsGitHubStatusResult } from "../../packages/gateway-protocol/src/index.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { beginAgentDeletion } from "../agents/agent-lifecycle-registry.js";
 import {
   inspectGitHubOAuthRecord,
   listGitHubDeviceAuthorizationRecords,
@@ -21,6 +21,10 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GitHubToolIdentityConfig } from "../config/types.tools.js";
 import { writeHiddenGitHubSecretRecord } from "../secrets/store/secret-store.js";
+import {
+  beginAgentDeletionJournal,
+  removeAgentDeletionJournal,
+} from "../state/agent-deletion-journal.js";
 import { recordAgentProvenance } from "../state/agent-provenance.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 
@@ -715,21 +719,26 @@ describe("GitHub OAuth authorization lifecycle", () => {
     currentConfig = configForScope("agent");
     const lifecycle = createLifecycle();
     const started = await startAuthorization(lifecycle, "agent");
-    const deletion = beginAgentDeletion({
+    const deletion = beginAgentDeletionJournal({
       agentId: "main",
+      operationId: randomUUID(),
       agentDir: "/agents/main",
       workspaceDir: "/workspaces/main",
       sessionsDir: "/sessions/main",
+      deleteFiles: true,
     });
-    await advanceToPoll(started.requestId);
+    try {
+      await advanceToPoll(started.requestId);
 
-    await expect(lifecycle.pollAuthorization(started.requestId)).resolves.toEqual({
-      status: "failed",
-      reason: "identity_changed",
-    });
-    expect(mocks.pollDeviceToken).not.toHaveBeenCalled();
-    expect(mocks.installProfile).not.toHaveBeenCalled();
-    deletion.rollback();
+      await expect(lifecycle.pollAuthorization(started.requestId)).resolves.toEqual({
+        status: "failed",
+        reason: "identity_changed",
+      });
+      expect(mocks.pollDeviceToken).not.toHaveBeenCalled();
+      expect(mocks.installProfile).not.toHaveBeenCalled();
+    } finally {
+      removeAgentDeletionJournal(deletion.agentId, deletion.operationId);
+    }
   });
 
   it("rejects an agent authorization after same-id recreation gets fresh provenance", async () => {

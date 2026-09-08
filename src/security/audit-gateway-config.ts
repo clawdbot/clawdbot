@@ -12,7 +12,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveGatewayAuthForConfig } from "../gateway/auth-resolve.js";
 import { resolveGatewayAuthTokenSourceConflict } from "../gateway/auth-token-source-conflict.js";
 import { createGatewayCredentialPlan } from "../gateway/credential-planner.js";
-import { isInvalidGatewayToken } from "../gateway/known-weak-gateway-secrets.js";
+import { isInvalidGatewaySecret } from "../gateway/known-weak-gateway-secrets.js";
 import type { SecurityAuditFinding } from "./audit.types.js";
 import { collectCoreInsecureOrDangerousFlags } from "./core-dangerous-config-flags.js";
 import { DEFAULT_GATEWAY_HTTP_TOOL_DENY } from "./dangerous-tools.js";
@@ -282,40 +282,46 @@ export function collectGatewayConfigFindings(
     });
   }
 
-  const configToken = cfg.gateway?.auth?.token;
-  const tokenOverride = options.gatewayAuthOverride?.token;
-  let tokenInput = auth.token ?? tokenOverride ?? configToken;
-  if (tokenOverride === undefined && plan.localToken.refPath) {
-    // An unavailable reference cannot lend its ambient fallback to strength checks.
-    const pendingRef =
-      hasUnresolvedConfigPath(cfg, plan.localToken.refPath) ||
-      resolveConfigSecretRef({
-        config: cfg,
-        path: plan.localToken.refPath,
-        value: configToken,
-        defaults: cfg.secrets?.defaults,
+  for (const credential of ["token", "password"] as const) {
+    if (auth.mode !== credential) {
+      continue;
+    }
+    const configValue = cfg.gateway?.auth?.[credential];
+    const override = options.gatewayAuthOverride?.[credential];
+    const localPlan = credential === "token" ? plan.localToken : plan.localPassword;
+    let input = auth[credential] ?? override ?? configValue;
+    if (override === undefined && localPlan.refPath) {
+      // An unavailable reference cannot lend its ambient fallback to strength checks.
+      const pendingRef =
+        hasUnresolvedConfigPath(cfg, localPlan.refPath) ||
+        resolveConfigSecretRef({
+          config: cfg,
+          path: localPlan.refPath,
+          value: configValue,
+          defaults: cfg.secrets?.defaults,
+        });
+      input = pendingRef ? undefined : configValue;
+    }
+    const value = typeof input === "string" ? input.trim() : null;
+    if (isInvalidGatewaySecret(input)) {
+      findings.push({
+        checkId: `gateway.${credential}_placeholder_value`,
+        severity: "critical",
+        title: `Gateway ${credential} is a blank or undefined/null placeholder`,
+        detail: `The selected Gateway ${credential} is a known non-secret value. Gateway startup rejects it.`,
+        remediation:
+          credential === "token"
+            ? "Run `openclaw doctor --fix --generate-gateway-token` for an inline token; otherwise rotate its external secret source. Restart the Gateway afterward."
+            : "Generate a real secret (for example, `openssl rand -hex 32`) and update OPENCLAW_GATEWAY_PASSWORD or gateway.auth.password (or its external source). Restart the Gateway afterward.",
       });
-    tokenInput = pendingRef ? undefined : configToken;
-  }
-  const token = typeof tokenInput === "string" ? tokenInput.trim() : null;
-  const placeholderToken = auth.mode === "token" && isInvalidGatewayToken(tokenInput);
-  if (placeholderToken) {
-    findings.push({
-      checkId: "gateway.token_placeholder_value",
-      severity: "critical",
-      title: "Gateway token is a blank or undefined/null placeholder",
-      detail: "The selected Gateway token is a known non-secret value. Gateway startup rejects it.",
-      remediation:
-        "Run `openclaw doctor --fix --generate-gateway-token` for an inline token; otherwise rotate its external secret source. Restart the Gateway afterward.",
-    });
-  }
-  if (auth.mode === "token" && !placeholderToken && token && token.length < 24) {
-    findings.push({
-      checkId: "gateway.token_too_short",
-      severity: "warn",
-      title: "Gateway token looks short",
-      detail: `gateway auth token is ${token.length} chars; prefer a long random token.`,
-    });
+    } else if (value && value.length < 24) {
+      findings.push({
+        checkId: `gateway.${credential}_too_short`,
+        severity: "warn",
+        title: `Gateway ${credential} looks short`,
+        detail: `gateway auth ${credential} is ${value.length} chars; prefer a long random ${credential}.`,
+      });
+    }
   }
 
   if (auth.mode === "trusted-proxy") {

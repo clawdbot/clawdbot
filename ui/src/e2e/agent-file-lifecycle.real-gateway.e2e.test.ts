@@ -222,9 +222,9 @@ catalogSuite.define(() => {
             .fill("Keep this identity draft");
           await picker.click();
           await picker.locator('wa-option[value="fixture/selected"]').click();
-          const fallbacks = editor.locator(".agent-chip-input input");
-          await fallbacks.fill("fixture/anchor");
-          await fallbacks.press("Enter");
+          const fallbackInput = editor.locator("openclaw-multi-select.agent-fallbacks input");
+          await fallbackInput.fill("fixture/anchor");
+          await fallbackInput.press("Enter");
           const selected = () => picker.evaluate((element) => (element as WaSelect).value);
           await expect.poll(selected).toBe("fixture/selected");
           await expect.poll(() => mutations.length).toBeGreaterThan(0);
@@ -303,9 +303,11 @@ catalogSuite.define(() => {
               .locator(".agent-identity-editor__fields input[maxlength='64']")
               .inputValue(),
           ).toBe("Keep this identity draft");
-          expect(await editor.locator(".agent-chip-input .chip").textContent()).toContain(
-            "fixture/anchor",
-          );
+          expect(
+            await editor
+              .locator(".multi-select__chip")
+              .evaluateAll((chips) => chips.map((chip) => chip.getAttribute("data-value"))),
+          ).toContain("fixture/anchor");
           expect(mutations).toEqual(writesBeforePublication);
           const persistedModel = await owner.cli([
             "config",
@@ -426,7 +428,9 @@ suite.define(() => {
             await page.goto(url.toString());
             const confirmation = page.locator("openclaw-gateway-url-confirmation");
             await confirmation.waitFor();
-            await confirmation.getByRole("button", { name: "Confirm", exact: true }).click();
+            await confirmation
+              .getByRole("button", { name: `Switch to 127.0.0.1:${port}`, exact: true })
+              .click();
             const editor = page.locator(".agent-file-textarea");
             await expect.poll(() => editor.inputValue()).toBe("# Real main instructions\n");
 

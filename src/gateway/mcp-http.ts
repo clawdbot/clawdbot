@@ -288,6 +288,7 @@ async function startMcpLoopbackServer(port = 0): Promise<() => Promise<void>> {
           () =>
             toolCache.resolve({
               context: requestContext,
+              rootedExecution: boundClientGrant?.rootedExecution,
               cfg,
               signal: requestAbort.signal,
               ...(boundClientGrant?.toolAuth

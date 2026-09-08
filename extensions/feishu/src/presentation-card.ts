@@ -13,6 +13,7 @@ import {
   type MessagePresentationButton,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { markdownToIRWithMeta } from "openclaw/plugin-sdk/text-chunking";
 import type { OutboundIdentity, ReplyPayload } from "../runtime-api.js";
 import { createFeishuCardInteractionEnvelope } from "./card-interaction.js";
 import { parseFeishuCommentTarget } from "./comment-target.js";
@@ -132,6 +133,35 @@ export function assertFeishuCardWithinEnvelope(
   if (!isFeishuCardWithinEnvelope(card)) {
     throw new Error(`${label} exceeds the 30 KB or 200-element API limit.`);
   }
+}
+
+/** Feishu allows at most five table components per static interactive card. */
+const FEISHU_CARD_TABLE_LIMIT = 5;
+
+function countMarkdownTables(text: string): number {
+  // GFM table headers require a literal pipe.
+  return text.includes("|") ? markdownToIRWithMeta(text, { tableMode: "block" }).tables.length : 0;
+}
+
+export function withinCardTableLimit(text: string): boolean {
+  return countMarkdownTables(text) <= FEISHU_CARD_TABLE_LIMIT;
+}
+
+export function feishuCardWithinTableLimit(card: Record<string, unknown>): boolean {
+  let remaining = FEISHU_CARD_TABLE_LIMIT;
+  const visit = (value: unknown): boolean => {
+    if (Array.isArray(value)) {
+      return value.every(visit);
+    }
+    if (!isRecord(value)) {
+      return true;
+    }
+    if (value.tag === "markdown" && typeof value.content === "string") {
+      remaining -= countMarkdownTables(value.content);
+    }
+    return remaining >= 0 && Object.values(value).every(visit);
+  };
+  return visit(card);
 }
 
 function resolveFeishuButtonUrl(button: MessagePresentationButton): string | undefined {
@@ -425,8 +455,11 @@ export function buildFeishuPayloadCard(params: {
   }
   if (isNativeCard) {
     assertFeishuCardWithinEnvelope(card, "Feishu native card");
+    return markRenderedFeishuCard(card);
   }
-  return isFeishuCardWithinEnvelope(card) ? markRenderedFeishuCard(card) : undefined;
+  return isFeishuCardWithinEnvelope(card) && feishuCardWithinTableLimit(card)
+    ? markRenderedFeishuCard(card)
+    : undefined;
 }
 
 type FeishuPresentationContext = {

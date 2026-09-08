@@ -1,5 +1,4 @@
-// Node utility tests cover node selection defaults and gateway fallback between
-// current and legacy node list methods.
+// Node selection defaults and Gateway inventory requests.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayProtocolRequestTimeoutError } from "../../../packages/gateway-client/src/protocol-request.js";
 import { GatewayClientRequestError } from "../../../packages/gateway-client/src/request-error.js";
@@ -143,49 +142,27 @@ describe("resolveNodeIdFromList defaults", () => {
 });
 
 describe("listNodes", () => {
-  it("falls back to node.pair.list only when node.list is unavailable", async () => {
-    // Old gateways only expose node.pair.list; newer authorization failures
-    // must still surface instead of being hidden by fallback.
-    gatewayMocks.callGatewayTool
-      .mockRejectedValueOnce(
-        new GatewayClientRequestError({
-          code: "INVALID_REQUEST",
-          message: "unknown method: node.list",
-        }),
-      )
-      .mockResolvedValueOnce({
-        pending: [],
-        paired: [{ nodeId: "pair-1", displayName: "Pair 1", platform: "ios", remoteIp: "1.2.3.4" }],
-      });
-
+  it("returns live node inventory and forwards cancellation", async () => {
+    const nodes = [node({ nodeId: "node-1", displayName: "Node 1", platform: "ios" })];
+    gatewayMocks.callGatewayTool.mockResolvedValueOnce({ nodes });
     const signal = new AbortController().signal;
-    await expect(listNodes({}, signal)).resolves.toEqual([
-      {
-        nodeId: "pair-1",
-        displayName: "Pair 1",
-        platform: "ios",
-        remoteIp: "1.2.3.4",
-      },
-    ]);
-    expect(gatewayMocks.callGatewayTool).toHaveBeenNthCalledWith(
-      1,
+    await expect(listNodes({}, signal)).resolves.toEqual(nodes);
+    expect(gatewayMocks.callGatewayTool).toHaveBeenCalledExactlyOnceWith(
       "node.list",
       {},
       {},
       { signal },
     );
-    expect(gatewayMocks.callGatewayTool).toHaveBeenNthCalledWith(
-      2,
-      "node.pair.list",
-      {},
-      {},
-      {
-        signal,
-      },
-    );
   });
 
   it.each([
+    {
+      label: "an unknown-method rejection",
+      error: new GatewayClientRequestError({
+        code: "INVALID_REQUEST",
+        message: "unknown method: node.list",
+      }),
+    },
     {
       label: "a local request timeout",
       error: new GatewayProtocolRequestTimeoutError({

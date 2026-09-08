@@ -69,6 +69,7 @@ describe("GPT-Live session history", () => {
   it("preserves explicit direct WebSocket role-bearing seeds", () => {
     expect(
       buildOpenAIQuicksilverSessionUpdate({
+        model: "gpt-live-test",
         instructions: " Speak briefly. ",
         initialItems: [
           { role: "user", text: "Question" },
@@ -79,7 +80,7 @@ describe("GPT-Live session history", () => {
       type: "session.update",
       session: {
         instructions: "Speak briefly.",
-        audio: { output: { voice: "cove" } },
+        audio: { output: { voice: "marin" } },
         delegation: { type: "client" },
         initial_items: [
           { type: "message", role: "user", content: [{ type: "input_text", text: "Question" }] },
@@ -90,6 +91,21 @@ describe("GPT-Live session history", () => {
           },
         ],
       },
+    });
+  });
+
+  it("keeps released and unlisted routes on their own voice profiles", () => {
+    expect(
+      buildOpenAIQuicksilverSession({ model: "gpt-live-1-codex", voice: "SPRUCE" }).audio,
+    ).toEqual({ output: { voice: "spruce" } });
+    expect(buildOpenAIQuicksilverSession({ model: "gpt-live-1-codex" }).audio).toEqual({
+      output: { voice: "cove" },
+    });
+    expect(
+      buildOpenAIQuicksilverSession({ model: "gpt-live-test-canary", voice: "CEDAR" }).audio,
+    ).toEqual({ output: { voice: "cedar" } });
+    expect(buildOpenAIQuicksilverSession({ model: "gpt-live-test-canary" }).audio).toEqual({
+      output: { voice: "marin" },
     });
   });
 });
@@ -104,7 +120,7 @@ describe("Realtime call creation", () => {
       return createCallResponse("v=answer\r\n", `rtc_${requests.length}`);
     }) as unknown as typeof fetch;
     const session = buildOpenAIQuicksilverSession({
-      model: "gpt-live-1-codex",
+      model: "gpt-live-test-canary",
       instructions: "Speak briefly.",
       voice: "spruce",
     });
@@ -254,11 +270,11 @@ describe("Realtime call creation", () => {
         "GPT-Live rejected the session (403). Verify the selected OpenAI account, model, and GPT-Live voice; this response alone does not identify which was denied.",
     },
     {
-      name: "Platform waitlist denial",
+      name: "Platform model access denial",
       status: 400,
       body: '{"error":{"code":"model_not_found","message":"The model does not exist or you do not have access"}}',
       message:
-        "OpenAI Platform API-key access to /v1/live is waitlist-gated. Use a ChatGPT OAuth profile or request access at https://openai.com/form/gpt-live-1-in-the-api/",
+        "OpenAI Platform API-key access is unavailable for the selected GPT-Live model. Verify the selected model and Platform account access.",
     },
     {
       name: "unsupported route model",
@@ -274,7 +290,7 @@ describe("Realtime call creation", () => {
         auth: { type: "api-key", token: "platform-key" },
         requestIds: createRequestIds("error"),
         sdp: "v=offer\r\n",
-        session: buildOpenAIQuicksilverSession({ model: "gpt-live-1-codex" }),
+        session: buildOpenAIQuicksilverSession({ model: "gpt-live-test-canary" }),
         fetchImpl: fetchImpl as unknown as typeof fetch,
       },
       openAIRealtimeHost,
@@ -286,10 +302,34 @@ describe("Realtime call creation", () => {
     });
   });
 
+  it("omits private provider detail from call creation errors", async () => {
+    const model = "gpt-live-test-canary";
+    const sensitiveDetail = "sensitive-route sensitive-session sensitive-transcript";
+    const fetchImpl = vi.fn(
+      async () => new Response(`provider rejected ${model} ${sensitiveDetail}`, { status: 422 }),
+    );
+    const promise = createOpenAIQuicksilverCall(
+      {
+        auth: { type: "api-key", token: "platform-key" },
+        requestIds: createRequestIds("model-redaction"),
+        sdp: "v=offer\r\n",
+        session: buildOpenAIQuicksilverSession({ model }),
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+      },
+      openAIRealtimeHost,
+    );
+
+    await expect(promise).rejects.toMatchObject({
+      name: "OpenAIQuicksilverCallError",
+      status: 422,
+      message: "GPT-Live call creation failed (422)",
+    });
+  });
+
   it.each([
     {
       name: "GPT-Live",
-      model: "gpt-live-1-codex",
+      model: "gpt-live-test-canary",
       expectedMessage: "GPT-Live call creation failed (429)",
     },
     {
@@ -376,7 +416,7 @@ describe("Realtime call creation", () => {
           auth: { type: "oauth", token: "oauth-token", accountId: "acct-1" },
           requestIds: createRequestIds("header-fallback"),
           sdp: "v=offer\r\n",
-          session: buildOpenAIQuicksilverSession({ model: "gpt-live-1-codex" }),
+          session: buildOpenAIQuicksilverSession({ model: "gpt-live-test-canary" }),
           fetchImpl: fetchImpl as unknown as typeof fetch,
         },
         openAIRealtimeHost,
@@ -394,7 +434,7 @@ describe("Realtime call creation", () => {
           auth: { type: "oauth", token: "oauth-token", accountId: "acct-1" },
           requestIds: createRequestIds("uuid-location"),
           sdp: "v=offer\r\n",
-          session: buildOpenAIQuicksilverSession({ model: "gpt-live-1-codex" }),
+          session: buildOpenAIQuicksilverSession({ model: "gpt-live-test-canary" }),
           fetchImpl: fetchImpl as unknown as typeof fetch,
         },
         openAIRealtimeHost,
@@ -419,7 +459,7 @@ describe("Realtime call creation", () => {
           auth: { type: "oauth", token: "oauth-token", accountId: "acct-1" },
           requestIds: createRequestIds("empty-answer"),
           sdp: "v=offer\r\n",
-          session: buildOpenAIQuicksilverSession({ model: "gpt-live-1-codex" }),
+          session: buildOpenAIQuicksilverSession({ model: "gpt-live-test-canary" }),
           fetchImpl: fetchImpl as unknown as typeof fetch,
         },
         openAIRealtimeHost,
@@ -435,7 +475,7 @@ describe("Realtime call creation", () => {
     {
       label: "GPT-Live",
       auth: { type: "oauth" as const, token: "oauth-token", accountId: "acct-1" },
-      model: "gpt-live-1-codex",
+      model: "gpt-live-test-canary",
       location: "/v1/live/rtc_oversized_answer",
     },
     {

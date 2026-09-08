@@ -3,6 +3,7 @@
  */
 import type { Server } from "node:http";
 import { getExtensionRelayModule } from "./extension-relay.runtime.js";
+import { stopBrowserScreencasts } from "./screencast/session.js";
 import type { BrowserServerState } from "./server-context.js";
 import { markBrowserRuntimeStopping } from "./server-context.lifecycle.js";
 import { stopKnownBrowserProfiles } from "./server-lifecycle.js";
@@ -61,6 +62,8 @@ async function stopBrowserRuntimeInternal(
   markBrowserRuntimeStopping(current);
   let firstError: Error | undefined;
 
+  // Viewers receive the shutdown code before profile invalidation closes their targets.
+  const screencastDrain = finalizeGlobalAdapters ? stopBrowserScreencasts() : Promise.resolve();
   // stopKnownBrowserProfiles invalidates every actor synchronously before its
   // first await; only then do we wait for tab cleanup and profile drains.
   const profileDrain = stopKnownBrowserProfiles({
@@ -76,7 +79,7 @@ async function stopBrowserRuntimeInternal(
       current.stopTrackedTabCleanup?.();
     }
   });
-  for (const result of await Promise.allSettled([profileDrain, tabCleanup])) {
+  for (const result of await Promise.allSettled([screencastDrain, profileDrain, tabCleanup])) {
     if (result.status === "rejected") {
       firstError ??= toRuntimeLifecycleError(result.reason, "Browser profile cleanup failed.");
     }

@@ -171,6 +171,41 @@ it("replaces a confirmed-missing remembered session with the agent main route", 
   );
 });
 
+it("refreshes a cached roster and its default before accepting a remembered agent", async () => {
+  const cachedList: AgentsListResult = {
+    defaultId: "retired",
+    mainKey: "main",
+    scope: "per-sender",
+    agents: [{ id: "retired" }],
+  };
+  const liveList: AgentsListResult = {
+    ...cachedList,
+    defaultId: "next",
+    agents: [{ id: "next" }],
+  };
+  const ensureAgentsList = vi.fn(async () => liveList);
+
+  await expect(
+    resolveInitialApplicationLocation({
+      location: { pathname: "/", search: "", hash: "" },
+      basePath: "",
+      sessionKey: "agent:retired:main",
+      gateway: {
+        snapshot: {
+          phase: "connected",
+          client: { request: vi.fn() },
+          hello: { snapshot: { sessionDefaults: { defaultAgentId: "main", mainKey: "main" } } },
+        },
+        subscribe: vi.fn(() => () => undefined),
+      } as unknown as ApplicationContext<RouteId>["gateway"],
+      agentsList: () => cachedList,
+      ensureAgentsList,
+      signal: new AbortController().signal,
+    }),
+  ).resolves.toEqual({ pathname: "/chat/next", search: "", hash: "" });
+  expect(ensureAgentsList).toHaveBeenCalledOnce();
+});
+
 it("validates a remembered session again after the Gateway client changes", async () => {
   let finishFirstRequest:
     | ((result: { ok: true; key: string; agentId: string }) => void)

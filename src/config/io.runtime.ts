@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { formatErrorMessage } from "../infra/errors.js";
 import { cloneEnvWithPlatformSemantics, createConfigRuntimeEnvBase } from "./config-env-vars.js";
 import { resolveManagedUnsetPathsForWrite } from "./config-path-mutation.js";
@@ -7,7 +6,6 @@ import { resolveWriteEnvSnapshotForPath } from "./env-preserve.js";
 import { GATEWAY_CONFIG_SELECTION_ENV_KEYS } from "./gateway-env-selection.js";
 import { createConfigIO } from "./io.factory.js";
 import {
-  coerceConfig,
   createManagedRuntimeEnvBase,
   replaceEnvSnapshot,
   resolveManagedRuntimeEnvBaseline,
@@ -26,7 +24,6 @@ import type {
 import { ConfigRuntimeRefreshError, configWritePostCommitRollback } from "./io.types.js";
 import { rollbackConfigFileWriteIfUnchanged } from "./io.write-safety.js";
 import { formatConfigIssueSummary } from "./issue-format.js";
-import { applyMergePatch, createMergePatch } from "./merge-patch.js";
 import { ConfigMutationConflictError } from "./mutation-conflict.js";
 import { assertConfigWriteAllowedInCurrentMode } from "./nix-mode-write-guard.js";
 import {
@@ -45,6 +42,7 @@ import {
   type RuntimeConfigSnapshotRefreshOptions,
   type RuntimeConfigWritePreparedCandidate,
 } from "./runtime-snapshot.js";
+import { projectLegacyRuntimeConfigWrite } from "./runtime-source-projection.js";
 import {
   attachRuntimeConfigWriteApplication,
   copyRuntimeConfigWriteApplication,
@@ -267,41 +265,6 @@ export async function readSourceConfigSnapshotForWrite(): Promise<ReadConfigFile
   return await readConfigFileSnapshotForWrite();
 }
 
-function pruneUnauthoredRuntimeDeletions(
-  patch: unknown,
-  source: unknown,
-  candidate: unknown,
-): void {
-  // Replacing an authored scalar or explicitly submitting an empty object is
-  // intent, not an incidental removal of runtime-only state.
-  if (
-    !isRecord(patch) ||
-    (source !== undefined && !isRecord(source)) ||
-    (isRecord(candidate) && Object.keys(candidate).length === 0)
-  ) {
-    return;
-  }
-  const sourceRecord = isRecord(source) ? source : undefined;
-  const candidateRecord = isRecord(candidate) ? candidate : undefined;
-  for (const [key, value] of Object.entries(patch)) {
-    const sourceValue =
-      sourceRecord && Object.hasOwn(sourceRecord, key) ? sourceRecord[key] : undefined;
-    if (value === null && sourceValue === undefined) {
-      delete patch[key];
-      continue;
-    }
-    if (!isRecord(value) || Object.keys(value).length === 0) {
-      continue;
-    }
-    const candidateValue =
-      candidateRecord && Object.hasOwn(candidateRecord, key) ? candidateRecord[key] : undefined;
-    pruneUnauthoredRuntimeDeletions(value, sourceValue, candidateValue);
-    if (Object.keys(value).length === 0) {
-      delete patch[key];
-    }
-  }
-}
-
 export async function writeConfigFile(
   cfg: OpenClawConfig,
   options: ConfigWriteOptions = {},
@@ -320,18 +283,15 @@ export async function writeConfigFile(
     ? createConfigIO({ ...ioOptions, env: createManagedRuntimeEnvBase() })
     : processIo;
   assertConfigWriteAllowedInCurrentMode({ configPath: io.configPath });
-  let nextCfg = cfg;
   const runtimeConfigSnapshot = getRuntimeConfigSnapshot();
   const runtimeConfigSourceSnapshot = getRuntimeConfigSourceSnapshot();
   const hadRuntimeSnapshot = Boolean(runtimeConfigSnapshot);
   const hadBothSnapshots = Boolean(runtimeConfigSnapshot && runtimeConfigSourceSnapshot);
-  if (hadBothSnapshots) {
-    const runtimePatch = createMergePatch(runtimeConfigSnapshot!, cfg);
-    // Removing a runtime-only field must not mint empty source parents. Keep
-    // explicitly submitted empty objects and the separate file-default projection.
-    pruneUnauthoredRuntimeDeletions(runtimePatch, runtimeConfigSourceSnapshot, cfg);
-    nextCfg = coerceConfig(applyMergePatch(runtimeConfigSourceSnapshot!, runtimePatch));
-  }
+  // Snapshot-based inputs retain their own source/runtime basis in the file writer.
+  let nextCfg =
+    options.inputBase === undefined
+      ? projectLegacyRuntimeConfigWrite(cfg, runtimeConfigSnapshot, runtimeConfigSourceSnapshot)
+      : cfg;
   const baseSnapshotRead = options.baseSnapshot
     ? {
         snapshot: options.baseSnapshot,

@@ -31,18 +31,14 @@ import {
 import { createGoalComposerController } from "./chat-composer-goal-mode.ts";
 import { createComposerKeyDownHandler } from "./chat-composer-keydown.ts";
 import type { HumanMentionMenuHost } from "./chat-composer-mention-menu.ts";
+import { resolveComposerMenus } from "./chat-composer-menus.ts";
 import {
-  getActiveSkillMenuOptionId,
-  getActiveSkillMenuOptionLabel,
   isSkillMenuVisible,
   resetSkillMenuState,
   type SkillMenuHost,
   updateSkillMenu,
 } from "./chat-composer-skill-menu.ts";
 import {
-  getActiveSlashMenuOptionId,
-  getActiveSlashMenuOptionLabel,
-  isSlashMenuVisible,
   resetSlashMenuState,
   type SlashMenuHost,
   updateSlashMenu,
@@ -664,30 +660,22 @@ export function renderChatComposer(props: ChatComposerProps) {
   if (props.modelSwitching && state.slashMenuCommand?.key === "think") {
     resetSlashMenuState(state);
   }
-  const slashMenuVisible = props.connected && canCompose && isSlashMenuVisible(state);
-  const skillMenuVisible = props.connected && canCompose && isSkillMenuVisible(state);
-  const mentionMenuVisible = state.mentionMenu.open;
-  if (!skillMenuVisible && state.skillMenuOpen && !state.skillCommandRefreshPending) {
+  const commandsVisible = props.connected && canCompose;
+  if (
+    !(commandsVisible && isSkillMenuVisible(state)) &&
+    state.skillMenuOpen &&
+    !state.skillCommandRefreshPending
+  ) {
     resetSkillMenuState(state);
   }
-  const activeSlashMenuOptionId = mentionMenuVisible
-    ? state.mentionMenu.activeId(props.paneId)
-    : skillMenuVisible
-      ? getActiveSkillMenuOptionId(state, props.paneId)
-      : getActiveSlashMenuOptionId(state, props.paneId);
-  const activeSlashMenuOptionLabel = mentionMenuVisible
-    ? state.mentionMenu.activeLabel()
-    : skillMenuVisible
-      ? getActiveSkillMenuOptionLabel(state)
-      : getActiveSlashMenuOptionLabel(state);
-  const slashMenuListboxId = paneDomId(
-    props.paneId,
-    mentionMenuVisible
-      ? "mention-menu-listbox"
-      : skillMenuVisible
-        ? "skill-menu-listbox"
-        : "slash-menu-listbox",
-  );
+  const {
+    slashMenuVisible,
+    skillMenuVisible,
+    mentionMenuVisible,
+    activeMenuOptionId: activeSlashMenuOptionId,
+    activeMenuOptionLabel: activeSlashMenuOptionLabel,
+    menuListboxId: slashMenuListboxId,
+  } = resolveComposerMenus(props.paneId, commandsVisible, state, state, state.mentionMenu);
   const slashMenuAnnouncementId = paneDomId(props.paneId, "slash-active-announcement");
 
   return renderChatComposerView({

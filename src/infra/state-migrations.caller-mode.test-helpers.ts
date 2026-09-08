@@ -106,3 +106,13 @@ export function expectPlanReceiptDescriptorsToMatch(params: {
     params.plan.steps.map(stableStepDescriptor),
   );
 }
+
+export function createCallerModeSnapshot(
+  fixture: Pick<LegacyStateMigrationPlan["snapshot"], "homeDir" | "configPath" | "stateDir">,
+): LegacyStateMigrationPlan["snapshot"] {
+  return {
+    homeDir: fixture.homeDir,
+    configPath: fixture.configPath,
+    stateDir: fixture.stateDir,
+  };
+}

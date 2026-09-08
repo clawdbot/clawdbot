@@ -1222,12 +1222,13 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     const directToolTypingOptions = shouldUseDirectToolTypingOptions
       ? ({
           // iMessage's native typing bubble is channel-owned UI, not a
-          // visible tool-progress message. The suppress flag is what lets
-          // dispatch forward this callback even when verbose progress is off;
-          // allowProgress covers message_tool_only source delivery. Keep this on
-          // the direct instant/default path even when older imsg builds do not
-          // report native typing support.
+          // visible tool-progress message. The lifecycle flag lets dispatch
+          // forward it while text progress is hidden; allowProgress covers
+          // message_tool_only source delivery. Keep this on the direct
+          // instant/default path even when older imsg builds do not report
+          // native typing support.
           suppressDefaultToolProgressMessages: true,
+          allowToolLifecycleWhenProgressHidden: true,
           allowProgressCallbacksWhenSourceDeliverySuppressed: true,
           onTypingController: (typing: IMessageTypingController) => {
             directTypingController = typing;

@@ -72,6 +72,37 @@ describe("prepared provider errors after settled tools", () => {
     );
   });
 
+  it.each(["earlier user turn", "current commentary substring"])(
+    "does not attribute current output to %s",
+    (source) => {
+      const base = createSettledProviderFailureAttempt({
+        assistantTexts: ["The note is already saved."],
+      });
+      const earlierAssistant = {
+        ...base.lastAssistant!,
+        stopReason: "stop" as const,
+        content: [
+          {
+            type: "text" as const,
+            text:
+              source === "earlier user turn"
+                ? "The note is already saved."
+                : "The note is already saved. I will verify it.",
+          },
+        ],
+      };
+      base.messagesSnapshot.splice(source === "earlier user turn" ? 0 : 1, 0, earlierAssistant);
+      base.terminal = {
+        kind: "failed",
+        source: "prompt",
+        error: new Error("Stream ended without finish_reason"),
+      };
+      const attempt = projectSettledProviderFailureAttempt(base);
+      expect(attempt.settledTurnFinalizationContext).toBeUndefined();
+      expect(resolveSettledTurnFinalizationRequest(prepareRequest(attempt))).toBeNull();
+    },
+  );
+
   it.each([
     { name: "missing recovery context", change: { settledTurnFinalizationContext: undefined } },
     {

@@ -8,6 +8,7 @@ import type { ChannelCapability } from "../lib/channels/index.ts";
 import type { ChatAttachment, ChatComposerMemoryFallback } from "../lib/chat/chat-types.ts";
 import type { RuntimeConfigCapability } from "../lib/config/runtime-config-capability.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
+import type { LiveActivity } from "../pages/activity/live-activity.ts";
 import type { ControlUiPluginCapability } from "../plugins/control-ui-capability.ts";
 import type { AgentSelectionCapability } from "./agent-selection.ts";
 import type { ApplicationChatSubmissions } from "./chat-submissions.ts";
@@ -109,6 +110,7 @@ export type ApplicationContext<TRouteId extends string = string> = {
   readonly sidebarAttention: SidebarAttentionStore;
   readonly runtimeConfig: RuntimeConfigCapability;
   readonly sessions: SessionCapability;
+  readonly liveActivity: LiveActivity;
   readonly placementStartup: ApplicationPlacementStartup;
   readonly plugins: ControlUiPluginCapability;
   readonly overlays: ApplicationOverlays;

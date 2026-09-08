@@ -35,9 +35,17 @@ import {
   type WorkerWorkspaceOperationCoordinator,
 } from "./workspace-operation-coordinator.js";
 
+const runReclaimPreparation: Parameters<
+  typeof createWorkerPlacementDispatchService
+>[0]["runReclaimPreparation"] = async ({ run, authorize, pendingOperations }) => {
+  await pendingOperations?.settled;
+  return await run(authorize);
+};
+
 export function createHarness(
   placementStore: PlacementStore,
   options: {
+    environmentService?: WorkerEnvironmentService;
     runReclaimPreparation?: Parameters<
       typeof createWorkerPlacementDispatchService
     >[0]["runReclaimPreparation"];
@@ -356,7 +364,7 @@ export function createHarness(
     expiresAtMs: 10_000,
   };
   const environments: WorkerDispatchEnvironmentService &
-    Pick<WorkerEnvironmentService, "recordError"> = {
+    Pick<WorkerEnvironmentService, "recordError" | "requestDestroy"> = {
     recordError: vi.fn((record) => record),
     supportsProviderExecutionMode: vi.fn(() => true),
     create: vi.fn(async () => {
@@ -404,6 +412,7 @@ export function createHarness(
       await options.afterDestroy?.();
       return destroyed;
     }),
+    requestDestroy: (requestedEnvironmentId) => environments.destroy(requestedEnvironmentId),
     reconcileOnce: vi.fn(async () => {
       log.push("environment:reconcile");
     }),
@@ -411,13 +420,15 @@ export function createHarness(
       log.push("environment:reconcile");
     }),
   };
+  if (options.environmentService) {
+    Object.assign(environments, options.environmentService);
+  }
   const service = createWorkerPlacementDispatchService({
     placements,
     environments,
     isShuttingDown: options.isShuttingDown,
     prepareGatewayMove: options.prepareGatewayMove,
-    runReclaimPreparation:
-      options.runReclaimPreparation ?? (async ({ run, authorize }) => await run(authorize)),
+    runReclaimPreparation: options.runReclaimPreparation ?? runReclaimPreparation,
     runnerAvailability: createWorkerPlacementRunnerAvailabilityReader({
       environments,
       hasCurrentDeviceRunner: () => options.deviceRunnerAvailable === true,
@@ -619,7 +630,7 @@ export const createRecoveryService = (
     runActivationBarrier: async ({ activate }) => activate(),
     runMoveBarrier: async ({ begin }) => begin(),
     resolveMoveDestination: async () => undefined,
-    runReclaimPreparation: async ({ run, authorize }) => await run(authorize),
+    runReclaimPreparation,
     runReclaimBarrier: async ({ begin, reclaim }) =>
       await reclaim({ kind: "local", path: "/gateway/workspace" }, begin()),
     runFailedReclaimBarrier: async ({ reclaim }) => await reclaim(),

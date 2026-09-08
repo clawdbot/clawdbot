@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -213,6 +213,40 @@ describe("ClawHub skill uninstall lifecycle", () => {
         expectedVersion: "1.0.0",
       }),
     ).resolves.toMatchObject({ ok: false, code: "modified" });
+  });
+
+  it("restores the staged skill when parent deletion ends before untracking", async () => {
+    const current = await fixture();
+    const beforeLock = await readFile(current.lockPath, "utf8");
+    const planned = await planClawHubSkillUninstall({
+      workspaceDir: current.workspaceDir,
+      slug: current.slug,
+      expectedVersion: "1.0.0",
+    });
+    if (!planned.ok) {
+      throw new Error(planned.error);
+    }
+    let active = true;
+    const deps = {
+      beforePersistentApply: () => {
+        if (!active) {
+          throw new Error("Parent deletion ended.");
+        }
+      },
+      rename: async (...args: Parameters<typeof rename>) => {
+        await rename(...args);
+        active = false;
+      },
+    };
+
+    await expect(applyClawHubSkillUninstall(planned.plan, deps)).resolves.toMatchObject({
+      ok: false,
+      error: expect.stringContaining("Parent deletion ended."),
+    });
+    await expect(readFile(join(current.skillDir, "SKILL.md"), "utf8")).resolves.toContain(
+      "name: triage",
+    );
+    await expect(readFile(current.lockPath, "utf8")).resolves.toBe(beforeLock);
   });
 
   it("restores the staged skill when lockfile untracking fails", async () => {

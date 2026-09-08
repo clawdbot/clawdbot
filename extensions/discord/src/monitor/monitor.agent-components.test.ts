@@ -2,7 +2,12 @@
 import { ChannelType, ComponentType } from "discord-api-types/v10";
 import { expectPairingReplyText } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import {
   enqueueSystemEvent,
   peekSystemEventEntries,
@@ -30,6 +35,7 @@ import {
   createAgentComponentButton,
   createAgentSelectMenu,
 } from "./agent-components.system-controls.js";
+import { createDiscordLivePolicyReader } from "./live-policy.js";
 
 describe("agent components", () => {
   const defaultDmSessionKey = buildAgentSessionKey({
@@ -181,6 +187,50 @@ describe("agent components", () => {
   beforeEach(() => {
     resetDiscordComponentRuntimeMocks();
     resetSystemEventsForTest();
+  });
+
+  it("does not create pairing after policy is revoked during the component store read", async () => {
+    const cfg: OpenClawConfig = {
+      channels: { discord: { dmPolicy: "pairing", allowFrom: [] } },
+    };
+    setRuntimeConfigSnapshot(cfg, cfg);
+    const stored = createDeferred<string[]>();
+    const readStarted = createDeferred<void>();
+    readAllowFromStoreMock.mockImplementationOnce(() => {
+      readStarted.resolve();
+      return stored.promise;
+    });
+    const button = createAgentComponentButton({
+      cfg,
+      accountId: "default",
+      readPolicy: createDiscordLivePolicyReader({
+        cfg,
+        accountId: "default",
+        token: "synthetic-token",
+        resolvedAllowlist: { guildEntries: undefined, allowFrom: [] },
+      }),
+    });
+    const { interaction, reply } = createDmButtonInteraction();
+    try {
+      const run = button.run(interaction, { componentId: "hello" } as ComponentData);
+      await readStarted.promise;
+      const revoked: OpenClawConfig = {
+        channels: { discord: { dmPolicy: "disabled", allowFrom: [] } },
+      };
+      setRuntimeConfigSnapshot(revoked, revoked);
+      stored.resolve([]);
+      await run;
+
+      expect(reply).toHaveBeenCalledExactlyOnceWith({
+        content: "Access policy changed. Try this interaction again.",
+        ephemeral: true,
+      });
+      expect(upsertPairingRequestMock).not.toHaveBeenCalled();
+      expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+    } finally {
+      stored.resolve([]);
+      clearRuntimeConfigSnapshot();
+    }
   });
 
   it("sends pairing reply when DM sender is not allowlisted", async () => {

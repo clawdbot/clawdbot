@@ -42,7 +42,6 @@ async function createRelay(platform: "linux" | "darwin" | "win32") {
     throw Object.assign(new Error("synthetic missing process group"), { code: "ESRCH" });
   });
   const stub = createStubChild();
-  stub.child.unref = vi.fn();
   const cancellations: Array<(error: Error) => void> = [];
   // Keep channel closure independently controlled from cancellation write completion.
   const control = new Duplex({
@@ -140,10 +139,8 @@ async function createRelay(platform: "linux" | "darwin" | "win32") {
   };
 }
 
-it("reports cleanup uncertainty when construction aborts before ready", async () => {
-  platformMock = mockProcessPlatform("linux");
+function createWritableRelayChild() {
   const stub = createStubChild();
-  stub.child.unref = vi.fn();
   const control = new Duplex({
     autoDestroy: false,
     read() {},
@@ -156,52 +153,28 @@ it("reports cleanup uncertainty when construction aborts before ready", async ()
     configurable: true,
   });
   mocks.spawn.mockReturnValue(stub.child);
-  const abort = new AbortController();
-  const starting = createServiceChildRelayAdapter({
-    command: "synthetic-command",
-    args: [],
-    stdinMode: "pipe-closed",
-    oomScoreWrapperSelected: false,
-    abortSignal: abort.signal,
-  });
-  await nextTurn();
-  expect(mocks.spawn).toHaveBeenCalled();
-  expect(stub.killMock).not.toHaveBeenCalled();
+  return { ...stub, control };
+}
 
-  abort.abort();
-  await expect(starting).rejects.toThrow("service child cleanup identity lost");
-  expect(stub.killMock).toHaveBeenCalledWith("SIGKILL");
-  control.destroy();
-  stub.emitExit(null, "SIGKILL");
-});
-
-it("reports cleanup loss when deferred start delivery fails after abort", async () => {
+it.each([
+  { name: "construction aborts before ready", deferredStart: false },
+  { name: "deferred start delivery fails after abort", deferredStart: true },
+])("reports cleanup uncertainty when $name", async ({ deferredStart }) => {
   platformMock = mockProcessPlatform("linux");
-  const stub = createStubChild();
-  stub.child.unref = vi.fn();
-  const control = new Duplex({
-    autoDestroy: false,
-    read() {},
-    write(_chunk, _encoding, callback) {
-      callback();
-    },
-  });
-  Object.defineProperty(stub.child, "stdio", {
-    value: [stub.child.stdin, stub.child.stdout, stub.child.stderr, control],
-    configurable: true,
-  });
+  const stub = createWritableRelayChild();
   const startCallbacks: Array<(error: Error | null) => void> = [];
-  stub.sendMock.mockImplementation((_message, ...args) => {
-    const callback = args.findLast((value) => typeof value === "function") as
-      | ((error: Error | null) => void)
-      | undefined;
-    if (!callback) {
-      throw new Error("Expected a start delivery callback");
-    }
-    startCallbacks.push(callback);
-    return true;
-  });
-  mocks.spawn.mockReturnValue(stub.child);
+  if (deferredStart) {
+    stub.sendMock.mockImplementation((_message, ...args) => {
+      const callback = args.findLast(
+        (value): value is (error: Error | null) => void => typeof value === "function",
+      );
+      if (!callback) {
+        throw new Error("Expected a start delivery callback");
+      }
+      startCallbacks.push(callback);
+      return true;
+    });
+  }
   const abort = new AbortController();
   const starting = createServiceChildRelayAdapter({
     command: "synthetic-command",
@@ -210,16 +183,21 @@ it("reports cleanup loss when deferred start delivery fails after abort", async 
     oomScoreWrapperSelected: false,
     abortSignal: abort.signal,
   });
-
   await nextTurn();
-  expect(startCallbacks).toHaveLength(1);
+  expect(stub.killMock).not.toHaveBeenCalled();
+  if (deferredStart) {
+    expect(startCallbacks).toHaveLength(1);
+  }
+
   abort.abort();
   const rejected = expect(starting).rejects.toThrow("service child cleanup identity lost");
-  startCallbacks[0]!(new Error("synthetic start delivery failed"));
+  if (deferredStart) {
+    startCallbacks[0]!(new Error("synthetic start delivery failed"));
+  }
   await rejected;
   expect(stub.killMock).toHaveBeenCalledWith("SIGKILL");
   await nextTurn();
-  control.destroy();
+  stub.control.destroy();
   stub.emitExit(null, "SIGKILL");
 });
 
@@ -227,19 +205,7 @@ it.each(["linux", "win32"] as const)(
   "keeps rejected construction ownership failures visible to supervisor joins (%s)",
   async (platform) => {
     platformMock = mockProcessPlatform(platform);
-    const stub = createStubChild();
-    const control = new Duplex({
-      autoDestroy: false,
-      read() {},
-      write(_chunk, _encoding, callback) {
-        callback();
-      },
-    });
-    Object.defineProperty(stub.child, "stdio", {
-      value: [stub.child.stdin, stub.child.stdout, stub.child.stderr, control],
-      configurable: true,
-    });
-    mocks.spawn.mockReturnValue(stub.child);
+    const stub = createWritableRelayChild();
     const supervisor = createProcessSupervisor();
     const scopeKey = "scope:rejected-construction";
     const cleanupScope = supervisor.acquireScopeCleanup(scopeKey, { processTree: "required-all" });
@@ -254,7 +220,7 @@ it.each(["linux", "win32"] as const)(
     const run = await pending;
     await expect(run.wait()).resolves.toMatchObject({ reason: "manual-cancel" });
     const outcomes = Promise.allSettled([cleanupScope(), supervisor.shutdown()]);
-    control.destroy();
+    stub.control.destroy();
     stub.disconnectMock();
     stub.emitExit(null, "SIGKILL");
 

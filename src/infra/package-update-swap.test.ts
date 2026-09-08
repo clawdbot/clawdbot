@@ -1,26 +1,51 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { withTestDir } from "../test-helpers/temp-dir.js";
-import { createRetainedPackageSwap } from "./package-update-swap.test-support.js";
+import { swapStagedPackageInstall, type PackageUpdateTransaction } from "./package-update-swap.js";
+import {
+  createPackageSwapFixture,
+  createRetainedPackageSwap,
+} from "./package-update-swap.test-support.js";
 
 describe("retained package backup retirement", () => {
   it.each([false, true])(
-    "keeps the only intact backup after partial cleanup (caller verified=%s)",
+    "does not copy or remove the old package after a denied backup rename (caller verified=%s)",
     async (activationVerified) => {
       await withTestDir({ prefix: "openclaw-retained-backup-" }, async (base) => {
-        const { result, transaction, packageRoot } = await createRetainedPackageSwap(base, true);
-        expect(result).toMatchObject({ status: "failed", activePackageRoot: null });
-        const completion = await transaction.complete({ activationVerified });
-        await expect(
-          fs.readFile(path.join(transaction.backupRoot, "dist", "index.js"), "utf8"),
-        ).resolves.toBe("export {};\n");
-        await expect(fs.stat(path.join(packageRoot, "dist", "index.js"))).rejects.toMatchObject({
+        const { params, packageRoot, launcher } = await createPackageSwapFixture(base);
+        const rename = fs.rename.bind(fs);
+        const renameSpy = vi.spyOn(fs, "rename").mockImplementation(async (...args) => {
+          if (String(args[0]) === packageRoot) {
+            throw Object.assign(new Error("cross-device move"), { code: "EXDEV" });
+          }
+          return rename(...args);
+        });
+        let transaction: PackageUpdateTransaction | undefined;
+        let result;
+        try {
+          result = await swapStagedPackageInstall({
+            ...params,
+            onTransaction: (value) => {
+              transaction = value;
+            },
+          });
+        } finally {
+          renameSpy.mockRestore();
+        }
+        expect(transaction).toBeDefined();
+        expect(result).toMatchObject({ status: "failed", activePackageRoot: packageRoot });
+        const completion = await transaction!.complete({ activationVerified });
+        await expect(fs.readFile(path.join(packageRoot, "dist", "index.js"), "utf8")).resolves.toBe(
+          "export {};\n",
+        );
+        await expect(fs.stat(transaction!.backupRoot)).rejects.toMatchObject({
           code: "ENOENT",
         });
+        await expect(fs.readFile(launcher, "utf8")).resolves.toBe("old launcher\n");
         expect(completion).toMatchObject({
           exitCode: 1,
-          stderrTail: expect.stringContaining(transaction.backupRoot),
+          stderrTail: expect.stringContaining("Installation recovery is unverified"),
         });
       });
     },

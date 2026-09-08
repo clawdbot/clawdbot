@@ -24,7 +24,7 @@ import {
   writeSessionEntry,
   type ResolvedSessionEntryRow,
 } from "./session-accessor.sqlite-entry-store.js";
-import { emitCommittedSessionIdentityDiff } from "./session-accessor.sqlite-identity.js";
+import { prepareSessionIdentityPublication } from "./session-accessor.sqlite-identity.js";
 import {
   findTranscriptEventInDatabase,
   readTranscriptEventMessage,
@@ -144,9 +144,7 @@ export async function appendExpectedSessionTranscriptTurn(
       preparedEntry,
       options.sessionFile,
     );
-    let previousIdentity = new Map<string, SessionEntry>();
-    let currentIdentity = new Map<string, SessionEntry>();
-    runOpenClawAgentWriteTransaction((transactionDb) => {
+    const publish = runOpenClawAgentWriteTransaction((transactionDb) => {
       mutation?.assertCurrent?.();
       const fresh = readSessionEntryRow(transactionDb, resolved.sessionKey);
       const replay = mutation
@@ -160,7 +158,7 @@ export async function appendExpectedSessionTranscriptTurn(
       if (replay) {
         if (fresh?.entry.sessionId !== options.expectedSessionId) {
           result = sqliteSessionTranscriptTurnRebound(fresh, options.sessionFile);
-          return;
+          return undefined;
         }
         result = {
           appendedMessages: [],
@@ -168,12 +166,12 @@ export async function appendExpectedSessionTranscriptTurn(
           sessionFile: options.sessionFile,
           sessionTurnMutationResult: { result: replay, replayed: true },
         };
-        return;
+        return undefined;
       }
       const currentEntry = resolveExpectedEntry(fresh);
       if (!currentEntry) {
         result = sqliteSessionTranscriptTurnRebound(fresh, options.sessionFile);
-        return;
+        return undefined;
       }
       const goal = mutation
         ? applySessionGoalOperation(currentEntry, mutation.operation, Date.now())
@@ -253,9 +251,13 @@ export async function appendExpectedSessionTranscriptTurn(
         appendedMessages,
       );
 
+      // Append-owned metadata (including history coverage) is part of this same
+      // transaction. Do not overwrite it with the pre-append entry snapshot.
+      const appendedEntry =
+        readSessionEntryRow(transactionDb, resolved.sessionKey)?.entry ?? currentEntry;
       const sessionPatch = buildExpectedTranscriptTurnSessionPatch({
         appendedMessages,
-        currentEntry,
+        currentEntry: appendedEntry,
         expectedSessionState: options.expectedSessionState,
         sessionFile: options.sessionFile,
         sessionLifecyclePatch: options.sessionLifecyclePatch,
@@ -266,13 +268,20 @@ export async function appendExpectedSessionTranscriptTurn(
       }
       const next =
         Object.keys(sessionPatch).length > 0
-          ? mergeSessionEntry(currentEntry, sessionPatch)
-          : currentEntry;
-      if (initialEntry || next !== currentEntry) {
+          ? mergeSessionEntry(appendedEntry, sessionPatch)
+          : appendedEntry;
+      let publishIdentity: (() => void) | undefined;
+      if (initialEntry || next !== appendedEntry) {
         const identityKeys = collectSessionEntryLookupKeys(transactionDb, resolved.sessionKey);
-        previousIdentity = readSessionIdentitySnapshot(transactionDb, identityKeys);
+        const previousIdentity = readSessionIdentitySnapshot(transactionDb, identityKeys);
         writeSessionEntry(transactionDb, resolved.sessionKey, next);
-        currentIdentity = readSessionIdentitySnapshot(transactionDb, identityKeys);
+        const currentIdentity = readSessionIdentitySnapshot(transactionDb, identityKeys);
+        publishIdentity = prepareSessionIdentityPublication(
+          transactionDb,
+          resolved.agentId,
+          previousIdentity,
+          currentIdentity,
+        );
       }
       const sessionTurnMutationResult = mutation
         ? {
@@ -293,8 +302,9 @@ export async function appendExpectedSessionTranscriptTurn(
         sessionEntry: cloneSessionEntry(next),
         sessionFile: options.sessionFile,
       };
+      return publishIdentity;
     }, toDatabaseOptions(resolved));
-    emitCommittedSessionIdentityDiff(resolved.agentId, previousIdentity, currentIdentity);
+    publish?.();
     return result;
   });
 }

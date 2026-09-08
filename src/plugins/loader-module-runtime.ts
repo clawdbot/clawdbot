@@ -8,6 +8,7 @@ import { getPluginCache, withPluginCache } from "./plugin-cache.js";
 import { withProfile } from "./plugin-load-profile.js";
 import { getCachedPluginModuleLoader } from "./plugin-module-loader-cache.js";
 import { installOpenClawPluginSdkNativeResolver } from "./plugin-sdk-native-resolver.js";
+import { getPluginRegistryInspectionResources } from "./registry-inspection-resources.js";
 import type { PluginRegistry } from "./registry-types.js";
 import { withPluginRegistrationContext } from "./runtime.js";
 import { createRuntimeBase } from "./runtime/runtime-base.js";
@@ -88,12 +89,15 @@ function createGuardedPluginRegistrationApi(api: OpenClawPluginApi): {
 function runPluginRegisterSync(
   register: NonNullable<OpenClawPluginDefinition["register"]>,
   api: Parameters<NonNullable<OpenClawPluginDefinition["register"]>>[0],
+  registry: PluginRegistry,
 ): void {
   const guarded = createGuardedPluginRegistrationApi(api);
   try {
     const result = register(guarded.api);
     if (isPromiseLike(result)) {
-      void Promise.resolve(result).catch(() => {});
+      const pending = Promise.resolve(result);
+      getPluginRegistryInspectionResources(registry)?.trackRegistration(pending);
+      void pending.catch(() => {});
       throw new Error("plugin register must be synchronous");
     }
   } finally {
@@ -107,9 +111,14 @@ export function runPluginRegisterSyncInRegistry(
   registry: PluginRegistry,
   pluginId: string,
 ): void {
-  withPluginRegistrationContext(registry, pluginId, () => runPluginRegisterSync(register, api), {
-    registerMemoryCapability: api.registerMemoryCapability,
-  });
+  withPluginRegistrationContext(
+    registry,
+    pluginId,
+    () => runPluginRegisterSync(register, api, registry),
+    {
+      registerMemoryCapability: api.registerMemoryCapability,
+    },
+  );
 }
 
 export function createPluginModuleLoader(options: {

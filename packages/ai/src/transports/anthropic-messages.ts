@@ -1,5 +1,4 @@
 import type {
-  CacheControlEphemeral,
   ContentBlockParam,
   MessageCreateParamsStreaming,
   Tool as AnthropicTool,
@@ -68,14 +67,13 @@ async function convertContentBlocks(
   profile: "provider" | "transport",
   isError: boolean,
 ) {
-  const text = extractToolResultText(content);
   const mediaPlaceholder = describeToolResultMediaPlaceholder(content);
   const hasImages =
     (profile === "provider" || model.input.includes("image")) &&
     content.some(isImageWithMediaPayload);
   if (!hasImages) {
     return sanitizeNonEmptyTransportPayloadText(
-      text,
+      extractToolResultText(content),
       mediaPlaceholder ??
         (profile === "transport" ? "(no output)" : isError ? "[tool error with no output]" : ""),
     );
@@ -303,22 +301,8 @@ export async function convertAnthropicMessages(
       continue;
     }
     if (msg.role === "toolResult") {
-      const toolResult = msg;
-      const toolResults: ToolResultBlockParam[] = [
-        {
-          type: "tool_result",
-          tool_use_id: toolResult.toolCallId,
-          content: await convertContentBlocks(
-            toolResult.content,
-            model,
-            imageBudget,
-            options.profile,
-            toolResult.isError,
-          ),
-          is_error: toolResult.isError,
-        },
-      ];
-      let j = i + 1;
+      const toolResults: ToolResultBlockParam[] = [];
+      let j = i;
       while (j < transformedMessages.length) {
         const nextMsg = transformedMessages.at(j);
         if (nextMsg?.role !== "toolResult") {
@@ -445,7 +429,6 @@ export function convertAnthropicTools(
   tools: Tool[],
   isOAuthTokenLocal: boolean,
   supportsEagerToolInputStreaming = false,
-  cacheControl?: CacheControlEphemeral,
 ): {
   projection: AnthropicToolProjection;
   tools: AnthropicTool[];
@@ -454,7 +437,7 @@ export function convertAnthropicTools(
     isOAuthTokenLocal ? toClaudeCodeToolName(name) : name,
   );
   const convertedTools: AnthropicTool[] = [];
-  for (const [index, tool] of projection.tools.entries()) {
+  for (const tool of projection.tools) {
     const convertedTool: AnthropicTool = {
       name: tool.wireName,
       description: tool.description,
@@ -462,9 +445,6 @@ export function convertAnthropicTools(
     };
     if (supportsEagerToolInputStreaming) {
       convertedTool.eager_input_streaming = true;
-    }
-    if (cacheControl && index === projection.tools.length - 1) {
-      convertedTool.cache_control = cacheControl;
     }
     convertedTools.push(convertedTool);
   }

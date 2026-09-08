@@ -173,15 +173,26 @@ describe("UsagePage cache convergence", () => {
       focusDocument();
       let snapshot = cacheSnapshot(source, status);
       const provider = { updatedAt: 1, providers: [] };
-      const request = vi.fn(async (method: string) =>
-        method === "usage.status"
+      const request = vi.fn(async (method: string) => {
+        if (method === "sessions.usage.timeseries") {
+          return { points: [] };
+        }
+        if (method === "sessions.usage.logs") {
+          return { logs: [] };
+        }
+        return method === "usage.status"
           ? provider
           : method === "usage.cost"
             ? snapshot.costSummary
-            : snapshot.result,
-      );
+            : {
+                ...snapshot.result,
+                sessions: [{ key: "agent:main:poll", usage: snapshot.result.totals }],
+              };
+      });
       const page = await createPage({ request } as unknown as GatewayBrowserClient, true);
       await preloadUsage(page);
+      page.querySelector<HTMLButtonElement>(".session-bar-selection")!.click();
+      await vi.advanceTimersByTimeAsync(0);
       expect(page.querySelector(".usage-cache-warning")?.textContent).toContain(
         "Checking for updated totals",
       );
@@ -190,6 +201,9 @@ describe("UsagePage cache convergence", () => {
       await vi.advanceTimersByTimeAsync(20_000);
       await page.updateComplete;
       expect(request.mock.calls.filter(([method]) => method === "sessions.usage")).toHaveLength(4);
+      for (const method of ["sessions.usage.timeseries", "sessions.usage.logs"]) {
+        expect(request.mock.calls.filter(([called]) => called === method)).toHaveLength(1);
+      }
       expect(page.querySelector(".usage-cache-warning")?.textContent).toContain(
         "Automatic checks paused; select Refresh",
       );
@@ -220,6 +234,51 @@ describe("UsagePage cache convergence", () => {
       expect(request).toHaveBeenCalledTimes(callsBeforeRemoval);
     },
   );
+
+  it("does not transfer a manual detail refresh to a replacement selection", async () => {
+    const snapshot = cacheSnapshot("sessions", "fresh");
+    const keys = ["agent:main:a", "agent:main:b"];
+    const result = {
+      ...snapshot.result,
+      sessions: keys.map((key) => ({ key, usage: snapshot.result.totals })),
+    };
+    const manual = deferred<typeof result>();
+    let refreshing = false;
+    const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+      if (method === "sessions.usage") {
+        return refreshing ? manual.promise : result;
+      }
+      if (method === "sessions.usage.timeseries") {
+        return { points: [] };
+      }
+      if (method === "sessions.usage.logs") {
+        return { logs: [{ timestamp: Date.now(), role: "user", content: String(params?.key) }] };
+      }
+      return method === "usage.cost" ? snapshot.costSummary : { providers: [] };
+    });
+    const page = await createPage({ request } as unknown as GatewayBrowserClient, true);
+    await preloadUsage(page);
+    page.querySelectorAll<HTMLButtonElement>(".session-bar-selection")[0]!.click();
+    await vi.waitFor(() =>
+      expect(page.querySelector(".session-log-content")?.textContent).toBe(keys[0]),
+    );
+
+    refreshing = true;
+    refreshButton(page).click();
+    page.querySelectorAll<HTMLButtonElement>(".session-bar-selection")[1]!.click();
+    await vi.waitFor(() =>
+      expect(page.querySelector(".session-log-content")?.textContent).toBe(keys[1]),
+    );
+    manual.resolve(result);
+    await vi.waitFor(() => expect(refreshButton(page).disabled).toBe(false));
+
+    expect(page.querySelector(".session-log-content")?.textContent).toBe(keys[1]);
+    for (const method of ["sessions.usage.timeseries", "sessions.usage.logs"]) {
+      expect(
+        request.mock.calls.filter(([called]) => called === method).map(([, params]) => params?.key),
+      ).toEqual(keys);
+    }
+  });
 
   it.each(["pending", "settled"] as const)(
     "keeps cache convergence after an aggregate failure with %s provider usage",

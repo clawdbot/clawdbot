@@ -10,6 +10,7 @@ import {
   loadSessionLogs,
   loadSessionUsageTimeSeries,
 } from "./session-cost-usage.js";
+import type { CostBreakdown } from "./session-cost-usage.types.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const flatPricing = { input: 1, output: 2, cacheRead: 0.5, cacheWrite: 0 };
@@ -24,7 +25,7 @@ const tieredPricing: ModelDefinitionConfig["cost"] = {
 type PricingCase = {
   name: string;
   pricing?: ModelDefinitionConfig["cost"];
-  recordedCost?: { total: number; totalOrigin?: "provider-billed" };
+  recordedCost?: CostBreakdown;
   topLevelUsage?: boolean;
   expectedCost: number | undefined;
   expectedBreakdown?: { input: number; output: number; cacheRead: number; cacheWrite: number };
@@ -51,9 +52,41 @@ describe("session usage reporting pricing", () => {
       expectedCost: undefined,
     },
     {
-      name: "tiered pricing replacing a recorded flat estimate",
+      // The recorded call owns its estimate; a later catalog cannot recover its service tier.
+      name: "recorded flat estimate preserved after catalog gains tiers",
       pricing: tieredPricing,
       recordedCost: { total: 0.001 },
+      expectedCost: 0.001,
+    },
+    {
+      name: "priority-adjusted recorded cost preserved with tiered pricing",
+      pricing: tieredPricing,
+      recordedCost: {
+        total: 0.0084,
+        input: 0.004,
+        output: 0.004,
+        cacheRead: 0.0004,
+        cacheWrite: 0,
+      },
+      expectedCost: 0.0084,
+      expectedBreakdown: { input: 0.004, output: 0.004, cacheRead: 0.0004, cacheWrite: 0 },
+    },
+    {
+      name: "flex-adjusted recorded cost preserved with tiered pricing",
+      pricing: tieredPricing,
+      recordedCost: {
+        total: 0.0021,
+        input: 0.001,
+        output: 0.001,
+        cacheRead: 0.0001,
+        cacheWrite: 0,
+      },
+      expectedCost: 0.0021,
+      expectedBreakdown: { input: 0.001, output: 0.001, cacheRead: 0.0001, cacheWrite: 0 },
+    },
+    {
+      name: "missing recorded cost estimated from tiered pricing",
+      pricing: tieredPricing,
       expectedCost: 0.0042,
       expectedBreakdown: { input: 0.002, output: 0.002, cacheRead: 0.0002, cacheWrite: 0 },
     },

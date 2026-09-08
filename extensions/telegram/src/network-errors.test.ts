@@ -8,10 +8,8 @@ import {
   isTelegramRateLimitError,
   isSafeToRetrySendError,
   isTelegramClientRejection,
-  isTelegramPollingNetworkError,
   isTelegramServerError,
   rethrowTelegramSendError,
-  tagTelegramNetworkError,
   TelegramRequestNotStartedError,
 } from "./network-errors.js";
 
@@ -87,24 +85,6 @@ describe("isTelegramAuthenticationError", () => {
 });
 
 describe("isRecoverableTelegramNetworkError", () => {
-  it("tracks Telegram polling origin separately from generic network matching", () => {
-    const slackDnsError = Object.assign(
-      new Error("A request error occurred: getaddrinfo ENOTFOUND slack.com"),
-      {
-        code: "ENOTFOUND",
-        hostname: "slack.com",
-      },
-    );
-    expect(isRecoverableTelegramNetworkError(slackDnsError)).toBe(true);
-    expect(isTelegramPollingNetworkError(slackDnsError)).toBe(false);
-
-    tagTelegramNetworkError(slackDnsError, {
-      method: "getUpdates",
-      url: "https://api.telegram.org/bot123456:ABC/getUpdates",
-    });
-    expect(isTelegramPollingNetworkError(slackDnsError)).toBe(true);
-  });
-
   it.each([
     ["ETIMEDOUT", "timeout"],
     ["ENETDOWN", "network down"],
@@ -201,13 +181,6 @@ describe("isRecoverableTelegramNetworkError", () => {
   it("detects grammY 'timed out' long-poll errors (#7239)", () => {
     const err = new Error("Request to 'getUpdates' timed out after 500 seconds");
     expect(isRecoverableTelegramNetworkError(err)).toBe(true);
-  });
-
-  it("normalizes blank tagged origins to null and finds nested tags", () => {
-    const inner = new Error("inner");
-    tagTelegramNetworkError(inner, { method: " ", url: " " });
-    const outer = Object.assign(new Error("outer"), { cause: inner });
-    expect(isTelegramPollingNetworkError(outer)).toBe(false);
   });
 
   // Grammy HttpError tests (issue #3815)

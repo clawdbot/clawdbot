@@ -92,10 +92,7 @@ describe("minimax provider hooks", () => {
           },
         },
       },
-      resolveProviderApiKey: () => ({
-        apiKey: "explicit-key",
-        discoveryApiKey: "explicit-key",
-      }),
+      resolveProviderApiKey: () => ({ apiKey: undefined }),
       resolveProviderAuth: () => ({
         apiKey: MINIMAX_OAUTH_MARKER,
         discoveryApiKey: "oauth-token",
@@ -111,14 +108,22 @@ describe("minimax provider hooks", () => {
     expect(headers.get("authorization")).toBeNull();
   });
 
-  it.each([
-    { name: "API-key profile without mode metadata", mode: undefined, bearer: false },
-    { name: "API-key profile", mode: "api_key", bearer: false },
-    { name: "token profile", mode: "token", bearer: true },
-    { name: "OAuth profile", mode: "oauth", bearer: true },
-  ] as const)(
-    "uses the selected $name ahead of another OAuth profile through the shared catalog wrapper",
-    async ({ mode, bearer }) => {
+  it.each(
+    (
+      [
+        { name: "API-key profile without mode metadata", mode: undefined, bearer: false },
+        { name: "token profile without mode metadata", mode: undefined, bearer: true },
+        { name: "API-key profile", mode: "api_key", bearer: false },
+        { name: "token profile", mode: "token", bearer: true },
+        { name: "OAuth profile", mode: "oauth", bearer: true },
+      ] as const
+    ).flatMap((entry) => [
+      { ...entry, available: true },
+      { ...entry, available: false },
+    ]),
+  )(
+    "keeps the selected $name coherent through the shared catalog wrapper (available: $available)",
+    async ({ mode, bearer, available }) => {
       const fetchMock = vi.fn(
         async (_input: RequestInfo | URL, _init?: RequestInit) =>
           new Response(JSON.stringify({ data: [{ id: "MiniMax-M3", object: "model" }] })),
@@ -130,7 +135,15 @@ describe("minimax provider hooks", () => {
         name: "MiniMax Provider",
       });
       const portalProvider = requireRegisteredProvider(providers, "minimax-portal");
-      const apiKey = mode === "oauth" ? MINIMAX_OAUTH_MARKER : "selected-profile-credential";
+      const legacyToken = mode === undefined && bearer;
+      const apiKey =
+        mode === "oauth"
+          ? MINIMAX_OAUTH_MARKER
+          : available
+            ? "selected-profile-credential"
+            : mode === "token"
+              ? "MINIMAX_OAUTH_TOKEN"
+              : "MINIMAX_API_KEY";
 
       const result = await runProviderCatalog({
         provider: portalProvider,
@@ -138,19 +151,32 @@ describe("minimax provider hooks", () => {
         env: {},
         resolveProviderApiKey: () => ({
           apiKey,
-          discoveryApiKey: "selected-profile-credential",
+          discoveryApiKey: available ? "selected-profile-credential" : undefined,
           profileId: "minimax-portal:selected",
           ...(mode ? { mode } : {}),
         }),
         resolveProviderAuth: () => ({
-          apiKey: MINIMAX_OAUTH_MARKER,
-          discoveryApiKey: "other-oauth-credential",
-          mode: "oauth",
-          profileId: "minimax-portal:other-oauth",
+          apiKey: legacyToken ? apiKey : MINIMAX_OAUTH_MARKER,
+          discoveryApiKey: legacyToken ? "selected-profile-credential" : "other-oauth-credential",
+          mode: legacyToken ? "token" : "oauth",
+          profileId: legacyToken ? "minimax-portal:selected" : "minimax-portal:other-oauth",
           source: "profile",
         }),
       });
 
+      const canDiscover = available || legacyToken;
+      expect(result?.outcomes).toEqual([
+        {
+          provider: "minimax-portal",
+          profileId: "minimax-portal:selected",
+          status: canDiscover ? "ready" : "unavailable",
+        },
+      ]);
+      if (!canDiscover) {
+        expect(result).toMatchObject({ providers: {} });
+        expect(fetchMock).not.toHaveBeenCalled();
+        return;
+      }
       const provider = result && "provider" in result ? result.provider : undefined;
       expect(provider?.apiKey).toBe(apiKey);
       const headers = new Headers(fetchMock.mock.calls[0]?.[1]?.headers);
@@ -160,6 +186,62 @@ describe("minimax provider hooks", () => {
       );
     },
   );
+
+  it.each([
+    {
+      name: "different profiles",
+      selectedProfileId: "minimax-portal:selected",
+      resolvedProfileId: "minimax-portal:other",
+      mode: "token",
+    },
+    {
+      name: "unknown profiles",
+      selectedProfileId: undefined,
+      resolvedProfileId: undefined,
+      mode: undefined,
+    },
+    {
+      name: "different credential modes",
+      selectedProfileId: "minimax-portal:selected",
+      resolvedProfileId: "minimax-portal:selected",
+      mode: "api_key",
+    },
+  ] as const)("does not complete matching markers with $name", async (entry) => {
+    const { providers } = await registerProviderPlugin({
+      plugin: minimaxProviderPlugin,
+      id: "minimax",
+      name: "MiniMax Provider",
+    });
+    const result = await runProviderCatalog({
+      provider: requireRegisteredProvider(providers, "minimax-portal"),
+      config: {},
+      env: {},
+      resolveProviderApiKey: () => ({
+        apiKey: "MINIMAX_OAUTH_TOKEN",
+        profileId: entry.selectedProfileId,
+        mode: entry.mode,
+      }),
+      resolveProviderAuth: () => ({
+        apiKey: "MINIMAX_OAUTH_TOKEN",
+        discoveryApiKey: "other-profile-token",
+        mode: "token",
+        source: "profile",
+        profileId: entry.resolvedProfileId,
+      }),
+    });
+
+    expect(result).toEqual({
+      providers: {},
+      outcomes: [
+        {
+          provider: "minimax-portal",
+          profileId: entry.selectedProfileId,
+          status: "unavailable",
+        },
+      ],
+    });
+    expect(fetch).not.toHaveBeenCalled();
+  });
 
   it("uses Bearer discovery auth for MINIMAX_OAUTH_TOKEN", async () => {
     const fetchMock = vi.fn(
@@ -183,10 +265,11 @@ describe("minimax provider hooks", () => {
         mode: "api_key",
       }),
       resolveProviderAuth: () => ({
-        apiKey: "MINIMAX_OAUTH_TOKEN",
-        discoveryApiKey: "oauth-token",
-        mode: "api_key",
-        source: "env",
+        apiKey: MINIMAX_OAUTH_MARKER,
+        discoveryApiKey: "other-oauth-token",
+        mode: "oauth",
+        source: "profile",
+        profileId: "minimax-portal:other-oauth",
       }),
     } as never);
 

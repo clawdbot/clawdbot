@@ -14,6 +14,7 @@ function normalizeSessionEntryArchiveReason(
 ): SessionEntry["archiveReason"] | undefined {
   return value === "manual" ||
     value === "active-session-cap" ||
+    value === "age-retention" ||
     value === "stale-dashboard" ||
     value === "restart-recovery"
     ? value

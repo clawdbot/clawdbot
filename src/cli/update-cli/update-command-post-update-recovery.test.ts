@@ -1,18 +1,38 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import * as configOwner from "../../config/config.js";
 import { asResolvedSourceConfig, asRuntimeConfig } from "../../config/materialize.js";
 import { ScheduledTaskAutoStartRecoveryError } from "../../daemon/schtasks-update-recovery.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { createRetainedPackageSwap } from "../../infra/package-update-swap.test-support.js";
+import {
+  swapStagedPackageInstall,
+  type PackageUpdateTransaction,
+} from "../../infra/package-update-swap.js";
+import { createPackageSwapFixture } from "../../infra/package-update-swap.test-support.js";
 import { readUpdateStateSchemaVersions } from "../../infra/update-candidate-state.js";
-import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
+import * as repairAgent from "../../infra/update-repair-agent.js";
+import * as runLedger from "../../infra/update-run-ledger.js";
+import {
+  createUpdateRun,
+  getUpdateRun,
+  recordUpdateRunStep,
+  recordUpdateRunVerification,
+} from "../../infra/update-run-ledger.js";
+import { renderUpdateRunNotice, renderUpdateRunReport } from "../../infra/update-run-report.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { defaultRuntime } from "../../runtime.js";
 
 const mocks = vi.hoisted(() => ({
   printResult: vi.fn(),
+  gatewayCommand: vi.fn<
+    typeof import("./update-command-service-command.js").runUpdatedInstallGatewayCommand
+  >(async () => "accepted"),
+  readRuntime: vi.fn(async (): Promise<{ status: string; pid?: number }> => ({
+    status: "unknown",
+  })),
   restartCandidate: vi.fn<typeof import("./update-command-service.js").maybeRestartService>(
     async () => "ok",
   ),
@@ -31,7 +51,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("./progress.js", () => ({ printResult: mocks.printResult }));
 vi.mock("./update-command-service-command.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./update-command-service-command.js")>()),
-  runUpdatedInstallGatewayCommand: async () => "accepted",
+  runUpdatedInstallGatewayCommand: mocks.gatewayCommand,
 }));
 vi.mock("../../config/config.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../config/config.js")>()),
@@ -47,6 +67,7 @@ vi.mock("../../config/config.js", async (importOriginal) => ({
 }));
 vi.mock("../../daemon/service.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../daemon/service.js")>()),
+  resolveGatewayService: () => ({ readRuntime: mocks.readRuntime }),
   readGatewayServiceState: async () => ({
     installed: true,
     loadState: { status: "loaded" },
@@ -79,7 +100,10 @@ vi.mock("./update-command-result.js", async (importOriginal) => ({
 
 import { UpdatePreMutationError } from "./shared.js";
 import { finishUpdate } from "./update-command-post-update.js";
+import { repairUpdateService } from "./update-command-repair-service.js";
 import { UpdateCommandFailure } from "./update-command-result.js";
+import * as servicePlan from "./update-command-service-plan.js";
+import * as verificationOwner from "./update-command-verification.js";
 
 type FinishUpdateParams = Parameters<typeof finishUpdate>[0];
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -112,6 +136,8 @@ async function finishFailedUpdate(
     previousInstallRoot?: string;
     packageTransaction?: FinishUpdateParams["packageTransaction"];
     schemaVersions?: FinishUpdateParams["schemaVersions"];
+    configSnapshot?: FinishUpdateParams["configSnapshot"];
+    activationConfig?: { path: string; raw: string | null; hash: string };
     previousVerified?: boolean;
     windowsTaskAutoStartRecovery?: NonNullable<
       FinishUpdateParams["preManagedServiceStop"]
@@ -119,15 +145,17 @@ async function finishFailedUpdate(
   } = {},
 ): Promise<UpdateCommandFailure> {
   return await finishUpdate({
+    mutationStarted: true,
     result,
     ...(options.failure ? { failure: options.failure } : {}),
     root: options.originalRoot ?? result.root ?? "/repo",
     previousInstallRoot: options.previousInstallRoot,
     packageTransaction: options.packageTransaction,
     schemaVersions: options.schemaVersions,
+    activationConfig: options.activationConfig,
     previousVerified: options.previousVerified,
     installKindChanged: false,
-    configSnapshot: {
+    configSnapshot: options.configSnapshot ?? {
       path: "/fixture/openclaw.json",
       exists: false,
       raw: null,
@@ -489,6 +517,7 @@ describe("failed update recovery restart", () => {
         OPENCLAW_PROFILE: "work",
       };
       const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
+      mocks.readRuntime.mockResolvedValue({ status: stopped ? "stopped" : "unknown" });
       await finishFailedUpdate(
         failedResult({ serviceRestartSafe: false, reason: "rollback-checkout-dirty" }),
         { stopped, run },
@@ -499,6 +528,61 @@ describe("failed update recovery restart", () => {
       expect(nextAction).toContain("Run `openclaw --profile work triage`");
       expect(nextAction?.includes("Keep the gateway stopped")).toBe(stopped);
       expect(mocks.printResult.mock.lastCall?.[2]).toEqual({ nextAction });
+    },
+  );
+
+  it.each([7376, 7377])(
+    "reports the latest running process after the activation stop (pid=%s)",
+    async (pid) => {
+      const env = {
+        ...process.env,
+        OPENCLAW_STATE_DIR: tempDirs.make("update-running-unverified-"),
+      };
+      const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
+      recordUpdateRunVerification(
+        run.runId,
+        { serviceRunning: true, pid: 7376, runningVersion: "2026.9.3" },
+        { env },
+      );
+      recordUpdateRunStep(
+        run.runId,
+        { step: "gateway verification", status: "failed", detail: "readyz-unhealthy" },
+        { env },
+      );
+      mocks.readRuntime.mockResolvedValue({ status: "running", pid });
+
+      await finishFailedUpdate(
+        {
+          ...failedResult({ serviceRestartSafe: false, reason: "runtime-verification-failed" }),
+          reason: "state-migrated-no-rollback",
+        },
+        { stopped: true, run },
+      );
+
+      const recorded = getUpdateRun(run.runId, { env });
+      if (!recorded) {
+        throw new Error("Expected the failed update run to remain recorded");
+      }
+      const version = pid === 7376 ? "2026.9.3" : undefined;
+      expect(recorded.origin.nextAction).toContain(
+        `The gateway is running${version ? ` ${version}` : ""} but did not pass verification (readyz-unhealthy)`,
+      );
+      expect(recorded.origin.nextAction).not.toContain("gateway stopped");
+      expect(recorded.origin.nextAction).not.toContain("remains stopped");
+      expect(recorded.origin.nextAction).toContain("triage");
+      expect(recorded.verification).toMatchObject({ serviceRunning: true, pid });
+      expect(recorded.verification.runningVersion).toBe(version);
+      expect(mocks.printResult.mock.lastCall?.[2]).toEqual({
+        nextAction: recorded.origin.nextAction,
+      });
+      for (const report of [
+        renderUpdateRunReport(recorded).markdown,
+        renderUpdateRunNotice(recorded, "finished"),
+      ]) {
+        expect(report).toContain("readyz-unhealthy");
+        expect(report).toContain("triage");
+        expect(report).not.toContain("remains stopped");
+      }
     },
   );
 
@@ -527,9 +611,30 @@ describe("failed package update recovery safety", () => {
     vi.spyOn(defaultRuntime, "exit").mockImplementation(() => undefined as never);
   });
 
-  it("retains and reports the recovery backup after an older-target backup move partially fails", async () => {
+  it("retains and reports the recovery backup after candidate activation fails", async () => {
     const base = tempDirs.make("update-older-target-backup-");
-    const { result, transaction, packageRoot } = await createRetainedPackageSwap(base, true);
+    const { params, packageRoot, globalRoot } = await createPackageSwapFixture(base);
+    const rename = fs.rename.bind(fs);
+    vi.spyOn(fs, "rename").mockImplementation(async (...args) => {
+      if (String(args[0]) === params.stage.packageRoot) {
+        throw Object.assign(new Error("candidate activation denied"), { code: "EACCES" });
+      }
+      return rename(...args);
+    });
+    let transaction: PackageUpdateTransaction | undefined;
+    const result = await swapStagedPackageInstall({
+      ...params,
+      onTransaction: (retained) => {
+        transaction = retained;
+      },
+    });
+    if (!transaction) {
+      throw new Error("Package activation did not retain its recovery transaction");
+    }
+    expect(result).toMatchObject({
+      status: "failed",
+      step: { stderrTail: expect.stringContaining("candidate activation denied") },
+    });
     const backupRuntime = path.join(transaction.backupRoot, "dist", "index.js");
     const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(base, "state") };
     const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
@@ -562,76 +667,150 @@ describe("failed package update recovery safety", () => {
     expect(getUpdateRun(run.runId, { env })?.status).toBe("failed");
     expect(failure.result.steps).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ stderrTail: expect.stringContaining(transaction.backupRoot) }),
+        expect.objectContaining({
+          name: "global install backup retention",
+          exitCode: 1,
+          stderrTail: expect.stringContaining(globalRoot),
+        }),
       ]),
     );
     expect(mocks.restart).not.toHaveBeenCalled();
     expect(mocks.restartCandidate).not.toHaveBeenCalled();
   });
 
-  it("restores the managed install root and keeps its backup until rolled-back is durable", async () => {
-    const env = { ...process.env, OPENCLAW_STATE_DIR: tempDirs.make("update-managed-rollback-") };
-    const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
-    const schemaVersions = await readUpdateStateSchemaVersions({
-      stateDir: env.OPENCLAW_STATE_DIR,
-      config: {},
-      env,
-    });
-    const originalRoot = "/managed/previous";
-    mocks.stopCandidate.mockResolvedValueOnce({
-      stopped: true,
-      inspected: true,
-      runtimeInspected: true,
-      running: true,
-      serviceEnv: env,
-      serviceUpdateVerdict: {
-        kind: "owned",
-        root: process.cwd(),
-        fingerprint: "fixture",
-        refreshDefinition: true,
-      },
-    });
-    mocks.restartCandidate.mockResolvedValueOnce("ok");
-    const rollback = vi.fn(async () => ({
-      name: "package rollback",
-      activePackageRoot: originalRoot,
-      command: "restore",
-      cwd: originalRoot,
-      exitCode: 0,
-      durationMs: 1,
-    }));
-    let cleanupStatus: string | undefined;
-    const complete = vi.fn(async () => {
-      cleanupStatus = getUpdateRun(run.runId, { env })?.status;
-    });
-    const failure = await finishFailedUpdate(
-      {
-        status: "error",
-        mode: "pnpm",
-        root: process.cwd(),
-        before: { version: "2026.9.1" },
-        after: { version: "2026.9.3" },
-        reason: "version-mismatch",
-        steps: [],
+  it.each([false, true])(
+    "settles the first broken update after Doctor rewrites config (operator edit=%s)",
+    async (operatorEdit) => {
+      const stateDir = tempDirs.make("update-managed-rollback-");
+      const configPath = path.join(stateDir, "openclaw.json");
+      const env = {
+        ...process.env,
+        OPENCLAW_STATE_DIR: stateDir,
+        OPENCLAW_CONFIG_PATH: configPath,
+      };
+      const config = {
+        gateway: { mode: "local" },
+        agents: { defaults: { models: { "openai/gpt-5.6-luna": {} } } },
+        plugins: { enabled: false },
+      };
+      const original = `${JSON.stringify(config, null, 4)}\n`;
+      await fs.writeFile(configPath, original, { mode: 0o600 });
+      await fs.writeFile(`${configPath}.pre-update`, original, { mode: 0o600 });
+      const io = configOwner.createConfigIO({
+        env,
+        pluginValidation: "core-only",
+        observe: false,
+        suppressFutureVersionWarning: true,
+      });
+      const configSnapshot = await io.readConfigFileSnapshot();
+      expect(configSnapshot.valid).toBe(true);
+      vi.spyOn(configOwner, "readConfigFileSnapshot").mockImplementation(() =>
+        io.readConfigFileSnapshot(),
+      );
+      const doctorConfig = {
+        ...config,
+        meta: { migrations: { modelPolicyAllowlist: true }, lastTouchedVersion: "2026.9.3" },
+        agents: {
+          defaults: { ...config.agents.defaults, modelPolicy: { allow: ["openai/gpt-5.6-luna"] } },
+        },
+        wizard: { lastRunCommand: "doctor", lastRunVersion: "2026.9.3" },
+      };
+      const doctorRaw = `${JSON.stringify(doctorConfig, null, 2)}\n`;
+      await fs.writeFile(configPath, doctorRaw);
+      const activationConfig = {
+        path: configPath,
+        raw: original,
+        hash: createHash("sha256").update(doctorRaw).digest("hex"),
+      };
+      const current = operatorEdit
+        ? `${JSON.stringify({ ...doctorConfig, logging: { level: "debug" } }, null, 2)}\n`
+        : doctorRaw;
+      if (operatorEdit) {
+        await fs.writeFile(configPath, current);
+      }
+      const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
+      const schemaVersions = await readUpdateStateSchemaVersions({
+        stateDir: env.OPENCLAW_STATE_DIR,
+        config: {},
+        env,
+      });
+      const originalRoot = "/managed/previous";
+      mocks.stopCandidate.mockResolvedValue({
+        stopped: true,
+        inspected: true,
+        runtimeInspected: true,
+        running: true,
+        serviceEnv: env,
+        serviceUpdateVerdict: {
+          kind: "owned",
+          root: process.cwd(),
+          fingerprint: "fixture",
+          refreshDefinition: true,
+        },
+      });
+      mocks.restartCandidate.mockResolvedValueOnce("ok");
+      const rollback = vi.fn(async () => ({
+        name: "package rollback",
+        activePackageRoot: originalRoot,
+        command: "restore",
+        cwd: originalRoot,
+        exitCode: 0,
         durationMs: 1,
-      },
-      {
-        run,
-        originalRoot,
-        previousInstallRoot: "/shell/unrelated",
-        schemaVersions,
-        previousVerified: true,
-        packageTransaction: { backupRoot: "/managed/backup", rollback, complete },
-      },
-    );
-    expect(failure.result).toMatchObject({ root: originalRoot, after: { version: "2026.9.1" } });
-    expect(mocks.restartCandidate.mock.lastCall?.[0]).toMatchObject({
-      result: { root: originalRoot, after: { version: "2026.9.1" } },
-    });
-    expect(rollback).toHaveBeenCalledOnce();
-    expect(complete).toHaveBeenCalledOnce();
-    expect(cleanupStatus).toBe("rolled-back");
-  });
+      }));
+      let cleanupStatus: string | undefined;
+      const complete = vi.fn(async () => {
+        cleanupStatus = getUpdateRun(run.runId, { env })?.status;
+      });
+      const failure = await finishFailedUpdate(
+        {
+          status: "error",
+          mode: "pnpm",
+          root: process.cwd(),
+          before: { version: "2026.9.1" },
+          after: { version: "2026.9.3" },
+          reason: "version-mismatch",
+          steps: [],
+          durationMs: 1,
+        },
+        {
+          run,
+          originalRoot,
+          previousInstallRoot: "/shell/unrelated",
+          schemaVersions,
+          configSnapshot,
+          activationConfig,
+          previousVerified: true,
+          packageTransaction: { backupRoot: "/managed/backup", rollback, complete },
+        },
+      );
+      const recorded = getUpdateRun(run.runId, { env });
+      if (!recorded) {
+        throw new Error("Expected the completed update to remain recorded");
+      }
+      if (operatorEdit) {
+        expect(failure.result.reason).toBe("state-migrated-no-rollback");
+        expect(recorded.status).toBe("failed");
+        expect(recorded.origin.nextAction).toContain("openclaw.json");
+        expect(await fs.readFile(configPath, "utf8")).toBe(current);
+        expect(rollback).not.toHaveBeenCalled();
+        expect(mocks.restartCandidate).not.toHaveBeenCalled();
+        return;
+      }
+      expect(failure.result).toMatchObject({ root: originalRoot, after: { version: "2026.9.1" } });
+      expect(mocks.restartCandidate.mock.lastCall?.[0]).toMatchObject({
+        result: { root: originalRoot, after: { version: "2026.9.1" } },
+      });
+      expect(rollback).toHaveBeenCalledOnce();
+      expect(complete).toHaveBeenCalledOnce();
+      expect(cleanupStatus).toBe("rolled-back");
+      expect(recorded.status).toBe("rolled-back");
+      expect(renderUpdateRunReport(recorded).headline).toContain("↩️ OpenClaw update rolled back");
+      expect(await fs.readFile(configPath, "utf8")).toBe(original);
+      if (process.platform !== "win32") {
+        expect((await fs.stat(configPath)).mode & 0o777).toBe(0o600);
+      }
+    },
+  );
 
   it.each([
     "global install verify",
@@ -689,4 +868,109 @@ describe("failed package update recovery safety", () => {
       packageRollbackVerified: true,
     });
   });
+});
+
+describe("live repair ownership after activation", () => {
+  it.each([false, true])(
+    "repairs a still-running restart failure using its own ledger (transient read=%s)",
+    async (transientRead) => {
+      const stateDir = tempDirs.make("update-live-repair-owner-");
+      const configPath = path.join(stateDir, "openclaw.json");
+      await fs.writeFile(configPath, "{}\n", { mode: 0o600 });
+      const env = {
+        ...process.env,
+        OPENCLAW_STATE_DIR: stateDir,
+        OPENCLAW_CONFIG_PATH: configPath,
+      };
+      const run = { runId: createUpdateRun({ trigger: "api" }, { env }).runId, env };
+
+      const serviceEnv = { ...env, OPENCLAW_STATE_DIR: tempDirs.make("update-repair-service-") };
+      vi.spyOn(servicePlan, "resolveGatewayServiceManagementBlockMessageForUpdate").mockReturnValue(
+        undefined,
+      );
+      const service = await vi.importActual<typeof import("./update-command-service.js")>(
+        "./update-command-service.js",
+      );
+      mocks.gatewayCommand.mockRejectedValueOnce(new Error("candidate restart failed"));
+      expect(
+        await service.maybeRestartService({
+          shouldRestart: true,
+          result: { status: "ok", mode: "npm", root: "/repo", steps: [], durationMs: 1 },
+          opts: { json: true, run },
+          refreshServiceEnv: false,
+          serviceEnv,
+          serviceUpdateVerdict: { kind: "unresolved", root: "/repo", fingerprint: "fixture" },
+          gatewayPort: 19101,
+          timeoutMs: 1_000,
+        }),
+      ).toBe("failed");
+      expect(mocks.gatewayCommand).toHaveBeenCalled();
+      expect(getUpdateRun(run.runId, { env })).toMatchObject({
+        status: "running",
+        phase: "verifying",
+      });
+      const failed = { ok: false, score: 0, summary: "Candidate boot failed." };
+      const verified = { ok: true, score: 1, summary: "Gateway is ready." };
+      const verify = vi
+        .spyOn(verificationOwner, "verifyUpdatedGateway")
+        .mockResolvedValueOnce(failed)
+        .mockResolvedValueOnce(failed)
+        .mockResolvedValueOnce(verified);
+      const prepare = vi
+        .spyOn(repairAgent, "prepareUnattendedUpdateRepair")
+        .mockImplementation(async (repair) => {
+          // A failed restart never reached ordinary verification. Live repair must
+          // own the durable repair phase before the candidate worker is admitted.
+          expect(getUpdateRun(run.runId, { env })).toMatchObject({
+            status: "running",
+            phase: "repairing",
+          });
+          if (transientRead) {
+            const busy = Object.assign(new Error("database is locked"), { errcode: 5 });
+            vi.spyOn(runLedger, "getUpdateRun").mockImplementationOnce(() => {
+              throw busy;
+            });
+            expect(repair.isCurrent).toThrow(busy);
+          }
+          expect(repair.isCurrent?.()).toBe(true);
+          const signal = new AbortController().signal;
+          expect(await repair.validate(signal)).toEqual(failed);
+          repair.onEvent?.({
+            type: "turn-started",
+            turn: 1,
+            provider: "openai",
+            model: "gpt-5.6-luna",
+          });
+          const validation = await repair.validate(signal);
+          expect(validation).toEqual(verified);
+          repair.onEvent?.({ type: "stopped", status: "repaired" });
+          return { status: "repaired", attempts: [], finalValidation: validation };
+        });
+      const result = await repairUpdateService({
+        result: {
+          status: "error",
+          reason: "restart-unhealthy",
+          mode: "npm",
+          root: "/repo",
+          before: { version: "2026.9.1" },
+          after: { version: "2026.9.3" },
+          steps: [],
+          durationMs: 1,
+        },
+        root: "/repo",
+        env: serviceEnv,
+        opts: { json: true, run },
+        gatewayPort: 19101,
+        timeoutMs: 1_000,
+        expectedService: { serviceEnv },
+      });
+      expect(result).toMatchObject({ status: "ok" });
+      expect(prepare).toHaveBeenCalledOnce();
+      expect(verify).toHaveBeenCalledTimes(3);
+      expect(getUpdateRun(run.runId, { env })).toMatchObject({
+        status: "running",
+        repair: [expect.objectContaining({ status: "succeeded" })],
+      });
+    },
+  );
 });

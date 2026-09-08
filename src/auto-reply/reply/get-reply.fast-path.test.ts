@@ -24,6 +24,7 @@ import { buildCommandContext } from "./commands-context.js";
 import { handleGoalCommand } from "./commands-goal.js";
 import { initFastReplySessionState } from "./get-reply-fast-path.js";
 import {
+  emptyAliasIndex,
   markCompleteReplyConfig,
   withFastReplyConfig,
 } from "./get-reply-fast-path.test-support.js";
@@ -36,17 +37,14 @@ import {
   registerGetReplyRuntimeOverrides,
 } from "./get-reply.test-fixtures.js";
 import { loadGetReplyModuleForTest } from "./get-reply.test-loader.js";
+import type { InternalGetReplyOptions } from "./get-reply.types.js";
+import { REPLY_OPERATION_RUN_STATE } from "./reply-operation-run-state.js";
 import "./get-reply.test-runtime-mocks.js";
 
 registerGetReplyBaselineBypass();
 
 type LoadModelCatalogFn =
   typeof import("../../agents/prepared-model-catalog.js").loadPreparedModelCatalog;
-type ModelAliasIndex = import("../../agents/model-selection.js").ModelAliasIndex;
-
-function emptyAliasIndex(): ModelAliasIndex {
-  return { byAlias: new Map(), byKey: new Map() };
-}
 
 const mocks = vi.hoisted(() => ({
   buildStatusReply: vi.fn(),
@@ -274,8 +272,7 @@ describe("getReplyFromConfig fast test bootstrap", () => {
       expect(mocks.initSessionState).not.toHaveBeenCalled();
       expect(mocks.resolveReplyDirectives).toHaveBeenCalledOnce();
       expect(vi.mocked(runPreparedReplyMock)).toHaveBeenCalledOnce();
-      const preparedReplyParams = requirePreparedReplyParams();
-      expect(preparedReplyParams.cfg).toBe(cfg);
+      expect(requirePreparedReplyParams().cfg).toBe(cfg);
     },
   );
 
@@ -308,6 +305,7 @@ describe("getReplyFromConfig fast test bootstrap", () => {
       createGetReplySessionState({
         sessionKey: "agent:main:slack:channel:C123",
         sessionId: "rotated-session",
+        sessionEntry: { lifecycleRevision: "prepared-revision" },
         storePath: "/tmp/custom-sessions.json",
       }),
     );
@@ -326,6 +324,7 @@ describe("getReplyFromConfig fast test bootstrap", () => {
     expect(onSessionPrepared).toHaveBeenCalledWith({
       sessionKey: "agent:main:slack:channel:C123",
       sessionId: "rotated-session",
+      lifecycleRevision: "prepared-revision",
       storePath: "/tmp/custom-sessions.json",
     });
   });
@@ -337,6 +336,8 @@ describe("getReplyFromConfig fast test bootstrap", () => {
       new ModelSelectionLockedError(MODEL_SELECTION_LOCKED_RESET_MESSAGE),
     );
 
+    const runState: import("./reply-operation-run-state.js").ReplyOperationRunState = {};
+    const replyOptions: InternalGetReplyOptions = { [REPLY_OPERATION_RUN_STATE]: runState };
     const result = await getReplyFromConfig(
       buildGetReplyCtx({
         Body: "/reset openai/gpt-5.5 continue",
@@ -345,11 +346,12 @@ describe("getReplyFromConfig fast test bootstrap", () => {
         CommandAuthorized: true,
         SessionKey: sessionKey,
       }),
-      undefined,
+      replyOptions,
       {} as OpenClawConfig,
     );
 
     expect(result).toEqual({ text: MODEL_SELECTION_LOCKED_RESET_MESSAGE });
+    expect(runState.preRunRejection).toBe("model-selection-locked");
     expect(mocks.resolveReplyDirectives).not.toHaveBeenCalled();
     expect(vi.mocked(runPreparedReplyMock)).not.toHaveBeenCalled();
   });

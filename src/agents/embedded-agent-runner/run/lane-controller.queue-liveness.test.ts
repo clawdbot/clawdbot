@@ -353,7 +353,7 @@ describe("queued embedded run context liveness", () => {
     },
   );
 
-  test("releases ownership when a custom queue rejects admission synchronously", () => {
+  test("releases ownership when a custom queue rejects admission synchronously", async () => {
     const registeredAt = 1_000;
     const clock = vi.spyOn(Date, "now").mockReturnValue(registeredAt);
     const { controller, params } = createRunController({
@@ -366,9 +366,9 @@ describe("queued embedded run context liveness", () => {
       registeredAt,
     });
 
-    expect(() =>
+    await expect(
       controller.enqueueSession(() => controller.enqueueGlobal(async () => createRunResult())),
-    ).toThrow("custom lane rejected admission");
+    ).rejects.toThrow("custom lane rejected admission");
 
     clock.mockReturnValue(registeredAt + CONTEXT_TTL_MS + 1);
     expect(sweepStaleRunContexts()).toBe(1);

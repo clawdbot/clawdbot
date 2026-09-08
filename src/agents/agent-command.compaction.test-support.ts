@@ -25,6 +25,7 @@ import type { EmbeddedAgentRunResult } from "./embedded-agent.js";
 import type { loadManifestModelCatalog } from "./model-catalog.js";
 import type { ModelFallbackRunOptions } from "./model-fallback-attempt.js";
 import { createAgentRunRestartAbortError } from "./run-termination.js";
+import { waitForSessionMaintenance } from "./session-maintenance/coordinator.js";
 
 type ProviderModelNormalizationParams = { provider: string; context: { modelId: string } };
 type LoadManifestModelCatalogParams = Parameters<typeof loadManifestModelCatalog>[0];
@@ -52,6 +53,9 @@ const compactionTestState = vi.hoisted(() => ({
     outcome: "completed" as const,
   })),
   runSessionCompactionIfNeededMock: vi.fn<RunSessionCompaction>(
+    async (params) => params.sessionEntry,
+  ),
+  runSessionPreflightCompactionMock: vi.fn<RunSessionCompaction>(
     async (params) => params.sessionEntry,
   ),
   deliverAgentCommandResultMock: vi.fn(),
@@ -216,7 +220,9 @@ vi.mock("../auto-reply/reply/agent-runner-memory.js", () => ({
   runMemoryFlushIfNeeded: (params: Parameters<RunMemoryFlush>[0]) =>
     compactionTestState.runMemoryFlushIfNeededMock(params),
   runSessionCompactionIfNeeded: (params: Parameters<RunSessionCompaction>[0]) =>
-    compactionTestState.runSessionCompactionIfNeededMock(params),
+    params.beforeCompaction
+      ? compactionTestState.runSessionPreflightCompactionMock(params)
+      : compactionTestState.runSessionCompactionIfNeededMock(params),
 }));
 
 vi.mock("../infra/agent-events.js", async () => {
@@ -258,6 +264,7 @@ export function registerAgentCommandCompactionTestHooks(): void {
       compactionTestState.runCliTurnCompactionLifecycleMock,
       compactionTestState.runMemoryFlushIfNeededMock,
       compactionTestState.runSessionCompactionIfNeededMock,
+      compactionTestState.runSessionPreflightCompactionMock,
       compactionTestState.deliverAgentCommandResultMock,
       compactionTestState.captureSessionDiffBaselineMock,
     ]) {
@@ -295,6 +302,13 @@ export function registerAgentCommandCompactionTestHooks(): void {
 
   afterEach(async () => {
     const storePath = compactionTestState.cfg?.session?.store;
+    if (storePath) {
+      await Promise.all(
+        listSessionEntriesCore({ storePath }).map(({ sessionKey }) =>
+          waitForSessionMaintenance(sessionKey),
+        ),
+      );
+    }
     compactionTestState.cfg = undefined;
     compactionTestState.workspaceDir = undefined;
     compactionTestState.agentDir = undefined;

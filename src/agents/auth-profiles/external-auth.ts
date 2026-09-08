@@ -119,16 +119,6 @@ function resolveAllowedExternalCliAuthProfiles(params: {
   );
 }
 
-function resolveExternalCliAuthProfileMap(params: {
-  store: AuthProfileStore;
-  env?: NodeJS.ProcessEnv;
-  externalCli?: ExternalCliOverlayOptions;
-}): ExternalAuthProfileMap {
-  return new Map(
-    resolveAllowedExternalCliAuthProfiles(params).map((profile) => [profile.profileId, profile]),
-  );
-}
-
 function hasPersistableExternalCliSyncCandidate(
   store: AuthProfileStore,
   params?: ExternalCliOverlayOptions,
@@ -208,8 +198,9 @@ export function createExternalAuthRuntime(
         store: params.store,
       },
     });
-    const externalCli = params.externalCli;
-    const resolved = resolveExternalCliAuthProfileMap({ ...params, externalCli });
+    const resolved = new Map(
+      resolveAllowedExternalCliAuthProfiles(params).map((profile) => [profile.profileId, profile]),
+    );
     const runtimeExternalCliProfileIds = new Set(
       [...resolved.values()]
         .filter((profile) => profile.persistence !== "persisted")

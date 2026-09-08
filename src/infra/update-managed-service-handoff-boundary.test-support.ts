@@ -35,6 +35,7 @@ import {
   releaseManagedRepairInference,
 } from "./update-managed-service-handoff-repair.test-support.js";
 import { prepareManagedServiceRuntimeFixture } from "./update-managed-service-handoff-runtime.test-support.js";
+import { managedServiceStateUpdateScript } from "./update-managed-service-handoff-state.test-support.js";
 import { createUpdateRun, getUpdateRun } from "./update-run-ledger.js";
 
 type GatewayRestartSentinelDatabase = Pick<OpenClawStateKyselyDatabase, "gateway_restart_sentinel">;
@@ -101,7 +102,7 @@ export function createManagedServiceManagerBoundary({
     const commandTimingsPath = path.join(root, "manager-command-timings.jsonl");
     const recoveryModulePath = path.join(root, "recovery-health.mjs");
     const stateDatabasePath = resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: root });
-    const consumeNotification = `const db = new (require("node:sqlite").DatabaseSync)(${JSON.stringify(stateDatabasePath)}); const cleared = db.prepare("DELETE FROM gateway_restart_sentinel WHERE sentinel_key = 'current'").run(); db.close(); if (cleared.changes !== 1) throw new Error("expected one published notification before recovery consumed it"); { const state = JSON.parse(fs.readFileSync(${JSON.stringify(statePath)}, "utf8")); state.consumedNotifications = Number(cleared.changes); fs.writeFileSync(${JSON.stringify(statePath)}, JSON.stringify(state)); }`;
+    const consumeNotification = `const db = new (require("node:sqlite").DatabaseSync)(${JSON.stringify(stateDatabasePath)}); const cleared = db.prepare("DELETE FROM gateway_restart_sentinel WHERE sentinel_key = 'current'").run(); db.close(); if (cleared.changes !== 1) throw new Error("expected one published notification before recovery consumed it"); ${managedServiceStateUpdateScript(statePath, "state.consumedNotifications = Number(cleared.changes)")};`;
     if (options?.updaterNotification) {
       openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     }
@@ -112,12 +113,15 @@ export function createManagedServiceManagerBoundary({
     import { createRequire } from "node:module";
     const require = createRequire(import.meta.url);
     export async function waitForGatewayUpdateRecovery(expectedVersion, expectedBuildId) {
-      const state = JSON.parse(fs.readFileSync(${JSON.stringify(statePath)}, "utf8"));
+      ${managedServiceStateUpdateScript(
+        statePath,
+        `
       state.healthProbed = true;
       state.healthProbeCount = (state.healthProbeCount || 0) + 1;
       state.expectedVersion = expectedVersion;
       state.expectedBuildId = expectedBuildId;
-      fs.writeFileSync(${JSON.stringify(statePath)}, JSON.stringify(state));
+      `,
+      )};
       ${options?.updaterNotification === "consumed" ? consumeNotification : ""}
       ${options?.diagnosticReadFailure === "after-recovery" ? `{ const db = new (require("node:sqlite").DatabaseSync)(${JSON.stringify(stateDatabasePath)}); db.exec("ALTER TABLE gateway_restart_sentinel RENAME COLUMN thread_id TO unreadable_thread_id"); db.close(); }` : ""}
       const fault = ${JSON.stringify(options?.gatewayHealth)};
@@ -155,6 +159,7 @@ export function createManagedServiceManagerBoundary({
         parentPid,
         statePath,
         commandsPath,
+        configPath: path.join(root, "openclaw.json"),
         options,
       }),
       {
@@ -252,12 +257,9 @@ export function createManagedServiceManagerBoundary({
           });
           ledger.recordUpdateRunVerification(${JSON.stringify(run.runId)}, {
             serviceRunning: false, pid: ${parentPid}, readyz: false, settled: false,
-            channelsReady: false, pluginErrors: ["candidate plugin failed"], inferenceProbe: "passed",
+            channelsReady: false, pluginErrors: ["candidate plugin failed"],
           });
-          const managerFs = require("node:fs");
-          const managerState = JSON.parse(managerFs.readFileSync(${JSON.stringify(statePath)}, "utf8"));
-          managerState.previousGenerationRestored = true;
-          managerFs.writeFileSync(${JSON.stringify(statePath)}, JSON.stringify(managerState));
+          ${managedServiceStateUpdateScript(statePath, "state.previousGenerationRestored = true")};
           ${updaterScript}
         })().catch((error) => { console.error(error); process.exit(18); });`;
       }
@@ -438,9 +440,10 @@ export function createManagedServiceManagerBoundary({
         }
       };
       expect(readLease()).toEqual({
-        version: 1,
-        pid: runningHelper.pid,
-        startIdentity: expect.any(String),
+        version: 2,
+        executor: { pid: runningHelper.pid, startIdentity: expect.any(String) },
+        helper: { pid: runningHelper.pid, startIdentity: expect.any(String) },
+        action: { kind: "update" },
       });
       await expect(pathExists(commandsPath)).resolves.toBe(false);
       if (options?.controlDisconnect) {
