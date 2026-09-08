@@ -61,9 +61,6 @@ function setMediaStoreNetworkDepsForTest(deps?: {
 
 if (process.env.VITEST || process.env.NODE_ENV === "test") {
   (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.mediaStoreTestApi")] = {
-    enforcePlaybackTranscodeCacheLimit,
-    PLAYBACK_TRANSCODE_MAX_CACHE_BYTES,
-    PLAYBACK_TRANSCODE_TTL_MS,
     setMediaStoreNetworkDepsForTest,
   };
 }
@@ -302,11 +299,6 @@ export async function writePlaybackTranscodeCache(params: {
     await prunePlaybackTranscodeCacheToSize();
     return filePath;
   });
-}
-
-/** Serializes maintenance quota scans with cache insertions. */
-async function enforcePlaybackTranscodeCacheLimit(): Promise<void> {
-  await queuePlaybackCacheOperation(prunePlaybackTranscodeCacheToSize);
 }
 
 /** Prunes expired playback renditions and reapplies the fixed cache size budget. */
