@@ -12,7 +12,9 @@ import type {
   SessionCatalogListProviderParams,
   SessionCatalogProvider,
 } from "../../plugins/session-catalog.js";
+import { ADMIN_SCOPE, authorizeOperatorScopesForRequiredScope } from "../method-scopes.js";
 import { SessionCatalogListAdmission } from "./session-catalog-list-admission.js";
+import type { GatewayClient } from "./types.js";
 
 const MAX_CONCURRENT_SESSION_CATALOG_LISTS = 4;
 const MAX_QUEUED_SESSION_CATALOG_LISTS = 32;
@@ -21,10 +23,20 @@ const PROCESS_HOME_CATALOG_SKIP_MESSAGE =
 
 let reportedProcessHomeCatalogSkip = false;
 
-export function allowProcessHomeFallback(logGateway?: {
-  warn: (message: string, fields?: Record<string, unknown>) => void;
-}): boolean {
-  const allowed = allowsProcessHomeSessionScan();
+export function allowProcessHomeFallback(
+  logGateway?: { warn: (message: string, fields?: Record<string, unknown>) => void },
+  params?: {
+    access: "read" | "mutate";
+    client: GatewayClient | null;
+    provider: SessionCatalogProvider;
+  },
+): boolean {
+  const scopes = Array.isArray(params?.client?.connect?.scopes) ? params.client.connect.scopes : [];
+  const adminRead =
+    params?.access === "read" &&
+    params.provider.adminProcessHomeRead === true &&
+    authorizeOperatorScopesForRequiredScope(ADMIN_SCOPE, scopes).allowed;
+  const allowed = allowsProcessHomeSessionScan() || adminRead;
   if (!allowed && !reportedProcessHomeCatalogSkip && logGateway) {
     reportedProcessHomeCatalogSkip = true;
     logGateway.warn(PROCESS_HOME_CATALOG_SKIP_MESSAGE, { reason: "isolated_state" });

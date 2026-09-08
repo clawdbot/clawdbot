@@ -516,9 +516,6 @@ describe("Codex supervision catalog", () => {
     });
 
     await withEnvAsync({ CODEX_HOME: processCodexHome }, async () => {
-      expect(getProvider()?.audience).toEqual(
-        expect.objectContaining({ kind: "gateway-owner-local" }),
-      );
       const onHost = vi.fn();
       const completions: Promise<void>[] = [];
       const hosts = await getProvider()!.list({
@@ -544,74 +541,6 @@ describe("Codex supervision catalog", () => {
             host.sessions[0]?.canArchive,
         ),
       ).toBe(true);
-      expect(hosts.every((host) => host.kind === "gateway" && !host.nodeId)).toBe(true);
-      expect(hosts.flatMap((host) => host.sessions)).toEqual([
-        expect.objectContaining({ source: "cli", archived: false }),
-        expect.objectContaining({ source: "cli", archived: false }),
-        expect.objectContaining({ source: "cli", archived: false }),
-      ]);
-      expect(
-        hosts
-          .flatMap((host) => host.sessions)
-          .every((session) => !session.sessionKey && !session.createdActor),
-      ).toBe(true);
-      const audience = getProvider()?.audience;
-      const local = hosts.find((host) => host.hostId === CODEX_LOCAL_SESSION_HOST_ID);
-      const native = local?.sessions[0];
-      if (!audience || typeof audience !== "object" || !local || !native) {
-        throw new Error("owner-local catalog fixture is unavailable");
-      }
-      const sessionEntries = {
-        entriesForAgent: () => [],
-        entriesForCatalog: () => [],
-      };
-      expect(audience.prepareVisibility({ host: local, sessionEntries })(native)).toBe(true);
-      for (const privacy of [
-        { visibility: "draft" as const },
-        { incognito: true as const },
-        { initializationPending: true as const },
-      ]) {
-        const entry = {
-          ...adoptedEntry({ sourceThreadId: native.threadId, sourceHomeId: native.sourceHomeId }),
-          ...privacy,
-        };
-        expect(
-          audience.prepareVisibility({
-            host: local,
-            sessionEntries: {
-              ...sessionEntries,
-              entriesForCatalog: () => [
-                { agentId: "beta", sessionKey: "agent:beta:adopted", entry },
-              ],
-            },
-          })(native),
-        ).toBe(false);
-      }
-      for (const [sourceHomeId, visible] of [
-        ["another-home", true],
-        [undefined, false],
-      ] as const) {
-        expect(
-          audience.prepareVisibility({
-            host: local,
-            sessionEntries: {
-              ...sessionEntries,
-              entriesForCatalog: () => [
-                {
-                  agentId: "beta",
-                  sessionKey: "agent:beta:adopted",
-                  entry: adoptedEntry({ sourceThreadId: native.threadId, sourceHomeId }),
-                },
-              ],
-            },
-          })(native),
-        ).toBe(visible);
-      }
-      expect(
-        audience.prepareVisibility({ host: local, sessionEntries: { entriesForAgent: () => [] } })(
-          native,
-        ),
-      ).toBe(false);
       expect(forRequest.mock.calls.every(([agentId]) => agentId === "beta")).toBe(true);
       expect(forRequest.mock.calls.every(([, source]) => source?.agentDir === betaAgentDir)).toBe(
         true,

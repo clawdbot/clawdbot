@@ -25,7 +25,6 @@ const hoisted = vi.hoisted(() => ({
       entry: {
         createdActor?: { type: "human"; source: "profile" | "channel" | "unknown"; id: string };
         incognito?: true;
-        initializationPending?: true;
         updatedAt?: number;
         visibility?: "shared" | "draft";
       };
@@ -85,16 +84,6 @@ function host(sessions: ReturnType<typeof session>[], nextCursor?: string) {
     ...(nextCursor ? { nextCursor } : {}),
   };
 }
-
-const ownerLocalAudience = {
-  kind: "gateway-owner-local",
-  prepareVisibility: ({ sessionEntries }) => {
-    const adopted = new Set(
-      sessionEntries.entriesForCatalog?.().map(({ sessionKey }) => sessionKey),
-    );
-    return (row) => !adopted.has(`agent:main:${row.threadId}`);
-  },
-} satisfies Exclude<NonNullable<SessionCatalogProvider["audience"]>, string>;
 
 function provider(overrides: Partial<SessionCatalogProvider> = {}): SessionCatalogProvider {
   return {
@@ -673,7 +662,6 @@ describe("session catalog caller visibility", () => {
       hoisted.activeRegistry.sessionCatalogs = [
         {
           provider: provider({
-            audience: ownerLocalAudience,
             list: vi.fn(async () => [
               host([
                 session("other-thread", "agent:main:other"),

@@ -227,7 +227,6 @@ describe("gateway connect pairing exemptions", () => {
       expect(visibility.kind).toBe("unrestricted");
       expect(JSON.parse(visibility.cacheKey)).toEqual({
         admin: true,
-        gatewayOwner: false,
         multipleIdentities: false,
         profileId: null,
         profileAliases: [],
