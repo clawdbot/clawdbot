@@ -246,6 +246,55 @@ describe("openrouter music generation provider", () => {
     expect(releaseLock).toHaveBeenCalledTimes(1);
   });
 
+  it.each(["completed", "provider error", "timeout"] as const)(
+    "releases a capture tee after %s without waiting for its sibling",
+    async (outcome) => {
+      const cancel = vi.fn();
+      const lines =
+        outcome === "completed"
+          ? sseResponseLines({ audio: Buffer.from("wav-bytes").toString("base64"), done: true })
+          : outcome === "provider error"
+            ? ['data: {"error":{"message":"provider disconnected"}}\n']
+            : [];
+      const [consumer, capture] = new ReadableStream<Uint8Array>({
+        start(controller) {
+          for (const line of lines) {
+            controller.enqueue(new TextEncoder().encode(line));
+          }
+        },
+        cancel,
+      }).tee();
+      const release = vi.fn(async () => {
+        await capture.cancel();
+      });
+      postJsonRequestMock.mockResolvedValue({
+        response: new Response(consumer),
+        release,
+      });
+
+      const operation = buildOpenRouterMusicGenerationProvider().generateMusic({
+        provider: "openrouter",
+        prompt: "capture cleanup",
+        cfg: {},
+        timeoutMs: outcome === "timeout" ? 1 : 1000,
+      });
+      if (outcome === "completed") {
+        await expect(operation).resolves.toMatchObject({
+          tracks: [{ buffer: Buffer.from("wav-bytes") }],
+        });
+      } else {
+        await expect(operation).rejects.toThrow(
+          outcome === "timeout"
+            ? "OpenRouter music generation timed out after 1ms"
+            : "OpenRouter music generation failed: provider disconnected",
+        );
+      }
+      expect(release).toHaveBeenCalledOnce();
+      expect(cancel).toHaveBeenCalledOnce();
+      expect(consumer.locked).toBe(false);
+    },
+  );
+
   it("rejects streamed audio with non-canonical base64 pad bits", async () => {
     postJsonRequestMock.mockResolvedValue({
       response: sseResponse(sseResponseLines({ audio: "ZE==", done: true })),
