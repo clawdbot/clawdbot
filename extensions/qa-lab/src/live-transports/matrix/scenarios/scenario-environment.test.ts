@@ -210,7 +210,7 @@ describe("matrix scenario environment", () => {
           }
           if (method === "config.patch") {
             patchCount += 1;
-            return { hash: `patched-${patchCount}`, ok: true };
+            return { hash: `patched-${patchCount}`, changedPaths: ["channels.matrix"], ok: true };
           }
           if (method === "channels.status") {
             statusCount += 1;
@@ -394,6 +394,7 @@ describe("matrix scenario environment", () => {
           if (method === "config.patch") {
             return {
               hash: "patched-config-hash",
+              changedPaths: ["channels.matrix"],
               ok: true,
             };
           }
@@ -537,7 +538,7 @@ describe("matrix scenario environment", () => {
             if (patchCount === 1) {
               throw new Error("config changed since last load");
             }
-            return { hash: "patched-config-hash", ok: true };
+            return { hash: "patched-config-hash", changedPaths: ["channels.matrix"], ok: true };
           }
           if (method === "channels.status") {
             statusCount += 1;
@@ -621,6 +622,7 @@ describe("matrix scenario environment", () => {
         if (method === "config.patch") {
           return {
             noop: true,
+            changedPaths: [],
             ok: true,
           };
         }
@@ -687,108 +689,127 @@ describe("matrix scenario environment", () => {
     expect(waitForConfigRestartSettle).not.toHaveBeenCalled();
   });
 
-  it("fails preparation when fresh account readiness exhausts the shared deadline", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(0);
-    let configReadCount = 0;
-    let statusReadCount = 0;
-    const statusTimeouts: number[] = [];
-    const gateway = {
-      baseUrl: "http://127.0.0.1:12345",
-      runtimeEnv: {},
-      tempRoot: "/tmp/matrix-qa",
-      workspaceDir: "/tmp/matrix-qa/workspace",
-      call: vi.fn(
-        async (
-          method: string,
-          params?: unknown,
-          opts?: { deadlineMs?: number; timeoutMs?: number },
-        ) => {
-          if (method === "config.get") {
-            configReadCount += 1;
-            if (configReadCount === 1) {
-              return { config: {} };
+  it.each([
+    { changedPaths: ["channels.matrix.accounts.sut.accessToken"], requiresRestart: true },
+    { changedPaths: ["models.providers.openai.models"], requiresRestart: false },
+    { changedPaths: [], requiresRestart: false },
+  ])(
+    "requires a fresh account only for effective Matrix changes: $changedPaths",
+    async ({ changedPaths, requiresRestart }) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(0);
+      let configReadCount = 0;
+      let statusReadCount = 0;
+      const statusTimeouts: number[] = [];
+      const gateway = {
+        baseUrl: "http://127.0.0.1:12345",
+        runtimeEnv: {},
+        tempRoot: "/tmp/matrix-qa",
+        workspaceDir: "/tmp/matrix-qa/workspace",
+        call: vi.fn(
+          async (
+            method: string,
+            params?: unknown,
+            opts?: { deadlineMs?: number; timeoutMs?: number },
+          ) => {
+            if (method === "config.get") {
+              configReadCount += 1;
+              if (configReadCount === 1) {
+                return { config: {} };
+              }
+              if (configReadCount === 2) {
+                return { hash: "config-hash" };
+              }
+              vi.setSystemTime(59_900);
+              return {
+                appliedConfigHash: "patched-config-hash",
+                configRevisionHash: "patched-config-hash",
+                hash: changedPaths.length === 0 ? "config-hash" : "patched-config-hash",
+              };
             }
-            if (configReadCount === 2) {
-              return { hash: "config-hash" };
+            if (method === "config.patch") {
+              return {
+                hash: "patched-config-hash",
+                changedPaths,
+                noop: changedPaths.length === 0,
+                ok: true,
+              };
             }
-            vi.setSystemTime(59_900);
-            return {
-              appliedConfigHash: "patched-config-hash",
-              configRevisionHash: "patched-config-hash",
-              hash: "patched-config-hash",
-            };
-          }
-          if (method === "config.patch") {
-            return { hash: "patched-config-hash", ok: true };
-          }
-          if (method === "channels.status") {
-            statusReadCount += 1;
-            statusTimeouts.push(opts?.timeoutMs ?? -1);
-            if (statusReadCount === 2) {
-              expect((params as { timeoutMs?: number } | undefined)?.timeoutMs).toBe(100);
-              vi.setSystemTime(60_000);
+            if (method === "channels.status") {
+              statusReadCount += 1;
+              statusTimeouts.push(opts?.timeoutMs ?? -1);
+              if (statusReadCount === 2) {
+                expect((params as { timeoutMs?: number } | undefined)?.timeoutMs).toBe(100);
+                if (requiresRestart) {
+                  vi.setSystemTime(60_000);
+                }
+              }
+              if (statusReadCount === 3) {
+                vi.setSystemTime(60_000);
+              }
+              return {
+                channelAccounts: {
+                  matrix: [
+                    {
+                      accountId: "sut",
+                      connected: true,
+                      healthState: "healthy",
+                      lastStartAt: 100,
+                      restartPending: false,
+                      running: true,
+                    },
+                  ],
+                },
+              };
             }
-            return {
-              channelAccounts: {
-                matrix: [
-                  {
-                    accountId: "sut",
-                    connected: true,
-                    healthState: "healthy",
-                    lastStartAt: 100,
-                    restartPending: false,
-                    running: true,
-                  },
-                ],
-              },
-            };
-          }
-          throw new Error(`unexpected gateway method ${method}`);
-        },
-      ),
-    };
-    const environment = createMatrixQaScenarioEnvironment({
-      accountId: "sut",
-      harness: { baseUrl: "http://127.0.0.1:8008", recording: {} } as never,
-      observedEvents: [],
-      provisioning: {
-        observationAccounts: {
-          driver: { accessToken: "driver-room-observation" },
-          observer: { accessToken: "observer-room-observation" },
-        },
-        driver: { accessToken: "fixture", userId: "@driver:test" },
-        observer: { accessToken: "fixture", userId: "@observer:test" },
-        roomId: "!room:test",
-        sut: { accessToken: "fixture", userId: "@sut:test" },
-        topology: { rooms: [] },
-      } as never,
-    });
-    const waitForConfigRestartSettle = vi.fn();
-    const preparing = environment.prepareFlow({
-      config: {},
-      gateway,
-      outputDir: "/tmp/matrix-qa/output",
-      scenarioId: "matrix-deadline",
-      scenarioTitle: "Matrix deadline",
-      timeoutMs: 8_000,
-      waitForConfigRestartSettle,
-    });
-    const rejection = expect(preparing).rejects.toThrow(
-      'matrix account "sut" did not become ready',
-    );
+            throw new Error(`unexpected gateway method ${method}`);
+          },
+        ),
+      };
+      const environment = createMatrixQaScenarioEnvironment({
+        accountId: "sut",
+        harness: { baseUrl: "http://127.0.0.1:8008", recording: {} } as never,
+        observedEvents: [],
+        provisioning: {
+          observationAccounts: {
+            driver: { accessToken: "driver-room-observation" },
+            observer: { accessToken: "observer-room-observation" },
+          },
+          driver: { accessToken: "fixture", userId: "@driver:test" },
+          observer: { accessToken: "fixture", userId: "@observer:test" },
+          roomId: "!room:test",
+          sut: { accessToken: "fixture", userId: "@sut:test" },
+          topology: { rooms: [] },
+        } as never,
+      });
+      const waitForConfigRestartSettle = vi.fn();
+      const preparing = environment.prepareFlow({
+        config: {},
+        gateway,
+        outputDir: "/tmp/matrix-qa/output",
+        scenarioId: "matrix-deadline",
+        scenarioTitle: "Matrix deadline",
+        timeoutMs: 8_000,
+        waitForConfigRestartSettle,
+      });
+      const outcome = requiresRestart
+        ? expect(preparing).rejects.toThrow('matrix account "sut" did not become ready')
+        : expect(preparing).resolves.toBeDefined();
 
-    await vi.runAllTimersAsync();
-    await rejection;
+      await vi.runAllTimersAsync();
+      await outcome;
 
-    expect(Date.now()).toBe(60_000);
-    expect(statusTimeouts).toEqual([5_000, 100]);
-    expect(
-      gateway.call.mock.calls.map((call) => (call[2] as { deadlineMs?: number }).deadlineMs),
-    ).toEqual(Array.from({ length: gateway.call.mock.calls.length }, () => 60_000));
-    expect(waitForConfigRestartSettle).not.toHaveBeenCalled();
-    expect(gateway.call.mock.calls.filter(([method]) => method === "config.patch")).toHaveLength(1);
-  });
+      expect(Date.now()).toBe(requiresRestart ? 60_000 : 59_900);
+      expect(statusTimeouts).toEqual([5_000, 100]);
+      expect(
+        gateway.call.mock.calls.map((call) => (call[2] as { deadlineMs?: number }).deadlineMs),
+      ).toEqual(Array.from({ length: gateway.call.mock.calls.length }, () => 60_000));
+      expect(waitForConfigRestartSettle).not.toHaveBeenCalled();
+      expect(gateway.call.mock.calls.filter(([method]) => method === "config.patch")).toHaveLength(
+        1,
+      );
+    },
+  );
 
   it("rejects a stale account start after a delayed failed pre-restart status read", async () => {
     vi.useFakeTimers();
@@ -834,7 +855,7 @@ describe("matrix scenario environment", () => {
           };
         }
         if (method === "config.patch") {
-          return { hash: "config-hash", noop: true, ok: true };
+          return { hash: "config-hash", changedPaths: [], noop: true, ok: true };
         }
         if (method === "channels.status") {
           statusReadCount += 1;

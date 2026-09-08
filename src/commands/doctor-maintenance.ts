@@ -9,6 +9,7 @@ import {
   acquireGatewayLifecycleCoordinator,
   acquireStateDatabaseCoordinator,
 } from "../infra/state-database-coordinator.js";
+import { DoctorUnreadableStateDatabaseError } from "../infra/state-repair-message.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import type { DoctorOptions } from "./doctor-prompter.js";
@@ -159,12 +160,41 @@ export async function beginDoctorMaintenance(params: {
     // Gateway ownership lasts until that process stops, not for a short transaction.
     coordinators.push(acquireGatewayLifecycleCoordinator({ databasePath, busyTimeoutMs: 0 }));
     coordinators.push(acquireStateDatabaseCoordinator({ databasePath, busyTimeoutMs: 250 }));
-    const { assertNoOpenClawAgentDatabaseLeasesReadOnly } =
+    const { assertNoOpenClawAgentDatabaseLeasesReadOnly, OpenClawAgentDatabaseLeaseActiveError } =
       await import("../state/openclaw-agent-db-lease.js");
-    assertNoOpenClawAgentDatabaseLeasesReadOnly({ env });
+    try {
+      assertNoOpenClawAgentDatabaseLeasesReadOnly({ env });
+    } catch (error) {
+      if (error instanceof OpenClawAgentDatabaseLeaseActiveError) {
+        throw error;
+      }
+      // Classify unreadable state under the held owners without opening a writer.
+      const { preflightOpenClawDatabaseSchemas } =
+        await import("../state/openclaw-database-preflight.js");
+      const { OPENCLAW_STATE_SCHEMA_VERSION } =
+        await import("../state/openclaw-state-db-contract.js");
+      const { OPENCLAW_AGENT_SCHEMA_VERSION } =
+        await import("../state/openclaw-agent-db-contract.js");
+      const schemas = await preflightOpenClawDatabaseSchemas({
+        env,
+        scope: "state",
+        supportedVersions: {
+          state: OPENCLAW_STATE_SCHEMA_VERSION,
+          agent: OPENCLAW_AGENT_SCHEMA_VERSION,
+        },
+      });
+      const unreadable = schemas.indeterminate.find((database) => database.kind === "state");
+      if (unreadable) {
+        throw new DoctorUnreadableStateDatabaseError(unreadable.path, unreadable.reason);
+      }
+      throw error;
+    }
     repairStoresMayBeOpen = true;
   } catch (error) {
     await release();
+    if (error instanceof DoctorUnreadableStateDatabaseError) {
+      throw error;
+    }
     throw new Error(
       `Doctor could not enter maintenance. ${String(error)} Stop the Gateway service and other OpenClaw processes using this state, then run ${formatCliCommand("openclaw doctor --fix", env)} from an independent shell.`,
       { cause: error },
