@@ -1,3 +1,4 @@
+import { fromMarkdown } from "mdast-util-from-markdown";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { withServer } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -63,6 +64,37 @@ describe("Discord webhook delivery", () => {
     resetDiscordOutboundMocks(hoisted);
     hoisted.sendWebhookMessageDiscordMock.mockImplementation((...args) =>
       realWebhookSend(...(args as Parameters<typeof realWebhookSend>)),
+    );
+  });
+
+  it("keeps false closing fences inside code in webhook HTTP payloads", async () => {
+    const body = [
+      "before",
+      "```not-a-close",
+      ...Array.from({ length: 30 }, (_, i) => `# code-${i} ${"x".repeat(100)}`),
+    ].join("\n");
+    await withWebhookServer(
+      (_content, index) => ({ body: { id: String(index), channel_id: "thread-1" } }),
+      async (contents) => {
+        await realWebhookSend(`\`\`\`txt\n${body}\n\`\`\``, {
+          cfg,
+          webhookId: "123",
+          webhookToken: "test-token",
+          threadId: "thread-1",
+          wait: true,
+        });
+        const nodes = contents.flatMap((content) => fromMarkdown(content).children);
+        expect(contents.length).toBeGreaterThan(1);
+        expect(contents.every((content) => content.length <= 2000)).toBe(true);
+        expect(nodes.every((node) => node.type === "code")).toBe(true);
+        // Character-limited chunks can split a code line, adding a display newline on reassembly.
+        expect(
+          nodes
+            .flatMap((node) => (node.type === "code" ? [node.value] : []))
+            .join("")
+            .replaceAll("\n", ""),
+        ).toBe(body.replaceAll("\n", ""));
+      },
     );
   });
 

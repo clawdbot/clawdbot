@@ -5,6 +5,7 @@ import {
   Routes,
   type APIMessageTopLevelComponent,
 } from "discord-api-types/v10";
+import { fromMarkdown } from "mdast-util-from-markdown";
 // Discord tests cover send.sends basic channel messages plugin behavior.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -216,6 +217,34 @@ describe("resolveDiscordTargetChannelId", () => {
 });
 
 describe("sendMessageDiscord", () => {
+  it("keeps false closing fences inside code in channel HTTP payloads", async () => {
+    const loopback = await createDiscordLoopbackRest();
+    const body = [
+      "before",
+      "```not-a-close",
+      ...Array.from({ length: 14 }, (_, i) => `# code-${i}`),
+    ].join("\n");
+    try {
+      await sendMessageDiscord("channel:789", `\`\`\`txt\n${body}\n\`\`\``, {
+        rest: loopback.rest,
+        token: "t",
+        cfg: DISCORD_TEST_CFG,
+      });
+      const contents = loopback.requests
+        .filter((request) => request.method === "POST")
+        .map((request) => (JSON.parse(request.body) as { content: string }).content);
+      const nodes = contents.flatMap((content) => fromMarkdown(content).children);
+      expect(contents.length).toBeGreaterThan(1);
+      expect(contents.every((content) => content.length <= 2000)).toBe(true);
+      expect(nodes.every((node) => node.type === "code")).toBe(true);
+      expect(nodes.flatMap((node) => (node.type === "code" ? [node.value] : [])).join("\n")).toBe(
+        body,
+      );
+    } finally {
+      await loopback.close();
+    }
+  });
+
   it("keeps missing platform identity ambiguous in progress and final results", async () => {
     const { rest, postMock, getMock } = makeDiscordRest();
     getMock.mockResolvedValueOnce({ type: ChannelType.GuildText });
