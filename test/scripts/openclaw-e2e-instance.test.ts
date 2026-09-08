@@ -567,6 +567,50 @@ describe("scripts/lib/openclaw-e2e-instance.sh", () => {
     });
   });
 
+  it("publishes failed install diagnostics once with the ERR handler enabled", () => {
+    withTempDir("openclaw-e2e-instance-install-err-sidecar-", (tempDir) => {
+      const fixture = createPackageInstallFixture(tempDir);
+      const diagnosticsPath = path.join(tempDir, "install-diagnostics.log");
+      fs.writeFileSync(diagnosticsPath, "", { mode: 0o622 });
+      fs.chmodSync(diagnosticsPath, 0o622);
+      writeFakeTimeout(path.join(tempDir, "timeout"), true);
+      writeBashExecutable(path.join(tempDir, "npm"), ['printf "recent npm tail\\n"', "exit 42"]);
+
+      const result = runBashWithHelper(
+        [
+          `INSTALL_LOG=${shellQuote(fixture.logPath)}`,
+          'dump_debug_logs() { openclaw_e2e_dump_logs "$INSTALL_LOG"; }',
+          "openclaw_e2e_enable_failure_diagnostics",
+          `openclaw_e2e_install_package "$INSTALL_LOG" ${shellQuote("fixture package")} ${shellQuote(fixture.prefixPath)}`,
+        ],
+        {
+          PATH: `${tempDir}${path.delimiter}${hostPath}`,
+          OPENCLAW_CURRENT_PACKAGE_TGZ: fixture.packagePath,
+          OPENCLAW_E2E_INSTALL_DIAGNOSTICS: diagnosticsPath,
+          OPENCLAW_E2E_INSTALL_DIAGNOSTICS_UID: String(process.getuid?.() ?? 0),
+          OPENCLAW_E2E_NPM_INSTALL_TIMEOUT: "42s",
+          OPENCLAW_TEST_TIMEOUT_ARGS: fixture.timeoutArgsPath,
+        },
+      );
+      const published = spawnSync(
+        process.execPath,
+        [
+          "--import",
+          path.resolve("scripts/tsx.mjs"),
+          path.resolve("scripts/lib/openclaw-e2e-install-diagnostics.mjs"),
+          "publish",
+          diagnosticsPath,
+        ],
+        { encoding: "utf8" },
+      );
+
+      expect(result.status, result.stderr).toBe(42);
+      expect(published.status, published.stderr).toBe(0);
+      expect(result.stderr).not.toContain("recent npm tail");
+      expect(`${result.stderr}${published.stdout}`.match(/recent npm tail/g)).toHaveLength(1);
+    });
+  });
+
   it("returns the diagnostics capture status when npm succeeds", () => {
     withTempDir("openclaw-e2e-instance-install-capture-failure-", (tempDir) => {
       const fixture = createPackageInstallFixture(tempDir);

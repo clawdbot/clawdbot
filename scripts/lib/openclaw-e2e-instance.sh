@@ -260,6 +260,7 @@ openclaw_e2e_install_package() {
   local diagnostics_path="${OPENCLAW_E2E_INSTALL_DIAGNOSTICS:-}"
   local diagnostics_tool="${BASH_SOURCE[0]%/*}/openclaw-e2e-install-diagnostics.mjs"
   local args=(-g)
+  OPENCLAW_E2E_SUPPRESS_INSTALL_LOG_DUMP=""
   if [ -n "$prefix" ]; then
     args+=("--prefix" "$prefix")
   fi
@@ -292,6 +293,7 @@ openclaw_e2e_install_package() {
   fi
   echo "npm install failed for $label" >&2
   [ -n "$diagnostics_path" ] || openclaw_e2e_print_log "$log_file" >&2
+  OPENCLAW_E2E_SUPPRESS_INSTALL_LOG_DUMP="$log_file"
   return "$install_status"
 }
 openclaw_e2e_find_dep_package() {
@@ -601,6 +603,9 @@ openclaw_e2e_enable_openclaw_cli_timeout() {
 openclaw_e2e_dump_logs() {
   local path
   for path in "$@"; do
+    if [ "$path" = "${OPENCLAW_E2E_SUPPRESS_INSTALL_LOG_DUMP:-}" ]; then
+      continue
+    fi
     openclaw_e2e_print_log "$path"
   done
 }

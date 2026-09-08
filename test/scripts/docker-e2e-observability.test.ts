@@ -1,6 +1,13 @@
 // Docker E2E Observability tests cover docker e2e observability script behavior.
 import { spawnSync } from "node:child_process";
-import { chmodSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  readdirSync,
+  readFileSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -157,6 +164,57 @@ export async function load(url, context, nextLoad) {
     expect(wrapper).not.toContain('-v "$install_diagnostics_dir:/tmp/openclaw-install-diagnostics');
     expect(scenario).toContain('rm -rf "$scenario_tmp"');
     expect(scenario).not.toContain("openclaw-install-diagnostics.log");
+  });
+
+  it("resolves the wrapper sidecar owner without stat dialect output", () => {
+    const tempDir = tempDirs.make("openclaw-typed-onboarding-owner-");
+    const script = readFileSync(typedOnboardingScript, "utf8");
+    const start = script.indexOf("install_diagnostics_dir=");
+    const end = script.indexOf("\n\nPACKAGE_TGZ=", start);
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    const statPath = path.join(tempDir, "stat");
+    writeFileSync(
+      statPath,
+      [
+        "#!/bin/sh",
+        'if [ "${1:-}" = "-f" ]; then',
+        '  printf "poisoned stat output\\n"',
+        "  exit 1",
+        "fi",
+        'printf "%s\\n" "$OPENCLAW_TEST_UID"',
+      ].join("\n"),
+      "utf8",
+    );
+    chmodSync(statPath, 0o755);
+    const uid = process.getuid?.() ?? 0;
+
+    const result = spawnSync(
+      "/bin/bash",
+      [
+        "-c",
+        `${script.slice(start, end)}
+printf '%s' "$install_diagnostics_uid"`,
+      ],
+      {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          OPENCLAW_TEST_UID: String(uid),
+          PATH: `${tempDir}:${process.env.PATH}`,
+          TMPDIR: tempDir,
+        },
+      },
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+    const diagnosticsDir = readdirSync(tempDir).find((entry) =>
+      entry.startsWith("openclaw-typed-onboarding-install-diagnostics."),
+    );
+    expect(diagnosticsDir).toBeDefined();
+    const diagnosticsPath = path.join(tempDir, diagnosticsDir!, "install.log");
+    expect(statSync(diagnosticsPath).uid).toBe(uid);
+    expect(result.stdout).toBe(String(uid));
   });
 
   it("prints the bounded heartbeat log before signal cleanup", () => {

@@ -47,7 +47,10 @@ chmod 700 "$install_diagnostics_dir"
 install_diagnostics_path="$install_diagnostics_dir/install.log"
 : >"$install_diagnostics_path"
 chmod 622 "$install_diagnostics_path"
-install_diagnostics_uid="$(stat -f %u "$install_diagnostics_path" 2>/dev/null || stat -c %u "$install_diagnostics_path")"
+install_diagnostics_uid="$(
+  node -e 'process.stdout.write(String(require("node:fs").statSync(process.argv[1]).uid))' \
+    "$install_diagnostics_path"
+)"
 
 PACKAGE_TGZ="$(docker_e2e_prepare_package_tgz release-typed-onboarding "${OPENCLAW_CURRENT_PACKAGE_TGZ:-}")"
 if [ -z "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:-}" ] && [ -z "${OPENCLAW_CURRENT_PACKAGE_TGZ:-}" ]; then
