@@ -2,7 +2,6 @@ import { createHash } from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE } from "../agents/internal-runtime-context.js";
 import { isHeartbeatOkResponse, isHeartbeatUserMessage } from "../auto-reply/heartbeat-filter.js";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
@@ -455,25 +454,14 @@ function stripInterSessionPromptPrefixFromContent(content: unknown): unknown {
   });
 }
 
-function extractPromptPrefixField(text: string, field: string): string | undefined {
-  const prefixIndex = text.indexOf(INTER_SESSION_PROMPT_PREFIX_BASE);
-  if (prefixIndex === -1) {
-    return undefined;
-  }
-  const lineEnd = text.indexOf("\n", prefixIndex);
-  const header = lineEnd === -1 ? text.slice(prefixIndex) : text.slice(prefixIndex, lineEnd);
-  const escapedField = field.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const match = new RegExp(`(?:^|\\s)${escapedField}=([^\\s]+)`).exec(header);
-  return normalizeOptionalString(match?.[1]);
-}
-
 function resolveSessionsSendForwardedSenderSession(
   message: Record<string, unknown>,
 ): { sessionKey?: string; agentId?: string } | undefined {
+  // The sender identity must come from the runtime-derived provenance, never
+  // from message text: a caller-asserted sourceSession in the prompt header
+  // would otherwise render relayed content as that agent's native output.
   const provenance = normalizeInputProvenance(message.provenance);
-  const text = extractProjectedText(message.content ?? message.text);
-  const sourceSessionKey =
-    provenance?.sourceSessionKey ?? extractPromptPrefixField(text, "sourceSession");
+  const sourceSessionKey = provenance?.sourceSessionKey;
   const agentId = parseAgentSessionKey(sourceSessionKey)?.agentId;
   return sourceSessionKey
     ? { sessionKey: sourceSessionKey, ...(agentId ? { agentId } : {}) }

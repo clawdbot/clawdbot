@@ -26,11 +26,11 @@ describe("forwarded session attribution", () => {
       senderLabel: "Forwarded from main",
     },
     {
-      name: "prompt metadata when provenance lacks the source key",
+      name: "asserted prompt metadata ignored when provenance lacks the source key",
       sourceSessionKey: undefined,
       promptSessionKey: "agent:helper:dashboard:source",
-      senderSession: { sessionKey: "agent:helper:dashboard:source", agentId: "helper" },
-      senderLabel: "Forwarded from helper",
+      senderSession: undefined,
+      senderLabel: "Forwarded agent message",
     },
     {
       name: "a session key without a parseable agent",
