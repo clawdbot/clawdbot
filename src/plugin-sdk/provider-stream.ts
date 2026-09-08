@@ -8,11 +8,13 @@ import {
   createOpenAIFastModeWrapper,
   createOpenAIReasoningCompatibilityWrapper,
   createOpenAIResponsesContextManagementWrapper,
+  createOpenAISafetyIdentifierWrapper,
   createOpenAIServiceTierWrapper,
   createOpenAIStringContentWrapper,
   createOpenAITextVerbosityWrapper,
   createOpenAIThinkingLevelWrapper,
   resolveOpenAIFastMode,
+  resolveOpenAISafetyIdentifier,
   resolveOpenAIServiceTier,
   resolveOpenAITextVerbosity,
 } from "../llm/providers/stream-wrappers/openai.js";
@@ -141,6 +143,11 @@ export function buildProviderStreamFamilyHooks(
 
           if (serviceTier) {
             nextStreamFn = createOpenAIServiceTierWrapper(nextStreamFn, serviceTier);
+          }
+
+          const safetyIdentifier = resolveOpenAISafetyIdentifier(ctx.extraParams);
+          if (safetyIdentifier) {
+            nextStreamFn = createOpenAISafetyIdentifierWrapper(nextStreamFn, safetyIdentifier);
           }
 
           const textVerbosity = resolveOpenAITextVerbosity(ctx.extraParams);
