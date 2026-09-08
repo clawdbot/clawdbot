@@ -472,7 +472,7 @@ route with no authored request override. The `openai/*` prefix alone never
 selects Codex. Custom endpoints, Completions adapters, and authored request
 behavior stay on OpenClaw. Plaintext official HTTP endpoints are rejected. Older `codex/gpt-*`
 refs remain compatibility inputs. See
-[OpenAI implicit agent runtime](/providers/openai#implicit-agent-runtime).
+[OpenAI implicit agent runtime](/providers/openai/runtimes#implicit-agent-runtime).
 
 For operator setup, model prefix examples, and Codex-only configs, see
 [Codex Harness](/plugins/codex-harness).

@@ -210,7 +210,7 @@ function createRealtimeTalkEvidenceWriter(
       id: SCENARIO_ID,
       title: "OpenAI realtime Talk live",
       sourcePath: SOURCE_PATH,
-      docsRefs: ["docs/nodes/talk.md", "docs/providers/openai.md"],
+      docsRefs: ["docs/nodes/talk.md", "docs/providers/openai/voice-and-speech.md"],
       codeRefs: [
         SOURCE_PATH,
         SMOKE_PATH,

@@ -20,7 +20,7 @@ scenario:
     - Evidence retains only normalized leg status, byte counts, audio format metadata, and a status digest.
   docsRefs:
     - docs/nodes/talk.md
-    - docs/providers/openai.md
+    - docs/providers/openai/voice-and-speech.md
     - docs/concepts/qa-e2e-automation.md
   codeRefs:
     - test/e2e/qa-lab/media/realtime-talk-live.ts
