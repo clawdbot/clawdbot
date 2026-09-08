@@ -34,6 +34,7 @@ import {
   sameUpdateRunDriver,
   type UpdateRunDriver,
 } from "./update-run-driver.js";
+import { listUpdateRuns } from "./update-run-reader.js";
 import {
   finishUpdateRunRecord,
   type FinishUpdateRunResult,
@@ -44,6 +45,8 @@ import {
 import type { UpdateRecoveryReadinessReceipt } from "./update-run-recovery-schema.js";
 import { hasStoredUpdateRecovery } from "./update-run-recovery-store.js";
 import { ABANDONED_UPDATE_RUN_MS } from "./update-run-timeouts.js";
+
+export { listUpdateRuns } from "./update-run-reader.js";
 
 type LedgerDatabase = Pick<DB, "update_runs">;
 type RunPatch = Partial<
@@ -652,30 +655,6 @@ export function getUpdateRun(
   return withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(
     ({ db }) => (tableExists(db, "update_runs") ? readRun(db, runId) : undefined),
     options,
-  );
-}
-
-export function listUpdateRuns(
-  input: { limit?: number; active?: boolean } = {},
-  options: OpenClawStateDatabaseOptions = {},
-): UpdateRunRecord[] {
-  return (
-    withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(({ db }) => {
-      if (!tableExists(db, "update_runs")) {
-        return [];
-      }
-      let query = getNodeSqliteKysely<LedgerDatabase>(db).selectFrom("update_runs").selectAll();
-      if (input.active) {
-        query = query.where("status", "=", "running");
-      }
-      return executeSqliteQuerySync(
-        db,
-        query
-          .orderBy("created_at_ms", "desc")
-          .orderBy("run_id", "desc")
-          .limit(Math.max(1, Math.min(100, Math.trunc(input.limit ?? 20)))),
-      ).rows.map(decodeRun);
-    }, options) ?? []
   );
 }
 

@@ -3,7 +3,10 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../infra/kysely-sync-cache-state.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
-import { prepareSqliteReadOnlyLocationSync } from "../infra/sqlite-readonly-location.js";
+import {
+  prepareSqliteReadOnlyLocation,
+  prepareSqliteReadOnlyLocationSync,
+} from "../infra/sqlite-readonly-location.js";
 import { withSqliteSourceHandle } from "../infra/sqlite-source-handle.js";
 import { openClawStateDatabaseCache } from "./openclaw-state-db-cache.js";
 import {
@@ -146,6 +149,37 @@ export function withExistingOpenClawStateDatabaseArtifactPreservingReadOnly<T>(
   // Cache absence cannot rule out caller-owned SQLite handles. Copy in a child
   // so closing a source descriptor cannot release this process's POSIX locks.
   const prepared = prepareSqliteReadOnlyLocationSync(existingPath);
+  try {
+    return withFreshOpenClawStateDatabaseReadOnly(
+      operation,
+      options,
+      existingPath,
+      prepared.location,
+    );
+  } finally {
+    prepared.cleanup();
+  }
+}
+
+/** Async inspection can join the live mutation owner's private snapshot provider.
+ * The owner remains responsible for native handles; no child borrows its fence.
+ */
+export async function withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync<T>(
+  operation: (database: OpenClawStateReadOnlyDatabase) => T,
+  options: OpenClawStateDatabaseOptions = {},
+): Promise<T | undefined> {
+  const pathname = resolveReadOnlyPath(options);
+  const reused = withOpenClawStateDatabaseReadOnlyIfOpen(operation, pathname);
+  if (reused.reused) {
+    return reused.value;
+  }
+  const existingPath = existingPathOrUndefined(pathname);
+  if (existingPath === undefined) {
+    return undefined;
+  }
+  const prepared = await prepareSqliteReadOnlyLocation(existingPath, {
+    preserveSourceArtifacts: true,
+  });
   try {
     return withFreshOpenClawStateDatabaseReadOnly(
       operation,

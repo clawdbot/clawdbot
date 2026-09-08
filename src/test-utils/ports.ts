@@ -114,7 +114,13 @@ let nextTestPortOffset = 0;
 export async function getDeterministicFreePortBlock(params?: {
   offsets?: number[];
 }): Promise<number> {
-  const offsets = params?.offsets ?? [0, 1, 2, 3, 4];
+  return allocateDeterministicPortBlock(params?.offsets ?? [0, 1, 2, 3, 4], false);
+}
+
+async function allocateDeterministicPortBlock(
+  offsets: number[],
+  allowPermissionFallback: boolean,
+): Promise<number> {
   if (
     offsets.length === 0 ||
     offsets.some((offset) => !Number.isInteger(offset) || offset < 0 || offset > 65535 - 1024)
@@ -135,6 +141,23 @@ export async function getDeterministicFreePortBlock(params?: {
       : processShard + Math.abs(threadId);
 
   const pool = getPortPool();
+  const canUseBlock = async (start: number): Promise<boolean> => {
+    try {
+      return await isPortBlockFree(start, offsets);
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException | undefined)?.code;
+      if (
+        allowPermissionFallback &&
+        pool.excludesEphemeral &&
+        (code === "EPERM" || code === "EACCES")
+      ) {
+        // Socket-denied callers still need the same safe pool and HTTP checks.
+        // Retain this candidate without attempting another denied probe.
+        return true;
+      }
+      throw err;
+    }
+  };
   const rangeSize = Math.max(1000, maxOffset + 1);
   const shards = pool.ranges.flatMap((range) => {
     const ranges: PortRange[] = [];
@@ -160,7 +183,7 @@ export async function getDeterministicFreePortBlock(params?: {
   // so probing every single offset is wasted work and slows large suites.
   for (let attempt = 0; attempt < usable; attempt += blockSize) {
     const start = primary.start + ((nextTestPortOffset + attempt) % usable);
-    const ok = await isPortBlockFree(start, offsets);
+    const ok = await canUseBlock(start);
     if (!ok) {
       continue;
     }
@@ -179,7 +202,7 @@ export async function getDeterministicFreePortBlock(params?: {
     const port = pool.excludesEphemeral
       ? alternative.start + ((nextTestPortOffset + attempt * blockSize) % available)
       : await getFreePort();
-    const ok = await isPortBlockFree(port, offsets);
+    const ok = await canUseBlock(port);
     if (ok) {
       return port;
     }
@@ -193,7 +216,7 @@ export async function getFreePortBlockWithPermissionFallback(params: {
   fallbackBase: number;
 }): Promise<number> {
   try {
-    return await getDeterministicFreePortBlock({ offsets: params.offsets });
+    return await allocateDeterministicPortBlock(params.offsets, true);
   } catch (err) {
     const code = (err as NodeJS.ErrnoException | undefined)?.code;
     if (code === "EPERM" || code === "EACCES") {

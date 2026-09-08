@@ -463,7 +463,7 @@ export async function persistPluginInstall(params: {
         }
       }
       await refreshPluginRegistryAfterConfigMutation({
-        config: next,
+        configPath: params.snapshot.writeOptions.ownedConfigPathForWrite,
         reason: "source-changed",
         installRecords: nextInstallRecords,
         invalidateRuntimeCache: params.invalidateRuntimeCache,

@@ -185,17 +185,47 @@ describe("deterministic test port blocks", () => {
   });
 
   it.each(["EPERM", "EACCES"])(
-    "preserves the explicit permission fallback for %s",
+    "keeps permission-denied Linux blocks outside the client range for %s",
     async (code) => {
       host.range = "32768\t60999\n";
       host.rejectPort.mockReturnValue(code);
-      const { getFreePortBlockWithPermissionFallback, isPortFree } = await import("./ports.js");
-      await expect(isPortFree(41032)).resolves.toBe(false);
-      await expect(
-        getFreePortBlockWithPermissionFallback({ offsets: [0, 1, 2, 4], fallbackBase: 44000 }),
-      ).resolves.toBe(44000 + (process.pid % 10000));
+      const { getFreePortBlockWithPermissionFallback } = await import("./ports.js");
+      const offsets = [0, 1, 2, 4];
+      const port = await getFreePortBlockWithPermissionFallback({ offsets, fallbackBase: 44000 });
+      for (const offset of offsets) {
+        expect(port + offset >= 1024 && port + offset <= 65535).toBe(true);
+        expect(port + offset < 32768 || port + offset > 60999).toBe(true);
+      }
+      expect(host.rejectPort.mock.calls.map(([candidate]) => candidate)).toEqual(
+        offsets.map((offset) => port + offset),
+      );
     },
   );
+
+  it("skips HTTP-blocked derived ports before accepting a denied Linux block", async () => {
+    host.range = "1 1711";
+    host.rejectPort.mockReturnValue("EPERM");
+    const { getFreePortBlockWithPermissionFallback } = await import("./ports.js");
+    // Select the first safe shard so +7 first hits Fetch-blocked port 1719.
+    await withEnvAsync({ VITEST_WORKER_ID: String(64 - (process.pid % 64)) }, async () => {
+      const port = await getFreePortBlockWithPermissionFallback({
+        offsets: [0, 7],
+        fallbackBase: 44000,
+      });
+      expect(port).toBe(1728);
+      expect(host.rejectPort.mock.calls.map(([candidate]) => candidate)).toEqual([1728, 1735]);
+    });
+  });
+
+  it.each(["darwin", "win32"])("preserves the explicit %s permission fallback", async (os) => {
+    host.platform.mockReturnValue(os);
+    host.rejectPort.mockReturnValue("EACCES");
+    const { getFreePortBlockWithPermissionFallback } = await import("./ports.js");
+    await expect(
+      getFreePortBlockWithPermissionFallback({ offsets: [0, 1, 2, 4], fallbackBase: 44000 }),
+    ).resolves.toBe(44000 + (process.pid % 10000));
+    expect(host.reads).not.toHaveBeenCalled();
+  });
 
   it.each(["1024 65535", "invalid"])(
     "does not fall back to ephemeral ports for host range %s",

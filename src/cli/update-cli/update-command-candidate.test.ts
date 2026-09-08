@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { inspect } from "node:util";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as doctor from "../../commands/doctor.js";
@@ -331,7 +332,7 @@ it("runs the actual candidate Doctor under held state owners before preparing pl
       moduleUrl: import.meta.url,
     });
     const next = await runUpdateCommandCandidateMutations(params);
-    expect(next).toBeDefined();
+    expect(next, inspect(params.failure, { depth: 8 })).toBeDefined();
     expect(
       recovery
         .getRecord()

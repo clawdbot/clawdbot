@@ -267,7 +267,7 @@ export const handlePluginsCommand: CommandHandler = defineAuthorizedTextCommand(
 
       let registryWarning: string | undefined;
       try {
-        const committedConfig = await setPluginEnabledFromCommand({
+        await setPluginEnabledFromCommand({
           pluginId: plugin.id,
           enabled: pluginsCommand.action === "enable",
           action: pluginsCommand.action,
@@ -279,7 +279,6 @@ export const handlePluginsCommand: CommandHandler = defineAuthorizedTextCommand(
           }),
         });
         await refreshPluginRegistryAfterConfigMutation({
-          config: committedConfig,
           reason: "policy-changed",
           logger: {
             warn: (message) => {

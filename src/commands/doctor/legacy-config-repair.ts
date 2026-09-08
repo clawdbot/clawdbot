@@ -35,8 +35,7 @@ export function planLegacyConfigForUpdateChannel(
     return undefined;
   }
 
-  const nextConfig =
-    hasAuthoredIncludes && migrated.sourceConfig ? migrated.sourceConfig : validated.config;
+  const nextConfig = migrated.sourceConfig ?? migrated.config;
   if (
     hasAuthoredIncludes &&
     !configWriteTargetsIncludeBoundary({ snapshot: configSnapshot, nextConfig })
@@ -65,6 +64,7 @@ export function planLegacyConfigForUpdateChannel(
 export async function repairLegacyConfigForUpdateChannel(params: {
   configSnapshot: ConfigSnapshot;
   plan?: LegacyConfigUpdatePlan;
+  configWriteOptions?: ConfigWriteOptions;
   jsonMode: boolean;
 }): Promise<{ snapshot: ConfigSnapshot; repaired: boolean }> {
   const plan = params.plan ?? planLegacyConfigForUpdateChannel(params.configSnapshot);
@@ -85,13 +85,13 @@ export async function repairLegacyConfigForUpdateChannel(params: {
     }
   }
   await replaceConfigFile({
-    nextConfig: plan.nextConfig,
+    sourceConfig: plan.nextConfig,
     baseHash: plan.snapshot.hash,
     writeOptions: {
       // Reuse the canonical writer's fresh lock/path check and original include fences.
       // Immediate repair still uses its fresh writer snapshot; deferred plans must
       // supply the data captured by readConfigFileSnapshotForWrite at planning time.
-      ...(params.plan ? plan.includeIdentity : {}),
+      ...(params.plan ? plan.includeIdentity : params.configWriteOptions),
       expectedConfigPath: plan.snapshot.path,
       auditOrigin: "doctor",
       allowConfigSizeDrop: true,

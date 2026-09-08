@@ -1,5 +1,4 @@
 import path from "node:path";
-import type { LegacyConfigUpdatePlan } from "../../commands/doctor/legacy-config-repair.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import { resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -13,11 +12,10 @@ import { validateUpdateCandidateCanary } from "../../infra/update-candidate-cana
 import type { UpdateCandidateRehearsal } from "../../infra/update-candidate-rehearsal.js";
 import { readUpdateStateSchemaVersions } from "../../infra/update-candidate-state.js";
 import { readControlPlaneUpdateSentinelMeta } from "../../infra/update-control-plane-sentinel.js";
-import type { DevUpdateTarget } from "../../infra/update-dev-target.js";
 import { readBuiltGatewayBuildId } from "../../infra/update-git-runtime.js";
 import {
+  canResolveRegistryVersionForPackageTarget,
   verifyPackageUpdateRecovery,
-  type ResolvedGlobalInstallTarget,
 } from "../../infra/update-global.js";
 import { recordUpdateRunPhase, recordUpdateRunStep } from "../../infra/update-run-ledger.js";
 import { createUpdateRecoveryPackageHooks } from "../../infra/update-run-recovery-package.js";
@@ -34,7 +32,6 @@ import {
   inspectGatewayRestart,
   waitForGatewayHttpReadiness,
 } from "../daemon-cli/restart-health.js";
-import { createUpdateProgress } from "./progress.js";
 import {
   captureTargetDatabaseSchemaContext,
   checkTargetDatabaseSchemasForContexts,
@@ -46,10 +43,10 @@ import {
   readPackageVersion,
   resolveGitInstallDir,
   UpdatePreMutationError,
-  type UpdateCommandOptions,
 } from "./shared.js";
 import { captureStoppedState } from "./update-command-checkpoint.js";
 import { inspectUpdateDatabaseContexts } from "./update-command-database-context.js";
+import type { MutableUpdateExecutionParams } from "./update-command-execution.types.js";
 import { createBeforeGitMutation, updateGitInstall } from "./update-command-git.js";
 import {
   formatUpdateAncestryBlockMessage,
@@ -73,7 +70,6 @@ import type { MutableUpdateExecutionResult } from "./update-command-result.js";
 import {
   GatewayServiceUpdateOwnershipError,
   gatewayServiceCommandUsesRoot,
-  type ManagedServiceRootRedirect,
 } from "./update-command-service-plan.js";
 import {
   maybeRestartServiceAfterFailedMutableUpdate,
@@ -82,42 +78,18 @@ import {
   shouldBlockMutableUpdateFromGatewayServiceEnv,
   UpdateCommandAbort,
   type PreManagedServiceStop,
-  type UpdateCommandRecoveryState,
 } from "./update-command-service.js";
 
 const CLI_NAME = resolveCliName();
 
-export async function executeMutableUpdate(params: {
-  root: string;
-  installKind: "git" | "package" | "unknown";
-  updateInstallKind: "git" | "package" | "unknown";
-  switchToGit: boolean;
-  timeoutMs: number | undefined;
-  updateStepTimeoutMs: number;
-  startedAt: number;
-  progress: ReturnType<typeof createUpdateProgress>["progress"];
-  stop: () => void;
-  channel: "stable" | "extended-stable" | "beta" | "dev";
-  tag: string;
-  opts: UpdateCommandOptions;
-  shouldRestart: boolean;
-  devTarget?: DevUpdateTarget;
-  packageInstallSpec: string | null;
-  packageInstallEnv?: NodeJS.ProcessEnv;
-  packageInstallTarget?: ResolvedGlobalInstallTarget;
-  packageTargetVersion?: string;
-  packageTargetSchemaVersions?: OpenClawSchemaVersions;
-  packageUpdateNodeRunner?: string;
-  managedServiceNodeRunner?: string;
-  managedServiceRootRedirect: ManagedServiceRootRedirect | null;
-  invocationCwd?: string;
-  legacyConfigPlan?: LegacyConfigUpdatePlan;
-  recoveryState: UpdateCommandRecoveryState;
-  prepareMutableUpdate: (env?: NodeJS.ProcessEnv) => Promise<void>;
-  onActivation?: () => void;
-}): Promise<MutableUpdateExecutionResult | null> {
+export async function executeMutableUpdate(
+  params: MutableUpdateExecutionParams,
+): Promise<MutableUpdateExecutionResult | null> {
   const { opts, updateStepTimeoutMs } = params;
   assertUpdateCommandRecovery(opts);
+  const stagedPluginAdmission =
+    params.updateInstallKind === "package" &&
+    !canResolveRegistryVersionForPackageTarget(params.packageInstallSpec ?? params.tag);
   let preManagedServiceStop: PreManagedServiceStop | undefined;
   let ownedManagedUpdateContext: OwnedManagedUpdateContext | undefined;
   let admission: Awaited<ReturnType<typeof inspectUpdateDatabaseContexts>> | undefined;
@@ -150,6 +122,20 @@ export async function executeMutableUpdate(params: {
       );
     }
     admittedTargetSchemaVersions = versions;
+  };
+  const preflightPlugins = async (targetVersion: string | null) => {
+    await recheckSchemas(params.packageTargetSchemaVersions);
+    const { preflightConfiguredNpmPluginTargets } =
+      await import("./update-command-plugin-preflight.js");
+    const context = admission!.contexts.at(-1)!;
+    await preflightConfiguredNpmPluginTargets({
+      config: context.configSnapshot.sourceConfig,
+      env: context.env,
+      targetVersion,
+      channel: params.channel,
+      timeoutMs: params.updateStepTimeoutMs,
+    });
+    await recheckSchemas(params.packageTargetSchemaVersions);
   };
   let recoveryEnv: NodeJS.ProcessEnv | undefined;
   let packageTransaction: PackageUpdateTransaction | undefined;
@@ -339,6 +325,25 @@ export async function executeMutableUpdate(params: {
       assertCurrent?: () => void,
     ) => {
       signal?.throwIfAborted();
+      if (stagedPluginAdmission) {
+        // Explicit artifacts acquire their version from the private staged package,
+        // before rehearsal or activation can mutate any serving state.
+        try {
+          await preflightPlugins(await readPackageVersion(root));
+          signal?.throwIfAborted();
+          assertCurrent?.();
+          await params.prepareMutableUpdate(
+            ownedManagedUpdateContext?.env ?? admission?.managedEnv,
+          );
+          signal?.throwIfAborted();
+          assertCurrent?.();
+        } catch (error) {
+          if (error instanceof UpdatePreMutationError) {
+            candidateFailureReason = error.reason;
+          }
+          throw error;
+        }
+      }
       const snapshot = rehearsal
         ? { config: rehearsal.sourceConfig, hash: rehearsal.sourceConfigHash }
         : (validatedConfigSnapshot ?? (await readCandidateSource(env)));
@@ -542,20 +547,13 @@ export async function executeMutableUpdate(params: {
       });
     }
     if (params.updateInstallKind === "package") {
-      await recheckSchemas(params.packageTargetSchemaVersions);
-      const { preflightConfiguredNpmPluginTargets } =
-        await import("./update-command-plugin-preflight.js");
-      const context = admission!.contexts.at(-1)!;
-      await preflightConfiguredNpmPluginTargets({
-        config: context.configSnapshot.sourceConfig,
-        env: context.env,
-        targetVersion: params.packageTargetVersion ?? null,
-        channel: params.channel,
-        timeoutMs: updateStepTimeoutMs,
-      });
-      await recheckSchemas(params.packageTargetSchemaVersions);
+      if (!stagedPluginAdmission) {
+        await preflightPlugins(params.packageTargetVersion ?? null);
+      }
       await stopManagedServiceBeforeMutableUpdate(undefined, "inspect");
-      await params.prepareMutableUpdate(admission?.managedEnv);
+      if (!stagedPluginAdmission) {
+        await params.prepareMutableUpdate(admission?.managedEnv);
+      }
       const packageUpdate: PackageInstallUpdateParams = {
         root: params.root,
         installKind: params.installKind,

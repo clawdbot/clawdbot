@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { doctorCommand } from "../../commands/doctor.js";
-import { readConfigFileSnapshot } from "../../config/config.js";
 import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
 import { readBuiltGatewayBuildId } from "../../infra/update-git-runtime.js";
 import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
@@ -19,10 +18,7 @@ import { buildUpdateDoctorEnv } from "../../infra/update-runner-doctor.js";
 import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import { readPackageVersion } from "./shared.js";
-import {
-  persistRequestedUpdateChannel,
-  restoreDroppedPreUpdateChannels,
-} from "./update-command-config.js";
+import { preparePostCorePluginConfig } from "./update-command-config.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-managed-context.js";
 import { runUpdateCommandMutation } from "./update-command-mutation.js";
 import { updatePluginsAfterCoreUpdate } from "./update-command-plugins.js";
@@ -208,27 +204,21 @@ export async function runUpdateCommandCandidateMutations(
   }
   if (phases.length <= 1) {
     const pluginUpdate = await execute("plugins", async () => {
-      let snapshot = await readConfigFileSnapshot({ observe: false, skipPluginValidation: true });
-      snapshot = await persistRequestedUpdateChannel({
-        configSnapshot: snapshot,
-        requestedChannel: params.requestedChannel,
-      });
       const original = params.configSnapshot;
-      const restored = restoreDroppedPreUpdateChannels(
-        snapshot,
-        original.valid
+      const preparedConfig = await preparePostCorePluginConfig({
+        requestedChannel: params.requestedChannel,
+        observe: false,
+        preUpdateConfig: original.valid
           ? {
               sourceConfig: original.sourceConfig,
               authoredConfig: isRecord(original.parsed) ? original.parsed : original.sourceConfig,
             }
           : undefined,
-      );
+      });
       const result = await updatePluginsAfterCoreUpdate({
         root: params.result.root ?? params.root,
         channel: params.channel,
-        configSnapshot: restored.snapshot,
-        configChanged: restored.changed,
-        restoredAuthoredChannels: restored.authoredChannels,
+        ...preparedConfig,
         json: params.opts.json,
         acceptCapabilities: params.opts.acceptCapabilities,
         timeoutMs: params.updateStepTimeoutMs,

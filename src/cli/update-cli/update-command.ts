@@ -356,13 +356,12 @@ async function updateCommandInternal(
       tag = extendedStable.version;
       packageInstallSpec = extendedStable.packageSpec;
     } else if (explicitTag) {
-      const explicitSpec = resolveGlobalInstallSpec({
-        packageName: DEFAULT_PACKAGE_NAME,
-        tag,
-        env: packageInstallEnv,
-      });
       targetVersion = await resolveTargetVersion(tag, timeoutMs, {
-        spec: explicitSpec,
+        spec: resolveGlobalInstallSpec({
+          packageName: DEFAULT_PACKAGE_NAME,
+          tag,
+          env: packageInstallEnv,
+        }),
         command: npmMetadataCommand,
         cwd: invocationCwd,
         env: packageInstallEnv,
@@ -464,6 +463,7 @@ async function updateCommandInternal(
     devTarget,
     packageTargetSchemaVersions,
     packageTargetVersion: targetVersion ?? undefined,
+    packageInstallSpec,
     opts,
     refuseUpdate,
   });

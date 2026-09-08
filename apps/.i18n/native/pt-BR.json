@@ -1693,6 +1693,7 @@
     "native.apple.05f711cec069ec47": "Pareamento necessário. Em um cliente OpenClaw já pareado, execute /pair approve e verifique a conexão novamente.",
     "native.apple.0603402116243f9e": "Nova conversa na árvore de trabalho",
     "native.apple.060e3947436fa930": "Não foi possível processar %1$@: %2$@",
+    "native.apple.0644a7702bb80de1": "A sessão no navegador expirou. Reconecte este Gateway.",
     "native.apple.067bbf8e4b7d1837": "Ouvido: %@",
     "native.apple.06aa02b192d6a1b3": "Revisando",
     "native.apple.06ced75261e8a242": "PID do App",
