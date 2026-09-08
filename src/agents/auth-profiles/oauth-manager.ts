@@ -1133,7 +1133,6 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
         const settled = await withOAuthProfileLock(
           { provider: params.provider, profileId: params.profileId },
           async () => {
-            let peerSettlementError: unknown;
             if (claim.peerGeneration) {
               try {
                 activePeerClaims = mergePeerClaims(
@@ -1151,7 +1150,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
                 if (error instanceof OAuthRefreshPeerFenceError) {
                   activePeerClaims = mergePeerClaims(activePeerClaims, error.claims);
                 }
-                peerSettlementError = error;
+                throw error;
               }
             }
             const claimSettlement = await settleOAuthRefreshClaim({
@@ -1164,18 +1163,13 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
             if (!claimSettlement) {
               return null;
             }
-            if (!peerSettlementError) {
-              try {
-                await settlePeerClaimsUnderRefreshLock({
-                  claim,
-                  claims: activePeerClaims,
-                  replacement: claimSettlement.credential,
-                });
-              } catch (error) {
-                peerSettlementError = error;
-              }
-            }
-            if (peerSettlementError) {
+            try {
+              await settlePeerClaimsUnderRefreshLock({
+                claim,
+                claims: activePeerClaims,
+                replacement: claimSettlement.credential,
+              });
+            } catch (peerSettlementError) {
               try {
                 failOAuthRefreshPeerClaims({
                   profileId: params.profileId,

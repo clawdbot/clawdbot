@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { resetFileLockStateForTest } from "../../infra/file-lock.js";
+import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { captureEnv } from "../../test-utils/env.js";
 import "./oauth-external-auth-passthrough.test-support.js";
 import { getOAuthProviderRuntimeMocks } from "./oauth-common-mocks.test-support.js";
@@ -646,7 +647,7 @@ describe("resolveApiKeyForProfile cross-agent refresh coordination (#26322)", ()
     }
   });
 
-  it("preserves the owner rotation when the settlement rescan finds an unreadable candidate", async () => {
+  it("retains the consumed generation when the settlement rescan finds an unreadable candidate", async () => {
     const envSnapshot = captureEnv(OAUTH_AGENT_ENV_KEYS);
     let tempRoot = "";
 
@@ -664,8 +665,9 @@ describe("resolveApiKeyForProfile cross-agent refresh coordination (#26322)", ()
       const provider = "openai";
       const peerAgentDir = path.join(tempRoot, "agents", "peer-a", "agent");
       await fs.mkdir(peerAgentDir, { recursive: true });
-      saveAuthProfileStore(createExpiredOauthStore({ profileId, provider }), peerAgentDir);
-      saveAuthProfileStore(createExpiredOauthStore({ profileId, provider }), mainAgentDir);
+      const originalStore = createExpiredOauthStore({ profileId, provider });
+      saveAuthProfileStore(originalStore, peerAgentDir);
+      saveAuthProfileStore(originalStore, mainAgentDir);
 
       let finishRefresh: (() => void) | undefined;
       let markStarted: (() => void) | undefined;
@@ -700,18 +702,41 @@ describe("resolveApiKeyForProfile cross-agent refresh coordination (#26322)", ()
       );
       finishRefresh?.();
 
-      await expect(resolving).resolves.toEqual(
-        expect.objectContaining({ apiKey: "preserved-rotation-access" }),
+      await expect(resolving).rejects.toThrow(
+        "Failed to fence every historical OAuth refresh peer",
       );
-      expect(loadPersistedAuthProfileStore(mainAgentDir)?.profiles[profileId]).toMatchObject({
-        access: "preserved-rotation-access",
-        refresh: "preserved-rotation-refresh",
-      });
-      const terminalPeer = loadPersistedAuthProfileStore(peerAgentDir)?.profiles[profileId];
-      expect(terminalPeer?.type === "oauth" && isOAuthRefreshFence(terminalPeer)).toBe(true);
-      expect(terminalPeer?.type === "oauth" && isPendingOAuthRefreshFence(terminalPeer)).toBe(
-        false,
+      expect(refreshProviderOAuthCredentialWithPluginMock).toHaveBeenCalledOnce();
+      for (const agentDir of [mainAgentDir, peerAgentDir]) {
+        const terminal = loadPersistedAuthProfileStore(agentDir)?.profiles[profileId];
+        expect(terminal?.type === "oauth" && isOAuthRefreshFence(terminal)).toBe(true);
+        expect(terminal?.type === "oauth" && isPendingOAuthRefreshFence(terminal)).toBe(false);
+        expect(terminal).not.toMatchObject({
+          access: "preserved-rotation-access",
+          refresh: "preserved-rotation-refresh",
+        });
+      }
+
+      closeOpenClawAgentDatabasesForTest(tempRoot);
+      await fs.rm(resolveAuthProfileDatabasePath(unreadableAgentDir), { force: true });
+      writePersistedAuthProfileStoreRaw(originalStore, unreadableAgentDir);
+      clearRuntimeAuthProfileStoreSnapshots();
+
+      await expect(
+        resolveApiKeyForProfileInTest(resolveApiKeyForProfile, {
+          store: ensureAuthProfileStore(mainAgentDir),
+          profileId,
+          agentDir: mainAgentDir,
+        }),
+      ).resolves.toBeNull();
+      expect(refreshProviderOAuthCredentialWithPluginMock).toHaveBeenCalledOnce();
+      const terminalLatePeer =
+        loadPersistedAuthProfileStore(unreadableAgentDir)?.profiles[profileId];
+      expect(terminalLatePeer?.type === "oauth" && isOAuthRefreshFence(terminalLatePeer)).toBe(
+        true,
       );
+      expect(
+        terminalLatePeer?.type === "oauth" && isPendingOAuthRefreshFence(terminalLatePeer),
+      ).toBe(false);
     } finally {
       envSnapshot.restore();
       resetFileLockStateForTest();
