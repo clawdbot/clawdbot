@@ -298,7 +298,11 @@ class CronPage extends OpenClawLightDomElement {
       });
       if (isCurrent()) {
         this.cronModelSuggestions = result.models.map((entry) => entry.id);
-        this.modelSuggestionsError = null;
+        this.modelSuggestionsError = result.providerOutcomes?.some(
+          (outcome) => outcome.status !== "ready",
+        )
+          ? t("chat.modelControls.modelsRefreshFailed")
+          : null;
       }
     } catch (error) {
       if (isCurrent()) {
