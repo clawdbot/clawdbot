@@ -199,6 +199,8 @@ CLI-backed runtimes settle profile health only after their resume, fork, and fre
 
     OpenAI-compatible **provider-completed** stop/finish reasons such as `Unhandled stop reason: error`, `stop reason: error`, `reason: error`, and `Provider finish_reason: error` are classified as **`server_error`** (HTTP-like status 500), not timeout. They remain failover-eligible for model/profile rotation, but diagnostics keep the provider finish-reason text instead of rewriting the user copy to "LLM request timed out." Transport-shaped finish reasons such as `Provider finish_reason: abort`, `network_error`, and `malformed_response` stay in the timeout/failover bucket (status 408).
 
+    HTTP status mapping follows that same rule. An untyped `5xx` response classifies as **`server_error`**, so a `502` or `503` reports a provider failure instead of claiming the request timed out, and it stays eligible for retry-limit model fallback. Only the gateway-timeout statuses `504`, `522`, and `524`, plus the nginx client-abort `499`, classify as **`timeout`**. A provider-typed body still wins: a `5xx` whose payload declares `overloaded_error` or `server_error` keeps that classification.
+
     Generic server text can also land in that timeout bucket when the source matches a known transient pattern. For example, the bare model runtime stream-wrapper message `An unknown error occurred` is treated as failover-worthy for every provider because the shared model runtime emits it when provider streams end with `stopReason: "aborted"` or `stopReason: "error"` without specific details. JSON `api_error` payloads with transient server text such as `internal server error`, `unknown error, 520`, `upstream error`, or `backend error` are also treated as failover-worthy timeouts.
 
     OpenRouter-specific generic upstream text such as bare `Provider returned error` is treated as timeout only when the provider context is actually OpenRouter. Generic internal fallback text such as `LLM request failed with an unknown error.` stays conservative and does not trigger failover by itself.
@@ -280,7 +282,7 @@ The embedded runtime's existing session setting `retry.provider.maxRetries` over
 
 While waiting, the Control UI shows one transient **Retrying… n/10** indicator for rate limits. Retried failures do not become persisted assistant messages; terminal failure retains one error. History hides recovered empty or reasoning-only errors without rewriting stored transcripts.
 
-Visible failure messages preserve the provider's HTTP status independently of retry classification. A provider HTTP 500 remains a server error in the final reply, even when recovery groups it with timeout-shaped failures. Raw provider response details stay out of that reply.
+Visible failure messages preserve the provider's HTTP status independently of retry classification. A provider HTTP 500 remains a server error in the final reply, and recovery classifies it as `server_error` rather than grouping it with timeout-shaped failures. Raw provider response details stay out of that reply.
 
 Provider overloads and HTTP 5xx failures use transient recovery guidance. A message saying only that a model is "not available" does not establish that it was retired or that your configuration needs to change. Configuration guidance requires a missing-model response or an explicit account/model restriction. Codex turn errors retain their overload and HTTP-status information even after Codex stops retrying the turn.
 

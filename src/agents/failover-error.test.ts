@@ -227,8 +227,11 @@ describe("failover-error", () => {
         },
       }),
     ).toBe("format");
-    for (const status of [500, 502, 503, 504, 520, 521, 522, 523, 524]) {
+    for (const status of [504, 522, 524]) {
       expect(resolveFailoverReasonFromError({ status })).toBe("timeout");
+    }
+    for (const status of [500, 502, 503, 520, 521, 523]) {
+      expect(resolveFailoverReasonFromError({ status })).toBe("server_error");
     }
     expect(resolveFailoverReasonFromError({ status: 529 })).toBe("overloaded");
   });
@@ -372,7 +375,7 @@ describe("failover-error", () => {
         status: 503,
         message: "Internal database error",
       }),
-    ).toBe("timeout");
+    ).toBe("server_error");
     expect(
       resolveFailoverReasonFromError({
         status: 503,

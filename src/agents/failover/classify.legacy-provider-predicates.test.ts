@@ -139,14 +139,15 @@ describe("Cloudflare / CDN HTML error page classification (#67517)", () => {
   const prefixedHtml401 = `Error: 401 ${html401}`;
   const prefixedHtml407 = `Error: 407 ${html407}`;
 
-  it("classifies Cloudflare HTML 502 as timeout", () => {
-    expect(classifyFailoverReason(`502 ${cloudflareHtml502}`)).toBe("timeout");
+  it("classifies Cloudflare HTML 502 as server_error", () => {
+    expect(classifyFailoverReason(`502 ${cloudflareHtml502}`)).toBe("server_error");
   });
 
-  it("classifies Cloudflare HTML 503 with rate-limit text as timeout", () => {
-    // CDN HTML wrappers are upstream availability failures even when the page
-    // body contains generic rate-limit words.
-    expect(classifyFailoverReason(`503 ${cloudflareHtml503}`)).toBe("timeout");
+  it("classifies Cloudflare HTML 503 with rate-limit text as server_error", () => {
+    // CDN HTML wrappers are upstream service failures even when the page body
+    // contains generic rate-limit words. #67517 asked for them to read as
+    // upstream HTTP/service errors rather than rate limits or DNS faults.
+    expect(classifyFailoverReason(`503 ${cloudflareHtml503}`)).toBe("server_error");
   });
 
   it("preserves auth classification for 401 HTML", () => {

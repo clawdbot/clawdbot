@@ -21,6 +21,7 @@ export function shouldUseTransientCooldownProbeSlot(
     reason === "empty_response" ||
     reason === "no_error_details" ||
     reason === "unclassified" ||
+    reason === "server_error" ||
     reason === "timeout"
   );
 }

@@ -26,6 +26,7 @@ import {
   isExactUnknownNoDetailsError,
   isGenericUnknownStreamErrorMessage,
   isReplayInvalidErrorMessage,
+  isTimingHttpStatus,
   isUnsupportedImageInputErrorMessage,
   toPluginClassification,
   toReasonClassification,
@@ -313,7 +314,10 @@ export function classifyFailoverSignal(
     isTransportHtmlErrorStatus(inferredStatus) &&
     isHtmlErrorResponse(signal.message, inferredStatus)
   ) {
-    return toReasonClassification("timeout");
+    // An HTML body means a CDN or proxy answered instead of the provider, so it
+    // carries no provider error type to classify. Only the timing statuses are
+    // timeouts; the rest are upstream failures.
+    return toReasonClassification(isTimingHttpStatus(inferredStatus) ? "timeout" : "server_error");
   }
   // Message/detail semantics stay ahead of generic structured types so an
   // invalid-request wrapper cannot hide billing, context, or provider policy.
