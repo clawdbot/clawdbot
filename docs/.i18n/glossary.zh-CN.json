@@ -4,6 +4,10 @@
     "target": "OpenClaw"
   },
   {
+    "source": "TOOLS.md",
+    "target": "TOOLS.md"
+  },
+  {
     "source": "macOS platform notes",
     "target": "macOS 平台说明"
   },

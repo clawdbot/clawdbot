@@ -54,7 +54,7 @@ export function createPolicyToolMetadataChecks(
   return createPolicyScopedChecks(deps, [
     [
       CHECK_IDS.policyUnmigratedToolsFile,
-      "Governed tool declarations have been migrated from TOOLS.md into AGENTS.md.",
+      "Legacy TOOLS.md has been manually reviewed and its governed declarations preserved in AGENTS.md.",
     ],
     [
       CHECK_IDS.policyMissingToolRisk,

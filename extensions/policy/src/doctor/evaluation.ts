@@ -198,13 +198,13 @@ async function evaluatePolicyUncached(ctx: HealthCheckContext): Promise<PolicyEv
         checkId: CHECK_IDS.policyUnmigratedToolsFile,
         severity: "error",
         message:
-          "TOOLS.md contains unmigrated governed tool declarations; run `openclaw doctor --fix` to migrate them into the AGENTS.md `## Tools` section before policy evaluation can pass.",
+          "TOOLS.md is present while tools.requireMetadata is enabled. Policy cannot distinguish optional notes from legacy governed declarations; review the file manually before policy evaluation can pass.",
         source: "policy",
         path: "TOOLS.md",
         target: "oc://TOOLS.md/tools",
         requirement: `oc://${policyFile.ocDocName}/tools/requireMetadata`,
         fixHint:
-          "Run `openclaw doctor --fix` to migrate TOOLS.md into the AGENTS.md `## Tools` section.",
+          "Review and preserve governed declarations in the AGENTS.md `## Tools` section and ordinary notes under `### Local notes` with deeper subheadings. Back up and remove TOOLS.md after review; doctor --fix does not migrate it automatically.",
       };
     }
     evidence = await collectPolicyEvidence(ctx.cfg as Record<string, unknown>, {

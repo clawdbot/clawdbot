@@ -34,6 +34,7 @@ Inside the workspace, OpenClaw expects these user-editable files:
 | -------------- | ---------------------------------------------------- |
 | `AGENTS.md`    | Operating instructions + "memory"                    |
 | `SOUL.md`      | Persona, boundaries, tone                            |
+| `TOOLS.md`     | Optional local environment notes, when present       |
 | `IDENTITY.md`  | Agent name/vibe/emoji                                |
 | `USER.md`      | User profile + preferred address                     |
 | `BOOTSTRAP.md` | One-time first-run ritual (deleted after completion) |
@@ -41,7 +42,7 @@ Inside the workspace, OpenClaw expects these user-editable files:
 
 On the first turn of a new session, OpenClaw injects the contents of these files into the system prompt's Project Context. `MEMORY.md` is only injected when it exists at the workspace root.
 
-Blank files are skipped. Large files are trimmed and truncated with a marker so prompts stay lean (read the file for full content). A missing file (other than `MEMORY.md`) injects a single "missing file" marker line instead; `openclaw setup` creates a safe default template for it.
+Blank files are skipped. Large files are trimmed and truncated with a marker so prompts stay lean (read the file for full content). Absent `TOOLS.md`, `USER.md`, and `MEMORY.md` files are omitted. Other missing files inject a single "missing file" marker line instead. `openclaw setup` creates safe defaults, but never seeds `TOOLS.md`; create it manually to opt in. See the [optional TOOLS.md limitations](/concepts/agent-workspace#optional-toolsmd-limitations).
 
 `BOOTSTRAP.md` is only created for a **brand new workspace** (no other bootstrap files present). While it is pending, OpenClaw keeps it in Project Context and adds system-prompt bootstrap guidance for the initial ritual instead of copying it into the user message. If you delete it after completing the ritual, it is not recreated on later restarts.
 
@@ -66,7 +67,7 @@ To disable bootstrap file creation entirely (for pre-seeded workspaces), set:
 
 Core tools (read/exec/edit/write and related system tools) are always available,
 subject to tool policy. `apply_patch` is on by default for OpenAI models and gated by
-`tools.exec.applyPatch` (`enabled`, `workspaceOnly`, `allowModels`). The `## Tools` section of `AGENTS.md` does **not** control which tools exist; it is guidance for how _you_ want them used.
+`tools.exec.applyPatch` (`enabled`, `workspaceOnly`, `allowModels`). The `## Tools` section of `AGENTS.md` and optional `TOOLS.md` do **not** control which tools exist; they provide guidance for how _you_ want them used.
 
 ## Skills
 

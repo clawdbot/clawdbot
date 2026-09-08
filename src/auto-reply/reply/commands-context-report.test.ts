@@ -31,7 +31,10 @@ function makeParams(
     storePath?: string;
     agentId?: string;
     currentTurn?: NonNullable<SessionEntry["systemPromptReport"]>["currentTurn"];
-    nativeUnverified?: boolean;
+    unverifiedFile?: {
+      status: "native_unverified" | "retained_unverified";
+      missing?: boolean;
+    };
   },
 ): HandleCommandsParams {
   const totalTokensFresh = options?.totalTokensFresh ?? true;
@@ -70,14 +73,15 @@ function makeParams(
           nonProjectContextChars: 500,
         },
         ...(options?.currentTurn ? { currentTurn: options.currentTurn } : {}),
-        injectedWorkspaceFiles: options?.nativeUnverified
+        injectedWorkspaceFiles: options?.unverifiedFile
           ? [
               {
-                name: "AGENTS.md",
-                path: "/tmp/workspace/AGENTS.md",
-                missing: false,
-                rawChars: 10_000,
-                injectionStatus: "native_unverified",
+                name:
+                  options.unverifiedFile.status === "native_unverified" ? "AGENTS.md" : "TOOLS.md",
+                path: `/tmp/workspace/${options.unverifiedFile.status === "native_unverified" ? "AGENTS.md" : "TOOLS.md"}`,
+                missing: options.unverifiedFile.missing === true,
+                rawChars: options.unverifiedFile.missing ? 0 : 10_000,
+                injectionStatus: options.unverifiedFile.status,
                 injectedChars: null,
                 truncated: null,
               },
@@ -173,7 +177,9 @@ describe("buildContextReply", () => {
 
   it("reports native Codex project docs as unverified without OpenClaw limit advice", async () => {
     const result = await buildContextReply(
-      makeParams("/context detail", false, { nativeUnverified: true }),
+      makeParams("/context detail", false, {
+        unverifiedFile: { status: "native_unverified" },
+      }),
     );
 
     expect(result.text).toContain(
@@ -185,6 +191,25 @@ describe("buildContextReply", () => {
     expect(result.text).not.toContain("Bootstrap context is over configured limits");
     expect(result.text).not.toContain("agents.entries.*.bootstrapMaxChars");
   });
+
+  it.each([false, true])(
+    "distinguishes unknown retained contents from current disk state (missing: %s)",
+    async (missing) => {
+      const result = await buildContextReply(
+        makeParams("/context detail", false, {
+          unverifiedFile: { status: "retained_unverified", missing },
+        }),
+      );
+      expect(result.text).toContain("- TOOLS.md: SNAPSHOT/UNVERIFIED");
+      expect(result.text).toContain(missing ? "raw(local missing) 0" : "raw(local) 10,000 chars");
+      expect(result.text).toContain("injected unknown");
+      expect(result.text).toContain("not proof that a file was included in the snapshot");
+      expect(result.text).toContain("start a new session to apply workspace changes");
+      expect(result.text).not.toContain("Bootstrap context is over configured limits");
+      expect(result.text).not.toContain("one aggregate root-to-CWD byte budget");
+      expect(result.text).not.toContain("agents.entries.*.bootstrapMaxChars");
+    },
+  );
 
   it("falls back to config defaults when legacy reports are missing bootstrap limits", async () => {
     const result = await buildContextReply(
@@ -403,23 +428,26 @@ describe("buildContextReply", () => {
     }
   });
 
-  it("omits unknown native project-document bytes from context maps", async () => {
-    const result = await buildContextReply(
-      makeParams("/context map", false, {
-        contextTokens: 8_192,
-        totalTokens: 900,
-        nativeUnverified: true,
-      }),
-    );
-    if (!result.mediaUrl) {
-      throw new Error("missing context map media path");
-    }
-    try {
-      expect(result.text).toContain("Tracked: 1,020 chars");
-    } finally {
-      await unlink(result.mediaUrl);
-    }
-  });
+  it.each(["native_unverified", "retained_unverified"] as const)(
+    "omits unknown %s file sizes from context maps",
+    async (status) => {
+      const result = await buildContextReply(
+        makeParams("/context map", false, {
+          contextTokens: 8_192,
+          totalTokens: 900,
+          unverifiedFile: { status },
+        }),
+      );
+      if (!result.mediaUrl) {
+        throw new Error("missing context map media path");
+      }
+      try {
+        expect(result.text).toContain("Tracked: 1,020 chars");
+      } finally {
+        await unlink(result.mediaUrl);
+      }
+    },
+  );
 
   it("includes transcript conversation size in context maps", async () => {
     await withTranscript(

@@ -49,7 +49,10 @@ export type SessionSystemPromptReport = {
           truncated: boolean;
         }
       | {
-          injectionStatus: "native_unverified";
+          // Native discovery or a retained snapshot lacks exact per-file attribution.
+          // For retained_unverified, missing/rawChars describe current disk state;
+          // neither establishes whether the file was included in the snapshot.
+          injectionStatus: "native_unverified" | "retained_unverified";
           injectedChars: null;
           truncated: null;
         }

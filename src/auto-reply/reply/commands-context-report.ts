@@ -276,20 +276,25 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
 
   const fileLines = report.injectedWorkspaceFiles.map((f) => {
     const nativeUnverified = f.injectionStatus === "native_unverified";
-    const status = nativeUnverified
-      ? "NATIVE/UNVERIFIED"
-      : f.missing
-        ? "MISSING"
-        : f.truncated
-          ? "TRUNCATED"
-          : "OK";
+    const retainedUnverified = f.injectionStatus === "retained_unverified";
+    const unverified = f.injectedChars === null;
+    const status = retainedUnverified
+      ? "SNAPSHOT/UNVERIFIED"
+      : nativeUnverified
+        ? "NATIVE/UNVERIFIED"
+        : f.missing
+          ? "MISSING"
+          : f.truncated
+            ? "TRUNCATED"
+            : "OK";
     const raw = f.missing ? "0" : formatCharsAndTokens(f.rawChars);
-    const injected = nativeUnverified
+    const injected = unverified
       ? "unknown"
       : f.missing
         ? "0"
         : formatCharsAndTokens(f.injectedChars);
-    return `- ${f.name}: ${status} | raw${nativeUnverified ? "(local)" : ""} ${raw} | injected ${injected}`;
+    const rawScope = unverified ? (f.missing ? "(local missing)" : "(local)") : "";
+    return `- ${f.name}: ${status} | raw${rawScope} ${raw} | injected ${injected}`;
   });
 
   const sandboxLine = `Sandbox: mode=${report.sandbox?.mode ?? "unknown"} sandboxed=${report.sandbox?.sandboxed ?? false}`;
@@ -327,9 +332,7 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
   const bootstrapMaxLabel = `${formatInt(bootstrapMaxChars)} chars`;
   const bootstrapTotalLabel = `${formatInt(bootstrapTotalMaxChars)} chars`;
   const bootstrapAnalysis = analyzeBootstrapBudget({
-    files: report.injectedWorkspaceFiles.filter(
-      (file) => file.injectionStatus !== "native_unverified",
-    ),
+    files: report.injectedWorkspaceFiles.filter((file) => file.injectedChars !== null),
     bootstrapMaxChars,
     bootstrapTotalMaxChars,
   });
@@ -370,6 +373,14 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
         "Keep earlier/root files concise and read the relevant scoped file directly if guidance appears missing.",
       ]
     : [];
+  const retainedUnverifiedWarningLines = report.injectedWorkspaceFiles.some(
+    (file) => file.injectionStatus === "retained_unverified",
+  )
+    ? [
+        "A workspace snapshot is active, but its per-file contents and sizes are unverified. Raw(local) describes files on disk now, not proof that a file was included in the snapshot.",
+        "Editing or removing a local file does not change the retained snapshot; start a new session to apply workspace changes. The retained snapshot is included in the system prompt total, not the per-file totals.",
+      ]
+    : [];
 
   const contextWindowLabel = session.contextTokens != null ? formatInt(session.contextTokens) : "?";
   const totalsLine =
@@ -384,6 +395,7 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
     systemPromptLine,
     ...(bootstrapWarningLines.length ? ["", ...bootstrapWarningLines] : []),
     ...(nativeUnverifiedWarningLines.length ? ["", ...nativeUnverifiedWarningLines] : []),
+    ...(retainedUnverifiedWarningLines.length ? ["", ...retainedUnverifiedWarningLines] : []),
     "",
     "Injected workspace files:",
     ...fileLines,

@@ -3169,10 +3169,10 @@ describe("agents.files.list", () => {
 
   // Pins the derivation: a private copy of this list in the gateway is what let a
   // retired file linger in the Control UI as a permanently-missing tab.
-  it("lists the canonical workspace filenames except IDENTITY.md", async () => {
+  it("lists canonical workspace filenames except IDENTITY.md and absent TOOLS.md", async () => {
     const names = await listAgentFileNames();
     expect(names).toStrictEqual(
-      WORKSPACE_BOOTSTRAP_FILENAMES.filter((name) => name !== "IDENTITY.md"),
+      WORKSPACE_BOOTSTRAP_FILENAMES.filter((name) => name !== "IDENTITY.md" && name !== "TOOLS.md"),
     );
   });
 
@@ -3181,8 +3181,46 @@ describe("agents.files.list", () => {
     const names = await listAgentFileNames();
     expect(names).toStrictEqual(
       WORKSPACE_BOOTSTRAP_FILENAMES.filter(
-        (name) => name !== "IDENTITY.md" && name !== "BOOTSTRAP.md",
+        (name) => name !== "IDENTITY.md" && name !== "BOOTSTRAP.md" && name !== "TOOLS.md",
       ),
+    );
+  });
+
+  it("offers an existing optional TOOLS.md in the editor", async () => {
+    mocks.fsLstat.mockImplementation(async (pathname: unknown) => {
+      if (path.basename(String(pathname)) === "TOOLS.md") {
+        return makeFileStat({ size: 17 });
+      }
+      throw createEnoentError();
+    });
+
+    const names = await listAgentFileNames();
+    expect(names).toContain("TOOLS.md");
+  });
+
+  it("does not offer a missing TOOLS.md when the workspace root is unavailable", async () => {
+    agentsTesting.setDepsForTests({
+      root: async () => {
+        throw new FsSafeError("not-found", "workspace missing");
+      },
+    });
+
+    const names = await listAgentFileNames();
+    expect(names).not.toContain("TOOLS.md");
+    expect(names).toContain("AGENTS.md");
+  });
+
+  it("accepts explicit TOOLS.md creation without requiring a seeded file", async () => {
+    const { respond, promise } = makeCall("agents.files.set", {
+      agentId: "main",
+      name: "TOOLS.md",
+      content: "# Local environment notes\n",
+    });
+    await promise;
+
+    expectRespondOk(respond, { ok: true });
+    expect(mocks.rootWrite).toHaveBeenCalledWith(
+      expect.objectContaining({ relativePath: "TOOLS.md", data: "# Local environment notes\n" }),
     );
   });
 

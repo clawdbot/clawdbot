@@ -49,5 +49,5 @@ workspace root.
 - `files` (string[]): alias of `paths`.
 
 All paths are resolved from the workspace and must stay inside it (including realpath checks).
-Only recognized bootstrap basenames are loaded (`AGENTS.md`, `SOUL.md`,
+Only recognized bootstrap basenames are loaded (`AGENTS.md`, `SOUL.md`, `TOOLS.md`,
 `IDENTITY.md`, `USER.md`, `BOOTSTRAP.md`, `MEMORY.md`).

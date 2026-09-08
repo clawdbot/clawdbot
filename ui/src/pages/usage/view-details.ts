@@ -869,8 +869,7 @@ function renderContextPanel(
       labelKey: "usage.details.files",
       tokens: charsToTokens(
         contextWeight.injectedWorkspaceFiles.reduce(
-          (sum, file) =>
-            file.injectionStatus === "native_unverified" ? sum : sum + file.injectedChars,
+          (sum, file) => sum + (file.injectedChars ?? 0),
           0,
         ),
       ),

@@ -297,7 +297,7 @@ function buildGroups(params: {
 }): TreemapGroup[] {
   const { report } = params;
   const injectedTotal = report.injectedWorkspaceFiles.reduce(
-    (sum, file) => (file.injectionStatus === "native_unverified" ? sum : sum + file.injectedChars),
+    (sum, file) => sum + (file.injectedChars ?? 0),
     0,
   );
   const projectFrameChars = Math.max(0, report.systemPrompt.projectContextChars - injectedTotal);
@@ -317,7 +317,7 @@ function buildGroups(params: {
       color: rgba(58, 145, 91),
       leaves: [
         ...report.injectedWorkspaceFiles
-          .filter((file) => file.injectionStatus !== "native_unverified")
+          .filter((file) => file.injectedChars !== null)
           .map((file) => ({
             name: file.name,
             value: file.injectedChars,

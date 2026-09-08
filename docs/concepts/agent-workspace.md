@@ -81,7 +81,10 @@ Standard files OpenClaw expects inside the workspace:
     The agent's name, vibe, and emoji. Created/updated during the bootstrap ritual.
   </Accordion>
   <Accordion title="AGENTS.md Tools section - local tool conventions">
-    The `## Tools` section holds local environment notes and conventions. It does not control tool availability; it is only guidance.
+    The `## Tools` section can hold local environment notes and conventions. It does not control tool availability; it is only guidance. Governed tool metadata remains in this section.
+  </Accordion>
+  <Accordion title="TOOLS.md - separate local environment notes (optional)">
+    An alternative to keeping local notes in `AGENTS.md`. Create it manually at the configured workspace root to opt in; setup does not seed it. When present, it is available in the Files editor and normal main, subagent, and cron bootstrap context. Lightweight runs exclude it. See the [TOOLS.md example](/reference/templates/TOOLS) and the limitations below.
   </Accordion>
   <Accordion title="BOOT.md - startup checklist">
     Optional startup checklist run on Gateway startup when the [boot-md hook](/automation/hooks#boot-md) is enabled. Enabling a different internal hook does not enable `boot-md`. Keep it short; use the message tool for outbound sends.
@@ -101,8 +104,30 @@ Standard files OpenClaw expects inside the workspace:
 </AccordionGroup>
 
 <Note>
-If a required bootstrap file is missing, OpenClaw injects a "missing file" marker into the session and continues. Optional `USER.md` and `MEMORY.md` files are omitted when absent. Large bootstrap files are truncated when injected; adjust general limits with `agents.defaults.bootstrapMaxChars` (default: `20000`) and `agents.defaults.bootstrapTotalMaxChars` (default: `60000`). `USER.md` keeps its separate 4,000-character cap. `openclaw setup` can recreate missing defaults without overwriting existing files.
+If a required bootstrap file is missing, OpenClaw injects a "missing file" marker into the session and continues. Optional `TOOLS.md`, `USER.md`, and `MEMORY.md` files are omitted when absent. Large bootstrap files are truncated when injected; adjust general limits with `agents.defaults.bootstrapMaxChars` (default: `20000`) and `agents.defaults.bootstrapTotalMaxChars` (default: `60000`). `USER.md` keeps its separate 4,000-character cap. `openclaw setup` can recreate missing defaults without overwriting existing files; it does not create `TOOLS.md`.
 </Note>
+
+<a id="optional-toolsmd-limitations" />
+
+### Optional TOOLS.md limitations
+
+- Existing root `TOOLS.md` files also opt in: files retained from an older setup
+  become active context after upgrade. Review their contents before upgrading.
+- Keep secrets and private user memory out of local environment notes: like the
+  `AGENTS.md` Tools section, `TOOLS.md` can reach subagents and shared sessions.
+- Separate sandbox workspaces do not yet receive a seeded copy of `TOOLS.md`.
+  Normal prompt preparation can read the configured workspace, but sandbox file
+  reads and compaction paths that reload the sandbox directory cannot rely on it.
+  Keep required sandbox guidance in `AGENTS.md` until that support is available.
+- With the Policy plugin's `tools.requireMetadata` enabled, a root `TOOLS.md`
+  still blocks conformance checks. Legacy declarations and ordinary note headings
+  cannot be distinguished reliably. Review and preserve governed declarations in
+  the `AGENTS.md` Tools section. Put ordinary notes under `### Local notes`, using
+  deeper headings within that subsection, then back up and remove `TOOLS.md` after review.
+  Doctor does not perform this migration automatically.
+
+Already-migrated `AGENTS.md` content and historical archives are left untouched.
+OpenClaw does not automatically split notes or restore a deleted file.
 
 ## What is NOT in the workspace
 

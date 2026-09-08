@@ -6,6 +6,7 @@ function createExtensionCodexAppServerAttemptSupportVitestConfig(
 ) {
   return createScopedVitestConfig(
     [
+      "extensions/codex/src/app-server/attempt-context-retained-report.test.ts",
       "extensions/codex/src/app-server/attempt-context.test.ts",
       "extensions/codex/src/app-server/attempt-deadlines.test.ts",
       "extensions/codex/src/app-server/attempt-notifications.test.ts",

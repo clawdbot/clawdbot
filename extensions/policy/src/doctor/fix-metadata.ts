@@ -30,7 +30,7 @@ const POLICY_FIX_METADATA = [
   m(
     CHECK_IDS.policyUnmigratedToolsFile,
     "manual",
-    "Run openclaw doctor --fix to migrate governed tool declarations into AGENTS.md.",
+    "Review and preserve TOOLS.md content in AGENTS.md, including governed declarations in its Tools section; back up and remove TOOLS.md after review. Doctor does not migrate it automatically.",
     { policyPath: ["tools", "requireMetadata"] },
   ),
   m(
