@@ -3,6 +3,7 @@ import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import {
   afterAll,
@@ -702,6 +703,43 @@ describe("ManagedWorktreeService", () => {
     expect(await git(restored.path, "diff", "--cached", "--name-only")).toBe("");
     expect(await git(restored.path, "diff", "--name-only")).toBe("README.md");
   });
+
+  it.each([false, true])(
+    "handles snapshot restore with a shallow snapshot: %s",
+    async (shallowSnapshot) => {
+      await fs.writeFile(path.join(repo, "README.md"), "second commit\n");
+      await git(repo, "commit", "-am", "second");
+      const remote = await addRemote(root, repo);
+      const clone = path.join(root, "shallow");
+      await git(root, "clone", "--depth=1", pathToFileURL(remote).href, clone);
+      const originalHead = await git(clone, "rev-parse", "HEAD");
+      const created = await materializeDownstreamFixture("shallow-restore", { repoRoot: clone });
+      await fs.writeFile(path.join(created.path, "README.md"), "saved changes\n");
+      const removed = await service.remove({ id: created.id, reason: "test" });
+      const snapshotRef = removed.snapshotRef!;
+      const snapshotCommit = await git(clone, "rev-parse", snapshotRef);
+      if (shallowSnapshot) {
+        // A later depth-limited fetch can graft the local snapshot itself. Merely
+        // putting its parent on the boundary does not hide the snapshot's parent.
+        await git(clone, "fetch", "--depth=1", pathToFileURL(clone).href, snapshotRef);
+        await expect(git(clone, "rev-parse", `${snapshotRef}^`)).rejects.toThrow(
+          "unknown revision",
+        );
+        await expect(service.restore({ id: created.id })).rejects.toThrow(
+          `Cannot restore snapshot ${snapshotCommit} in ${clone}: shallow clone boundary; run \`git fetch --unshallow\` in ${clone}`,
+        );
+        expect(getRegistryWorktree(env, created.id)?.snapshotRef).toBe(snapshotRef);
+        await expect(fs.stat(created.path)).rejects.toMatchObject({ code: "ENOENT" });
+      } else {
+        const restored = await service.restore({ id: created.id });
+        expect(await git(restored.path, "rev-parse", "HEAD")).toBe(originalHead);
+        expect(await fs.readFile(path.join(restored.path, "README.md"), "utf8")).toBe(
+          "saved changes\n",
+        );
+        expect(await git(restored.path, "status", "--porcelain")).toBe("M README.md");
+      }
+    },
+  );
 
   it("captures tracked executable-bit changes when core.filemode is disabled", async () => {
     const script = path.join(repo, "tool.sh");
