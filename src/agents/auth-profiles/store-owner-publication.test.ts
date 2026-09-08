@@ -14,7 +14,8 @@ import {
   getRuntimeAuthProfileStoreCredentialMutationToken,
   getRuntimeAuthProfileStoreStateMutationToken,
 } from "./mutation-lineage.js";
-import { loadPersistedSharedAuthProfileStore } from "./persisted.js";
+import { createOAuthRefreshFence } from "./oauth-refresh-marker.js";
+import { loadPersistedAuthProfileStore, loadPersistedSharedAuthProfileStore } from "./persisted.js";
 import {
   replaceRuntimeAuthProfileStoreSnapshots,
   setRuntimeAuthProfileStoreSnapshot,
@@ -147,6 +148,100 @@ describe("auth publication owner receipts", () => {
     );
     expect(snapshotAt(root.agentPath)?.runtimePersistedProfileIds).toEqual(["local", "shared"]);
   });
+
+  it.each(["shared", "agent-local"] as const)(
+    "keeps runtime-only rows out of unrelated %s batch persistence",
+    async (scope) => {
+      const root = await seedRoot("original");
+      const agentDir = scope === "agent-local" ? root.agentDir : undefined;
+      const databasePath = scope === "agent-local" ? root.agentPath : root.sharedPath;
+      const durableProfileId = scope === "agent-local" ? "local" : "shared";
+      const durableCredential = apiKey(scope === "agent-local" ? "original-local" : "original");
+      const staleProfileId = "openai:removed";
+      const staleFenceId = "openai:stale-fence";
+      const externalProfileId = "anthropic:runtime-external";
+      const expiredOAuth = {
+        type: "oauth",
+        provider: "openai",
+        access: "expired-access",
+        refresh: "consumed-refresh",
+        expires: Date.now() - 60_000,
+      } satisfies AuthProfileCredential;
+      const staleFence = createOAuthRefreshFence({
+        profileId: staleFenceId,
+        credential: expiredOAuth,
+      });
+
+      withEnv(root.env, () => {
+        writePersistedAuthProfileStoreRaw(
+          {
+            version: 1,
+            profiles: {
+              [durableProfileId]: durableCredential,
+              [staleProfileId]: apiKey("removed"),
+              [staleFenceId]: staleFence,
+            },
+          },
+          agentDir,
+        );
+        setRuntimeAuthProfileStoreSnapshot(
+          loadAuthProfileStoreWithoutExternalProfiles(agentDir),
+          agentDir,
+        );
+        writePersistedAuthProfileStoreRaw(
+          { version: 1, profiles: { [durableProfileId]: durableCredential } },
+          agentDir,
+        );
+
+        const runtimeStore = snapshotAt(databasePath);
+        if (!runtimeStore) {
+          throw new Error("missing runtime auth profile snapshot");
+        }
+        setRuntimeAuthProfileStoreSnapshot(
+          {
+            ...runtimeStore,
+            profiles: {
+              ...runtimeStore.profiles,
+              [externalProfileId]: {
+                type: "oauth",
+                provider: "anthropic",
+                access: "external-access",
+                refresh: "external-refresh",
+                expires: Date.now() + 60_000,
+              },
+            },
+            runtimeExternalProfileIds: [externalProfileId],
+          },
+          agentDir,
+        );
+      });
+
+      await persistAuthProfileBatch({
+        stateDir: root.stateDir,
+        agentDir,
+        profiles: [{ profileId: "openai:unrelated", credential: apiKey("unrelated") }],
+      });
+
+      const persisted =
+        scope === "agent-local"
+          ? loadPersistedAuthProfileStore(root.agentDir)
+          : loadPersistedSharedAuthProfileStore(root.env);
+      expect(persisted?.profiles).toEqual({
+        [durableProfileId]: durableCredential,
+        "openai:unrelated": apiKey("unrelated"),
+      });
+      expect(snapshotAt(databasePath)?.profiles).toMatchObject({
+        [durableProfileId]: durableCredential,
+        "openai:unrelated": apiKey("unrelated"),
+        [externalProfileId]: {
+          access: "external-access",
+          refresh: "external-refresh",
+        },
+      });
+      expect(snapshotAt(databasePath)?.profiles[staleProfileId]).toBeUndefined();
+      expect(snapshotAt(databasePath)?.profiles[staleFenceId]).toBeUndefined();
+    },
+  );
 
   it.each([
     { unreadableLocal: false, populated: false },

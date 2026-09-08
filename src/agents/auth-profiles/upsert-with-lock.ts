@@ -4,12 +4,7 @@ import { AUTH_STORE_VERSION } from "./constants.js";
 import { normalizeAuthProfileCredential } from "./credential-normalize.js";
 import { withOAuthProfileLock, withOAuthProfileLocks } from "./oauth-profile-lock.js";
 import { isOAuthRefreshFence, isSameOAuthRefreshGeneration } from "./oauth-refresh-marker.js";
-import {
-  loadPersistedAuthProfileStore,
-  loadPersistedSharedAuthProfileStore,
-  mergeAuthProfileStores,
-} from "./persisted.js";
-import { getRuntimeAuthProfileStoreSnapshotAtDatabasePath } from "./runtime-snapshots.js";
+import { loadPersistedAuthProfileStore, loadPersistedSharedAuthProfileStore } from "./persisted.js";
 import {
   deletePersistedAuthProfileStoreRaw,
   inspectPersistedAuthProfileStateRaw,
@@ -242,18 +237,8 @@ export async function persistAuthProfileBatch(
             }
           }
           if (appliedProfiles.size > 0) {
-            const runtimeStore = getRuntimeAuthProfileStoreSnapshotAtDatabasePath(
-              owner.databasePath,
-            );
-            // Preserve inherited and resolved runtime rows while persistence filtering keeps
-            // this transaction scoped to the canonical local owner.
-            const publicationStore = runtimeStore
-              ? mergeAuthProfileStores(runtimeStore, next, {
-                  preserveBaseRuntimeExternalProfiles: true,
-                })
-              : next;
             saveAuthProfileStoreWithPreparedOwner(
-              publicationStore,
+              next,
               params.agentDir,
               { filterExternalAuthProfiles: false, syncExternalCli: false },
               database,

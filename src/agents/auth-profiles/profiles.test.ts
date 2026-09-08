@@ -298,11 +298,9 @@ describe("promoteAuthProfileInOrder", () => {
             version: AUTH_STORE_VERSION,
             profiles: {
               "openai:local": {
-                type: "oauth",
+                type: "api_key",
                 provider: "openai",
-                access: "local-old",
-                refresh: "local-refresh-old",
-                expires: Date.now() + 60_000,
+                key: "sk-local-old",
               },
             },
           },
@@ -322,23 +320,17 @@ describe("promoteAuthProfileInOrder", () => {
           throw new Error("external auth hook must not run during postcommit rebuild");
         });
         try {
-          await persistAuthProfileBatch({
-            agentDir: customAgentDir,
-            profiles: [
-              {
-                profileId: "openai:local",
-                credential: {
-                  type: "oauth",
-                  provider: "openai",
-                  access: "local-new",
-                  refresh: "local-refresh-new",
-                  expires: Date.now() + 120_000,
-                },
+          await expect(
+            upsertAuthProfileWithLock({
+              agentDir: customAgentDir,
+              profileId: "openai:local",
+              credential: {
+                type: "api_key",
+                provider: "openai",
+                key: "sk-local-new",
               },
-            ],
-            resetFailureState: true,
-            allowOAuthGenerationReplacement: true,
-          });
+            }),
+          ).resolves.not.toBeNull();
         } finally {
           externalAuthTesting.resetResolveExternalAuthProfilesForTest();
         }
@@ -351,7 +343,7 @@ describe("promoteAuthProfileInOrder", () => {
         });
         expect(
           getRuntimeAuthProfileStoreSnapshot(customAgentDir)?.profiles["openai:local"],
-        ).toMatchObject({ access: "local-new", refresh: "local-refresh-new" });
+        ).toMatchObject({ key: "sk-local-new" });
       },
       { clearOAuthDir: true },
     );
