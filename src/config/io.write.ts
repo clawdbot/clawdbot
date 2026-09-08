@@ -6,6 +6,7 @@ import { isVerbose } from "../global-state.js";
 import { isVitestRuntimeEnv } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { replaceFileAtomic } from "../infra/replace-file.js";
+import { recordUpdateDoctorConfigWrite } from "../infra/update-doctor-result.js";
 import { initializeNativeSessionCatalogPreferences } from "../plugins/native-session-catalog-config.js";
 import { maintainConfigBackups } from "./backup-rotation.js";
 import { collectChangedPaths } from "./config-change-paths.js";
@@ -25,6 +26,7 @@ import {
   restoreEnvRefsFromMap,
   restoreEnvVarRefs,
 } from "./env-preserve.js";
+import { resolveKeyedAgentEntryIncludePreservation } from "./include-write-boundary.js";
 import { readConfigIncludeFileWithGuards, resolveConfigIncludes } from "./includes.js";
 import {
   appendConfigAuditRecord,
@@ -51,6 +53,7 @@ import {
 } from "./io.read-helpers.js";
 import { loggedConfigWarningFingerprints, setBoundedConfigIoWarningEntry } from "./io.state.js";
 import type {
+  ConfigWriteInputBasis,
   ConfigWriteOptions,
   InternalConfigWriteResult,
   ReadConfigFileSnapshotInternalResult,
@@ -97,6 +100,10 @@ export async function writeConfigFileFromContext(
       }
     : await readSnapshot();
   const snapshot = snapshotRead.snapshot;
+  const inputBasis: ConfigWriteInputBasis = {
+    kind: options.inputBase ?? "runtime",
+    config: options.inputBase === "source" ? snapshot.sourceConfig : snapshot.runtimeConfig,
+  };
   if (options.baseSnapshot) {
     assertBaseSnapshotStillCurrent(snapshot, configPath, deps.fs);
   }
@@ -127,7 +134,7 @@ export async function writeConfigFileFromContext(
   let persistCandidate: unknown = nextConfig;
   let envRefMap: Map<string, string> | null = null;
   const changedPaths = new Set<string>();
-  collectChangedPaths(snapshot.config, nextConfig, "", changedPaths);
+  collectChangedPaths(inputBasis.config, nextConfig, "", changedPaths);
   for (const changedPath of [...explicitSetPaths, ...(options.unsetPaths ?? [])]) {
     const normalizedPath = changedPath.filter((segment) => segment.length > 0).join(".");
     if (normalizedPath) {
@@ -140,7 +147,12 @@ export async function writeConfigFileFromContext(
   // Doctor repairs need the same authored projection so roster moves preserve nested includes.
   // Missing snapshots also use this owner; exact bootstrap rosters carry explicitSetPaths.
   if (snapshot.valid || (snapshot.exists && hasAuthoredIncludes)) {
+    const keyedAgentEntryIncludes = resolveKeyedAgentEntryIncludePreservation({
+      configPath: snapshot.path,
+      provenance: snapshot.includeProvenance,
+    });
     persistCandidate = resolvePersistCandidateForWrite({
+      inputBasis,
       runtimeConfig: snapshot.config,
       sourceConfig: snapshot.resolved,
       sourceConfigValid: snapshot.valid,
@@ -148,6 +160,7 @@ export async function writeConfigFileFromContext(
       nextConfig,
       rootAuthoredConfig: snapshot.parsed,
       agentRosterIncludeOwned: snapshot.agentRosterIncludeOwned,
+      keyedAgentEntryIncludePaths: keyedAgentEntryIncludes?.includePaths,
       unsetPaths,
       explicitSetPaths,
       explicitSetValueSource,
@@ -185,14 +198,16 @@ export async function writeConfigFileFromContext(
     }
   }
 
-  persistCandidate = applyUnsetPathsForWrite(persistCandidate as OpenClawConfig, unsetPaths);
   const envForRestore = options.envSnapshotForRestore ?? deps.env;
-  const resolveValidationCandidate = (candidate: unknown) =>
-    containsConfigIncludeDirective(candidate)
+  const resolveValidationCandidate = (candidate: unknown) => {
+    // Validate removals now; apply them once to the final authored output after materialization.
+    const config = applyUnsetPathsForWrite(candidate as OpenClawConfig, unsetPaths);
+    return containsConfigIncludeDirective(config)
       ? context.resolveRuntimePreflightSourceConfig(
-          restoreEnvVarRefs(candidate, snapshot.parsed, envForRestore) as OpenClawConfig,
+          restoreEnvVarRefs(config, snapshot.parsed, envForRestore) as OpenClawConfig,
         )
-      : candidate;
+      : config;
+  };
   const validationCandidate = resolveValidationCandidate(persistCandidate);
   const validateCandidate = (candidate: unknown) => {
     const result = validateConfigObjectRawWithPlugins(candidate, {
@@ -465,6 +480,7 @@ export async function writeConfigFileFromContext(
         });
       },
     });
+    recordUpdateDoctorConfigWrite(configPath, previousHash, nextHash);
     try {
       options.assertConfigPathForWrite?.();
     } catch (error) {

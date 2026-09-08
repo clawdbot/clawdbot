@@ -46,6 +46,7 @@ echo "Installing the real OpenClaw package artifact with npm as root..."
 DOCKER_COMMAND_TIMEOUT="$DOCKER_RUN_TIMEOUT" docker_e2e_docker_run_cmd run -d \
   --name "$NPM_PROOF_CONTAINER" \
   --user root \
+  -e OPENCLAW_FS_SAFE_NATIVE_CONTRACT \
   "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
   -v "$PACKAGE_HARNESS_DIR:/repo:ro" \
   -v "$ROOT_DIR/scripts/docker/verify-fs-safe-native.mjs:/tmp/verify-fs-safe-native.mjs:ro" \
@@ -69,6 +70,7 @@ DOCKER_COMMAND_TIMEOUT="$DOCKER_RUN_TIMEOUT" docker_e2e_docker_run_cmd run -d \
 echo "Installing the real OpenClaw package artifact with pnpm..."
 DOCKER_COMMAND_TIMEOUT="$DOCKER_RUN_TIMEOUT" docker_e2e_docker_run_cmd run -d \
   --name "$PNPM_PROOF_CONTAINER" \
+  -e OPENCLAW_FS_SAFE_NATIVE_CONTRACT \
   "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
   -v "$PACKAGE_HARNESS_DIR:/repo:ro" \
   -v "$ROOT_DIR/scripts/docker/verify-fs-safe-native.mjs:/tmp/verify-fs-safe-native.mjs:ro" \
@@ -127,6 +129,7 @@ SOURCE_LINK
 echo "Installing the real OpenClaw package artifact with Bun..."
 DOCKER_COMMAND_TIMEOUT="$DOCKER_RUN_TIMEOUT" docker_e2e_docker_run_cmd run -d \
   --name "$BUN_PROOF_CONTAINER" \
+  -e OPENCLAW_FS_SAFE_NATIVE_CONTRACT \
   "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
   -v "$PACKAGE_HARNESS_DIR:/repo:ro" \
   "$IMAGE_NAME" \
@@ -146,6 +149,7 @@ DOCKER_COMMAND_TIMEOUT="$DOCKER_RUN_TIMEOUT" docker_e2e_docker_run_cmd run -d \
 echo "Installing the real OpenClaw package artifact with npm on musl..."
 DOCKER_COMMAND_TIMEOUT="$DOCKER_RUN_TIMEOUT" docker_e2e_docker_run_cmd run -d \
   --name "$MUSL_PROOF_CONTAINER" \
+  -e OPENCLAW_FS_SAFE_NATIVE_CONTRACT \
   "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
   "$MUSL_IMAGE_NAME" \
   sh -lc '
@@ -198,6 +202,13 @@ for installed_version in "$NPM_INSTALLED_VERSION" "$PNPM_INSTALLED_VERSION" "$BU
   fi
 done
 
+# The legacy contract intentionally skips native verification; evidence must not
+# present that omission as an executed native proof.
+MUSL_FS_SAFE_NATIVE_OUTCOME="passed"
+if [[ "${OPENCLAW_FS_SAFE_NATIVE_CONTRACT:-required}" == "not-applicable" ]]; then
+  MUSL_FS_SAFE_NATIVE_OUTCOME="not-applicable"
+fi
+
 node --import tsx "$ROOT_DIR/scripts/e2e/lib/docker-artifact-proof/write-identities.ts" \
   --scenario docker-package-install \
   --output "$IDENTITY_PATH" \
@@ -213,7 +224,7 @@ node --import tsx "$ROOT_DIR/scripts/e2e/lib/docker-artifact-proof/write-identit
   --detail "npm:openclawPath=/usr/local/bin/openclaw" \
   --detail "npm:helpCommand=passed" \
   --detail "npm:nonRootExecution=passed" \
-  --detail "musl:fsSafeNative=passed" \
+  --detail "musl:fsSafeNative=$MUSL_FS_SAFE_NATIVE_OUTCOME" \
   --detail "pnpm:installedPackageRoot=$PNPM_PACKAGE_ROOT" \
   --detail "pnpm:installedPackageVersion=$PNPM_PACKAGE_VERSION" \
   --detail "pnpm:openclawVersion=$PNPM_INSTALLED_VERSION" \

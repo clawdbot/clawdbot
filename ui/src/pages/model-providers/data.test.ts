@@ -294,6 +294,33 @@ describe("buildModelProviderCards", () => {
     });
   });
 
+  it("keeps automatic shared-owner orders incomplete on each separate card", () => {
+    const cards = buildModelProviderCards({
+      ...EMPTY_INPUT,
+      authStatus: authStatus([
+        {
+          provider: "provider-a",
+          authProvider: "shared-auth",
+          displayName: "Provider A",
+          status: "ok",
+          profiles: [{ profileId: "shared:first", type: "oauth", status: "ok" }],
+        },
+        {
+          provider: "provider-b",
+          authProvider: "shared-auth",
+          displayName: "Provider B",
+          status: "ok",
+          profiles: [{ profileId: "shared:second", type: "oauth", status: "ok" }],
+        },
+      ]),
+    });
+
+    expect(cards).toHaveLength(2);
+    expect(cards.map((provider) => provider.profileOrderExplicitProviders)).toEqual([[], []]);
+    expect(cards[0]?.profileOrders["shared-auth"]).toEqual(["shared:first", "shared:second"]);
+    expect(cards[1]?.profileOrders["shared-auth"]).toEqual(["shared:first", "shared:second"]);
+  });
+
   it("merges CLI alias auth rows even when usage enrichment is unavailable", () => {
     const cards = buildModelProviderCards({
       ...EMPTY_INPUT,
@@ -349,6 +376,61 @@ describe("buildModelProviderCards", () => {
       { provider: "claude-cli", profileIds: ["p2"] },
     ]);
   });
+
+  it("groups alias profile priority under the shared auth owner", () => {
+    const cards = buildModelProviderCards({
+      ...EMPTY_INPUT,
+      authStatus: authStatus([
+        {
+          provider: "anthropic",
+          authProvider: "anthropic",
+          displayName: "Claude",
+          status: "ok",
+          profiles: [{ profileId: "p1", type: "oauth", status: "ok" }],
+          profileOrder: ["p2", "p1"],
+          profileOrderStored: true,
+        },
+        {
+          provider: "claude-cli",
+          authProvider: "anthropic",
+          displayName: "Claude",
+          status: "ok",
+          profiles: [{ profileId: "p2", type: "oauth", status: "ok" }],
+          profileOrder: ["p2", "p1"],
+          profileOrderStored: true,
+        },
+      ]),
+    });
+
+    expect(firstCard(cards)).toMatchObject({
+      profileProviderIds: { p1: "anthropic", p2: "anthropic" },
+      profileOrders: { anthropic: ["p2", "p1"] },
+      profileOrderExplicitProviders: ["anthropic"],
+      profileOrderStoredProviders: ["anthropic"],
+    });
+  });
+
+  it.each(["provider-config", "auth-config"] as const)(
+    "projects %s priority locks onto the owning card",
+    (profileOrderLocked) => {
+      const cards = buildModelProviderCards({
+        ...EMPTY_INPUT,
+        authStatus: authStatus([
+          {
+            provider: "openai",
+            authProvider: "openai",
+            displayName: "OpenAI",
+            status: "ok",
+            profiles: [{ profileId: "p1", type: "oauth", status: "ok", source: "config" }],
+            profileOrder: ["p1"],
+            profileOrderLocked,
+          },
+        ]),
+      });
+
+      expect(firstCard(cards).profileOrderLocks).toEqual({ openai: profileOrderLocked });
+    },
+  );
 
   it("keeps a credential-less missing route visible beside CLI OAuth", () => {
     const cards = buildModelProviderCards({

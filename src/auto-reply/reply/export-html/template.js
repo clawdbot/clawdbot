@@ -1886,9 +1886,9 @@
         }
         return `<pre><code class="hljs">${highlighted}</code></pre>`;
       },
-      // Text content: escape HTML tags
+      // Delegate nested inline tokens; leaf text keeps the existing escaping.
       text(token) {
-        return escapeHtmlTags(escapeHtml(token.text));
+        return token.tokens ? false : escapeHtmlTags(escapeHtml(token.text));
       },
       // Inline code: escape HTML
       codespan(token) {

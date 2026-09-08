@@ -22,7 +22,7 @@ import {
   resolveLocalControlUiProbeLinks,
 } from "../gateway/control-ui-links.js";
 import { normalizeControlUiBasePath } from "../gateway/control-ui-shared.js";
-import { isInvalidGatewayToken } from "../gateway/known-weak-gateway-secrets.js";
+import { isInvalidGatewaySecret } from "../gateway/known-weak-gateway-secrets.js";
 import { probeGateway, type GatewayProbeResult } from "../gateway/probe.js";
 import {
   detectBrowserOpenSupport,
@@ -137,7 +137,7 @@ export function normalizeGatewayTokenInput(value: unknown): string {
   const trimmed = value.trim();
   // Reject the literal string "undefined" — a common bug when JS undefined
   // gets coerced to a string via template literals or String(undefined).
-  if (isInvalidGatewayToken(trimmed)) {
+  if (isInvalidGatewaySecret(trimmed)) {
     return "";
   }
   return trimmed;

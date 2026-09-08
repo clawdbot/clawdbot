@@ -35,6 +35,8 @@ function ensureDependencyIgnores(root) {
     "node_modules",
     "**/node_modules/",
     "pnpm-lock.yaml",
+    // Runtime promotion stages destination siblings before its final clean check.
+    "*.openclaw-update-*.tmp/",
     PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH,
   ];
   const missing = required.filter((entry) => !lines.has(entry));

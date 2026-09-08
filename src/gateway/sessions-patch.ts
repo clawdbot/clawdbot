@@ -41,6 +41,7 @@ import {
   buildSessionCreationStamp,
   type SessionCreatedVia,
 } from "../config/sessions/session-entry-provenance.js";
+import { isPinnableSessionEntry } from "../config/sessions/session-pin-policy.js";
 import { projectCanonicalSessionEntryShape } from "../config/sessions/store-entry-shape.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeExecTarget } from "../infra/exec-approvals.js";
@@ -363,10 +364,17 @@ function* projectSessionPatchSteps(
     }
   }
 
+  const pinnable = isPinnableSessionEntry(storeKey, next);
+  if (!pinnable) {
+    delete next.pinnedAt;
+  }
   if ("pinned" in patch) {
     if (patch.pinned === true) {
       if (next.archivedAt !== undefined) {
         return invalid("cannot pin an archived session; restore it first");
+      }
+      if (!pinnable) {
+        return invalid("cannot pin a child session; pin its parent session instead");
       }
       next.pinnedAt ??= now;
     } else {

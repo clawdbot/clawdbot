@@ -7,6 +7,7 @@ import {
 } from "./panel-loading-skeleton.ts";
 
 const variants = [
+  "board",
   "browser",
   "chat",
   "desktop",

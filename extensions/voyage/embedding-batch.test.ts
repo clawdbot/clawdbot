@@ -135,49 +135,91 @@ afterEach(() => {
 });
 
 describe("voyage batch bounded reads", () => {
-  it("preserves configured query parameters on real direct embedding requests", async () => {
-    const received: Array<{ url: string; authorization: string | undefined }> = [];
-    const server = createServer((request, response) => {
-      received.push({ url: request.url ?? "", authorization: request.headers.authorization });
-      if (request.url !== "/tenant/v1/embeddings?api-version=2024-10-21&tenant=beta") {
-        response.writeHead(404).end("wrong embedding endpoint");
-        return;
+  it.each([
+    { operation: "single", inputType: "query", expectedInputs: [["first"]] },
+    { operation: "single", inputType: "document", expectedInputs: [["first"]] },
+    { operation: "single", inputType: undefined, expectedInputs: [["first"]] },
+    { operation: "batch", inputType: "query", expectedInputs: [["first"], ["second"]] },
+    { operation: "batch", inputType: "document", expectedInputs: [["first", "second"]] },
+    { operation: "batch", inputType: undefined, expectedInputs: [["first", "second"]] },
+  ] as const)(
+    "preserves real $operation $inputType requests, grouping, and configured query parameters",
+    async ({ operation, inputType, expectedInputs }) => {
+      const received: Array<{
+        url: string;
+        authorization: string | undefined;
+        body: unknown;
+      }> = [];
+      const vectors: Record<string, number[]> = { first: [7, 11], second: [13, 17] };
+      const server = createServer((request, response) => {
+        request.setEncoding("utf8");
+        let text = "";
+        request.on("data", (chunk: string) => {
+          text += chunk;
+        });
+        request.on("end", () => {
+          if (request.url !== "/tenant/v1/embeddings?api-version=2024-10-21&tenant=beta") {
+            response.writeHead(404).end("wrong embedding endpoint");
+            return;
+          }
+          const body = JSON.parse(text) as { input: string[] };
+          received.push({ url: request.url, authorization: request.headers.authorization, body });
+          response.writeHead(200, { "content-type": "application/json" });
+          response.end(
+            JSON.stringify({
+              data: body.input.map((input, index) => ({ index, embedding: vectors[input] })),
+            }),
+          );
+        });
+      });
+      server.listen(0, "127.0.0.1");
+      await once(server, "listening");
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("expected loopback TCP address");
       }
-      response.writeHead(200, { "content-type": "application/json" });
-      response.end(JSON.stringify({ data: [{ embedding: [7, 11] }] }));
-    });
-    server.listen(0, "127.0.0.1");
-    await once(server, "listening");
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("expected loopback TCP address");
-    }
 
-    try {
-      const { provider } = await createVoyageEmbeddingProvider({
-        config: {},
-        provider: "voyage",
-        model: "voyage-3",
-        fallback: "none",
-        remote: {
-          baseUrl: `http://127.0.0.1:${address.port}/tenant/v1/?api-version=2024-10-21&tenant=beta#local`,
-          apiKey: "voyage-loopback-key",
-        },
-      });
-
-      await expect(provider.embed("hello", { inputType: "query" })).resolves.toEqual([7, 11]);
-      expect(received).toEqual([
-        {
-          url: "/tenant/v1/embeddings?api-version=2024-10-21&tenant=beta",
-          authorization: "Bearer voyage-loopback-key",
-        },
-      ]);
-    } finally {
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
-    }
-  });
+      try {
+        const { provider } = await createVoyageEmbeddingProvider({
+          config: {},
+          provider: "voyage",
+          model: "voyage/voyage-3",
+          fallback: "none",
+          remote: {
+            baseUrl: `http://127.0.0.1:${address.port}/tenant/v1/?api-version=2024-10-21&tenant=beta#local`,
+            apiKey: "voyage-loopback-key",
+          },
+        });
+        expect(provider.maxInputTokens).toBe(32000);
+        if (operation === "single") {
+          await expect(provider.embed({ text: "first" }, { inputType })).resolves.toEqual([7, 11]);
+        } else {
+          await expect(
+            provider.embedBatch([{ text: "first" }, "second"], { inputType }),
+          ).resolves.toEqual([
+            [7, 11],
+            [13, 17],
+          ]);
+        }
+        expect(received).toHaveLength(expectedInputs.length);
+        expect(received).toEqual(
+          expect.arrayContaining(
+            expectedInputs.map((input) => ({
+              url: "/tenant/v1/embeddings?api-version=2024-10-21&tenant=beta",
+              authorization: "Bearer voyage-loopback-key",
+              body: { model: "voyage-3", input, input_type: inputType ?? "document" },
+            })),
+          ),
+        );
+        await expect(provider.embedBatch([], { inputType })).resolves.toEqual([]);
+        expect(received).toHaveLength(expectedInputs.length);
+      } finally {
+        await new Promise<void>((resolve, reject) => {
+          server.close((error) => (error ? reject(error) : resolve()));
+        });
+      }
+    },
+  );
 
   it("preserves configured query parameters through real batch upload, create, status, and error output", async () => {
     const received: Array<{ url: string; authorization: string | undefined }> = [];

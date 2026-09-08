@@ -365,7 +365,13 @@ describe("browser chrome helpers", () => {
         });
       },
       run: async (baseUrl) => {
-        await expect(isChromeCdpReady(baseUrl, 300, 400)).resolves.toBe(true);
+        const onDiagnostic = vi.fn();
+        await expect(
+          isChromeCdpReady(baseUrl, 300, 400, undefined, { onDiagnostic }),
+        ).resolves.toBe(true);
+        expect(onDiagnostic).toHaveBeenCalledWith(
+          expect.objectContaining({ ok: true, wsUrl: expect.stringContaining("/health") }),
+        );
       },
     });
   });

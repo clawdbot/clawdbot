@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
@@ -6,7 +7,11 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { asResolvedSourceConfig, asRuntimeConfig } from "../../config/materialize.js";
 import { appendTranscriptEventsInTransaction } from "../../config/sessions/session-accessor.sqlite-transcript-store.js";
 import { readUpdateStateSchemaVersions } from "../../infra/update-candidate-state.js";
-import { createUpdateRun, recordUpdateRunStep } from "../../infra/update-run-ledger.js";
+import {
+  adoptUpdateRun,
+  createUpdateRun,
+  recordUpdateRunStep,
+} from "../../infra/update-run-ledger.js";
 import { defaultRuntime } from "../../runtime.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db-contract.js";
 import {
@@ -51,7 +56,7 @@ it.each([
   { agentId: "main", changed: "shared", blocked: "state-migrated-no-rollback" },
   { agentId: "main", changed: "agent", blocked: "state-migrated-no-rollback" },
 ])(
-  "classifies activation after a first serving turn (agent=$agentId, changed=$changed)",
+  "classifies activation after first-use database creation (agent=$agentId, changed=$changed)",
   async ({ agentId, changed, blocked }) => {
     const stateDir = await fs.realpath(dirs.make("update-first-serving-turn-"));
     const env = { OPENCLAW_STATE_DIR: stateDir };
@@ -143,9 +148,61 @@ it("refuses state inspection when activation leaves no known runtime root", asyn
   });
 });
 
-it.each([false, true])(
-  "finishes the same real ledger from the candidate after the old updater is fenced by migration (json=%s)",
-  async (json) => {
+it.each([
+  { beforeContent: false, publish: false, blocked: "state-migrated-no-rollback" },
+  { beforeContent: true, publish: false, blocked: undefined },
+  { beforeContent: true, publish: true, blocked: undefined },
+])(
+  "accepts applied shared content through activation (alreadyApplied=$beforeContent, published=$publish)",
+  async ({ beforeContent, publish, blocked }) => {
+    const stateDir = await fs.realpath(dirs.make("update-deferred-content-"));
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const shared = openOpenClawStateDatabase({ env });
+    const contentVersion = OPENCLAW_STATE_SCHEMA_VERSION + 1;
+    const markContentApplied = () =>
+      shared.db
+        .prepare(
+          "INSERT OR REPLACE INTO config_machine_state (state_key, value_json, updated_at_ms) VALUES (?, ?, ?)",
+        )
+        .run("state.schema.contentVersion", JSON.stringify(contentVersion), Date.now());
+    if (beforeContent) {
+      markContentApplied();
+    }
+    const schemaVersions = await readUpdateStateSchemaVersions({ stateDir, config: {}, env });
+    markContentApplied();
+    if (publish) {
+      shared.db.exec(`PRAGMA user_version = ${contentVersion};`);
+    }
+    const result = {
+      status: "ok" as const,
+      mode: "npm" as const,
+      root: process.cwd(),
+      steps: [],
+      durationMs: 0,
+    };
+    await expect(
+      inspectActivatedUpdateState({
+        result,
+        root: process.cwd(),
+        schemaVersions,
+        candidateSchemaVersions: { state: contentVersion, agent: OPENCLAW_AGENT_SCHEMA_VERSION },
+        config: {},
+        env,
+      }),
+    ).resolves.toBe(blocked);
+    expect(result).toMatchObject({ status: "ok", steps: [] });
+    expect(shared.db.prepare("PRAGMA user_version").get()?.user_version).toBe(
+      publish ? contentVersion : OPENCLAW_STATE_SCHEMA_VERSION,
+    );
+  },
+);
+
+it.each([
+  { json: false, parentOwns: false },
+  { json: true, parentOwns: true },
+])(
+  "finishes the same real ledger from the candidate after the old updater is fenced by migration (json=$json, parentOwns=$parentOwns)",
+  async ({ json, parentOwns }) => {
     const stateDir = await fs.realpath(dirs.make("migrated-update-"));
     const env = {
       ...process.env,
@@ -155,6 +212,9 @@ it.each([false, true])(
     };
     const root = process.cwd();
     const created = createUpdateRun({ trigger: "cli" }, { env });
+    const parentDriver = parentOwns
+      ? adoptUpdateRun(created.runId, { env }).origin.driver
+      : undefined;
     const run = { runId: created.runId, env };
     const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
     vi.useFakeTimers();
@@ -279,12 +339,21 @@ it.each([false, true])(
     const inspected = new DatabaseSync(database.path, { readOnly: true });
     try {
       const row = inspected
-        .prepare("SELECT status, reason, steps_json FROM update_runs WHERE run_id = ?")
+        .prepare("SELECT status, reason, origin_json, steps_json FROM update_runs WHERE run_id = ?")
         .get(created.runId);
       expect(row).toMatchObject({ status: "failed", reason: "state-migrated-no-rollback" });
       expect(JSON.parse(String(row?.steps_json))).toEqual(
         expect.arrayContaining([progress.pendingSteps.at(-1)]),
       );
+      const origin = JSON.parse(String(row?.origin_json));
+      const driver = origin.driver;
+      expect(driver).toMatchObject({
+        host: os.hostname(),
+        pid: expect.any(Number),
+        startIdentity: expect.any(String),
+      });
+      expect(driver.pid).not.toBe(process.pid);
+      expect(origin.previousDrivers).toEqual(parentOwns ? [parentDriver] : undefined);
     } finally {
       inspected.close();
     }

@@ -91,6 +91,7 @@ export function registerBedrockMantlePlugin(api: OpenClawPluginApi): void {
       }),
     normalizeResolvedModel: ({ modelId, model }) =>
       normalizeMantleResolvedModel({ modelId, model }),
+    supportsSystemPromptCacheBoundary: true,
     createStreamFn: ({ model }) =>
       model.api === "anthropic-messages" ? createMantleAnthropicStreamFn() : undefined,
     matchesContextOverflowError: ({ errorMessage }) =>

@@ -126,7 +126,7 @@ describe("Mermaid Markdown presentation", () => {
     await vi.waitFor(() =>
       expect(action(element!, copied ? "Copied!" : "Copy failed")).toBeDefined(),
     );
-    expect(copySource).toHaveBeenCalledExactlyOnceWith(original);
+    expect(copySource.mock.calls.map(([text]) => text)).toEqual([original]);
 
     action(element!, "Show diagram").click();
     await element!.updateComplete;
@@ -161,7 +161,7 @@ describe("Mermaid Markdown presentation", () => {
     expect(element!.shadowRoot?.textContent).not.toContain("internal parser detail");
     expect(action(element!, "Expand diagram").disabled).toBe(true);
     action(element!, "Copy source").click();
-    await vi.waitFor(() => expect(copySource).toHaveBeenCalledExactlyOnceWith(original));
+    await vi.waitFor(() => expect(copySource.mock.calls.map(([text]) => text)).toEqual([original]));
     if (failure === "image") {
       expect(revokeObjectURL).toHaveBeenCalledExactlyOnceWith("blob:mermaid-1");
     } else {

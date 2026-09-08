@@ -49,7 +49,7 @@ export type WithRunSession = (
 ) => RunCronAgentTurnResult;
 
 const CRON_EXECUTION_ROOT_RUNTIME_ERROR =
-  "collection review requires the embedded agent runtime; the configured CLI runtime cannot be rooted at the Workshop directory";
+  "collection review requires a runtime that enforces the Workshop root through OpenClaw tools";
 
 export class CronExecutionRootRuntimeError extends Error {
   constructor() {
@@ -61,8 +61,9 @@ export class CronExecutionRootRuntimeError extends Error {
 export function assertCronExecutionRootRuntime(
   executionRoot: string | undefined,
   runtime: string,
+  rootedCliExecution: boolean,
 ): void {
-  if (executionRoot && runtime !== "openclaw") {
+  if (executionRoot && runtime !== "openclaw" && !rootedCliExecution) {
     throw new CronExecutionRootRuntimeError();
   }
 }

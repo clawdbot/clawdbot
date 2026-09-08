@@ -31,6 +31,11 @@ import {
   readTranscriptDisplaySource,
 } from "./session-accessor.sqlite-display-position.js";
 import {
+  parseStoredTranscriptEvent,
+  readHistoricalHistoryAnchorPage,
+  resolveHistoricalHistoryEventById,
+} from "./session-accessor.sqlite-history-interval.js";
+import {
   assertVisibleMessageRangeJson,
   hasUnindexedVisibleMessages,
   iterateVisibleMessageRange,
@@ -174,7 +179,7 @@ function readBoundaryEvents(
         .where("identity.event_type", "in", ["compaction", "reset"])
         .where("identity.seq", ">=", firstSeq)
         .where("identity.seq", "<=", lastSeq),
-    ).rows.map((row) => [row.seq, JSON.parse(row.event_json) as TranscriptEvent]),
+    ).rows.map((row) => [row.seq, parseStoredTranscriptEvent(row.event_json)]),
   );
 }
 
@@ -313,7 +318,7 @@ function readVisibleMessageById(
   return seq === undefined
     ? undefined
     : {
-        event: JSON.parse(row.event_json) as TranscriptEvent,
+        event: parseStoredTranscriptEvent(row.event_json),
         eventSeq: row.event_seq,
         seq,
       };
@@ -539,7 +544,9 @@ export function readSessionTranscriptHistoryEventById(
 ): SessionTranscriptMessageEvent | undefined {
   return withCurrentProjectionSnapshot(scope, (projection) => {
     const history = resolveVisibleHistoryProjection(projection);
-    const event = resolveHistoryEventById(projection, eventId, history);
+    const event =
+      resolveHistoryEventById(projection, eventId, history) ??
+      resolveHistoricalHistoryEventById(projection, eventId);
     return event
       ? positionTranscriptDisplayEvents(projection, history.displaySource, [event])[0]
       : undefined;
@@ -604,14 +611,19 @@ export function readSessionTranscriptHistoryAnchorPage(
     const history = resolveVisibleHistoryProjection(projection);
     const anchor = resolveHistoryEventById(projection, options.messageId, history);
     if (!anchor) {
-      return {
-        events: [],
-        found: false,
-        hasOverreadContext: false,
-        offset: 0,
-        displaySource: history.displaySource,
-        totalMessages: history.total,
-      };
+      // Explicit anchors reopen the closed reset interval that still contains the
+      // active-path row. Unanchored history and current-display lookup stay
+      // latest-reset-relative; missing or off-path IDs stay not-found.
+      return (
+        readHistoricalHistoryAnchorPage(projection, history.displaySource, options) ?? {
+          events: [],
+          found: false,
+          hasOverreadContext: false,
+          offset: 0,
+          displaySource: history.displaySource,
+          totalMessages: history.total,
+        }
+      );
     }
     const pageSize = Math.max(
       1,

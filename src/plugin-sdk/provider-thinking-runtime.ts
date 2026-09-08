@@ -1,8 +1,13 @@
 import type { ProviderThinkingProfile } from "../plugins/provider-thinking.types.js";
+export {
+  isGoogleGemini3FlashModel,
+  isGoogleGemini3ProModel,
+  isGoogleGemini3ThinkingLevelModel,
+} from "@openclaw/ai/internal/google-model-family";
 
 const THINKING_LEVEL_IDS = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
 
-// Provider policies load eagerly; keep this module free of runtime imports.
+// Provider policies load eagerly; keep this module free of streaming runtime imports.
 export function resolveEffortThinkingProfile(
   efforts: readonly string[] | null | undefined,
 ): ProviderThinkingProfile | undefined {

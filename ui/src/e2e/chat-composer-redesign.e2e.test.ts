@@ -5,6 +5,7 @@ import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-ar
 import {
   takeControlUiElementScreenshot,
   takeControlUiViewportScreenshot,
+  waitForControlUiProofSurface,
 } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -214,17 +215,22 @@ suite.define(() => {
       for (const picker of [
         {
           menu: ".chat-controls__model-menu",
+          popup: '.chat-controls__model-picker wa-popup [part="popup"]',
           trigger: '[data-chat-model-select="true"]',
         },
         {
           menu: ".chat-controls__effort-menu",
+          popup: '.chat-controls__effort-picker wa-popup [part="popup"]',
           trigger: '[data-chat-thinking-select="true"]',
         },
       ]) {
         const visibleTrigger = composer.locator(picker.trigger);
         await expect.poll(() => visibleTrigger.isVisible()).toBe(true);
         await visibleTrigger.click();
-        await page.waitForTimeout(100);
+        // The popup scales while opening; measure its settled viewport bounds.
+        await waitForControlUiProofSurface(composer.locator(picker.popup), [
+          page.locator(picker.menu),
+        ]);
         const [composerBox, footerBox, menuBox, triggerBox] = await Promise.all([
           composer.boundingBox(),
           composer.locator(".agent-chat__composer-footer").boundingBox(),

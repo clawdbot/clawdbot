@@ -26,6 +26,7 @@ import {
   buildLiveXaiOAuthProvider,
   buildLiveXaiProvider,
   buildXaiProvider,
+  isXaiGrokProxyBaseUrl,
 } from "./provider-catalog.js";
 import { isXaiProviderId } from "./provider-id.js";
 import {
@@ -211,18 +212,36 @@ export default defineSingleProviderPluginEntry({
         }
         const { resolveApiKeyForProvider } =
           await import("openclaw/plugin-sdk/provider-auth-runtime");
-        const runtimeAuth = await resolveApiKeyForProvider({
-          provider: PROVIDER_ID,
-          cfg: ctx.config,
-          ...(ctx.agentDir ? { agentDir: ctx.agentDir } : {}),
-          ...(ctx.workspaceDir ? { workspaceDir: ctx.workspaceDir } : {}),
-          ...(auth.profileId ? { profileId: auth.profileId, lockedProfile: true } : {}),
-          // Prepared direct auth must not reopen failed profile candidates.
-          ...(!auth.profileId && auth.mode !== "none" ? { allowAuthProfileFallback: false } : {}),
-        }).catch(() => undefined);
+        const grokProxy = isXaiGrokProxyBaseUrl(
+          ctx.config.models?.providers?.[PROVIDER_ID]?.baseUrl,
+        );
+        // Static token material can already be ready in a cold command or worker.
+        const resolvedAuth =
+          auth.mode === "token" && grokProxy && auth.discoveryApiKey
+            ? { ...auth, apiKey: auth.discoveryApiKey }
+            : await resolveApiKeyForProvider({
+                provider: PROVIDER_ID,
+                cfg: ctx.config,
+                ...(ctx.agentDir ? { agentDir: ctx.agentDir } : {}),
+                ...(ctx.workspaceDir ? { workspaceDir: ctx.workspaceDir } : {}),
+                ...(auth.profileId ? { profileId: auth.profileId, lockedProfile: true } : {}),
+                // Prepared direct auth must not reopen failed profile candidates.
+                ...(!auth.profileId && auth.mode !== "none"
+                  ? { allowAuthProfileFallback: false }
+                  : {}),
+              }).catch(() => undefined);
+        // Static token storage does not distinguish subscription tokens from Console API tokens.
+        const subscriptionToken =
+          (resolvedAuth?.mode === "token" || auth.mode === "token") && grokProxy;
+        if (subscriptionToken && (!resolvedAuth?.apiKey || resolvedAuth.mode !== "token")) {
+          return {
+            providers: {},
+            outcomes: [{ provider: PROVIDER_ID, profileId: auth.profileId, status: "unavailable" }],
+          };
+        }
         const selectedAuth =
-          runtimeAuth?.mode === "oauth" && runtimeAuth.apiKey
-            ? { ...runtimeAuth, oauth: true }
+          resolvedAuth?.apiKey && (resolvedAuth.mode === "oauth" || subscriptionToken)
+            ? { ...resolvedAuth, oauth: true }
             : { ...(auth.apiKey ? auth : ctx.resolveProviderApiKey(PROVIDER_ID)), oauth: false };
         if (!selectedAuth.apiKey) {
           return null;
@@ -233,7 +252,10 @@ export default defineSingleProviderPluginEntry({
           profileId: selectedAuth.profileId,
           run: async () => ({
             provider: selectedAuth.oauth
-              ? await buildLiveXaiOAuthProvider({ discoveryApiKey: apiKey })
+              ? await buildLiveXaiOAuthProvider({
+                  discoveryApiKey: apiKey,
+                  authMode: selectedAuth.mode === "token" ? "token" : "oauth",
+                })
               : await buildLiveXaiProvider(selectedAuth),
           }),
         });

@@ -7,6 +7,7 @@ import { sessionPullRequestsForGateway } from "../../lib/session-pull-requests.t
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { storeChatComposerMemoryFallback } from "./chat-composer-memory-fallback.ts";
 import { loadChatBranches, retireChatBranchRequests } from "./chat-history-branches.ts";
+import { loadChatHistory } from "./chat-history.ts";
 import { ChatPaneBoard } from "./chat-pane-board.ts";
 import {
   consumePaneSessionHandoff,
@@ -170,6 +171,15 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
       const deferredHydrationActive = this.resumeDeferredSessionHydration();
       if (state && !deferredHydrationActive) {
         this.markSessionRead(selectedChatSessionRow(state));
+        if (
+          state.connected &&
+          this.resolveChatReadTarget() &&
+          (state.chatRunId || selectedChatSessionRow(state)?.hasActiveRun)
+        ) {
+          // Keep the retained transcript visible while reconciling the live run's
+          // authoritative start time and activity after a foreground return.
+          void loadChatHistory(state, { deferBranches: true });
+        }
       }
       if (
         state &&

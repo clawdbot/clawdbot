@@ -1031,28 +1031,61 @@ describe("gateway config methods", () => {
     expect(error?.details?.issues?.[0]?.path).toBe("gateway.bind");
   });
 
-  it("returns noop for config.patch when config is unchanged", async () => {
-    const current = await rpcReq<{
-      config?: Record<string, unknown>;
-      hash?: string;
-    }>(requireClient(), "config.get", {});
-    expect(current.ok).toBe(true);
+  it.each(["config.set", "config.apply", "config.patch"] as const)(
+    "preserves literal nulls in full replacements and patch deletion through %s",
+    async (method) => {
+      const original = await getCurrentConfigObject();
+      const seed = structuredClone(original.config);
+      const agents = requireConfigObject(seed.agents, "agents");
+      const defaults = requireConfigObject(agents.defaults ?? {}, "agent defaults");
+      agents.defaults = { ...defaults, params: { temperature: 0.2, topP: 0.8 } };
 
-    // Patch with the same config — no actual changes
+      try {
+        await writeJsonFile(original.path, seed);
+        invalidateConfigGetResponseCache();
+        const current = await getCurrentConfigObject();
+        const next = structuredClone(current.config);
+        const nextAgents = requireConfigObject(next.agents, "agents");
+        const nextDefaults = requireConfigObject(nextAgents.defaults, "agent defaults");
+        nextDefaults.params = { temperature: null, nested: { value: null } };
+        const patch = { agents: { defaults: { params: { temperature: null, topP: null } } } };
+
+        const res = await rpcReq(requireClient(), method, {
+          raw: JSON.stringify(method === "config.patch" ? patch : next),
+          baseHash: current.hash,
+        });
+
+        expect(res.ok, res.error?.message).toBe(true);
+        const persisted = JSON.parse(await fs.readFile(original.path, "utf-8"));
+        expect(persisted.agents.defaults).toStrictEqual({
+          ...defaults,
+          params: method === "config.patch" ? {} : { temperature: null, nested: { value: null } },
+        });
+      } finally {
+        await restoreConfigFileForTest(original);
+        invalidateConfigGetResponseCache();
+      }
+    },
+  );
+
+  it("returns noop for config.patch when authored config is unchanged", async () => {
+    const current = await getCurrentConfigObject();
+
+    // Replaying runtime defaults would explicitly author them into the source config.
     const res = await rpcReq<{
       ok?: boolean;
       noop?: boolean;
       config?: Record<string, unknown>;
     }>(requireClient(), "config.patch", {
-      raw: JSON.stringify(current.payload?.config ?? {}),
-      baseHash: current.payload?.hash,
+      raw: JSON.stringify(current.config),
+      baseHash: current.hash,
     });
 
     expect(res.ok, res.error?.message).toBe(true);
     expect(res.payload?.noop).toBe(true);
     // Config hash should not change (no file write)
     const after = await rpcReq<{ hash?: string }>(requireClient(), "config.get", {});
-    expect(after.payload?.hash).toBe(current.payload?.hash);
+    expect(after.payload?.hash).toBe(current.hash);
   });
 
   it("acknowledges sandbox config only after the runtime snapshot applies it", async () => {

@@ -16,6 +16,7 @@ import {
 } from "../../sessions/session-key-utils.js";
 import { sessionDeliveryOrigin } from "../../utils/delivery-context.shared.js";
 import type { SessionMaintenanceConfig, SessionMaintenanceMode } from "../types.base.js";
+import { isPinnableSessionEntry } from "./session-pin-policy.js";
 import type { SessionEntry } from "./types.js";
 
 const log = createSubsystemLogger("sessions/store");
@@ -562,7 +563,7 @@ function shouldPreserveNonArchivedMaintenanceEntry(params: {
   preserveKeys?: ReadonlySet<string>;
   preserveRecentMs?: number | null;
 }): boolean {
-  if (params.entry?.pinnedAt !== undefined) {
+  if (params.entry?.pinnedAt !== undefined && isPinnableSessionEntry(params.key, params.entry)) {
     return true;
   }
   // A model lock is durable harness ownership, not merely a UI restriction.

@@ -216,7 +216,11 @@ type PreparedFixtureDescriptor = Awaited<ReturnType<typeof bundleFixture>>["desc
 
 async function qualificationFixture<
   Descriptor extends Pick<PreparedFixtureDescriptor, "source" | "producer">,
->(descriptor: Descriptor, pluginSdkApi: object = {}) {
+>(
+  descriptor: Descriptor,
+  pluginSdkApi: object = {},
+  dependencyReports: Record<string, object | string> = {},
+) {
   const source = descriptor.source;
   const makeProducer = (jobId: string, jobName: string) => ({
     ...descriptor.producer,
@@ -243,10 +247,14 @@ async function qualificationFixture<
     kind: string,
     id: string,
     producer: ReturnType<typeof makeProducer>,
-    files: Record<string, object>,
+    files: Record<string, object | string>,
   ) => {
     const entries = Object.entries(files).map(
-      ([name, value]) => [name, Buffer.from(`${JSON.stringify(value)}\n`)] as const,
+      ([name, value]) =>
+        [
+          name,
+          Buffer.from(typeof value === "string" ? value : `${JSON.stringify(value)}\n`),
+        ] as const,
     );
     const zip = new JSZip();
     for (const [name, bytes] of entries) {
@@ -298,6 +306,7 @@ async function qualificationFixture<
     makeProducer("49", "Check npm dependencies"),
     {
       "dependency-evidence-manifest.json": { releaseSha: source.sha },
+      ...dependencyReports,
     },
   );
   const jobs = [sourceCheck, contentsProof, sdkProof, dependencyProof].map(({ producer }) => ({
@@ -536,7 +545,7 @@ describe("prepared npm bundle", () => {
   });
 
   it.each([undefined, "v2026.8.1"])(
-    "qualifies exact package bytes with large SDK evidence (release tag=%s)",
+    "qualifies exact package bytes with large SDK and npm lock evidence (release tag=%s)",
     async (releaseTag) => {
       const fixture = await bundleFixture();
       const directory = tempDirs.make("npm-bundle-");
@@ -555,11 +564,32 @@ describe("prepared npm bundle", () => {
       expect(readFileSync(downloaded.tarballPath)).toEqual(
         fixture.files.get(fixture.manifest.tarballName),
       );
-      const proof = await qualificationFixture(fixture.descriptor, {
-        baseline: "published",
-        // Successful releases can carry multi-megabyte declaration diffs.
-        diff: { exports: [{ before: "export type Previous = unknown;\n".repeat(150_000) }] },
-      });
+      const npmLocks = `${JSON.stringify({ packages: [{ lock: { packages: { "": { description: "x".repeat(3 * 1024 * 1024) } } } }] })}\n`;
+      const dependencyReports = {
+        ...Object.fromEntries(
+          [
+            "dependency-vulnerability-gate",
+            "transitive-manifest-risk-report",
+            "dependency-ownership-surface-report",
+            "dependency-changes-report",
+          ].flatMap((name) => [
+            [`${name}.json`, {}],
+            [`${name}.md`, "# Report\n"],
+          ]),
+        ),
+        "dependency-evidence-summary.md": "# Dependency evidence\n",
+        "npm-package-locks.json": npmLocks,
+        "npm-package-locks.md": "# npm package-lock mirrors\n",
+      };
+      const proof = await qualificationFixture(
+        fixture.descriptor,
+        {
+          baseline: "published",
+          // Successful releases can carry multi-megabyte declaration diffs.
+          diff: { exports: [{ before: "export type Previous = unknown;\n".repeat(150_000) }] },
+        },
+        dependencyReports,
+      );
       const manifest = await qualifyNpmPackageBundle({
         descriptor: fixture.descriptor,
         inputDir,
@@ -573,6 +603,11 @@ describe("prepared npm bundle", () => {
       });
       expect(manifest.version).toBe(3);
       expect(manifest.preparedBundle).toEqual(fixture.descriptor);
+      for (const [name, value] of Object.entries(dependencyReports)) {
+        expect(readFileSync(join(outputDir, "dependency-evidence", name), "utf8")).toBe(
+          typeof value === "string" ? value : `${JSON.stringify(value)}\n`,
+        );
+      }
       for (const entry of [
         fixture.descriptor.package.fileName,
         ...fixture.descriptor.corePackages.map((pkg) => pkg.tarballName),

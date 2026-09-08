@@ -1,0 +1,53 @@
+{
+  "name": "@openclaw/team-reports",
+  "version": "2026.9.2",
+  "description": "OpenClaw team activity reports plugin (GitHub org + Discord activity with model summaries)",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/openclaw/openclaw"
+  },
+  "type": "module",
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*",
+    "openclaw": "workspace:*"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.9.2"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
+  },
+  "dependencies": {
+    "zod": "4.4.3"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "install": {
+      "clawhubSpec": "clawhub:@openclaw/team-reports",
+      "npmSpec": "@openclaw/team-reports",
+      "defaultChoice": "npm",
+      "minHostVersion": ">=2026.9.2"
+    },
+    "compat": {
+      "pluginApi": ">=2026.9.2"
+    },
+    "build": {
+      "openclawVersion": "2026.9.2",
+      "bundledDist": false,
+      "staticAssets": [
+        {
+          "source": "./assets/crab.avif",
+          "output": "assets/crab.avif"
+        }
+      ]
+    },
+    "release": {
+      "publishToClawHub": true,
+      "publishToNpm": true
+    }
+  }
+}

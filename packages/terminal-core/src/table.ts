@@ -1,5 +1,5 @@
 import { iterateAnsiSegments } from "./ansi-sequences.js";
-import { splitGraphemes, truncateToVisibleWidth, visibleWidth } from "./ansi.js";
+import { iterateGraphemes, truncateToVisibleWidth, visibleWidth } from "./ansi.js";
 import { createDisplayStringFormatter } from "./display-string.js";
 import { sanitizeTerminalText } from "./safe-text.js";
 
@@ -386,7 +386,7 @@ function wrapLine(text: string, width: number): string[] {
       acceptToken({ kind: "ansi", value, width: 0 });
       continue;
     }
-    for (const grapheme of splitGraphemes(value)) {
+    for (const grapheme of iterateGraphemes(value)) {
       acceptToken({ kind: "char", value: grapheme, width: 0 });
     }
   }

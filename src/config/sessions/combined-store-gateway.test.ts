@@ -9,7 +9,7 @@ import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { loadCombinedSessionStoreForGatewayCore } from "./combined-store-gateway.js";
-import { replaceSessionEntrySync } from "./session-accessor.js";
+import { persistSessionTranscriptTurn, replaceSessionEntrySync } from "./session-accessor.js";
 import { setCanonicalSqliteSessionMainKey } from "./session-canonical-key.js";
 
 it.each(["global", "unknown"])("projects the recorded aggregate %s owner", async (sessionKey) => {
@@ -64,6 +64,13 @@ it("projects shared rows under their logical owner while retaining the physical 
         { sessionId: `session-${sessionKey}`, updatedAt: 1 },
       );
     }
+    await persistSessionTranscriptTurn(
+      { agentId: "main", storePath, sessionKey: "global", sessionId: "session-global" },
+      {
+        messages: [{ message: { role: "user", content: "Shared physical global title" } }],
+        touchSessionEntry: false,
+      },
+    );
 
     for (const configuredAgentsOnly of [false, true]) {
       const combined = loadCombinedSessionStoreForGatewayCore(cfg, { configuredAgentsOnly });
@@ -83,6 +90,34 @@ it("projects shared rows under their logical owner while retaining the physical 
         global: "ops",
         unknown: "ops",
         "agent:worker:task": "worker",
+      });
+
+      const ownerPreserving = loadCombinedSessionStoreForGatewayCore(cfg, {
+        configuredAgentsOnly,
+        preserveSentinelOwners: true,
+      });
+      const listed = await listSessionsFromStoreAsync({
+        cfg,
+        ...ownerPreserving,
+        opts: { includeGlobal: true, includeUnknown: true, includeDerivedTitles: true },
+      });
+      expect(listed.sessions).toHaveLength(3);
+      expect(listed.sessions).toContainEqual(
+        expect.objectContaining({
+          kind: "global",
+          agentId: "ops",
+          sessionId: "session-global",
+          derivedTitle: "Shared physical global title",
+        }),
+      );
+      expect(listed.sessions).toContainEqual(
+        expect.objectContaining({ kind: "unknown", agentId: "ops" }),
+      );
+      const globalRow = listed.sessions.find((row) => row.kind === "global")!;
+      expect(ownerPreserving.targetsBySessionKey.get(globalRow.key)).toEqual({
+        agentId: "ops",
+        storeKey: "global",
+        storeTarget: { agentId: "main", storePath },
       });
     }
     for (const [agentId, keys] of [

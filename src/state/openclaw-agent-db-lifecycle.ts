@@ -5,6 +5,7 @@ import { isMainThread, threadId } from "node:worker_threads";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { setSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
+import type { SqliteIntegrityDiagnostics } from "../infra/sqlite-integrity.js";
 import { createSqliteTerminalOpenLatch } from "../infra/sqlite-terminal-open-latch.js";
 import { registerSqliteCacheExitClose } from "../infra/sqlite-wal.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -74,6 +75,7 @@ export function startAgentDatabaseOpenTiming(
   agentId: string,
   pathname: string,
   admissionMode: "sync" | "async",
+  diagnostics: SqliteIntegrityDiagnostics,
 ) {
   const startedAt = performance.now();
   let elapsedMs = 0;
@@ -93,6 +95,7 @@ export function startAgentDatabaseOpenTiming(
         isMainThread,
         admissionMode,
         phaseDurationsMs,
+        ...diagnostics,
         thresholdMs: OPENCLAW_AGENT_DB_SLOW_OPEN_MS,
       });
     }

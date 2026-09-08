@@ -18,6 +18,21 @@ final class RemotePortTunnel: @unchecked Sendable {
         let identity: String
         let remotePort: Int
         let hostKeyPolicy: CommandResolver.SSHHostKeyPolicy
+        let preferredLocalPort: UInt16?
+
+        init(
+            target: CommandResolver.SSHParsedTarget,
+            identity: String,
+            remotePort: Int,
+            hostKeyPolicy: CommandResolver.SSHHostKeyPolicy,
+            preferredLocalPort: UInt16? = nil)
+        {
+            self.target = target
+            self.identity = identity
+            self.remotePort = remotePort
+            self.hostKeyPolicy = hostKeyPolicy
+            self.preferredLocalPort = preferredLocalPort
+        }
     }
 
     let localPort: UInt16?
@@ -78,11 +93,22 @@ final class RemotePortTunnel: @unchecked Sendable {
             defaultRemotePort: remotePort,
             for: sshHost,
             root: root) ?? remotePort
+        // Named profiles reserve their startup port; an explicit config preference can still change live.
+        let preferredLocalPort = OpenClawConfigFile.gatewayPort(root: root)
+            .flatMap(UInt16.init(exactly:))
+            .map { port in
+                UInt16(GatewayEnvironment.resolvedGatewayPort(
+                    environment: ProcessInfo.processInfo.environment,
+                    configPort: Int(port),
+                    storedPort: 0,
+                    profile: .current))
+            }
         return Configuration(
             target: target,
             identity: settings.identity.trimmingCharacters(in: .whitespacesAndNewlines),
             remotePort: resolvedRemotePort,
-            hostKeyPolicy: settings.sshHostKeyPolicy)
+            hostKeyPolicy: settings.sshHostKeyPolicy,
+            preferredLocalPort: preferredLocalPort)
     }
 
     static func create(

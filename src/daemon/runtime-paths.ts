@@ -10,21 +10,9 @@ import { isSqliteWalResetSafeVersion } from "../infra/sqlite-runtime-version.js"
 import { resolveStableNodePath } from "../infra/stable-node-path.js";
 import { getWindowsProgramFilesRoots } from "../infra/windows-install-roots.js";
 import { runExec } from "../process/exec.js";
+import { matchesVersionManagerPath } from "../shared/version-manager-path.js";
 import { isBunRuntime } from "./runtime-binary.js";
-
-const VERSION_MANAGER_MARKERS = [
-  "/.nvm/",
-  "/.fnm/",
-  "/.local/share/fnm/",
-  "/library/application support/fnm/",
-  "/.volta/",
-  "/.asdf/",
-  "/.local/share/mise/",
-  "/.n/",
-  "/.nodenv/",
-  "/.nodebrew/",
-  "/nvs/",
-];
+import { normalizeServicePathEntry } from "./service-path-policy.js";
 
 function getPathModule(platform: NodeJS.Platform) {
   return platform === "win32" ? path.win32 : path.posix;
@@ -34,15 +22,6 @@ function isNodeExecPath(execPath: string, platform: NodeJS.Platform): boolean {
   const pathModule = getPathModule(platform);
   const base = normalizeLowercaseStringOrEmpty(pathModule.basename(execPath));
   return base === "node" || base === "node.exe";
-}
-
-function normalizeForCompare(input: string, platform: NodeJS.Platform): string {
-  const pathModule = getPathModule(platform);
-  const normalized = pathModule.normalize(input).replaceAll("\\", "/");
-  if (platform === "win32") {
-    return normalizeLowercaseStringOrEmpty(normalized);
-  }
-  return normalized;
 }
 
 function buildSystemNodeCandidates(
@@ -89,7 +68,7 @@ function buildBunCandidates(
     if (!candidate || !pathModule.isAbsolute(candidate)) {
       return;
     }
-    const normalized = normalizeForCompare(candidate, platform);
+    const normalized = normalizeServicePathEntry(candidate, platform);
     if (seen.has(normalized)) {
       return;
     }
@@ -236,8 +215,8 @@ export function isVersionManagedNodePath(
   nodePath: string,
   platform: NodeJS.Platform = process.platform,
 ): boolean {
-  const normalized = normalizeLowercaseStringOrEmpty(normalizeForCompare(nodePath, platform));
-  return VERSION_MANAGER_MARKERS.some((marker) => normalized.includes(marker));
+  const normalized = normalizeLowercaseStringOrEmpty(normalizeServicePathEntry(nodePath, platform));
+  return matchesVersionManagerPath(normalized, "daemon-runtime");
 }
 
 /** True when a Node path matches known system install candidates for the platform. */
@@ -246,9 +225,9 @@ export function isSystemNodePath(
   env: Record<string, string | undefined> = process.env,
   platform: NodeJS.Platform = process.platform,
 ): boolean {
-  const normalized = normalizeForCompare(nodePath, platform);
+  const normalized = normalizeServicePathEntry(nodePath, platform);
   return buildSystemNodeCandidates(env, platform).some((candidate) => {
-    const normalizedCandidate = normalizeForCompare(candidate, platform);
+    const normalizedCandidate = normalizeServicePathEntry(candidate, platform);
     return normalized === normalizedCandidate;
   });
 }

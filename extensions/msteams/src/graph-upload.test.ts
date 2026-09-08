@@ -23,12 +23,16 @@ function requireFetchCall(fetchFn: ReturnType<typeof vi.fn>, index = 0): FetchCa
   return call;
 }
 
-function expectGraphUploadFetch(fetchFn: ReturnType<typeof vi.fn>, expectedUrl: string): void {
+function expectGraphUploadFetch(
+  fetchFn: ReturnType<typeof vi.fn>,
+  expectedUrl: string,
+  contentType = "application/octet-stream",
+): void {
   const [url, init] = requireFetchCall(fetchFn);
   expect(url).toBe(expectedUrl);
   expect(init?.method).toBe("PUT");
   expect(init?.headers?.Authorization).toBe("Bearer graph-token");
-  expect(init?.headers?.["Content-Type"]).toBe("application/octet-stream");
+  expect(init?.headers?.["Content-Type"]).toBe(contentType);
   expect(init?.headers?.["User-Agent"]).toMatch(/^teams\.ts\[apps\]\/.+ OpenClaw\/.+$/);
 }
 
@@ -224,26 +228,48 @@ describe("graph upload helpers", () => {
     expect(requireMSTeamsSharePointSiteId(" site-123 ")).toBe("site-123");
   });
 
-  it("uploads to SharePoint with the site drive path", async () => {
-    const fetchFn = vi.fn(async () =>
-      jsonResponse({ id: "item-2", webUrl: "https://example.com/2", name: "b.txt" }),
-    );
+  it.each([undefined, "application/pdf"])(
+    "uploads to SharePoint with the site drive path and MIME %s",
+    async (contentType) => {
+      const backing = Buffer.from([0xfe, 0xfd, 1, 2, 3, 0xfc]);
+      const buffer = backing.subarray(2, 5);
+      const expectedBytes = Buffer.from([0, 0x80, 0xff]);
+      let finishToken: (token: string) => void = () => {};
+      const tokenReady = new Promise<string>((resolve) => {
+        finishToken = resolve;
+      });
+      const delayedTokenProvider = { getAccessToken: vi.fn(async () => await tokenReady) };
+      const fetchFn = vi.fn<typeof fetch>(async (_url, init) => {
+        backing.fill(0);
+        expect(Buffer.from(await new Response(init?.body).arrayBuffer())).toEqual(expectedBytes);
+        return jsonResponse({ id: "item-2", webUrl: "https://example.com/2", name: "b.txt" });
+      });
 
-    const result = await uploadToSharePoint({
-      filename: "b.txt",
-      fetchFn: withFetchPreconnect(fetchFn),
-    });
+      const upload = uploadToSharePoint({
+        buffer,
+        contentType,
+        filename: "b.txt",
+        tokenProvider: delayedTokenProvider,
+        fetchFn: withFetchPreconnect(fetchFn),
+      });
+      await vi.waitFor(() => expect(delayedTokenProvider.getAccessToken).toHaveBeenCalledOnce());
+      expect(fetchFn).not.toHaveBeenCalled();
+      expectedBytes.copy(buffer);
+      finishToken("graph-token");
+      const result = await upload;
 
-    expectGraphUploadFetch(
-      fetchFn,
-      "https://graph.microsoft.com/v1.0/sites/site-123/drive/root:/OpenClawShared/b.txt:/content?@microsoft.graph.conflictBehavior=rename",
-    );
-    expect(result).toEqual({
-      id: "item-2",
-      webUrl: "https://example.com/2",
-      name: "b.txt",
-    });
-  });
+      expectGraphUploadFetch(
+        fetchFn,
+        "https://graph.microsoft.com/v1.0/sites/site-123/drive/root:/OpenClawShared/b.txt:/content?@microsoft.graph.conflictBehavior=rename",
+        contentType,
+      );
+      expect(result).toEqual({
+        id: "item-2",
+        webUrl: "https://example.com/2",
+        name: "b.txt",
+      });
+    },
+  );
 
   it("uploads with conflictBehavior=rename and surfaces the name SharePoint assigns", async () => {
     // Regression: openclaw-runtime image assets reuse names (image-1.png). Graph's default

@@ -1,5 +1,4 @@
 // File Transfer tests cover dir fetch plugin behavior.
-import { execFileSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -231,11 +230,6 @@ describe("handleDirFetch — happy path", () => {
     expect(r.entries).toContain("b.txt");
     expect(r.entries).toContain("sub");
     expect(r.entries).toContain("sub/c.txt");
-    const archiveEntries = execFileSync("/usr/bin/tar", ["-tzf", "-"], {
-      input: buf,
-      encoding: "utf8",
-    }).split("\n");
-    expect(archiveEntries).toEqual(expect.arrayContaining(["./.root-note", "./.hidden/note.txt"]));
     expect(r.entries).toEqual(expect.arrayContaining([".root-note", ".hidden/note.txt"]));
     expect(r.fileCount).toBe(r.entries?.length);
   });

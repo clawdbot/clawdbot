@@ -53,6 +53,200 @@
   letter-spacing: 0.04em;
 }
 
+.model-providers__profiles {
+  width: 100%;
+  container-name: provider-profiles;
+  container-type: inline-size;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+}
+
+.model-providers__profiles-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  padding-block: var(--space-3);
+}
+
+.model-providers__profiles-heading-copy,
+.model-providers__profile-copy {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.model-providers__profiles-heading-copy {
+  flex: 1 1 200px;
+}
+
+.model-providers__profiles-heading-copy strong,
+.model-providers__profile-copy strong {
+  color: var(--text-strong);
+  font-size: var(--control-ui-text-sm);
+  font-weight: 650;
+}
+
+.model-providers__profiles-heading-copy span,
+.model-providers__profile-copy span {
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+}
+
+.model-providers__profiles-heading-actions,
+.model-providers__profile-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.model-providers__profiles-heading-actions {
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.model-providers__profiles-heading-actions .btn {
+  min-height: 44px;
+}
+
+.model-providers__profile {
+  display: grid;
+  grid-template-columns: 44px 28px minmax(0, 1fr) max-content max-content;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+  padding-block: var(--space-3);
+  border-top: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+}
+
+.model-providers__profile-grip,
+.model-providers__profile-logout {
+  display: inline-grid;
+  width: 44px;
+  min-width: 44px;
+  height: 44px;
+  padding: 0;
+  place-items: center;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+}
+
+.model-providers__profile-logout:disabled {
+  color: color-mix(in srgb, var(--muted) 24%, transparent);
+  cursor: default;
+}
+
+.model-providers__profile-grip svg,
+.model-providers__profile-logout svg {
+  width: 16px;
+  height: 16px;
+}
+
+.model-providers__profile-grip {
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+.model-providers__profile-grip:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.model-providers__profile-grip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  border-radius: var(--radius-sm);
+}
+
+/* The lifted row can extend beyond its provider card while capture owns the gesture. */
+.model-providers__provider-list > .settings-group:has(.model-providers__profile--dragging) {
+  position: relative;
+  z-index: 8;
+  overflow: visible;
+}
+
+.model-providers__profile--dragging {
+  position: relative;
+  z-index: 8;
+  border-radius: var(--radius-md);
+  background: var(--card);
+  box-shadow:
+    0 16px 36px rgb(0 0 0 / 20%),
+    0 0 0 1px var(--border);
+  transform: scale(1.01);
+  /* Keep the row under the pointer while hit-testing the drop target beneath it. */
+  pointer-events: none;
+}
+
+.model-providers__profile--dragging .model-providers__profile-grip {
+  cursor: grabbing;
+}
+
+.model-providers__profiles--sorting
+  .model-providers__profile:not(.model-providers__profile--dragging) {
+  transition: translate 100ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .model-providers__profiles--sorting
+    .model-providers__profile:not(.model-providers__profile--dragging) {
+    transition: none;
+  }
+}
+
+.model-providers__profile-avatar {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-muted);
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+  place-items: center;
+}
+
+.model-providers__profile-position {
+  min-width: 2ch;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+.model-providers__profile-logout:hover:not(:disabled),
+.model-providers__profile-logout:focus-visible {
+  color: var(--danger);
+}
+
+@container provider-profiles (max-width: 640px) {
+  .model-providers__profile {
+    grid-template-columns: 44px minmax(0, 1fr) max-content;
+    gap: var(--space-2);
+  }
+
+  .model-providers__profile-avatar {
+    display: none;
+  }
+
+  .model-providers__profile-copy {
+    grid-column: 2 / -1;
+  }
+
+  .model-providers__profile-status {
+    grid-column: 1 / 3;
+  }
+
+  .model-providers__profile-actions {
+    justify-self: end;
+  }
+}
+
+.model-providers__fallbacks,
 .model-providers__inline-form,
 .model-providers__probe {
   display: grid;
@@ -101,21 +295,11 @@
 }
 
 .model-providers__inline-form,
-.model-providers__confirm,
 .model-providers__probe {
   padding: 12px;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   background: var(--bg-muted);
-}
-
-.model-providers__confirm {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  color: var(--text);
-  font-size: 13px;
 }
 
 .model-providers__probe {
@@ -268,8 +452,7 @@
     grid-template-columns: 1fr;
   }
 
-  .model-providers__credentials,
-  .model-providers__confirm {
+  .model-providers__credentials {
     align-items: flex-start;
     flex-direction: column;
   }

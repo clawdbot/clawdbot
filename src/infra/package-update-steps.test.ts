@@ -187,12 +187,15 @@ describe("runGlobalPackageUpdateSteps", () => {
     await withTestDir({ prefix: "openclaw-package-update-direct-root-" }, async (base) => {
       const managedRoot = path.join(base, ".openclaw", "npm", "node_modules");
       const packageRoot = path.join(managedRoot, "openclaw");
+      const staleRenameDir = path.join(managedRoot, ".openclaw-stale");
       await writePackageRoot(packageRoot, "1.0.0");
+      await fs.mkdir(staleRenameDir);
 
       const runStep = vi.fn(async ({ name, argv, cwd }): Promise<PackageUpdateStepResult> => {
         if (name !== "global update") {
           throw new Error(`unexpected step ${name}`);
         }
+        await expectPathMissing(staleRenameDir);
         const prefixIndex = argv.indexOf("--prefix");
         expect(prefixIndex).toBeGreaterThan(0);
         const stagePrefix = argv[prefixIndex + 1];

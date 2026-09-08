@@ -16,6 +16,7 @@ import { listBundledSourceOverlayDirs } from "./bundled-source-overlays.js";
 import { recordPluginCandidateInstallOwner } from "./candidate-install-owner.js";
 import { discoverConfiguredPluginLoadPaths, type PluginCandidate } from "./discovery.js";
 import { shouldRejectHardlinkedPluginFiles } from "./hardlink-policy.js";
+import { getInstalledPluginIndexFacts } from "./installed-plugin-index-facts.js";
 import { hashStableJson } from "./installed-plugin-index-hash.js";
 import {
   isInstalledPluginIndexInstallOwnerAmbiguous,
@@ -43,7 +44,6 @@ import {
   pluginCacheRealpathSync,
   readPluginCacheFile,
 } from "./plugin-cache-files.js";
-import { getPluginCache } from "./plugin-cache.js";
 import { tracePluginLifecyclePhase } from "./plugin-lifecycle-trace.js";
 import {
   normalizePluginDependencySpecs,
@@ -56,25 +56,11 @@ type InstalledPackageMetadata = {
   packageOptionalDependencies?: PluginDependencySpecMap;
 };
 
-function isDeepFrozenJsonLike(value: unknown, seen = new WeakSet<object>()): boolean {
-  if (!value || typeof value !== "object") {
-    return true;
-  }
-  const object = value;
-  if (seen.has(object)) {
-    return true;
-  }
-  if (!Object.isFrozen(object)) {
-    return false;
-  }
-  seen.add(object);
-  return Object.values(value).every((entry) => isDeepFrozenJsonLike(entry, seen));
-}
-
 export function resolveInstalledManifestRegistryIndexFingerprint(
   index: InstalledPluginIndex,
 ): string {
-  const cached = getPluginCache().metadata.indexFingerprints.get(index);
+  const facts = getInstalledPluginIndexFacts(index);
+  const cached = facts?.fingerprint;
   if (cached) {
     return cached;
   }
@@ -98,8 +84,8 @@ export function resolveInstalledManifestRegistryIndexFingerprint(
       }),
     ),
   });
-  if (isDeepFrozenJsonLike(index)) {
-    getPluginCache().metadata.indexFingerprints.set(index, fingerprint);
+  if (facts) {
+    facts.fingerprint = fingerprint;
   }
   return fingerprint;
 }

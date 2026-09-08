@@ -1,4 +1,5 @@
 // Matrix plugin module implements room behavior.
+import { filterStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveMatrixRoomId } from "../send.js";
 import { withResolvedActionClient, withResolvedRoomAction } from "./client.js";
 import { EventType, type MatrixActionClientOpts } from "./types.js";
@@ -34,6 +35,7 @@ export async function getMatrixRoomInfo(roomId: string, opts: MatrixActionClient
     let name: string | null = null;
     let topic: string | null = null;
     let canonicalAlias: string | null = null;
+    let altAliases: string[] = [];
     let memberCount: number | null = null;
 
     try {
@@ -53,6 +55,7 @@ export async function getMatrixRoomInfo(roomId: string, opts: MatrixActionClient
     try {
       const aliasState = await client.getRoomStateEvent(resolvedRoom, "m.room.canonical_alias", "");
       canonicalAlias = typeof aliasState?.alias === "string" ? aliasState.alias : null;
+      altAliases = filterStringEntries(aliasState?.alt_aliases);
     } catch {
       // ignore
     }
@@ -69,7 +72,7 @@ export async function getMatrixRoomInfo(roomId: string, opts: MatrixActionClient
       name,
       topic,
       canonicalAlias,
-      altAliases: [], // Would need separate query
+      altAliases,
       memberCount,
     };
   });

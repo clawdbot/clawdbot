@@ -512,13 +512,6 @@ export class MemoryRecallEmbeddingError extends Error {
   }
 }
 
-export const testing = {
-  isEmbeddingDimensionsRejectedError,
-  isMemoryRecallTimeoutError,
-  runWithTimeout,
-  truncateEmbeddingVector,
-} as const;
-
 export function createEmbeddings(api: OpenClawPluginApi): Embeddings {
   const provider = new ProviderAdapterEmbeddings(api);
   let direct: { fingerprint: string; client: OpenAiCompatibleEmbeddings } | undefined;

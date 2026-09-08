@@ -9,6 +9,7 @@ import type {
   CommandInteraction,
   StringSelectMenuInteraction,
 } from "../internal/discord.js";
+import type { DiscordLivePolicyReader } from "./live-policy.js";
 import type { DiscordDispatchReplyFromConfig } from "./native-command.types.js";
 import type { ThreadBindingManager } from "./thread-bindings.js";
 
@@ -20,6 +21,7 @@ type DispatchDiscordCommandInteractionParams = {
   command: ChatCommandDefinition;
   commandArgs?: CommandArgs;
   cfg: OpenClawConfig;
+  readPolicy?: DiscordLivePolicyReader;
   discordConfig: DiscordConfig;
   accountId: string;
   sessionPrefix: string;

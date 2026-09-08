@@ -1,0 +1,267 @@
+name: Requested Telegram Behavior Proof
+run-name: ${{ format('Mantis Telegram request [{0}]', inputs.request_id) }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_ref:
+        description: Exact same-repository PR head SHA
+        required: true
+        type: string
+      request_id:
+        description: Consumer-issued SHA256 request ID
+        required: true
+        type: string
+      pr_number:
+        description: Open pull request whose exact head is under test
+        required: true
+        type: string
+      proof_plan:
+        description: Strict data-only scenario JSON selected by the original reviewer
+        required: false
+        type: string
+      plan_sha256:
+        description: SHA256 of canonical data-only proof plan
+        required: false
+        type: string
+      scenario:
+        description: Trusted behavior recipe; Crabline is transport-emulated, not live Telegram
+        required: true
+        default: telegram-markdown-parser-fidelity
+        type: choice
+        options:
+          - telegram-markdown-parser-fidelity
+          - telegram-bot-e2e-proof
+
+permissions:
+  actions: read
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: telegram-test-server-proof-${{ inputs.request_id }}
+  cancel-in-progress: false
+
+jobs:
+  admit_request:
+    name: Admit exact requested Telegram behavior proof
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check maintainer authority and exact PR head
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        env:
+          CANDIDATE_SHA: ${{ inputs.candidate_ref }}
+          TARGET_PR: ${{ inputs.pr_number }}
+          WORKFLOW_REF: ${{ github.ref }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          REQUEST_ID: ${{ inputs.request_id }}
+          SCENARIO: ${{ inputs.scenario }}
+        with:
+          script: |
+            if (!process.env.WORKFLOW_REF?.startsWith("refs/heads/") || process.env.RUN_ATTEMPT !== "1") {
+              throw new Error("Proof requires an approved protected branch and run attempt 1");
+            }
+            const allowed = new Set(["write", "maintain", "admin"]);
+            // GitHub owns the actor identity; the consumer already checks the human request.
+            if (context.actor !== "clawsweeper[bot]") {
+              const permission = await github.rest.repos.getCollaboratorPermissionLevel({
+                ...context.repo,
+                username: context.actor,
+              });
+              if (!allowed.has(permission.data.permission)) {
+                throw new Error("Maintainer-level repository access required");
+              }
+            }
+            const { CANDIDATE_SHA, TARGET_PR, REQUEST_ID } = process.env;
+            if (
+              !new Set(["telegram-markdown-parser-fidelity", "telegram-bot-e2e-proof"]).has(process.env.SCENARIO) ||
+              !/^[a-f0-9]{64}$/.test(REQUEST_ID) ||
+              !/^[a-f0-9]{40}$/.test(CANDIDATE_SHA) ||
+              !/^[1-9][0-9]*$/.test(TARGET_PR) ||
+              !Number.isSafeInteger(Number(TARGET_PR))
+            ) {
+              throw new Error("Invalid proof inputs");
+            }
+            const { data: pull } = await github.rest.pulls.get({
+              ...context.repo,
+              pull_number: Number(TARGET_PR),
+            });
+            if (
+              pull.state !== "open" ||
+              pull.head.sha !== CANDIDATE_SHA ||
+              pull.head.repo?.id !== context.payload.repository.id
+            ) {
+              throw new Error("Exact open same-repository PR head required");
+            }
+      - name: Checkout trusted harness
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Verify protected main-ancestry workflow pin
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/mantis/request-workflow-admission.mjs
+      - name: Preserve trusted candidate-ref admission
+        uses: ./.github/actions/mantis-validate-trusted-ref
+        env:
+          GH_TOKEN: ${{ github.token }}
+        with:
+          candidate-ref: ${{ inputs.candidate_ref }}
+
+  run_telegram_proof:
+    name: Run request-bound Telegram bot proof
+    needs: admit_request
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    timeout-minutes: 60
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+      id-token: write
+    environment: ${{ inputs.scenario == 'telegram-bot-e2e-proof' && 'qa-live-shared' || '' }}
+    steps:
+      - name: Checkout trusted harness
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Setup trusted tooling
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: 24.x
+          install-bun: "false"
+          cache-mode: restore
+      - name: Ensure rootless networking helper
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v slirp4netns >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends slirp4netns
+          fi
+      - name: Prepare bounded rootless candidate storage
+        run: node scripts/mantis/telegram-proof-storage.mts setup
+      - name: Prepare trusted dependencies before candidate execution
+        shell: bash
+        run: |
+          set -euo pipefail
+          git archive "$GITHUB_WORKFLOW_SHA" |
+            podman build --memory 16g --cpu-period 100000 --cpu-quota 200000 --file scripts/mantis/telegram-test-server-proof.Dockerfile \
+              --tag localhost/mantis-telegram-proof -
+      - name: Install pinned Crabbox for disposable candidate lifecycle
+        if: ${{ inputs.scenario == 'telegram-bot-e2e-proof' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          install_dir="$RUNNER_TEMP/mantis-crabbox"
+          mkdir -p "$install_dir/bin"
+          curl --fail --location --proto '=https' --tlsv1.2 \
+            https://github.com/openclaw/crabbox/releases/download/v0.50.0/crabbox_0.50.0_linux_amd64.tar.gz \
+            --output "$install_dir/crabbox.tar.gz"
+          printf '%s  %s\n' 8ab55a0302e7119a45e7522c2fff2d4e295496c33766c87cf619f342824cab75 "$install_dir/crabbox.tar.gz" | sha256sum --check
+          tar -xzf "$install_dir/crabbox.tar.gz" -C "$install_dir/bin" crabbox
+          echo "$install_dir/bin" >> "$GITHUB_PATH"
+      - name: Build exact candidate without credentials or network
+        env:
+          CANDIDATE_SHA: ${{ inputs.candidate_ref }}
+        run: node scripts/mantis/prepare-request-telegram.mts "$CANDIDATE_SHA"
+      - name: Prepare pinned TDLib before leasing
+        if: ${{ inputs.scenario == 'telegram-bot-e2e-proof' }}
+        env:
+          TELEGRAM_USER_DRIVER_TDLIB_CACHE_DIR: ${{ runner.temp }}/mantis-tdlib
+        run: >-
+          python3 scripts/mantis/telegram-driver-preflight.py --prepare
+          .agents/skills/telegram-e2e-userbot/scripts/user-driver.py
+      - name: Run isolated Test Server DM and trusted capture
+        if: ${{ inputs.scenario == 'telegram-bot-e2e-proof' }}
+        env:
+          REQUEST_ID: ${{ inputs.request_id }}
+          TARGET_PR: ${{ inputs.pr_number }}
+          CANDIDATE_SHA: ${{ inputs.candidate_ref }}
+          TELEGRAM_USER_DRIVER_TDLIB_CACHE_DIR: ${{ runner.temp }}/mantis-tdlib
+          PROOF_PLAN: ${{ inputs.proof_plan }}
+          PLAN_SHA256: ${{ inputs.plan_sha256 }}
+          OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
+          OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          node scripts/mantis/run-request-telegram.mts
+          "$CANDIDATE_SHA" .artifacts/telegram-test-server-proof
+      - name: Run canonical formatting recipe against isolated Gateway and Crabline
+        if: ${{ inputs.scenario == 'telegram-markdown-parser-fidelity' }}
+        env:
+          REQUEST_ID: ${{ inputs.request_id }}
+          TARGET_PR: ${{ inputs.pr_number }}
+          CANDIDATE_SHA: ${{ inputs.candidate_ref }}
+        run: >-
+          node scripts/mantis/run-request-telegram-qa.mts
+          "$CANDIDATE_SHA" .artifacts/telegram-test-server-proof
+      - name: Remove bounded candidate storage
+        if: ${{ always() && env.MANTIS_PODMAN_ROOT != '' }}
+        run: node scripts/mantis/telegram-proof-storage.mts cleanup
+      - name: Upload normalized public observations
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: mantis-request-telegram-${{ github.run_id }}-1
+          path: ${{ inputs.scenario == 'telegram-markdown-parser-fidelity' && '.artifacts/telegram-test-server-proof/qa-*.json' || '.artifacts/telegram-test-server-proof/*.json' }}
+          retention-days: 14
+          if-no-files-found: ignore
+      - name: Summarize proof limits
+        if: ${{ success() }}
+        shell: bash
+        env:
+          TARGET_PR: ${{ inputs.pr_number }}
+          CANDIDATE_SHA: ${{ inputs.candidate_ref }}
+          SCENARIO: ${{ inputs.scenario }}
+          PLAN_SHA256: ${{ inputs.plan_sha256 }}
+          TRANSPORT: ${{ inputs.scenario == 'telegram-markdown-parser-fidelity' && 'Crabline Bot API emulator; no Telegram Test Server or TDLib' || 'Telegram Test Server; bounded selected DM plan' }}
+        run: |
+          {
+            echo "## Requested Telegram behavior proof"
+            echo
+            printf -- '- PR: #%s\n' "$TARGET_PR"
+            printf -- '- Candidate: `%s`\n' "$CANDIDATE_SHA"
+            printf -- '- Scenario: %s\n' "$SCENARIO"
+            printf -- '- Transport: %s\n' "$TRANSPORT"
+            echo "- Scope: the selected bounded plan or fixed recipe; not general proof of every Telegram change"
+            echo "- Limits: no production or personal Telegram, live model, readiness, label, repair, close, or merge effect"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  finalize_bound_request:
+    name: Finalize request-bound evidence
+    needs: [admit_request, run_telegram_proof]
+    if: ${{ always() && needs.admit_request.result == 'success' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout trusted finalizer
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - name: Setup trusted finalizer dependencies
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: 24.x
+          install-bun: "false"
+          cache-mode: restore
+      - name: Verify artifacts and bind receipt
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUEST_ID: ${{ inputs.request_id }}
+          TARGET_PR: ${{ inputs.pr_number }}
+          CANDIDATE_SHA: ${{ inputs.candidate_ref }}
+          SCENARIO: ${{ inputs.scenario }}
+          PLAN_SHA256: ${{ inputs.plan_sha256 }}
+        run: node scripts/mantis/finalize-request-proof.mts "$SCENARIO"
+      - name: Upload request receipt
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: mantis-request-receipt-${{ github.run_id }}-1
+          path: .artifacts/mantis-request-finalizer/receipt.json
+          retention-days: 14
+          if-no-files-found: error

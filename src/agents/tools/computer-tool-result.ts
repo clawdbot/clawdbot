@@ -86,7 +86,7 @@ export function invalidateComputerFrameIfMissing(params: {
   imagesBlocked?: boolean;
 }): boolean {
   const frameToolCallId = params.contextEpoch.frameToolCallId;
-  if (frameToolCallId === undefined) {
+  if (frameToolCallId === undefined || params.imagesBlocked) {
     return invalidateComputerFrame(params.contextEpoch);
   }
 
@@ -105,7 +105,6 @@ export function invalidateComputerFrameIfMissing(params: {
   }
 
   if (
-    !params.imagesBlocked &&
     frameImageIdentity !== undefined &&
     frameImageIdentity === params.contextEpoch.frameImageIdentity
   ) {

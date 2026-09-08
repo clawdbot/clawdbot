@@ -464,14 +464,6 @@ async function consumeChatStream(
           params.usedContentIndexes,
         )
       : new Set<number>();
-    const indexCandidates =
-      toolCallIndex === undefined
-        ? new Set<number>()
-        : findIdentityCandidates(
-            (identity) => identity.indexes.has(toolCallIndex),
-            params.usedContentIndexes,
-          );
-
     if (idCandidates.size > 0) {
       let candidates = idCandidates;
       if (nameCandidates.size > 0) {
@@ -517,6 +509,14 @@ async function consumeChatStream(
       }
       return requireSingleCandidate(indexCompatibleCandidates);
     }
+
+    const indexCandidates =
+      toolCallIndex === undefined
+        ? new Set<number>()
+        : findIdentityCandidates(
+            (identity) => identity.indexes.has(toolCallIndex),
+            params.usedContentIndexes,
+          );
 
     if (functionName) {
       // A new name normally starts a sibling call even when the SDK's omitted
@@ -636,10 +636,7 @@ async function consumeChatStream(
         }
 
         if (item.type === "thinking") {
-          const deltaText = item.thinking
-            .map((part) => ("text" in part ? part.text : ""))
-            .filter((text) => text.length > 0)
-            .join("");
+          const deltaText = item.thinking.map((part) => ("text" in part ? part.text : "")).join("");
           const thinkingDelta = sanitizeSurrogates(deltaText);
           if (!thinkingDelta) {
             continue;

@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -103,6 +103,11 @@ function runLiveArtifactTupleValidation(packageEnv: Record<string, string>) {
   const summaryPath = path.join(tempDir, "summary");
   const selectedSha = "a".repeat(40);
   mkdirSync(fakeBin);
+  mkdirSync(path.join(tempDir, ".release-harness", "scripts"), { recursive: true });
+  copyFileSync(
+    path.resolve("scripts/resolve-fs-safe-native-contract.mjs"),
+    path.join(tempDir, ".release-harness", "scripts/resolve-fs-safe-native-contract.mjs"),
+  );
   writeFileSync(
     path.join(fakeBin, "git"),
     `#!/usr/bin/env bash
@@ -121,6 +126,7 @@ exit 64
   const stepEnv = Object.fromEntries(Object.keys(step.env ?? {}).map((name) => [name, ""]));
   try {
     const result = spawnSync("bash", ["--noprofile", "--norc", "-c", step.run ?? ""], {
+      cwd: tempDir,
       encoding: "utf8",
       env: {
         ...process.env,
@@ -132,6 +138,7 @@ exit 64
         PROVIDED_BARE_IMAGE: "ghcr.io/openclaw/openclaw:test",
         SELECTED_SHA: selectedSha,
         SHARED_IMAGE_POLICY: "existing-only",
+        TRUSTED_WORKFLOW_SHA: selectedSha,
         ...packageEnv,
       },
     });

@@ -1,3 +1,4 @@
+import { stripSystemPromptCacheBoundary } from "@openclaw/ai/internal/shared";
 // Composes provider plugin runtime hooks with shared provider policy.
 import {
   findNormalizedProviderValue,
@@ -13,16 +14,13 @@ import {
   mergePluginTextTransforms,
 } from "../agents/plugin-text-transforms.js";
 import { unwrapSecretSentinelsForProviderEgress } from "../agents/provider-secret-egress.js";
+import type { StreamFn } from "../agents/runtime/index.js";
 import type { ProviderSystemPromptContribution } from "../agents/system-prompt-contribution.js";
 import type { ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { providerUsageLabel } from "../infra/provider-usage.shared.js";
 import type { UsageProviderId } from "../infra/provider-usage.types.js";
 import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
-import {
-  normalizeProviderModelIdWithManifest,
-  type ManifestModelIdNormalizationSource,
-} from "./manifest-model-id-normalization.js";
 import type { PluginManifestRegistry } from "./manifest-registry.js";
 import type {
   PluginMetadataRegistryView,
@@ -74,7 +72,6 @@ import type {
   ProviderFetchUsageSnapshotContext,
   ProviderNormalizeToolSchemasContext,
   ProviderNormalizeConfigContext,
-  ProviderNormalizeModelIdContext,
   ProviderReasoningOutputMode,
   ProviderReasoningOutputModeContext,
   ProviderNormalizeResolvedModelContext,
@@ -384,21 +381,6 @@ export function applyProviderResolvedTransportWithPlugin(params: {
   };
 }
 
-export function normalizeProviderModelIdWithPlugin(params: {
-  provider: string;
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  plugins?: ManifestModelIdNormalizationSource;
-  context: ProviderNormalizeModelIdContext;
-}): string | undefined {
-  const plugin = resolveProviderHookPlugin(params);
-  return (
-    normalizeOptionalString(plugin?.normalizeModelId?.(params.context)) ??
-    normalizeProviderModelIdWithManifest(params)
-  );
-}
-
 export function normalizeProviderTransportWithPlugin(params: {
   provider: string;
   modelId?: string | null;
@@ -572,7 +554,7 @@ export function resolveProviderStreamFn(params: {
   runtimeHandle?: ProviderRuntimePluginHandle;
   allowRuntimePluginLoad?: boolean;
   context: ProviderCreateStreamFnContext;
-}) {
+}): StreamFn | undefined {
   // Transport families may explicitly ask for a different fallback owner.
   const plugin =
     params.runtimeHandle?.provider === params.provider
@@ -580,7 +562,18 @@ export function resolveProviderStreamFn(params: {
       : params.allowRuntimePluginLoad === false
         ? resolveLoadedProviderRuntimePlugin(params)
         : resolveProviderRuntimePlugin(params);
-  return plugin?.createStreamFn?.(params.context) ?? undefined;
+  const streamFn = plugin?.createStreamFn?.(params.context);
+  if (!streamFn || plugin?.supportsSystemPromptCacheBoundary) {
+    return streamFn ?? undefined;
+  }
+  return (model, context, options) =>
+    streamFn(
+      model,
+      context.systemPrompt
+        ? { ...context, systemPrompt: stripSystemPromptCacheBoundary(context.systemPrompt) }
+        : context,
+      options,
+    );
 }
 
 export function resolveProviderTransportTurnStateWithPlugin(params: {

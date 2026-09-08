@@ -59,7 +59,10 @@ function shouldRenderCodeBlockInteraction(env: unknown): boolean {
 }
 
 function encodeCodeBlockCopyPayload(value: string): string {
-  return `${blockArtCopyPayloadPrefix}${JSON.stringify(value)}`;
+  // DOMPurify removes attributes containing XML comment ends or closing tags.
+  // JSON escapes survive sanitization and decode only as clipboard text.
+  const payload = JSON.stringify(value).replaceAll("<", "\\u003c").replaceAll(">", "\\u003e");
+  return `${blockArtCopyPayloadPrefix}${payload}`;
 }
 
 function decodeCodeBlockCopyPayload(value: string, encoding?: string): string {
@@ -95,9 +98,10 @@ export function handleMarkdownCodeBlockClick(event: Event): void {
   const code = decodeCodeBlockCopyPayload(button.dataset.code ?? "", button.dataset.codeEncoding);
   const attempt = (codeBlockCopyAttempts.get(button) ?? 0) + 1;
   codeBlockCopyAttempts.set(button, attempt);
-  void copyToClipboard(code).then((copied) => {
+  const isCurrent = () => button.isConnected && codeBlockCopyAttempts.get(button) === attempt;
+  void copyToClipboard(code, isCurrent).then((copied) => {
     // Clipboard writes can finish out of click order; older attempts must not own feedback.
-    if (codeBlockCopyAttempts.get(button) !== attempt) {
+    if (!isCurrent()) {
       return;
     }
     button.classList.toggle("copied", copied);

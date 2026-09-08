@@ -1,3 +1,4 @@
+import type { GetPromptResult } from "@modelcontextprotocol/sdk/types.js";
 import { stableStringify } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AgentToolResult } from "./runtime/index.js";
@@ -159,4 +160,22 @@ export function projectMcpCallToolResult(
       : {}),
     ...(typeof result.isError === "boolean" ? { isError: result.isError } : {}),
   });
+}
+
+/** Keep template roles descriptive while projecting its content for the model. */
+export function projectMcpGetPromptResult(
+  result: GetPromptResult,
+  details: Record<string, unknown>,
+): AgentToolResult<unknown> {
+  const content = result.messages.flatMap(({ role, content: block }) => [
+    { type: "text", text: `${role}:` },
+    block,
+  ]);
+  if (result.description !== undefined) {
+    content.unshift({ type: "text", text: result.description });
+  }
+  return setMcpCodeModeGuestResult(
+    projectMcpCallToolResult({ content }, details),
+    toToolSearchJsonSafe(result),
+  );
 }

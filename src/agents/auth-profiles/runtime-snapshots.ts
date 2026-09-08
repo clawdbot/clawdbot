@@ -214,7 +214,7 @@ export function getOwnedRuntimeAuthProfileStoreSnapshotAtDatabasePath(
 export function getPreparedRuntimeAuthProfileStoreSnapshotCore(
   agentDir?: string,
   inheritedAuthDir?: string,
-): AuthProfileStore | undefined {
+): RuntimeAuthProfileStore | undefined {
   const inheritedKey = resolveRuntimeStoreKey(inheritedAuthDir);
   const requestedKey = resolveRuntimeStoreKey(agentDir);
   const inherited = getRuntimeAuthProfileStoreSnapshotAtDatabasePath(inheritedKey);
@@ -227,6 +227,10 @@ export function getPreparedRuntimeAuthProfileStoreSnapshotCore(
     return mergeAuthProfileStores(inherited, requested, {
       preserveBaseRuntimeExternalProfiles: true,
     });
+  }
+  if (agentDir && !requested && inherited) {
+    // The shared snapshot owns its order; this agent has no local override to reset.
+    return { ...inherited, runtimeLocalOrderProviderIds: [] };
   }
   return requested ?? inherited;
 }

@@ -191,6 +191,34 @@ describe("sessions tool batch patch", () => {
     });
   });
 
+  it("returns the child pin error while pinning a root in the same batch", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await seedSessions();
+      const childKey = targetKeys[0]!;
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey: childKey },
+        { spawnedBy: currentKey },
+      );
+      const result = await createStoredSessionTool().execute("pin-selected", {
+        action: "patch",
+        targets: [{ sessionKey: childKey }, { sessionKey: "current" }],
+        pinned: true,
+      });
+      expect(result.details).toMatchObject({
+        status: "partial",
+        succeeded: [1],
+        failed: [0],
+        errors: [
+          { index: 0, message: "cannot pin a child session; pin its parent session instead" },
+        ],
+      });
+      expect(loadSessionEntry({ agentId: "main", sessionKey: childKey })?.pinnedAt).toBeUndefined();
+      expect(loadSessionEntry({ agentId: "main", sessionKey: currentKey })?.pinnedAt).toEqual(
+        expect.any(Number),
+      );
+    });
+  });
+
   it("rejects duplicate aliases before any batch mutation", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       await seedSessions();

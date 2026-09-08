@@ -1467,41 +1467,63 @@ describe("google-meet plugin", () => {
     });
   });
 
-  it("keeps local Chrome talk-back available on Linux and blocks unsupported hosts", () => {
+  it("keeps local Chrome talk-back available on Linux and blocks unsupported hosts", async () => {
     const { cliRegistrations, methods, tools } = setup(undefined, { registerPlatform: "linux" });
+    const tool = getMeetTool({ tools });
+    const callGatewayFromCli = vi.fn(async () => ({ ok: true }));
+    googleMeetPluginTesting.setCallGatewayFromCliForTests(callGatewayFromCli);
 
     expect(tools).toHaveLength(1);
     expect(cliRegistrations).toHaveLength(1);
     expect(methods.has("googlemeet.setup")).toBe(true);
-    expect(
-      googleMeetPluginTesting.isGoogleMeetAgentToolActionUnsupportedOnHost({
-        config: resolveGoogleMeetConfig({}),
-        raw: { action: "join" },
-        platform: "linux",
-      }),
-    ).toBe(false);
 
-    expect(
-      googleMeetPluginTesting.isGoogleMeetAgentToolActionUnsupportedOnHost({
-        config: resolveGoogleMeetConfig({}),
-        raw: { action: "join", mode: "transcribe" },
-        platform: "linux",
-      }),
-    ).toBe(false);
-    expect(
-      googleMeetPluginTesting.isGoogleMeetAgentToolActionUnsupportedOnHost({
-        config: resolveGoogleMeetConfig({}),
-        raw: { action: "join" },
-        platform: "win32",
-      }),
-    ).toBe(true);
-    expect(
-      googleMeetPluginTesting.isGoogleMeetAgentToolActionUnsupportedOnHost({
-        config: resolveGoogleMeetConfig({}),
-        raw: { action: "join", transport: "chrome-node" },
-        platform: "linux",
-      }),
-    ).toBe(false);
+    const joined = await tool.execute("linux-agent", { action: "join" });
+    expect(joined.details).toEqual({ ok: true });
+    expect(callGatewayFromCli).toHaveBeenCalledOnce();
+    expect(callGatewayFromCli).toHaveBeenNthCalledWith(
+      1,
+      "googlemeet.join",
+      expect.any(Object),
+      { action: "join" },
+      { progress: false, scopes: ["operator.admin"] },
+    );
+
+    const transcribed = await tool.execute("linux-transcribe", {
+      action: "join",
+      mode: "transcribe",
+    });
+    expect(transcribed.details).toEqual({ ok: true });
+    expect(callGatewayFromCli).toHaveBeenCalledTimes(2);
+    expect(callGatewayFromCli).toHaveBeenNthCalledWith(
+      2,
+      "googlemeet.join",
+      expect.any(Object),
+      { action: "join", mode: "transcribe" },
+      { progress: false, scopes: ["operator.admin"] },
+    );
+
+    googleMeetPluginTesting.setPlatformForTests(() => "win32");
+    const blocked = await tool.execute("windows-agent", { action: "join" });
+    expect(blocked.details).toEqual({
+      error:
+        "Google Meet local Chrome talk-back audio requires macOS with BlackHole 2ch or Linux with PipeWire-Pulse. On this host, use mode: transcribe, transport: twilio, or a supported chrome-node.",
+    });
+    expect(callGatewayFromCli).toHaveBeenCalledTimes(2);
+
+    googleMeetPluginTesting.setPlatformForTests(() => "linux");
+    const remote = await tool.execute("linux-chrome-node", {
+      action: "join",
+      transport: "chrome-node",
+    });
+    expect(remote.details).toEqual({ ok: true });
+    expect(callGatewayFromCli).toHaveBeenCalledTimes(3);
+    expect(callGatewayFromCli).toHaveBeenNthCalledWith(
+      3,
+      "googlemeet.join",
+      expect.any(Object),
+      { action: "join", transport: "chrome-node" },
+      { progress: false, scopes: ["operator.admin"] },
+    );
   });
 
   it("returns structured gateway errors for missing session ids", async () => {

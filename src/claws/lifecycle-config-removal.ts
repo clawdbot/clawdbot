@@ -25,18 +25,12 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { digestClawAgentConfig } from "./agent-config-digest.js";
-import {
-  deletionEffects,
-  type ClawCleanupTargets,
-  type ClawTrashPath,
-} from "./lifecycle-delete-support.js";
+import { deletionEffects, type ClawCleanupTargets } from "./lifecycle-delete-support.js";
 import {
   readClawInstallRecordFromDatabase,
   updateClawInstallRecordStatus,
   type PersistedClawInstall,
 } from "./provenance.js";
-
-export type ConfigCommit = (transform: (config: OpenClawConfig) => OpenClawConfig) => Promise<void>;
 
 type ClawAgentConfigRemovalParams = {
   agentId: string;
@@ -46,9 +40,7 @@ type ClawAgentConfigRemovalParams = {
   expectedState: "present" | "missing";
   fallbackWorkspace: string;
   config?: OpenClawConfig;
-  commitConfig?: ConfigCommit;
   stateDatabase?: OpenClawStateDatabaseOptions;
-  trashPath?: ClawTrashPath;
   onModified: () => Error;
   quiesceMonitors?: (operationId: string) => Promise<void>;
   drainMonitors?: (operationId: string) => Promise<void>;
@@ -56,7 +48,7 @@ type ClawAgentConfigRemovalParams = {
 
 type ClawAgentConfigRemovalResult = {
   agentRemoved: boolean;
-  cleanupTargets?: ClawCleanupTargets;
+  cleanupTargets: ClawCleanupTargets;
   configBeforeDelete: OpenClawConfig;
   nextConfig: OpenClawConfig;
 };
@@ -80,46 +72,6 @@ async function commitClawAgentConfigRemoval(
   params: ClawAgentConfigRemovalParams,
   assertCurrent: () => void,
 ): Promise<ClawAgentConfigRemovalResult> {
-  if (params.commitConfig) {
-    let result: ClawAgentConfigRemovalResult | undefined;
-    await params.commitConfig((config) => {
-      assertCurrent();
-      const effects = deletionEffects(
-        config,
-        params.agentId,
-        params.fallbackWorkspace,
-        params.stateDatabase?.env,
-      );
-      const agent = listAgentEntries(config).find((candidate) => candidate.id === params.agentId);
-      if (
-        (agent && digestClawAgentConfig(agent) !== params.expectedDigest) ||
-        digestClawAgentRemovalSurface(config, params.agentId) !==
-          params.expectedRemovalSurfaceDigest
-      ) {
-        throw params.onModified();
-      }
-      result = {
-        agentRemoved: Boolean(agent),
-        ...(params.trashPath
-          ? {
-              cleanupTargets: {
-                workspaceDir: effects.workspace,
-                agentDir: effects.agentDir,
-                sessionsDir: effects.sessionsDir,
-              },
-            }
-          : {}),
-        configBeforeDelete: config,
-        nextConfig: effects.pruned.config,
-      };
-      return effects.pruned.config;
-    });
-    if (!result) {
-      throw new Error("Claw config removal did not run its commit transform.");
-    }
-    return result;
-  }
-
   const configBeforeDelete = params.config ?? getRuntimeConfig();
   try {
     const committed = await deleteAgentConfigEntry({

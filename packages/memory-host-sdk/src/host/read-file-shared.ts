@@ -1,4 +1,3 @@
-// Memory Host SDK module implements read file shared behavior.
 import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { MemoryReadResult } from "./types.js";
@@ -34,25 +33,22 @@ function fitLinesToCharBudget(params: { lines: string[]; maxChars: number }): {
   hardTruncatedSingleLine: boolean;
 } {
   const { lines, maxChars } = params;
-  if (lines.length === 0) {
-    return { text: "", includedLines: 0, hardTruncatedSingleLine: false };
-  }
-
-  let includedLines = lines.length;
-  let text = lines.join("\n");
-  while (includedLines > 1 && text.length > maxChars) {
-    includedLines -= 1;
-    text = lines.slice(0, includedLines).join("\n");
-  }
-
-  if (text.length <= maxChars) {
-    return { text, includedLines, hardTruncatedSingleLine: false };
+  let includedLines = 0;
+  let chars = 0;
+  for (const line of lines) {
+    const nextChars = chars + line.length + (includedLines > 0 ? 1 : 0);
+    // Keep an oversized first line for the existing single-line truncation contract.
+    if (includedLines > 0 && nextChars > maxChars) {
+      break;
+    }
+    includedLines += 1;
+    chars = nextChars;
   }
 
   return {
-    text: truncateUtf16Safe(text, maxChars),
-    includedLines: 1,
-    hardTruncatedSingleLine: true,
+    text: truncateUtf16Safe(lines.slice(0, includedLines).join("\n"), maxChars),
+    includedLines,
+    hardTruncatedSingleLine: chars > maxChars,
   };
 }
 

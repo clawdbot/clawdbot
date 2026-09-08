@@ -7,9 +7,7 @@ import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.ui.design.ClawTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -58,16 +56,10 @@ internal fun GatewayTrustDialog(
       }
     }
 
-  AlertDialog(
+  FoldAwarePrompt(
     onDismissRequest = onDecline,
     containerColor = ClawTheme.colors.surfaceRaised,
-    title = {
-      Text(
-        stringResource(R.string.trust_this_gateway),
-        style = ClawTheme.type.section,
-        color = ClawTheme.colors.text,
-      )
-    },
+    title = stringResource(R.string.trust_this_gateway),
     text = {
       Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text(message, style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
@@ -89,24 +81,20 @@ internal fun GatewayTrustDialog(
         }
       }
     },
-    confirmButton = {
+    actions = {
+      if (prompt.systemTrustAvailable) {
+        TextButton(onClick = onUseSystemTrust) {
+          Text(nativeString("Use system trust"))
+        }
+      }
+      TextButton(onClick = onDecline) {
+        Text(cancelLabel)
+      }
       TextButton(
         onClick = { onAccept(if (manualEntry) normalizedManualFingerprint else null) },
         enabled = !manualEntry || normalizedManualFingerprint != null,
       ) {
         Text(confirmLabel)
-      }
-    },
-    dismissButton = {
-      Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        if (prompt.systemTrustAvailable) {
-          TextButton(onClick = onUseSystemTrust) {
-            Text(nativeString("Use system trust"))
-          }
-        }
-        TextButton(onClick = onDecline) {
-          Text(cancelLabel)
-        }
       }
     },
   )
