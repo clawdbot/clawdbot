@@ -411,6 +411,54 @@ describe("readScheduledTaskCommand", () => {
     );
   });
 
+  it("strips trailing output redirections added by operators before argv parsing (#137362)", async () => {
+    await withScheduledTaskScript(
+      {
+        scriptLines: [
+          "@echo off",
+          'node gateway.js --port 18789 >> "C:\\Logs\\gateway stdout.log" 2>&1 < NUL',
+        ],
+      },
+      async (env) => {
+        const result = await readScheduledTaskCommand(env);
+        expect(result).toEqual({
+          programArguments: ["node", "gateway.js", "--port", "18789"],
+          sourcePath: resolveTaskScriptPath(env),
+        });
+      },
+    );
+  });
+
+  it("strips combined stdout/stderr redirection in any order (#137362)", async () => {
+    await withScheduledTaskScript(
+      { scriptLines: ["@echo off", "node gateway.js < NUL >> gateway.log 2>&1"] },
+      async (env) => {
+        const result = await readScheduledTaskCommand(env);
+        expect(result?.programArguments).toEqual(["node", "gateway.js"]);
+      },
+    );
+  });
+
+  it("strips bare stderr duplication and fd-prefixed redirects (#137362)", async () => {
+    await withScheduledTaskScript(
+      { scriptLines: ["@echo off", "node gateway.js 1>> gateway.log 2>&1"] },
+      async (env) => {
+        const result = await readScheduledTaskCommand(env);
+        expect(result?.programArguments).toEqual(["node", "gateway.js"]);
+      },
+    );
+  });
+
+  it("keeps quoted arguments that merely contain a redirect character", async () => {
+    await withScheduledTaskScript(
+      { scriptLines: ["@echo off", 'node gateway.js --msg "a>b"'] },
+      async (env) => {
+        const result = await readScheduledTaskCommand(env);
+        expect(result?.programArguments).toEqual(["node", "gateway.js", "--msg", "a>b"]);
+      },
+    );
+  });
+
   it("preserves UNC paths in command arguments", async () => {
     await withScheduledTaskScript(
       {

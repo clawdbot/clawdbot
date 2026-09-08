@@ -38,6 +38,24 @@ function stripStdinNulRedirect(commandLine: string): string {
   return commandLine.replace(/\s*<\s*NUL\s*$/i, "");
 }
 
+// Operators append output redirections to the launcher to capture gateway
+// output; they are parsed as arguments unless stripped, which breaks the
+// ownership match against the live process command line (#137362).
+// The operator must follow whitespace (or start of line) so quoted arguments
+// containing ">" are left untouched.
+const TRAILING_OUTPUT_REDIRECT_RE = /(?:^|\s)\d?>>?\s*("[^"]*"|&\d+|\S+)\s*$/;
+
+function stripTrailingCmdRedirections(commandLine: string): string {
+  let stripped = stripStdinNulRedirect(commandLine);
+  for (;;) {
+    const next = stripped.replace(TRAILING_OUTPUT_REDIRECT_RE, "");
+    if (next === stripped) {
+      return stripped;
+    }
+    stripped = stripStdinNulRedirect(next);
+  }
+}
+
 export function shouldFallbackToStartupEntry(params: { code: number; detail: string }): boolean {
   // Permission failures and hung schtasks calls can use the per-user Startup fallback.
   return (
@@ -254,7 +272,9 @@ export async function readScheduledTaskCommand(
       }
       // Generated launchers redirect stdin so a hidden service console never
       // presents as interactive (#112173); the redirection is not an argument.
-      commandLine = stripStdinNulRedirect(line);
+      // Trailing output redirections added by operators are stripped for the
+      // same reason (#137362).
+      commandLine = stripTrailingCmdRedirections(line);
       break;
     }
     if (!commandLine) {
