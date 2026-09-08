@@ -1,5 +1,6 @@
 import pMap, { pMapSkip } from "p-map";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { formatTimestamp } from "../../logging/timestamps.js";
 import {
   beginGatewayRootWorkAdmissionWhenOpen,
   GatewayDrainingError,
@@ -97,7 +98,12 @@ export function armTimer(state: CronServiceState) {
   // tests that simulate long-running jobs. Runtime behavior is unchanged.
   setCronTimer(state, clampedDelay);
   state.deps.log.debug(
-    { nextAt, delayMs: clampedDelay, clamped: delay > MAX_CRON_TIMER_DELAY_MS },
+    {
+      nextAt,
+      nextAtIso: formatTimestamp(new Date(nextAt), { style: "long" }),
+      delayMs: clampedDelay,
+      clamped: delay > MAX_CRON_TIMER_DELAY_MS,
+    },
     "cron: timer armed",
   );
 }

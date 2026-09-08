@@ -169,6 +169,19 @@ describe("CronService - armTimer tight loop prevention", () => {
       expect(lengthReads).toBe(2);
       expect(state.timer).toBe(latestTimeoutHandle(timeoutSpy));
       expect(extractTimeoutDelays(timeoutSpy)).toContain(10_000);
+      expect(noopLogger.debug).toHaveBeenLastCalledWith(
+        {
+          nextAt: now + 10_000,
+          nextAtIso: expect.stringMatching(
+            /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}[+-]\d{2}:\d{2}$/,
+          ),
+          delayMs: 10_000,
+          clamped: false,
+        },
+        "cron: timer armed",
+      );
+      const timerLog = noopLogger.debug.mock.lastCall?.[0] as { nextAtIso: string };
+      expect(Date.parse(timerLog.nextAtIso)).toBe(now + 10_000);
     } finally {
       timeoutSpy.mockRestore();
     }
