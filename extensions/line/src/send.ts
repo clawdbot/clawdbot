@@ -18,7 +18,7 @@ import { resolveLineAccount } from "./accounts.js";
 import { messageAction, normalizeLineMessage } from "./actions.js";
 import { resolveLineChannelAccessToken } from "./channel-access-token.js";
 import { buildLineMediaMessage } from "./outbound-media.js";
-import { recordLineSentMessages } from "./outbound-message-log.js";
+import { recordLineSentMessages } from "./quoted-messages.js";
 import { createLineSendReceipt } from "./send-receipt.js";
 import { runLinePushWithRetries } from "./send-retry.js";
 import type { LineChannelData, LineOutboundMediaKind, LineSendResult } from "./types.js";

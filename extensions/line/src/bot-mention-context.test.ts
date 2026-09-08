@@ -14,12 +14,12 @@ vi.mock("./send.js", () => ({
 }));
 
 let handleLineWebhookEvents: typeof import("./bot-handlers.js").handleLineWebhookEvents;
-let recordLineSentMessages: typeof import("./outbound-message-log.js").recordLineSentMessages;
+let recordLineSentMessages: typeof import("./quoted-messages.js").recordLineSentMessages;
 
 beforeAll(async () => {
   vi.resetModules();
   ({ handleLineWebhookEvents } = await import("./bot-handlers.js"));
-  ({ recordLineSentMessages } = await import("./outbound-message-log.js"));
+  ({ recordLineSentMessages } = await import("./quoted-messages.js"));
 });
 
 afterAll(() => {

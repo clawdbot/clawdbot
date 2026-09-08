@@ -18,8 +18,10 @@ import { buildLineMessageContext, buildLinePostbackContext } from "./bot-message
 import type { ResolvedLineAccount } from "./types.js";
 
 const logVerboseMock = vi.hoisted(() => vi.fn());
+// Mirrors getUserProfile: the id decides the answer, so a test can name one
+// profile per user the context asks about.
 const getUserProfileMock = vi.hoisted(() =>
-  vi.fn(async () => null as { displayName: string } | null),
+  vi.fn(async (_userId: string) => null as { displayName: string } | null),
 );
 const getLineGroupNameMock = vi.hoisted(() => vi.fn(async () => undefined as string | undefined));
 const toInboundMediaFactsWithMetadataMock = vi.hoisted(() => vi.fn());
@@ -143,6 +145,8 @@ describe("buildLineMessageContext", () => {
     const event = createMessageEvent({ type: "group", groupId: "group-1", userId: "user-1" });
 
     const context = await buildLineMessageContext({
+      groupPolicy: "open",
+      groupAllowFrom: [],
       event,
       allMedia: [],
       cfg,
@@ -169,6 +173,8 @@ describe("buildLineMessageContext", () => {
 
   it("describes a sticker with the keywords LINE sent for it", async () => {
     const context = await buildLineMessageContext({
+      groupPolicy: "open",
+      groupAllowFrom: [],
       event: stickerEvent({ keywords: ["Thank you", "Thanks", "Grateful", "Bowing"] }),
       allMedia: [],
       cfg,
@@ -187,6 +193,8 @@ describe("buildLineMessageContext", () => {
     // keywords identify the sticker as a different character than that entry
     // named — so the shipped shape, not a hand-made one, pins this projection.
     const context = await buildLineMessageContext({
+      groupPolicy: "open",
+      groupAllowFrom: [],
       event: stickerEvent({
         id: "629316390784598646",
         stickerId: "52002734",
@@ -221,6 +229,8 @@ describe("buildLineMessageContext", () => {
 
   it("uses the sender's own text for a message sticker", async () => {
     const context = await buildLineMessageContext({
+      groupPolicy: "open",
+      groupAllowFrom: [],
       event: stickerEvent({ text: "See you tomorrow" }),
       allMedia: [],
       cfg,
@@ -236,6 +246,8 @@ describe("buildLineMessageContext", () => {
     ["   ", "[Sent a sticker:    ]"],
   ])("preserves sender-authored sticker whitespace", async (text, expected) => {
     const context = await buildLineMessageContext({
+      groupPolicy: "open",
+      groupAllowFrom: [],
       event: stickerEvent({ text, keywords: ["fallback"] }),
       allMedia: [],
       cfg,
@@ -249,6 +261,8 @@ describe("buildLineMessageContext", () => {
   it("prefers message-sticker text over experimental keywords", async () => {
     // LINE's official message-sticker webhook example carries both properties.
     const context = await buildLineMessageContext({
+      groupPolicy: "open",
+      groupAllowFrom: [],
       event: stickerEvent({
         stickerId: "738839",
         packageId: "12287",
@@ -267,6 +281,8 @@ describe("buildLineMessageContext", () => {
 
   it("still reports a sticker that carries neither keywords nor text", async () => {
     const context = await buildLineMessageContext({
+      groupPolicy: "open",
+      groupAllowFrom: [],
       event: stickerEvent({}),
       allMedia: [],
       cfg,
@@ -293,6 +309,8 @@ describe("buildLineMessageContext", () => {
     } as Partial<MessageEvent>);
 
     const context = await buildLineMessageContext({
+      groupPolicy: "open",
+      groupAllowFrom: [],
       event,
       allMedia: [],
       cfg,
@@ -320,6 +338,8 @@ describe("buildLineMessageContext", () => {
     } as Partial<MessageEvent>);
 
     const context = await buildLineMessageContext({
+      groupPolicy: "open",
+      groupAllowFrom: [],
       event,
       allMedia: [],
       cfg,
@@ -334,6 +354,8 @@ describe("buildLineMessageContext", () => {
     const event = createMessageEvent({ type: "user", userId: "user-1" });
 
     const context = await buildLineMessageContext({
+      groupPolicy: "open",
+      groupAllowFrom: [],
       event,
       allMedia: [],
       cfg,
@@ -349,6 +371,8 @@ describe("buildLineMessageContext", () => {
     const event = createMessageEvent({ type: "group", groupId: "group-1", userId: "user-1" });
 
     const context = await buildLineMessageContext({
+      groupPolicy: "open",
+      groupAllowFrom: [],
       event,
       allMedia: [],
       cfg,
@@ -369,6 +393,8 @@ describe("buildLineMessageContext", () => {
       agents: { defaults: { envelopeTimestamp: "off" } },
     };
     await buildLineMessageContext({
+      groupPolicy: "open",
+      groupAllowFrom: [],
       event: createMessageEvent({ type: "user", userId: "user-1" }, {
         timestamp,
         message: { id: "baseline", type: "text", text: "BODY_MARKER" },
@@ -391,6 +417,8 @@ describe("buildLineMessageContext", () => {
     logVerboseMock.mockClear();
 
     await buildLineMessageContext({
+      groupPolicy: "open",
+      groupAllowFrom: [],
       event: createMessageEvent({ type: "user", userId: "user-1" }, {
         timestamp,
         message: { id: "1", type: "text", text: rawBody },
@@ -418,6 +446,8 @@ describe("buildLineMessageContext", () => {
     } as Partial<MessageEvent>);
 
     const context = await buildLineMessageContext({
+      groupPolicy: "open",
+      groupAllowFrom: [],
       event,
       allMedia: [],
       mediaUnavailable: true,
@@ -445,6 +475,8 @@ describe("buildLineMessageContext", () => {
     } as Partial<MessageEvent>);
 
     const context = await buildLineMessageContext({
+      groupPolicy: "open",
+      groupAllowFrom: [],
       event,
       allMedia: [{ path: "/tmp/line-image.png", contentType: "image/png" }],
       cfg,
@@ -494,6 +526,8 @@ describe("buildLineMessageContext", () => {
     const event = createMessageEvent({ type: "group", groupId: "group-1", userId: "user-1" });
 
     const context = await buildLineMessageContext({
+      groupPolicy: "open",
+      groupAllowFrom: [],
       event,
       allMedia: [],
       cfg,
@@ -517,6 +551,8 @@ describe("buildLineMessageContext", () => {
     const event = createMessageEvent({ type: "room", roomId: "room-1", userId: "user-1" });
 
     const context = await buildLineMessageContext({
+      groupPolicy: "open",
+      groupAllowFrom: [],
       event,
       allMedia: [],
       cfg,
@@ -540,6 +576,8 @@ describe("buildLineMessageContext", () => {
     const event = createMessageEvent({ type: "group", groupId: "group-1", userId: "user-1" });
 
     const context = await buildLineMessageContext({
+      groupPolicy: "open",
+      groupAllowFrom: [],
       event,
       allMedia: [],
       cfg,
@@ -562,6 +600,8 @@ describe("buildLineMessageContext", () => {
     const event = createMessageEvent({ type: "group", groupId: "group-1", userId: "user-1" });
 
     const context = await buildLineMessageContext({
+      groupPolicy: "open",
+      groupAllowFrom: [],
       event,
       allMedia: [],
       cfg,
@@ -589,6 +629,8 @@ describe("buildLineMessageContext", () => {
     const event = createMessageEvent({ type: "user", userId: "user-1" });
 
     const context = await buildLineMessageContext({
+      groupPolicy: "open",
+      groupAllowFrom: [],
       event,
       allMedia: [],
       cfg,
@@ -608,6 +650,8 @@ describe("buildLineMessageContext", () => {
     );
 
     const context = await buildLineMessageContext({
+      groupPolicy: "open",
+      groupAllowFrom: [],
       event,
       allMedia: [],
       cfg,
@@ -622,6 +666,8 @@ describe("buildLineMessageContext", () => {
     const event = createMessageEvent({ type: "user", userId: "user-auth" });
 
     const context = await buildLineMessageContext({
+      groupPolicy: "open",
+      groupAllowFrom: [],
       event,
       allMedia: [],
       cfg,
@@ -687,6 +733,8 @@ describe("buildLineMessageContext", () => {
     const event = createMessageEvent({ type: "user", userId: "user-noauth" });
 
     const context = await buildLineMessageContext({
+      groupPolicy: "open",
+      groupAllowFrom: [],
       event,
       allMedia: [],
       cfg,
@@ -704,6 +752,8 @@ describe("buildLineMessageContext", () => {
     };
 
     const context = await buildLineMessageContext({
+      groupPolicy: "open",
+      groupAllowFrom: [],
       event,
       allMedia: [],
       cfg: directCfg,
@@ -763,6 +813,8 @@ describe("buildLineMessageContext", () => {
     } as MessageEvent;
 
     const context = await buildLineMessageContext({
+      groupPolicy: "open",
+      groupAllowFrom: [],
       event,
       allMedia: [],
       cfg: bindingCfg,
@@ -800,6 +852,8 @@ describe("buildLineMessageContext", () => {
     } as MessageEvent;
 
     const context = await buildLineMessageContext({
+      groupPolicy: "open",
+      groupAllowFrom: [],
       event,
       allMedia: [],
       cfg: bindingCfg,
@@ -873,6 +927,8 @@ describe("buildLineMessageContext", () => {
 
     const event = createMessageEvent({ type: "user", userId });
     const context = await buildLineMessageContext({
+      groupPolicy: "open",
+      groupAllowFrom: [],
       event,
       allMedia: [],
       cfg,
@@ -895,6 +951,8 @@ describe("buildLineMessageContext", () => {
       userId: "U47f0bbc534dc503c4e4cadc86e619b63",
     });
     const context = await buildLineMessageContext({
+      groupPolicy: "open",
+      groupAllowFrom: [],
       event,
       allMedia: [],
       cfg,
@@ -917,6 +975,8 @@ describe("buildLineMessageContext", () => {
       userId: "U47f0bbc534dc503c4e4cadc86e619b63",
     });
     const context = await buildLineMessageContext({
+      groupPolicy: "open",
+      groupAllowFrom: [],
       event,
       allMedia: [],
       cfg,
@@ -935,6 +995,8 @@ describe("buildLineMessageContext", () => {
       userId: "U47f0bbc534dc503c4e4cadc86e619b63",
     });
     await buildLineMessageContext({
+      groupPolicy: "open",
+      groupAllowFrom: [],
       event,
       allMedia: [],
       cfg,
@@ -984,6 +1046,8 @@ describe("buildLineMessageContext", () => {
     "projects LINE emoji metadata without losing text: $text",
     async ({ text, spans, expected, mention }) => {
       const context = await buildLineMessageContext({
+        groupPolicy: "open",
+        groupAllowFrom: [],
         event: createMessageEvent(
           { type: "user", userId: "user-1" },
           {
