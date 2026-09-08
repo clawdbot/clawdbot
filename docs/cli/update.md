@@ -419,7 +419,8 @@ Both stall diagnostics also include `childProcesses`: up to eight descendant
 processes with `pid`, `parentPid`, and an executable name (`command`). Arguments,
 environment values, and executable paths are omitted. `childProcessesTruncated`
 indicates omitted entries; `childProcessInspection: "unavailable"` means the
-process list could not be read. Inspection runs only after a stall and adds at
+process list could not be read. A null `command` means that process's executable
+name was unavailable. Inspection runs only after a stall and adds at
 most one second to the exit bound. Phase-failure JSON includes the same fields.
 Preserve these diagnostics and the phase receipts when reporting a blocked child.
 Human repair can still wait for a recovery choice or repair agent; its exit grace
