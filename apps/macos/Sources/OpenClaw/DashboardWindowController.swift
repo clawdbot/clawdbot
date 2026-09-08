@@ -15,6 +15,8 @@ private final class DashboardWindowContentView: NSView {
 /// Toolbar` (and ⌥⌘T) would collapse the titlebar while the web inset stays
 /// pinned at `--openclaw-native-titlebar-height`, resurrecting the traffic-light
 /// misalignment. Refusing the toggle keeps the two heights in lockstep.
+/// Native fullscreen removes the traffic lights, so delegate callbacks hide the toolbar; init
+/// reconciles reused fullscreen windows while the web row keeps hosting `.macos-titlebar-controls`.
 private final class DashboardWindow: NSWindow {
     /// User intent belongs to the native window, not the privileged document it hosts.
     var userIntentGeneration: UInt64 = 0
@@ -247,6 +249,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
             self.requestBrowserProfileImportOfferIfNeeded()
         }
         self.window?.delegate = self
+        self.applyFullScreenChrome(isFullScreen: window.styleMask.contains(.fullScreen))
         self.installHistoryStateBridge()
         if restoreKeyboardFocus {
             window.makeFirstResponder(self.webView)
@@ -1057,6 +1060,8 @@ extension DashboardWindowController {
         self.currentURL
     }
 
+    // MARK: - NSWindowDelegate
+
     func windowWillClose(_: Notification) {
         self.retirePendingLoad()
         (self.window as? DashboardWindow)?.lifetimeRevision &+= 1
@@ -1071,6 +1076,18 @@ extension DashboardWindowController {
         self.webView.stopLoading()
         self.nativeBrowser.dispose()
         self.onClosed?()
+    }
+
+    func windowDidEnterFullScreen(_: Notification) {
+        self.applyFullScreenChrome(isFullScreen: true)
+    }
+
+    func windowDidExitFullScreen(_: Notification) {
+        self.applyFullScreenChrome(isFullScreen: false)
+    }
+
+    private func applyFullScreenChrome(isFullScreen: Bool) {
+        self.window?.toolbar?.isVisible = !isFullScreen
     }
 
     func webView(
