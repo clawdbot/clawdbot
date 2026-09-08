@@ -81,6 +81,5 @@ describe("dashboards index", () => {
 
     const avatar = container.querySelector(".dashboard-card__avatar");
     expect(avatar?.textContent).toBe("🇺🇸");
-    expect(avatar?.textContent).not.toBe("🇺🇸Team".charAt(0));
   });
 });

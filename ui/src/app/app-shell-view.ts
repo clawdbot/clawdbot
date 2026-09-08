@@ -12,8 +12,8 @@ import {
 } from "../components/settings-sidebar-lazy.ts";
 import type { ThemeModeChangeDetail } from "../components/theme-mode-toggle.ts";
 import { t } from "../i18n/index.ts";
-import { deriveAvatarInitial } from "../lib/avatar.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
+import { takeGraphemes } from "../lib/graphemes.ts";
 import {
   formatKeyboardShortcutCombo,
   KEYBOARD_SHORTCUT_COMBOS,
@@ -462,9 +462,7 @@ export function renderApplicationShell(host: ShellViewHost) {
                     aria-label=${t("nav.expand")}
                     aria-expanded="false"
                     data-env-avatar=${
-                      config.environment
-                        ? deriveAvatarInitial(config.assistantIdentity.name) || nothing
-                        : nothing
+                      config.environment ? takeGraphemes(config.assistantIdentity.name, 1) : nothing
                     }
                     @click=${() => host.toggleNavigationSurface()}
                   >
