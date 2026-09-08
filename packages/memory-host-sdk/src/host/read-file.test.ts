@@ -1,4 +1,5 @@
 // Memory Host SDK tests cover read file behavior.
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -80,6 +81,14 @@ describe("readMemoryFile", () => {
           }
           return await realLstat(...args);
         });
+        // fs-safe checks child metadata synchronously; configured-root admission remains async.
+        const realLstatSync = fsSync.lstatSync;
+        const lstatSyncSpy = vi.spyOn(fsSync, "lstatSync").mockImplementation((...args) => {
+          if (path.resolve(String(args[0])) === blockedTarget) {
+            throw scanError;
+          }
+          return realLstatSync(...args);
+        });
         try {
           await expect(
             readMemoryFile({
@@ -128,6 +137,7 @@ describe("readMemoryFile", () => {
             }),
           ).rejects.toThrow("path required");
         } finally {
+          lstatSyncSpy.mockRestore();
           lstatSpy.mockRestore();
         }
       } finally {

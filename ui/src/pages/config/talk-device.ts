@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { deviceSettingsGroupLabelKey } from "../../app-navigation.ts";
 import type { NativeDeviceSettingsCapability } from "../../app/native-device-settings.ts";
 import {
   renderSettingsRow,
@@ -48,6 +49,11 @@ function changeDeviceLocales(
       // Only a published snapshot can acknowledge an intent. Reading the old
       // snapshot during another edit must not clear a pending return to that value.
       const locale = snapshot.voice.locale;
+      if (!locale) {
+        pendingDeviceLocales.delete(capability);
+        unsubscribe();
+        return;
+      }
       if (desired.primary === locale.primary) {
         delete desired.primary;
       }
@@ -132,32 +138,30 @@ export function renderDeviceTalk(capability: NativeDeviceSettingsCapability | nu
   const voice = capability.snapshot?.voice;
   if (!voice) {
     return renderSettingsSection(
-      { title: t("configPage.deviceTalk.title") },
+      { title: t(deviceSettingsGroupLabelKey(capability.snapshot)) },
       renderSettingsRow({ title: t("common.loading") }),
     );
   }
+  const microphone = voice.microphone;
   const microphoneOptions = [
     { value: "", label: t("configPage.deviceTalk.systemDefault") },
-    ...voice.microphone.devices.map(({ id, name }) => ({ value: id, label: name })),
+    ...(microphone?.devices.map(({ id, name }) => ({ value: id, label: name })) ?? []),
   ];
   if (
-    voice.microphone.selectedId &&
-    !voice.microphone.devices.some(({ id }) => id === voice.microphone.selectedId)
+    microphone?.selectedId &&
+    !microphone.devices.some(({ id }) => id === microphone.selectedId)
   ) {
     microphoneOptions.push({
-      value: voice.microphone.selectedId,
-      label: t("configPage.deviceTalk.disconnectedMicrophone", { id: voice.microphone.selectedId }),
+      value: microphone.selectedId,
+      label: t("configPage.deviceTalk.disconnectedMicrophone", { id: microphone.selectedId }),
     });
   }
-  const languageOptions = voice.locale.available.map(({ id, name }) => ({
+  const languageOptions = (voice.locale?.available ?? []).map(({ id, name }) => ({
     value: id,
     label: name,
   }));
   const locale = deviceLocaleSelection(capability);
-  if (!locale) {
-    return nothing;
-  }
-  return renderSettingsSection({ title: t("configPage.deviceTalk.title") }, [
+  return renderSettingsSection({ title: t(deviceSettingsGroupLabelKey(capability.snapshot)) }, [
     ...(
       [
         "wakeEnabled",
@@ -168,104 +172,125 @@ export function renderDeviceTalk(capability: NativeDeviceSettingsCapability | nu
         "realtimeRelayEnabled",
         "triggerChime",
         "sendChime",
+        "talkEnabled",
+        "talkButtonEnabled",
+        "talkBackgroundEnabled",
+        "speakerphoneEnabled",
       ] as const
-    ).map((key) =>
-      renderSettingsToggleRow({
-        title: t(`configPage.deviceTalk.${key}`),
-        checked: voice[key],
-        disabled: key === "wakeEnabled" && !voice.supported && !voice.wakeEnabled,
-        description:
-          key === "wakeEnabled" && !voice.supported
-            ? t("configPage.deviceTalk.unsupported")
-            : key === "realtimeRelayEnabled"
-              ? t("configPage.deviceTalk.realtimeRelayHint")
-              : undefined,
-        onChange: (value) => capability.set(`voice.${key}`, value),
-      }),
-    ),
-    renderSettingsSelectRow({
-      title: t("configPage.deviceTalk.microphone"),
-      value: voice.microphone.selectedId ?? "",
-      options: microphoneOptions,
-      onChange: (value) => capability.set("voice.microphone", value || null),
-    }),
-    renderSettingsSelectRow({
-      title: t("configPage.deviceTalk.primaryLanguage"),
-      value: locale.primary,
-      options: languageOptions,
-      onChange: (value) => {
-        const current = deviceLocaleSelection(capability);
-        if (current) {
-          changeDeviceLocales(capability, {
-            primary: value,
-            ...(current.additional.includes(value)
-              ? { additional: current.additional.filter((id) => id !== value) }
-              : {}),
+    ).map((key) => {
+      const checked = voice[key];
+      return checked === undefined
+        ? nothing
+        : renderSettingsToggleRow({
+            title: t(`configPage.deviceTalk.${key}`),
+            checked,
+            disabled: key === "wakeEnabled" && !voice.supported && !voice.wakeEnabled,
+            description:
+              key === "wakeEnabled" && !voice.supported
+                ? t(
+                    capability.snapshot?.device.platform === "macos"
+                      ? "configPage.deviceTalk.unsupported"
+                      : "configPage.deviceTalk.unsupportedDevice",
+                  )
+                : key === "realtimeRelayEnabled"
+                  ? t("configPage.deviceTalk.realtimeRelayHint")
+                  : undefined,
+            onChange: (value) => capability.set(`voice.${key}`, value),
           });
-        }
-      },
     }),
-    renderSettingsRow({
-      title: t("configPage.deviceTalk.additionalLanguages"),
-      stacked: true,
-      control: html`
-        ${locale.additional.map((id) => {
-          const name = voice.locale.available.find((option) => option.id === id)?.name ?? id;
-          return html`<div>
-            ${name}
-            <button
-              class="btn btn--sm"
-              type="button"
-              aria-label=${t("configPage.deviceTalk.removeLanguage", { name })}
-              @click=${() => {
+    microphone
+      ? renderSettingsSelectRow({
+          title: t("configPage.deviceTalk.microphone"),
+          value: microphone.selectedId ?? "",
+          options: microphoneOptions,
+          onChange: (value) => capability.set("voice.microphone", value || null),
+        })
+      : nothing,
+    locale
+      ? renderSettingsSelectRow({
+          title: t("configPage.deviceTalk.primaryLanguage"),
+          value: locale.primary,
+          options: languageOptions,
+          onChange: (value) => {
+            const current = deviceLocaleSelection(capability);
+            if (current) {
+              changeDeviceLocales(capability, {
+                primary: value,
+                ...(current.additional.includes(value)
+                  ? { additional: current.additional.filter((id) => id !== value) }
+                  : {}),
+              });
+            }
+          },
+        })
+      : nothing,
+    locale
+      ? renderSettingsRow({
+          title: t("configPage.deviceTalk.additionalLanguages"),
+          stacked: true,
+          control: html`
+            ${locale.additional.map((id) => {
+              const name = languageOptions.find((option) => option.value === id)?.label ?? id;
+              return html`<div>
+                ${name}
+                <button
+                  class="btn btn--sm"
+                  type="button"
+                  aria-label=${t("configPage.deviceTalk.removeLanguage", { name })}
+                  @click=${() => {
+                    const current = deviceLocaleSelection(capability);
+                    if (current) {
+                      changeDeviceLocales(capability, {
+                        additional: current.additional.filter((value) => value !== id),
+                      });
+                    }
+                  }}
+                >
+                  ${t("common.remove")}
+                </button>
+              </div>`;
+            })}
+            <select
+              class="settings-select"
+              aria-label=${t("configPage.deviceTalk.addLanguage")}
+              @change=${(event: Event) => {
+                // SAFETY: This listener is bound directly to the native select, so currentTarget is that select.
+                const select = event.currentTarget as HTMLSelectElement;
                 const current = deviceLocaleSelection(capability);
-                if (current) {
+                if (
+                  select.value &&
+                  current &&
+                  select.value !== current.primary &&
+                  !current.additional.includes(select.value)
+                ) {
                   changeDeviceLocales(capability, {
-                    additional: current.additional.filter((value) => value !== id),
+                    additional: [...current.additional, select.value],
                   });
+                  select.value = "";
                 }
               }}
             >
-              ${t("common.remove")}
-            </button>
-          </div>`;
-        })}
-        <select
-          class="settings-select"
-          aria-label=${t("configPage.deviceTalk.addLanguage")}
-          @change=${(event: Event) => {
-            // SAFETY: This listener is bound directly to the native select, so currentTarget is that select.
-            const select = event.currentTarget as HTMLSelectElement;
-            const current = deviceLocaleSelection(capability);
-            if (
-              select.value &&
-              current &&
-              select.value !== current.primary &&
-              !current.additional.includes(select.value)
-            ) {
-              changeDeviceLocales(capability, {
-                additional: [...current.additional, select.value],
-              });
-              select.value = "";
-            }
-          }}
-        >
-          <option value="">${t("configPage.deviceTalk.addLanguage")}</option>
-          ${languageOptions
-            .filter(({ value }) => value !== locale.primary && !locale.additional.includes(value))
-            .map(({ value, label }) => html`<option value=${value}>${label}</option>`)}
-        </select>
-      `,
-    }),
-    renderSettingsRow({
-      title: t("configPage.deviceTalk.microphoneTest"),
-      control: html`<button
-        class="btn btn--sm"
-        type="button"
-        @click=${() => capability.openPanel("microphone-test")}
-      >
-        ${t("configPage.deviceTalk.microphoneTest")}
-      </button>`,
-    }),
+              <option value="">${t("configPage.deviceTalk.addLanguage")}</option>
+              ${languageOptions
+                .filter(
+                  ({ value }) => value !== locale.primary && !locale.additional.includes(value),
+                )
+                .map(({ value, label }) => html`<option value=${value}>${label}</option>`)}
+            </select>
+          `,
+        })
+      : nothing,
+    microphone
+      ? renderSettingsRow({
+          title: t("configPage.deviceTalk.microphoneTest"),
+          control: html`<button
+            class="btn btn--sm"
+            type="button"
+            @click=${() => capability.openPanel("microphone-test")}
+          >
+            ${t("configPage.deviceTalk.microphoneTest")}
+          </button>`,
+        })
+      : nothing,
   ]);
 }

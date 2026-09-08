@@ -3,6 +3,9 @@ import { execFileSync } from "node:child_process";
 
 const [ref, workflowSha, allowFrozenSource] = process.argv.slice(2);
 const isSha = (value) => /^[0-9a-f]{40}$/u.test(value ?? "");
+const NATIVE_MARKER =
+  /\b(?:configureFsSafeNative|getFsSafeNativeConfig|getNativeBinding)\b|@openclaw\/fs-safe\/native/u;
+const LEGACY_PYTHON_ONLY_FS_SAFE_VERSION = "0.3.0";
 assert.ok(isSha(ref), "ref must be a full lowercase commit SHA");
 assert.ok(isSha(workflowSha), "workflow SHA must be a full lowercase commit SHA");
 
@@ -32,36 +35,25 @@ function isLegacyPythonOnlySource() {
     return false;
   }
   try {
-    const defaults = execFileSync("git", ["show", `${ref}:src/infra/fs-safe-defaults.ts`], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    });
-    if (
-      !defaults.includes('import { configureFsSafePython } from "@openclaw/fs-safe/config";') ||
-      /\b(?:configureFsSafeNative|getFsSafeNativeConfig|getNativeBinding)\b|@openclaw\/fs-safe\/native/u.test(
-        defaults,
-      )
-    ) {
+    const readSource = (path) =>
+      execFileSync("git", ["show", `${ref}:${path}`], {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+      });
+    const packageJson = JSON.parse(readSource("package.json"));
+    if (packageJson.dependencies?.["@openclaw/fs-safe"] !== LEGACY_PYTHON_ONLY_FS_SAFE_VERSION) {
       return false;
     }
-    execFileSync(
-      "git",
-      [
-        "grep",
-        "-qE",
-        "\\b(configureFsSafeNative|getFsSafeNativeConfig|getNativeBinding)\\b|@openclaw/fs-safe/native",
-        ref,
-        "--",
-        "src",
-        "packages",
-        "extensions",
-      ],
-      { stdio: "ignore" },
+    const defaults = readSource("src/infra/fs-safe-defaults.ts");
+    // fs-safe 0.3.0's public config module exports Python/lock controls only;
+    // a built package on this exact dependency cannot consume native controls.
+    return (
+      defaults.includes('import { configureFsSafePython } from "@openclaw/fs-safe/config";') &&
+      !NATIVE_MARKER.test(defaults)
     );
+  } catch {
+    // Missing or unreadable ownership sources are unknown, therefore strict.
     return false;
-  } catch (error) {
-    // Only git grep's no-match status proves the complete product tree is pre-native.
-    return error && typeof error === "object" && "status" in error && error.status === 1;
   }
 }
 

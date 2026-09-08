@@ -668,6 +668,82 @@ describe("xai stream wrappers", () => {
     ]);
   });
 
+  it.each([false, true])(
+    "keeps compatibility image history as a prefix across turns (parallel: %s)",
+    (parallel) => {
+      const image = { type: "input_image", image_url: "data:image/png;base64,QUJDRA==" };
+      const result = {
+        type: "function_call_output",
+        call_id: "call_image",
+        output: [{ type: "input_text", text: "Read image" }, image],
+      };
+      const group = [
+        result,
+        ...(parallel
+          ? [{ type: "function_call_output", call_id: "call_text", output: "No image" }]
+          : []),
+      ];
+      const history = [
+        { type: "message", role: "user", content: "Read the files" },
+        { type: "function_call", call_id: "call_image", name: "read", arguments: "{}" },
+        ...(parallel
+          ? [{ type: "function_call", call_id: "call_text", name: "read", arguments: "{}" }]
+          : []),
+        ...group,
+      ];
+      const project = (input: Array<Record<string, unknown>>) => {
+        const payload = { input: structuredClone(input) };
+        runXaiToolPayloadWrapper({ payload, input: ["text", "image"] });
+        return payload.input;
+      };
+      const first = project(history);
+      const nextTurns = [
+        { type: "message", role: "assistant", content: "I read the files." },
+        { type: "message", role: "user", content: "Read another image" },
+        { type: "function_call", call_id: "call_next", name: "read", arguments: "{}" },
+        { ...result, call_id: "call_next" },
+      ];
+      const next = project([...history, ...nextTurns]);
+
+      // Compare the actual serialized message prefix, including the image bytes.
+      expect(JSON.stringify(next.slice(0, first.length))).toBe(JSON.stringify(first));
+      expect(first.slice(-group.length - 1)).toEqual([
+        { ...result, output: "Read image" },
+        ...(parallel ? [group[1]] : []),
+        {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "Image(s) from tool result #1:" }, image],
+        },
+      ]);
+      expect(next.at(-1)).toEqual({
+        type: "message",
+        role: "user",
+        content: [
+          { type: "input_text", text: `Image(s) from tool result #${group.length + 1}:` },
+          image,
+        ],
+      });
+      expect(project(next)).toEqual(next);
+
+      // Compaction replaces old history; the retained tail establishes a fresh prefix.
+      const compactedHistory = [
+        { type: "message", role: "user", content: "Summary: the first files were read." },
+        ...nextTurns,
+      ];
+      const compacted = project(compactedHistory);
+      expect(compacted.at(-1)).toEqual(first.at(-1));
+      expect(compacted).toHaveLength(compactedHistory.length + 1);
+      expect(
+        project([
+          ...compactedHistory,
+          { type: "message", role: "assistant", content: "The next image is blue." },
+          { type: "message", role: "user", content: "Thanks" },
+        ]).slice(0, compacted.length),
+      ).toEqual(compacted);
+    },
+  );
+
   it("replays source-based input_image parts from tool results", () => {
     const payload: Record<string, unknown> = {
       input: [

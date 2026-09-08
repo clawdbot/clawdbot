@@ -353,7 +353,7 @@ describe("check-workflows", () => {
       "persist-credentials": false,
     });
     expect(native.steps.find((step) => step.name === "Setup Node.js")?.env).toMatchObject({
-      REQUESTED_NODE_VERSION: "22.x",
+      REQUESTED_NODE_VERSION: "24.x",
     });
     expect(native.steps.find((step) => step.name === "Setup pnpm")?.uses).toBe(
       "./.github/actions/setup-pnpm-store-cache",

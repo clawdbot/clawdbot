@@ -294,16 +294,6 @@ export async function runDoctorRepairSequence(params: {
   const packageSwapInProgress = isUpdatePackageSwapInProgress(env);
   const pluginInstallRepairConverged =
     !packageSwapInProgress && failedPluginIds.length === 0 && !hasUnscopedInstallRepairWarnings;
-  if (pluginInstallRepairConverged) {
-    // Provider availability is authoritative only after configured plugin repair
-    // converges. Preserve model refs while package installation still needs a retry.
-    const modelRepair = repairStaleAgentModelRefs(state.candidate, {
-      env,
-      pluginMetadataSnapshot: pluginMetadataSnapshotState.current,
-    });
-    retiredModelRefConfig = modelRepair.retiredModelRefConfig;
-    applyMutation(modelRepair);
-  }
   if (!packageSwapInProgress && !hasUnscopedInstallRepairWarnings) {
     applyMutation(
       runWithCurrentPluginMetadata(() =>
@@ -370,6 +360,16 @@ export async function runDoctorRepairSequence(params: {
     env,
   });
   applyMutation(staleAuthOrderRepair);
+  if (pluginInstallRepairConverged) {
+    // Route retirement reads canonical credentials. Finish auth migration first,
+    // and preserve model refs while configured plugin installation needs a retry.
+    const modelRepair = repairStaleAgentModelRefs(state.candidate, {
+      env,
+      pluginMetadataSnapshot: pluginMetadataSnapshotState.current,
+    });
+    retiredModelRefConfig = modelRepair.retiredModelRefConfig;
+    applyMutation(modelRepair);
+  }
   const authProfilesRepaired =
     legacyOAuthSidecarRepair.changes.length > 0 ||
     staleOAuthShadowRepair.changes.length > 0 ||

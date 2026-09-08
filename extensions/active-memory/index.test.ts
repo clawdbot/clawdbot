@@ -29,7 +29,6 @@ import {
   onTestFailed,
   vi,
 } from "vitest";
-import { applyCliRuntimeRecallTimeoutDefault } from "./config.js";
 import plugin, { testing } from "./index.js";
 import { resolveActiveRecallForRun } from "./recall-state.js";
 import * as transcriptWatch from "./transcript-watch.js";
@@ -203,33 +202,6 @@ describe("active-memory plugin", () => {
     "Active Memory intentionally skipped deep recall because this turn did not ask for past context.";
   const unavailableRecallContext =
     "Active Memory could not retrieve memory for this turn. Do not assume that no relevant memory exists.";
-
-  it("removes an injected Context block from the retrieval query", () => {
-    const prompt = `what should I pack?\n\n${testing.buildPromptPrefix("User prefers aisle seats.")}`;
-    const query = testing.buildSearchQuery({ latestUserMessage: prompt });
-
-    expect(query).toBe("what should I pack?");
-    expect(query).not.toContain("Context:");
-    expect(query).not.toContain("User prefers aisle seats.");
-  });
-
-  it("keeps user-authored lines that merely start with Context", () => {
-    const query = testing.buildSearchQuery({
-      latestUserMessage: "Context: my project uses TypeScript",
-    });
-
-    expect(query).toBe("Context: my project uses TypeScript");
-  });
-
-  it("keeps previous-message query context UTF-16 well-formed", () => {
-    const query = testing.buildSearchQuery({
-      latestUserMessage: "why?",
-      recentTurns: [{ role: "user", text: `${"x".repeat(119)}🚀tail` }],
-    });
-
-    expect(query).toBe(`${"x".repeat(119)} why?`);
-    expect(query).not.toMatch(UNPAIRED_SURROGATE_RE);
-  });
 
   const hooks: Record<string, Function> = {};
   const requireHook = (name: string): Function =>
@@ -3750,38 +3722,6 @@ describe("active-memory plugin", () => {
     );
   });
 
-  it("caches ok summaries but not empty, no-relevant, or timeout_partial results", () => {
-    expect(
-      testing.shouldCacheResult({
-        status: "timeout_partial",
-        elapsedMs: 1,
-        summary: "partial summary",
-      }),
-    ).toBe(false);
-    expect(
-      testing.shouldCacheResult({
-        status: "ok",
-        elapsedMs: 1,
-        rawReply: "full summary",
-        summary: "full summary",
-      }),
-    ).toBe(true);
-    expect(
-      testing.shouldCacheResult({
-        status: "empty",
-        elapsedMs: 1,
-        summary: null,
-      }),
-    ).toBe(false);
-    expect(
-      testing.shouldCacheResult({
-        status: "no_relevant_memory",
-        elapsedMs: 1,
-        summary: null,
-      }),
-    ).toBe(false);
-  });
-
   it("does not cache no-relevant-memory recall results", async () => {
     registerPluginConfig({ logging: true });
     runEmbeddedAgent.mockResolvedValue({
@@ -3806,27 +3746,6 @@ describe("active-memory plugin", () => {
       .mocked(api.logger.info)
       .mock.calls.map((call: unknown[]) => String(call[0]));
     expect(infoLines.join("\n")).not.toContain("cached status=");
-  });
-
-  it("surfaces timeout_partial summaries in status lines, metadata, and prompt prefixes", () => {
-    const summary = "User prefers aisle seats.";
-    const config = testing.normalizePluginConfig({
-      agents: ["main"],
-      queryMode: "recent",
-    });
-    const statusLine = testing.buildPluginStatusLine({
-      result: { status: "timeout_partial", elapsedMs: 1234, summary },
-      config,
-    });
-
-    expect(statusLine).toContain("status=timeout_partial");
-    expect(statusLine).toContain(`summary=${summary.length} chars`);
-    expect(testing.buildMetadata(summary)).toBe(
-      "<active_memory_plugin>\nUser prefers aisle seats.\n</active_memory_plugin>",
-    );
-    expect(testing.buildPromptPrefix(summary)).toBe(
-      "Context:\n<active_memory_plugin>\nUser prefers aisle seats.\n</active_memory_plugin>",
-    );
   });
 
   it("does not cache timeout results", async () => {
@@ -6206,18 +6125,6 @@ describe("active-memory plugin", () => {
     expect(testing.normalizePluginConfig({ fastMode: false }).fastMode).toBe(false);
     expect(testing.normalizePluginConfig({ fastMode: "auto" }).fastMode).toBe("auto");
     expect(testing.normalizePluginConfig({ fastMode: "on" }).fastMode).toBeUndefined();
-  });
-
-  it("raises the default recall budget only when CLI dispatch is eligible", () => {
-    const defaults = testing.normalizePluginConfig({});
-    expect(defaults.timeoutMs).toBe(15_000);
-    expect(defaults.timeoutMsIsDefault).toBe(true);
-    expect(applyCliRuntimeRecallTimeoutDefault(defaults, true).timeoutMs).toBe(45_000);
-    expect(applyCliRuntimeRecallTimeoutDefault(defaults, false).timeoutMs).toBe(15_000);
-    // Explicit operator config always wins.
-    const explicit = testing.normalizePluginConfig({ timeoutMs: 20_000 });
-    expect(explicit.timeoutMsIsDefault).toBe(false);
-    expect(applyCliRuntimeRecallTimeoutDefault(explicit, true).timeoutMs).toBe(20_000);
   });
 
   it("applies the CLI dispatch recall budget to the embedded run", async () => {

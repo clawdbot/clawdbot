@@ -81,7 +81,6 @@ const mocks = vi.hoisted(() => ({
       lastInteractionAt: entry?.lastInteractionAt,
     }),
   ),
-  hasTerminalMainSessionTranscriptNewerThanRegistrySync: vi.fn(() => false),
   lifecycleGeneration: "test-generation",
 }));
 
@@ -135,8 +134,6 @@ vi.mock("../../config/sessions.js", async () => {
       return m?.[1] ?? "main";
     },
     resolveExplicitAgentSessionKey: mocks.resolveExplicitAgentSessionKey,
-    hasTerminalMainSessionTranscriptNewerThanRegistrySync:
-      mocks.hasTerminalMainSessionTranscriptNewerThanRegistrySync,
     resolveAgentMainSessionKey: ({
       cfg,
       agentId,
@@ -1168,7 +1165,6 @@ export const describe0AfterEach0 = () => {
         lastInteractionAt: entry?.lastInteractionAt,
       }),
     );
-  mocks.hasTerminalMainSessionTranscriptNewerThanRegistrySync.mockReset().mockReturnValue(false);
   mocks.lifecycleGeneration = "test-generation";
   dateOnlyFakeClockActive = false;
   vi.useRealTimers();

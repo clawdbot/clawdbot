@@ -886,7 +886,7 @@ end
     expect(snapshotUITest).not.toContain("selectReleaseScreenshotDestination");
     expect(navigationTest).toContain("self.launchApp(for: Self.agentScreenshotTarget)");
     expect(navigationTest).toContain('self.selectSidebarDestination("Settings")');
-    expect(navigationTest).toContain('"settings-system-agent-row"');
+    expect(navigationTest).toContain('"SettingsHub.Fallback"');
     expect(navigationTest).not.toContain("XCTExpectFailure");
     expect(navigationTest).not.toContain("XCTExpectedFailure");
     expect(rootTabs).toContain("self.scenePhase == .active");

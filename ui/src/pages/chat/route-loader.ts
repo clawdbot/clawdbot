@@ -32,7 +32,11 @@ import {
   querySessionReference,
   uniqueShortIdPrefix,
 } from "./route-loader-session-reference.ts";
-import { findCachedShortSession, sessionKeyUuid } from "./route-loader-short-cache.ts";
+import {
+  findCachedShortSession,
+  findLocalSessionReference,
+  sessionKeyUuid,
+} from "./route-loader-short-cache.ts";
 import {
   resolveShortSessionReference,
   type SessionReferenceResolution,
@@ -303,6 +307,8 @@ export async function loadChatRoute(
   const { target } = resolvedTarget;
   const routeLocation = resolvedTarget.location;
   const preferenceDerived = isPreferenceDerivedFace(routeLocation);
+  const defaultsUsable =
+    hasConfiguredMainKey(context) && context.agents.state.agentsList?.scope !== "global";
   const catalogKey = catalogSessionKeyFromSearch(routeLocation.search);
   if (target.kind === "main" && catalogKey) {
     const sessionKey = buildCatalogSessionKey(catalogKey);
@@ -342,7 +348,9 @@ export async function loadChatRoute(
     };
   }
   if (target.kind === "main") {
-    await waitForGatewayClient(context.gateway, signal);
+    if (preferenceDerived || !defaultsUsable) {
+      await waitForGatewayClient(context.gateway, signal);
+    }
     const sessionKey = mainSessionKey(context, target);
     if (preferenceDerived) {
       const resolution = await querySessionReference(
@@ -377,7 +385,9 @@ export async function loadChatRoute(
     };
   }
   if (target.kind === "literal") {
-    let defaultsKnown = hasConfiguredMainKey(context);
+    let defaultsKnown =
+      defaultsUsable ||
+      (context.gateway.snapshot.phase === "connected" && hasConfiguredMainKey(context));
     const needsGatewayResolution = preferenceDerived || Boolean(target.slugCandidate);
     if (!defaultsKnown && needsGatewayResolution) {
       await waitForGatewayClient(context.gateway, signal);
@@ -482,8 +492,22 @@ export async function loadChatRoute(
         : {}),
     };
   }
-  const resolution = cached?.row
-    ? ({ kind: "unique", session: cached.row } as const)
+  let localRow = cached?.row;
+  if (!cached && defaultsUsable && !preferenceDerived) {
+    await context.sessions.whenCachedRosterSettled();
+    signal.throwIfAborted();
+    // Only the pre-hello cached roster resolves a short id locally; a connected
+    // load keeps the Gateway's authoritative sessions.resolve answer.
+    if (context.sessions.state.resultCached) {
+      localRow = findLocalSessionReference(
+        context.sessions.state.result?.sessions ?? [],
+        target,
+        configuredMainKey(context),
+      );
+    }
+  }
+  const resolution = localRow
+    ? ({ kind: "unique", session: localRow } as const)
     : await resolveShortSessionReference(
         context,
         target,

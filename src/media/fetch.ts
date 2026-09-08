@@ -413,9 +413,10 @@ async function assertMediaResponseOk(params: {
   const statusText = res.statusText ? ` ${res.statusText}` : "";
   const redirected = finalUrl !== url ? ` (redirected to ${redactMediaUrl(finalUrl)})` : "";
   let detail = `HTTP ${res.status}${statusText}`;
-  if (!res.body) {
-    detail = `HTTP ${res.status}${statusText}; empty response body`;
-  } else {
+  // Failed response bodies may have been deliberately discarded by the caller.
+  if (res.ok) {
+    detail += "; empty response body";
+  } else if (res.body) {
     const snippet = await readErrorBodySnippet(res, { chunkTimeoutMs: readIdleTimeoutMs });
     if (snippet) {
       detail += `; body: ${snippet}`;

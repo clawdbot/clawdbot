@@ -241,6 +241,7 @@ describe("doctor Workshop relocation reservations", () => {
       externalProposalCount: 0,
       externalProposalCountsByAgent: {},
       legacyBackupRootCount: 0,
+      preservedLegacyBackupRootCount: 0,
     });
     await expectWorkshopMigrationConverged({ env: testState.env });
   });

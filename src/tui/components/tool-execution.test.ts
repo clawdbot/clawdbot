@@ -13,6 +13,96 @@ function renderToolOutput(text: string, width: number) {
 }
 
 describe("ToolExecutionComponent", () => {
+  it.each(
+    ["exec", "wait"].flatMap((toolName) =>
+      [false, true].flatMap((pretty) =>
+        [false, true].map((partial) => ({ toolName, pretty, partial })),
+      ),
+    ),
+  )(
+    "preserves literal Code Mode $toolName output (pretty=$pretty, partial=$partial)",
+    ({ toolName, pretty, partial }) => {
+      const details = {
+        status: partial ? "waiting" : "failed",
+        telemetry: { visibleTools: ["exec", "wait"] },
+      };
+      const json = JSON.stringify(
+        {
+          status: details.status,
+          value: 'START_COMPLETED **stars** "quoted" \\path',
+          literal: "```\n# literal heading\n```",
+        },
+        null,
+        pretty ? 2 : undefined,
+      );
+      const text = `SECURITY NOTICE: EXTERNAL, UNTRUSTED source\n<<<EXTERNAL_UNTRUSTED_CONTENT>>>\n${json}\n\`\`\`\n# literal heading\n\`\`\`\n<<<END_EXTERNAL_UNTRUSTED_CONTENT>>>`;
+      const component = new ToolExecutionComponent(
+        toolName,
+        toolName === "exec" ? { code: "return value;" } : { runId: "synthetic-run" },
+      );
+      const result = { content: [{ type: "text", text }], details };
+      if (partial) {
+        component.setPartialResult(result);
+      } else {
+        component.setResult(result, { isError: true });
+      }
+      component.setExpanded(true);
+
+      const rendered = normalizeTestText(component.render(1_024).join("\n"));
+      for (const line of text.split("\n")) {
+        expect(rendered).toContain(line);
+      }
+    },
+  );
+
+  it("keeps Code Mode literal output bounded and terminal-safe through expansion", () => {
+    const attack = "\x1b]52;c;SYNTHETIC_CLIPBOARD_PAYLOAD\x07";
+    const text = `START_LITERAL ${attack}\u202eمرحبا\u202c\r\n${"**literal**".repeat(2_048)} END_LITERAL`;
+    const component = new ToolExecutionComponent("wait", { runId: "synthetic-run" });
+    component.setResult({
+      content: [{ type: "text", text }],
+      details: { status: "completed", telemetry: { visibleTools: ["exec", "wait"] } },
+    });
+
+    for (const expanded of [false, true, false]) {
+      component.setExpanded(expanded);
+      const lines = component.render(40);
+      const raw = lines.join("\n");
+      const rendered = normalizeTestText(raw);
+      expect(lines.every((line) => visibleWidth(line) <= 40)).toBe(true);
+      expect(rendered).toContain("**literal**");
+      expect(rendered.includes("END_LITERAL")).toBe(expanded);
+      if (!expanded) {
+        expect(lines.length).toBeLessThanOrEqual(MAX_COLLAPSED_COMPONENT_LINES);
+      }
+      expect(rendered).not.toContain("SYNTHETIC_CLIPBOARD_PAYLOAD");
+      expect(rendered).not.toContain("]52;c;");
+      expect(raw).not.toMatch(/[\r\u202e\u202c]/u);
+      expect(raw).toContain("\u2067");
+      expect(raw).toContain("\u2069");
+    }
+  });
+
+  it.each([
+    { name: "exec", details: undefined },
+    { name: "exec", details: { status: "completed", telemetry: { visibleTools: ["exec"] } } },
+    { name: "custom_tool", details: { telemetry: { visibleTools: ["exec", "wait"] } } },
+  ])(
+    "retains ordinary Markdown output for $name without Code Mode result identity",
+    ({ name, details }) => {
+      const component = new ToolExecutionComponent(name, { command: "echo sample" });
+      component.setResult({
+        content: [{ type: "text", text: "# Heading\n\n**emphasis**" }],
+        details,
+      });
+      const rendered = normalizeTestText(component.render(80).join("\n"));
+      expect(rendered).toContain("Heading");
+      expect(rendered).toContain("emphasis");
+      expect(rendered).not.toContain("# Heading");
+      expect(rendered).not.toContain("**emphasis**");
+    },
+  );
+
   it("keeps tool arguments, output, and running status independent across updates", () => {
     const component = new ToolExecutionComponent("read", { path: "initial.txt" });
     component.setPartialResult({ content: [{ type: "text", text: "partial output" }] });

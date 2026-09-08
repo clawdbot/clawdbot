@@ -80,7 +80,7 @@ describe("convertMessages assistant text replay", () => {
   });
 
   it.each([false, true])(
-    "preserves sanitized block positions with thinking-as-text %s",
+    "preserves interleaved text, thinking, and tool replay with thinking-as-text %s",
     (requiresThinkingAsText) => {
       const assistant: AssistantMessage = {
         role: "assistant",
@@ -88,20 +88,44 @@ describe("convertMessages assistant text replay", () => {
         provider: model.provider,
         model: model.id,
         content: [
-          { type: "thinking", thinking: "reason\ud800" },
+          { type: "thinking", thinking: " \t", thinkingSignature: "reasoning_text" },
+          {
+            type: "thinking",
+            thinking: "reason\ud800",
+            thinkingSignature: "reasoning_content",
+          },
           { type: "text", text: " \t" },
           { type: "text", text: "first\ud800" },
           { type: "text", text: "\udc00" },
-          { type: "thinking", thinking: "next😀" },
+          {
+            type: "toolCall",
+            id: "call_lookup",
+            name: "lookup",
+            arguments: { query: "cats" },
+            thoughtSignature: '{"type":"reasoning.encrypted","data":"synthetic"}',
+          },
+          { type: "thinking", thinking: "next😀", thinkingSignature: "reasoning_text" },
           { type: "text", text: "last😀" },
         ],
         usage: emptyUsage,
-        stopReason: "stop",
+        stopReason: "toolUse",
         timestamp: 2,
       };
       const converted = convertMessages(
         model,
-        { messages: [assistant] },
+        {
+          messages: [
+            assistant,
+            {
+              role: "toolResult",
+              toolCallId: "call_lookup",
+              toolName: "lookup",
+              content: [{ type: "text", text: "found" }],
+              isError: false,
+              timestamp: 3,
+            },
+          ],
+        },
         { ...resolveOpenAICompletionsCompat(model), requiresThinkingAsText },
       );
 
@@ -116,7 +140,17 @@ describe("convertMessages assistant text replay", () => {
                 { type: "text", text: "last😀" },
               ]
             : "first\n\nlast😀",
+          ...(!requiresThinkingAsText && { reasoning_content: "reason\ud800\nnext😀" }),
+          tool_calls: [
+            {
+              id: "call_lookup",
+              type: "function",
+              function: { name: "lookup", arguments: '{"query":"cats"}' },
+            },
+          ],
+          reasoning_details: [{ type: "reasoning.encrypted", data: "synthetic" }],
         },
+        { role: "tool", content: "found", tool_call_id: "call_lookup" },
       ]);
     },
   );

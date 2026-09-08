@@ -4,8 +4,12 @@ type SnapshotInvalidationListener = (invalidation: SnapshotInvalidation) => void
 
 const SNAPSHOT_INVALIDATION_STORAGE_KEY = "openclaw.control.chatSnapshots.invalidate.v1";
 const invalidationListeners = new Set<SnapshotInvalidationListener>();
+export let snapshotStoreGeneration = 0;
 
 function notifySnapshotInvalidation(invalidation: SnapshotInvalidation): Promise<void> {
+  if (!invalidation.sessionKey) {
+    snapshotStoreGeneration += 1;
+  }
   return Promise.all(
     [...invalidationListeners].map((listener) => Promise.resolve(listener(invalidation))),
   ).then(() => undefined);

@@ -11,6 +11,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { readTranscriptEventRows } from "../../config/sessions/session-accessor.sqlite-read.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
+import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -352,7 +353,7 @@ describe("createPersistCronSessionEntry", () => {
         (row) => JSON.parse(row.eventJson) as { type?: unknown; version?: unknown; cwd?: unknown },
       );
       expect(events[0]?.type).toBe("session");
-      expect(events[0]?.version).toBe(3);
+      expect(events[0]?.version).toBe(CURRENT_SESSION_VERSION);
       expect(events[0]?.cwd).toBe("/tmp/cron-stale-workspace");
       expect(events[1]?.type).toBe("reset");
       expect(events).toHaveLength(2);

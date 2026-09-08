@@ -1,9 +1,9 @@
 import Foundation
 import Network
 
-public enum GatewayDiscoveryBrowserSupport {
+enum GatewayDiscoveryBrowserSupport {
     @MainActor
-    public static func makeBrowser(
+    static func makeBrowser(
         serviceType: String,
         domain: String,
         queueLabelPrefix: String,

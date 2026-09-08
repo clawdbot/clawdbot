@@ -536,6 +536,15 @@ openclaw logs --follow
 - **An image or attachment cannot be sent:** Use a path under the configured
   `remoteWorkspaceDir`, such as `/sandbox/report.png`, rather than assuming
   every backend uses Docker's `/workspace` directory.
+- **Mirror synchronization reports recovery paths:** OpenClaw kept a host shadow
+  outside the workspace because its move or restoration could not finish. The
+  error identifies the preserved path and the workspace path and retains the
+  original failure. Compare both paths and recover the needed files before
+  deleting either copy. A partial move can leave different files in each path;
+  OpenClaw preserves remaining workspace entries instead of overwriting them
+  with an incomplete or unverified backup. If restoration completed and only
+  cleanup of the preservation directory failed, the error confirms the restored
+  workspace path and identifies the leftover directory instead.
 - **Recreate or prune cannot delete a sandbox:** Restore access to the original
   OpenShell gateway and workspace, confirm the sandbox still exists with
   `openshell --workspace <workspace-name> sandbox get <sandbox-name>`, and retry

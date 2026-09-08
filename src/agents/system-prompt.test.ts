@@ -1049,6 +1049,33 @@ describe("buildAgentSystemPrompt", () => {
     );
   });
 
+  it("keeps first casing and visible-only order with sparse duplicate tool names", () => {
+    const toolNames: string[] = [];
+    toolNames[1] = " Read ";
+    toolNames[2] = "read";
+    toolNames[3] = " EXEC ";
+    toolNames[4] = "exec";
+    toolNames[5] = " custom_Z ";
+    toolNames[6] = "CUSTOM_z";
+    toolNames[7] = "custom_a";
+    toolNames[8] = " ";
+    Object.freeze(toolNames);
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames,
+      capabilityToolNames: [" process ", "READ", "process", "custom_deferred"],
+    });
+    const tooling = prompt.split("## Tooling\n")[1]?.split("\nThe AGENTS.md Tools section")[0];
+
+    expect(tooling?.split("\n").filter((line) => line.startsWith("- "))).toEqual([
+      "- Read: Read files",
+      "- EXEC: Run shell; pty for TTY CLIs",
+      "- custom_a",
+      "- custom_Z",
+    ]);
+    expect(prompt).toContain("Use EXEC yieldMs or process(poll, timeout=<ms>).");
+  });
+
   it("includes docs guidance when docsPath is provided", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",

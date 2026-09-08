@@ -17,6 +17,7 @@ import {
   NODE_DESKTOP_ATTACH_PATH,
   NODE_PORTAL_ATTACH_PATH,
 } from "../shared/node-desktop-stream.js";
+import { rejectWebSocketUpgrade } from "../shared/websocket-upgrade-reject.js";
 import { AUTH_RATE_LIMIT_SCOPE_WORKER_ADMISSION, type AuthRateLimiter } from "./auth-rate-limit.js";
 import type { GatewayAuthResult, ResolvedGatewayAuth } from "./auth.js";
 import type { NodeDesktopStreamBroker } from "./desktop/node-stream-broker.js";
@@ -110,7 +111,7 @@ function rejectUpgradeAuth(socket: Pick<Duplex, "end" | "destroy">, auth: Gatewa
     );
     return;
   }
-  socket.end("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n", () => socket.destroy());
+  rejectWebSocketUpgrade(socket, { status: 401 });
 }
 
 function handleBudgetedGatewayWebSocketUpgrade(params: {
@@ -288,7 +289,7 @@ export function attachGatewayUpgradeHandler(opts: {
         return;
       }
       if (originalWorkerGatewayRoute !== "outside") {
-        socket.end("HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n", () => socket.destroy());
+        rejectWebSocketUpgrade(socket, { status: 404 });
         return;
       }
       const scopedNodeCapability = normalizePluginNodeCapabilityScopedUrl(req.url ?? "/");
@@ -304,7 +305,7 @@ export function attachGatewayUpgradeHandler(opts: {
       const pathContext = resolvePluginRoutePathContext(requestPath);
       const workerGatewayRoute = classifyWorkerGatewayPath(requestPath);
       if (workerGatewayRoute !== "outside") {
-        socket.end("HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n", () => socket.destroy());
+        rejectWebSocketUpgrade(socket, { status: 404 });
         return;
       }
       const nodeCapability = resolvePluginNodeCapabilityRoute?.(pathContext);

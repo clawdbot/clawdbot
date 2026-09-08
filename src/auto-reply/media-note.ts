@@ -133,7 +133,7 @@ type InboundMediaNoteProjection = {
   text?: string;
   media: MediaFact[];
   /** Original ctx.media fact positions aligned with `media`, for index-based identity. */
-  mediaIndexes?: number[];
+  mediaIndexes: number[];
 };
 
 /** Formats prompt-visible attachment text and retains facts that still need native hydration. */

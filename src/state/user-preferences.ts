@@ -13,19 +13,9 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db.js";
+import { createOpenClawStateSchemaEnsurer } from "./openclaw-state-feature-schema.js";
 
 type UserPreferencesDatabase = Pick<OpenClawStateKyselyDatabase, "user_preferences">;
-
-const ensuredDatabases = new WeakSet<DatabaseSync>();
-const USER_PREFERENCES_SCHEMA_SQL = `
-CREATE TABLE IF NOT EXISTS user_preferences (
-  profile_id TEXT NOT NULL,
-  pref_key TEXT NOT NULL,
-  value_json TEXT NOT NULL,
-  updated_at_ms INT NOT NULL,
-  PRIMARY KEY (profile_id, pref_key)
-) STRICT;
-`;
 
 type UserPreferenceError =
   | { code: "invalid-entry-count" }
@@ -36,21 +26,10 @@ type UserPreferenceError =
       currentCount: number;
     };
 
-export function ensureUserPreferencesSchema(options: OpenClawStateDatabaseOptions = {}): void {
-  const database = openOpenClawStateDatabase(options);
-  if (ensuredDatabases.has(database.db)) {
-    return;
-  }
-  runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      // sqlite-allow-raw -- feature-local additive schema DDL; preference rows use Kysely below.
-      db.exec(USER_PREFERENCES_SCHEMA_SQL);
-    },
-    options,
-    { operationLabel: "users.preferences.schema.ensure" },
-  );
-  ensuredDatabases.add(database.db);
-}
+export const ensureUserPreferencesSchema = createOpenClawStateSchemaEnsurer({
+  table: "user_preferences",
+  operationLabel: "users.preferences.schema.ensure",
+});
 
 export function mutateUserPreference(
   database: DatabaseSync,

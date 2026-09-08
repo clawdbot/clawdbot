@@ -163,6 +163,72 @@ describe("formatMessageCliText displayLimit", () => {
   });
 });
 
+describe("formatMessageCliText reaction labels", () => {
+  it.each(["raw", "name", "emoji", "key"] as const)(
+    "renders untrusted %s reaction cells as plain terminal text",
+    (field) => {
+      const label = "\u001b[2Jreaction\nline";
+      const reaction = field === "raw" ? { emoji: { raw: label } } : { [field]: label };
+      const result = {
+        kind: "action",
+        channel: "matrix",
+        action: "reactions",
+        handledBy: "plugin",
+        payload: {
+          reactions: [{ ...reaction, count: 2, users: ["\u001b[31malice\u001b[0m", "bob\tother"] }],
+        },
+        dryRun: false,
+      } satisfies MessageActionResult;
+      const payload = structuredClone(result.payload);
+
+      const output = textJoined(formatMessageCliText(result));
+
+      expect(result.payload).toEqual(payload);
+      expect(output).not.toContain("\u001b[2J");
+      expect(output).toContain("reaction\\nline");
+      expect(output).toContain("alice");
+      expect(output).toContain("bob\\tother");
+      expect(output.replaceAll("\n", "")).not.toMatch(/\p{Cc}/u);
+    },
+  );
+
+  it.each([
+    ["matrix", { key: "👍" }, "👍"],
+    ["matrix", { key: ":party_parrot:" }, ":party_parrot:"],
+    ["discord", { emoji: { id: "123", name: "party", raw: "party:123" } }, "party:123"],
+    ["slack", { name: "thumbsup" }, "thumbsup"],
+    ["msteams", { name: "like", emoji: "👍" }, "like"],
+    [
+      "directchat",
+      { emoji: { raw: "raw-priority" }, name: "unused-name", key: "unused-key" },
+      "raw-priority",
+    ],
+    [
+      "directchat",
+      { name: "name-priority", emoji: "unused-emoji", key: "unused-key" },
+      "name-priority",
+    ],
+    ["directchat", { emoji: "🦞", key: "unused-key" }, "🦞"],
+  ] as const)("renders %s reaction labels from their result shape", (channel, reaction, label) => {
+    const result = {
+      kind: "action",
+      channel,
+      action: "reactions",
+      handledBy: "plugin",
+      payload: {
+        reactions: [{ ...reaction, count: 2, users: ["@alice:qa.test", "@bob:qa.test"] }],
+      },
+      dryRun: false,
+    } satisfies MessageActionResult;
+
+    const output = textJoined(formatMessageCliText(result));
+
+    expect(output).toContain(label);
+    expect(output).toContain("@alice:qa.test");
+    expect(output).toContain("@bob:qa.test");
+  });
+});
+
 describe("renderPaginationHint", () => {
   it("emits hint when payload has hasMore: true", () => {
     const messages = [msg("id-1", "2026-01-01T00:00:00.000Z", "alice", "hello")];

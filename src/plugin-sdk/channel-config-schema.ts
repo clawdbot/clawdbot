@@ -13,6 +13,7 @@ export {
   buildJsonChannelConfigSchema,
   buildMultiAccountChannelSchema,
   buildNestedDmConfigSchema,
+  refineChannelDmPolicy,
 } from "../channels/plugins/config-schema.js";
 export {
   BlockStreamingChunkSchema,

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { projectProviderError } from "../../../packages/ai/src/utils/provider-error.js";
 import { failoverClassificationCorpus } from "../../agents/failover/failover-classification.corpus.cases.test-support.js";
 import { failoverRetryExpectations } from "../../agents/failover/failover-retry.expected.test-support.js";
 import { createZeroUsageFixture } from "../../agents/test-helpers/usage-fixtures.js";
@@ -220,17 +221,53 @@ describe("isRetryableAssistantError", () => {
     ).toBe(false);
   });
 
-  it.each(["502 Bad gateway", "503 service unavailable", "529 Overloaded"])(
-    "keeps concrete outage evidence ahead of a generic invalid-request type: %s",
-    (text) => {
+  it.each([undefined, 400, 404, 422, 500, 502])(
+    "does not replay a validation rejection with status %s",
+    (status) => {
+      const error = {
+        type: "invalid_request_error",
+        code: "unknown_parameter",
+        message: "Unsupported parameter: timeout",
+      };
+      const prefix = status === undefined ? "" : `${status} `;
       expect(
         isRetryableAssistantError({
-          ...errorMessage(text),
-          errorType: "invalid_request_error",
+          ...errorMessage(`${prefix}${error.message}`),
+          errorType: error.type,
+          errorCode: error.code,
         }),
-      ).toBe(true);
+      ).toBe(false);
+      expect(isRetryableAssistantError(errorMessage(`${prefix}${JSON.stringify({ error })}`))).toBe(
+        false,
+      );
     },
   );
+
+  it("honors validation when projection keeps status outside the message", () => {
+    const error = {
+      type: "invalid_request_error",
+      code: "unknown_parameter",
+      message: "Unsupported parameter: timeout",
+    };
+    const projected = projectProviderError({ status: 502, message: error.message, error });
+    expect(
+      isRetryableAssistantError({ ...errorMessage(projected.errorMessage), ...projected }),
+    ).toBe(false);
+  });
+
+  it.each([
+    "500 request timed out",
+    "502 Bad gateway",
+    "503 service unavailable",
+    "529 Overloaded",
+  ])("keeps concrete outage evidence ahead of a generic invalid-request type: %s", (text) => {
+    expect(
+      isRetryableAssistantError({
+        ...errorMessage(text),
+        errorType: "invalid_request_error",
+      }),
+    ).toBe(true);
+  });
 
   it("does not treat permanent provider-wrapped 4xx as retryable", () => {
     expect(

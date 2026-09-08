@@ -14,6 +14,11 @@ function card(overrides: Partial<ModelProviderCard> = {}): ModelProviderCard {
     id: "openai",
     displayName: "OpenAI",
     profiles: [],
+    profileProviderIds: {},
+    profileOrders: {},
+    profileOrderStoredProviders: [],
+    profileOrderExplicitProviders: [],
+    profileOrderLocks: {},
     credentialProviderIds: ["openai"],
     logoutTargets: [],
     hasConfigApiKey: false,
@@ -45,6 +50,7 @@ function props(overrides: Partial<ModelProvidersViewProps> = {}): ModelProviders
     configBusy: false,
     quickAddSupported: true,
     unconfiguredProviders: [{ id: "anthropic", displayName: "Anthropic" }],
+    canViewProfiles: true,
     canMutate: true,
     mutationBlockedReason: null,
     providerUsageStalled: false,
@@ -54,7 +60,7 @@ function props(overrides: Partial<ModelProvidersViewProps> = {}): ModelProviders
     probeResults: {},
     keyEditorProvider: null,
     keyDraft: "",
-    pendingLogoutProvider: null,
+    profileOrders: {},
     addProviderOpen: false,
     addProviderId: "",
     addProviderKey: "",
@@ -66,8 +72,7 @@ function props(overrides: Partial<ModelProvidersViewProps> = {}): ModelProviders
     onRemoveKey: () => undefined,
     onProbe: () => undefined,
     onRequestLogout: () => undefined,
-    onCancelLogout: () => undefined,
-    onLogout: () => undefined,
+    onProfileOrderChange: () => undefined,
     onAddProviderToggle: () => undefined,
     onAddProviderIdChange: () => undefined,
     onAddProviderKeyChange: () => undefined,
@@ -395,7 +400,10 @@ describe("renderModelProviders", () => {
           card({
             hasConfigApiKey: true,
             apiKey: { source: "config" },
-            logoutTargets: [{ provider: "openai", profileIds: ["openai:oauth"] }],
+            profiles: [
+              { profileId: "openai:one", type: "oauth", status: "ok", logoutSupported: true },
+            ],
+            logoutTargets: [{ provider: "openai", profileIds: ["openai:one"] }],
           }),
         ],
         keyEditorProvider: "openai",
@@ -425,7 +433,9 @@ describe("renderModelProviders", () => {
     ).toBe(true);
     expect(button(provider!, "Replace key")?.disabled).toBe(true);
     expect(button(provider!, "Remove key")?.disabled).toBe(true);
-    expect(button(provider!, "Log out")?.disabled).toBe(true);
+    expect(
+      provider?.querySelector<HTMLButtonElement>(".model-providers__profile-logout")?.disabled,
+    ).toBe(true);
 
     const addForm = container.querySelector(".model-providers__add-form");
     expect(
@@ -950,37 +960,6 @@ describe("renderModelProviders", () => {
     );
     button(container, "Test connection")?.click();
     expect(onProbe).toHaveBeenCalledWith("openai", ["anthropic", "claude-cli"]);
-  });
-
-  it("shows logout confirmation only for OAuth or token profiles", () => {
-    const onLogout = vi.fn();
-    const container = mount(
-      props({
-        cards: [
-          card({
-            credentialProviderIds: ["openai", "openai-codex"],
-            logoutTargets: [{ provider: "openai-codex", profileIds: ["openai:oauth"] }],
-            profiles: [
-              {
-                profileId: "openai:oauth",
-                type: "oauth",
-                status: "ok",
-                logoutSupported: true,
-              },
-            ],
-          }),
-        ],
-        pendingLogoutProvider: "openai",
-        onLogout,
-      }),
-    );
-    expect(text(container.querySelector(".model-providers__confirm"))).toContain(
-      "Log out of OpenAI?",
-    );
-    container.querySelector<HTMLButtonElement>(".model-providers__confirm .btn.danger")?.click();
-    expect(onLogout).toHaveBeenCalledWith("openai", [
-      { provider: "openai-codex", profileIds: ["openai:oauth"] },
-    ]);
   });
 
   it("uses the original config key for credential mutations", () => {

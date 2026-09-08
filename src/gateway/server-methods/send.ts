@@ -950,6 +950,10 @@ export const sendHandlers: GatewayRequestHandlers = {
       requestedOrigin: request.conversationReadOrigin,
     });
     const agentRuntimeAuthority = createAgentRuntimeAuthorityGuard(client, context, respond);
+    const assertDirectAdapterHandoff = agentRuntimeAuthority.commitGuard;
+    const onPlatformSendDispatch = assertDirectAdapterHandoff
+      ? async () => assertDirectAdapterHandoff()
+      : undefined;
     await withMessageOperationRoute({
       context,
       prefix: "message.action",
@@ -1150,6 +1154,14 @@ export const sendHandlers: GatewayRequestHandlers = {
             toolContext: trustedContext.toolContext,
             dryRun: false,
             gatewayClientScopes,
+            ...(request.action === "send"
+              ? {
+                  onPlatformSendDispatch,
+                  assertDirectAdapterHandoff,
+                  // Recovery cannot retain a live run's closure-bound send authority.
+                  skipQueue: client?.internal?.agentRuntimeIdentity !== undefined,
+                }
+              : {}),
           };
           let payload: unknown;
           if (canonicalAction) {
@@ -1165,8 +1177,6 @@ export const sendHandlers: GatewayRequestHandlers = {
                     actionOrigin: trustedContext.runtimeAgentId
                       ? ("message-tool" as const)
                       : undefined,
-                    skipQueue: client?.internal?.agentRuntimeIdentity !== undefined,
-                    onPlatformSendDispatch: async () => agentRuntimeAuthority.commitGuard?.(),
                   }
                 : {}),
               params: {
@@ -1504,6 +1514,7 @@ export const sendHandlers: GatewayRequestHandlers = {
             // Runtime-bound sends cannot outlive their operational run. Keep
             // recovery from replaying them after the live authority closes.
             onPlatformSendDispatch,
+            assertDirectAdapterHandoff: commitAgentRuntimeAuthority,
             skipQueue: hasAgentRuntimeAuthority,
             mirror: outboundSessionKey
               ? {

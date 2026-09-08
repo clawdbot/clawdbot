@@ -633,6 +633,29 @@ This surprises people who add one channel to give it special settings and find t
 
 Channel entries override guild-level values, so a channel entry with `users: ["*"]` opens that one room to any sender even when the guild `users` list is narrow. Entries match by channel ID, name, or slug, and a thread falls back to its parent channel's entry.
 
+### Applying access-policy changes
+
+For running Discord accounts, policy-only changes saved in the Control UI apply
+through the Gateway's validated runtime config publication without restarting the
+Discord connection or waiting for active Control UI turns to finish. This covers
+`groupPolicy`, `dmPolicy`, `allowFrom`, `dm`, `guilds`, `allowBots`, and
+`dangerouslyAllowNameMatching`, both at `channels.discord` and under
+`channels.discord.accounts.<accountId>`.
+
+New messages and interactions use the published policy, including guild/channel
+membership, user and role allowlists, and mention requirements. Name-based entries
+are resolved and cached for the policy revision before admission; already admitted
+work retains its existing context. If a name-policy lookup cannot finish within
+an interaction's response budget, components show an ephemeral policy-updating
+message and autocomplete returns no choices. A later interaction uses the resolved
+policy; the expired interaction is never resumed.
+
+Token, application ID, proxy, intents, command registration, voice configuration,
+and account enablement still use the channel's restart path and drain deferral.
+A write that mixes policy and restart-required settings stays one deferred
+transaction. Manual channel stop/start reads the committed config; it does not
+publish a pending transport change from disk.
+
 ### Role-based agent routing
 
 Use `bindings[].match.roles` to route Discord guild members to different agents by role ID. Role-based bindings accept role IDs only and are evaluated after peer or parent-peer bindings and before guild-only bindings. If a binding also sets other match fields (for example `peer` + `guildId` + `roles`), all configured fields must match.
@@ -1311,7 +1334,7 @@ Notes:
 - If receive logs repeatedly show `DecryptionFailed(UnencryptedWhenPassthroughDisabled)` after updating, collect a dependency report and logs. The bundled `@discordjs/voice` line includes the upstream padding fix from discord.js PR #11449, which closed discord.js issue #11419.
 - `The operation was aborted` receive events are expected when OpenClaw finalizes a captured speaker segment; they are verbose diagnostics, not warnings.
 - Verbose Discord voice logs include a bounded one-line STT transcript preview for each accepted speaker segment, so debugging shows both the user side and the agent reply side without dumping unbounded transcript text.
-- In `agent-proxy` mode, forced consult fallback skips likely incomplete transcript fragments such as text ending in `...` or a trailing connector like "and", plus obvious non-actionable closings like "be right back" or "bye". Logs show `forced agent consult skipped reason=...` when this prevents a stale queued answer.
+- In `agent-proxy` mode, forced consult fallback skips likely incomplete transcript fragments such as text ending in `...` or a trailing connector like "and", plus complete non-actionable closings like "I'll be right back" or "bye". Requests that mention a closing, such as "write a goodbye email", still reach the agent. Closing detection uses a bounded English-language heuristic; unrecognized wording continues to the agent. Logs show `forced agent consult skipped reason=...` when this prevents a stale queued answer.
 
 ### Capture voice transcripts
 

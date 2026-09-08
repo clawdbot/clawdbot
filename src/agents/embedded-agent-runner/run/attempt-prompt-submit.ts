@@ -84,6 +84,7 @@ export async function submitEmbeddedAttemptPrompt(input: {
   modelPrompt: string;
   onFinalPromptText: (prompt: string) => void;
   onSteeringAcknowledged: () => void;
+  persistToolResultProjections: () => Promise<void>;
   prependContext?: string;
   promptActiveSession: PromptActiveSession;
   runtimeContextMessage?: RuntimeContextCustomMessage;
@@ -110,33 +111,38 @@ export async function submitEmbeddedAttemptPrompt(input: {
 
   const installProviderPromptHistoryTransform = (): (() => void) => {
     const baseStreamFn = activeSession.agent.streamFn;
-    const providerPromptStreamFn = wrapStreamFnWithMessageTransform(baseStreamFn, (messages) => {
-      const providerPromptHistoryTruncation = truncateOversizedToolResultsInMessages(
-        messages,
-        input.contextTokenBudget,
-        input.toolResultMaxChars,
-        input.toolResultAggregateMaxChars,
-        input.toolResultPromptProjectionState,
-      );
-      const providerMessages =
-        providerPromptHistoryTruncation.messages !== messages
-          ? providerPromptHistoryTruncation.messages
-          : messages;
-      if (providerPromptHistoryTruncation.aggregateTruncatedCount > 0) {
-        recordAggregateTruncation(attempt);
-      }
-      // Mark the current turn sent at provider dispatch so late media appends
-      // instead of rewriting its prompt-cache slot (#99495).
-      markSessionUserTurnsSent(input.sessionPromptState, providerMessages);
-      const recorder = attempt.userTurnTranscriptRecorder;
-      if (
-        recorder &&
-        hasSessionUserTurnBeenSent(input.sessionPromptState, recorder.message) !== false
-      ) {
-        recorder.markSentToProvider?.();
-      }
-      return providerMessages;
-    });
+    const persistThenStream: StreamFn = async (model, context, options) => {
+      await input.persistToolResultProjections();
+      options?.signal?.throwIfAborted();
+      return baseStreamFn(model, context, options);
+    };
+    const providerPromptStreamFn = wrapStreamFnWithMessageTransform(
+      persistThenStream,
+      (messages) => {
+        const providerPromptHistoryTruncation = truncateOversizedToolResultsInMessages(
+          messages,
+          input.contextTokenBudget,
+          input.toolResultMaxChars,
+          input.toolResultAggregateMaxChars,
+          input.toolResultPromptProjectionState,
+        );
+        const providerMessages = providerPromptHistoryTruncation.messages;
+        if (providerPromptHistoryTruncation.aggregateTruncatedCount > 0) {
+          recordAggregateTruncation(attempt);
+        }
+        // Mark the current turn sent at provider dispatch so late media appends
+        // instead of rewriting its prompt-cache slot (#99495).
+        markSessionUserTurnsSent(input.sessionPromptState, providerMessages);
+        const recorder = attempt.userTurnTranscriptRecorder;
+        if (
+          recorder &&
+          hasSessionUserTurnBeenSent(input.sessionPromptState, recorder.message) !== false
+        ) {
+          recorder.markSentToProvider?.();
+        }
+        return providerMessages;
+      },
+    );
     activeSession.agent.streamFn = providerPromptStreamFn;
     return () => {
       if (activeSession.agent.streamFn === providerPromptStreamFn) {
@@ -248,7 +254,7 @@ function hasNonEmptyContent(content: unknown): boolean {
 }
 
 /** Classifies prompt failures and performs yield or mid-turn recovery. */
-type PromptErrorAttempt = Pick<EmbeddedRunAttemptParams, "runId" | "sessionId">;
+type PromptErrorAttempt = Pick<EmbeddedRunAttemptParams, "runId" | "sessionId" | "abortSignal">;
 type WithOwnedTranscriptWrite = <T>(operation: () => Promise<T> | T) => Promise<T>;
 
 type EmbeddedAttemptPromptErrorOutcome = {
@@ -281,9 +287,17 @@ export async function handleEmbeddedAttemptPromptError(input: {
       sessionId: input.attempt.sessionId,
     });
     await input.withOwnedTranscriptWrite(async () => {
-      stripSessionsYieldArtifacts(input.activeSession);
+      const transcriptRewritten = stripSessionsYieldArtifacts(input.activeSession);
       if (input.yieldMessage) {
         await persistSessionsYieldContextMessage(input.activeSession, input.yieldMessage);
+      }
+      const target = transcriptRewritten && input.activeSession.sessionManager.getSessionTarget();
+      if (target) {
+        // Yield cleanup owns this rewrite; settle its projection before handing off the lane.
+        // The caller signal stays live during a deliberate sessions_yield provider abort.
+        const { waitForSessionTranscriptProjection } =
+          await import("../../../config/sessions/session-transcript-reconcile.js");
+        await waitForSessionTranscriptProjection(target, input.attempt.abortSignal);
       }
     });
     return {};

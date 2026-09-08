@@ -306,13 +306,13 @@ function isFuzzyActivationNameMatch(
   if (heardCompact[0] !== activationCompact[0]) {
     return false;
   }
-  const distance = levenshteinDistance(heardCompact, activationCompact);
   if (candidate.edge === "trailing") {
     return (
       heardCompact.length === activationCompact.length &&
       hasOnlyPhoneticSubstitutions(heardCompact, activationCompact)
     );
   }
+  const distance = levenshteinDistance(heardCompact, activationCompact);
   if (distance <= 1) {
     return true;
   }

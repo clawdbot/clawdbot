@@ -9,7 +9,9 @@ import {
   extractErrorHttpStatus,
   extractLeadingHttpStatus,
   extractProviderWrappedHttpStatus,
+  parseApiErrorInfo,
 } from "../../shared/assistant-error-format.js";
+import { classifyFailoverReasonFromCode } from "./classification-rules.js";
 import { INCOMPLETE_ASSISTANT_STREAM_RE } from "./message-patterns.js";
 import type { FailoverClassification, FailoverSignal } from "./signal.js";
 
@@ -121,6 +123,13 @@ export function resolveRetryAfterMs(
     : Math.ceil(Math.max(headerSeconds ?? 0, seconds ?? 0) * 1000);
 }
 
+/** Usage-window evidence is distinct from a temporary throttle's retry floor. */
+export function hasLongWindowRateLimitEvidence(message: string | undefined): boolean {
+  return Boolean(
+    message && LONG_WINDOW_RATE_LIMIT_RE.test(message) && !SHORT_RATE_LIMIT_UNIT_RE.test(message),
+  );
+}
+
 /** Classify provider rate-limit text without deciding a caller's retry policy. */
 export function classifyRateLimitWindow(
   message: string | undefined,
@@ -141,7 +150,7 @@ export function classifyRateLimitWindow(
   if (RETRY_AFTER_VALUE_RE.test(raw) && !hasShortRateLimitUnit) {
     return { kind: "long" };
   }
-  if (LONG_WINDOW_RATE_LIMIT_RE.test(raw) && !hasShortRateLimitUnit) {
+  if (hasLongWindowRateLimitEvidence(raw)) {
     return { kind: "long" };
   }
   if (SHORT_WINDOW_RATE_LIMIT_RE.test(raw) || extractLeadingHttpStatus(raw)?.code === 429) {
@@ -154,7 +163,7 @@ export function classifyRateLimitWindow(
 export function shouldRetryFailoverSignal(params: {
   classification: FailoverClassification | null;
   hasTransientEvidence: boolean;
-  signal: Pick<FailoverSignal, "message" | "status">;
+  signal: Pick<FailoverSignal, "code" | "message" | "status">;
 }): boolean {
   if (!params.hasTransientEvidence) {
     return false;
@@ -162,7 +171,15 @@ export function shouldRetryFailoverSignal(params: {
   const reason =
     params.classification?.kind === "reason" ? params.classification.reason : undefined;
   const status = resolveRetrySignalStatus(params.signal);
-  if (reason === "format" && status !== undefined && status >= 500 && status < 600) {
+  // Preserve 4xx server-error retries unless a validation code proves rejection.
+  if (
+    reason === "format" &&
+    (status === undefined ||
+      (status >= 500 && status < 600) ||
+      (classifyFailoverReasonFromCode(params.signal.code) ??
+        classifyFailoverReasonFromCode(parseApiErrorInfo(params.signal.message)?.code)) ===
+        "format")
+  ) {
     return false;
   }
   const hasLongLimitWindow = classifyRateLimitWindow(params.signal.message).kind === "long";

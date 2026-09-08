@@ -28,15 +28,23 @@ beforeEach(() => {
 
 suite.define(() => {
   it.each(["return", "first visit"] as const)(
-    "retains recent activity for a %s after unrelated diagnostic traffic",
+    "retains activity across sessions for a %s and chat changes after diagnostic traffic",
     async (visit) => {
       await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
-        const gateway = await installMockGateway(page, { sessionKey: "main" });
-        const emitTool = (id: string) =>
+        const sessionKey = "agent:main:main";
+        const otherSessionKey = "agent:main:other";
+        const gateway = await installMockGateway(page, {
+          sessionKey,
+          sessions: [
+            { key: sessionKey, kind: "direct", displayName: "Main", updatedAt: Date.now() },
+            { key: otherSessionKey, kind: "direct", displayName: "Other", updatedAt: Date.now() },
+          ],
+        });
+        const emitTool = (id: string, key: string) =>
           gateway.emitGatewayEvent("session.tool", {
             stream: "tool",
             runId: `run-${id}`,
-            sessionKey: "main",
+            sessionKey: key,
             data: {
               phase: "result",
               name: "read",
@@ -58,7 +66,7 @@ suite.define(() => {
           await waitForControlUiSettingsTakeover(page);
         }
         await gateway.waitForRequest("connect");
-        await emitTool("original");
+        await emitTool("original", sessionKey);
         await fillDiagnosticLog();
         if (visit === "return") {
           await expect.poll(() => page.locator(".activity-entry").count()).toBe(1);
@@ -71,7 +79,7 @@ suite.define(() => {
           await waitForControlUiSettingsTakeover(page);
         }
         await page.locator("openclaw-activity-page").waitFor({ state: "detached" });
-        await emitTool("while-away");
+        await emitTool("while-away", otherSessionKey);
         await fillDiagnosticLog();
         const loggedEvents = await page.evaluate(() => {
           const app = document.querySelector<ActivityApp>("openclaw-app");
@@ -100,6 +108,25 @@ suite.define(() => {
             })
             .waitFor({ state: "visible" });
         }
+
+        await page
+          .locator(
+            `.sidebar-recent-session[data-session-key="${otherSessionKey}"] a.sidebar-recent-session__link`,
+          )
+          .click();
+        await waitForControlUiRoute(page, { routeId: "chat" });
+        await expect
+          .poll(() =>
+            page.evaluate(
+              () =>
+                document.querySelector<ActivityApp>("openclaw-app")?.runtime.context.gateway
+                  .snapshot.sessionKey,
+            ),
+          )
+          .toBe(otherSessionKey);
+        await page.goBack();
+        await waitForControlUiRoute(page, { routeId: "activity", search: "?view=live" });
+        await expect.poll(() => page.locator(".activity-entry").count()).toBe(2);
         expect(await gateway.getSocketCount()).toBe(1);
       });
     },

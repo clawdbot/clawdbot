@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { ButtonInteraction, StringSelectMenuInteraction } from "../internal/discord.js";
+import type { DiscordLivePolicyReader } from "./live-policy.js";
 import {
   recordDiscordModelPickerRecentModel,
   type DiscordModelPickerPreferenceScope,
@@ -40,6 +41,7 @@ export async function applyDiscordModelPickerSelection(params: {
   selectionCommand: DiscordModelPickerSelectionCommand;
   dispatchCommandInteraction: DispatchDiscordCommandInteraction;
   cfg: OpenClawConfig;
+  readPolicy?: DiscordLivePolicyReader;
   discordConfig: DiscordConfig;
   accountId: string;
   sessionPrefix: string;
@@ -56,6 +58,7 @@ export async function applyDiscordModelPickerSelection(params: {
   try {
     const dispatchResult = await withTimeout(
       params.dispatchCommandInteraction({
+        readPolicy: params.readPolicy,
         interaction: params.interaction,
         prompt: params.selectionCommand.prompt,
         command: params.selectionCommand.command,

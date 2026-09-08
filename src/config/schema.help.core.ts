@@ -120,7 +120,7 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   "gateway.auth":
     "Authentication policy for gateway HTTP/WebSocket access including mode, credentials, trusted-proxy behavior, and rate limiting. Keep auth enabled for every non-loopback deployment.",
   "gateway.auth.mode":
-    'Gateway auth mode: "none", "token", "password", or "trusted-proxy" depending on your edge architecture. Use token/password for direct exposure, and trusted-proxy only behind hardened identity-aware proxies.',
+    'Gateway auth mode: "none", "token", "password", or "trusted-proxy" depending on your edge architecture. Token/password mode selects the configured secret (gateway.auth.token or gateway.auth.password); clients may send it in either connect auth field. Use token/password for direct exposure, and trusted-proxy only behind hardened identity-aware proxies.',
   "gateway.auth.allowTailscale":
     "Allows trusted Tailscale identity paths to satisfy gateway auth checks when configured. Use this only when your tailnet identity posture is strong and operator workflows depend on it.",
   "gateway.auth.identityScopes":
@@ -197,9 +197,9 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Value for the Strict-Transport-Security response header. Set only on HTTPS origins that you fully control; use false to explicitly disable.",
   "gateway.remote.url": "Remote Gateway WebSocket URL (ws:// or wss://).",
   "gateway.remote.token":
-    "Bearer token used to authenticate this client to a remote gateway in token-auth deployments. Store via secret/env substitution and rotate alongside remote gateway auth changes.",
+    "Shared secret sent in the token field to authenticate this client to a remote gateway. The server's gateway.auth.mode selects its configured secret; either client token or password field is accepted. Store via secret/env substitution and rotate alongside remote gateway auth changes.",
   "gateway.remote.password":
-    "Password credential used for remote gateway authentication when password mode is enabled. Keep this secret managed externally and avoid plaintext values in committed config.",
+    "Shared secret sent in the password field to authenticate this client to a remote gateway. The server's gateway.auth.mode selects its configured secret; either client token or password field is accepted. Keep this secret managed externally and avoid plaintext values in committed config.",
   "gateway.remote.edgeAuth":
     "Secret-backed HTTP headers presented to an identity-aware proxy in front of the configured remote Gateway. Headers are sent only to the exact gateway.remote.url origin over WSS and never follow redirects.",
   "gateway.remote.tlsFingerprint":

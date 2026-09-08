@@ -3,7 +3,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SkillStatusEntry } from "../../api/types.ts";
 import type { SessionToolOverrides } from "../../lib/sessions/patch.ts";
 import { readOwnEntry } from "../../lib/sessions/tool-overrides.ts";
-import { loadSkillStatusReport } from "../../lib/skills/index.ts";
+import { loadSkillStatusReport } from "../../lib/skills/status-report.ts";
 import type { ChatComposerMenuSkill } from "./components/chat-composer-plus-menu.ts";
 
 export function composerWebSearchBaseEnabled(config: Record<string, unknown> | null): boolean {
@@ -12,7 +12,7 @@ export function composerWebSearchBaseEnabled(config: Record<string, unknown> | n
 
 function toComposerSkill(skill: SkillStatusEntry): ChatComposerMenuSkill {
   const missingDeps = Object.values(skill.missing).some((values) => values.length > 0);
-  const blocked = skill.blockedByAllowlist || skill.blockedByAgentFilter === true;
+  const blocked = skill.blockedByAllowlist || skill.blockedByAgentFilter;
   const baseEnabled = !skill.disabled;
   return {
     key: skill.skillKey,

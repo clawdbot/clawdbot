@@ -14,6 +14,130 @@ const groupId = `swarm:${sessionKey}:11111111-2222-4333-8444-666666666666`;
 
 suite.define(() => {
   it.each([
+    { name: "desktop", width: 1440, height: 900, count: 1 },
+    { name: "mobile", width: 390, height: 844, count: 1 },
+    { name: "mobile-many", width: 390, height: 844, count: 30 },
+  ])("collapses successful child runs without hiding their details on $name", async (viewport) => {
+    const proofDir = createControlUiE2eArtifactDir(`completed-swarm-${viewport.name}`);
+    await suite.withPage(
+      { viewport, hasTouch: viewport.name.startsWith("mobile") },
+      async ({ page }) => {
+        const children = Array.from({ length: viewport.count }, (_, index) => ({
+          key: `agent:main:subagent:completed-${index}`,
+          kind: "direct",
+          label: "Research worker visibility after reconnect",
+          parentSessionKey: sessionKey,
+          swarmGroupId: groupId,
+          status: "running",
+          updatedAt: 1,
+        }));
+        const group = {
+          groupId,
+          createdAt: 1,
+          queued: 0,
+          running: viewport.count,
+          done: 0,
+          failed: 0,
+          children: children.map((child) => ({ sessionKey: child.key, status: "running" })),
+        };
+        const parent = {
+          key: sessionKey,
+          kind: "direct",
+          label: "Research comparison",
+          updatedAt: 1,
+          swarm: { groups: [group], otherActiveGroups: 0 },
+        };
+        const gateway = await installMockGateway(page, {
+          sessionKey,
+          sessions: [parent, ...children],
+          historyMessages: [
+            {
+              role: "assistant",
+              content: [{ type: "text", text: "Research results are in the conversation." }],
+            },
+          ],
+          methodResponses: {
+            "sessions.list": chatSessionListResponse([parent, ...children]),
+            "sessions.describe": { session: parent },
+          },
+        });
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+        const widget = page.locator('[data-test-id="chat-swarm"]');
+        const disclosure = widget.locator("details");
+        const summary = disclosure.locator("summary");
+        await expect.poll(() => widget.locator(".chat-swarm__task").count()).toBe(viewport.count);
+        expect(await widget.locator(".chat-swarm__markers").isVisible()).toBe(true);
+        await page.screenshot({ path: path.join(proofDir, "active.png"), animations: "disabled" });
+
+        // The collector summary owns completion even while child rows are stale.
+        const completedParent = {
+          ...parent,
+          updatedAt: 2,
+          swarm: {
+            groups: [
+              {
+                ...group,
+                running: 0,
+                done: viewport.count,
+                children: children.map((child) => ({ sessionKey: child.key, status: "done" })),
+              },
+            ],
+            otherActiveGroups: 0,
+          },
+        };
+        await gateway.setMethodResponse("sessions.describe", { session: completedParent });
+        await gateway.setMethodResponse(
+          "sessions.list",
+          chatSessionListResponse([completedParent, ...children]),
+        );
+        await gateway.emitGatewayEvent("sessions.changed", {
+          sessionKey,
+          agentId: "main",
+          reason: "swarm",
+        });
+        await expect
+          .poll(() => widget.locator(".chat-swarm__tasks .chat-swarm__task-icon--done").count())
+          .toBe(viewport.count);
+        await page.screenshot({
+          path: path.join(proofDir, "completed.png"),
+          animations: "disabled",
+        });
+        const box = await disclosure.boundingBox();
+        expect(box).not.toBeNull();
+        expect(box!.height).toBeLessThanOrEqual(64);
+        expect((await summary.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+        expect(await summary.textContent()).toContain(`${viewport.count} completed`);
+        expect(await disclosure.getAttribute("open")).toBeNull();
+        expect(await widget.locator(".chat-swarm__tasks").isVisible()).toBe(false);
+        expect(await page.locator(".agent-chat__composer-combobox textarea").isVisible()).toBe(
+          true,
+        );
+        await summary.focus();
+        await page.keyboard.press("Enter");
+        await expect.poll(() => widget.locator(".chat-swarm__tasks").isVisible()).toBe(true);
+        expect(
+          await widget
+            .getByText("Child runs finished. Check the conversation for the final response.")
+            .isVisible(),
+        ).toBe(true);
+        await page.screenshot({
+          path: path.join(proofDir, "completed-details.png"),
+          animations: "disabled",
+        });
+        await page.keyboard.press("Space");
+        await expect.poll(() => widget.locator(".chat-swarm__tasks").isVisible()).toBe(false);
+        await page.reload();
+        await expect
+          .poll(() => widget.locator(".chat-swarm__tasks .chat-swarm__task-icon--done").count())
+          .toBe(viewport.count);
+        expect((await disclosure.boundingBox())!.height).toBeLessThanOrEqual(64);
+        expect(await disclosure.getAttribute("open")).toBeNull();
+        await summary.click();
+        await expect.poll(() => widget.locator(".chat-swarm__tasks").isVisible()).toBe(true);
+      },
+    );
+  });
+  it.each([
     { name: "desktop", width: 1440, height: 900, childAgent: "main" },
     { name: "mobile", width: 390, height: 844, childAgent: "main" },
     { name: "cross-agent", width: 1440, height: 900, childAgent: "worker" },

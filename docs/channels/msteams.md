@@ -718,6 +718,7 @@ China/21Vianet has no separate global proactive `smba` URL in Microsoft's Teams 
 Teams markdown is more limited than Slack or Discord:
 
 - Basic formatting works: **bold**, _italic_, `code`, links.
+- Text edits, file captions, and finalized streaming replies use the same Markdown conversion and user-mention formatting as normal messages. Streaming previews may show unfinished Markdown until the final reply replaces them.
 - Complex markdown (tables, nested lists) may not render correctly.
 - Adaptive Cards are supported for approval prompts, polls, and semantic presentation sends (see below).
 

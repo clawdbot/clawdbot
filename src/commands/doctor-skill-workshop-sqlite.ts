@@ -16,6 +16,7 @@ import {
 import { isPathInside } from "../infra/path-guards.js";
 import { movePathWithCopyFallback } from "../infra/replace-file.js";
 import { acquireStateDatabaseCoordinator } from "../infra/state-database-coordinator.js";
+import { transitionPendingSkillProposalToStale } from "../skills/workshop/apply-transition.js";
 import { reconcileInterruptedSkillProposalApply } from "../skills/workshop/reconcile-transition.js";
 import { resolveWorkshopSkillsDir } from "../skills/workshop/skills-root.js";
 import {
@@ -24,6 +25,7 @@ import {
   updateProposal,
 } from "../skills/workshop/store-sqlite-record.js";
 import {
+  SkillProposalDraftMissingError,
   hashSkillProposalContent,
   importLegacySkillProposal,
   readSkillProposal,
@@ -92,6 +94,7 @@ export type LegacyWorkshopMigrationInspection = {
   externalProposalCount: number;
   externalProposalCountsByAgent: Record<string, number>;
   legacyBackupRootCount: number;
+  preservedLegacyBackupRootCount: number;
 };
 
 async function readJson(rootDir: Root, relativePath: string, maxBytes: number): Promise<unknown> {
@@ -142,17 +145,19 @@ export async function inspectLegacySkillWorkshopMigration(params: {
       return counts;
     }, {}),
     legacyBackupRootCount: backups.length,
+    preservedLegacyBackupRootCount: backups.filter((backup) => "warning" in backup).length,
   };
 }
 
 async function relocateLegacyWorkshopTargets(
   config: OpenClawConfig,
   env: NodeJS.ProcessEnv,
+  retireMissingDrafts: boolean,
 ): Promise<WorkshopRelocationResult> {
   const database = openOpenClawStateDatabase({ env });
-  const kysely = getNodeSqliteKysely<Pick<OpenClawStateDatabase, "skill_workshop_proposals">>(
-    database.db,
-  );
+  const kysely = getNodeSqliteKysely<
+    Pick<OpenClawStateDatabase, "skill_workshop_proposals" | "skill_workshop_proposal_rollbacks">
+  >(database.db);
   // Planning must not initialize optional Workshop tables or indexes on a no-op
   // startup. Actual proposal writes retain their feature-owned schema ensure.
   const readRows = () =>
@@ -164,12 +169,50 @@ async function relocateLegacyWorkshopTargets(
       : [];
   const deferredSources = new Set<string>();
   const recoveryWarnings: string[] = [];
+  let missingDraftsRetired = 0;
   // Settle writes while their proposal and rollback still name the same files.
   // Recovery can establish a create's ownership or restore a partial update.
   for (const row of readRows()) {
     const record = parseSkillProposalRow(row);
     if (!record || record.status !== "pending") {
       continue;
+    }
+    if (retireMissingDrafts) {
+      try {
+        await readSkillProposalBundle(record, { config, env });
+      } catch (error) {
+        if (!(error instanceof SkillProposalDraftMissingError)) {
+          recoveryWarnings.push(
+            `Could not inspect Skill Workshop proposal ${record.id}: ${String(error)}`,
+          );
+          deferredSources.add(resolveCanonicalWorkspacePath(record.target.skillDir));
+          continue;
+        }
+        // Any rollback row can describe an interrupted write. Keep it pending
+        // for recovery rather than treating its missing draft as abandoned work.
+        const rollback = executeSqliteQueryTakeFirstSync(
+          database.db,
+          kysely
+            .selectFrom("skill_workshop_proposal_rollbacks")
+            .select("proposal_id")
+            .where("proposal_id", "=", record.id),
+        );
+        if (rollback) {
+          recoveryWarnings.push(
+            `Skill Workshop proposal ${record.id} has a missing draft and unfinished apply recovery; restore its draft before retrying Doctor.`,
+          );
+          deferredSources.add(resolveCanonicalWorkspacePath(record.target.skillDir));
+          continue;
+        }
+        transitionPendingSkillProposalToStale({
+          record,
+          reason:
+            "Proposal draft is missing. Metadata and remaining files were preserved for recovery.",
+          input: { config, env, eventActor: { type: "system" } },
+        });
+        missingDraftsRetired += 1;
+        continue;
+      }
     }
     const workspaceDir = resolveLegacyWorkshopWorkspaceDir(record.target.skillDir, config, env);
     const { ownerAgentId } = inferOwnerAgentId({
@@ -297,7 +340,7 @@ async function relocateLegacyWorkshopTargets(
   return {
     movedSkills: plan.moves.filter((move) => move.operation === "move").length,
     retargetedProposals: updates.length - staleProposals,
-    staleProposals,
+    staleProposals: staleProposals + missingDraftsRetired,
     migratedBackupRoots: backupMigration.migrated,
     warnings: [...recoveryWarnings, ...plan.warnings, ...backupMigration.warnings],
   };
@@ -536,6 +579,7 @@ async function importLegacySkillProposalSidecars(params: {
 export async function migrateLegacySkillWorkshopProposals(params: {
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
+  retireMissingDrafts?: boolean;
 }): Promise<MigrationResult> {
   const env = params.env ?? process.env;
   // Plain Doctor can reach automatic migration without its repair scope.
@@ -545,7 +589,11 @@ export async function migrateLegacySkillWorkshopProposals(params: {
   });
   try {
     const sidecars = await importLegacySkillProposalSidecars({ config: params.config, env });
-    const relocation = await relocateLegacyWorkshopTargets(params.config, env);
+    const relocation = await relocateLegacyWorkshopTargets(
+      params.config,
+      env,
+      params.retireMissingDrafts === true,
+    );
     if (
       relocation.movedSkills > 0 ||
       relocation.retargetedProposals > 0 ||

@@ -7,10 +7,9 @@ import type { NormalizeReplySkipReason } from "../../auto-reply/reply/normalize-
 import type { SessionCreatedActor } from "../../config/sessions/session-entry-provenance.js";
 import type { CronConfig } from "../../config/types.cron.js";
 import type { HeartbeatRunResult, HeartbeatWakeRequest } from "../../infra/heartbeat-wake.js";
-import type { CommandLaneTaskMarker } from "../../process/command-queue.js";
+import type { SessionEventWakeWaitOptions } from "../../infra/session-event-wake.js";
 import { LEGACY_IMPLICIT_AGENT_ID } from "../../routing/session-key.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
-import type { CronActiveJobMarker } from "../active-jobs.js";
 import { toPublicCronJob } from "../public-job.js";
 import type { CronRuntimeAuthority } from "../runtime-authority.js";
 import type { CronScheduledToolPolicy } from "../scheduled-tool-policy.js";
@@ -168,40 +167,16 @@ export type CronServiceDeps = {
   }) => DeliveryContext | undefined;
   /** Runs timer and startup work inside the owning Gateway's detached scope. */
   runSchedulerOwned?: <T>(run: () => Promise<T>) => Promise<T>;
-  requestHeartbeat: (
-    opts: HeartbeatWakeRequest,
-    retry?: Extract<HeartbeatRunResult, { status: "skipped" }>,
-  ) => void;
+  requestHeartbeat: (opts: HeartbeatWakeRequest) => void;
   /** Waits for the terminal result of a cron-owned coalesced heartbeat wake. */
   requestHeartbeatAndWait?: (
     opts: HeartbeatWakeRequest,
-    lifecycle: { abortSignal?: AbortSignal },
+    lifecycle: SessionEventWakeWaitOptions,
   ) => Promise<HeartbeatRunResult>;
-  runHeartbeatOnce?: (opts?: {
-    source?: HeartbeatWakeRequest["source"];
-    intent?: HeartbeatWakeRequest["intent"];
-    reason?: string;
-    agentId?: string;
-    sessionKey?: string;
-    /** Exact cron run marker whose own activity must not block its awaited wake. */
-    owningCronJobMarker?: CronActiveJobMarker;
-    /** Exact command-lane task whose own slot must not block its awaited wake. */
-    owningCronLaneTaskMarker?: CommandLaneTaskMarker;
-    /** Optional heartbeat config override (e.g. target: "last" for cron-triggered heartbeats). */
-    heartbeat?: HeartbeatWakeRequest["heartbeat"];
-  }) => Promise<HeartbeatRunResult>;
   /** Resolves the outer watchdog for an awaited heartbeat handoff. */
   resolveHeartbeatTimeoutMs?: (
     opts: HeartbeatWakeRequest & { agentId: string },
   ) => number | undefined;
-  /**
-   * WakeMode=now: max time to wait for runHeartbeatOnce to stop returning
-   * { status:"skipped", reason:"requests-in-flight" } before falling back to
-   * requestHeartbeat.
-   */
-  wakeNowHeartbeatBusyMaxWaitMs?: number;
-  /** WakeMode=now: delay between runHeartbeatOnce retries while busy. */
-  wakeNowHeartbeatBusyRetryDelayMs?: number;
   runIsolatedAgentJob: (params: {
     job: CronJob;
     message: string;

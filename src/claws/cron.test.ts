@@ -197,7 +197,10 @@ describe("installClawCronJobs", () => {
       env: current.env,
       gateway: { add: async () => ({ id: "scheduler-123" }) },
     });
-    const view = listedCronJob("worker-two", refs[0]!, "scheduler-123");
+    const view = {
+      ...listedCronJob("worker-two", refs[0]!, "scheduler-123"),
+      effectiveAgentId: "worker-two",
+    };
     const before = structuredClone(view);
     const add = vi.fn();
 

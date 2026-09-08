@@ -127,13 +127,7 @@ function preparePromptProjectionStateForTest(params: {
     messages: params.messages,
     prompt: {
       effectivePrompt: prompt,
-      promptBeforePromptBuildHooks: prompt,
-      hasPromptBuildContext: false,
       effectiveTranscriptPrompt: prompt,
-      transcriptPromptForRuntimeSplit: prompt,
-      promptForRuntimeContextSplit: prompt,
-      promptForModelBeforeRuntimeContextSplit: prompt,
-      promptForRuntimeContextBeforeAnnotation: prompt,
     },
     replaceSessionMessages: () => {},
     sessionAgentId: "main",

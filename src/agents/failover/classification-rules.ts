@@ -297,6 +297,8 @@ export function classifyFailoverReasonFromCode(raw: string | undefined): Failove
     return null;
   }
   switch (normalized) {
+    case "UNKNOWN_PARAMETER":
+      return "format";
     case "RESOURCE_EXHAUSTED":
     case "RATE_LIMIT":
     case "RATE_LIMITED":

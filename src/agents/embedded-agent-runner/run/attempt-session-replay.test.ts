@@ -246,6 +246,7 @@ async function withReplaySession(
         modelPrompt: attempt.prompt,
         onFinalPromptText: () => {},
         onSteeringAcknowledged: () => {},
+        persistToolResultProjections: async () => {},
         runtimeOnly: false,
         sessionPromptState: promptState,
         systemPrompt: "",

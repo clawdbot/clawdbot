@@ -3,7 +3,37 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
+import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
+import { assertAgentSessionStoreDeletionSafe } from "./agent-delete-databases.js";
 import { findOverlappingWorkspaceAgentIds, isSharedAuthStoreOwner } from "./agent-delete-safety.js";
+
+describe("shared session store deletion safety", () => {
+  it.each(["absent", "survivor-owned", "per-agent"])(
+    "allows deletion with an %s session store",
+    async (kind) => {
+      await withStateDirEnv("openclaw-agent-delete-session-owner-", async ({ stateDir }) => {
+        const sharedPath = path.join(stateDir, "shared.sqlite");
+        const cfg: OpenClawConfig = {
+          agents: { ownership: "explicit", entries: { alpha: {}, ops: {} } },
+          session: {
+            store:
+              kind === "per-agent"
+                ? path.join(stateDir, "agents", "{agentId}", "agent", "openclaw-agent.sqlite")
+                : sharedPath,
+          },
+        };
+        if (kind === "survivor-owned") {
+          openOpenClawAgentDatabase({ agentId: "ops", path: sharedPath });
+        } else if (kind === "per-agent") {
+          openOpenClawAgentDatabase({ agentId: "alpha" });
+        }
+
+        expect(() => assertAgentSessionStoreDeletionSafe(cfg, "alpha")).not.toThrow();
+      });
+    },
+  );
+});
 
 describe("shared auth store deletion safety", () => {
   const sharedAuthDbPath = path.join(os.tmpdir(), "shared-auth", "openclaw-agent.sqlite");

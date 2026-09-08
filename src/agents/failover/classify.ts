@@ -1,3 +1,4 @@
+import { matchesContextOverflowMessage } from "@openclaw/ai/internal/runtime";
 import { inspectTlsCertificateError } from "@openclaw/ai/internal/shared";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -197,6 +198,9 @@ function classifyFailoverClassificationFromMessage(
   if (isTimeoutErrorMessage(raw)) {
     return toReasonClassification("timeout");
   }
+  if (matchesContextOverflowMessage(raw, "assistant-error")) {
+    return { kind: "context_overflow" };
+  }
   // Inspect raw and SDK-preserved types before the generic HTTP fallback, but
   // after more-specific text so invalid-request wrappers cannot hide an outage.
   const apiErrorReason = classifyCoreFailoverReasonFromErrorType(
@@ -319,13 +323,19 @@ export function classifyFailoverSignal(
   }
   // Message/detail semantics stay ahead of generic structured types so an
   // invalid-request wrapper cannot hide billing, context, or provider policy.
-  const codeReason = classifyFailoverReasonFromCode(signal.code);
+  const codeReason =
+    classifyFailoverReasonFromCode(signal.code) ??
+    classifyFailoverReasonFromCode(parseApiErrorInfo(signal.message)?.code);
+  // A validation code identifies the rejected operation; arbitrary parameter
+  // text must not turn it into an unrelated failure through message matching.
   const effectiveMessageClassification = providerPluginReason
     ? toPluginClassification(providerPluginReason)
-    : mergeMessageAndDetailClassification(
-        messageOrDetailClassification ?? errorTypeClassification,
-        codeReason ? toReasonClassification(codeReason) : null,
-      );
+    : codeReason === "format"
+      ? toReasonClassification("format")
+      : mergeMessageAndDetailClassification(
+          messageOrDetailClassification ?? errorTypeClassification,
+          codeReason ? toReasonClassification(codeReason) : null,
+        );
   if (codeReason === "auth_permanent") {
     return toReasonClassification(codeReason);
   }
