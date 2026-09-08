@@ -184,7 +184,16 @@ describe("session catalog Gateway HOME isolation", () => {
       label: "Local",
       kind: "gateway" as const,
       connected: true,
-      sessions: [{ threadId: "native-thread", title: "Native exact title" }],
+      sessions: [
+        {
+          threadId: "native-thread",
+          name: "Native exact title",
+          status: "idle",
+          archived: false,
+          canContinue: false,
+          canArchive: false,
+        },
+      ],
     };
     const list = vi.fn(async (request: Parameters<SessionCatalogProvider["list"]>[0]) =>
       request.allowProcessHomeFallback === false ? [] : [localHost],
@@ -196,7 +205,7 @@ describe("session catalog Gateway HOME isolation", () => {
       return {
         hostId: request.hostId,
         threadId: request.threadId,
-        items: [{ type: "message" as const, role: "user" as const, text: "native transcript" }],
+        items: [{ type: "userMessage" as const, text: "native transcript" }],
       };
     });
     hoisted.activeRegistry.sessionCatalogs = [
