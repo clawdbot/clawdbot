@@ -179,6 +179,135 @@ describe("Responses terminal tool completion", () => {
     expect(result.events.filter((event) => event.type === "toolcall_end")).toEqual([]);
   });
 
+  it.each([
+    ["an item-done", true],
+    ["a terminal", false],
+  ])(
+    "rejects %s snapshot that disagrees with complete streamed arguments",
+    async (_name, hasItemDone) => {
+      const streamed = '{"object_id":"x","if_match":"\\"rev-4\\"","object":{"data":{"kept":true}}}';
+      const stale = '{"object_id":"x","if_match":"\\"rev-","object":{"data":{}}}';
+      const result = await runFixture([
+        added(0),
+        {
+          type: "response.function_call_arguments.delta",
+          output_index: 0,
+          item_id: "fc_0",
+          delta: streamed,
+        },
+        ...(hasItemDone
+          ? [
+              {
+                type: "response.output_item.done",
+                output_index: 0,
+                item: tool(0, { arguments: stale }),
+              },
+            ]
+          : []),
+        completed("resp_argument_conflict", [
+          tool(0, { arguments: hasItemDone ? streamed : stale }),
+        ]),
+      ]);
+      expect(result.error).toBe("Responses stream completed tool call with conflicting arguments");
+      expect(result.events.filter((event) => event.type === "toolcall_end")).toEqual([]);
+    },
+  );
+
+  it("keeps the snapshot authoritative after an unrouteable argument frame", async () => {
+    const result = await runFixture([
+      added(0),
+      {
+        type: "response.function_call_arguments.delta",
+        output_index: 0,
+        item_id: "fc_0",
+        delta: '{"slot":9}',
+      },
+      added(1),
+      { type: "response.function_call_arguments.delta", delta: '{"unrouteable":true}' },
+      { type: "response.output_item.done", output_index: 0, item: tool(0) },
+      { type: "response.output_item.done", output_index: 1, item: tool(1) },
+      completed("resp_unreliable_arguments", [tool(0), tool(1)]),
+    ]);
+    expect(result.error).toBeNull();
+    expect(
+      result.content.map((block) => (block.type === "toolCall" ? block.arguments : null)),
+    ).toEqual([{ slot: 0 }, { slot: 1 }]);
+  });
+
+  it("completes a snapshot-only call whose opening snapshot is an empty object", async () => {
+    // No argument events: the terminal item, not the seeded opening snapshot,
+    // is the only argument encoding this call ever streamed.
+    const result = await runFixture([
+      added(0, { arguments: "{}" }),
+      { type: "response.output_item.done", output_index: 0, item: tool(0) },
+      completed("resp_opening_snapshot_done", [tool(0)]),
+    ]);
+    expect(result.error).toBeNull();
+    expect(
+      result.content.map((block) => (block.type === "toolCall" ? block.arguments : null)),
+    ).toEqual([{ slot: 0 }]);
+  });
+
+  it("recovers a snapshot-only call from the terminal response after an empty-object opening", async () => {
+    const result = await runFixture([
+      added(0, { arguments: "{}" }),
+      completed("resp_opening_snapshot_terminal", [tool(0)]),
+    ]);
+    expect(result.error).toBeNull();
+    expect(
+      result.content.map((block) => (block.type === "toolCall" ? block.arguments : null)),
+    ).toEqual([{ slot: 0 }]);
+  });
+
+  it("uses complete opening arguments when the done item carries none", async () => {
+    const result = await runFixture([
+      added(0, { arguments: JSON.stringify({ slot: 0 }) }),
+      { type: "response.output_item.done", output_index: 0, item: tool(0, { arguments: "" }) },
+      completed("resp_opening_arguments_done", [tool(0, { arguments: "" })]),
+    ]);
+    expect(result.error).toBeNull();
+    expect(
+      result.content.map((block) => (block.type === "toolCall" ? block.arguments : null)),
+    ).toEqual([{ slot: 0 }]);
+  });
+
+  it("uses complete opening arguments when the terminal item carries none", async () => {
+    const result = await runFixture([
+      added(0, { arguments: JSON.stringify({ slot: 0 }) }),
+      completed("resp_opening_arguments_terminal", [tool(0, { arguments: "" })]),
+    ]);
+    expect(result.error).toBeNull();
+    expect(
+      result.content.map((block) => (block.type === "toolCall" ? block.arguments : null)),
+    ).toEqual([{ slot: 0 }]);
+  });
+
+  it.each([
+    ["an item-done", true],
+    ["a terminal", false],
+  ])(
+    "lets %s snapshot replace an opening snapshot a keepalive delta never changed",
+    async (_name, hasItemDone) => {
+      const result = await runFixture([
+        added(0, { arguments: JSON.stringify({ slot: 9 }) }),
+        {
+          type: "response.function_call_arguments.delta",
+          output_index: 0,
+          item_id: "fc_0",
+          delta: "",
+        },
+        ...(hasItemDone
+          ? [{ type: "response.output_item.done", output_index: 0, item: tool(0) }]
+          : []),
+        completed("resp_empty_delta_opening_snapshot", [tool(0)]),
+      ]);
+      expect(result.error).toBeNull();
+      expect(
+        result.content.map((block) => (block.type === "toolCall" ? block.arguments : null)),
+      ).toEqual([{ slot: 0 }]);
+    },
+  );
+
   it("never completes active tools from an incomplete response", async () => {
     const result = await runFixture([
       added(0),

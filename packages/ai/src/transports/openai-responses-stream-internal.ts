@@ -62,6 +62,10 @@ export async function processResponsesStream<TApi extends Api>(
   type StreamingToolCallState = ResponsesToolCallState & {
     block: StreamingToolCallBlock;
     contentIndex: number;
+    // Set once an argument delta or done event lands on this call. The opening
+    // item snapshot seeds partialJson too; only a streamed buffer may conflict
+    // with the completion snapshot, an opening snapshot merely backs it up.
+    argumentsStreamed: boolean;
     // Preview refresh schedule for streamed arguments; done/terminal parses stay authoritative.
     previewSchedule: ToolArgumentPreviewSchedule;
   };
@@ -282,7 +286,11 @@ export async function processResponsesStream<TApi extends Api>(
       if (tracked && !state) {
         throw new Error("Responses stream completed with unresolved tool calls");
       }
-      const validated = resolveCompletedResponsesToolCall(item, { name: state?.block.name });
+      const validated = resolveCompletedResponsesToolCall(item, {
+        name: state?.block.name,
+        arguments: state?.argumentStreamReliable ? state.block.partialJson : undefined,
+        argumentsStreamed: state?.argumentsStreamed,
+      });
       if (state) {
         recovered.push(state);
       }
@@ -365,6 +373,7 @@ export async function processResponsesStream<TApi extends Api>(
             block: toolCallBlock,
             contentIndex,
             argumentStreamReliable: true,
+            argumentsStreamed: false,
             previewSchedule: createToolArgumentPreviewSchedule(),
             ...readResponsesToolCallItemIdentity(item),
           };
@@ -468,6 +477,10 @@ export async function processResponsesStream<TApi extends Api>(
       } else if (event.type === "response.function_call_arguments.delta") {
         const toolCall = streamingToolCalls.resolve(event);
         if (toolCall) {
+          // A keepalive delta contributes no bytes, so it leaves the buffer as
+          // the opening snapshot, which must stay a fallback rather than a
+          // streamed encoding that can conflict with the completion snapshot.
+          toolCall.argumentsStreamed ||= event.delta.length > 0;
           toolCall.block.partialJson += event.delta;
           // Preview refresh is geometric; the done event and terminal finalize
           // re-parse the full buffer authoritatively either way.
@@ -496,6 +509,7 @@ export async function processResponsesStream<TApi extends Api>(
             toolCall.block.partialJson = doneArguments;
             toolCall.block.arguments = parseStreamingJson(toolCall.block.partialJson);
             toolCall.argumentStreamReliable = true;
+            toolCall.argumentsStreamed = true;
           }
 
           if (doneArguments?.startsWith(previousPartialJson)) {
@@ -655,7 +669,10 @@ export async function processResponsesStream<TApi extends Api>(
           }
           const validated = resolveCompletedResponsesToolCall(item, {
             name: streamingToolCall?.block.name,
-            arguments: completedArguments || streamingToolCall?.block.partialJson || "",
+            arguments: streamingToolCall?.argumentStreamReliable
+              ? streamingToolCall.block.partialJson
+              : undefined,
+            argumentsStreamed: streamingToolCall?.argumentsStreamed,
           });
 
           finalizeToolCall(item, readResponsesOutputIndex(event), streamingToolCall, validated);
