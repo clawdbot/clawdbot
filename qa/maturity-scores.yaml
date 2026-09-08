@@ -3067,7 +3067,7 @@ surfaces:
           reason: human_override
           human_override: true
   - id: imessage-bluebubbles
-    name: iMessage and BlueBubbles
+    name: iMessage
     family: channel
     level:
       id: beta

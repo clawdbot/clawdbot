@@ -8418,11 +8418,11 @@ surfaces:
       source_ref: null
       process_version: 3
   - id: imessage-bluebubbles
-    name: iMessage and BlueBubbles
+    name: iMessage
     family: channel
     level: beta
     level_code: M3
-    rationale: Supported iMessage runs through imsg on a signed-in macOS Messages host; legacy BlueBubbles configs require migration. Keep macOS permissions, SSH wrapper, SIP/private API, and migration caveats visible.
+    rationale: Supported iMessage runs through imsg on a signed-in macOS Messages host. Keep macOS permissions, SSH wrapper, SIP/private API, and legacy BlueBubbles migration caveats visible without presenting the removed transport as an active channel.
     completeness_instructions: references/completeness/imessage-bluebubbles.md
     categories:
       - name: Channel Setup and Operations
@@ -8451,13 +8451,13 @@ surfaces:
             description: Covers Probe runtime health across local and remote `imsg rpc`, `cliPath`, `dbPath`, `remoteHost`, and related imsg transport, host requirements, and permissions behavior.
           - name: Account setup prompts
             coverageIds: [imessage-bluebubbles.account-setup-prompts]
-            description: Covers setup prompts, policy writes, account merging, default account selection, and account configuration behavior for iMessage/BlueBubbles.
+            description: Covers setup prompts, policy writes, account merging, default account selection, and account configuration behavior for iMessage.
           - name: Account status checks
             coverageIds: [imessage-bluebubbles.account-status-checks]
-            description: Covers account status output, setup state, account merging, and default account selection for iMessage/BlueBubbles.
+            description: Covers account status output, setup state, account merging, and default account selection for iMessage.
           - name: Doctor repair checks
             coverageIds: [imessage-bluebubbles.doctor-repair-checks]
-            description: Covers doctor checks, setup repair prompts, and policy verification for iMessage/BlueBubbles account configuration.
+            description: Covers doctor checks, setup repair prompts, and policy verification for iMessage account configuration.
           - name: Account Config
             coverageIds: [imessage-bluebubbles.account-config]
             description: Covers Account Config across setup prompts, policy writes, account merging, default account selection, and related setup, status, doctor, and account config behavior.
@@ -8479,7 +8479,7 @@ surfaces:
           - account status
           - doctor checks
           - Account Config
-          - imessage / bluebubbles setup, status, doctor, and account config
+          - iMessage setup, status, doctor, and account config
           - setup, status, doctor, and account config
         category_note: setup-status-doctor-and-account-config.md
         human_lts_override: false
@@ -8506,7 +8506,6 @@ surfaces:
             description: Covers System Prompts across `groupPolicy`, `groupAllowFrom`, `groups`, wildcard registry entries, `requireMention`, mention patterns, per-group tools, per-group system prompts, group sessions, and warnings for allowlist misconfiguration.
         docs:
           - docs/channels/imessage.md
-          - docs/channels/imessage-from-bluebubbles.md
           - docs/gateway/config-channels.md
         search_anchors:
           - Authorize direct senders
@@ -8515,7 +8514,7 @@ surfaces:
           - Group Policy
           - Mentions
           - System Prompts
-          - imessage / bluebubbles group policy, mentions, and system prompts
+          - iMessage group policy, mentions, and system prompts
           - group policy, mentions, and system prompts
         category_note: dm-pairing-access-and-session-routing.md
         human_lts_override: false
@@ -8569,19 +8568,18 @@ surfaces:
             description: Covers Message Tool across private API probing, action availability, action config gates, tapback mapping, edit/unsend/reply/effects/group management, `send-rich --file`, message-tool visibility/target grammar, and action dispatch errors.
         docs:
           - docs/channels/imessage.md
-          - docs/channels/imessage-from-bluebubbles.md
           - docs/gateway/config-channels.md
         search_anchors:
           - Media
           - Attachments
           - Remote Fetch
           - Chunking
-          - imessage / bluebubbles media, attachments, remote fetch, and chunking
+          - iMessage media, attachments, remote fetch, and chunking
           - media, attachments, remote fetch, and chunking
           - Native Actions
           - Private API
           - Message Tool
-          - imessage / bluebubbles native actions, private api, and message tool
+          - iMessage native actions, private api, and message tool
           - native actions, private api, and message tool
         category_note: media-attachments-remote-fetch-and-chunking.md
         human_lts_override: false
@@ -8603,15 +8601,15 @@ surfaces:
           - Native Approvals
           - Reactions
           - Operator Control
-          - imessage / bluebubbles native approvals, reactions, and operator control
+          - iMessage native approvals, reactions, and operator control
           - native approvals, reactions, and operator control
         category_note: native-approvals-reactions-and-operator-control.md
         human_lts_override: false
     last_score_run:
       status: complete
-      completed_at: "2026-05-30"
+      completed_at: "2026-09-08"
       by: codex
-      source_ref: null
+      source_ref: openclaw@19537f3e957ce8720cfdf22a35e7f0bb3e6b7741
       process_version: 3
   - id: signal
     name: Signal
