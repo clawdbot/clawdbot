@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import type { AuthConfig } from "../../config/types.auth.js";
 import {
   authStoreMocks,
   configureProviderRoutes,
@@ -101,7 +102,7 @@ function createTriggeredSessionEntry(params: {
 }
 
 describe("session auth-profile rotation", () => {
-  it.each([
+  it.each<{ name: string; rotation: AuthConfig["rotation"]; expected: string }>([
     { name: "omitted", rotation: undefined, expected: OAUTH_PROFILE_ID },
     { name: "enabled", rotation: { openai: { onCompaction: true } }, expected: OAUTH_PROFILE_ID },
     {
