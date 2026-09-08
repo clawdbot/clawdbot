@@ -1,15 +1,18 @@
 // Line plugin module owns durable webhook admission and core-drain wiring.
 import type { webhook } from "@line/bot-sdk";
+import { fanInChannelIngressLifecycles } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import {
   bindIngressLifecycleToReplyOptions,
   createChannelIngressMonitor,
   DEFAULT_INGRESS_ADOPTION_STALL_MS,
   DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
+  type ChannelIngressMonitorLifecycle,
   type ChannelIngressQueue,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { danger, type RuntimeEnv, warn } from "openclaw/plugin-sdk/runtime-env";
 import { runDetachedWebhookWork } from "openclaw/plugin-sdk/webhook-request-guards";
+import { createLineImageSetIngressBuffer } from "./inbound-image-set.js";
 import { getLineRuntime } from "./runtime.js";
 import {
   eventIdFor,
@@ -44,9 +47,13 @@ type LineWebhookSpoolOptions = {
   accountId: string;
   runtime: RuntimeEnv;
   deliver: (
-    event: webhook.Event,
+    events: readonly webhook.Event[],
     destination: string,
-    control: { turnAdoptionLifecycle: LineWebhookTurnAdoptionLifecycle },
+    control: {
+      turnAdoptionLifecycle: LineWebhookTurnAdoptionLifecycle;
+      /** Parts LINE announced for this send but never delivered. */
+      missingParts?: number;
+    },
   ) => Promise<void>;
   queue?: ChannelIngressQueue<LineWebhookSpoolPayload>;
 };
@@ -104,7 +111,43 @@ async function waitForActiveDeliveriesBeforeDispose(
   }
 }
 
+/** The imageSet a LINE inbound event belongs to, when it reported one. */
+// A set is one person's single send. In a group the lane is the whole room, so
+// the sender is what separates two members' sets - without it, a member the
+// group policy denies could have their image carried into an allowed member's
+// turn, which is authorized once for its holder and then downloads every part.
+function senderKeyFor(event: webhook.Event): string {
+  const source = event.source;
+  return source && "userId" in source && source.userId ? `user:${source.userId}` : "anonymous";
+}
+
+function resolveLineInboundImageSet(
+  event: webhook.Event,
+):
+  | { setId: string; senderKey: string; messageId: string; index?: number; total?: number }
+  | undefined {
+  if (event.type !== "message" || event.message.type !== "image") {
+    return undefined;
+  }
+  const imageSet = event.message.imageSet;
+  return imageSet?.id
+    ? {
+        setId: imageSet.id,
+        senderKey: senderKeyFor(event),
+        messageId: event.message.id,
+        ...(imageSet.index === undefined ? {} : { index: imageSet.index }),
+        ...(imageSet.total === undefined ? {} : { total: imageSet.total }),
+      }
+    : undefined;
+}
+
 export function createLineWebhookSpool(options: LineWebhookSpoolOptions): LineWebhookSpool {
+  // Parts of one multi-image send arrive as separate claims; they are grouped
+  // here so the whole set becomes one delivery with one fanned-in ownership.
+  const imageSets = createLineImageSetIngressBuffer<
+    webhook.Event,
+    ChannelIngressMonitorLifecycle
+  >();
   const queue =
     options.queue ??
     getLineRuntime().state.openChannelIngressQueue<LineWebhookSpoolPayload>({
@@ -154,11 +197,76 @@ export function createLineWebhookSpool(options: LineWebhookSpoolOptions): LineWe
         ),
     },
     deliver: async ({ event, destination }, lifecycle) => {
+      const laneKey = laneKeyFor(event, eventIdFor(event));
+      const imageSet = resolveLineInboundImageSet(event);
+      let turnEvents: readonly webhook.Event[] = [event];
+      let turnLifecycles: readonly (typeof lifecycle)[] = [lifecycle];
+      let releaseLane: (() => void) | undefined;
+      let missingParts: number | undefined;
+      if (imageSet) {
+        if (!acceptsDeferredClaims) {
+          // Shutting down: a claim parked in the buffer would never flush, so hand
+          // this part back and let a restart redeliver the whole set instead.
+          await lifecycle.onAbandoned();
+          return undefined;
+        }
+        // Hold this claim while the rest of the set arrives. Deferring frees the
+        // lane, which is the only way the later parts can be claimed at all.
+        lifecycle.onDeferred();
+        const set = await imageSets.admit({
+          laneKey,
+          setId: imageSet.setId,
+          senderKey: imageSet.senderKey,
+          messageId: imageSet.messageId,
+          event,
+          lifecycle,
+          ...(imageSet.index === undefined ? {} : { index: imageSet.index }),
+          ...(imageSet.total === undefined ? {} : { total: imageSet.total }),
+        });
+        if (!set) {
+          // Another part holds this set and delivers every claim behind it.
+          return undefined;
+        }
+        if (set.missing) {
+          // The turn answers what arrived. The agent is told as well - a short
+          // set otherwise reads as the whole send - and the operator gets the
+          // count that explains a small media count.
+          missingParts = set.missing;
+          options.runtime.error?.(
+            danger(
+              `line: image set ${imageSet.setId} delivered ${set.events.length} of the send's parts, ${set.missing} still missing`,
+            ),
+          );
+        }
+        turnEvents = set.events;
+        turnLifecycles = set.lifecycles;
+        // Hold the lane until this delivery is done, or a message sent after the
+        // images overtakes them while this turn is still fetching their media.
+        releaseLane = set.finish;
+      } else if (imageSets.isBusy(laneKey)) {
+        if (!acceptsDeferredClaims) {
+          await lifecycle.onAbandoned();
+          return undefined;
+        }
+        // Release the lane before waiting. Holding it makes this event the lane
+        // owner, and the remaining parts of the set it is waiting for could then
+        // never be claimed - the set would time out partial and split in two.
+        lifecycle.onDeferred();
+        // Queue behind the set and behind anything else already released on this
+        // lane. Deferring gave up the drain's serialization, so without this the
+        // messages freed together would race each other into delivery.
+        releaseLane = await imageSets.enterLane(laneKey);
+      }
+      // One ownership lifecycle spanning every durable claim this turn consumed.
+      const fannedIn = fanInChannelIngressLifecycles(turnLifecycles);
       // Reply options intentionally omit the drain-only onAdoptionFinalizing callback;
       // the monitor wrapper already tracks that callback as a handoff before invoking us.
-      const boundLifecycle = bindIngressLifecycleToReplyOptions(lifecycle).turnAdoptionLifecycle;
+      const boundLifecycle = bindIngressLifecycleToReplyOptions(
+        fannedIn.lifecycle ?? lifecycle,
+      ).turnAdoptionLifecycle;
       let handedOff = false;
-      const delivery = options.deliver(event, destination, {
+      const delivery = options.deliver(turnEvents, destination, {
+        ...(missingParts === undefined ? {} : { missingParts }),
         turnAdoptionLifecycle: {
           ...boundLifecycle,
           onAdopted: async () => {
@@ -190,14 +298,28 @@ export function createLineWebhookSpool(options: LineWebhookSpoolOptions): LineWe
       activeDeliveries.add(delivery);
       try {
         await delivery;
+      } catch (error) {
+        // Only the holder's claim rides this rejection back to the drain. The
+        // other parts already returned as deferred, so without fanning the
+        // failure across them they stay held until recovery.
+        await fannedIn.abandon(error);
+        handedOff = true;
+        throw error;
       } finally {
         activeDeliveries.delete(delivery);
+        releaseLane?.();
+      }
+      if (!handedOff && !stopTask) {
+        // A gated or deliberately skipped turn still consumed every source claim.
+        await fannedIn.settle();
+        handedOff = true;
       }
       if (stopTask && !handedOff) {
-        return {
-          kind: "failed-retryable" as const,
-          error: new Error("LINE webhook spool stopped before delivery handoff."),
-        };
+        // Hand every claim back, not just the one the drain is holding: the rest
+        // of a set was deferred into this turn and would otherwise stay deferred
+        // forever, with stop() waiting on claims nothing will ever finish.
+        await fannedIn.abandon();
+        return undefined;
       }
       return undefined;
     },
@@ -216,6 +338,11 @@ export function createLineWebhookSpool(options: LineWebhookSpoolOptions): LineWe
     admissionMode: "durable-after-stop",
     drain: {
       adoptionStallTimeoutMs: DEFAULT_INGRESS_ADOPTION_STALL_MS,
+      // A deferred claim keeps its durable retry guarantee but stops owning the
+      // lane. LINE lanes are per sender/group/room, so the parts of one
+      // multi-image send share one; holding it would block every later part
+      // behind the first, and the set they are meant to join could never form.
+      deferredLaneOccupancy: "release",
       orderBy: "received",
       scanLimit: LINE_WEBHOOK_DRAIN_SCAN_LIMIT,
       startLimit: LINE_WEBHOOK_MAX_CONCURRENT_DELIVERIES,

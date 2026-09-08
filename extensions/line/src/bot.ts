@@ -93,9 +93,9 @@ export function createLineBot(opts: LineBotOptions): LineBot {
   const spool = createLineWebhookSpool({
     accountId: account.accountId,
     runtime,
-    deliver: async (event, _destination, control) => {
+    deliver: async (events, _destination, control) => {
       const cfg = resolveTurnConfig();
-      await handleLineWebhookEvents([event], {
+      await handleLineWebhookEvents([...events], {
         cfg,
         account,
         runtime,
@@ -105,6 +105,7 @@ export function createLineBot(opts: LineBotOptions): LineBot {
         ...(control.turnAdoptionLifecycle
           ? { turnAdoptionLifecycle: control.turnAdoptionLifecycle }
           : {}),
+        ...(control.missingParts === undefined ? {} : { missingParts: control.missingParts }),
         groupHistories,
         historyLimit:
           account.config.historyLimit ??

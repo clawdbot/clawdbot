@@ -179,13 +179,19 @@ vi.mock("./send.js", () => ({
 }));
 
 const { buildLineMessageContextMock, buildLinePostbackContextMock } = vi.hoisted(() => ({
-  buildLineMessageContextMock: vi.fn(async () => ({
-    ctxPayload: { From: "line:group:group-1" },
-    replyToken: "reply-token",
-    route: { agentId: "default" },
-    isGroup: true,
-    accountId: "default",
-  })),
+  buildLineMessageContextMock: vi.fn(
+    async (_params: {
+      allMedia?: { path: string }[];
+      // The event the turn answers as: its reply token is what reaches LINE.
+      event?: { replyToken?: string };
+    }) => ({
+      ctxPayload: { From: "line:group:group-1" },
+      replyToken: "reply-token",
+      route: { agentId: "default" },
+      isGroup: true,
+      accountId: "default",
+    }),
+  ),
   buildLinePostbackContextMock: vi.fn(async () => null as unknown),
 }));
 
@@ -264,6 +270,7 @@ function createLineWebhookTestContext(params: {
   requireMention?: boolean;
   groupHistories?: Map<string, HistoryEntry[]>;
   accessGroups?: Record<string, { type: "message.senders"; members: Record<string, string[]> }>;
+  turnAdoptionLifecycle?: LineWebhookContext["turnAdoptionLifecycle"];
   implicitMentions?: { quotedBot?: boolean };
 }): Parameters<typeof handleLineWebhookEvents>[1] {
   const allowFrom = params.allowFrom ?? (params.dmPolicy === "open" ? ["*"] : undefined);
@@ -298,6 +305,20 @@ function createLineWebhookTestContext(params: {
     mediaMaxBytes: 1,
     processMessage: params.processMessage,
     ...(params.groupHistories ? { groupHistories: params.groupHistories } : {}),
+    ...(params.turnAdoptionLifecycle
+      ? { turnAdoptionLifecycle: params.turnAdoptionLifecycle }
+      : {}),
+  };
+}
+
+/** Records how an image-set part's ingress claim was finally settled. */
+function createTurnAdoptionLifecycleSpy() {
+  return {
+    admission: "exclusive" as const,
+    onAdopted: vi.fn(async () => {}),
+    onDeferred: vi.fn(() => {}),
+    onAbandoned: vi.fn(async () => {}),
+    abortSignal: new AbortController().signal,
   };
 }
 
@@ -886,6 +907,7 @@ describe("handleLineWebhookEvents", () => {
       groupHistories,
     });
 
+    // One delivery is one turn, so the two sends arrive as two deliveries.
     await handleLineWebhookEvents(
       [
         createTestMessageEvent({
@@ -903,6 +925,11 @@ describe("handleLineWebhookEvents", () => {
           source: { type: "group", groupId: "group-hist-1", userId: "user-one" },
           webhookEventId: "evt-hist-1",
         }),
+      ],
+      context,
+    );
+    await handleLineWebhookEvents(
+      [
         createTestMessageEvent({
           message: { id: "m-hist-2", type: "text", text: "second", quoteToken: "q-hist-2" },
           timestamp: 1700000001000,
@@ -1629,6 +1656,144 @@ describe("handleLineWebhookEvents", () => {
 
     // Should be skipped because there is a non-bot mention and the bot was not mentioned.
     expect(processMessage).not.toHaveBeenCalled();
+  });
+
+  // The spool hands the whole set to the handler at once; the handler's job is to
+  // make it one turn carrying every image rather than one turn per part.
+  it("answers a multi-image send as one turn instead of one turn per image", async () => {
+    downloadLineMediaMock.mockImplementation(async (messageId: string) => ({
+      path: `/media/${messageId}.png`,
+      contentType: "image/png",
+      size: 10,
+    }));
+    const processMessage = vi.fn();
+    const context = createLineWebhookTestContext({
+      processMessage,
+      dmPolicy: "open",
+      turnAdoptionLifecycle: createTurnAdoptionLifecycleSpy(),
+    });
+    const imagePart = (messageId: string, index: number) =>
+      createTestMessageEvent({
+        message: {
+          id: messageId,
+          type: "image",
+          contentProvider: { type: "line" },
+          imageSet: { id: "image-set-1", index, total: 3 },
+        } as MessageEvent["message"],
+        source: { type: "user", userId: "U1" },
+        webhookEventId: `evt-${index}`,
+      });
+
+    // LINE does not deliver the parts in order; the spool preserves what it got.
+    await handleLineWebhookEvents(
+      [imagePart("m2", 2), imagePart("m1", 1), imagePart("m3", 3)],
+      context,
+    );
+
+    expect(downloadLineMediaMock).toHaveBeenCalledTimes(3);
+    expect(buildLineMessageContextMock).toHaveBeenCalledTimes(1);
+    expect(processMessage).toHaveBeenCalledTimes(1);
+    // Every part's media reaches the one turn that speaks for the set.
+    expect(buildLineMessageContextMock.mock.calls[0]?.[0]?.allMedia).toHaveLength(3);
+  });
+
+  it("answers a set with its freshest part while media keeps the picked order", async () => {
+    downloadLineMediaMock.mockImplementation(async (messageId: string) => ({
+      path: `/media/${messageId}.png`,
+      contentType: "image/png",
+      size: 10,
+    }));
+    const processMessage = vi.fn();
+    const context = createLineWebhookTestContext({
+      processMessage,
+      dmPolicy: "open",
+      turnAdoptionLifecycle: createTurnAdoptionLifecycleSpy(),
+    });
+    const base = 1_700_000_000_000;
+    const imagePart = (messageId: string, index: number, arrivedAt: number) =>
+      createTestMessageEvent({
+        message: {
+          id: messageId,
+          type: "image",
+          contentProvider: { type: "line" },
+          imageSet: { id: "image-set-fresh", index, total: 3 },
+        } as MessageEvent["message"],
+        source: { type: "user", userId: "U1" },
+        webhookEventId: `evt-${index}`,
+        replyToken: `reply-${index}`,
+        timestamp: arrivedAt,
+      });
+
+    // Delivered 2, 1, 3: image 3 is the freshest arrival, image 1 the oldest.
+    await handleLineWebhookEvents(
+      [
+        imagePart("m2", 2, base + 200),
+        imagePart("m1", 1, base + 100),
+        imagePart("m3", 3, base + 300),
+      ],
+      context,
+    );
+
+    // The turn speaks as the freshest part: a reply token expires, so answering
+    // with image 1's would risk a token that is already stale.
+    const built = buildLineMessageContextMock.mock.calls[0]?.[0];
+    expect(built?.event?.replyToken).toBe("reply-3");
+    // Media still reads in the order the sender picked them.
+    expect(built?.allMedia?.map((media) => media.path)).toEqual([
+      "/media/m1.png",
+      "/media/m2.png",
+      "/media/m3.png",
+    ]);
+  });
+
+  it("keeps the delivered order for a set whose parts carry no index", async () => {
+    // `imageSet.index` is optional in LINE's contract - a sender on LINE 11.15
+    // or earlier for Android omits it - so the only order those parts have is
+    // the one the spool's buffer resolved before handing them over.
+    downloadLineMediaMock.mockImplementation(async (messageId: string) => ({
+      path: `/media/${messageId}.png`,
+      contentType: "image/png",
+      size: 10,
+    }));
+    const processMessage = vi.fn();
+    const context = createLineWebhookTestContext({
+      processMessage,
+      dmPolicy: "open",
+      turnAdoptionLifecycle: createTurnAdoptionLifecycleSpy(),
+    });
+    const base = 1_700_000_000_000;
+    const unindexedPart = (messageId: string, timestamp: number) =>
+      createTestMessageEvent({
+        message: {
+          id: messageId,
+          type: "image",
+          contentProvider: { type: "line" },
+          imageSet: { id: "image-set-unindexed" },
+        } as MessageEvent["message"],
+        source: { type: "user", userId: "U1" },
+        webhookEventId: `evt-${messageId}`,
+        replyToken: `reply-${messageId}`,
+        timestamp,
+      });
+
+    await handleLineWebhookEvents(
+      [
+        unindexedPart("m1", base + 100),
+        unindexedPart("m2", base + 200),
+        unindexedPart("m3", base + 300),
+      ],
+      context,
+    );
+
+    const built = buildLineMessageContextMock.mock.calls[0]?.[0];
+    // The order handed over survives: no index means nothing may re-sort it.
+    expect(built?.allMedia?.map((media) => media.path)).toEqual([
+      "/media/m1.png",
+      "/media/m2.png",
+      "/media/m3.png",
+    ]);
+    // Answering still uses the freshest token, which is a separate fact.
+    expect(built?.event?.replyToken).toBe("reply-m3");
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

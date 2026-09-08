@@ -10,12 +10,12 @@ import {
 } from "../../process/gateway-work-admission.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { createChannelIngressError } from "./ingress-errors.js";
+import { createChannelIngressMonitor } from "./ingress-monitor.js";
 import {
   CHANNEL_INGRESS_RETENTION_DEFAULTS,
-  createChannelIngressMonitor,
   type ChannelIngressMonitorLifecycle,
   type CreateChannelIngressMonitorOptions,
-} from "./ingress-monitor.js";
+} from "./ingress-monitor.types.js";
 import { createChannelIngressQueue, type ChannelIngressQueue } from "./ingress-queue.js";
 import {
   ChannelIngressUnavailableError,

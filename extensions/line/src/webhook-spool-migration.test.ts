@@ -43,7 +43,7 @@ describe("LINE webhook spool upgrade migration", () => {
         await waitForVerdict(queue, "message:message-legacy-upgrade-1", "completed");
         expect(deliver).toHaveBeenCalledTimes(1);
         expect(deliver).toHaveBeenCalledWith(
-          event,
+          [event],
           "destination-1",
           expect.objectContaining({ turnAdoptionLifecycle: expect.anything() }),
         );
@@ -309,11 +309,11 @@ describe("LINE webhook spool upgrade migration", () => {
       const delivered: string[] = [];
       const deliver = vi.fn(
         async (
-          event: webhook.Event,
+          events: readonly webhook.Event[],
           _destination: string,
           control: { turnAdoptionLifecycle: LineWebhookTurnAdoptionLifecycle },
         ) => {
-          delivered.push(event.webhookEventId ?? "");
+          delivered.push(...events.map((event) => event.webhookEventId ?? ""));
           await control.turnAdoptionLifecycle.onAdopted();
         },
       );

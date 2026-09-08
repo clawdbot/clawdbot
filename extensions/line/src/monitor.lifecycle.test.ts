@@ -723,8 +723,8 @@ describe("monitorLineProvider lifecycle", () => {
           accountId: "default",
           runtime,
           queue,
-          deliver: async (event, _destination, control) => {
-            delivered.push(event);
+          deliver: async (events, _destination, control) => {
+            delivered.push(...events);
             await control.turnAdoptionLifecycle.onAdopted();
           },
         });

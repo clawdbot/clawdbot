@@ -7,7 +7,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 type DeliverFn = (
-  event: webhook.Event,
+  events: readonly webhook.Event[],
   destination: string,
   control: Record<string, unknown>,
 ) => Promise<void>;
@@ -59,7 +59,8 @@ function createDeliverableBot(startupConfig: OpenClawConfig): {
   const deliverEvent = deliver;
   return {
     deliverOnce: async () => {
-      await deliverEvent({ type: "message" } as webhook.Event, "destination", {});
+      // The spool delivers a whole turn: one call can carry several events.
+      await deliverEvent([{ type: "message" } as webhook.Event], "destination", {});
       const context = handleLineWebhookEventsMock.mock.calls.at(-1)?.[1];
       if (!context) {
         throw new Error("handleLineWebhookEvents was not called");

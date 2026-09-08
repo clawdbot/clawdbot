@@ -6,14 +6,14 @@
  * group config, then returns sender/route/command/activation projections plus
  * the ordered ingress graph.
  */
-import {
-  createChannelIngressMonitor,
-  type ChannelIngressMonitorDrainOptions,
-  type ChannelIngressMonitorFacts,
-  type ChannelIngressMonitorLifecycle,
-  type ChannelIngressMonitorPayloadCodec,
-  type CreateChannelIngressMonitorOptions,
-} from "../channels/message/ingress-monitor.js";
+import { createChannelIngressMonitor } from "../channels/message/ingress-monitor.js";
+import type {
+  ChannelIngressMonitorDrainOptions,
+  ChannelIngressMonitorFacts,
+  ChannelIngressMonitorLifecycle,
+  ChannelIngressMonitorPayloadCodec,
+  CreateChannelIngressMonitorOptions,
+} from "../channels/message/ingress-monitor.types.js";
 export {
   channelIngressRoutes,
   createChannelIngressResolver,
@@ -151,25 +151,55 @@ export function fanInChannelIngressLifecycles(
   }
 
   let handedOff = false;
+  // Set once every claim has reached a terminal disposition. A consumer that
+  // wraps this lifecycle abandons through onAbandoned rather than the abandon
+  // helper below, so without this the claims a rejected adoption already
+  // released would be settled a second time and consume a second retry.
+  let settledAll = false;
+  const settleOnce = async (run: () => Promise<void>) => {
+    if (settledAll) {
+      return;
+    }
+    settledAll = true;
+    await run();
+  };
+  const fanOut = async (
+    invoke: (lifecycle: ChannelIngressLifecycle) => void | Promise<void>,
+    targets: readonly ChannelIngressLifecycle[] = lifecycles,
+  ) => {
+    await Promise.all(targets.map(async (lifecycle) => await invoke(lifecycle)));
+  };
+  const abandonAll = () => settleOnce(() => fanOut((lifecycle) => lifecycle.onAbandoned()));
+  const failEach = (targets: readonly ChannelIngressLifecycle[], error: unknown) =>
+    fanOut(
+      (lifecycle) => (lifecycle.onFailed ? lifecycle.onFailed(error) : lifecycle.onAbandoned()),
+      targets,
+    );
+  const failAll = (error: unknown) => settleOnce(() => failEach(lifecycles, error));
+  // Adoption runs in claim order so each durable source settles in the order it
+  // was taken. Handoff is already marked by the time this runs, so a caller's
+  // abandon after a rejection here is a no-op; release the claim that threw and
+  // every claim after it instead of leaving them held until recovery.
   const adoptAll = async () => {
-    for (const lifecycle of lifecycles) {
-      await lifecycle.onAdopted();
+    for (const [index, lifecycle] of lifecycles.entries()) {
+      try {
+        await lifecycle.onAdopted();
+      } catch (error) {
+        // Callers match the adoption error itself (isIngressAdoptionLostError),
+        // so a failing release must not replace it.
+        await Promise.allSettled([settleOnce(() => failEach(lifecycles.slice(index), error))]);
+        throw error;
+      }
     }
   };
-  const fanOut = async (invoke: (lifecycle: ChannelIngressLifecycle) => void | Promise<void>) => {
-    await Promise.all(lifecycles.map(async (lifecycle) => await invoke(lifecycle)));
-  };
-  const abandonAll = () => fanOut((lifecycle) => lifecycle.onAbandoned());
-  const failAll = (error: unknown) =>
-    fanOut((lifecycle) =>
-      lifecycle.onFailed ? lifecycle.onFailed(error) : lifecycle.onAbandoned(),
-    );
   const supportsCancellation = lifecycles.every((lifecycle) => lifecycle.onCancelled !== undefined);
   // Omit aggregate cancellation unless every durable source supports it. Callers
   // can then use settle/abandon without an acknowledged-but-unsettled claim.
   const cancelAll = () =>
-    fanOut((lifecycle) =>
-      lifecycle.onCancelled ? lifecycle.onCancelled() : lifecycle.onAbandoned(),
+    settleOnce(() =>
+      fanOut((lifecycle) =>
+        lifecycle.onCancelled ? lifecycle.onCancelled() : lifecycle.onAbandoned(),
+      ),
     );
   return {
     lifecycle: {
@@ -217,8 +247,10 @@ export function fanInChannelIngressLifecycles(
     // A gated or deliberately skipped turn still consumed every source claim.
     settle: async () => {
       if (!handedOff) {
-        await adoptAll();
+        // Mark before adopting, matching onAdopted: a rejection partway has
+        // already released the rest, so a later abandon must stay a no-op.
         handedOff = true;
+        await adoptAll();
       }
     },
     abandon: async (error?: unknown) => {
