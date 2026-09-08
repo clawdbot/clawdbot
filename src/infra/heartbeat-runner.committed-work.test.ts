@@ -61,11 +61,7 @@ async function runCommittedWork(params: {
       recordReplyOperationAgentTurn([state], owner, {
         kind: "settled",
         status: "ok",
-        result: { meta: { durationMs: 1 }, ...params.result },
-        resolved: { provider: "openai", model: "test" },
-        fallback: { exhausted: false, attempts: [] },
-        autoCompactionCount: 0,
-        didLogHeartbeatStrip: false,
+        result: params.result,
       });
       if (params.failAfterSettlement) {
         recordReplyOperationAgentTurn([state], owner);
