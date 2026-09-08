@@ -46,9 +46,8 @@ final class GatewayDiscoveryModel {
     var statusText: String = GatewayDiscoveryStatusText.idle
     private(set) var debugLog: [DebugLogEntry] = []
 
-    private var browsers: [String: NWBrowser] = [:]
+    private let browserSession = GatewayDiscoveryBrowserSession()
     private var gatewaysByDomain: [String: [DiscoveredGateway]] = [:]
-    private var statesByDomain: [String: NWBrowser.State] = [:]
     private var debugLoggingEnabled = false
     private var lastStableIDs = Set<GatewayStableIdentifier.Key>()
 
@@ -64,63 +63,52 @@ final class GatewayDiscoveryModel {
     }
 
     func start() {
-        if !self.browsers.isEmpty { return }
+        if self.browserSession.isRunning { return }
         self.appendDebugLog("start()")
 
-        for domain in OpenClawBonjour.gatewayServiceDomains {
-            let browser = GatewayDiscoveryBrowserSupport.makeBrowser(
-                serviceType: OpenClawBonjour.gatewayServiceType,
-                domain: domain,
-                queueLabelPrefix: "ai.openclawfoundation.app.gateway-discovery",
-                onState: { [weak self] state in
-                    guard let self else { return }
-                    self.statesByDomain[domain] = state
-                    self.updateStatusText()
-                    self.appendDebugLog("state[\(domain)]: \(Self.prettyState(state))")
-                },
-                onResults: { [weak self] results in
-                    guard let self else { return }
-                    self.gatewaysByDomain[domain] = results.compactMap { result -> DiscoveredGateway? in
-                        switch result.endpoint {
-                        case let .service(name, _, _, _):
-                            let decodedName = BonjourEscapes.decode(name)
-                            let txt = result.endpoint.txtRecord?.dictionary ?? [:]
-                            let advertisedName = txt["displayName"]
-                            let prettyAdvertised = advertisedName
-                                .map(Self.prettifyInstanceName)
-                                .flatMap { $0.isEmpty ? nil : $0 }
-                            let prettyName = prettyAdvertised ?? Self.prettifyInstanceName(decodedName)
-                            return DiscoveredGateway(
-                                name: prettyName,
-                                endpoint: result.endpoint,
-                                stableID: GatewayEndpointID.stableID(result.endpoint),
-                                debugID: GatewayEndpointID.prettyDescription(result.endpoint),
-                                lanHost: Self.txtValue(txt, key: "lanHost"),
-                                tailnetDns: Self.txtValue(txt, key: "tailnetDns"),
-                                gatewayPort: Self.txtIntValue(txt, key: "gatewayPort"),
-                                tlsEnabled: Self.txtBoolValue(txt, key: "gatewayTls"),
-                                tlsFingerprintSha256: Self.txtValue(txt, key: "gatewayTlsSha256"),
-                                cliPath: Self.txtValue(txt, key: "cliPath"))
-                        default:
-                            return nil
-                        }
+        self.browserSession.start(
+            queueLabelPrefix: "ai.openclawfoundation.app.gateway-discovery",
+            onState: { [weak self] domain, state, status in
+                guard let self else { return }
+                self.statusText = status
+                self.appendDebugLog("state[\(domain)]: \(Self.prettyState(state))")
+            },
+            onResults: { [weak self] domain, results in
+                guard let self else { return }
+                self.gatewaysByDomain[domain] = results.compactMap { result -> DiscoveredGateway? in
+                    switch result.endpoint {
+                    case let .service(name, _, _, _):
+                        let decodedName = BonjourEscapes.decode(name)
+                        let txt = result.endpoint.txtRecord?.dictionary ?? [:]
+                        let advertisedName = txt["displayName"]
+                        let prettyAdvertised = advertisedName
+                            .map(GatewayDiscoveryText.prettifyInstanceName)
+                            .flatMap { $0.isEmpty ? nil : $0 }
+                        let prettyName = prettyAdvertised ?? GatewayDiscoveryText.prettifyInstanceName(decodedName)
+                        return DiscoveredGateway(
+                            name: prettyName,
+                            endpoint: result.endpoint,
+                            stableID: GatewayEndpointID.stableID(result.endpoint),
+                            debugID: GatewayEndpointID.prettyDescription(result.endpoint),
+                            lanHost: GatewayDiscoveryText.txtValue(txt, key: "lanHost"),
+                            tailnetDns: GatewayDiscoveryText.txtValue(txt, key: "tailnetDns"),
+                            gatewayPort: GatewayDiscoveryText.txtValue(txt, key: "gatewayPort").flatMap { Int($0) },
+                            tlsEnabled: GatewayDiscoveryText.txtBoolValue(txt, key: "gatewayTls"),
+                            tlsFingerprintSha256: GatewayDiscoveryText.txtValue(txt, key: "gatewayTlsSha256"),
+                            cliPath: GatewayDiscoveryText.txtValue(txt, key: "cliPath"))
+                    default:
+                        return nil
                     }
-                    .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
-                    self.recomputeGateways()
-                })
-
-            self.browsers[domain] = browser
-        }
+                }
+                .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+                self.recomputeGateways()
+            })
     }
 
     func stop() {
         self.appendDebugLog("stop()")
-        for browser in self.browsers.values {
-            browser.cancel()
-        }
-        self.browsers = [:]
+        self.browserSession.stop()
         self.gatewaysByDomain = [:]
-        self.statesByDomain = [:]
         self.gateways = []
         self.statusText = GatewayDiscoveryStatusText.stopped
     }
@@ -138,12 +126,6 @@ final class GatewayDiscoveryModel {
         }
         self.lastStableIDs = nextIDs
         self.gateways = next
-    }
-
-    private func updateStatusText() {
-        self.statusText = GatewayDiscoveryStatusText.make(
-            states: Array(self.statesByDomain.values),
-            hasBrowsers: !self.browsers.isEmpty)
     }
 
     private static func prettyState(_ state: NWBrowser.State) -> String {
@@ -169,27 +151,5 @@ final class GatewayDiscoveryModel {
         if self.debugLog.count > 200 {
             self.debugLog.removeFirst(self.debugLog.count - 200)
         }
-    }
-
-    private static func prettifyInstanceName(_ decodedName: String) -> String {
-        let normalized = decodedName.split(whereSeparator: \.isWhitespace).joined(separator: " ")
-        let stripped = normalized.replacingOccurrences(of: " (OpenClaw)", with: "")
-            .replacingOccurrences(of: #"\s+\(\d+\)$"#, with: "", options: .regularExpression)
-        return stripped.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    private static func txtValue(_ dict: [String: String], key: String) -> String? {
-        let raw = dict[key]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return raw.isEmpty ? nil : raw
-    }
-
-    private static func txtIntValue(_ dict: [String: String], key: String) -> Int? {
-        guard let raw = self.txtValue(dict, key: key) else { return nil }
-        return Int(raw)
-    }
-
-    private static func txtBoolValue(_ dict: [String: String], key: String) -> Bool {
-        guard let raw = self.txtValue(dict, key: key)?.lowercased() else { return false }
-        return raw == "1" || raw == "true" || raw == "yes"
     }
 }

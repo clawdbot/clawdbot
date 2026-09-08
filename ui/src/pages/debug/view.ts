@@ -2,6 +2,7 @@
 import { html, nothing } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import type { EventLogEntry } from "../../api/event-log.ts";
+import { isNativeEmbedHost } from "../../app/native-web-chrome.ts";
 import { highlightJsonHtml } from "../../components/markdown-code-blocks.ts";
 import {
   renderSettingsEmpty,
@@ -155,20 +156,24 @@ export function renderDebug(props: DebugProps) {
       description: t("debug.lanes.subtitle"),
       actions: html`
         <button class="btn" @click=${props.onOpenOverlay}>
-          ${t("debug.overlay.openWithShortcut", { shortcut: DEBUG_OVERLAY_SHORTCUT_LABEL })}
+          ${
+            isNativeEmbedHost()
+              ? t("debug.overlay.open")
+              : t("debug.overlay.openWithShortcut", { shortcut: DEBUG_OVERLAY_SHORTCUT_LABEL })
+          }
         </button>
       `,
     },
     html`
       <div class="data-table-container command-lanes-table-wrap">
-        <table class="data-table command-lanes-table">
+        <table class="data-table command-lanes-table settings-table--stacked" role="table">
           <thead>
             <tr>
-              <th>${t("debug.lanes.lane")}</th>
-              <th>${t("debug.lanes.active")}</th>
-              <th>${t("debug.lanes.queued")}</th>
-              <th>${t("debug.lanes.group")}</th>
-              <th>${t("debug.lanes.blocked")}</th>
+              <th scope="col">${t("debug.lanes.lane")}</th>
+              <th scope="col">${t("debug.lanes.active")}</th>
+              <th scope="col">${t("debug.lanes.queued")}</th>
+              <th scope="col">${t("debug.lanes.group")}</th>
+              <th scope="col">${t("debug.lanes.blocked")}</th>
             </tr>
           </thead>
           <tbody>

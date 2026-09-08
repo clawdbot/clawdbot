@@ -45,11 +45,11 @@ struct TalkModeGatewayConfigTests {
             sagVoice: "sag-voice",
             envApiKey: "env-key")
 
-        #expect(parsed.activeProvider == "mlx")
+        #expect(parsed.snapshot.activeProvider == "mlx")
         #expect(parsed.modelId == "mlx-community/fish-audio-s2-pro-8bit")
         #expect(parsed.apiKey == nil)
         #expect(parsed.voiceId == "unused-voice")
-        #expect(parsed.speechLocaleID == "ru-RU")
+        #expect(parsed.snapshot.speechLocaleID == "ru-RU")
         #expect(parsed.referenceAudioPath == "/tmp/reference.wav")
         #expect(parsed.referenceText == "reference transcript")
     }
@@ -74,12 +74,12 @@ struct TalkModeGatewayConfigTests {
 
         let parsed = Self.parse(snapshot)
 
-        #expect(parsed.realtimeProvider == "OpenAI")
-        #expect(parsed.realtimeModelId == "gpt-live-test-canary")
-        #expect(parsed.realtimeSpeakerVoice == "cedar")
-        #expect(parsed.realtimeMode == "realtime")
-        #expect(parsed.realtimeTransport == "gateway-relay")
-        #expect(parsed.realtimeBrain == "agent-consult")
+        #expect(parsed.snapshot.realtime.provider == "OpenAI")
+        #expect(parsed.snapshot.realtime.modelId == "gpt-live-test-canary")
+        #expect(parsed.snapshot.realtime.speakerVoice == "cedar")
+        #expect(parsed.snapshot.realtime.mode == "realtime")
+        #expect(parsed.snapshot.realtime.transport == "gateway-relay")
+        #expect(parsed.snapshot.realtime.brain == "agent-consult")
         #expect(parsed.hasGatewayRealtimeRelayTuple)
     }
 
@@ -98,12 +98,12 @@ struct TalkModeGatewayConfigTests {
 
         let parsed = Self.parse(snapshot)
 
-        #expect(parsed.realtimeProvider == "openai")
-        #expect(parsed.realtimeModelId == "gpt-realtime-2.1")
-        #expect(parsed.realtimeSpeakerVoice == "marin")
-        #expect(parsed.realtimeMode == "realtime")
-        #expect(parsed.realtimeTransport == nil)
-        #expect(parsed.realtimeBrain == nil)
+        #expect(parsed.snapshot.realtime.provider == "openai")
+        #expect(parsed.snapshot.realtime.modelId == "gpt-realtime-2.1")
+        #expect(parsed.snapshot.realtime.speakerVoice == "marin")
+        #expect(parsed.snapshot.realtime.mode == "realtime")
+        #expect(parsed.snapshot.realtime.transport == nil)
+        #expect(parsed.snapshot.realtime.brain == nil)
         #expect(!parsed.hasGatewayRealtimeRelayTuple)
     }
 
@@ -122,9 +122,9 @@ struct TalkModeGatewayConfigTests {
 
         let parsed = Self.parse(snapshot)
 
-        #expect(parsed.realtimeProvider == "OPENAI")
-        #expect(parsed.realtimeModelId == "gpt-live-test-canary")
-        #expect(parsed.realtimeSpeakerVoice == "cedar")
+        #expect(parsed.snapshot.realtime.provider == "OPENAI")
+        #expect(parsed.snapshot.realtime.modelId == "gpt-live-test-canary")
+        #expect(parsed.snapshot.realtime.speakerVoice == "cedar")
     }
 
     @Test func `fallback has no realtime selection`() {
@@ -135,12 +135,12 @@ struct TalkModeGatewayConfigTests {
             sagVoice: nil,
             envApiKey: nil)
 
-        #expect(parsed.realtimeProvider == nil)
-        #expect(parsed.realtimeModelId == nil)
-        #expect(parsed.realtimeSpeakerVoice == nil)
-        #expect(parsed.realtimeMode == nil)
-        #expect(parsed.realtimeTransport == nil)
-        #expect(parsed.realtimeBrain == nil)
+        #expect(parsed.snapshot.realtime.provider == nil)
+        #expect(parsed.snapshot.realtime.modelId == nil)
+        #expect(parsed.snapshot.realtime.speakerVoice == nil)
+        #expect(parsed.snapshot.realtime.mode == nil)
+        #expect(parsed.snapshot.realtime.transport == nil)
+        #expect(parsed.snapshot.realtime.brain == nil)
     }
 
     @Test func `redacted gateway model remains omitted`() {
@@ -168,7 +168,7 @@ struct TalkModeGatewayConfigTests {
             ],
             issues: nil)
 
-        #expect(Self.parse(snapshot).realtimeModelId == nil)
+        #expect(Self.parse(snapshot).snapshot.realtime.modelId == nil)
     }
 
     @Test func `released realtime model remains available`() {
@@ -183,8 +183,8 @@ struct TalkModeGatewayConfigTests {
         ])
 
         let parsed = Self.parse(snapshot)
-        #expect(parsed.realtimeModelId == "gpt-live-1-codex")
-        #expect(parsed.realtimeSpeakerVoice == "spruce")
+        #expect(parsed.snapshot.realtime.modelId == "gpt-live-1-codex")
+        #expect(parsed.snapshot.realtime.speakerVoice == "spruce")
     }
 
     private static func snapshot(talk: [String: Any]) -> ConfigSnapshot {

@@ -632,7 +632,6 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
                 ? nothing
                 : renderPanelRefreshStatus({
                     status: this.sessionData.sessionCatalogRefreshStatus,
-                    onRetry: () => void this.sessionData.refreshSessionCatalogs(),
                     className: "sidebar-session-error sidebar-session-catalog-error",
                   })
             }

@@ -1,5 +1,7 @@
 import { randomBytes } from "node:crypto";
+import { readFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { join } from "node:path";
 import { TLSSocket } from "node:tls";
 import { getPluginRuntimeGatewayRequestScope } from "openclaw/plugin-sdk/plugin-runtime";
 import { DAY_MS, describePeriod } from "./periods.js";
@@ -11,16 +13,32 @@ import {
   type PageContext,
   type PeriodIndex,
 } from "./render/html.js";
+import type { TeamReportsHealth } from "./scheduler.js";
 import type { TeamReportsStore } from "./store.js";
 import type { Period, Person, PersonReport } from "./types.js";
 
 type TeamReportsHttpOptions = {
   basePath: string;
   displayTimezone: string;
+  /** The plugin's shipped `assets` directory; the dist bundle flattens `src/`, so callers resolve it from the plugin root. */
+  assetsDir: string;
   getStore: () => TeamReportsStore | undefined;
   status: () => unknown;
+  health: () => TeamReportsHealth;
+  orgs: () => string[];
   people: () => Person[];
 };
+
+const assets = new Map<string, Buffer>();
+
+function readAsset(assetsDir: string, name: "crab.avif" | "icon.png"): Buffer {
+  let asset = assets.get(name);
+  if (!asset) {
+    asset = readFileSync(join(assetsDir, name));
+    assets.set(name, asset);
+  }
+  return asset;
+}
 
 const KEY_PATTERNS: Record<Period, RegExp> = {
   day: /^\d{4}-\d{2}-\d{2}$/,
@@ -103,14 +121,14 @@ export function createTeamReportsHttpHandler(options: TeamReportsHttpOptions) {
     const send = (
       status: number,
       contentType: string,
-      body: string,
+      body: string | Buffer,
       headers: Record<string, string> = {},
     ) => {
       res.writeHead(status, {
-        "Content-Type": `${contentType}; charset=utf-8`,
+        "Content-Type": typeof body === "string" ? `${contentType}; charset=utf-8` : contentType,
         "Content-Length": Buffer.byteLength(body),
         "Cache-Control": "private, no-store",
-        "Content-Security-Policy": `default-src 'none'; style-src 'nonce-${nonce}'; img-src https://avatars.githubusercontent.com data:; base-uri 'none'; form-action 'none'`,
+        "Content-Security-Policy": `default-src 'none'; style-src 'nonce-${nonce}'; script-src 'nonce-${nonce}'; img-src 'self' https://avatars.githubusercontent.com data:; base-uri 'none'; form-action 'none'`,
         "X-Content-Type-Options": "nosniff",
         "Referrer-Policy": "no-referrer",
         ...headers,
@@ -135,6 +153,20 @@ export function createTeamReportsHttpHandler(options: TeamReportsHttpOptions) {
     if (!route) {
       return notFound();
     }
+    const [first, key, format] = route.segments;
+    if (first === "assets") {
+      if (route.segments.length !== 2 || (key !== "crab.avif" && key !== "icon.png")) {
+        return notFound();
+      }
+      return send(
+        200,
+        key === "crab.avif" ? "image/avif" : "image/png",
+        readAsset(options.assetsDir, key),
+        {
+          "Cache-Control": "private, max-age=86400",
+        },
+      );
+    }
     const store = options.getStore();
     if (!store) {
       return send(
@@ -143,13 +175,12 @@ export function createTeamReportsHttpHandler(options: TeamReportsHttpOptions) {
         "Team Reports is not running. Start or restart the Gateway service.\n",
       );
     }
-    const [first, key, format] = route.segments;
     const json = (body: unknown) => send(200, "application/json", JSON.stringify(body));
     if (first === "status" && route.segments.length === 1) {
       return json(options.status());
     }
     const index = (): PeriodIndex => ({
-      day: store.listPeriods({ period: "day", limit: 60 }),
+      day: store.listPeriods({ period: "day", limit: 400 }),
       week: store.listPeriods({ period: "week", limit: 60 }),
       month: store.listPeriods({ period: "month", limit: 60 }),
     });
@@ -187,27 +218,31 @@ export function createTeamReportsHttpHandler(options: TeamReportsHttpOptions) {
     if (route.segments.length === 0) {
       const periods = index();
       const latest = periods.day[0];
-      const days = latest ? store.getDayReports(latest.sinceMs - 27 * DAY_MS, latest.untilMs) : [];
-      return html(renderIndexPage(ctx, periods, days));
+      const stored = latest ? store.getPeriod("day", latest.key) : undefined;
+      return html(
+        renderIndexPage(ctx, periods, {
+          orgs: stored?.report.orgs ?? options.orgs(),
+          latest: stored,
+          health: options.health(),
+        }),
+      );
     }
     if (first === "people" && route.segments.length <= 2) {
       const latest = store.listPeriods({ period: "day", limit: 1 })[0];
       const recent = latest ? (store.getPeriod("day", latest.key)?.report.members ?? []) : [];
       const people = visiblePeople(options.people(), recent);
       if (!key) {
-        return html(renderPeoplePage(ctx, people));
+        const endKey = latest?.key ?? new Date().toISOString().slice(0, 10);
+        const since = new Date(Date.parse(`${endKey}T00:00:00Z`) - 27 * DAY_MS)
+          .toISOString()
+          .slice(0, 10);
+        return html(renderPeoplePage(ctx, people, store.listPersonDaysSince(since), endKey));
       }
       const person = people.find((candidate) =>
         candidate.github.some((login) => login.toLowerCase() === key.toLowerCase()),
       );
       const login = person?.github[0] ?? key;
-      const latestDay = store.listPersonDays(login, { limit: 1 })[0];
-      const since = latestDay
-        ? new Date(Date.parse(`${latestDay.dayKey}T00:00:00Z`) - 27 * DAY_MS)
-            .toISOString()
-            .slice(0, 10)
-        : undefined;
-      const days = latestDay ? store.listPersonDays(login, { since, limit: 28 }) : [];
+      const days = store.listPersonDays(login, { limit: 400 });
       if (!person && days.length === 0) {
         return notFound();
       }
@@ -239,7 +274,14 @@ export function createTeamReportsHttpHandler(options: TeamReportsHttpOptions) {
       if (format === "report.md") {
         return send(200, "text/markdown", stored.markdown);
       }
-      return html(renderReportPage(ctx, stored.report, stored.summary));
+      return html(
+        renderReportPage(
+          ctx,
+          stored.report,
+          stored.summary,
+          store.listPeriods({ period: first, limit: 400 }).filter((entry) => entry.key <= key),
+        ),
+      );
     }
     return notFound();
   };

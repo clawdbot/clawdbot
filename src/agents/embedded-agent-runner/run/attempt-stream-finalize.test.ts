@@ -185,7 +185,7 @@ function createFixture(overrides: FixtureOverrides = {}) {
     getRepairedRejectedProviderReplay: () => overrides.repairedRejectedProviderReplay ?? true,
     preparedStreamRuntime: {
       abortable: async <T>(promise: Promise<T>) => await promise,
-      cache: { observabilityEnabled: false, promptTools: [] },
+      cache: {},
       history: {
         contextEnginePromptAuthority: "assembled",
         contextEngineAssemblySucceeded: true,
@@ -224,7 +224,6 @@ function createFixture(overrides: FixtureOverrides = {}) {
     currentAttemptAssistant: undefined,
     currentAttemptCompletedAssistant: undefined,
     attemptUsage: undefined,
-    cacheBreak: null,
     lastCallUsage: undefined,
     promptCache: undefined,
   });
@@ -299,7 +298,6 @@ describe("runEmbeddedAttemptSettledPhase stream finalization", () => {
       currentAttemptAssistant: failedAssistant,
       currentAttemptCompletedAssistant: failedAssistant,
       attemptUsage: undefined,
-      cacheBreak: null,
       lastCallUsage: undefined,
       promptCache: undefined,
     });
@@ -353,7 +351,6 @@ describe("runEmbeddedAttemptSettledPhase stream finalization", () => {
       currentAttemptAssistant: undefined,
       currentAttemptCompletedAssistant: undefined,
       attemptUsage: undefined,
-      cacheBreak: null,
       lastCallUsage: undefined,
       promptCache: undefined,
     };
@@ -416,7 +413,6 @@ describe("runEmbeddedAttemptSettledPhase stream finalization", () => {
       currentAttemptAssistant: undefined,
       currentAttemptCompletedAssistant: undefined,
       attemptUsage: undefined,
-      cacheBreak: null,
       lastCallUsage: undefined,
       promptCache: { published: true },
     };
@@ -473,7 +469,6 @@ describe("runEmbeddedAttemptSettledPhase stream finalization", () => {
         currentAttemptAssistant: undefined,
         currentAttemptCompletedAssistant: undefined,
         attemptUsage: undefined,
-        cacheBreak: null,
         lastCallUsage: undefined,
         promptCache: undefined,
       });
@@ -512,7 +507,6 @@ describe("runEmbeddedAttemptSettledPhase stream finalization", () => {
       currentAttemptAssistant: undefined,
       currentAttemptCompletedAssistant: undefined,
       attemptUsage: undefined,
-      cacheBreak: null,
       lastCallUsage: undefined,
       promptCache: undefined,
     });
@@ -544,7 +538,6 @@ describe("runEmbeddedAttemptSettledPhase stream finalization", () => {
         currentAttemptAssistant: undefined,
         currentAttemptCompletedAssistant: undefined,
         attemptUsage: undefined,
-        cacheBreak: null,
         lastCallUsage: undefined,
         promptCache: undefined,
       };
@@ -760,7 +753,6 @@ describe("runEmbeddedAttemptSettledPhase stream finalization", () => {
       currentAttemptAssistant: undefined,
       currentAttemptCompletedAssistant: undefined,
       attemptUsage: undefined,
-      cacheBreak: null,
       lastCallUsage: undefined,
       promptCache: undefined,
     });

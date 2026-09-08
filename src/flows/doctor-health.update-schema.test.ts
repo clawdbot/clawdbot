@@ -37,6 +37,13 @@ function readDatabase(databasePath: string) {
   try {
     return {
       version: db.prepare("PRAGMA user_version").get()?.user_version,
+      contentVersion: tableExists(db, "config_machine_state")
+        ? db
+            .prepare(
+              "SELECT value_json FROM config_machine_state WHERE state_key = 'state.schema.contentVersion'",
+            )
+            .get()?.value_json
+        : undefined,
       ledger: tableExists(db, "update_runs")
         ? db.prepare("SELECT * FROM update_runs ORDER BY run_id").all()
         : [],
@@ -57,12 +64,12 @@ describe("Doctor schema bumps under an updating parent", () => {
   });
 
   it.each([
-    { kind: "state", updaterVersion: "2026.9.2" },
-    { kind: "agent", updaterVersion: "2026.9.2" },
-    { kind: "state", updaterVersion: "2026.9.2-rebuild.1" },
+    { kind: "state", updaterVersion: "2026.9.2", missingMetadata: true },
+    { kind: "agent", updaterVersion: "2026.9.2", missingMetadata: false },
+    { kind: "agent", updaterVersion: "2026.9.2-rebuild.1", missingMetadata: false },
   ])(
     "refuses a $kind bump driven by $updaterVersion before changing database bytes, ledger, or config",
-    async ({ kind, updaterVersion }) => {
+    async ({ kind, updaterVersion, missingMetadata }) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         const shared = openOpenClawStateDatabase({ env: state.env }).path;
         const agent = openOpenClawAgentDatabase({ agentId: "main", env: state.env }).path;
@@ -73,6 +80,11 @@ describe("Doctor schema bumps under an updating parent", () => {
         const supported =
           kind === "state" ? OPENCLAW_STATE_SCHEMA_VERSION : OPENCLAW_AGENT_SCHEMA_VERSION;
         setSchemaVersion(target, supported - 1);
+        if (missingMetadata) {
+          const db = new DatabaseSync(shared);
+          db.exec("DROP TABLE config_machine_state");
+          db.close();
+        }
         const before = readDatabase(shared);
         const quarantine = state.statePath("state", "openclaw-quarantine.sqlite");
         fs.writeFileSync(quarantine, "unreadable quarantine fixture");
@@ -105,50 +117,63 @@ describe("Doctor schema bumps under an updating parent", () => {
   );
 
   it.each([
+    { ledger: "running", update: "1", driver: "2026.9.2", bump: true, deferred: true },
+    { ledger: "running", update: "1", driver: "2026.9.2-rebuild.1", bump: true, deferred: true },
     { ledger: "missing", update: "1", driver: "2026.9.1", bump: true },
-    { ledger: "finished", update: "1", driver: "2026.9.2", bump: true },
+    { ledger: "finished", update: "1", driver: "2026.9.2", bump: true, deferred: true },
     { ledger: "running", update: "1", driver: "2026.9.3", bump: true },
     { ledger: "running", update: "1", driver: "2026.9.3-beta.1", bump: true },
     { ledger: "running", update: "1", driver: "2026.10.0", bump: true },
     { ledger: "running", update: "1", driver: "2026.9.1", bump: true },
     { ledger: "running", update: "1", driver: "unknown", bump: true },
     { ledger: "running", update: "1", driver: "2026.9.2", bump: false },
-    { ledger: "running", update: undefined, driver: "2026.9.2", bump: true },
-  ])("completes real migration when permitted: %j", async ({ ledger, update, driver, bump }) => {
-    vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", update);
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const shared = openOpenClawStateDatabase({ env: state.env }).path;
-      const run = createUpdateRun({ trigger: "cli", before: { version: driver } });
-      if (ledger === "finished") {
-        finishUpdateRun(run.runId, { status: "succeeded" });
-      }
-      closeOpenClawStateDatabaseForTest();
-      if (ledger === "missing") {
-        const db = new DatabaseSync(shared);
-        try {
-          db.exec("DROP TABLE update_runs");
-        } finally {
-          db.close();
+    { ledger: "running", update: undefined, driver: "2026.9.2", bump: true, deferred: true },
+  ])(
+    "completes real migration when permitted: %j",
+    async ({ ledger, update, driver, bump, deferred }) => {
+      vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", update);
+      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        const shared = openOpenClawStateDatabase({ env: state.env }).path;
+        const run = createUpdateRun({ trigger: "cli", before: { version: driver } });
+        if (ledger === "finished") {
+          finishUpdateRun(run.runId, { status: "succeeded" });
         }
-      }
-      if (bump) {
-        setSchemaVersion(shared, OPENCLAW_STATE_SCHEMA_VERSION - 1);
-      }
-      mocks.runContributions.mockImplementation(async () => {
-        const result = repairOpenClawStateDatabaseSchema({ env: state.env });
-        expect(result.warnings).toEqual([]);
-      });
-      await runDoctorHealthFlow(
-        { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-        {
+        closeOpenClawStateDatabaseForTest();
+        if (ledger === "missing") {
+          const db = new DatabaseSync(shared);
+          try {
+            db.exec("DROP TABLE update_runs");
+          } finally {
+            db.close();
+          }
+        }
+        if (bump) {
+          setSchemaVersion(shared, OPENCLAW_STATE_SCHEMA_VERSION - 1);
+        }
+        mocks.runContributions.mockImplementation(async () => {
+          const result = repairOpenClawStateDatabaseSchema({ env: state.env });
+          expect(result.warnings).toEqual([]);
+        });
+        const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+        await runDoctorHealthFlow(runtime, {
           repair: true,
           nonInteractive: true,
-        },
-      );
-      expect(readDatabase(shared).version).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
-      expect(mocks.outro).toHaveBeenCalledWith("Doctor complete.");
-    });
-  });
+        });
+        expect(readDatabase(shared).version).toBe(
+          OPENCLAW_STATE_SCHEMA_VERSION - (deferred ? 1 : 0),
+        );
+        if (deferred) {
+          expect(readDatabase(shared).contentVersion).toBe(String(OPENCLAW_STATE_SCHEMA_VERSION));
+          expect(runtime.log).toHaveBeenCalledWith(
+            expect.stringContaining(
+              `Schema content applied; version publication deferred until update run ${run.runId} finishes`,
+            ),
+          );
+        }
+        expect(mocks.outro).toHaveBeenCalledWith("Doctor complete.");
+      });
+    },
+  );
 
   it("emits a structured refusal with a failure exit for the affected ledger writer", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -156,6 +181,9 @@ describe("Doctor schema bumps under an updating parent", () => {
       createUpdateRun({ trigger: "cli", before: { version: "2026.9.2" } });
       closeOpenClawStateDatabaseForTest();
       setSchemaVersion(shared, OPENCLAW_STATE_SCHEMA_VERSION - 1);
+      const database = new DatabaseSync(shared);
+      database.exec("DROP TABLE config_machine_state");
+      database.close();
       const runtime = {
         log: vi.fn(),
         error: vi.fn(),

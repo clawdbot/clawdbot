@@ -1,6 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { formatCliCommand } from "../../cli/command-format.js";
+import { formatDoctorStateRepairFailure } from "../../infra/state-repair-message.js";
+import { readAgentDeletionJournal } from "../../state/agent-deletion-journal.js";
 import { listOpenClawRegisteredAgentDatabases } from "../../state/openclaw-agent-db-registry.js";
 import {
   closeOpenClawAgentDatabaseByPath,
@@ -27,6 +29,7 @@ export function assertSessionStoreMigrationComplete(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   targets?: readonly { storePath: string }[];
+  operation?: "doctor";
 }): void {
   const env = params.env ?? process.env;
   const targets = params.targets ?? resolveAllAgentSessionStoreTargetsSync(params.cfg, { env });
@@ -36,7 +39,12 @@ export function assertSessionStoreMigrationComplete(params: {
   ].find((storePath) => !storePath.endsWith(".sqlite") && fs.existsSync(storePath));
   if (legacyStore) {
     throw new SessionStoreMigrationRequiredError(
-      `Legacy session store requires migration: ${legacyStore}. Run "${formatCliCommand("openclaw doctor --fix", env)}" against the same state/config before starting OpenClaw.`,
+      params.operation === "doctor"
+        ? formatDoctorStateRepairFailure(
+            `Legacy session store requires migration at ${legacyStore}`,
+            "Repair the retained source using the migration report's named file and validation error, preserving the original history.",
+          )
+        : `Legacy session store requires migration: ${legacyStore}. Run "${formatCliCommand("openclaw doctor --fix", env)}" against the same state/config before starting OpenClaw.`,
     );
   }
 }
@@ -93,6 +101,15 @@ export async function runSessionStartupMigration(params: {
       continue;
     }
     databases.add(databasePath);
+    // Retained stores remain discoverable, but only deletion cleanup may write them.
+    // Check the physical owner so surviving shared stores still reach their runtime.
+    const deletion = readAgentDeletionJournal(options.agentId, { env });
+    if (deletion) {
+      params.log.info(
+        `session: skipping deleted agent database for ${options.agentId} (${deletion.cleanupCompleted ? "cleanup complete" : "cleanup pending; retry agent deletion"})`,
+      );
+      continue;
+    }
     const alreadyOpen = isOpenClawAgentDatabaseOpen(databasePath);
     let handedOff = false;
     try {

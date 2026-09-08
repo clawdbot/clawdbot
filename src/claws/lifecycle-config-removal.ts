@@ -1,8 +1,14 @@
 import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { stableStringify } from "@openclaw/normalization-core";
-import { prepareAgentDeleteDatabases } from "../agents/agent-delete-databases.js";
-import { beginAgentDeletion } from "../agents/agent-lifecycle-registry.js";
+import {
+  assertAgentSessionStoreDeletionSafe,
+  prepareAgentDeleteDatabases,
+} from "../agents/agent-delete-databases.js";
+import {
+  withAgentDeletion,
+  type AgentDeletionOperation,
+} from "../agents/agent-lifecycle-registry.js";
 import { listAgentEntries } from "../agents/agent-scope.js";
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -12,10 +18,7 @@ import {
 } from "../gateway/server-methods/agents-config-mutations.js";
 import { withAgentExecApprovalsRemoved } from "../infra/exec-approvals.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import {
-  completeAgentDeletionJournalInDatabase,
-  readAgentDeletionJournal,
-} from "../state/agent-deletion-journal.js";
+import { readAgentDeletionJournalInDatabase } from "../state/agent-deletion-journal.js";
 import type {
   OpenClawStateDatabase,
   OpenClawStateDatabaseOptions,
@@ -76,11 +79,13 @@ async function commitClawAgentConfigRemoval(
   try {
     const committed = await deleteAgentConfigEntry({
       agentId: params.agentId,
+      assertCurrent,
       allowConfigSizeDrop: true,
       allowMissing: params.expectedState === "missing",
       fallbackWorkspace: params.fallbackWorkspace,
       validateConfig: (config) => {
         assertCurrent();
+        assertAgentSessionStoreDeletionSafe(config, params.agentId, params.stateDatabase);
         if (
           digestClawAgentRemovalSurface(config, params.agentId) !==
           params.expectedRemovalSurfaceDigest
@@ -144,139 +149,125 @@ type CommittedClawAgentRemoval = ClawAgentConfigRemovalResult & {
   assertCurrent: (database?: OpenClawStateDatabase) => void;
   drainMonitors: () => Promise<void>;
   completeDeletion: (database: OpenClawStateDatabase) => void;
-  runDatabaseCleanup: ReturnType<typeof beginAgentDeletion>["runDatabaseCleanup"];
+  runDatabaseCleanup: AgentDeletionOperation["runDatabaseCleanup"];
 };
 
 export async function withClawAgentConfigRemoval<T>(
   params: ClawAgentConfigRemovalParams,
-  apply: (commitRemoval: () => Promise<CommittedClawAgentRemoval>) => Promise<T>,
+  apply: (
+    commitRemoval: () => Promise<CommittedClawAgentRemoval>,
+    assertCurrent: () => void,
+  ) => Promise<T>,
 ): Promise<T> {
-  const config = params.config ?? getRuntimeConfig();
+  const expectedInstall = structuredClone(params.expectedInstall);
   const stateOptions = {
     ...params.stateDatabase,
     path: openOpenClawStateDatabase(params.stateDatabase).path,
   };
-  const effects = deletionEffects(
-    config,
+  return await withAgentDeletion(
     params.agentId,
-    params.fallbackWorkspace,
-    stateOptions.env,
-  );
-  const expectedInstall = structuredClone(params.expectedInstall);
-  const matchesInstall = (database: OpenClawStateDatabase) =>
-    expectedInstall === undefined ||
-    isDeepStrictEqual(
-      readClawInstallRecordFromDatabase(database.db, params.agentId) ?? null,
-      expectedInstall,
-    );
-  // Validate and claim together: a stale install snapshot must never fence a replacement.
-  const { existingJournal, deletion } = runOpenClawStateWriteTransaction((database) => {
-    if (!matchesInstall(database)) {
-      throw params.onModified();
-    }
-    const transactionOptions = { ...stateOptions, database };
-    const previousJournal = readAgentDeletionJournal(params.agentId, transactionOptions);
-    const claimedDeletion = beginAgentDeletion(
-      {
-        agentId: params.agentId,
-        workspaceDir: effects.workspace,
-        agentDir: effects.agentDir,
-        sessionsDir: effects.sessionsDir,
-        // Selective cleanup may retain modified or untracked workspace entries.
-        deleteFiles: previousJournal?.deleteFiles ?? false,
-      },
-      transactionOptions,
-    );
-    return { existingJournal: previousJournal, deletion: claimedDeletion };
-  }, stateOptions);
-  let committed = false;
-  let monitorEffectsStarted = false;
-  const ownsRemoval = (database: OpenClawStateDatabase) => {
-    if (database.path !== stateOptions.path) {
-      return false;
-    }
-    const current = readAgentDeletionJournal(params.agentId, {
-      ...stateOptions,
-      path: database.path,
-      database,
-    });
-    return (
-      current?.operationId === deletion.entry.operationId &&
-      !current.cleanupCompleted &&
-      matchesInstall(database)
-    );
-  };
-  const assertCurrent = (database?: OpenClawStateDatabase) => {
-    const check = (current: OpenClawStateDatabase) => {
-      if (!ownsRemoval(current)) {
-        throw new Error(`Claw removal no longer owns agent ${params.agentId}.`);
-      }
-    };
-    if (database) {
-      check(database);
-    } else {
-      runOpenClawStateWriteTransaction(check, stateOptions);
-    }
-  };
-  try {
-    // Fence new claims and drain existing owners before any external or local removal effect.
-    if (params.quiesceMonitors) {
-      // A lost RPC response can hide accepted cancellation. Keep the durable fence
-      // until a retry has observed the serving owner and completed cleanup.
-      monitorEffectsStarted = true;
-      await params.quiesceMonitors(deletion.entry.operationId);
-    }
-    assertCurrent();
-    prepareAgentDeleteDatabases(config, params.agentId, effects.agentDir, stateOptions);
-    return await apply(async () => {
-      assertCurrent();
-      const result = await withAgentExecApprovalsRemoved(
+    async (begin) => {
+      const config = params.config ?? getRuntimeConfig();
+      assertAgentSessionStoreDeletionSafe(config, params.agentId, stateOptions);
+      const effects = deletionEffects(
+        config,
         params.agentId,
-        async () =>
-          commitClawAgentConfigRemoval(
-            { ...params, config, stateDatabase: stateOptions },
-            assertCurrent,
-          ),
-        stateOptions,
+        params.fallbackWorkspace,
+        stateOptions.env,
       );
-      committed = true;
-      assertCurrent();
-      return {
-        ...result,
-        assertCurrent,
-        drainMonitors: async () => {
-          await params.drainMonitors?.(deletion.entry.operationId);
-        },
-        runDatabaseCleanup: deletion.runDatabaseCleanup,
-        completeDeletion: (database: OpenClawStateDatabase) => {
-          if (
-            !completeAgentDeletionJournalInDatabase(
-              database,
-              params.agentId,
-              deletion.entry.operationId,
-            )
-          ) {
-            throw new Error(`Failed to complete deletion journal for agent ${params.agentId}.`);
-          }
-        },
-      };
-    });
-  } finally {
-    // Pre-config partial results release only this attempt's fence; committed cleanup retains it.
-    if (!committed && !monitorEffectsStarted && !existingJournal) {
-      deletion.rollback();
-    }
-    if (expectedInstall) {
-      // Result construction is pure; only the live operation may publish retry status.
-      runOpenClawStateWriteTransaction((database) => {
-        if (ownsRemoval(database)) {
-          updateClawInstallRecordStatus(params.agentId, "partial", {
-            ...stateOptions,
-            path: database.path,
-            database,
-          });
+      const matchesInstall = (database: OpenClawStateDatabase) =>
+        expectedInstall === undefined ||
+        isDeepStrictEqual(
+          readClawInstallRecordFromDatabase(database.db, params.agentId) ?? null,
+          expectedInstall,
+        );
+      // Validate and claim together: a stale install snapshot must never fence a replacement.
+      const { existingJournal, deletion } = runOpenClawStateWriteTransaction((database) => {
+        if (!matchesInstall(database)) {
+          throw params.onModified();
         }
+        const previousJournal = readAgentDeletionJournalInDatabase(database, params.agentId);
+        const claimedDeletion = begin({
+          agentId: params.agentId,
+          workspaceDir: effects.workspace,
+          agentDir: effects.agentDir,
+          sessionsDir: effects.sessionsDir,
+          // Selective cleanup may retain modified or untracked workspace entries.
+          deleteFiles: previousJournal?.deleteFiles ?? false,
+        });
+        return { existingJournal: previousJournal, deletion: claimedDeletion };
       }, stateOptions);
-    }
-  }
+      let committed = false;
+      let monitorEffectsStarted = false;
+      const assertCurrent = (database?: OpenClawStateDatabase) => {
+        const check = (current: OpenClawStateDatabase) => {
+          deletion.assertCurrent(current);
+          if (!matchesInstall(current)) {
+            throw new Error(`Claw removal no longer owns agent ${params.agentId}.`);
+          }
+        };
+        if (database) {
+          check(database);
+        } else {
+          runOpenClawStateWriteTransaction(check, stateOptions);
+        }
+      };
+      try {
+        // Fence new claims and drain existing owners before any external or local removal effect.
+        if (params.quiesceMonitors) {
+          // A lost RPC response can hide accepted cancellation. Keep the durable fence
+          // until a retry has observed the serving owner and completed cleanup.
+          monitorEffectsStarted = true;
+          await params.quiesceMonitors(deletion.entry.operationId);
+        }
+        assertCurrent();
+        prepareAgentDeleteDatabases(config, params.agentId, effects.agentDir, stateOptions);
+        return await apply(async () => {
+          assertCurrent();
+          const result = await withAgentExecApprovalsRemoved(
+            params.agentId,
+            async () =>
+              commitClawAgentConfigRemoval(
+                { ...params, config, stateDatabase: stateOptions },
+                assertCurrent,
+              ),
+            stateOptions,
+          );
+          committed = true;
+          assertCurrent();
+          return {
+            ...result,
+            assertCurrent,
+            drainMonitors: async () => {
+              assertCurrent();
+              await params.drainMonitors?.(deletion.entry.operationId);
+              assertCurrent();
+            },
+            runDatabaseCleanup: deletion.runDatabaseCleanup,
+            completeDeletion: deletion.completeInTransaction,
+          };
+        }, assertCurrent);
+      } finally {
+        // Pre-config partial results release only this attempt's fence; committed cleanup retains it.
+        if (!committed && !monitorEffectsStarted && !existingJournal) {
+          deletion.rollback();
+        }
+        if (expectedInstall) {
+          // Result construction is pure; only the live operation may publish retry status.
+          runOpenClawStateWriteTransaction((database) => {
+            try {
+              assertCurrent(database);
+            } catch {
+              return;
+            }
+            updateClawInstallRecordStatus(params.agentId, "partial", {
+              ...stateOptions,
+              database,
+            });
+          }, stateOptions);
+        }
+      }
+    },
+    stateOptions,
+  );
 }

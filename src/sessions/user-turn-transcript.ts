@@ -246,8 +246,16 @@ export function createUserTurnTranscriptRecorder(
     return Object.keys(metadata).length > 0 ? { ...next, __openclaw: metadata } : next;
   };
 
-  const applyMessageOverrides = (candidate: PersistedUserTurnMessage | undefined) =>
-    rewritePersistedSteerTargetRunId(applyReplacementText(candidate), confirmedSteerTargetRunId);
+  const applyMessageOverrides = (candidate: PersistedUserTurnMessage | undefined) => {
+    const next = rewritePersistedSteerTargetRunId(
+      applyReplacementText(candidate),
+      confirmedSteerTargetRunId,
+    );
+    // Native mirrors must reuse this admission even when no transport supplied a key.
+    return next && !next.idempotencyKey
+      ? { ...next, idempotencyKey: buildRunUserTurnIdempotencyKey(logicalTurnId) }
+      : next;
+  };
 
   const handlePersistenceError = (error: unknown) => {
     if (params.onPersistenceError) {

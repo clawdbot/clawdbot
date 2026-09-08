@@ -21,17 +21,16 @@ import {
   type CodexNodeHistory,
   type CodexSessionDisposition,
 } from "./session-catalog-node-adoption.js";
+import { lookupNodeCodexCatalogRecord } from "./session-catalog-node-lookup.js";
 import {
   catalogError,
   CatalogParamsError,
   CODEX_APP_SERVER_THREADS_LIST_COMMAND,
   CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND,
-  CODEX_SESSION_CATALOG_MAX_PAGE_LIMIT,
   MAX_SESSION_ID_LENGTH,
   filterCatalogPageByTitle,
   isInteractiveThreadSource,
   boundedCatalogString,
-  MAX_ACTION_CATALOG_PAGES,
   MAX_TRANSCRIPT_PAGE_LIMIT,
   NODE_INVOKE_TIMEOUT_MS,
   parseCatalogPage,
@@ -195,44 +194,6 @@ async function requireNodeForCodexContinue(params: {
   return { node, nodeId };
 }
 
-async function resolveNodeCodexRecord(params: {
-  agentId: string;
-  runtime: PluginRuntime;
-  nodeId: string;
-  threadId: string;
-}): Promise<CodexSessionCatalogSession> {
-  let cursor: string | undefined;
-  const seenCursors = new Set<string>();
-  for (let pageIndex = 0; pageIndex < MAX_ACTION_CATALOG_PAGES; pageIndex += 1) {
-    const raw = await params.runtime.nodes.invoke({
-      nodeId: params.nodeId,
-      command: CODEX_APP_SERVER_THREADS_LIST_COMMAND,
-      params: {
-        agentId: params.agentId,
-        limit: CODEX_SESSION_CATALOG_MAX_PAGE_LIMIT,
-        ...(cursor ? { cursor } : {}),
-      },
-      timeoutMs: NODE_INVOKE_TIMEOUT_MS,
-      scopes: ["operator.write"],
-    });
-    const page = parseCatalogPage(unwrapNodeInvokePayload(raw));
-    const record = page.sessions.find((candidate) => candidate.threadId === params.threadId);
-    if (record) {
-      return record;
-    }
-    const nextCursor = page.nextCursor?.trim();
-    if (!nextCursor) {
-      break;
-    }
-    if (seenCursors.has(nextCursor)) {
-      throw new CatalogParamsError("Codex session eligibility could not be verified");
-    }
-    seenCursors.add(nextCursor);
-    cursor = nextCursor;
-  }
-  throw new CatalogParamsError("Codex session is unavailable on the paired node");
-}
-
 function requireContinuableNodeRecord(record: CodexSessionCatalogSession): void {
   if (record.archived) {
     throw new CatalogParamsError("Codex session is archived on the paired node");
@@ -308,12 +269,20 @@ async function continueNodeCodexSessionInner(params: {
     runtime: params.api.runtime,
     hostId: params.hostId,
   });
-  const record = await resolveNodeCodexRecord({
+  const lookup = await lookupNodeCodexCatalogRecord({
     agentId: params.agentId,
     runtime: params.api.runtime,
     nodeId,
     threadId: params.threadId,
   });
+  if (lookup.kind !== "found") {
+    throw new CatalogParamsError(
+      lookup.kind === "cursor-cycle"
+        ? "Codex session eligibility could not be verified"
+        : "Codex session is unavailable on the paired node",
+    );
+  }
+  const record = lookup.record;
   requireContinuableNodeRecord(record);
   const existing = findNodeAdoptedSessionEntry({
     agentId: params.agentId,

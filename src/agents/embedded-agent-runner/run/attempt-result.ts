@@ -190,13 +190,10 @@ export function completeEmbeddedAttemptResult(
   const { sessionRuntime, bootstrap, systemPrompt } = input.prepared;
   const {
     agentSession: { clientToolCallSlots, hasDeliveredSourceReply, hookRunner },
-    cacheTrace,
     trajectoryRecorder,
-    transport: { streamStrategy },
   } = sessionRuntime;
   const { subscription, deferredLifecycleOwner } = input.preparedStreamRuntime.stream;
   const { bootstrapPromptWarning } = bootstrap;
-  const promptCacheChangesForTurn = prompt.promptCacheChangesForTurn;
   const hookAgentId = input.setup.sessionAgentId;
   // Output hooks can reenter the runtime; project only the state settled before they run.
   const state = {
@@ -251,45 +248,6 @@ export function completeEmbeddedAttemptResult(
     toolMetas,
   } = subscription;
   const toolMetasNormalized = normalizeEmbeddedAttemptToolMetas(toolMetas);
-
-  if (input.preparedStreamRuntime.cache.observabilityEnabled) {
-    const cacheBreak = settled.cacheBreak;
-    if (cacheBreak) {
-      const changeSummary =
-        cacheBreak.changes?.map((change) => `${change.code}(${change.detail})`).join(", ") ??
-        "no tracked cache input change";
-      log.warn(
-        `[prompt-cache] cache read dropped ${cacheBreak.previousCacheRead} -> ${cacheBreak.cacheRead} ` +
-          `for ${attempt.provider}/${attempt.modelId} via ${streamStrategy}; ${changeSummary}`,
-      );
-      cacheTrace?.recordStage("cache:result", {
-        options: {
-          previousCacheRead: cacheBreak.previousCacheRead,
-          cacheRead: cacheBreak.cacheRead,
-          changes: cacheBreak.changes?.map((change) => ({
-            code: change.code,
-            detail: change.detail,
-          })),
-        },
-      });
-    } else if (cacheTrace && promptCacheChangesForTurn) {
-      cacheTrace.recordStage("cache:result", {
-        note: "state changed without a cache-read break",
-        options: {
-          cacheRead: state.attemptUsage?.cacheRead ?? 0,
-          changes: promptCacheChangesForTurn.map((change) => ({
-            code: change.code,
-            detail: change.detail,
-          })),
-        },
-      });
-    } else if (cacheTrace) {
-      cacheTrace.recordStage("cache:result", {
-        note: "stable cache inputs",
-        options: { cacheRead: state.attemptUsage?.cacheRead ?? 0 },
-      });
-    }
-  }
 
   if (
     attempt.operation !== "settled-tool-finalization" &&

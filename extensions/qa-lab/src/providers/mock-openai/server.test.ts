@@ -433,6 +433,25 @@ const CODEX_CUSTOM_PATCH_NAMESPACE = {
   name: "openclaw_direct",
   tools: [CODEX_CUSTOM_PATCH_TOOL],
 } as const;
+const ANTHROPIC_GUEST_CODE_MODE_TOOLS = [
+  {
+    name: "exec",
+    input_schema: {
+      type: "object",
+      properties: { code: { type: "string" } },
+      required: ["code"],
+    },
+  },
+  {
+    name: "wait",
+    input_schema: {
+      type: "object",
+      properties: { runId: { type: "string" } },
+      required: ["runId"],
+    },
+  },
+] as const;
+
 const READ_TOOL = { type: "function", name: "read" } as const;
 const MESSAGE_TOOL = { type: "function", name: "message" } as const;
 const IMAGE_GENERATE_TOOL = { type: "function", name: "image_generate" } as const;
@@ -560,13 +579,19 @@ describe("qa mock openai server", () => {
     });
 
     const retained = requireArray(
-      await fetch(`${server.baseUrl}/debug/requests`).then((response) => response.json()),
+      await getJson(server, "/debug/requests"),
       "retained debug requests",
     );
     expect(retained).toHaveLength(debugRequestLimit);
     expect(requireRecord(retained[0], "retained request 0").cursor).toBe(2);
     expect(requireRecord(retained.at(-1), "last retained request").cursor).toBe(
       debugRequestLimit + 1,
+    );
+    expect(String(requireRecord(retained[0], "retained request 0").allInputText)).toContain(
+      "cursor request 1",
+    );
+    expect(String(requireRecord(retained.at(-1), "last retained request").allInputText)).toContain(
+      "cursor request overflow",
     );
 
     const nextRequests = requireArray(
@@ -601,25 +626,6 @@ describe("qa mock openai server", () => {
     expect(await invalid.json()).toEqual({
       error: "after must be a non-negative safe integer",
     });
-  });
-
-  it("retains enough debug requests for long shared QA runs", async () => {
-    const server = await startMockServer();
-
-    for (let index = 0; index < 250; index += 1) {
-      await expectOpenAiNonStreamingResponsesJson(server, {
-        input: [makeUserInput(`debug retention request ${index}`)],
-      });
-    }
-
-    const requestLog = requireArray(await getJson(server, "/debug/requests"), "debug requests");
-    expect(requestLog).toHaveLength(250);
-    expect(String(requireRecord(requestLog[0], "debug request 0").allInputText)).toContain(
-      "debug retention request 0",
-    );
-    expect(String(requireRecord(requestLog[249], "debug request 249").allInputText)).toContain(
-      "debug retention request 249",
-    );
   });
 
   it("serves health and streamed responses", async () => {
@@ -6328,24 +6334,7 @@ Update and merge these partial structured summaries.`,
   it("routes the initial model-switch read through Anthropic guest Code Mode", async () => {
     const server = await startMockServer();
     const body = (await expectAnthropicMessagesJson(server, {
-      tools: [
-        {
-          name: "exec",
-          input_schema: {
-            type: "object",
-            properties: { code: { type: "string" } },
-            required: ["code"],
-          },
-        },
-        {
-          name: "wait",
-          input_schema: {
-            type: "object",
-            properties: { runId: { type: "string" } },
-            required: ["runId"],
-          },
-        },
-      ],
+      tools: ANTHROPIC_GUEST_CODE_MODE_TOOLS,
       messages: [
         makeAnthropicUserText(
           "Read repo/qa/scenarios/index.yaml and summarize the QA scenario pack mission in one clause before any model switch.",
@@ -7164,24 +7153,7 @@ Update and merge these partial structured summaries.`,
   it("routes Anthropic image generation through Code Mode when only exec and wait are visible", async () => {
     const server = await startMockServer();
     const body = (await expectAnthropicMessagesJson(server, {
-      tools: [
-        {
-          name: "exec",
-          input_schema: {
-            type: "object",
-            properties: { code: { type: "string" } },
-            required: ["code"],
-          },
-        },
-        {
-          name: "wait",
-          input_schema: {
-            type: "object",
-            properties: { runId: { type: "string" } },
-            required: ["runId"],
-          },
-        },
-      ],
+      tools: ANTHROPIC_GUEST_CODE_MODE_TOOLS,
       messages: [
         makeAnthropicUserText(
           "Capability flip image check: generate a QA lighthouse image in this turn right now.",
@@ -7285,24 +7257,7 @@ Update and merge these partial structured summaries.`,
 
   it("does not interpret unmarked direct exec results as Code Mode control envelopes", async () => {
     const server = await startMockServer();
-    const tools = [
-      {
-        name: "exec",
-        input_schema: {
-          type: "object",
-          properties: { code: { type: "string" } },
-          required: ["code"],
-        },
-      },
-      {
-        name: "wait",
-        input_schema: {
-          type: "object",
-          properties: { runId: { type: "string" } },
-          required: ["runId"],
-        },
-      },
-    ];
+    const tools = ANTHROPIC_GUEST_CODE_MODE_TOOLS;
     const messages = [
       makeAnthropicUserText("Direct exec envelope isolation check."),
       {
@@ -7346,24 +7301,7 @@ Update and merge these partial structured summaries.`,
     const messages: Array<Record<string, unknown>> = [makeAnthropicUserText(prompt)];
     const request = async () => {
       const response = await expectAnthropicMessages(server, {
-        tools: [
-          {
-            name: "exec",
-            input_schema: {
-              type: "object",
-              properties: { code: { type: "string" } },
-              required: ["code"],
-            },
-          },
-          {
-            name: "wait",
-            input_schema: {
-              type: "object",
-              properties: { runId: { type: "string" } },
-              required: ["runId"],
-            },
-          },
-        ],
+        tools: ANTHROPIC_GUEST_CODE_MODE_TOOLS,
         messages,
       });
       return (await response.json()) as {

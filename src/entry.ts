@@ -59,30 +59,28 @@ async function writeCapturedCliArgumentError(message: string): Promise<void> {
   console.error(`[openclaw] ${message}`);
 }
 
-async function writeCliDiagnosticBlock(message: string): Promise<void> {
-  const { loadCliDotEnv } = await import("./cli/dotenv.js");
-  loadCliDotEnv({ quiet: true });
-  await configureGatewayStartupTraceConsoleFormatting(gatewayEntryStartupTrace);
-  const { formatConsoleDiagnosticBlock } = await import("./logging/json-console-line.js");
-  process.stderr.write(formatConsoleDiagnosticBlock({ level: "error", message: `${message}\n` }));
-}
-
 async function prepareCliDiagnosticBlockWriter(): Promise<
-  (message: string, error?: unknown) => void
+  (message: string, error?: unknown) => void | Promise<void>
 > {
-  const { loadCliDotEnv } = await import("./cli/dotenv.js");
-  loadCliDotEnv({ quiet: true });
-  await configureGatewayStartupTraceConsoleFormatting(gatewayEntryStartupTrace);
-  const { formatConsoleDiagnosticBlock } = await import("./logging/json-console-line.js");
-  return (message, error) => {
-    const formatted = error === undefined ? message : format(message, error);
-    process.stderr.write(
-      formatConsoleDiagnosticBlock({
-        level: "error",
-        message: formatted.endsWith("\n") ? formatted : `${formatted}\n`,
-      }),
-    );
+  const loadWriter = async (): Promise<(message: string, error?: unknown) => void> => {
+    const { loadCliDotEnv } = await import("./cli/dotenv.js");
+    loadCliDotEnv({ quiet: true });
+    await configureGatewayStartupTraceConsoleFormatting(gatewayEntryStartupTrace);
+    const { formatConsoleDiagnosticBlock } = await import("./logging/json-console-line.js");
+    return (message, error) => {
+      const formatted = error === undefined ? message : format(message, error);
+      process.stderr.write(
+        formatConsoleDiagnosticBlock({
+          level: "error",
+          message: formatted.endsWith("\n") ? formatted : `${formatted}\n`,
+        }),
+      );
+    };
   };
+  // Explicit traces flush before spawn; successful untraced parents need no diagnostics.
+  return gatewayEntryStartupTrace.enabled
+    ? loadWriter()
+    : async (message, error) => (await loadWriter())(message, error);
 }
 
 async function flushEntryStartupTraceForEarlyReturn(argv: string[]): Promise<void> {
@@ -238,7 +236,8 @@ export async function tryHandleRootHelpFastPath(
     deps.onError ??
     (async (error: unknown) => {
       const detail = error instanceof Error ? (error.stack ?? error.message) : String(error);
-      await writeCliDiagnosticBlock(`[openclaw] Failed to display help: ${detail}`);
+      const writeError = await prepareCliDiagnosticBlockWriter();
+      await writeError(`[openclaw] Failed to display help: ${detail}\n`);
       process.exit(1);
     });
   try {

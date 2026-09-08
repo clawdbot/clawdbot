@@ -570,6 +570,7 @@ describe("renderSessionsCard", () => {
       recent?: string[];
       tab?: Parameters<typeof renderSessionsCard>[7];
       onSelect?: Parameters<typeof renderSessionsCard>[8];
+      totalSessions?: number;
     } = {},
   ) => {
     const container = document.createElement("div");
@@ -588,13 +589,131 @@ describe("renderSessionsCard", () => {
         noop,
         noop,
         [],
-        sessions.length,
+        options.totalSessions ?? sessions.length,
         noop,
       ),
       container,
     );
     return container;
   };
+
+  const shownCountCases: Array<{
+    name: string;
+    sessionCount: number;
+    options?: Parameters<typeof renderCard>[1];
+    shown: number;
+    header: string;
+    empty?: string;
+    more?: string;
+    primaryLabels?: string[];
+    selectedLabel?: string;
+  }> = [
+    {
+      name: "empty All list",
+      sessionCount: 0,
+      shown: 0,
+      header: "0 shown",
+      empty: "No sessions in range",
+    },
+    {
+      name: "All list below the display cap",
+      sessionCount: 3,
+      shown: 3,
+      header: "3 shown",
+    },
+    {
+      name: "All list above the display cap",
+      sessionCount: 51,
+      shown: 50,
+      header: "50 shown · 51 total",
+      more: "+1 more",
+    },
+    {
+      name: "empty Recently viewed list",
+      sessionCount: 3,
+      options: { tab: "recent" },
+      shown: 0,
+      header: "0 shown · 3 total",
+      empty: "No recent sessions",
+    },
+    {
+      name: "Recently viewed list with a separate selected comparison",
+      sessionCount: 3,
+      options: {
+        tab: "recent",
+        recent: ["session-2", "missing", "session-0"],
+        selected: ["session-0", "session-1"],
+      },
+      shown: 2,
+      header: "2 shown · 3 total",
+      primaryLabels: ["Session 2", "Session 0"],
+      selectedLabel: "Selected (2)",
+    },
+    {
+      name: "Recently viewed list whose keys no longer match",
+      sessionCount: 3,
+      options: { tab: "recent", recent: ["missing"] },
+      shown: 0,
+      header: "0 shown · 3 total",
+      empty: "No recent sessions",
+    },
+    {
+      name: "filtered All list with its original total",
+      sessionCount: 3,
+      options: { totalSessions: 7 },
+      shown: 3,
+      header: "3 shown · 7 total",
+    },
+    {
+      name: "filtered Recently viewed list with its original total",
+      sessionCount: 3,
+      options: { tab: "recent", recent: ["session-1", "missing"], totalSessions: 7 },
+      shown: 1,
+      header: "1 shown · 7 total",
+      primaryLabels: ["Session 1"],
+    },
+  ];
+
+  it.each(shownCountCases)("reports the rows shown in the $name", (scenario) => {
+    const sessions: UsageSessionEntry[] = Array.from(
+      { length: scenario.sessionCount },
+      (_, index) => ({
+        key: `session-${index}`,
+        label: `Session ${index}`,
+        usage: {
+          ...totals,
+          input: 100 - index,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 100 - index,
+        },
+      }),
+    );
+    const container = renderCard(sessions, scenario.options);
+    const primaryList = container.querySelector(".sessions-card > .session-bars");
+    expect(primaryList?.querySelectorAll(".session-bar-row").length ?? 0).toBe(scenario.shown);
+    expect(
+      container
+        .querySelector(".sessions-card-header .sessions-card-count")
+        ?.textContent?.replace(/\s+/g, " ")
+        .trim(),
+    ).toBe(scenario.header);
+    expect(container.querySelector(".usage-empty-block")?.textContent?.trim()).toBe(scenario.empty);
+    expect(container.querySelector(".usage-more-sessions")?.textContent?.trim()).toBe(
+      scenario.more,
+    );
+    expect(
+      container.querySelector(".sessions-selected-group .sessions-card-count")?.textContent?.trim(),
+    ).toBe(scenario.selectedLabel);
+    if (scenario.primaryLabels) {
+      expect(
+        [...(primaryList?.querySelectorAll(".session-bar-title") ?? [])].map((label) =>
+          label.textContent?.trim(),
+        ),
+      ).toEqual(scenario.primaryLabels);
+    }
+  });
 
   it.each([
     { copied: true, feedback: "Copied!" },

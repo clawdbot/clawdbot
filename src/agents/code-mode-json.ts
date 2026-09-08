@@ -1,7 +1,10 @@
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
 import { toolResultFitsBudget, type ToolResultBudget } from "./tool-result-limits.js";
-import { renderToolSearchControlText } from "./tool-search-control-result.js";
+import {
+  renderToolSearchControlText,
+  serializeToolSearchControlResult,
+} from "./tool-search-control-result.js";
 
 export function toCodeModeJsonSafe(value: unknown): unknown {
   if (value === undefined) {
@@ -139,14 +142,6 @@ function createTruncationMarker(source: CodeModeJsonSource, maxBytes: number) {
   };
 }
 
-/** Nested bridge markers are ordinary guest data when later emitted or returned. */
-export function boundCodeModeValue(value: unknown, maxBytes: number): unknown {
-  const source = captureCodeModeValue(value, maxBytes);
-  return source.kind === "complete" && sourceBytes(source) <= maxBytes
-    ? (JSON.parse(source.json) as unknown)
-    : createTruncationMarker(source, maxBytes)(maxBytes);
-}
-
 function createErrorFitter(error: string, maxBytes: number) {
   const suffix = " [error truncated]";
   const fit = createJsonPrefixFitter(error, maxBytes, () => suffix.length);
@@ -219,7 +214,7 @@ export class CodeModeOutputState {
     const project = this.createProjector(params);
     const fits = (candidate: ReturnType<typeof project>) => {
       const rendered = renderToolSearchControlText(
-        JSON.stringify({ ...metadata, ...candidate.channels }, null, 2),
+        serializeToolSearchControlResult({ ...metadata, ...candidate.channels }, true),
         networkContent,
       );
       return !rendered.truncated && toolResultFitsBudget(rendered.text, this.modelBudget);

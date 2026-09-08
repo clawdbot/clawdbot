@@ -3,6 +3,7 @@ import type { MsgContext } from "../../auto-reply/templating.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import {
   resolveAccessStorePath,
@@ -20,7 +21,12 @@ import {
   forkSessionTranscriptFromParent,
   resolveSessionParentForkDecision,
 } from "./session-accessor.sqlite-parent-session.js";
-import { appendTranscriptEvent } from "./session-accessor.sqlite-transcript-write.js";
+import {
+  resolveSqliteTranscriptScope,
+  runExclusiveSqliteSessionWrite,
+  toDatabaseOptions,
+} from "./session-accessor.sqlite-scope.js";
+import { ensureTranscriptHeader } from "./session-accessor.sqlite-transcript-store.js";
 import type {
   SessionAccessScope,
   SessionEntryUpdateOptions,
@@ -36,7 +42,6 @@ import type {
   SessionEntryCreateWithTranscriptOptions,
 } from "./session-accessor.types.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
-import { createSessionTranscriptHeader } from "./transcript-header.js";
 import type { GroupKeyResolution, InternalSessionEntry as SessionEntry } from "./types.js";
 
 export async function forkSessionFromParentTranscript(
@@ -78,21 +83,24 @@ export async function createSessionEntryWithTranscript<TError = string>(
   if (!created.ok) {
     return { ok: false, error: created.error, phase: "entry" };
   }
+  const { cwd, commitGuard } = options;
 
   try {
-    await appendTranscriptEvent(
-      {
-        ...storeScope,
-        sessionId: created.entry.sessionId,
-        sessionKey: normalizedKey,
-      },
-      createSessionTranscriptHeader({ cwd: options.cwd, sessionId: created.entry.sessionId }),
-      options.commitGuard ? { beforeCommitInTransaction: options.commitGuard } : undefined,
-    );
+    const transcriptScope = resolveSqliteTranscriptScope({
+      ...storeScope,
+      sessionId: created.entry.sessionId,
+      sessionKey: normalizedKey,
+    });
+    await runExclusiveSqliteSessionWrite(transcriptScope, async () => {
+      runOpenClawAgentWriteTransaction((database) => {
+        commitGuard?.();
+        ensureTranscriptHeader(database, transcriptScope, cwd);
+      }, toDatabaseOptions(transcriptScope));
+    });
   } catch (err) {
     // Preserve authority errors from the commit guard instead of projecting
     // them as transcript failures at the Gateway boundary.
-    options.commitGuard?.();
+    commitGuard?.();
     return {
       ok: false,
       error: formatErrorMessage(err),
@@ -106,7 +114,7 @@ export async function createSessionEntryWithTranscript<TError = string>(
     removals: legacyKeys.map((sessionKey) => ({ sessionKey })),
     upserts: [{ sessionKey: normalizedKey, entry }],
     skipMaintenance: true,
-    ...(options.commitGuard ? { beforeCommitInTransaction: options.commitGuard } : {}),
+    ...(commitGuard ? { beforeCommitInTransaction: commitGuard } : {}),
   });
   return { ok: true, entry, sessionFile: normalizedKey };
 }
@@ -120,13 +128,7 @@ export function cloneSessionEntries(
 }
 
 function collectSessionEntryKeys(...entries: SessionEntry[]): Array<keyof SessionEntry> {
-  const keys = new Set<keyof SessionEntry>();
-  for (const entry of entries) {
-    for (const key of Object.keys(entry) as Array<keyof SessionEntry>) {
-      keys.add(key);
-    }
-  }
-  return [...keys];
+  return [...new Set(entries.flatMap((entry) => Object.keys(entry) as Array<keyof SessionEntry>))];
 }
 
 function sessionEntryFieldEqual(

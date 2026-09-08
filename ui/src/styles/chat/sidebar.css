@@ -1409,6 +1409,21 @@ openclaw-session-discussion {
   min-height: 0;
 }
 
+.sidebar-attachment-preview__text {
+  min-width: 0;
+  margin: 16px 0 0;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 13px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  tab-size: 4;
+}
+
 .sidebar-attachment-preview__image {
   display: block;
   width: 100%;

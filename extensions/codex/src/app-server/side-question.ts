@@ -1000,7 +1000,7 @@ export async function runCodexAppServerSideQuestion(
     if (!trimmed) {
       throw new Error("Codex /btw completed without an answer.");
     }
-    return { text: trimmed };
+    return { text: trimmed, usage: result.usage };
   } finally {
     try {
       // Cleanup aborts are ownership teardown, not a terminal run outcome.

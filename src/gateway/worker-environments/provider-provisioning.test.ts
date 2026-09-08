@@ -5,7 +5,9 @@ import {
   type WorkerExecutionMode,
   type WorkerLease,
   type WorkerProfile,
+  type WorkerProvider,
 } from "../../plugins/types.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { hashWorkerCredential } from "./credential.js";
 import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider-identity.js";
 import * as support from "./service.test-support.js";
@@ -14,6 +16,123 @@ type WorkerEnvironmentServiceError = support.WorkerEnvironmentServiceError;
 
 describe("worker environment service", () => {
   support.setupWorkerEnvironmentServiceSuite();
+
+  it("prepares a fresh request before persisting allocation possibility", async () => {
+    const provision = vi.fn();
+    const allocate = vi.fn(async () => {
+      expect(support.testState.store.list()[0]).toMatchObject({ state: "provisioning" });
+      return { leaseId: "lease-prepared", ssh: support.SSH_ENDPOINT };
+    });
+    const prepareProvision = vi.fn<NonNullable<WorkerProvider["prepareProvision"]>>(
+      async (profile, operationId, options) => {
+        expect(support.testState.store.list()[0]).toMatchObject({
+          state: "requested",
+          provisionOperationId: operationId,
+        });
+        expect(profile).toEqual({ region: "test" });
+        expect(options).toEqual({ machineClass: "large" });
+        return allocate;
+      },
+    );
+    const service = support.createService(support.createProvider({ provision, prepareProvision }));
+    await expect(service.create("development", "prepared-request", "large")).resolves.toMatchObject(
+      { state: "ready", leaseId: "lease-prepared" },
+    );
+    expect(prepareProvision).toHaveBeenCalledOnce();
+    expect(allocate).toHaveBeenCalledOnce();
+    expect(provision).not.toHaveBeenCalled();
+  });
+
+  it.each(["abort", "timeout"])(
+    "never allocates from preparation closed by %s",
+    async (closure) => {
+      const entered = createDeferredCore();
+      const settled = createDeferredCore();
+      const allocate = vi.fn(async () => ({ leaseId: "lease-late", ssh: support.SSH_ENDPOINT }));
+      const destroy = vi.fn();
+      const controller = new AbortController();
+      const service = support.createService(
+        support.createProvider({
+          prepareProvision: async () => {
+            entered.resolve();
+            await settled.promise;
+            return allocate;
+          },
+          destroy,
+        }),
+        closure === "timeout" ? { providerCallTimeoutMs: 25 } : {},
+      );
+      const creation = service
+        .create(
+          "development",
+          "closed-preparation",
+          undefined,
+          undefined,
+          undefined,
+          controller.signal,
+        )
+        .catch((error: unknown) => error);
+      await entered.promise;
+      if (closure === "abort") {
+        controller.abort(new Error("Stop before allocation"));
+        settled.resolve();
+      }
+      await creation;
+      settled.resolve();
+      const environment = support.testState.store.list()[0]!;
+      await service.destroy(environment.environmentId);
+      await service.stop();
+      expect(support.testState.store.get(environment.environmentId)).toMatchObject({
+        state: "failed",
+        leaseId: null,
+      });
+      expect(allocate).not.toHaveBeenCalled();
+      expect(destroy).not.toHaveBeenCalled();
+    },
+  );
+
+  it("does not invoke a late prepared allocation after replay times out", async () => {
+    const entered = createDeferredCore();
+    const settled = createDeferredCore();
+    const lateAllocation = vi.fn(async () => ({ leaseId: "lease-1", ssh: support.SSH_ENDPOINT }));
+    let preparations = 0;
+    const service = support.createService(
+      support.createProvider({
+        prepareProvision: async () => {
+          if (++preparations === 1) {
+            return async () => {
+              throw new Error("synthetic response lost after allocation");
+            };
+          }
+          entered.resolve();
+          await settled.promise;
+          return lateAllocation;
+        },
+      }),
+      { providerCallTimeoutMs: 25 },
+    );
+    await expect(service.create("development", "replayed-preparation")).rejects.toThrow(
+      "response lost after allocation",
+    );
+    const replay = service
+      .create("development", "replayed-preparation")
+      .catch((error: unknown) => error);
+    await entered.promise;
+    await replay;
+    expect(support.testState.store.list()[0]).toMatchObject({
+      state: "provisioning",
+      leaseId: null,
+    });
+    settled.resolve();
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(lateAllocation).not.toHaveBeenCalled();
+    expect(support.testState.store.list()[0]).toMatchObject({
+      state: "provisioning",
+      leaseId: null,
+    });
+  });
 
   it("persists intent and an immutable profile snapshot before provisioning", async () => {
     const operationIds: string[] = [];

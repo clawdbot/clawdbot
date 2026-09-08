@@ -1424,6 +1424,36 @@ describe("bundled plugin install/uninstall probe", () => {
     expect(fs.existsSync(path.dirname(env.HOME))).toBe(false);
   });
 
+  it("uses the candidate TTS config dialect only for the selected legacy plugin profile", async () => {
+    const frozen = await withEnvAsync(
+      { OPENCLAW_FROZEN_PLUGIN_PRERELEASE_FIXTURE_DIALECT: "legacy" },
+      async () => {
+        const runtimeSmoke = await import(pathToFileURL(runtimeSmokePath).href);
+        const configured = runtimeSmoke.withSmokeTtsConfig(
+          { messages: { other: true } },
+          { enabled: false },
+        );
+        return { configured, tts: runtimeSmoke.readSmokeTtsConfig(configured) };
+      },
+    );
+    expect(frozen.configured).toEqual({ messages: { other: true, tts: { enabled: false } } });
+    expect(frozen.tts).toEqual({ enabled: false });
+
+    const current = await withEnvAsync(
+      { OPENCLAW_FROZEN_PLUGIN_PRERELEASE_FIXTURE_DIALECT: undefined },
+      async () => {
+        const runtimeSmoke = await import(pathToFileURL(runtimeSmokePath).href);
+        const configured = runtimeSmoke.withSmokeTtsConfig(
+          { messages: { other: true } },
+          { enabled: false },
+        );
+        return { configured, tts: runtimeSmoke.readSmokeTtsConfig(configured) };
+      },
+    );
+    expect(current.configured).toEqual({ messages: { other: true }, tts: { enabled: false } });
+    expect(current.tts).toEqual({ enabled: false });
+  });
+
   it("selects packaged installable bundled sources instead of raw dist extension dirs", () => {
     const root = makePackageRoot();
     fs.mkdirSync(path.join(root, "dist", "extensions", "qa-channel"), { recursive: true });

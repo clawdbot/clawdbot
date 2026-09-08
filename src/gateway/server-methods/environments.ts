@@ -20,6 +20,10 @@ import { NODE_DESKTOP_STREAM_COMMAND } from "../../shared/node-desktop-stream.js
 import type { NodeListNode } from "../../shared/node-list-types.js";
 import { isDesktopCredentialsRequiredError } from "../desktop/host-source-errors.js";
 import { getNodeDesktopService } from "../desktop/node-source-context.js";
+import {
+  resolveDesktopObserveRequester,
+  type DesktopObserveRequester,
+} from "../desktop/observe-requester.js";
 import { WRITE_SCOPE, authorizeOperatorScopesForRequiredScope } from "../method-scopes.js";
 import { createKnownNodeCatalog, listKnownNodes } from "../node-catalog.js";
 import {
@@ -271,6 +275,7 @@ async function respondDesktopObserve(params: {
   request: DesktopObserveParams;
   respond: RespondFn;
   context: GatewayRequestContext;
+  requester?: DesktopObserveRequester;
 }) {
   if (params.request.source.kind === "host") {
     if (params.context.getRuntimeConfig().desktop?.host?.enabled !== true) {
@@ -300,6 +305,7 @@ async function respondDesktopObserve(params: {
         true,
         await params.context.hostDesktopService.observe({
           control: params.request.control ?? false,
+          requester: params.requester,
           ...("credentials" in params.request && params.request.credentials
             ? { credentials: params.request.credentials }
             : {}),
@@ -353,6 +359,7 @@ async function respondDesktopObserve(params: {
         await service.observe({
           nodeId: params.request.source.nodeId,
           control: params.request.control ?? false,
+          requester: params.requester,
           ...("credentials" in params.request && params.request.credentials
             ? { credentials: params.request.credentials }
             : {}),
@@ -395,6 +402,7 @@ async function respondDesktopObserve(params: {
     const result = await service.observeDesktop({
       environmentId: params.request.source.environmentId,
       control: params.request.control ?? false,
+      requester: params.requester,
     });
     params.respond(true, result, undefined);
   } catch (error) {
@@ -577,7 +585,13 @@ export const environmentsHandlers: GatewayRequestHandlers = {
       "worker environment destruction failed",
     );
   },
-  "worker.desktop.observe": async ({ params, respond, context }) => {
+  "worker.desktop.observe": async ({
+    params,
+    respond,
+    context,
+    client,
+    hasCurrentClientAuthority,
+  }) => {
     if (
       !assertValidParams(
         params,
@@ -595,6 +609,7 @@ export const environmentsHandlers: GatewayRequestHandlers = {
       },
       respond,
       context,
+      requester: resolveDesktopObserveRequester({ client, hasCurrentClientAuthority }),
     });
   },
   "worker.desktop.launch": async ({ params, respond, context }) => {
@@ -615,11 +630,16 @@ export const environmentsHandlers: GatewayRequestHandlers = {
       context,
     });
   },
-  "desktop.observe": async ({ params, respond, context }) => {
+  "desktop.observe": async ({ params, respond, context, client, hasCurrentClientAuthority }) => {
     if (!assertValidParams(params, validateDesktopObserveParams, "desktop.observe", respond)) {
       return;
     }
-    await respondDesktopObserve({ request: params, respond, context });
+    await respondDesktopObserve({
+      request: params,
+      respond,
+      context,
+      requester: resolveDesktopObserveRequester({ client, hasCurrentClientAuthority }),
+    });
   },
   "desktop.launch": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateDesktopLaunchParams, "desktop.launch", respond)) {

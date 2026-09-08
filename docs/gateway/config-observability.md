@@ -34,7 +34,7 @@ message, and target ids. Run/tool session keys remain available for correlation
 and can themselves contain platform account or peer ids. Records
 expire after 30 days and the ledger is capped at 100,000 rows. Query them with
 [`openclaw audit`](/cli/audit) or the
-[`audit.activity.list`](/gateway/protocol#audit-ledger-rpc) Gateway RPC. See
+[`audit.activity.list`](/gateway/protocol/ledgers#audit-ledger-rpc) Gateway RPC. See
 [Audit history](/gateway/audit) for the full data model, privacy semantics,
 and coverage limits.
 

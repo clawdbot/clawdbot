@@ -3,12 +3,15 @@ import { Command } from "commander";
 import type { Mock } from "vitest";
 import { vi } from "vitest";
 import { getRuntimeConfig } from "../config/config.js";
+import type { ConfigWriteOptions } from "../config/io.types.js";
+import type { ConfigReplaceInput } from "../config/mutate.js";
 import type { HookInstallRecord } from "../config/types.hooks.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { PLUGIN_INSTALL_ERROR_CODE } from "../plugins/install-types.js";
 import type { InstalledPluginIndex } from "../plugins/installed-plugin-index.js";
 import { recordPluginManifestInstallOwner } from "../plugins/manifest-install-owner.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { invokePluginArtifactInstallMock } from "../plugins/test-helpers/install-fixtures.js";
 import type { CliMockOutputRuntime } from "./test-runtime-capture.js";
 
@@ -59,6 +62,7 @@ function createEmptyUninstallActions() {
 let mockInstalledPluginIndexInstallRecords: PluginInstallRecordMap = {};
 let mockHookInstallRecords: Record<string, HookInstallRecord> = {};
 let mockInstalledPluginIndexRevision = 0;
+const mockPersistedConfigs = new Map<string, OpenClawConfig>();
 
 export function setHookInstallRecords(records: Record<string, HookInstallRecord>): void {
   mockHookInstallRecords = structuredClone(records);
@@ -166,6 +170,8 @@ export const buildPluginRegistrySnapshotReportMock: UnknownMock = vi.fn();
 export const buildPluginInspectReportMock: UnknownMock = vi.fn();
 export const buildAllPluginInspectReportsMock: UnknownMock = vi.fn();
 export const buildPluginDiagnosticsReportMock: UnknownMock = vi.fn();
+export const withPluginDiagnosticsReportForInspectionMock =
+  vi.fn<(typeof import("../plugins/status.js"))["withPluginDiagnosticsReportForInspection"]>();
 export const buildPluginCompatibilityNoticesMock: UnknownMock = vi.fn();
 export const inspectPluginRegistryMock: AsyncUnknownMock = vi.fn();
 export const refreshPluginRegistryMock: AsyncUnknownMock = vi.fn();
@@ -276,6 +282,31 @@ vi.mock("./plugins-update-gateway-signal.js", () => ({
   notifyGatewayPluginMetadataChanged: (...args: unknown[]) =>
     notifyGatewayPluginMetadataChangedMock(...args),
 }));
+
+vi.mock("../config/io.factory.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/io.factory.js")>();
+  return {
+    ...actual,
+    createConfigIO: (options: Parameters<typeof actual.createConfigIO>[0]) => ({
+      ...actual.createConfigIO(options),
+      readConfigFileSnapshot: async () => {
+        const snapshot = await invokeMock<
+          [],
+          ReturnType<ReturnType<typeof actual.createConfigIO>["readConfigFileSnapshot"]>
+        >(readConfigFileSnapshotMock);
+        const configPath = options?.configPath ?? snapshot.path;
+        const config = structuredClone(mockPersistedConfigs.get(configPath) ?? snapshot.config);
+        return {
+          ...snapshot,
+          path: configPath,
+          config,
+          runtimeConfig: config,
+          sourceConfig: config,
+        };
+      },
+    }),
+  };
+});
 
 vi.mock("../config/config.js", () => ({
   assertConfigWriteAllowedInCurrentMode: () => {
@@ -478,6 +509,9 @@ vi.mock("../plugins/manifest-registry.js", async (importOriginal) => {
 });
 
 vi.mock("../plugins/status.js", () => ({
+  withPluginDiagnosticsReportForInspection: (
+    ...args: Parameters<typeof withPluginDiagnosticsReportForInspectionMock>
+  ) => withPluginDiagnosticsReportForInspectionMock(...args),
   buildPluginSnapshotReport: ((
     ...args: Parameters<(typeof import("../plugins/status.js"))["buildPluginSnapshotReport"]>
   ) =>
@@ -899,6 +933,7 @@ export function resetPluginsCliTestState() {
   recordPluginInstallMock.mockReset();
   mockInstalledPluginIndexInstallRecords = {};
   mockInstalledPluginIndexRevision = 0;
+  mockPersistedConfigs.clear();
   loadInstalledPluginIndexInstallRecords.mockReset();
   writePersistedInstalledPluginIndexInstallRecords.mockReset();
   writePersistedInstalledPluginIndexInstallRecordsWithLeaseMock.mockReset();
@@ -910,6 +945,10 @@ export function resetPluginsCliTestState() {
   buildPluginInspectReportMock.mockReset();
   buildAllPluginInspectReportsMock.mockReset();
   buildPluginDiagnosticsReportMock.mockReset();
+  withPluginDiagnosticsReportForInspectionMock.mockReset();
+  withPluginDiagnosticsReportForInspectionMock.mockImplementation(async (_params, formatReport) =>
+    formatReport({ ...createEmptyPluginRegistry(), workspaceScope: "omitted" }),
+  );
   buildPluginCompatibilityNoticesMock.mockReset();
   inspectPluginRegistryMock.mockReset();
   refreshPluginRegistryMock.mockReset();
@@ -968,10 +1007,15 @@ export function resetPluginsCliTestState() {
     };
   });
   configWriteMock.mockResolvedValue(undefined);
-  replaceConfigFileMock.mockImplementation(
-    (async (params: { nextConfig: OpenClawConfig }) =>
-      await configWriteMock(params.nextConfig)) as (...args: unknown[]) => Promise<unknown>,
-  );
+  replaceConfigFileMock.mockImplementation((async (
+    params: ConfigReplaceInput & { writeOptions?: ConfigWriteOptions },
+  ) => {
+    const nextConfig = params.sourceConfig ?? params.nextConfig;
+    await configWriteMock(nextConfig);
+    const configPath = params.writeOptions?.ownedConfigPathForWrite ?? "/tmp/openclaw-config.json5";
+    mockPersistedConfigs.set(configPath, structuredClone(nextConfig));
+    return { path: configPath, nextConfig };
+  }) as (...args: unknown[]) => Promise<unknown>);
   resolveStateDir.mockReturnValue("/tmp/openclaw-state");
   resolveMarketplaceInstallShortcutMock.mockResolvedValue(null);
   installPluginFromMarketplaceMock.mockResolvedValue({

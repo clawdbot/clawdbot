@@ -1,4 +1,4 @@
-import { copyFileSync, cpSync, mkdirSync } from "node:fs";
+import { copyFileSync, cpSync, mkdirSync, realpathSync, symlinkSync } from "node:fs";
 import path from "node:path";
 
 export function copyDockerSchedulerHarness(root: string) {
@@ -39,6 +39,14 @@ export function copyDockerSchedulerHarness(root: string) {
     "scripts/e2e/lib/upgrade-survivor/config-recipe",
     path.join(upgradeSurvivorDir, "config-recipe"),
     { recursive: true },
+  );
+  // Real release jobs install their TypeScript toolchain in the harness before execution.
+  const modulesDir = path.join(root, "node_modules");
+  mkdirSync(modulesDir);
+  symlinkSync(
+    realpathSync(path.join("node_modules", "tsx")),
+    path.join(modulesDir, "tsx"),
+    process.platform === "win32" ? "junction" : "dir",
   );
   return scriptsDir;
 }

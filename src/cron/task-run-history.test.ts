@@ -2,10 +2,10 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
 import { FAILOVER_REASONS } from "../../packages/gateway-protocol/src/failover-reasons.js";
-import { saveTaskRegistryStateToSqlite } from "../tasks/task-registry.store.sqlite.js";
 import type { TaskRecord } from "../tasks/task-registry.types.js";
 import { resetTaskRegistryForTests } from "../tasks/task-runtime.test-helpers.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { seedTaskRegistryRowsForTests } from "../test-utils/task-registry-sqlite.js";
 import type { CronRunLogEntry } from "./run-log-types.js";
 import { CronService } from "./service.js";
 import { createNoopLogger } from "./service.test-harness.js";
@@ -312,12 +312,11 @@ describe("cron task run history", () => {
             nextRunAtMs: 5_000,
           },
         ];
-        saveTaskRegistryStateToSqlite({
-          tasks: new Map(
+        seedTaskRegistryRowsForTests(
+          new Map(
             entries.map((entry, index) => [`task-${index}`, taskFromEntry(entry, index, storeKey)]),
-          ),
-          deliveryStates: new Map(),
-        });
+          ).values(),
+        );
         const ledger = readCronTaskRunHistoryPage({ storeKey, jobId: JOB_ID, limit: 50 });
         const expected = entries
           .map((entry, index) => cronTaskRecordToRunLogEntry(taskFromEntry(entry, index, storeKey)))
@@ -373,8 +372,8 @@ describe("cron task run history", () => {
             durationMs: 0,
           },
         ];
-        saveTaskRegistryStateToSqlite({
-          tasks: new Map([
+        seedTaskRegistryRowsForTests(
+          new Map([
             ...entries.map(
               (entry, index) => [`task-${index}`, taskFromEntry(entry, index, storeKey)] as const,
             ),
@@ -404,9 +403,8 @@ describe("cron task run history", () => {
                 detail: { kind: "cron-run", status: "ok" },
               },
             ] as const,
-          ]),
-          deliveryStates: new Map(),
-        });
+          ]).values(),
+        );
 
         expect(
           readCronTaskRunHistoryPage({ storeKey, jobId: JOB_ID, limit: 1, offset: 1 }),
@@ -451,13 +449,12 @@ describe("cron task run history", () => {
           status: "error",
           error: "store b",
         };
-        saveTaskRegistryStateToSqlite({
-          tasks: new Map([
+        seedTaskRegistryRowsForTests(
+          new Map([
             ["store-a", { ...taskFromEntry(entryA, 1, storeA), taskId: "store-a" }],
             ["store-b", { ...taskFromEntry(entryB, 2, storeB), taskId: "store-b" }],
-          ]),
-          deliveryStates: new Map(),
-        });
+          ]).values(),
+        );
 
         expect(readCronTaskRunHistoryPage({ storeKey: storeA, jobId: JOB_ID })).toMatchObject({
           entries: [expect.objectContaining({ summary: "store a" })],

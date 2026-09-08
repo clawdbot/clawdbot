@@ -218,9 +218,12 @@ describe("runtime auth profile snapshots", () => {
     }
   });
 
-  it("notifies when provider credential order changes", () => {
+  it.each([
+    { change: "provider priority", state: { order: { openai: [] } } },
+    { change: "provider priority ownership", state: { runtimeLocalOrderProviderIds: [] } },
+  ])("notifies when $change changes", ({ state }) => {
     const agentDir = "/tmp/openclaw-auth-runtime-order";
-    const store = createStore("order");
+    const store = { ...createStore("order"), runtimeLocalOrderProviderIds: ["openai"] };
     setRuntimeAuthProfileStoreSnapshot(store, agentDir);
     const listener = vi.fn();
     const unregister = registerRuntimeAuthProfileStoreMutationListener(listener);
@@ -230,7 +233,7 @@ describe("runtime auth profile snapshots", () => {
           agentDir,
           store: {
             ...store,
-            order: { openai: [] },
+            ...state,
           },
         },
       ]);
@@ -326,8 +329,9 @@ describe("runtime auth profile snapshots", () => {
     const structuredCloneSpy = vi.spyOn(globalThis, "structuredClone");
     const agentDir = "/tmp/openclaw-auth-runtime-snapshot-agent";
     try {
-      const stored = createStore("access-1");
+      const stored = { ...createStore("access-1"), runtimeLocalOrderProviderIds: ["openai"] };
       setRuntimeAuthProfileStoreSnapshot(stored, agentDir);
+      stored.runtimeLocalOrderProviderIds.push("mutated");
       expectDefined(
         stored.profiles["openai:default"],
         'stored.profiles["openai:default"] test invariant',
@@ -337,6 +341,7 @@ describe("runtime auth profile snapshots", () => {
       const first = getRuntimeAuthProfileStoreSnapshotCore(agentDir);
       expectOpenAICodexSnapshotCredential(first, { access: "access-1" });
       expect(first?.order?.["openai"]).toEqual(["openai:default"]);
+      expect(first?.runtimeLocalOrderProviderIds).toEqual(["openai"]);
 
       const firstSnapshot = expectDefined(first, "first auth profile snapshot");
       expectDefined(firstSnapshot.profiles["openai:default"], "first OpenAI profile").provider =
@@ -404,6 +409,29 @@ describe("runtime auth profile snapshots", () => {
           "/tmp/openclaw-auth-runtime-also-missing",
         ),
       ).toBeUndefined();
+    } finally {
+      clearRuntimeAuthProfileStoreSnapshots();
+    }
+  });
+
+  it("does not attribute shared order to an agent without its own snapshot", () => {
+    const inheritedAuthDir = "/tmp/openclaw-auth-order-inherited";
+    const agentDir = "/tmp/openclaw-auth-order-missing-agent";
+    const inherited = {
+      ...createStore("inherited-order"),
+      runtimeLocalOrderProviderIds: ["openai"],
+    };
+    try {
+      setRuntimeAuthProfileStoreSnapshot(inherited, inheritedAuthDir);
+      expect(
+        getPreparedRuntimeAuthProfileStoreSnapshotCore(agentDir, inheritedAuthDir),
+      ).toMatchObject({
+        order: { openai: ["openai:default"] },
+        runtimeLocalOrderProviderIds: [],
+      });
+      expect(getRuntimeAuthProfileStoreSnapshotCore(inheritedAuthDir)).toMatchObject({
+        runtimeLocalOrderProviderIds: ["openai"],
+      });
     } finally {
       clearRuntimeAuthProfileStoreSnapshots();
     }

@@ -9,6 +9,7 @@ import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-meta
 import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import { buildDeclaredProviderOwnerIndex } from "../plugins/provider-owner-index.js";
 import * as facadeActivationRuntime from "./facade-activation-check.runtime.js";
 import {
   evaluateBundledPluginPublicSurfaceAccess,
@@ -861,6 +862,7 @@ describe("plugin-sdk facade runtime", () => {
         diagnostics: [],
         byPluginId: new Map(),
         normalizePluginId: (pluginId) => pluginId,
+        declaredProviderOwners: buildDeclaredProviderOwnerIndex(params.plugins ?? []),
         owners: {
           channels: new Map(),
           channelConfigs: new Map(),

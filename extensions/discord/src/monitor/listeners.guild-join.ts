@@ -13,6 +13,7 @@ import {
   resolveDiscordGuildEntry,
   type DiscordGuildEntryResolved,
 } from "./allow-list.js";
+import type { DiscordLivePolicyReader } from "./live-policy.js";
 import { resolveDiscordPreflightChannelAccess } from "./message-handler.preflight-channel-access.js";
 
 const DISCORD_GUILD_JOIN_INTRO_MAX_AGE_MS = 5 * 60 * 1_000;
@@ -20,6 +21,7 @@ const DISCORD_GUILD_JOIN_INTRO_MAX_AGE_MS = 5 * 60 * 1_000;
 export class DiscordGuildJoinIntroductionListener extends GuildCreateListener {
   constructor(
     private readonly params: {
+      readPolicy?: DiscordLivePolicyReader;
       cfg: OpenClawConfig;
       accountId: string;
       botUserId?: string;
@@ -32,7 +34,9 @@ export class DiscordGuildJoinIntroductionListener extends GuildCreateListener {
   }
 
   async handle(data: Parameters<GuildCreateListener["handle"]>[0], client: Client): Promise<void> {
-    if (!("joined_at" in data) || data.unavailable || !this.params.botUserId) {
+    const policy = await this.params.readPolicy?.();
+    const params = { ...this.params, ...policy };
+    if (!("joined_at" in data) || data.unavailable || !params.botUserId) {
       return;
     }
     const joinAgeMs = Date.now() - Date.parse(data.joined_at);
@@ -51,33 +55,26 @@ export class DiscordGuildJoinIntroductionListener extends GuildCreateListener {
       ? [systemChannel, ...textChannels.filter((channel) => channel !== systemChannel)]
       : textChannels;
     const discordOptions = {
-      cfg: this.params.cfg,
-      accountId: this.params.accountId,
+      cfg: params.cfg,
+      accountId: params.accountId,
       rest: client.rest,
     };
     const guildInfo = resolveDiscordGuildEntry({
       guild: new Guild(client, data),
       guildId: data.id,
-      guildEntries: this.params.guildEntries,
+      guildEntries: params.guildEntries,
     });
     const guildConfigured =
-      !this.params.guildEntries ||
-      Object.keys(this.params.guildEntries).length === 0 ||
-      Boolean(guildInfo);
+      !params.guildEntries || Object.keys(params.guildEntries).length === 0 || Boolean(guildInfo);
     let targetChannel: (typeof textChannels)[number] | undefined;
     let roomAllowed = false;
     for (const channel of candidateChannels) {
       if (
-        (await canViewDiscordGuildChannel(
-          data.id,
-          channel.id,
-          this.params.botUserId,
-          discordOptions,
-        )) &&
+        (await canViewDiscordGuildChannel(data.id, channel.id, params.botUserId, discordOptions)) &&
         (await hasAnyChannelPermissionDiscord(
           data.id,
           channel.id,
-          this.params.botUserId,
+          params.botUserId,
           [PermissionFlagsBits.SendMessages],
           discordOptions,
         ))
@@ -95,7 +92,7 @@ export class DiscordGuildJoinIntroductionListener extends GuildCreateListener {
           resolveDiscordPreflightChannelAccess({
             isGuildMessage: true,
             isGroupDm: false,
-            groupPolicy: this.params.groupPolicy,
+            groupPolicy: params.groupPolicy,
             messageChannelId: channel.id,
             displayChannelName: channel.name,
             displayChannelSlug: normalizeDiscordDisplaySlug(channel.name),
@@ -109,28 +106,32 @@ export class DiscordGuildJoinIntroductionListener extends GuildCreateListener {
         }
       }
     }
+    if (policy?.isCurrent() === false) {
+      params.logger?.info("Discord guild join introduction skipped: access policy changed", {
+        guildId: data.id,
+        accountId: params.accountId,
+      });
+      return;
+    }
     if (!targetChannel) {
-      this.params.logger?.info(
-        "Discord guild join introduction skipped: no writable text channel",
-        {
-          guildId: data.id,
-          accountId: this.params.accountId,
-        },
-      );
+      params.logger?.info("Discord guild join introduction skipped: no writable text channel", {
+        guildId: data.id,
+        accountId: params.accountId,
+      });
       return;
     }
     const selectedChannel = targetChannel;
 
     await reportChannelRoomJoin({
-      cfg: this.params.cfg,
+      cfg: params.cfg,
       channel: "discord",
-      accountId: this.params.accountId,
+      accountId: params.accountId,
       conversationId: data.id,
       deliverTo: `channel:${selectedChannel.id}`,
       route: resolveAgentRoute({
-        cfg: this.params.cfg,
+        cfg: params.cfg,
         channel: "discord",
-        accountId: this.params.accountId,
+        accountId: params.accountId,
         guildId: data.id,
         peer: { kind: "channel", id: selectedChannel.id },
       }),

@@ -312,6 +312,31 @@ docker_e2e_cleanup_container_cidfile() {
   fi
 }
 
+docker_e2e_print_failed_container_state() {
+  local cidfile="${1:-}"
+  [ -f "$cidfile" ] || return 0
+
+  local container_id
+  container_id="$(head -n 1 "$cidfile" 2>/dev/null || true)"
+  [ -n "$container_id" ] || return 0
+
+  local inspect_output=""
+  local inspect_status=0
+  inspect_output="$(
+    docker_e2e_docker_cmd inspect --format 'ExitCode={{.State.ExitCode}}
+OOMKilled={{.State.OOMKilled}}
+Error={{printf "%.4096s" .State.Error}}' "$container_id" 2>&1
+  )" || inspect_status="$?"
+  if [ "$inspect_status" -ne 0 ]; then
+    printf 'Docker container state unavailable (inspect exit %s): %.4096s\n' \
+      "$inspect_status" "$inspect_output" >&2
+    return 0
+  fi
+
+  echo "Docker container state:" >&2
+  printf '%.4608s\n' "$inspect_output" >&2
+}
+
 docker_e2e_harness_mount_args() {
   local harness_root="${DOCKER_E2E_HARNESS_ROOT_DIR:-$ROOT_DIR}"
   DOCKER_E2E_HARNESS_ARGS=(
@@ -439,7 +464,7 @@ docker_e2e_run_with_harness() {
     return 1
   fi
   eval "exec ${harness_stdin_fd}<&0"
-  docker_e2e_docker_run_cmd run --rm --cidfile "$cidfile" "${DOCKER_E2E_HARNESS_ARGS[@]}" "$@" <&$harness_stdin_fd &
+  docker_e2e_docker_run_cmd run --cidfile "$cidfile" "${DOCKER_E2E_HARNESS_ARGS[@]}" "$@" <&$harness_stdin_fd &
   docker_run_pid="$!"
   local had_errexit=0
   case "$-" in
@@ -452,6 +477,9 @@ docker_e2e_run_with_harness() {
   run_status="$?"
   if [ "$had_errexit" = "1" ]; then
     set -e
+  fi
+  if [ "$run_status" -ne 0 ]; then
+    docker_e2e_print_failed_container_state "$cidfile"
   fi
   cleanup_harness_run 0
   return "$run_status"

@@ -33,6 +33,7 @@ import {
   resolveMcpLoopbackPolicyTools,
   resolveMcpLoopbackScopedTools,
 } from "../../gateway/mcp-http.runtime.js";
+import { claimHeartbeatContextForUserRun } from "../../infra/heartbeat-outcome-store.js";
 import { buildSystemAgentToolsMcpServerConfig } from "../../mcp/openclaw-tools-serve-config.js";
 import { CliBackendAuthProfilePreparationError } from "../../plugins/cli-backend-errors.js";
 import type {
@@ -96,17 +97,17 @@ import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { resolveContextTokensForModel } from "../context.js";
 import { resolveConversationCapabilityProfile } from "../conversation-capability-profile.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
-import {
-  resolvePromptBuildHookResult,
-  prependSystemPromptAddition,
-  resolveAttemptMediaTaskSystemPromptAddition,
-} from "../embedded-agent-runner/run/attempt-prompt-helpers.js";
+import { waitForDeferredTurnMaintenanceForSession } from "../embedded-agent-runner/context-engine-maintenance.js";
+import { resolvePromptBuildHookResult } from "../embedded-agent-runner/run/attempt-prompt-helpers.js";
 import { composeSystemPromptWithHookContext } from "../embedded-agent-runner/run/attempt-thread-helpers.js";
 import {
   applyEmbeddedAttemptToolsAllow,
   mergeForcedEmbeddedAttemptToolsAllow,
 } from "../embedded-agent-runner/run/attempt-tool-construction-plan.js";
-import { buildCurrentInboundPrompt } from "../embedded-agent-runner/run/runtime-context-prompt.js";
+import {
+  buildCurrentInboundPrompt,
+  buildRuntimeContextCustomMessage,
+} from "../embedded-agent-runner/run/runtime-context-prompt.js";
 import {
   mapSandboxSkillEntriesForPrompt,
   mapSandboxSkillUsagePaths,
@@ -127,6 +128,7 @@ import {
   type PreparedRootedExecutionCapability,
 } from "../rooted-run-params.js";
 import { collectRuntimeChannelCapabilities } from "../runtime-capabilities.js";
+import { buildMediaTaskRuntimeContext } from "../runtime-facts-prompt.js";
 import { ensureSandboxWorkspaceForSession } from "../sandbox.js";
 import { resolveSandboxRuntimeStatus } from "../sandbox/runtime-status.js";
 import { buildSystemPromptReport } from "../system-prompt-report.js";
@@ -148,7 +150,7 @@ import {
   type BundledCliBackendAuthPolicy,
 } from "./cli-backend-auth-policy.js";
 import { getCliLiveSessionGeneration } from "./cli-live-session-registry.js";
-import { resolveCliExecutionTarget } from "./execution-target.js";
+import { createCliRunCurrentAssertion, resolveCliExecutionTarget } from "./execution-target.js";
 import { buildCliAgentSystemPrompt, isClaudeCliBackendId, normalizeCliModel } from "./helpers.js";
 import { prepareCliHistoryBoundary } from "./history-boundary.js";
 import { cliBackendLog } from "./log.js";
@@ -159,7 +161,7 @@ import {
   buildCliSessionHistoryPrompt,
   hasCliSessionTranscript,
   loadCliSessionHistoryMessages,
-  loadCliSessionReseedMessages,
+  loadCliSessionPromptContext,
   resolveAutoCliSessionReseedHistoryChars,
 } from "./session-history.js";
 import type {
@@ -261,23 +263,14 @@ function canTransportSystemPrompt(backend: CliBackendConfig): boolean {
   );
 }
 
-function buildCliSessionDriftUserContext(
-  reusableCliSession: CliReusableSession,
-): string | undefined {
-  if (reusableCliSession.mode !== "reuse-with-drift") {
-    return undefined;
-  }
-  return `OpenClaw resumed this CLI session after prompt content changed. Follow the current turn's instructions; changed=${reusableCliSession.drift.reasons.join(",")}.`;
-}
-
 function prependCliSessionDriftUserContext(
   context: RunCliAgentParams["currentInboundContext"],
   reusableCliSession: CliReusableSession,
 ): RunCliAgentParams["currentInboundContext"] {
-  const note = buildCliSessionDriftUserContext(reusableCliSession);
-  if (!note) {
+  if (reusableCliSession.mode !== "reuse-with-drift") {
     return context;
   }
+  const note = `OpenClaw resumed this CLI session after prompt content changed. Follow the current turn's instructions; changed=${reusableCliSession.drift.reasons.join(",")}.`;
   if (!context) {
     return { text: note };
   }
@@ -571,6 +564,11 @@ async function prepareCliRunContextWithinReadFence(
         sessionKey: suppliedSessionKey,
       }),
     };
+  }
+  // Every prompt/history read must observe prior deferred rewrites. Caller-owned
+  // memory remains independent of durable work sharing its correlation key.
+  if (!params.isolatedCompletion && !isControlOperation && !params.sessionManager) {
+    await waitForDeferredTurnMaintenanceForSession(params.sessionKey ?? params.sessionId);
   }
   const policySessionKey = params.runtimePolicySessionKey ?? params.sessionKey;
   // Capture the requester before admission replaces agentId with the execution owner.
@@ -912,8 +910,12 @@ async function prepareCliRunContextWithinReadFence(
   const requireExplicitMessageTarget =
     params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey);
   const hasCliSessionBindingFacts = bindingFacts !== undefined;
+  // Per-turn background restrictions must not replace the session-stable binding policy.
   const bindingRequireExplicitMessageTarget =
-    bindingFacts?.requireExplicitMessageTarget ?? requireExplicitMessageTarget;
+    bindingFacts?.requireExplicitMessageTarget ??
+    (hasCliSessionBindingFacts
+      ? isSubagentSessionKey(params.sessionKey)
+      : requireExplicitMessageTarget);
   const bindingSourceReplyDeliveryMode = hasCliSessionBindingFacts
     ? bindingFacts.sourceReplyDeliveryMode
     : params.sourceReplyDeliveryMode;
@@ -1990,8 +1992,33 @@ async function prepareCliRunContextWithinReadFence(
         }) ?? builtSystemPrompt)
       : builtSystemPrompt;
     let systemPrompt = transformedSystemPrompt;
+    const allowRawTranscriptReseed =
+      backendResolved.config.reseedFromRawTranscriptWhenUncompacted === true;
+    const historyParams = await admitPreparedParams(params);
+    params = historyParams;
+    const cliHistoryWriter = !isSideQuestion
+      ? await prepareCliHistoryBoundary(historyParams, { credential: authCredential })
+      : undefined;
+    // Explicit caller-owned memory remains input; it cannot authorize borrowed durable history.
+    const historyAllowed = params.sessionManager !== undefined || cliHistoryWriter !== undefined;
+    // Native compatibility and transcript account ownership are independent gates.
+    const rawTranscriptReseedReason = !historyAllowed
+      ? "auth-unknown"
+      : reusableCliSessionId
+        ? "session-expired"
+        : (invalidatedReason ?? (ignoreCliSessionCandidate ? undefined : "missing-transcript"));
+    const sessionPromptContext =
+      skipsTurnPreparation || params.isolatedCompletion
+        ? undefined
+        : await loadCliSessionPromptContext({
+            sessionManager: params.sessionManager,
+            sessionTarget: params.sessionTarget,
+            allowRawTranscriptReseed,
+            rawTranscriptReseedReason,
+          });
     const finalizedTranscriptPrompt =
-      params.finalizePromptForResolvedTools && params.transcriptPrompt === undefined
+      (params.finalizePromptForResolvedTools || sessionPromptContext?.durableContext) &&
+      params.transcriptPrompt === undefined
         ? params.prompt
         : params.transcriptPrompt;
     let promptContext: CliBackendPromptContext | undefined;
@@ -2009,6 +2036,7 @@ async function prepareCliRunContextWithinReadFence(
       try {
         const hookResult = promptBuildHookResult;
         const prependContext = [
+          sessionPromptContext?.durableContext,
           hookResult?.prependContext,
           authorizedPromptBuildResult?.prependContext,
         ]
@@ -2017,6 +2045,13 @@ async function prepareCliRunContextWithinReadFence(
         const appendContext = [
           hookResult?.appendContext,
           authorizedPromptBuildResult?.appendContext,
+          buildRuntimeContextCustomMessage(
+            buildMediaTaskRuntimeContext({
+              capabilityToolNames: new Set(promptTools.map((tool) => tool.name)),
+              sessionKey: params.sessionKey,
+              agentId: sessionAgentId,
+            }),
+          )?.content,
         ]
           .filter((value): value is string => Boolean(value?.trim()))
           .join("\n\n");
@@ -2044,17 +2079,6 @@ async function prepareCliRunContextWithinReadFence(
             prependSystemContext: hookResult?.prependSystemContext,
             appendSystemContext: hookResult?.appendSystemContext,
           }) ?? systemPrompt;
-        const mediaTaskSystemPromptAddition = resolveAttemptMediaTaskSystemPromptAddition({
-          sessionKey: params.sessionKey,
-          agentId: sessionAgentId,
-          trigger: params.trigger,
-        });
-        if (mediaTaskSystemPromptAddition) {
-          systemPrompt = prependSystemPromptAddition({
-            systemPrompt: ensureSystemPromptCacheBoundary(systemPrompt),
-            systemPromptAddition: mediaTaskSystemPromptAddition,
-          });
-        }
       } catch (error) {
         cliBackendLog.warn(`cli prompt-build hook preparation failed: ${String(error)}`);
       }
@@ -2082,34 +2106,14 @@ async function prepareCliRunContextWithinReadFence(
         promptForHooks = renderCurrentPrompt(promptForHooks, preferResumableText);
       }
     }
-    const allowRawTranscriptReseed =
-      backendResolved.config.reseedFromRawTranscriptWhenUncompacted === true;
-    const historyParams = await admitPreparedParams(params);
-    params = historyParams;
-    const cliHistoryWriter = !isSideQuestion
-      ? await prepareCliHistoryBoundary(historyParams, { credential: authCredential })
-      : undefined;
-    // Explicit caller-owned memory remains input; it cannot authorize borrowed durable history.
-    const historyAllowed = params.sessionManager !== undefined || cliHistoryWriter !== undefined;
-    // Native compatibility and transcript account ownership are independent gates.
-    const rawTranscriptReseedReason = !historyAllowed
-      ? "auth-unknown"
-      : reusableCliSessionId
-        ? "session-expired"
-        : (invalidatedReason ?? (ignoreCliSessionCandidate ? undefined : "missing-transcript"));
     // Node placement keeps this: the history prompt is built from the
     // gateway-side OpenClaw transcript, so a fresh remote CLI session still
     // receives prior conversation context via stdin.
     const shouldPrepareOpenClawHistoryPrompt =
       !skipsTurnPreparation && (!reusableCliSessionId || allowRawTranscriptReseed);
-    const openClawHistoryPrompt = shouldPrepareOpenClawHistoryPrompt
+    let openClawHistoryPrompt = shouldPrepareOpenClawHistoryPrompt
       ? buildCliSessionHistoryPrompt({
-          messages: await loadCliSessionReseedMessages({
-            sessionManager: params.sessionManager,
-            sessionTarget: params.sessionTarget,
-            allowRawTranscriptReseed,
-            rawTranscriptReseedReason,
-          }),
+          messages: sessionPromptContext?.reseedMessages ?? [],
           prompt: historyPromptCurrentTurn,
           maxHistoryChars: autoReseedHistoryChars,
         })
@@ -2264,7 +2268,7 @@ async function prepareCliRunContextWithinReadFence(
     }
     const hadSessionFile = await hasCliSessionTranscript(params);
     const contextEngineTurnPrompt = params.transcriptPrompt ?? params.prompt;
-    const preparedParams = await admitPreparedParams({
+    let preparedParams = await admitPreparedParams({
       ...params,
       config: runConfig,
       prompt: preparedPrompt,
@@ -2286,6 +2290,32 @@ async function prepareCliRunContextWithinReadFence(
       fallbackReason: params.modelRoutingProvenance?.fallbackReason,
     });
 
+    const note = claimHeartbeatContextForUserRun({
+      ...preparedParams,
+      agentId: sessionAgentId,
+      storePath: params.sessionTarget?.storePath ?? params.storePath,
+      detached: Boolean(params.sessionManager || params.isolatedCompletion),
+      assertCurrent: createCliRunCurrentAssertion(preparedParams),
+    });
+    if (note) {
+      preparedParams = {
+        ...preparedParams,
+        transcriptPrompt: finalizedTranscriptPrompt ?? params.prompt,
+      };
+      const append = (text: string) => composeCliPromptContext(text, { appendContext: note });
+      if (executionTarget.kind === "plugin") {
+        promptContext = {
+          ...promptContext,
+          appendContext: append(promptContext?.appendContext ?? ""),
+        };
+        promptForHooks = append(promptForHooks ?? preparedParams.prompt);
+      } else {
+        preparedParams.prompt = append(preparedParams.prompt);
+        if (openClawHistoryPrompt) {
+          openClawHistoryPrompt = append(openClawHistoryPrompt);
+        }
+      }
+    }
     return {
       params: preparedParams,
       bindQuestionAnswerAuthority,

@@ -687,6 +687,12 @@ stale context metadata on active 4.20 rows. It does not pin active 4.20
   <Accordion title="Advanced notes">
     - OpenClaw applies xAI-specific tool-schema and tool-call compatibility
       fixes automatically on the shared runner path.
+    - Native `https://api.x.ai/v1` Responses requests keep tool images attached
+      to their tool results. On compatibility routes (including Grok OAuth),
+      image-capable models receive a labeled user image message immediately
+      after each consecutive tool-result group. Parallel results stay together,
+      and later turns preserve the historical image position for prompt caching.
+      Compaction establishes a new history prefix and result numbering.
     - Native xAI requests default `tool_stream: true`. Set
       `agents.defaults.models["xai/<model>"].params.tool_stream` to `false`
       to disable it.

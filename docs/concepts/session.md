@@ -66,7 +66,7 @@ visible to Bob.
 Slack Agent View and Assistant View DMs are the exception: each visible root gets
 its own `:thread:<rootTs>` session on top of the base that `dmScope` selects, so
 those conversations stay isolated even under `main`. See
-[Agent View DMs](/channels/slack#agent-view-dms).
+[Agent View DMs](/channels/slack/threads-and-sessions#agent-view-dms).
 
 <Tip>
 If the same person contacts you from multiple channels, use

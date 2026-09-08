@@ -23,6 +23,8 @@ const REEF_RELAY_WEBSOCKET_MAX_PAYLOAD_BYTES = 64 * 1024;
 // window while catch-up or entry dispatch is busy. At the payload cap this
 // limits retained frame data to roughly 16 MiB per connection.
 const REEF_INBOX_LIVE_BUFFER_MAX_ENTRIES = 256;
+// Mailbox.pull returns at most 200 entries; a shorter page proves the tail absent.
+const REEF_INBOX_REST_PAGE_SIZE = 200;
 // Stalled TCP peers that never complete the HTTP upgrade would otherwise hang
 // forever — ws defaults to no handshakeTimeout. Match sibling channel WS budgets.
 const REEF_WS_HANDSHAKE_MS = 30_000;
@@ -436,11 +438,14 @@ export class ReefInboxConnection {
   // second connection concurrently delivering the same durable cursor range.
   private processing = Promise.resolve();
   private stopped = false;
-  // While a parked entry freezes the durable cursor, entries completed above it
-  // (receipts stay in the relay mailbox until retention) would be re-pulled
-  // every poll. This in-memory record keeps re-attempts scoped to the parked
-  // entry; it is pruned as the cursor advances and bounded by the relay's
-  // per-handle mailbox cap.
+  // Live frames cannot prove an older park resolved. Only a successful REST
+  // drain may clear this barrier, including across socket replacements.
+  private parked = false;
+  // REST-covered frames need no live dispatch (parks retry via REST). Keep this
+  // watermark after pruning completions whose delayed socket frames may still arrive.
+  private reconciledThrough = 0;
+  // Avoid replaying completed entries while a park holds the durable cursor.
+  // REST pages prune entries no longer retained in their authoritative range.
   private readonly processedAboveCursor = new Set<number>();
   constructor(
     readonly client: ReefTransportClient,
@@ -493,8 +498,10 @@ export class ReefInboxConnection {
         throw new Error("invalid Reef relay inbox cursor");
       }
       const previous = this.cursor;
-      await this.processEntries(page.entries, page.cursor, signal);
+      const parked = await this.processEntries(page.entries, page.cursor, signal);
+      signal?.throwIfAborted();
       if (!page.entries.length || this.cursor === previous) {
+        this.parked = parked;
         return;
       }
     }
@@ -504,7 +511,7 @@ export class ReefInboxConnection {
     entries: readonly InboxEntry[],
     cursor?: number,
     signal?: AbortSignal,
-  ): Promise<void> {
+  ): Promise<boolean> {
     let highestSequence = 0;
     for (const entry of entries) {
       if (!Number.isSafeInteger(entry.seq) || entry.seq < 1) {
@@ -518,30 +525,27 @@ export class ReefInboxConnection {
       throw new Error("Reef relay inbox cursor does not match its entries");
     }
     const fresh = entries.toSorted((left, right) => left.seq - right.seq);
-    if (fresh.length === 0) {
-      if (cursor !== undefined) {
-        this.advanceCursor(cursor);
-      }
-      return;
-    }
-    // A parked entry (pending review, transient guard failure) stays un-acked
-    // at the relay and must be pulled again, so the durable cursor freezes
-    // before it. Later entries still process now — acknowledged ones leave the
-    // relay mailbox, so redelivery cycles only re-pull the parked entry.
-    let parked = false;
+    // REST orders all retained entries in its range; a live batch cannot clear
+    // an older barrier. Publish new parks immediately, even if this scan fails.
+    let parked = cursor === undefined && this.parked;
     for (const entry of fresh) {
-      if (entry.seq <= this.cursor || this.processedAboveCursor.has(entry.seq)) {
+      if (
+        entry.seq <= this.cursor ||
+        (cursor === undefined && entry.seq <= this.reconciledThrough)
+      ) {
         continue;
       }
       signal?.throwIfAborted();
-      try {
-        await this.onEntries([entry]);
-      } catch (error) {
-        if (error instanceof ReefInboxEntryParkedError) {
-          parked = true;
-          continue;
+      if (!this.processedAboveCursor.has(entry.seq)) {
+        try {
+          await this.onEntries([entry]);
+        } catch (error) {
+          if (error instanceof ReefInboxEntryParkedError) {
+            this.parked = parked = true;
+            continue;
+          }
+          throw error;
         }
-        throw error;
       }
       // A completed handler has consumed the entry even if shutdown arrived
       // while it ran. Persist it before the next abort check to avoid replay.
@@ -549,13 +553,23 @@ export class ReefInboxConnection {
         this.processedAboveCursor.add(entry.seq);
       } else {
         this.advanceCursor(entry.seq);
-        // A resolved park may leave completed entries recorded above the
-        // cursor; fold the contiguous run in so the durable cursor catches up.
-        while (this.processedAboveCursor.has(this.cursor + 1)) {
-          this.advanceCursor(this.cursor + 1);
-        }
       }
     }
+    if (cursor !== undefined) {
+      const retained = new Set(fresh.map((entry) => entry.seq));
+      this.reconciledThrough = Math.max(this.reconciledThrough, cursor);
+      for (const seq of this.processedAboveCursor) {
+        if ((seq <= cursor || fresh.length < REEF_INBOX_REST_PAGE_SIZE) && !retained.has(seq)) {
+          this.processedAboveCursor.delete(seq);
+          this.reconciledThrough = Math.max(this.reconciledThrough, seq);
+        }
+      }
+      if (fresh.length === 0) {
+        // Empty pages may echo the old cursor after expiry/acknowledgment.
+        this.advanceCursor(this.reconciledThrough);
+      }
+    }
+    return parked;
   }
 
   /**

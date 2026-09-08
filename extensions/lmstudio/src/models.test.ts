@@ -107,7 +107,7 @@ describe("lmstudio-models", () => {
         });
       }
       if (String(url).endsWith("/api/v1/models/load")) {
-        return jsonResponse({ status: "loaded" });
+        return jsonResponse({ status: "loaded", instance_id: "inst-loaded" });
       }
       throw new Error(`Unexpected fetch URL: ${String(url)}`);
     });
@@ -366,6 +366,25 @@ describe("lmstudio-models", () => {
       contextWindow: 262_144,
       contextTokens: 8_192,
       maxTokens: 8_192,
+      loaded: true,
+    });
+  });
+
+  it("keeps a loaded context above the default load length", () => {
+    const model = mapLmstudioWireEntry({
+      type: "llm",
+      key: "large-loaded-context",
+      max_context_length: 262_144,
+      loaded_instances: [{ id: "loaded", config: { context_length: 98_304 } }],
+    });
+
+    // The default load length only governs the JIT load request for unloaded
+    // models; a running instance decides its own serving context.
+    expect(model).toMatchObject({
+      id: "large-loaded-context",
+      contextWindow: 262_144,
+      contextTokens: 98_304,
+      maxTokens: SELF_HOSTED_DEFAULT_MAX_TOKENS,
       loaded: true,
     });
   });

@@ -634,6 +634,6 @@ Each agent can override sandbox + tools: `agents.entries.*.sandbox` and `agents.
 
 - [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) -- per-agent overrides and precedence
 - [OpenShell](/gateway/openshell) -- managed sandbox backend setup, workspace modes, and config reference
-- [Sandbox configuration](/gateway/config-agents#agentsdefaultssandbox)
+- [Sandbox configuration](/gateway/config-agents/sandbox#agentsdefaultssandbox)
 - [Sandbox vs Tool Policy vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated) -- debugging "why is this blocked?"
 - [Security](/gateway/security)

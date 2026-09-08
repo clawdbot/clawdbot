@@ -5,8 +5,15 @@ import { ChannelType } from "discord-api-types/v10";
 import { createStartAccountContext } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedDiscordAccount } from "./accounts.js";
+import { createDiscordLivePolicyReader } from "./monitor/live-policy.js";
+import type { MonitorDiscordOpts } from "./monitor/provider.js";
 import * as sendModule from "./send.js";
 import { createDiscordSendReceipt } from "./send.receipt.js";
 import { EMPTY_DISCORD_TEST_CONFIG } from "./test-support/config.js";
@@ -863,6 +870,55 @@ describe("discordPlugin outbound", () => {
 
     await expectDiscordStartupDelay(cfg, "alpha", 0);
     await expectDiscordStartupDelay(cfg, "zeta", 10_000);
+  });
+
+  it("follows live policy published during a staggered account start", async () => {
+    prepareDiscordStartupMocks();
+    const cfg: OpenClawConfig = {
+      channels: {
+        discord: {
+          accounts: {
+            alpha: { token: "alpha-token" },
+            zeta: { token: "zeta-token", allowFrom: ["111"] },
+          },
+        },
+      },
+    };
+    const ready = createDeferred<undefined>();
+    sleepWithAbortMock.mockReturnValueOnce(ready.promise);
+    let readPolicy: ReturnType<typeof createDiscordLivePolicyReader> | undefined;
+    monitorDiscordProviderMock.mockImplementationOnce((opts: MonitorDiscordOpts) => {
+      readPolicy = createDiscordLivePolicyReader({
+        cfg: opts.config!,
+        accountId: opts.accountId!,
+        readConfig: opts.readConfig,
+      });
+    });
+    setRuntimeConfigSnapshot(cfg, cfg);
+    try {
+      const pending = startDiscordAccount(cfg, "zeta");
+      await vi.waitFor(() => expect(sleepWithAbortMock).toHaveBeenCalled());
+      const next: OpenClawConfig = {
+        channels: {
+          discord: {
+            ...cfg.channels?.discord,
+            accounts: {
+              ...cfg.channels?.discord?.accounts,
+              zeta: { token: "zeta-token", allowFrom: ["222"] },
+            },
+          },
+        },
+      };
+      setRuntimeConfigSnapshot(next, next);
+      ready.resolve(undefined);
+      await pending;
+      expect((await readPolicy!()).allowFrom).toEqual(["222"]);
+      setRuntimeConfigSnapshot(cfg, cfg);
+      expect((await readPolicy!()).allowFrom).toEqual(["111"]);
+    } finally {
+      ready.resolve(undefined);
+      clearRuntimeConfigSnapshot();
+    }
   });
 
   it("starts the configured default account before staggering secondary accounts", async () => {

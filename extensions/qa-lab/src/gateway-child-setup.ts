@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { closeQaRuntimeStores } from "openclaw/plugin-sdk/qa-runtime";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import {
@@ -435,6 +436,9 @@ export async function prepareQaGatewayChild(
           packagedMockAuthStaged = true;
         }
         if (usesPackagedCandidate && gatewayCommand) {
+          // Live auth staging opens parent-owned agent stores. Release this
+          // fixture's leases before the child Doctor takes maintenance ownership.
+          await closeQaRuntimeStores(tempRoot);
           const command = {
             lifetime,
             executablePath: gatewayCommand.executablePath,

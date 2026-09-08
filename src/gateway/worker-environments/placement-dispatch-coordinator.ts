@@ -108,27 +108,37 @@ export function coordinateWorkerPlacementDispatch(
   };
   const runExclusivePlacementOperation = <T>(
     operation: () => Promise<T>,
-    signal?: AbortSignal,
-    joinsActiveDispatch = false,
+    options: {
+      signal?: AbortSignal;
+      joinsActiveDispatch?: boolean;
+      waitForActiveDispatches?: boolean;
+    } = {},
   ): Promise<T> => {
+    const { signal } = options;
     const predecessor = placementFence;
+    const predecessorSettled = predecessor?.promise.catch(() => undefined);
     const ready = (async () => {
-      if (predecessor) {
-        await predecessor.promise.catch(() => undefined);
+      if (predecessorSettled) {
+        await predecessorSettled;
       }
       await waitForDispatchIdle();
     })();
     const current = (async () => {
-      await racePromiseWithAbortSignal(ready, signal);
+      await racePromiseWithAbortSignal(
+        options.waitForActiveDispatches === false
+          ? (predecessorSettled ?? Promise.resolve())
+          : ready,
+        signal,
+      );
       signal?.throwIfAborted();
       return await operation();
     })();
-    // A canceled waiter releases its admission immediately, but its fence must still
-    // carry older work forward so later requests cannot overtake the predecessor.
+    // Reclaim or cancellation can finish before older dispatches. Keep their idle
+    // wait in the fence so later requests still cannot overtake unfinished work.
     const barrier = Promise.allSettled([ready, current]).then(() => undefined);
     const exclusive: PlacementFence = {
       promise: barrier,
-      dispatchCohort: joinsActiveDispatch
+      dispatchCohort: options.joinsActiveDispatch
         ? (predecessor?.dispatchCohort ?? [...activeDispatches])
         : [],
     };
@@ -257,10 +267,9 @@ export function coordinateWorkerPlacementDispatch(
         return await admitDispatch(
           request,
           (signal) =>
-            runExclusivePlacementOperation(
-              () => service.move(request, report, authorize, signal),
+            runExclusivePlacementOperation(() => service.move(request, report, authorize, signal), {
               signal,
-            ),
+            }),
           authorize,
         );
       }, onTransition);
@@ -297,7 +306,8 @@ export function coordinateWorkerPlacementDispatch(
           request,
           authorize,
           beforeDrain,
-          runExclusivePlacementOperation,
+          // Preparation has settled this session's work; unrelated dispatches need not delay Stop.
+          (run) => runExclusivePlacementOperation(run, { waitForActiveDispatches: false }),
           operations.length
             ? {
                 isCurrent: isPending,
@@ -348,7 +358,7 @@ export function coordinateWorkerPlacementDispatch(
         })();
         sweep.joinedRecoveries.add(queued);
       } else {
-        queued = runExclusivePlacementOperation(recover, undefined, true);
+        queued = runExclusivePlacementOperation(recover, { joinsActiveDispatch: true });
       }
       void queued.catch(ready.reject);
       const tracked = trackPlacementOperation(async (report) => {

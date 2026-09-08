@@ -810,6 +810,8 @@ const SkillProposalManifestEntrySchema = closedObject({
   createdAt: NonEmptyString,
   updatedAt: NonEmptyString,
   scanState: SkillProposalScanStateSchema,
+  revisionHash: Type.Optional(Sha256String),
+  degradedState: Type.Optional(Type.Literal("draft-missing")),
 });
 
 /** Lists skill-workshop proposals for the selected agent scope. */

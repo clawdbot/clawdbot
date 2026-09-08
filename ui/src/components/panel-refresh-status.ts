@@ -1,15 +1,18 @@
 import { html, nothing, type TemplateResult } from "lit";
+import type { ApplicationGatewaySnapshot } from "../app/gateway.ts";
 import { t } from "../i18n/index.ts";
 import { formatUiError } from "../lib/format-error.ts";
+import { isAwaitingGatewayFailure } from "../lib/gateway-availability.ts";
 
 export type PanelRefreshStatus = Readonly<{
   error: string | null;
   hasLoaded: boolean;
   stale: boolean;
+  awaitingGateway: boolean;
 }>;
 
 export function createPanelRefreshStatus(): PanelRefreshStatus {
-  return { error: null, hasLoaded: false, stale: false };
+  return { error: null, hasLoaded: false, stale: false, awaitingGateway: false };
 }
 
 export function beginPanelRefresh(
@@ -23,47 +26,46 @@ export function beginPanelRefresh(
 }
 
 export function completePanelRefresh(): PanelRefreshStatus {
-  return { error: null, hasLoaded: true, stale: false };
+  return { error: null, hasLoaded: true, stale: false, awaitingGateway: false };
 }
 
-export function failPanelRefresh(status: PanelRefreshStatus, error: string): PanelRefreshStatus {
+export function failPanelRefresh(
+  status: PanelRefreshStatus,
+  error: unknown,
+  gateway: ApplicationGatewaySnapshot | null | undefined,
+): PanelRefreshStatus {
+  const awaitingGateway = isAwaitingGatewayFailure(error, gateway);
   return {
-    error: formatUiError(error),
+    error: awaitingGateway ? null : formatUiError(error),
     hasLoaded: status.hasLoaded,
     stale: status.hasLoaded,
+    awaitingGateway,
   };
 }
 
 export function renderPanelRefreshStatus(params: {
   status: PanelRefreshStatus;
   errorMessage?: string;
-  onRetry: () => void;
-  retryDisabled?: boolean;
   className?: string;
 }): TemplateResult | typeof nothing {
   const { status } = params;
+  if (status.awaitingGateway) {
+    return nothing;
+  }
   const rawError = params.errorMessage ?? status.error;
   const error = rawError ? formatUiError(rawError) : rawError;
   if (!error && !status.stale) {
     return nothing;
   }
   const className = params.className ? ` ${params.className}` : "";
-  if (!error) {
-    return html`
-      <div class="callout warn${className}" role="status">
-        <strong>${t("common.staleData")}</strong>
-      </div>
-    `;
-  }
   return html`
-    <div class="callout danger callout--dismissible${className}" role="alert">
-      <span class="callout__content">
-        <span>${error}</span>
-        ${status.stale ? html`<br /><strong>${t("common.staleData")}</strong>` : nothing}
-      </span>
-      <button class="btn btn--sm" ?disabled=${params.retryDisabled} @click=${params.onRetry}>
-        ${t("common.retry")}
-      </button>
+    <div
+      class="callout ${error ? "danger" : "warn"}${className}"
+      role=${error ? "alert" : "status"}
+    >
+      ${error ? html`<span>${error}</span>` : nothing}
+      ${error && status.stale ? html`<br />` : nothing}
+      ${status.stale ? html`<strong>${t("common.staleData")}</strong>` : nothing}
     </div>
   `;
 }

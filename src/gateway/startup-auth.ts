@@ -247,7 +247,11 @@ export async function ensureGatewayStartupAuth(params: {
     authOverride,
     tailscaleOverride: params.tailscaleOverride,
   });
-  assertGatewayAuthNotKnownWeak(resolved, authOverride?.token ?? params.cfg.gateway?.auth?.token);
+  assertGatewayAuthNotKnownWeak(
+    resolved,
+    authOverride?.token ?? params.cfg.gateway?.auth?.token,
+    authOverride?.password ?? params.cfg.gateway?.auth?.password,
+  );
   if (resolved.mode !== "token" || (resolved.token?.trim().length ?? 0) > 0) {
     warnHooksTokenReuseGatewayAuth({ cfg: params.cfg, auth: resolved, warn: params.warn });
     return { cfg: params.cfg, auth: resolved, persistedGeneratedToken: false };

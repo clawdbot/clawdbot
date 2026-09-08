@@ -89,8 +89,8 @@ module.exports = {
   return { ...fixture, reconcileFailureMarker };
 }
 
-afterEach(() => {
-  resetPreparedModelRuntimeSnapshotsForTest();
+afterEach(async () => {
+  await resetPreparedModelRuntimeSnapshotsForTest();
   clearPluginMetadataLifecycleCaches();
   resetPluginLoaderTestStateForTest();
   tempRoots.cleanup();

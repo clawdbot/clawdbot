@@ -1,10 +1,11 @@
 // Covers heartbeat system-event isolation by stable session keys.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import * as replyModule from "../auto-reply/reply.js";
+import * as replyModule from "../auto-reply/reply/get-reply-from-config.runtime.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import { runHeartbeatOnce } from "./heartbeat-runner.js";
+import { installHeartbeatRunnerTestRuntime } from "./heartbeat-runner.test-harness.js";
 import {
   readSessionStoreForTest,
   seedHeartbeatScratchForTest,
@@ -21,6 +22,8 @@ vi.mock("./outbound/deliver.js", () => ({
   deliverOutboundPayloads: vi.fn().mockResolvedValue([]),
   deliverOutboundPayloadsInternal: vi.fn().mockResolvedValue([]),
 }));
+
+installHeartbeatRunnerTestRuntime();
 
 afterEach(() => {
   vi.restoreAllMocks();

@@ -1,9 +1,6 @@
-import type { EventLogEntry } from "../../api/event-log.ts";
 import type { GatewayEventFrame } from "../../api/gateway.ts";
 import { notifyGatewayObservers } from "../../app/gateway-observers.ts";
-import type { ApplicationGateway, ApplicationGatewaySnapshot } from "../../app/gateway.ts";
-import { resolveSessionKey } from "../../lib/sessions/index.ts";
-import { uiSessionEventMatches } from "../../lib/sessions/session-key.ts";
+import type { ApplicationGateway } from "../../app/gateway.ts";
 import { parseActivityEvent, updateToolActivity, type ActivityEntry } from "./tool-activity.ts";
 
 type LiveActivitySnapshot = {
@@ -22,9 +19,7 @@ export type LiveActivity = {
 export function createLiveActivity(gateway: ApplicationGateway): LiveActivity {
   let entries: ActivityEntry[] = [];
   let snapshot: LiveActivitySnapshot = { entries, revision: 0 };
-  let sessionKey = resolveSessionKey(gateway.snapshot.sessionKey, gateway.snapshot.hello);
   let eventLogRevision = gateway.eventLogRevision;
-  let clearBoundary: WeakRef<EventLogEntry> | undefined;
   let disposed = false;
   const listeners = new Set<(snapshot: LiveActivitySnapshot) => void>();
 
@@ -44,7 +39,6 @@ export function createLiveActivity(gateway: ApplicationGateway): LiveActivity {
 
   const reduce = (
     current: ActivityEntry[],
-    source: ApplicationGatewaySnapshot,
     eventName: string,
     payload: unknown,
     receivedAt: number,
@@ -53,29 +47,10 @@ export function createLiveActivity(gateway: ApplicationGateway): LiveActivity {
       return current;
     }
     const event = parseActivityEvent(payload, receivedAt);
-    if (
-      !event ||
-      !uiSessionEventMatches(
-        { sessionKey, assistantAgentId: source.assistantAgentId, hello: source.hello },
-        event.sessionKey,
-        event.agentId,
-      )
-    ) {
+    if (!event) {
       return current;
     }
     return updateToolActivity(current, event);
-  };
-
-  const rebuild = (source: ApplicationGatewaySnapshot) => {
-    const eventLog = gateway.eventLog;
-    const boundary = clearBoundary?.deref();
-    const clearIndex = boundary ? eventLog.indexOf(boundary) : -1;
-    const visibleEvents = clearIndex < 0 ? eventLog : eventLog.slice(0, clearIndex);
-    let next: ActivityEntry[] = [];
-    for (const event of visibleEvents.toReversed()) {
-      next = reduce(next, source, event.event, event.payload, event.ts);
-    }
-    publish(next, true);
   };
 
   const retireChangedContext = () => {
@@ -84,23 +59,20 @@ export function createLiveActivity(gateway: ApplicationGateway): LiveActivity {
       return false;
     }
     eventLogRevision = revision;
-    clearBoundary = undefined;
     // Log notification precedes event delivery; replay would apply the next event twice.
     publish([], true);
     return true;
   };
 
-  // Raw history is only a seed for a new owner or selected session, never page navigation.
-  rebuild(gateway.snapshot);
-  const stopGateway = gateway.subscribe((source) => {
-    if (disposed) {
-      return;
-    }
-    const nextSessionKey = resolveSessionKey(source.sessionKey, source.hello);
-    const sessionChanged = nextSessionKey !== sessionKey;
-    sessionKey = nextSessionKey;
-    if (!retireChangedContext() && sessionChanged) {
-      rebuild(source);
+  // Gateway delivery owns visibility; Activity is independent of the selected chat.
+  let initialEntries: ActivityEntry[] = [];
+  for (const event of gateway.eventLog.toReversed()) {
+    initialEntries = reduce(initialEntries, event.event, event.payload, event.ts);
+  }
+  publish(initialEntries, true);
+  const stopGateway = gateway.subscribe(() => {
+    if (!disposed) {
+      retireChangedContext();
     }
   });
   const stopEventLog = gateway.subscribeEventLog(() => {
@@ -110,7 +82,7 @@ export function createLiveActivity(gateway: ApplicationGateway): LiveActivity {
   });
   const stopEvents = gateway.subscribeEvents((event: GatewayEventFrame) => {
     if (!disposed) {
-      publish(reduce(entries, gateway.snapshot, event.event, event.payload, Date.now()));
+      publish(reduce(entries, event.event, event.payload, Date.now()));
     }
   });
 
@@ -123,8 +95,6 @@ export function createLiveActivity(gateway: ApplicationGateway): LiveActivity {
       return () => listeners.delete(listener);
     },
     clear() {
-      const boundary = gateway.eventLog[0];
-      clearBoundary = boundary ? new WeakRef(boundary) : undefined;
       publish([], true);
     },
     dispose() {
@@ -132,7 +102,6 @@ export function createLiveActivity(gateway: ApplicationGateway): LiveActivity {
       stopGateway();
       stopEventLog();
       stopEvents();
-      clearBoundary = undefined;
       entries = [];
       snapshot = { entries, revision: snapshot.revision + 1 };
       listeners.clear();

@@ -156,6 +156,8 @@ export type CatalogSessionMenuRequest = {
   routeId: "chat" | "new-session";
   navigation: ApplicationNavigationOptions;
   canOpenTerminal: boolean;
+  canDelete: boolean;
+  name: string;
   meta: string;
 };
 

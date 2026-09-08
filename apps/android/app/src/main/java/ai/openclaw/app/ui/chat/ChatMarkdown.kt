@@ -213,10 +213,13 @@ private fun RenderCommonMarkBlock(
 
     is Heading -> {
       val headingText = remember(current, inlineStyles) { buildInlineMarkdown(current.firstChild, inlineStyles) }
+      val anchor = rememberChatReaderAnchor()
       Text(
         text = headingText,
         style = headingStyle(current.level, inlineStyles.baseCallout),
         color = textColor,
+        modifier = anchor?.modifier ?: Modifier,
+        onTextLayout = anchor?.onTextLayout ?: {},
       )
     }
 
@@ -324,10 +327,13 @@ private fun RenderLiteralHtml(
 ) {
   val literal = source.trim()
   if (literal.isNotEmpty()) {
+    val anchor = rememberChatReaderAnchor()
     Text(
       text = literal,
       style = ClawTheme.type.body.copy(fontFamily = FontFamily.Monospace),
       color = textColor,
+      modifier = anchor?.modifier ?: Modifier,
+      onTextLayout = anchor?.onTextLayout,
     )
   }
 }
@@ -434,10 +440,13 @@ private fun RenderInlineMarkdownRange(
     return
   }
 
+  val anchor = rememberChatReaderAnchor()
   Text(
     text = annotated,
     style = inlineStyles.baseCallout,
     color = textColor,
+    modifier = anchor?.modifier ?: Modifier,
+    onTextLayout = anchor?.onTextLayout ?: {},
   )
 }
 
@@ -576,12 +585,15 @@ private fun RenderTableBlock(
       ) {
         for (index in 0 until maxCols) {
           val cell = row.cells.getOrNull(index) ?: AnnotatedString("")
+          val anchor = rememberChatReaderAnchor()
           Text(
             text = cell,
             style = if (row.isHeader) ClawTheme.type.caption.copy(fontWeight = FontWeight.SemiBold) else inlineStyles.baseCallout,
             color = textColor,
+            onTextLayout = anchor?.onTextLayout ?: {},
             modifier =
               Modifier
+                .then(anchor?.modifier ?: Modifier)
                 .border(1.dp, ClawTheme.colors.textMuted.copy(alpha = 0.22f))
                 .padding(horizontal = 8.dp, vertical = 6.dp)
                 .width(160.dp),
@@ -1312,11 +1324,12 @@ private fun InlineBase64Image(
   val image = imageState.image
 
   if (image != null) {
+    val anchor = rememberChatReaderAnchor(base64)
     Image(
       bitmap = image,
       contentDescription = mimeType ?: nativeString("Image"),
       contentScale = ContentScale.Fit,
-      modifier = Modifier.fillMaxWidth(),
+      modifier = Modifier.fillMaxWidth().then(anchor?.modifier ?: Modifier),
     )
   } else if (imageState.failed) {
     Text(

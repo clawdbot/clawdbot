@@ -141,7 +141,7 @@ function containerFixture(
         },
         env: {},
         mounts: [],
-        image: "node:22-slim",
+        image: "node:24.19.0-slim",
         entry: bundleEntry,
         workerArgs: ["--internal-worker-session"],
         status: params.status ?? "running",
@@ -431,14 +431,14 @@ describe("node worker supervisor container isolation", () => {
     }
   });
 
-  it("uses the documented Node 22 image when no override is configured", async () => {
+  it("uses the documented Node 24.19.0 image when no override is configured", async () => {
     const fixture = containerFixture();
     const input = testWorkerLaunchInput(fixture.workspaceDir, "container-default-image");
     try {
       await fixture.supervisor.launch(input, endpoint);
       await waitForTerminal(fixture.supervisor, input.launchId);
       expect(fixture.events().find((event) => event.argv[0] === "create")?.container?.image).toBe(
-        "node:22-slim",
+        "node:24.19.0-slim",
       );
     } finally {
       await fixture.supervisor.close();

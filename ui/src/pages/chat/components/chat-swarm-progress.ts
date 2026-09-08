@@ -103,6 +103,7 @@ export function renderChatSwarmProgress({
         const total = group.queued + group.running + group.done + group.failed;
         const complete = group.done + group.failed;
         const terminal = complete === total;
+        const successful = terminal && total > 0 && group.failed === 0;
         const label = total === 1 && tasks[0] ? tasks[0].label : t("labsPage.swarm.groupTitle");
         const counts = t(terminal ? "labsPage.swarm.finished" : "labsPage.swarm.active", {
           running: String(group.running),
@@ -115,26 +116,47 @@ export function renderChatSwarmProgress({
           .flatMap((status) => Array.from({ length: Math.min(group[status], 64) }, () => status))
           .slice(0, 64);
         return html` <details
-          class="chat-swarm__group ${group.failed > 0 ? "chat-swarm__group--failed" : ""}"
+          class="chat-swarm__group ${group.failed > 0 ? "chat-swarm__group--failed" : ""} ${successful ? "chat-swarm__group--completed" : ""}"
           data-swarm-group=${group.groupId}
         >
           <summary class="chat-swarm__summary">
-            <div class="chat-swarm__header">
-              <strong title=${label}>${label}</strong>
-              <span
-                >${t("labsPage.swarm.progress", { complete: String(complete), total: String(total) })}</span
-              >
-            </div>
-            <div class="chat-swarm__markers" role="img" aria-label=${counts}>
-              ${markers.map((status) => html`<span class=${`chat-swarm__marker chat-swarm__marker--${status}`} aria-hidden="true"></span>`)}
-              ${total > markers.length ? html`<span>+${total - markers.length}</span>` : nothing}
-            </div>
-            <div class="chat-swarm__counts">${counts}</div>
-            ${terminal ? html`<div class="chat-swarm__outcome">${t("labsPage.swarm.childOutcome")}</div>` : nothing}
-            <span class="chat-swarm__disclosure"
-              >${t("labsPage.swarm.details")} ${icons.chevronDown}</span
-            >
+            ${
+              successful
+                ? html`
+                    <span
+                      class="chat-swarm__task-icon chat-swarm__task-icon--done"
+                      aria-hidden="true"
+                      >${icons.check}</span
+                    >
+                    <div class="chat-swarm__header"><strong title=${label}>${label}</strong></div>
+                    <span class="chat-swarm__counts"
+                      >${t("labsPage.swarm.completed", { done: String(group.done) })}</span
+                    >
+                    <span class="chat-swarm__disclosure"
+                      ><span class="sr-only">${t("labsPage.swarm.details")}</span
+                      >${icons.chevronDown}</span
+                    >
+                  `
+                : html`
+                    <div class="chat-swarm__header">
+                      <strong title=${label}>${label}</strong>
+                      <span
+                        >${t("labsPage.swarm.progress", { complete: String(complete), total: String(total) })}</span
+                      >
+                    </div>
+                    <div class="chat-swarm__markers" role="img" aria-label=${counts}>
+                      ${markers.map((status) => html`<span class=${`chat-swarm__marker chat-swarm__marker--${status}`} aria-hidden="true"></span>`)}
+                      ${total > markers.length ? html`<span>+${total - markers.length}</span>` : nothing}
+                    </div>
+                    <div class="chat-swarm__counts">${counts}</div>
+                    ${terminal ? html`<div class="chat-swarm__outcome">${t("labsPage.swarm.childOutcome")}</div>` : nothing}
+                    <span class="chat-swarm__disclosure"
+                      >${t("labsPage.swarm.details")} ${icons.chevronDown}</span
+                    >
+                  `
+            }
           </summary>
+          ${successful ? html`<div class="chat-swarm__outcome">${t("labsPage.swarm.childOutcome")}</div>` : nothing}
           <div class="chat-swarm__tasks" role="list">
             ${tasks.length === 0 ? html`<div class="chat-swarm__outcome">${t("labsPage.swarm.detailsUnavailable")}</div>` : nothing}
             ${tasks.map(

@@ -4,157 +4,6 @@ import Testing
 @testable import OpenClawKit
 
 @Suite(.serialized) struct LocationPermissionSummaryTests {
-    @Test func `location settings presentation uses apple access labels`() {
-        let whileUsing = LocationSettingsPresentation(
-            selectedMode: .whileUsing,
-            summary: LocationPermissionSummary(
-                desiredMode: .whileUsing,
-                locationServicesEnabled: true,
-                authorizationStatus: .authorizedWhenInUse,
-                accuracyAuthorization: .fullAccuracy))
-        let always = LocationSettingsPresentation(
-            selectedMode: .always,
-            summary: LocationPermissionSummary(
-                desiredMode: .always,
-                locationServicesEnabled: true,
-                authorizationStatus: .authorizedAlways,
-                accuracyAuthorization: .fullAccuracy))
-        let whileUsingWithAlwaysGrant = LocationSettingsPresentation(
-            selectedMode: .whileUsing,
-            summary: LocationPermissionSummary(
-                desiredMode: .whileUsing,
-                locationServicesEnabled: true,
-                authorizationStatus: .authorizedAlways,
-                accuracyAuthorization: .fullAccuracy))
-
-        #expect(whileUsing.accessLevelText == "While Using the App")
-        #expect(always.accessLevelText == "Always")
-        #expect(whileUsingWithAlwaysGrant.accessLevelText == "While Using the App")
-        #expect(OpenClawLocationMode.off.locationAccessLevelText == nil)
-    }
-
-    @Test func `location sharing control follows selected mode while permission is pending`() {
-        let presentation = LocationSettingsPresentation(
-            selectedMode: .whileUsing,
-            summary: LocationPermissionSummary(
-                desiredMode: .whileUsing,
-                locationServicesEnabled: true,
-                authorizationStatus: .notDetermined,
-                accuracyAuthorization: .fullAccuracy))
-
-        #expect(presentation.sharingControlIsOn)
-        #expect(presentation.showsAccessLevel)
-        #expect(presentation.accessLevelText == "While Using the App")
-        #expect(presentation.statusText == "iOS permission is required to share location.")
-        #expect(presentation.toggleAction() == .setMode(.off))
-    }
-
-    @Test func `location sharing toggle from off requests while using by default`() {
-        let presentation = LocationSettingsPresentation(
-            selectedMode: .off,
-            summary: LocationPermissionSummary(
-                desiredMode: .off,
-                locationServicesEnabled: true,
-                authorizationStatus: .notDetermined,
-                accuracyAuthorization: .fullAccuracy))
-
-        #expect(!presentation.sharingControlIsOn)
-        #expect(!presentation.showsAccessLevel)
-        #expect(presentation.toggleAction() == .setMode(.whileUsing))
-    }
-
-    @Test func `access level stays hidden when sharing is off despite retained ios grant`() {
-        let presentation = LocationSettingsPresentation(
-            selectedMode: .off,
-            summary: LocationPermissionSummary(
-                desiredMode: .off,
-                locationServicesEnabled: true,
-                authorizationStatus: .authorizedAlways,
-                accuracyAuthorization: .fullAccuracy))
-
-        #expect(!presentation.sharingControlIsOn)
-        #expect(!presentation.showsAccessLevel)
-        #expect(presentation.accessLevelText == nil)
-    }
-
-    @Test func `location sharing toggle opens app settings when denied`() {
-        let presentation = LocationSettingsPresentation(
-            selectedMode: .off,
-            summary: LocationPermissionSummary(
-                desiredMode: .off,
-                locationServicesEnabled: true,
-                authorizationStatus: .denied,
-                accuracyAuthorization: .fullAccuracy))
-
-        #expect(!presentation.sharingControlIsOn)
-        #expect(!presentation.showsAccessLevel)
-        #expect(presentation.accessLevelText == nil)
-        #expect(presentation.statusText == nil)
-        #expect(presentation.toggleAction() == .openAppSettings(.whileUsing))
-    }
-
-    @Test func `access level reports selection and warns when ios grant is lower`() {
-        let presentation = LocationSettingsPresentation(
-            selectedMode: .always,
-            summary: LocationPermissionSummary(
-                desiredMode: .always,
-                locationServicesEnabled: true,
-                authorizationStatus: .authorizedWhenInUse,
-                accuracyAuthorization: .fullAccuracy))
-
-        #expect(presentation.sharingControlIsOn)
-        #expect(presentation.showsAccessLevel)
-        #expect(presentation.accessLevelText == "Always")
-        #expect(presentation.statusText == "iOS currently allows location only while using the app.")
-        #expect(presentation.accessLevelAction(mode: .always) == .setMode(.always))
-        #expect(presentation.accessLevelAction(mode: .whileUsing) == .setMode(.whileUsing))
-        #expect(presentation.toggleAction() == .setMode(.off))
-    }
-
-    @Test func `healthy location sharing hides redundant status copy`() {
-        let presentation = LocationSettingsPresentation(
-            selectedMode: .whileUsing,
-            summary: LocationPermissionSummary(
-                desiredMode: .whileUsing,
-                locationServicesEnabled: true,
-                authorizationStatus: .authorizedWhenInUse,
-                accuracyAuthorization: .fullAccuracy))
-
-        #expect(presentation.sharingControlIsOn)
-        #expect(presentation.statusText == nil)
-    }
-
-    @Test func `global location services off opens app settings action`() {
-        let presentation = LocationSettingsPresentation(
-            selectedMode: .off,
-            summary: LocationPermissionSummary(
-                desiredMode: .off,
-                locationServicesEnabled: false,
-                authorizationStatus: .authorizedWhenInUse,
-                accuracyAuthorization: .fullAccuracy))
-
-        #expect(!presentation.sharingControlIsOn)
-        #expect(!presentation.showsAccessLevel)
-        #expect(presentation.statusText == nil)
-        #expect(presentation.toggleAction() == .openAppSettings(.whileUsing))
-    }
-
-    @Test func `restricted location permission shows settings guidance`() {
-        let presentation = LocationSettingsPresentation(
-            selectedMode: .whileUsing,
-            summary: LocationPermissionSummary(
-                desiredMode: .whileUsing,
-                locationServicesEnabled: true,
-                authorizationStatus: .restricted,
-                accuracyAuthorization: .fullAccuracy))
-
-        #expect(presentation.sharingControlIsOn)
-        #expect(presentation.showsAccessLevel)
-        #expect(presentation.statusText == "Location permission is restricted on this device.")
-        #expect(presentation.toggleAction() == .setMode(.off))
-        #expect(presentation.accessLevelAction(mode: .whileUsing) == .openAppSettings(.whileUsing))
-    }
-
     @Test func `always desired when in use authorized needs attention`() {
         let summary = LocationPermissionSummary(
             desiredMode: .always,
@@ -303,6 +152,95 @@ import Testing
         #expect(locationService.stopMonitoringCallCount == 1)
     }
 
+    @MainActor @Test func `retired location settings request cannot start monitoring or change sharing`() async {
+        let defaultsKey = "location.enabledMode"
+        let previous = UserDefaults.standard.object(forKey: defaultsKey)
+        defer {
+            if let previous {
+                UserDefaults.standard.set(previous, forKey: defaultsKey)
+            } else {
+                UserDefaults.standard.removeObject(forKey: defaultsKey)
+            }
+        }
+        UserDefaults.standard.set(OpenClawLocationMode.off.rawValue, forKey: defaultsKey)
+        let locationService = MockLocationService(authorizationStatus: .authorizedAlways)
+        let appModel = NodeAppModel(locationService: locationService)
+        var isCurrent = true
+        locationService.ensureAuthorizationHandler = { _ in
+            isCurrent = false
+            return .authorizedAlways
+        }
+
+        let granted = await IOSDeviceSettingsActions.applyLocationMode(
+            .always,
+            appModel: appModel,
+            isCurrent: { isCurrent })
+
+        #expect(!granted)
+        #expect(UserDefaults.standard.string(forKey: defaultsKey) == OpenClawLocationMode.off.rawValue)
+        #expect(locationService.backgroundUpdatesEnabled == nil)
+        #expect(locationService.startMonitoringCallCount == 0)
+        #expect(locationService.stopMonitoringCallCount == 0)
+    }
+
+    @MainActor @Test(arguments: [OpenClawLocationMode.whileUsing, .always], [true, false])
+    func `location selection waits for settled authorization and reloads only grants`(
+        _ mode: OpenClawLocationMode,
+        authorizationGranted: Bool) async throws
+    {
+        let defaultsKey = "location.enabledMode"
+        let previous = UserDefaults.standard.object(forKey: defaultsKey)
+        defer {
+            if let previous {
+                UserDefaults.standard.set(previous, forKey: defaultsKey)
+            } else {
+                UserDefaults.standard.removeObject(forKey: defaultsKey)
+            }
+        }
+        UserDefaults.standard.set(OpenClawLocationMode.off.rawValue, forKey: defaultsKey)
+        let locationService = MockLocationService(authorizationStatus: .notDetermined)
+        let requests = AsyncStream<OpenClawLocationMode>.makeStream()
+        let responses = AsyncStream<CLAuthorizationStatus>.makeStream()
+        defer {
+            requests.continuation.finish()
+            responses.continuation.finish()
+        }
+        locationService.ensureAuthorizationHandler = { requestedMode in
+            requests.continuation.yield(requestedMode)
+            var iterator = responses.stream.makeAsyncIterator()
+            return await iterator.next() ?? .denied
+        }
+        let appModel = NodeAppModel(locationService: locationService, audioAdmissionInitiallyAllowed: false)
+        let request = Task { @MainActor in
+            await IOSDeviceSettingsActions.applyLocationMode(mode, appModel: appModel)
+        }
+        var requestedModes = requests.stream.makeAsyncIterator()
+        #expect(await requestedModes.next() == mode)
+        #expect(UserDefaults.standard.string(forKey: defaultsKey) == OpenClawLocationMode.off.rawValue)
+        #expect(locationService.startMonitoringCallCount == 0)
+
+        let authorization: CLAuthorizationStatus = authorizationGranted
+            ? (mode == .always ? .authorizedAlways : .authorizedWhenInUse)
+            : .denied
+        responses.continuation.yield(authorization)
+        #expect(await request.value == authorizationGranted)
+
+        let domain = try #require(Bundle.main.bundleIdentifier)
+        let reloadedDefaults = UserDefaults()
+        let reloadedModel = NodeAppModel(
+            locationService: MockLocationService(authorizationStatus: authorization),
+            audioAdmissionInitiallyAllowed: false)
+        let reloadedSnapshot = IOSDeviceSettingsSnapshotProducer(
+            appModel: reloadedModel,
+            appearanceModel: AppAppearanceModel(userDefaults: reloadedDefaults),
+            defaults: reloadedDefaults).snapshot()
+        let expectedMode = authorizationGranted ? mode : .off
+        #expect(reloadedDefaults.persistentDomain(forName: domain)?[defaultsKey] as? String == expectedMode.rawValue)
+        #expect(reloadedDefaults.string(forKey: defaultsKey) == expectedMode.rawValue)
+        #expect(reloadedSnapshot.permissions.location.mode.rawValue == expectedMode.rawValue)
+        #expect(locationService.startMonitoringCallCount == (expectedMode == .always ? 1 : 0))
+    }
+
     @MainActor @Test func `external downgrade and always restoration reconcile significant monitoring`() {
         let defaultsKey = "location.enabledMode"
         let previous = UserDefaults.standard.object(forKey: defaultsKey)
@@ -356,6 +294,7 @@ private final class MockLocationService: LocationServicing, @unchecked Sendable 
     var backgroundUpdatesEnabled: Bool?
     var startMonitoringCallCount = 0
     var stopMonitoringCallCount = 0
+    var ensureAuthorizationHandler: (@MainActor (OpenClawLocationMode) async -> CLAuthorizationStatus)?
 
     init(
         authorizationStatus: CLAuthorizationStatus,
@@ -373,8 +312,13 @@ private final class MockLocationService: LocationServicing, @unchecked Sendable 
         self.accuracy
     }
 
-    func ensureAuthorization(mode: OpenClawLocationMode) async -> CLAuthorizationStatus {
-        _ = mode
+    func ensureAuthorization(
+        mode: OpenClawLocationMode,
+        isCurrent _: @MainActor () -> Bool) async -> CLAuthorizationStatus
+    {
+        if let ensureAuthorizationHandler {
+            self.status = await ensureAuthorizationHandler(mode)
+        }
         return self.status
     }
 

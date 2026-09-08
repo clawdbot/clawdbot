@@ -35,7 +35,7 @@ import {
 } from "./command-registration-policy.js";
 import { resolveCliStartupPolicy as resolveCliStartupPolicyForArgv } from "./command-startup-policy.js";
 import { maybeRunCliInContainer, parseCliContainerArgs } from "./container-target.js";
-import { isUnconfiguredConfigSource } from "./fresh-install-config.js";
+import { shouldStartLocalOnboarding } from "./fresh-install-config.js";
 import {
   consumeGatewayFastPathRootOptionToken,
   consumeGatewayRunOptionToken,
@@ -264,35 +264,6 @@ async function tryRunGatewayRunFastPath(
     process.exitCode = error.exitCode;
   }
   return true;
-}
-
-function isUnconfiguredConfigSnapshot(
-  snapshot: Pick<ConfigFileSnapshot, "exists" | "valid" | "sourceConfig">,
-): boolean {
-  if (!snapshot.exists) {
-    return true;
-  }
-  if (!snapshot.valid) {
-    return false;
-  }
-  return isUnconfiguredConfigSource(snapshot.sourceConfig);
-}
-
-async function shouldStartLocalOnboarding(
-  snapshot: Pick<ConfigFileSnapshot, "exists" | "valid" | "sourceConfig" | "path">,
-): Promise<boolean> {
-  if (isUnconfiguredConfigSnapshot(snapshot)) {
-    return true;
-  }
-  if (!snapshot.valid || snapshot.sourceConfig.gateway?.mode === "remote") {
-    return false;
-  }
-  // Inference persists before setup finishes; only its owning receipt can
-  // distinguish interrupted local onboarding from an authored model-only config.
-  const { readLocalOnboardingStateForConfig } = await import("../state/local-onboarding-state.js");
-  return (
-    readLocalOnboardingStateForConfig(snapshot.path, snapshot.sourceConfig)?.status === "pending"
-  );
 }
 
 export async function shouldStartOnboardingForFreshInstall(argv: string[]): Promise<boolean> {
