@@ -528,7 +528,7 @@ describe("buildGatewayCronService", () => {
     }
   });
 
-  it("converges collection review delivery and runs without a configured channel", async () => {
+  it("converges collection review effort and delivery and runs without a configured channel", async () => {
     const cfg = {
       ...createCronConfig("server-cron-skill-review-delivery"),
       skills: { workshop: { autonomous: { mode: "auto" } } },
@@ -536,13 +536,21 @@ describe("buildGatewayCronService", () => {
     const state = loadCronService(cfg);
     const [spec] = resolveSkillCollectionReviewMonitorSpecs(cfg, { schedulerSeed: "test-seed" });
 
-    if (!spec) {
+    if (!spec || spec.input.payload.kind !== "agentTurn") {
       throw new Error("expected the skill collection review monitor spec");
     }
 
     try {
       const existing = await state.cron.add(
-        { ...spec.input, delivery: { mode: "announce" } },
+        {
+          ...spec.input,
+          payload: {
+            kind: "agentTurn",
+            message: spec.input.payload.message,
+            toolsAllow: spec.input.payload.toolsAllow,
+          },
+          delivery: { mode: "announce" },
+        },
         { enabledExplicit: true, systemOwned: true },
       );
       runCronIsolatedAgentTurnMock.mockResolvedValueOnce({
@@ -551,7 +559,10 @@ describe("buildGatewayCronService", () => {
       });
 
       await expect(state.reconcileSystemJobs()).resolves.toBe("converged");
-      expect(state.cron.getJob(existing.id)).toMatchObject({ delivery: { mode: "none" } });
+      expect(state.cron.getJob(existing.id)).toMatchObject({
+        delivery: { mode: "none" },
+        payload: { thinking: "low" },
+      });
 
       await expect(state.cron.run(existing.id, "force")).resolves.toEqual({ ok: true, ran: true });
       expect(state.cron.getJob(existing.id)?.state).toMatchObject({

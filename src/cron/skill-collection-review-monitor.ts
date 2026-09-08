@@ -48,6 +48,7 @@ export function resolveSkillCollectionReviewMonitorSpecs(
       payload: {
         kind: "agentTurn",
         message: SKILL_WORKSHOP_MAINTENANCE_PROMPT,
+        thinking: "low",
         toolsAllow: [...SKILL_WORKSHOP_MAINTENANCE_TOOLS],
       },
       sessionTarget: "isolated",
