@@ -27,7 +27,6 @@ import {
   ACTIVE_EMBEDDED_RUNS,
 } from "../agents/embedded-agent-runner/run-state.js";
 import { queueEmbeddedAgentMessageWithOutcomeAsync } from "../agents/embedded-agent-runner/runs.js";
-import { resolveActiveReplyOperationForSessionId } from "../auto-reply/reply/reply-run-registry.registry.js";
 import { QuestionAnswerUnconfirmedError } from "../agents/harness/gateway-question-dispatch.js";
 import {
   buildAllowedModelSet,
@@ -45,6 +44,7 @@ import {
   DEFAULT_QUEUE_DROP,
 } from "../auto-reply/reply/queue/state.js";
 import type { QueueSettings } from "../auto-reply/reply/queue/types.js";
+import { resolveActiveReplyOperationForSessionId } from "../auto-reply/reply/reply-run-registry.registry.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import { getRuntimeConfig, registerConfigWriteListener } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
@@ -359,7 +359,6 @@ async function waitForQueuedLocalRun(previousRun: QueuedSessionRun, runId: strin
     }
   }
 }
-
 
 /** Prefer registration.agentId, then reply-op agent, then sessionKey parse. */
 function resolveActiveSteerOwnerAgentId(sessionId: string): string | undefined {
