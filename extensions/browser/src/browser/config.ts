@@ -261,12 +261,13 @@ function resolveBrowserSsrFPolicy(cfg: BrowserConfig | undefined): SsrFPolicy | 
   return resolved ?? (hasExplicitPrivateSetting ? { dangerouslyAllowPrivateNetwork: false } : {});
 }
 
-function ensureDefaultProfile(
+function ensureDefaultProfiles(
   profiles: Record<string, BrowserProfileConfig> | undefined,
   legacyCdpPort?: number,
   derivedDefaultCdpPort?: number,
   legacyCdpUrl?: string,
 ): Record<string, BrowserProfileConfig> {
+  // Built-in defaults share this private map; configured profiles stay caller-owned.
   const result = { ...profiles };
   if (!result[DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME]) {
     result[DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME] = {
@@ -274,34 +275,17 @@ function ensureDefaultProfile(
       ...(legacyCdpUrl ? { cdpUrl: legacyCdpUrl } : {}),
     };
   }
-  return result;
-}
-
-function ensureDefaultUserBrowserProfile(
-  profiles: Record<string, BrowserProfileConfig>,
-): Record<string, BrowserProfileConfig> {
-  const result = { ...profiles };
-  if (result.user) {
-    return result;
+  if (!result.user) {
+    result.user = {
+      driver: "existing-session",
+      attachOnly: true,
+    };
   }
-  result.user = {
-    driver: "existing-session",
-    attachOnly: true,
-  };
-  return result;
-}
-
-/** Built-in profile for the Chrome extension relay (user's signed-in browser). */
-function ensureDefaultChromeExtensionProfile(
-  profiles: Record<string, BrowserProfileConfig>,
-): Record<string, BrowserProfileConfig> {
-  const result = { ...profiles };
-  if (result.chrome) {
-    return result;
+  if (!result.chrome) {
+    result.chrome = {
+      driver: "extension",
+    };
   }
-  result.chrome = {
-    driver: "extension",
-  };
   return result;
 }
 
@@ -427,10 +411,11 @@ export function resolveBrowserConfig(
   const legacyCdpPort = rawCdpUrl ? cdpInfo.port : undefined;
   const isWsUrl = cdpInfo.parsed.protocol === "ws:" || cdpInfo.parsed.protocol === "wss:";
   const legacyCdpUrl = rawCdpUrl && isWsUrl ? cdpInfo.normalized : undefined;
-  let profiles = ensureDefaultChromeExtensionProfile(
-    ensureDefaultUserBrowserProfile(
-      ensureDefaultProfile(cfg?.profiles, legacyCdpPort, cdpPortRangeStart, legacyCdpUrl),
-    ),
+  let profiles = ensureDefaultProfiles(
+    cfg?.profiles,
+    legacyCdpPort,
+    cdpPortRangeStart,
+    legacyCdpUrl,
   );
   const cdpProtocol = cdpInfo.parsed.protocol === "https:" ? "https" : "http";
 

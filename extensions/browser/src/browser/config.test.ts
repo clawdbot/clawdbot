@@ -865,17 +865,36 @@ describe("browser config", () => {
     expect(getBrowserProfileCapabilities(work).usesChromeMcp).toBe(false);
   });
 
-  it("resolves a configured custom default profile", () => {
-    const resolved = resolveBrowserConfig({
-      defaultProfile: "custom",
-      profiles: {
+  it.each(
+    [[], ["openclaw"], ["user"], ["chrome"], ["openclaw", "user", "chrome"]].map(
+      (configuredDefaults) => ({ configuredDefaults }),
+    ),
+  )(
+    "resolves a custom default while preserving configured profiles $configuredDefaults",
+    ({ configuredDefaults }) => {
+      const profiles = Object.freeze({
         custom: { cdpPort: 19999 },
-      },
-    });
+        ...Object.fromEntries(configuredDefaults.map((name) => [name, { cdpPort: 20000 }])),
+      });
+      const resolved = resolveBrowserConfig({
+        defaultProfile: "custom",
+        profiles,
+      });
 
-    const profile = resolveProfile(resolved, resolved.defaultProfile);
-    expect(resolved.defaultProfile).toBe("custom");
-    expect(profile?.name).toBe("custom");
-    expect(profile?.cdpPort).toBe(19999);
-  });
+      const profile = resolveProfile(resolved, resolved.defaultProfile);
+      expect(resolved.defaultProfile).toBe("custom");
+      expect(profile?.name).toBe("custom");
+      expect(profile?.cdpPort).toBe(19999);
+      expect(Object.keys(resolved.profiles)).toEqual([
+        "custom",
+        ...configuredDefaults,
+        ...["openclaw", "user", "chrome"].filter((name) => !configuredDefaults.includes(name)),
+      ]);
+      for (const [name, configured] of Object.entries(profiles)) {
+        expect(resolved.profiles[name]).toBe(configured);
+      }
+      delete resolved.profiles.custom;
+      expect(resolveRequiredProfile({ profiles }, "custom").cdpPort).toBe(19999);
+    },
+  );
 });
