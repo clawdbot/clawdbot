@@ -517,6 +517,54 @@ describe("resolvePreparedRuntimeModelAuth", () => {
     ).rejects.toThrow("temporarily unavailable");
   });
 
+  it("unlocks direct fallback when every profile candidate is already in cooldown", async () => {
+    const store = authStore({
+      "openai:first": { type: "api_key", provider: "openai", key: "first-key" },
+    });
+    store.usageStats = {
+      "openai:first": { cooldownUntil: Date.now() + 60_000 },
+    };
+    const profilePlan = {
+      providerForAuth: "openai",
+      authProfileProviderForAuth: "openai",
+      forwardedAuthProfileId: "openai:first",
+      forwardedAuthProfileSource: "auto" as const,
+      forwardedAuthProfileCandidateIds: ["openai:first"],
+    };
+    const directPlan = {
+      providerForAuth: "openai",
+      authProfileProviderForAuth: "openai",
+    };
+    const resolveAuth = vi.fn(async ({ attempt }: { attempt: { kind: string } }) => {
+      if (attempt.kind !== "direct") {
+        throw new Error("profile should have been skipped");
+      }
+      return { plan: directPlan, auth: "native-direct" };
+    });
+    const materializeModel = vi.fn(async () => platformModel);
+
+    await expect(
+      resolvePreparedRuntimeAuthAttempts({
+        attempts: [
+          { kind: "profile", plan: profilePlan, profileId: "openai:first" },
+          {
+            kind: "direct",
+            plan: directPlan,
+            allowAuthProfileFallback: false,
+            requiresPriorProfileAttempt: true,
+          },
+        ],
+        store,
+        modelId: "gpt-5.5",
+        model: platformModel,
+        materializeModel,
+        resolveAuth,
+        errorMessage: "prepared auth failed",
+      }),
+    ).resolves.toMatchObject({ auth: "native-direct" });
+    expect(resolveAuth).toHaveBeenCalledOnce();
+  });
+
   it("does not unlock direct fallback when a profile cools during materialization", async () => {
     const store = authStore({
       "openai:first": { type: "api_key", provider: "openai", key: "first-key" },

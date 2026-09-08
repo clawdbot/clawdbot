@@ -88,6 +88,10 @@ export async function resolvePreparedRuntimeAuthAttempts<Model, Auth>(params: {
       })
     ) {
       firstError ??= new Error("Prepared runtime auth candidates are temporarily unavailable.");
+      // A profile tier with zero runnable candidates was still *considered*.
+      // Unlock subsequent direct attempts (e.g. Claude CLI native auth) instead
+      // of treating the skip as "profile tier never tried".
+      priorProfileAttempted = true;
       continue;
     }
     try {
