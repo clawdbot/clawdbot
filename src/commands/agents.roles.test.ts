@@ -1,8 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { loadAgentRole } from "../agents/agent-roles.js";
 import { createAgentTeam } from "../agents/agent-team.js";
-import { loadAgentTemplate } from "../agents/agent-templates.js";
+import { loadAgentIdentityFromWorkspace } from "../agents/identity-file.js";
 import { ensureAgentWorkspace } from "../agents/workspace.js";
 import { readConfigFileSnapshot, resetConfigRuntimeState } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -129,13 +130,20 @@ describe("role and team creation through persisted configuration", () => {
       expect(errors).toEqual([]);
       const summary: unknown = JSON.parse(logs.join("\n"));
       expect(summary).toMatchObject({ agentId: "editor", workspace });
-      const template = await loadAgentTemplate("writer");
-      for (const file of template.manifest.files) {
-        expect(await fs.readFile(path.join(workspace, file), "utf8")).toBe(template.files[file]);
+      const template = await loadAgentRole("writer");
+      for (const [file, content] of Object.entries(template.files)) {
+        expect(await fs.readFile(path.join(workspace, file), "utf8")).toBe(content);
       }
+      expect(loadAgentIdentityFromWorkspace(workspace)).toEqual({
+        name: "Writer",
+        creature: "writer assistant",
+        vibe: "clear, audience-aware writing",
+        emoji: "✍️",
+        theme: "clear, audience-aware writing",
+      });
       expect(await fs.readFile(path.join(workspace, "USER.md"), "utf8")).toContain("# USER.md");
       const config = await readConfig();
-      expect(config.agents?.entries?.editor?.identity).toEqual(template.manifest.identity);
+      expect(config.agents?.entries?.editor?.identity).toEqual(template.identity);
       expect(config.agents?.entries?.editor?.subagents).toEqual({ allowAgents: [] });
       expect(config.agents?.entries?.editor?.skills).toBeUndefined();
       await expect(fs.access(path.join(workspace, "BOOTSTRAP.md"))).rejects.toMatchObject({

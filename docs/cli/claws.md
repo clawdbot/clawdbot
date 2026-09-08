@@ -29,6 +29,16 @@ The current CLI reads a local package directory, `CLAW.md`, or grouped JSON mani
 Publishing, searching, and installing whole Claws through ClawHub are a
 separate registry track and are not part of this command surface yet.
 
+## Bundled role Claws
+
+The bundled `coordinator`, `researcher`, `writer`, and `reviewer` roles are Claw
+sources at `docs/reference/templates/roles/<role>` in a source checkout, with no
+`package.json` requirement. Use [`agents add --role`](/cli/agents#role-templates)
+or `openclaw claws add docs/reference/templates/roles/<role>` through the
+[preview and consent flow](/cli/claws#inspect-and-preview).
+[`agents team create`](/cli/agents#agents-team-create) owns delegation wiring;
+the role Claws will carry those settings once separate Claw profile support lands.
+
 ## Create a Claw package
 
 A package contains `package.json`, a `CLAW.md` manifest, and any conventional

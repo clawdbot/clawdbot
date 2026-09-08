@@ -522,6 +522,13 @@ async function resolveSource(
     };
   }
   if (inputStat.isDirectory()) {
+    const sourceRoot = await fsSafeRoot(inputPath);
+    if (
+      !(await sourceRoot.exists("package.json")) &&
+      (await sourceRoot.exists(CLAW_MARKDOWN_FILENAME))
+    ) {
+      return resolveSource(resolve(inputPath, CLAW_MARKDOWN_FILENAME));
+    }
     return resolvePackageSource(inputPath);
   }
   if (!inputStat.isFile()) {

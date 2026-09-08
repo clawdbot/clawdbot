@@ -24,9 +24,9 @@ import { recordAgentProvenance, type AgentCreatedVia } from "../state/agent-prov
 import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
 import { resolveUserPath } from "../utils.js";
 import { claimCompletedAgentDeletion } from "./agent-lifecycle-registry.js";
+import { listAgentRoles, loadAgentRole } from "./agent-roles.js";
 import { toAgentEntriesRecord } from "./agent-scope-config.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "./agent-scope.js";
-import { loadAgentTemplate } from "./agent-templates.js";
 import { resolveSharedAuthStoreOwnership } from "./auth-profiles/path-resolve.js";
 import {
   createAgentIdentityConfig,
@@ -254,10 +254,10 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
   const agentId = validation.agentId;
   const isBootstrapMain = agentId === BOOTSTRAP_AGENT_ID && params.bootstrapMain === true;
 
-  const template = params.role ? await loadAgentTemplate(params.role) : undefined;
+  const template = params.role ? await loadAgentRole(params.role) : undefined;
   const safeName = sanitizeAgentIdentityLine(rawName);
   const model = normalizeOptionalString(params.model);
-  const identity = template?.manifest.identity ??
+  const identity = template?.identity ??
     params.entry?.identity ??
     createAgentIdentityConfig({
       name: safeName,
@@ -397,8 +397,17 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
             const index = findAgentEntryIndex(list, agentId);
             list[index] = {
               ...list[index],
-              ...(template?.manifest.skills ? { skills: template.manifest.skills } : {}),
-              ...(template?.manifest.subagents ? { subagents: template.manifest.subagents } : {}),
+              ...(template
+                ? {
+                    subagents:
+                      params.role === "coordinator"
+                        ? {
+                            allowAgents: listAgentRoles().filter((role) => role !== "coordinator"),
+                            delegationMode: "prefer" as const,
+                          }
+                        : { allowAgents: [] },
+                  }
+                : {}),
               ...stagedEntry,
               id: agentId,
               name: safeName,
