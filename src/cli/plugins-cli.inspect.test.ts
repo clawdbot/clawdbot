@@ -3,12 +3,15 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { recordInstalledPluginIndexInstallOwner } from "../plugins/installed-plugin-index-install-owner.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { PluginInspectReport } from "../plugins/status.js";
 import {
   createInstalledPluginIndexSnapshot,
   createPluginRecord,
 } from "../plugins/status.test-fixtures.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import {
+  withPluginDiagnosticsReportForInspectionMock,
   buildAllPluginInspectReportsMock,
   buildPluginDiagnosticsReportMock,
   buildPluginInspectReportMock,
@@ -107,6 +110,114 @@ describe("plugins cli inspect", () => {
     workshopMocks.loadMetadata.mockReturnValue({ index: createInstalledPluginIndexSnapshot([]) });
   });
 
+  it.each([false, true])(
+    "serializes while owned and waits for release before JSON output (all: %s)",
+    async (all) => {
+      const started = createDeferredCore();
+      const finish = createDeferredCore();
+      const plugin = createPluginRecord({ id: "owned-inspect" });
+      let released = false;
+      let serialized = false;
+      Object.defineProperty(plugin, "description", {
+        enumerable: true,
+        get() {
+          expect(released).toBe(false);
+          serialized = true;
+          return "resource-backed description";
+        },
+      });
+      const report = {
+        ...createEmptyPluginRegistry(),
+        workspaceScope: "omitted" as const,
+        plugins: [plugin],
+      };
+      buildPluginSnapshotReportMock.mockReturnValue(report);
+      const inspect = createInspectReport({ plugin });
+      buildPluginInspectReportMock.mockReturnValue(inspect);
+      buildAllPluginInspectReportsMock.mockReturnValue([inspect]);
+      withPluginDiagnosticsReportForInspectionMock.mockImplementation(
+        async (_params, formatReport) => {
+          const output = formatReport(report);
+          expect(serialized).toBe(true);
+          started.resolve();
+          await finish.promise;
+          released = true;
+          return output;
+        },
+      );
+      const command = runPluginsCommand([
+        "plugins",
+        "inspect",
+        all ? "--all" : plugin.id,
+        "--runtime",
+        "--json",
+      ]);
+      try {
+        await started.promise;
+        expect(pluginsCliRuntimeLogs).toEqual([]);
+      } finally {
+        finish.resolve();
+        await command;
+      }
+      expect(withPluginDiagnosticsReportForInspectionMock).toHaveBeenCalledTimes(1);
+      expect(released).toBe(true);
+      expect(pluginsCliRuntimeLogs).toHaveLength(1);
+      const result = JSON.parse(pluginsCliRuntimeLogs[0] ?? "");
+      expect((all ? result[0] : result).plugin.description).toBe("resource-backed description");
+    },
+  );
+
+  it.each(["serialization", "disposal", "missing-report"] as const)(
+    "does not emit success when inspection has a %s failure",
+    async (failure) => {
+      const plugin = createPluginRecord({ id: "owned-inspect" });
+      const report = {
+        ...createEmptyPluginRegistry(),
+        workspaceScope: "omitted" as const,
+        plugins: [plugin],
+      };
+      buildPluginSnapshotReportMock.mockReturnValue(report);
+      const inspect = createInspectReport({ plugin });
+      buildPluginInspectReportMock.mockReturnValue(failure === "missing-report" ? null : inspect);
+      const serializationError = new Error("fixture serialization failed");
+      const disposalError = new Error("fixture disposal failed");
+      if (failure.startsWith("serialization")) {
+        Object.defineProperty(plugin, "description", {
+          enumerable: true,
+          get() {
+            throw serializationError;
+          },
+        });
+      }
+      withPluginDiagnosticsReportForInspectionMock.mockImplementation(
+        async (_params, formatReport) => {
+          const output = formatReport(report);
+          expect(pluginsCliRuntimeLogs).toEqual([]);
+          if (failure === "disposal") {
+            throw disposalError;
+          }
+          return output;
+        },
+      );
+      const command = runPluginsCommand(["plugins", "inspect", plugin.id, "--runtime", "--json"]);
+      await expect(command).rejects.toThrow(
+        failure === "missing-report" ? "__exit__:1" : `fixture ${failure} failed`,
+      );
+      expect(withPluginDiagnosticsReportForInspectionMock).toHaveBeenCalledTimes(1);
+      expect(pluginsCliRuntimeLogs).toHaveLength(failure === "missing-report" ? 1 : 0);
+    },
+  );
+
+  it.each([{ selection: ["--all", "extra"] }, { selection: [] }])(
+    "rejects invalid runtime selection before acquisition: $selection",
+    async ({ selection }) => {
+      await expect(
+        runPluginsCommand(["plugins", "inspect", ...selection, "--runtime", "--json"]),
+      ).rejects.toThrow("__exit__:1");
+      expect(withPluginDiagnosticsReportForInspectionMock).not.toHaveBeenCalled();
+    },
+  );
+
   it.each([
     { enabled: true, status: "loaded", expected: "enabled" },
     { enabled: false, status: "disabled", expected: "disabled" },
@@ -150,6 +261,7 @@ describe("plugins cli inspect", () => {
         ]);
       }
       expect(buildPluginDiagnosticsReportMock).not.toHaveBeenCalled();
+      expect(withPluginDiagnosticsReportForInspectionMock).not.toHaveBeenCalled();
 
       for (const selection of [[plugin.id], ["--all"]]) {
         pluginsCliRuntimeLogs.length = 0;
@@ -176,7 +288,9 @@ describe("plugins cli inspect", () => {
     const report = { plugins: [plugin], diagnostics: [] };
     const inspect = createInspectReport({ plugin });
     buildPluginSnapshotReportMock.mockReturnValue(report);
-    buildPluginDiagnosticsReportMock.mockReturnValue(report);
+    withPluginDiagnosticsReportForInspectionMock.mockImplementation(async (_params, formatReport) =>
+      formatReport({ ...createEmptyPluginRegistry(), workspaceScope: "omitted", ...report }),
+    );
     buildPluginInspectReportMock.mockReturnValue(inspect);
     buildAllPluginInspectReportsMock.mockReturnValue([inspect]);
 
@@ -203,14 +317,17 @@ describe("plugins cli inspect", () => {
         diagnostics: [
           {
             level: "warn" as const,
-            code: "workspace-scope-omitted",
+            code: "workspace-scope-omitted" as const,
             message: "Workspace discovery was skipped; select the system owner.",
           },
           diagnostic,
         ],
       };
       buildPluginSnapshotReportMock.mockReturnValue(report);
-      buildPluginDiagnosticsReportMock.mockReturnValue(report);
+      withPluginDiagnosticsReportForInspectionMock.mockImplementation(
+        async (_params, formatReport) =>
+          formatReport({ ...createEmptyPluginRegistry(), workspaceScope: "omitted", ...report }),
+      );
       buildPluginInspectReportMock.mockReturnValue(inspect);
       buildAllPluginInspectReportsMock.mockReturnValue(reports);
       const args = [
@@ -226,6 +343,7 @@ describe("plugins cli inspect", () => {
         if (selection === "missing") {
           await expect(command).rejects.toThrow("__exit__:1");
           expect(buildPluginDiagnosticsReportMock).not.toHaveBeenCalled();
+          expect(withPluginDiagnosticsReportForInspectionMock).not.toHaveBeenCalled();
         } else {
           await command;
           if (json) {
@@ -381,6 +499,7 @@ describe("plugins cli inspect", () => {
       await runPluginsCommand(["plugins", "inspect", pluginId]);
 
       expect(buildPluginDiagnosticsReportMock).not.toHaveBeenCalled();
+      expect(withPluginDiagnosticsReportForInspectionMock).not.toHaveBeenCalled();
       expect(pluginsCliRuntimeLogs.join("\n")).toContain("Policy");
       expect(pluginsCliRuntimeLogs.join("\n")).toContain("allowConversationAccess: true");
       expect(pluginsCliRuntimeLogs.join("\n")).toContain("Services:\nmem0-background");
@@ -465,12 +584,13 @@ describe("plugins cli inspect", () => {
 
     for (const selector of ["openclaw-mem0", "Mem0"]) {
       await runPluginsCommand(["plugins", "inspect", selector, "--runtime"]);
-      expect(buildPluginDiagnosticsReportMock).toHaveBeenLastCalledWith(
+      expect(withPluginDiagnosticsReportForInspectionMock).toHaveBeenLastCalledWith(
         expect.objectContaining({
           config: {},
           onlyPluginIds: ["openclaw-mem0"],
           runtimeInspection: true,
         }),
+        expect.any(Function),
       );
       expect(pluginsCliRuntimeLogs.at(-1)).toContain("Gateway discovery:\nmem0-runtime-discovery");
     }
@@ -490,6 +610,7 @@ describe("plugins cli inspect", () => {
       expect.objectContaining({ config: {} }),
     );
     expect(buildPluginDiagnosticsReportMock).not.toHaveBeenCalled();
+    expect(withPluginDiagnosticsReportForInspectionMock).not.toHaveBeenCalled();
     expect(runtimeErrors.at(-1)).toContain("Plugin not found: missing-plugin");
   });
 

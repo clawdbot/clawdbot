@@ -1,7 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { DatabaseSync } from "node:sqlite";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { runPluginsInspectCommand } from "../cli/plugins-inspect-command.js";
 import { readConfigFileSnapshotForWrite, writeConfigFile } from "../config/config.js";
+import { defaultRuntime } from "../runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnv, withEnvAsync } from "../test-utils/env.js";
 import { setGatewayPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
@@ -23,7 +26,11 @@ import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.
 import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import { getActivePluginRegistry } from "./runtime.js";
 import { applySlotSelectionForPlugin } from "./slot-selection.js";
-import { buildPluginDiagnosticsReport } from "./status.js";
+import * as statusSnapshot from "./status-snapshot.js";
+import {
+  withPluginDiagnosticsReportForInspection,
+  buildPluginDiagnosticsReport,
+} from "./status.js";
 
 describe("plugin runtime inspection", () => {
   afterEach(() => {
@@ -34,6 +41,150 @@ describe("plugin runtime inspection", () => {
 
   afterAll(() => {
     cleanupPluginLoaderFixturesForTest();
+  });
+
+  it.each([
+    "single",
+    "all",
+    "projection-error",
+    "projection-and-disposal-error",
+    "serialization-error",
+    "serialization-and-disposal-error",
+    "raw",
+  ] as const)("keeps native inspection custody through %s", async (mode) => {
+    const all = mode === "all";
+    const stateDir = makePluginLoaderTempDir();
+    const databasePath = path.join(stateDir, "inspection.sqlite");
+    const key = `__openclaw_inspect_${mode}`;
+    const state: {
+      database?: DatabaseSync;
+      disposals: number;
+      cleanups: number;
+      factories: number;
+    } = {
+      disposals: 0,
+      cleanups: 0,
+      factories: 0,
+    };
+    Object.defineProperty(globalThis, key, { value: state, configurable: true });
+    const plugin = writePlugin({
+      id: "native-cli-inspection",
+      body: `const { DatabaseSync } = require("node:sqlite");
+module.exports = {
+  id: "native-cli-inspection",
+  register(api) {
+    const state = globalThis[${JSON.stringify(key)}];
+    const database = new DatabaseSync(${JSON.stringify(databasePath)});
+    database.exec("CREATE TABLE inspection (value INTEGER); INSERT INTO inspection VALUES (42)");
+    state.database = database;
+    class NativeLifecycle {
+      id = "native-resource";
+      #database = database;
+      async dispose() {
+        state.disposals++;
+        this.#database.close();
+        if (${mode.endsWith("and-disposal-error")}) throw new Error("fixture disposal failed");
+      }
+      cleanup() { state.cleanups++; }
+    }
+    api.registerRuntimeLifecycle(new NativeLifecycle());
+    api.registerContextEngine("native-cli-inspection", () => {
+      state.factories++;
+      throw new Error("inspection must not invoke factories");
+    });
+    api.registerHttpRoute({ path: "/inspection", auth: "plugin", handler() { return true; } });
+  },
+};`,
+    });
+    const output: string[] = [];
+    const writeStdout = vi.spyOn(defaultRuntime, "writeStdout").mockImplementation((value) => {
+      expect(state.database?.isOpen).toBe(false);
+      output.push(value);
+    });
+    const projectionError = new Error("fixture report projection failed");
+    const projection = vi.spyOn(statusSnapshot, "collectPluginCapabilityConsentDiagnostics");
+    try {
+      await withEnvAsync(
+        {
+          OPENCLAW_HOME: stateDir,
+          OPENCLAW_STATE_DIR: stateDir,
+          OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
+        },
+        async () => {
+          useNoBundledPlugins();
+          const config = { plugins: { allow: [plugin.id], load: { paths: [plugin.file] } } };
+          await writeConfigFile(config);
+          const active = getActivePluginRegistry();
+          if (mode === "raw") {
+            const report = buildPluginDiagnosticsReport({ config, runtimeInspection: true });
+            expect(report.plugins[0]?.id).toBe(plugin.id);
+            expect(state.database?.isOpen).toBe(true);
+            expect(state.disposals).toBe(0);
+            expect(getActivePluginRegistry()).toBe(active);
+            return;
+          }
+          if (mode.includes("error")) {
+            if (mode.startsWith("projection")) {
+              projection.mockImplementation(() => {
+                throw projectionError;
+              });
+            }
+            const inspection = withPluginDiagnosticsReportForInspection(
+              { config, runtimeInspection: true },
+              (report) => {
+                expect(report.plugins[0]?.id).toBe(plugin.id);
+                expect(state.database?.prepare("SELECT value FROM inspection").get()).toEqual({
+                  value: 42,
+                });
+                return JSON.stringify({
+                  toJSON() {
+                    throw projectionError;
+                  },
+                });
+              },
+            );
+            if (!mode.includes("and-disposal")) {
+              await expect(inspection).rejects.toBe(projectionError);
+            } else {
+              await expect(inspection).rejects.toMatchObject({
+                errors: [projectionError, expect.any(AggregateError)],
+              });
+            }
+          } else {
+            await runPluginsInspectCommand(all ? undefined : plugin.id, {
+              all,
+              runtime: true,
+              json: true,
+            });
+            expect(getActivePluginRegistry()).toBe(active);
+            expect(output).toHaveLength(1);
+            const parsed = JSON.parse(output[0] ?? "");
+            expect(all ? parsed[0] : parsed).toMatchObject({
+              plugin: { id: plugin.id },
+              httpRouteCount: 1,
+            });
+          }
+          expect(getActivePluginRegistry()).toBe(active);
+          expect(state.disposals).toBe(1);
+          expect(state.database?.isOpen).toBe(false);
+          expect(state.cleanups).toBe(0);
+          expect(state.factories).toBe(0);
+          const reopened = new DatabaseSync(databasePath, { readOnly: true });
+          try {
+            expect(reopened.prepare("SELECT value FROM inspection").get()).toEqual({ value: 42 });
+          } finally {
+            reopened.close();
+          }
+        },
+      );
+    } finally {
+      projection.mockRestore();
+      writeStdout.mockRestore();
+      if (state.database?.isOpen) {
+        state.database.close();
+      }
+      Reflect.deleteProperty(globalThis, key);
+    }
   });
 
   it.each([
