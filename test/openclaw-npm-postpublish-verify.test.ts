@@ -2023,11 +2023,11 @@ describe("runtime dependency ownership build contract", () => {
       "package.json": JSON.stringify({ name: "openclaw", version: "2026.7.33", type: "module" }),
       "src/root.js": rootSource,
       "extensions/example/index.js": `
-      export { value } from "./shared.js";
+      export { value } from "../../src/shared.js";
       export const load = () => import("./lazy.js");
     `,
-      "extensions/example/observer.js": 'export { value } from "./shared.js";',
-      "extensions/example/shared.js": 'export { value } from "fixture-runtime";',
+      "extensions/example/observer.js": 'export { value } from "../../src/shared.js";',
+      "src/shared.js": 'export { value } from "fixture-runtime";',
       "extensions/example/lazy.js": 'export { lazy } from "fixture-lazy";',
       ...pluginSources,
     };
@@ -2114,7 +2114,7 @@ describe("runtime dependency ownership build contract", () => {
       `import { createRequire } from "node:module";
        export const value = createRequire(import.meta.url)("fixture-runtime");`,
     ],
-    ["root-shared chunk", 'export { value } from "../extensions/example/shared.js";'],
+    ["root-shared chunk", 'export { value } from "./shared.js";'],
   ])("rejects a root %s even when a plugin owns the same dependency", async (_name, source) => {
     const root = await buildInstalledFixture(source);
     expect(collectInstalledRootDependencyManifestErrors(root)).toEqual([
