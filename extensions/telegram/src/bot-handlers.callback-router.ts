@@ -51,6 +51,7 @@ import {
   startTelegramCallbackQueryAnswer,
 } from "./callback-query-answer-state.js";
 import { buildCommandsPaginationKeyboard, buildTelegramModelsMenuButtons } from "./command-ui.js";
+import { markdownToTelegramHtml } from "./format.js";
 import { resolveTelegramInlineButtonsScope } from "./inline-buttons.js";
 import {
   buildModelsKeyboard,
@@ -495,7 +496,10 @@ async function handleTelegramModelCallback(params: {
           )
         : undefined;
     try {
-      await editCallbackMessage(result.text, keyboard ? { reply_markup: keyboard } : undefined);
+      await editCallbackMessage(markdownToTelegramHtml(result.text), {
+        parse_mode: "HTML",
+        ...(keyboard ? { reply_markup: keyboard } : {}),
+      });
     } catch (editErr) {
       if (!String(editErr).includes("message is not modified")) {
         throw new TelegramRetryableCallbackError(editErr);

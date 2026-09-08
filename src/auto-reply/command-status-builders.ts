@@ -158,9 +158,11 @@ function buildCommandItems(
 
   for (const command of pluginCommands) {
     const pluginLabel = command.pluginId ? ` (${command.pluginId})` : "";
+    // Preserve the canonical spelling without auto-linking only its prefix or guessing an alias.
+    const commandName = command.name.includes("-") ? `\`/${command.name}\`` : `/${command.name}`;
     items.push({
       label: "Plugins",
-      text: `/${command.name}${pluginLabel} - ${command.description}`,
+      text: `${commandName}${pluginLabel} - ${command.description}`,
     });
   }
 
