@@ -10,6 +10,7 @@ import {
   recordUpdateRecoveryNativeIntent,
   recordUpdateRecoveryNativeNotApplied,
   cancelUpdateRecoveryRestart,
+  reconcileUpdateRecoveryStoppedSuppression,
   recordUpdateRecoveryNativeObservation,
 } from "./update-run-recovery-native.js";
 import { setupNativeManagerFixture } from "./update-run-recovery-native.test-support.js";
@@ -505,5 +506,205 @@ it.each(["not-applied", "stopped", "identity-change", "revoked"])(
         f.options,
       ),
     ).toThrow();
+  },
+);
+
+it.each([
+  "pending",
+  "observed",
+  "enabled",
+  "running",
+  "unloaded",
+  "missing",
+  "identity",
+  "revoked",
+  "stale-row",
+])(
+  "reconciles only freshly owned stopped suppression without rewriting history (%s)",
+  async (mode) => {
+    const f = await stopped("linux");
+    const startId = randomUUID();
+    let record = (
+      await recordUpdateRecoveryNativeIntent(
+        f.record,
+        {
+          effectId: startId,
+          action: "restore",
+          target: f.original,
+          observe: f.observe,
+          restart: { runtime: "candidate", resourceId: "gateway" },
+        },
+        f.fence,
+        f.options,
+      )
+    ).record;
+    f.setFacts(f.original);
+    record = (
+      await recordUpdateRecoveryNativeObservation(record, startId, f.observe, f.fence, f.options)
+    ).record;
+    record = recordUpdateRecoveryFailure(
+      record,
+      { code: "candidate-failed", effectId: startId },
+      f.fence,
+      f.options,
+    );
+    const suppressionId = randomUUID();
+    const target = { ...f.original, enabled: false };
+    record = (
+      await recordUpdateRecoveryNativeIntent(
+        record,
+        {
+          effectId: suppressionId,
+          action: "suppress",
+          target,
+          observe: f.observe,
+        },
+        f.fence,
+        f.options,
+      )
+    ).record;
+    if (mode === "observed") {
+      f.setFacts(target);
+      record = (
+        await recordUpdateRecoveryNativeObservation(
+          record,
+          suppressionId,
+          f.observe,
+          f.fence,
+          f.options,
+        )
+      ).record;
+    }
+    const original = structuredClone(record);
+    let expected = original;
+    const actual = { ...target, stopped: true };
+    f.setFacts(
+      mode === "enabled"
+        ? { ...actual, enabled: true }
+        : mode === "running"
+          ? target
+          : mode === "unloaded"
+            ? { ...actual, loaded: false }
+            : mode === "missing"
+              ? { exists: false, enabled: null, loaded: false, stopped: true }
+              : actual,
+    );
+    let live = true;
+    const fence = {
+      assertCurrent() {
+        if (!live) {
+          throw new Error("revoked");
+        }
+      },
+    };
+    const observe = async () => {
+      const value = await f.observe();
+      if (mode === "revoked") {
+        live = false;
+      }
+      if (mode === "stale-row") {
+        expected = recordUpdateRecoveryFailure(
+          record,
+          original.primaryFailure!,
+          f.fence,
+          f.options,
+        );
+      }
+      return mode === "identity"
+        ? { ...value, identity: { ...value.identity, runId: randomUUID() } }
+        : value;
+    };
+    if (!["pending", "observed"].includes(mode)) {
+      await expect(
+        reconcileUpdateRecoveryStoppedSuppression(record, observe, fence, f.options),
+      ).rejects.toThrow();
+      expect(loadUpdateRecovery(record.runId, f.options)).toEqual(expected);
+      return;
+    }
+    record = await reconcileUpdateRecoveryStoppedSuppression(record, observe, fence, f.options);
+    const before = original.nativeManager!.effects.at(-1)!;
+    const reconciled = record.nativeManager!.effects.at(-1)!;
+    expect(reconciled).toEqual({
+      ...before,
+      state: mode === "observed" ? "observed" : "reconciled",
+      reconciledStop: { facts: actual, revision: record.revision },
+    });
+    expect(record.nativeManager!.original).toEqual(original.nativeManager!.original);
+    expect(record.effects).toEqual(original.effects);
+    expect(record.primaryFailure).toEqual(original.primaryFailure);
+    expect(record.checkpoint).toEqual(original.checkpoint);
+    expect(record.verification).toBeNull();
+    expect(record.terminal).toBeUndefined();
+    // Lost acknowledgement is safe to reconcile at the new revision, not the old one.
+    await expect(
+      reconcileUpdateRecoveryStoppedSuppression(record, observe, fence, f.options),
+    ).resolves.toEqual(record);
+    await expect(
+      reconcileUpdateRecoveryStoppedSuppression(original, observe, fence, f.options),
+    ).rejects.toThrow();
+    await expect(
+      recordUpdateRecoveryNativeObservation(record, suppressionId, observe, fence, f.options),
+    ).rejects.toThrow();
+    // Suppression reconciliation alone never authorizes cancellation or readiness.
+    await expect(cancelUpdateRecoveryRestart(record, observe, fence, f.options)).rejects.toThrow();
+    for (const change of [
+      "facts",
+      "revision",
+      "action",
+      "original-after",
+      "missing-marker",
+      "intent-marker",
+      "missing-failure",
+    ]) {
+      const invalid = structuredClone(record);
+      const effect = invalid.nativeManager!.effects.at(-1)!;
+      if (change === "facts") {
+        effect.reconciledStop!.facts.stopped = false;
+      }
+      if (change === "revision") {
+        effect.reconciledStop!.revision = effect.intentRevision;
+      }
+      if (change === "action") {
+        effect.action = "restore";
+      }
+      if (change === "original-after") {
+        effect.after.loaded = false;
+      }
+      if (change === "missing-marker") {
+        effect.state = "reconciled";
+        delete effect.reconciledStop;
+      }
+      if (change === "intent-marker") {
+        effect.state = "intent";
+      }
+      if (change === "missing-failure") {
+        invalid.primaryFailure = null;
+      }
+      expect(UpdateRecoveryRecordSchema.safeParse(invalid).success, change).toBe(false);
+    }
+    const stopId = randomUUID();
+    const stop = await recordUpdateRecoveryNativeIntent(
+      record,
+      {
+        effectId: stopId,
+        action: "stop",
+        target: actual,
+        observe,
+      },
+      fence,
+      f.options,
+    );
+    expect(stop.status).toBe("after"); // No command required: independent stop readback is still mandatory.
+    record = (
+      await recordUpdateRecoveryNativeObservation(stop.record, stopId, observe, fence, f.options)
+    ).record;
+    record = await cancelUpdateRecoveryRestart(record, observe, fence, f.options);
+    expect(record.effects.at(-1)).toMatchObject({
+      state: "cancelled",
+      observedIdentity: null,
+      cancelledByNativeEffectId: stopId,
+    });
+    closeOpenClawStateDatabaseForTest();
+    expect(loadUpdateRecovery(record.runId, f.options)).toEqual(record);
   },
 );

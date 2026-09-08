@@ -4,6 +4,7 @@ import { resolveGatewayService } from "../../daemon/service.js";
 import { currentUpdateRecoveryNativeFacts } from "../../infra/update-run-recovery-native-schema.js";
 import {
   cancelUpdateRecoveryRestart,
+  reconcileUpdateRecoveryStoppedSuppression,
   inspectUpdateRecoveryNativeManager,
   recordUpdateRecoveryNativeIntent,
   recordUpdateRecoveryNativeNotApplied,
@@ -42,15 +43,22 @@ export async function quiesceFailedUpdateCommand(params: {
   await withUpdateCommandSourceOwnership({ recovery, env, mutation: true }, async (source) => {
     const { assertCurrent, verifySources, definitionPaths } = source;
     const fence = { assertCurrent };
-    const observe = () =>
-      readUpdateCommandNativeObservation({
-        record: recovery.getRecord(),
+    const observe = async () => {
+      const expected = recovery.getRecord();
+      await verifySources();
+      assertExactUpdateRecoveryClaim(expected, fence, recovery.options);
+      const observed = await readUpdateCommandNativeObservation({
+        record: expected,
         env,
         definitionPaths,
         assertCurrent,
         timeoutMs: params.timeoutMs,
         quiescingFailedCandidate: true,
       });
+      await verifySources();
+      assertExactUpdateRecoveryClaim(expected, fence, recovery.options);
+      return observed;
+    };
     const verify = async () => {
       const expected = recovery.getRecord();
       await verifySources();
@@ -90,11 +98,41 @@ export async function quiesceFailedUpdateCommand(params: {
           ),
         );
       } else {
-        throw new UpdateCommandRecoveryPendingError(
-          "Native failure conflicts with its dispatched before/after facts.",
+        recovery.onRecord(
+          await reconcileUpdateRecoveryStoppedSuppression(
+            current,
+            observe,
+            fence,
+            recovery.options,
+          ),
         );
       }
     }
+    const reconcileStopped = async () => {
+      const expected = recovery.getRecord();
+      const suppressed = expected.nativeManager!.effects.at(-1);
+      if (
+        suppressed?.action !== "suppress" ||
+        suppressed.state !== "observed" ||
+        suppressed.reconciledStop ||
+        suppressed.after.stopped
+      ) {
+        return;
+      }
+      const actual = await observe();
+      await verify();
+      if (actual.facts.stopped) {
+        recovery.onRecord(
+          await reconcileUpdateRecoveryStoppedSuppression(
+            expected,
+            observe,
+            fence,
+            recovery.options,
+          ),
+        );
+      }
+    };
+    await reconcileStopped();
     current = recovery.getRecord();
     const last = current.nativeManager!.effects.at(-1);
     const restart = current.effects.at(-1);
@@ -139,7 +177,16 @@ export async function quiesceFailedUpdateCommand(params: {
         recovery.options,
       );
       recovery.onRecord(observed.record);
-      if (observed.status !== "after") {
+      if (observed.status === "conflict" && action === "suppress") {
+        recovery.onRecord(
+          await reconcileUpdateRecoveryStoppedSuppression(
+            observed.record,
+            observe,
+            fence,
+            recovery.options,
+          ),
+        );
+      } else if (observed.status !== "after") {
         throw new UpdateCommandRecoveryPendingError(
           "Failed candidate remains pending native quiescence.",
           { cause: failure },
@@ -158,6 +205,7 @@ export async function quiesceFailedUpdateCommand(params: {
         setUpdateCommandNativePolicy(manager.identity, false, env, assertCurrent, params.timeoutMs),
       );
     }
+    await reconcileStopped();
     facts = currentUpdateRecoveryNativeFacts(recovery.getRecord().nativeManager!);
     await apply(
       "stop",

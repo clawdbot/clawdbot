@@ -38,6 +38,8 @@ export async function readUpdateCommandNativeObservation(params: {
   }
   // A failed start may leave a positively inspected systemd auto-restart job.
   // This proves only non-quiescence, never readiness or a stopped service.
+  // Linux loadState reports is-enabled policy. Loaded-only command/runtime
+  // reads below prove unit loading even after journaled suppression disables it.
   const autoRestarting = (value: GatewayServiceState) =>
     params.quiescingFailedCandidate === true &&
     Boolean(params.record.primaryFailure) &&
@@ -51,7 +53,6 @@ export async function readUpdateCommandNativeObservation(params: {
     ) === true &&
     !params.record.terminal &&
     platform() === "linux" &&
-    value.loadState.status === "loaded" &&
     value.runtime?.status === "unknown" &&
     value.runtime.state === "activating" &&
     value.runtime.subState === "auto-restart" &&

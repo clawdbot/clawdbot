@@ -286,6 +286,7 @@ export async function recordUpdateRecoveryNativeIntent(
   if (prior?.effectId === effectId) {
     if (
       prior.state === "not-applied" ||
+      prior.reconciledStop !== undefined ||
       prior.action !== action ||
       !isDeepStrictEqual(prior.after, target) ||
       (prior.state === "observed" && !isDeepStrictEqual(observation.facts, target))
@@ -363,7 +364,12 @@ export async function recordUpdateRecoveryNativeObservation(
   const { record } = inspected;
   assertExecutingClaim(record);
   const pending = record.nativeManager!.effects.at(-1)!;
-  if (record.terminal || pending.effectId !== effectId || pending.state === "not-applied") {
+  if (
+    record.terminal ||
+    pending.effectId !== effectId ||
+    pending.state === "not-applied" ||
+    pending.reconciledStop !== undefined
+  ) {
     throw new UpdateRecoveryConflictError();
   }
   if (inspected.status !== "after" || pending.state === "observed") {
@@ -448,5 +454,67 @@ export async function cancelUpdateRecoveryRestart(
     const entry = current.effects.at(-1)!;
     entry.state = "cancelled";
     entry.cancelledByNativeEffectId = last.effectId;
+  });
+}
+
+/** Reconcile only a disabled Linux candidate that stopped after suppression.
+ * The original before/after and any exact observedRevision remain immutable.
+ * This records a later fact, never a fabricated running observation or readiness.
+ * The caller must retain native/source exclusion and its fresh executing claim.
+ */
+export async function reconcileUpdateRecoveryStoppedSuppression(
+  expected: UpdateRecoveryRevision,
+  observe: Observe,
+  fence: UpdateRecoveryFence,
+  options: OpenClawStateDatabaseOptions = {},
+): Promise<UpdateRecoveryRecord> {
+  const { record, observation } = await inspect(expected, observe, fence, options);
+  assertExecutingClaim(record);
+  const manager = record.nativeManager;
+  const suppression = manager?.effects.at(-1);
+  const start = manager?.effects.at(-2);
+  const restart = record.effects.at(-1);
+  if (
+    !record.primaryFailure ||
+    !record.checkpoint ||
+    record.terminal ||
+    record.restore ||
+    manager?.identity.platform !== "linux" ||
+    !suppression ||
+    suppression.action !== "suppress" ||
+    (suppression.state !== "intent" &&
+      suppression.state !== "observed" &&
+      suppression.state !== "reconciled") ||
+    !suppression.before.exists ||
+    !suppression.before.loaded ||
+    suppression.before.enabled !== true ||
+    suppression.before.stopped ||
+    !isDeepStrictEqual(suppression.after, { ...suppression.before, enabled: false }) ||
+    !isDeepStrictEqual(observation.facts, { ...suppression.after, stopped: true }) ||
+    !start ||
+    start.action !== "restore" ||
+    start.state !== "observed" ||
+    !start.before.stopped ||
+    start.after.stopped ||
+    restart?.effectId !== start.effectId ||
+    restart.kind !== "service-restart" ||
+    restart.runtime !== "candidate" ||
+    restart.state !== "intent" ||
+    record.effects.some((effect) => effect.state === "intent" && effect !== restart)
+  ) {
+    throw new UpdateRecoveryConflictError();
+  }
+  if (suppression.reconciledStop) {
+    if (!isDeepStrictEqual(suppression.reconciledStop.facts, observation.facts)) {
+      throw new UpdateRecoveryConflictError();
+    }
+    return record;
+  }
+  return write(record, fence, options, (current) => {
+    const entry = current.nativeManager!.effects.at(-1)!;
+    if (entry.state === "intent") {
+      entry.state = "reconciled";
+    }
+    entry.reconciledStop = { facts: observation.facts, revision: current.revision + 1 };
   });
 }

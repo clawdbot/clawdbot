@@ -63,7 +63,10 @@ const effect = z.strictObject({
   action: RecoveryNativeActionSchema,
   before: RecoveryNativeFactsSchema,
   after: RecoveryNativeFactsSchema,
-  state: z.enum(["intent", "observed", "not-applied"]),
+  state: z.enum(["intent", "observed", "not-applied", "reconciled"]),
+  // A later native stop is not an observation of the suppression's running target.
+  // Retain that target and any earlier exact observation instead of rewriting them.
+  reconciledStop: z.strictObject({ facts: RecoveryNativeFactsSchema, revision }).optional(),
   intentRevision: revision,
   observedRevision: revision.optional(),
 });
@@ -86,8 +89,24 @@ export const RecoveryNativeManagerSchema = z
         entry.intentRevision <= last ||
         (entry.state === "intent"
           ? entry.observedRevision !== undefined || index !== manager.effects.length - 1
-          : entry.observedRevision === undefined ||
-            entry.observedRevision <= entry.intentRevision) ||
+          : entry.state === "reconciled"
+            ? entry.observedRevision !== undefined || !entry.reconciledStop
+            : entry.observedRevision === undefined ||
+              entry.observedRevision <= entry.intentRevision) ||
+        (entry.reconciledStop !== undefined &&
+          entry.state !== "reconciled" &&
+          entry.state !== "observed") ||
+        (entry.reconciledStop !== undefined &&
+          entry.reconciledStop.revision <= (entry.observedRevision ?? entry.intentRevision)) ||
+        (entry.reconciledStop !== undefined &&
+          (manager.identity.platform !== "linux" ||
+            entry.action !== "suppress" ||
+            !entry.before.exists ||
+            !entry.before.loaded ||
+            entry.before.enabled !== true ||
+            entry.before.stopped ||
+            !isDeepStrictEqual(entry.after, { ...entry.before, enabled: false }) ||
+            !isDeepStrictEqual(entry.reconciledStop.facts, { ...entry.after, stopped: true }))) ||
         !validNativeTransition(
           entry.action,
           entry.before,
@@ -99,8 +118,9 @@ export const RecoveryNativeManagerSchema = z
         ctx.addIssue({ code: "custom", message: "Invalid native manager effect history" });
       }
       ids.add(entry.effectId);
-      previous = entry.state === "not-applied" ? entry.before : entry.after;
-      last = entry.observedRevision ?? entry.intentRevision;
+      previous =
+        entry.reconciledStop?.facts ?? (entry.state === "not-applied" ? entry.before : entry.after);
+      last = entry.reconciledStop?.revision ?? entry.observedRevision ?? entry.intentRevision;
     }
   });
 export type UpdateRecoveryNativeIdentity = z.infer<typeof RecoveryNativeIdentitySchema>;
@@ -156,7 +176,10 @@ export function currentUpdateRecoveryNativeFacts(
   manager: z.infer<typeof RecoveryNativeManagerSchema>,
 ): UpdateRecoveryNativeFacts {
   const last = manager.effects.at(-1);
-  return last?.state === "not-applied" ? last.before : (last?.after ?? manager.original);
+  return (
+    last?.reconciledStop?.facts ??
+    (last?.state === "not-applied" ? last.before : (last?.after ?? manager.original))
+  );
 }
 
 /** Only a captured, enabled running service stopped before package activation

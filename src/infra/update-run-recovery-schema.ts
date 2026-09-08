@@ -319,9 +319,32 @@ const recoveryInspectionRecordSchema = z
         native.identity.configPath !== record.source.configPath ||
         native.identity.profile !== record.source.profile ||
         native.boundAtRevision > record.revision ||
-        (!record.primaryFailure && native.effects.some((entry) => entry.state === "not-applied")) ||
+        (!record.primaryFailure &&
+          native.effects.some(
+            (entry) => entry.state === "not-applied" || entry.state === "reconciled",
+          )) ||
+        native.effects.some((entry, index) => {
+          if (!entry.reconciledStop) {
+            return false;
+          }
+          const start = native.effects[index - 1];
+          const restart = record.effects.find((effect) => effect.effectId === start?.effectId);
+          return (
+            !record.primaryFailure ||
+            !record.checkpoint ||
+            !start ||
+            start.action !== "restore" ||
+            start.state !== "observed" ||
+            !start.before.stopped ||
+            start.after.stopped ||
+            restart?.kind !== "service-restart" ||
+            restart.runtime !== "candidate"
+          );
+        }) ||
         native.effects.some(
-          (entry) => (entry.observedRevision ?? entry.intentRevision) > record.revision,
+          (entry) =>
+            (entry.reconciledStop?.revision ?? entry.observedRevision ?? entry.intentRevision) >
+            record.revision,
         ) ||
         (native.effects.at(-1)?.state === "intent" && (record.terminal || record.verification)) ||
         (!nativeFinal?.stopped &&

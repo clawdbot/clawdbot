@@ -45,6 +45,7 @@ import { captureStoppedState } from "./update-command-checkpoint.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import { runUpdateCommandMutation } from "./update-command-mutation.js";
 import { withUpdateCommandNativePreparation } from "./update-command-native-preparation.js";
+import { interruptNativeSuppressionReplay } from "./update-command-native-suppression.test-support.js";
 import {
   interruptPackageGapReplay,
   packageGapReplayModes,
@@ -87,6 +88,10 @@ it.each([
   "start-rollback",
   "unapplied-start-rollback",
   "auto-restart-rollback",
+  "auto-restart-after-start-rollback",
+  "auto-restart-stopped-rollback",
+  "auto-restart-observed-stop-rollback",
+  "auto-restart-retained-rollback",
   "auto-restart-foreign-manager",
   "auto-restart-counter-drift",
   "auto-restart-unverified",
@@ -112,7 +117,11 @@ it.each([
     const replay = mode.startsWith("replay-");
     const packageGap = mode.startsWith("replay-package-gap");
     const autoRestart = mode.startsWith("auto-restart-");
-    const refusedAutoRestart = autoRestart && mode !== "auto-restart-rollback";
+    const nativeRetained = mode === "auto-restart-retained-rollback";
+    const observedStop = mode === "auto-restart-observed-stop-rollback";
+    const nativeStopped =
+      nativeRetained || observedStop || mode === "auto-restart-stopped-rollback";
+    const refusedAutoRestart = autoRestart && !mode.endsWith("rollback");
     if (packageGap || autoRestart) {
       vi.mocked(os.platform).mockReturnValue("linux");
     }
@@ -234,6 +243,7 @@ it.each([
           const events: string[] = [];
           let autoRestarting = false;
           let restartCount = 1;
+          let inspectionUnavailable = false;
           const start = vi.fn(
             async (
               args: Parameters<ReturnType<typeof services.resolveGatewayService>["start"]>[0],
@@ -261,7 +271,12 @@ it.each([
               servingVersion = previous ? "1.0.0" : "2.0.0";
               servingBoot = previous ? "previous-boot" : "candidate-boot";
               running = previous || mode !== "unapplied-start-rollback";
-              if (!previous && autoRestart) {
+              if (
+                !previous &&
+                autoRestart &&
+                !nativeStopped &&
+                mode !== "auto-restart-after-start-rollback"
+              ) {
                 running = false;
                 autoRestarting = true;
                 throw new Error("candidate ExecStartPre exited 71; automatic restart queued");
@@ -281,30 +296,47 @@ it.each([
                 ],
                 sourcePath: definition,
               }),
-              readRuntime: async () => ({
-                status: autoRestarting ? "unknown" : running ? "running" : "stopped",
-                ...(autoRestarting
-                  ? {
-                      state: "activating",
-                      subState: mode === "auto-restart-unverified" ? "start" : "auto-restart",
-                    }
-                  : {}),
-                ...(running ? { pid: process.pid } : {}),
-                systemd: {
-                  unit: "openclaw-gateway.service",
-                  managerUid:
-                    autoRestarting && mode === "auto-restart-foreign-manager" ? 2002 : 2001,
+              readRuntime: async () => {
+                const last = recovery?.getRecord().nativeManager?.effects.at(-1);
+                if (
+                  observedStop &&
+                  recovery?.getRecord().primaryFailure &&
+                  last?.action === "suppress" &&
+                  last.state === "observed"
+                ) {
+                  running = false;
+                  autoRestarting = false;
+                }
+                if (inspectionUnavailable) {
+                  throw new Error("fixture interrupted after suppression dispatch");
+                }
+                return {
+                  status: autoRestarting ? "unknown" : running ? "running" : "stopped",
                   ...(autoRestarting
-                    ? { nRestarts: mode === "auto-restart-counter-drift" ? restartCount++ : 1 }
+                    ? {
+                        state: "activating",
+                        subState: mode === "auto-restart-unverified" ? "start" : "auto-restart",
+                      }
                     : {}),
-                },
-              }),
-              isLoaded: async () => windows || os.platform() !== "darwin" || running,
+                  ...(running ? { pid: process.pid } : {}),
+                  systemd: {
+                    unit: "openclaw-gateway.service",
+                    managerUid:
+                      autoRestarting && mode === "auto-restart-foreign-manager" ? 2002 : 2001,
+                    ...(autoRestarting
+                      ? { nRestarts: mode === "auto-restart-counter-drift" ? restartCount++ : 1 }
+                      : {}),
+                  },
+                };
+              },
+              // The Linux service adapter exposes is-enabled here, not D-Bus unit loading.
+              isLoaded: async () =>
+                autoRestart ? enabled : windows || os.platform() !== "darwin" || running,
               isEnabled: async () => enabled,
               start,
               stop: async (args) => {
                 args.assertCurrent?.();
-                const state = recovery.getRecord();
+                const state = loadUpdateRecovery(run.runId, options)!;
                 expect(state.primaryFailure).not.toBeNull();
                 expect(state.nativeManager!.effects.at(-1)).toMatchObject({
                   action: "stop",
@@ -319,7 +351,7 @@ it.each([
             }),
           );
           const enable = async () => {
-            if (!replay) {
+            if (!replay && !nativeRetained) {
               recovery.fence.assertCurrent();
             }
             const record = loadUpdateRecovery(run.runId, options)!;
@@ -353,6 +385,11 @@ it.each([
             expect(recovery.getRecord().primaryFailure).not.toBeNull();
             events.push("disable");
             enabled = false;
+            if (nativeStopped && !observedStop) {
+              running = false;
+              autoRestarting = false;
+              inspectionUnavailable = nativeRetained;
+            }
             return { code: 0, stdout: "", stderr: "", termination: "exit" as const };
           };
           const restoreDisabledPolicy = async () => {
@@ -568,11 +605,20 @@ it.each([
                 state: "intent",
               });
               expect(healthRecord.nativeManager!.effects.at(-1)!.state).toBe("observed");
+              const failedAfterStart =
+                (nativeStopped || mode === "auto-restart-after-start-rollback") &&
+                servingBoot === "candidate-boot";
+              if (failedAfterStart) {
+                running = false;
+                autoRestarting = true;
+              }
               return {
                 ...health,
                 gatewayVersion: servingVersion,
                 gatewayBootId: servingBoot,
-                healthy: !(mode === "health-rollback" && servingBoot === "candidate-boot"),
+                healthy:
+                  !failedAfterStart &&
+                  !(mode === "health-rollback" && servingBoot === "candidate-boot"),
               };
             });
             vi.spyOn(healthProbe, "waitForGatewayHttpReadiness").mockImplementation(async () => ({
@@ -654,6 +700,13 @@ it.each([
                     : input,
                 ),
               );
+            }
+            if (nativeRetained) {
+              resume = await interruptNativeSuppressionReplay(params, () => {
+                inspectionUnavailable = false;
+              });
+              expect(events).toEqual(["enable", "start", "disable"]);
+              return;
             }
             if (replay) {
               resume = packageGap
@@ -769,7 +822,7 @@ it.each([
               expect(start).toHaveBeenCalledOnce();
             } else if (lateRollback) {
               expect(events).toEqual(
-                mode === "unapplied-start-rollback"
+                mode === "unapplied-start-rollback" || nativeStopped
                   ? ["enable", "start", "disable", "enable", "start"]
                   : ["enable", "start", "disable", "stop", "enable", "start"],
               );
@@ -801,6 +854,12 @@ it.each([
             expect(recovery.assertReady).toThrow("No serving proof");
           });
           await resume?.();
+          if (nativeRetained) {
+            expect(events).toEqual(["enable", "start", "disable", "enable", "start"]);
+            expect(start).toHaveBeenCalledTimes(2);
+            expect(await fs.readFile(pkg.launcher, "utf8")).toBe("old launcher\n");
+            expect(JSON.parse(await fs.readFile(config, "utf8")).update).toBeUndefined();
+          }
           if (replay) {
             expect(start).toHaveBeenCalledTimes(
               mode === "replay-conflict" ||
