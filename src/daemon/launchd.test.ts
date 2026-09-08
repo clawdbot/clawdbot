@@ -1,4 +1,5 @@
 // Launchd tests cover macOS service plist generation and command handling.
+import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import { PassThrough } from "node:stream";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -2050,7 +2051,7 @@ describe("launchd install", () => {
       Object.assign(new Error("ENOSPC: no space left on device, rename"), { code: "ENOSPC" }),
     );
 
-    const error = await installLaunchAgent(
+    const error = await stageLaunchAgent(
       defaultLaunchAgentFixture(env, {
         environment: { OPENCLAW_GATEWAY_PORT: "19000" },
       }),
@@ -2067,12 +2068,13 @@ describe("launchd install", () => {
     const envFilePath = "/Users/test/.openclaw/service-env/ai.openclaw.gateway.env";
     const originalEnv = "export OPENCLAW_GATEWAY_TOKEN='original-token'\n";
     state.files.set(envFilePath, originalEnv);
-    vi.mocked(fs.writeFile).mockImplementationOnce(async (p: string, data: string) => {
+    vi.mocked(fs.writeFile).mockImplementationOnce(async (p, data) => {
+      assert(typeof p === "string" && typeof data === "string");
       state.files.set(p, data.slice(0, 16));
       throw Object.assign(new Error("EFBIG: file too large, write"), { code: "EFBIG" });
     });
 
-    const error = await installLaunchAgent(
+    const error = await stageLaunchAgent(
       defaultLaunchAgentFixture(env, {
         environment: { OPENCLAW_GATEWAY_PORT: "19000" },
       }),
