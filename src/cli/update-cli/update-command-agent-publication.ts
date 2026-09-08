@@ -3,6 +3,7 @@ import path from "node:path";
 import { openNodeSqliteDatabase, resolveExistingSqliteFileUri } from "../../infra/node-sqlite.js";
 import { hasNodeErrorCode } from "../../infra/path-guards.js";
 import { createSqliteLifecycleAggregateError } from "../../infra/sqlite-coordinator.js";
+import { checkpointRetainedSqliteWal } from "../../infra/sqlite-wal.js";
 import {
   acquireStateDatabaseCoordinator,
   acquireStateDatabaseHandleExclusion,
@@ -55,22 +56,7 @@ function closeRetainedAgentFamily(file: string, assertCurrent: () => void) {
   // mode=rw refuses missing databases. No schema opening, migrations or logical leases.
   const db = openNodeSqliteDatabase(resolveExistingSqliteFileUri(file));
   try {
-    verify();
-    // Map the existing WAL index in NORMAL mode before taking exclusive SQLite
-    // ownership. Otherwise SQLite can leave an old SHM after closing the WAL.
-    if (db.prepare("PRAGMA journal_mode").get()?.journal_mode !== "wal") {
-      throw new Error("Retained agent sidecars do not belong to a WAL database");
-    }
-    verify();
-    // Kysely transactions cannot retain SQLite file locks across WAL maintenance.
-    // No data/schema statements execute; a real reader/writer makes this refuse.
-    db.exec("PRAGMA busy_timeout=0; PRAGMA locking_mode=EXCLUSIVE; BEGIN EXCLUSIVE; ROLLBACK;");
-    verify();
-    const checkpoint = db.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get();
-    if (checkpoint?.busy !== 0) {
-      throw new Error("Replay agent WAL checkpoint is still busy");
-    }
-    verify();
+    checkpointRetainedSqliteWal(db, verify);
   } finally {
     db.close();
   }
