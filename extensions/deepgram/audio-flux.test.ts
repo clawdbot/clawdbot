@@ -203,7 +203,7 @@ describe("Deepgram Flux audio", () => {
           model,
           language,
           query: {
-            language_hint: queryLanguage,
+            ...(queryLanguage === undefined ? {} : { language_hint: queryLanguage }),
             eot_threshold: 0.7,
             numerals: true,
             profanity_filter: true,
