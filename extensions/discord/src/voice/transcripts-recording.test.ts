@@ -462,6 +462,7 @@ defineDiscordVoiceTests((harness) => {
       } else if (dispatch === "control") {
         expect(controlRealtimeVoiceAgentRunMock).toHaveBeenCalledExactlyOnceWith({
           sessionKey,
+          runTarget: null,
           text: texts.join("\n"),
         });
         expect(agentCommandMock).not.toHaveBeenCalled();

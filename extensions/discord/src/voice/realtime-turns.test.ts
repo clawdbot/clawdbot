@@ -187,6 +187,7 @@ defineDiscordVoiceTests(
       await vi.waitFor(() =>
         expect(controlRealtimeVoiceAgentRunMock).toHaveBeenCalledWith({
           sessionKey: "discord:g1:c1",
+          runTarget: null,
           text: "cancel that",
         }),
       );
@@ -451,6 +452,7 @@ defineDiscordVoiceTests(
 
       expect(controlRealtimeVoiceAgentRunMock).toHaveBeenCalledWith({
         sessionKey: "discord:g1:c1",
+        runTarget: null,
         text: "how is it going",
       });
       expect(lastAgentCommandArgs().message).toContain("how is it going");
@@ -475,6 +477,7 @@ defineDiscordVoiceTests(
 
       expect(controlRealtimeVoiceAgentRunMock).toHaveBeenCalledWith({
         sessionKey: "discord:g1:c1",
+        runTarget: null,
         text: "how is it going",
       });
       expect(lastAgentCommandArgs().message).toContain("how is it going");
@@ -769,6 +772,7 @@ defineDiscordVoiceTests(
 
       expect(controlRealtimeVoiceAgentRunMock).toHaveBeenCalledWith({
         sessionKey: "discord:g1:c1",
+        runTarget: null,
         text: "how is it going",
       });
       expect(lastAgentCommandArgs().message).toContain("how is it going");
@@ -916,6 +920,7 @@ defineDiscordVoiceTests(
 
       expect(controlRealtimeVoiceAgentRunMock).toHaveBeenCalledWith({
         sessionKey: "discord:g1:c1",
+        runTarget: null,
         text: "how is it going",
       });
       expect(lastAgentCommandArgs().message).toContain("how is it going");

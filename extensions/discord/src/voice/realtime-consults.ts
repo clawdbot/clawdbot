@@ -3,7 +3,6 @@ import {
   buildRealtimeVoiceAgentErrorProviderResult,
   classifyRealtimeVoiceConsultToolCall,
   classifySkippableRealtimeVoiceConsultTranscript,
-  controlRealtimeVoiceAgentRun,
   createRealtimeVoiceAgentTalkbackQueue,
   parseRealtimeVoiceAgentControlToolArgs,
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
@@ -19,7 +18,10 @@ import {
 } from "openclaw/plugin-sdk/realtime-voice";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
-import { maybeControlDiscordVoiceAgentRun } from "./agent-control.js";
+import {
+  controlDiscordVoiceAgentRun,
+  maybeControlDiscordVoiceAgentRun,
+} from "./agent-control.js";
 import { formatVoiceLogPreview } from "./log-preview.js";
 import { formatVoiceIngressPrompt } from "./prompt.js";
 import type { DiscordRealtimePlaybackPort } from "./realtime-playback.js";
@@ -313,8 +315,8 @@ export class DiscordRealtimeConsults {
     let result: RealtimeVoiceAgentControlResult;
     try {
       const parsed = parseRealtimeVoiceAgentControlToolArgs(event.args);
-      result = await controlRealtimeVoiceAgentRun({
-        sessionKey: this.params.entry.route.sessionKey,
+      result = await controlDiscordVoiceAgentRun({
+        entry: this.params.entry,
         text: parsed.text,
         mode: parsed.mode,
       });

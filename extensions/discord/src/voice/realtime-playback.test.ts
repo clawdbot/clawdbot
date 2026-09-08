@@ -132,6 +132,7 @@ defineDiscordVoiceTests(
       await vi.waitFor(() =>
         expect(controlRealtimeVoiceAgentRunMock).toHaveBeenCalledWith({
           sessionKey: "discord:g1:c1",
+          runTarget: null,
           text: "revísalo en WebUI",
           mode: "steer",
         }),
