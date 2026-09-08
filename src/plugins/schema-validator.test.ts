@@ -2144,5 +2144,37 @@ describe("schema validator", () => {
     expect(Format.Get("email")?.("not an email")).toBe(false);
     expect(Format.Get("uuid")?.("not a uuid")).toBe(false);
   });
+
+  it("rejects nested-repetition patternProperties before TypeBox validation", () => {
+    const value = { aaaaaaaaaaaaaaaaaaaaX: {} };
+    const started = Date.now();
+    const result = validateJsonSchemaValue({
+      cacheKey: "schema-validator.test.defaults.pattern-properties-redos",
+      schema: {
+        type: "object",
+        patternProperties: {
+          "(a+)+$": {
+            type: "object",
+            properties: {
+              mode: { type: "string", default: "applied" },
+            },
+            additionalProperties: true,
+          },
+        },
+        additionalProperties: true,
+      },
+      value,
+      applyDefaults: true,
+    });
+    const elapsedMs = Date.now() - started;
+    expect(elapsedMs).toBeLessThan(2_000);
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      throw new Error("expected validation failure for unsafe patternProperties");
+    }
+    expect(result.errors.some((error) => /unsafe patternProperties/i.test(error.message))).toBe(
+      true,
+    );
+  });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

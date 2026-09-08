@@ -317,3 +317,48 @@ describe("JSON Schema child traversal", () => {
     });
   });
 });
+
+describe("applyJsonSchemaDefaults patternProperties safety", () => {
+  it("skips nested-repetition patternProperties instead of compiling them", () => {
+    const schema = {
+      type: "object",
+      patternProperties: {
+        "(a+)+$": {
+          type: "object",
+          properties: {
+            mode: { type: "string", default: "applied" },
+          },
+        },
+      },
+    };
+    const value = { aaaaaaaaaaaaaaaaaaaaX: {} };
+
+    const started = Date.now();
+    const result = applyJsonSchemaDefaults(schema, value) as {
+      aaaaaaaaaaaaaaaaaaaaX: { mode?: string };
+    };
+    const elapsedMs = Date.now() - started;
+
+    expect(elapsedMs).toBeLessThan(250);
+    expect(result.aaaaaaaaaaaaaaaaaaaaX.mode).toBeUndefined();
+  });
+
+  it("still applies defaults through safe patternProperties", () => {
+    const schema = {
+      type: "object",
+      patternProperties: {
+        "^x": {
+          type: "object",
+          properties: {
+            mode: { type: "string", default: "auto" },
+          },
+        },
+      },
+    };
+
+    const result = applyJsonSchemaDefaults(schema, { x1: {} }) as {
+      x1: { mode?: string };
+    };
+    expect(result.x1.mode).toBe("auto");
+  });
+});

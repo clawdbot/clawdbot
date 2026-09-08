@@ -6,6 +6,7 @@ import {
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { Compile } from "typebox/schema";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
+import { compileJsonSchemaPatternRegex } from "../security/safe-regex.js";
 
 type LocalRefResolution =
   | {
@@ -793,10 +794,8 @@ function applyObjectPropertyDefaults(
   const patternMatchedKeys = new Set<string>();
   if (isRecord(schema.patternProperties)) {
     for (const [pattern, propertySchema] of Object.entries(schema.patternProperties)) {
-      let regex: RegExp;
-      try {
-        regex = new RegExp(pattern);
-      } catch {
+      const regex = compileJsonSchemaPatternRegex(pattern);
+      if (!regex) {
         continue;
       }
       for (const key of Object.keys(value)) {

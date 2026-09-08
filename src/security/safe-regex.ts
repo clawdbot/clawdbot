@@ -1,6 +1,7 @@
 // Performs lightweight safe-regex checks for user-supplied patterns.
 import { expectDefined } from "@openclaw/normalization-core";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
+import { hasAdjacentUnboundedTwins } from "./safe-regex-adjacent.js";
 type QuantifierRead = {
   consumed: number;
   minRepeat: number;
@@ -343,7 +344,7 @@ export function compileSafeRegexDetailed(source: string, flags = ""): SafeRegexC
   }
 
   let result: SafeRegexCompileResult;
-  if (hasNestedRepetition(trimmed)) {
+  if (hasNestedRepetition(trimmed) || hasAdjacentUnboundedTwins(trimmed, flags)) {
     result = { regex: null, source: trimmed, flags, reason: "unsafe-nested-repetition" };
   } else {
     try {
@@ -360,4 +361,42 @@ export function compileSafeRegexDetailed(source: string, flags = ""): SafeRegexC
 
 export function compileSafeRegex(source: string, flags = ""): RegExp | null {
   return compileSafeRegexDetailed(source, flags).regex;
+}
+
+export function compileJsonSchemaPatternRegex(source: string, flags = ""): RegExp | null {
+  return compileJsonSchemaPatternRegexDetailed(source, flags).regex;
+}
+
+/** Exact-source compile for JSON Schema patternProperties (do not trim). */
+export function compileJsonSchemaPatternRegexDetailed(
+  source: string,
+  flags = "",
+): SafeRegexCompileResult {
+  if (!source) {
+    return { regex: null, source, flags, reason: "empty" };
+  }
+  const cacheKey = `exact::${flags}::${source}`;
+  if (safeRegexCache.has(cacheKey)) {
+    return (
+      safeRegexCache.get(cacheKey) ?? {
+        regex: null,
+        source,
+        flags,
+        reason: "invalid-regex",
+      }
+    );
+  }
+  let result: SafeRegexCompileResult;
+  if (hasNestedRepetition(source) || hasAdjacentUnboundedTwins(source, flags)) {
+    result = { regex: null, source, flags, reason: "unsafe-nested-repetition" };
+  } else {
+    try {
+      result = { regex: new RegExp(source, flags), source, flags, reason: null };
+    } catch {
+      result = { regex: null, source, flags, reason: "invalid-regex" };
+    }
+  }
+  safeRegexCache.set(cacheKey, result);
+  pruneMapToMaxSize(safeRegexCache, SAFE_REGEX_CACHE_MAX);
+  return result;
 }
