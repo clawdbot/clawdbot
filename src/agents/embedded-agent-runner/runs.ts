@@ -851,23 +851,73 @@ function prepareEmbeddedAgentQueueMessage(
  * - With a sessionId, aborts that single run.
  * - With no sessionId, supports targeted abort modes (for example, compacting runs only).
  */
-export function abortEmbeddedAgentRun(sessionId: string): boolean;
+export type EmbeddedRunOwnerScope = { agentId?: string; defaultAgentId?: string };
+
+type AbortEmbeddedAgentRunOpts = {
+  mode?: "all" | "compacting";
+  reason?: "restart";
+} & EmbeddedRunOwnerScope;
+
+function hasEmbeddedRunOwnerFilter(owner?: EmbeddedRunOwnerScope): boolean {
+  return Boolean(owner?.agentId || owner?.defaultAgentId);
+}
+
+function matchesEmbeddedOrReplyRunOwner(
+  sessionId: string,
+  owner: EmbeddedRunOwnerScope,
+): { embedded: boolean; reply: boolean } {
+  const handle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
+  const registration = handle ? ACTIVE_EMBEDDED_RUN_REGISTRATIONS.get(handle) : undefined;
+  const replyOperation = resolveActiveReplyOperationForSessionId(sessionId);
+  return {
+    embedded: Boolean(handle && registration && matchesSessionProgressOwner(owner, registration)),
+    reply: Boolean(
+      replyOperation &&
+      matchesSessionProgressOwner(owner, {
+        agentId: replyOperation.agentId,
+        sessionKey: replyOperation.key,
+      }),
+    ),
+  };
+}
+
+export function abortEmbeddedAgentRun(sessionId: string, opts?: EmbeddedRunOwnerScope): boolean;
 export function abortEmbeddedAgentRun(
   sessionId: undefined,
-  opts: { mode: "all" | "compacting"; reason?: "restart" },
+  opts: { mode: "all" | "compacting"; reason?: "restart" } & EmbeddedRunOwnerScope,
 ): boolean;
 export function abortEmbeddedAgentRun(
   sessionId?: string,
-  opts?: { mode?: "all" | "compacting"; reason?: "restart" },
+  opts?: AbortEmbeddedAgentRunOpts,
 ): boolean {
   if (typeof sessionId === "string" && sessionId.length > 0) {
+    const ownerFilter = hasEmbeddedRunOwnerFilter(opts)
+      ? { agentId: opts?.agentId, defaultAgentId: opts?.defaultAgentId }
+      : undefined;
     const handle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
     if (!handle) {
+      if (ownerFilter) {
+        const match = matchesEmbeddedOrReplyRunOwner(sessionId, ownerFilter);
+        if (!match.reply) {
+          diag.debug(`abort skipped: sessionId=${sessionId} reason=owner_mismatch`);
+          return false;
+        }
+      }
       if (abortReplyRunBySessionId(sessionId)) {
         return true;
       }
       diag.debug(`abort failed: sessionId=${sessionId} reason=no_active_run`);
       return false;
+    }
+    if (ownerFilter) {
+      const match = matchesEmbeddedOrReplyRunOwner(sessionId, ownerFilter);
+      if (!match.embedded) {
+        if (match.reply) {
+          return abortReplyRunBySessionId(sessionId);
+        }
+        diag.debug(`abort skipped: sessionId=${sessionId} reason=owner_mismatch`);
+        return false;
+      }
     }
     if (!isEmbeddedRunHandleAbortable(sessionId, handle)) {
       diag.debug(`abort failed: sessionId=${sessionId} reason=not_abortable`);
@@ -963,8 +1013,17 @@ export async function preemptAndDrainEmbeddedHeartbeatRun(
   return (await drainPromise) ? "drained" : "timed-out";
 }
 
-export function isEmbeddedAgentRunActive(sessionId: string): boolean {
-  const active = ACTIVE_EMBEDDED_RUNS.has(sessionId) || isReplyRunActiveForSessionId(sessionId);
+export function isEmbeddedAgentRunActive(
+  sessionId: string,
+  owner?: EmbeddedRunOwnerScope,
+): boolean {
+  let active: boolean;
+  if (hasEmbeddedRunOwnerFilter(owner)) {
+    const match = matchesEmbeddedOrReplyRunOwner(sessionId, owner!);
+    active = match.embedded || match.reply;
+  } else {
+    active = ACTIVE_EMBEDDED_RUNS.has(sessionId) || isReplyRunActiveForSessionId(sessionId);
+  }
   if (active) {
     diag.debug(`run active check: sessionId=${sessionId} active=true`);
   }
@@ -978,7 +1037,7 @@ export function resolveEmbeddedAgentRunProgressState(
   return resolveEmbeddedRunProgressState(sessionId, "operational");
 }
 
-type SessionProgressOwner = { agentId?: string; defaultAgentId?: string };
+type SessionProgressOwner = EmbeddedRunOwnerScope;
 
 function matchesSessionProgressOwner(
   owner: SessionProgressOwner,
@@ -1041,7 +1100,13 @@ function resolveEmbeddedRunProgressState(
   return replyInProgress ? "queued" : undefined;
 }
 
-export function isEmbeddedAgentRunInProgress(sessionId: string): boolean {
+export function isEmbeddedAgentRunInProgress(
+  sessionId: string,
+  owner?: EmbeddedRunOwnerScope,
+): boolean {
+  if (hasEmbeddedRunOwnerFilter(owner)) {
+    return resolveEmbeddedAgentSessionProgressState(sessionId, owner!) !== undefined;
+  }
   return resolveEmbeddedAgentRunProgressState(sessionId) !== undefined;
 }
 
@@ -1262,12 +1327,13 @@ function waitForCurrentEmbeddedAgentRunEnd(
 export async function waitForEmbeddedAgentRunEnd(
   sessionId: string,
   timeoutMs: number | null = 15_000,
+  owner?: EmbeddedRunOwnerScope,
 ): Promise<boolean> {
   if (!sessionId) {
     return true;
   }
   const deadline = timeoutMs === null ? undefined : Date.now() + timeoutMs;
-  while (isEmbeddedAgentRunActive(sessionId)) {
+  while (isEmbeddedAgentRunActive(sessionId, owner)) {
     const remainingMs = deadline === undefined ? null : deadline - Date.now();
     if (remainingMs !== null && remainingMs <= 0) {
       return false;
