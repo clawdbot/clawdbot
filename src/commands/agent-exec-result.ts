@@ -111,11 +111,18 @@ export function classifyAgentExecResult(
     meta.stopReason === "error" ||
     hasErrorPayload;
   const status: AgentExecStatus = timeout ? "timeout" : failed ? "error" : "ok";
+  // An abort with no error text of its own names its cause instead of the generic
+  // failure text, so the message agrees with the "aborted" error kind below.
+  const failureMessage = failed
+    ? meta.aborted
+      ? "Agent run aborted"
+      : "Agent run failed"
+    : undefined;
   const errorMessage = timeout
     ? (meta.error?.message ?? errorPayloadMessage ?? "Agent run timed out")
     : fallbackExhausted
       ? (meta.error?.message ?? errorPayloadMessage ?? "All model fallback candidates failed")
-      : (meta.error?.message ?? errorPayloadMessage ?? (failed ? "Agent run failed" : undefined));
+      : (meta.error?.message ?? errorPayloadMessage ?? failureMessage);
   const errorKind = timeout
     ? "timeout"
     : fallbackExhausted
