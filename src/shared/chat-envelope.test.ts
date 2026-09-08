@@ -27,4 +27,32 @@ describe("shared/chat-envelope", () => {
       "I typed [message_id: abc123] inline",
     );
   });
+
+  it("preserves message id examples in code", () => {
+    expect(stripMessageIdHints("```text\n[message_id: abc123]\n```")).toBe(
+      "```text\n[message_id: abc123]\n```",
+    );
+    expect(stripMessageIdHints("    [message_id: abc123]")).toBe("    [message_id: abc123]");
+    expect(stripMessageIdHints("> ```text\n> [message_id: abc123]\n> ```")).toBe(
+      "> ```text\n> [message_id: abc123]\n> ```",
+    );
+  });
+
+  it("removes generated hints surrounding code examples", () => {
+    expect(
+      stripMessageIdHints("[message_id: generated]\n```text\n[message_id: literal]\n```"),
+    ).toBe("```text\n[message_id: literal]\n```");
+    expect(
+      stripMessageIdHints("```text\n[message_id: literal]\n```\n[message_id: generated]"),
+    ).toBe("```text\n[message_id: literal]\n```");
+    expect(
+      stripMessageIdHints("[message_id: generated]\r\n```text\r\n[message_id: literal]\r\n```"),
+    ).toBe("```text\n[message_id: literal]\n```");
+  });
+
+  it("preserves CRLF code when no generated hint is removed", () => {
+    expect(stripMessageIdHints("```text\r\n[message_id: literal]\r\n```")).toBe(
+      "```text\r\n[message_id: literal]\r\n```",
+    );
+  });
 });
