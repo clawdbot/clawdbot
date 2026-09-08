@@ -265,10 +265,14 @@ function resolveActiveProfileId(params: {
 }
 
 function isActiveProfileCandidate(
-  params: { store: AuthProfileStore; now: number },
+  params: { store: AuthProfileStore; now: number; config: AuthProfileOrderConfig },
   profileId: string,
 ): boolean {
-  const unusableUntil = resolveProfileUnusableUntilForDisplay(params.store, profileId);
+  const unusableUntil = resolveProfileUnusableUntilForDisplay(
+    params.store,
+    profileId,
+    params.config,
+  );
   return !isActiveUntil(unusableUntil ?? undefined, params.now);
 }
 
@@ -405,7 +409,11 @@ function describeInactiveProfileStatus(params: {
   if (isActiveUntil(blockedUntil, params.now)) {
     return `rate-limited - resets ${formatRelativeReset(blockedUntil, params.now)}`;
   }
-  const unusableUntil = resolveProfileUnusableUntilForDisplay(params.store, params.profileId);
+  const unusableUntil = resolveProfileUnusableUntilForDisplay(
+    params.store,
+    params.profileId,
+    params.config,
+  );
   if (isActiveUntil(unusableUntil ?? undefined, params.now)) {
     return describeFailureStatus(stats?.disabledReason ?? stats?.cooldownReason, params.credential);
   }

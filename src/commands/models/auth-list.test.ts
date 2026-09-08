@@ -169,6 +169,35 @@ describe("modelsAuthListCommand", () => {
     });
   });
 
+  it("hides cooldown markers for a configured cooldown bypass provider", async () => {
+    mocks.loadModelsConfig.mockResolvedValue({
+      auth: { cooldownBypassProviders: ["my-gateway"] },
+    } as OpenClawConfig);
+    mocks.ensureAuthProfileStore.mockReturnValue({
+      version: 1,
+      profiles: {
+        "my-gateway:manual": { type: "api_key", provider: "my-gateway", key: "secret" },
+        "anthropic:default": { type: "api_key", provider: "anthropic", key: "secret" },
+      },
+      usageStats: {
+        "my-gateway:manual": { disabledUntil: 1_900_000_100_000, disabledReason: "billing" },
+        "anthropic:default": { disabledUntil: 1_900_000_100_000, disabledReason: "billing" },
+      },
+    } satisfies AuthProfileStore);
+
+    const jsonRuntime = createRuntime();
+    await modelsAuthListCommand({ json: true }, jsonRuntime);
+    expect(jsonRuntime.jsonPayloads[0]).toMatchObject({
+      profiles: [
+        expect.objectContaining({ id: "anthropic:default", disabledReason: "billing" }),
+        expect.not.objectContaining({ disabledUntil: expect.anything() }),
+      ],
+    });
+    const textRuntime = createRuntime();
+    await modelsAuthListCommand({ provider: "my-gateway" }, textRuntime);
+    expect(textRuntime.logs.at(-1)).toBe("- my-gateway:manual [my-gateway/api_key]");
+  });
+
   it("shows exact WHAM classification without hiding the canonical reason in JSON", async () => {
     mocks.ensureAuthProfileStore.mockReturnValue({
       version: 1,

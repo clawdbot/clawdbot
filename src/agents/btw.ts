@@ -457,6 +457,7 @@ async function resolveBtwPreparedRuntimeAuth(
   return resolvePreparedRuntimeAuthAttempts({
     attempts: params.preparation.attempts,
     store: params.authProfileStore,
+    cfg,
     modelId: params.modelId,
     model: params.model,
     materializeModel: ({ plan, model, forceResolve }) =>
