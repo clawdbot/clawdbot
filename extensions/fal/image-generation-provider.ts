@@ -14,11 +14,11 @@ import {
   assertOkOrThrowHttpError,
   assertOkOrThrowProviderError,
   createProviderOperationDeadline,
+  readProviderBinaryResponse,
   readProviderJsonResponse,
   resolveProviderOperationTimeoutMs,
   type ProviderOperationDeadline,
 } from "openclaw/plugin-sdk/provider-http";
-import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import {
   buildHostnameAllowlistPolicyFromSuffixAllowlist,
   fetchWithSsrFGuard,
@@ -610,7 +610,12 @@ async function fetchImageBuffer(
     await assertOkOrThrowProviderError(response, "fal image download failed");
     const mimeType = response.headers.get("content-type")?.trim() || "image/png";
     return {
-      buffer: await readResponseWithLimit(response, maxBytes, {
+      // The download deadline above already bounds this read, so the shared
+      // reader's default idle timer stays off; only the binary-content contract
+      // is added here.
+      buffer: await readProviderBinaryResponse(response, "fal generated image download", "image", {
+        maxBytes,
+        chunkTimeoutMs: 0,
         onOverflow: ({ maxBytes: maxBytesLocal }) =>
           new Error(`fal generated image download exceeds ${maxBytesLocal} bytes`),
       }),

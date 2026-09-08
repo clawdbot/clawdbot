@@ -152,6 +152,49 @@ describe("fal music generation provider", () => {
     ).rejects.toThrow("fal generated music download exceeds 1 bytes");
   });
 
+  it.each([
+    { label: "a JSON error payload", body: '{"error":"quota"}', contentType: "application/json" },
+    {
+      label: "a problem+json payload",
+      body: '{"title":"gone"}',
+      contentType: "application/problem+json",
+    },
+    { label: "an HTML page", body: "<html>sign in</html>", contentType: "text/html" },
+    { label: "an empty body", body: "", contentType: "audio/mpeg" },
+  ])("rejects a generated music download that returns $label", async ({ body, contentType }) => {
+    postJsonRequestMock.mockResolvedValue(
+      falMusicJsonResponse({
+        audio: { url: "https://v3b.fal.media/files/b/out.mp3", content_type: "audio/mpeg" },
+      }),
+    );
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(
+            new ReadableStream({
+              start(controller) {
+                if (body) {
+                  controller.enqueue(new TextEncoder().encode(body));
+                }
+                controller.close();
+              },
+            }),
+            { headers: { "content-type": contentType } },
+          ),
+      ),
+    );
+
+    await expect(
+      buildFalMusicGenerationProvider().generateMusic({
+        provider: "fal",
+        model: "fal-ai/minimax-music/v2.6",
+        prompt: "short track",
+        cfg: {},
+      }),
+    ).rejects.toThrow("fal generated music download: malformed audio response");
+  });
+
   it("rejects MiniMax lyrics requests that also ask for instrumental output", async () => {
     await expect(
       buildFalMusicGenerationProvider().generateMusic({
