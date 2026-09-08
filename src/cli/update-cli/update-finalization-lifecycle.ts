@@ -15,6 +15,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { watchCliExitAfterOutput } from "../one-shot-exit.js";
 import { hasCliProcessScope } from "../runtime-cleanup-scope.js";
 import { getPendingCliDisposers } from "../runtime-cleanup.js";
+import { inspectUpdateFinalizationChildren } from "./update-finalization-processes.js";
 
 // Local metadata/backup/completion work gets 30s; Doctor gets 2m for migrations,
 // registry installs get 10m, and convergence gets 3m for Doctor + validation.
@@ -135,15 +136,27 @@ export class UpdateFinalizationLifecycle {
         // Do not race and unwind a still-mutating phase. Kill owned subprocesses and
         // exit without yielding, so late awaits cannot write into an OCM rollback.
         try {
-          this.stopChildren();
+          let diagnostics: ReturnType<typeof inspectUpdateFinalizationChildren>;
+          try {
+            // The parent still owns the update; capture names before killing them.
+            // No result or rollback handoff can occur during this bounded synchronous read.
+            diagnostics = inspectUpdateFinalizationChildren();
+          } finally {
+            this.stopChildren();
+          }
           end("failed");
           const error = `Update finalization timed out in ${phase} after ${budgetMs}ms`;
           this.finishLedger(1, error);
           writeSync(2, `${error}\n`);
+          writeSync(
+            2,
+            `[update finalize] Stalled phase children: ${JSON.stringify(diagnostics)}\n`,
+          );
+          this.recordDiagnostic(JSON.stringify(diagnostics));
           if (this.json) {
             writeSync(
               1,
-              `${JSON.stringify({ status: "failed", mode: "finalize", root: this.root, restart: false, stuckPhase: phase, elapsedMs: Math.round(performance.now() - this.startedAt), error, phaseTimings: this.phaseTimings })}\n`,
+              `${JSON.stringify({ status: "failed", mode: "finalize", root: this.root, restart: false, stuckPhase: phase, elapsedMs: Math.round(performance.now() - this.startedAt), error, phaseTimings: this.phaseTimings, ...diagnostics })}\n`,
             );
           }
         } finally {
@@ -179,6 +192,16 @@ export class UpdateFinalizationLifecycle {
     }
   }
 
+  private recordDiagnostic(diagnostic: string): void {
+    if (this.runId) {
+      try {
+        recordUpdateRunDiagnostic(this.runId, diagnostic, this.ledgerOptions);
+      } catch {
+        /* stderr still carries the diagnostic. */
+      }
+    }
+  }
+
   fail(): void {
     clearTimeout(this.timer);
     this.finishLedger(1);
@@ -207,18 +230,13 @@ export class UpdateFinalizationLifecycle {
         const diagnostic = JSON.stringify({
           activeResources: [...new Set(process.getActiveResourcesInfo())].toSorted(),
           unsettledDisposers: getPendingCliDisposers(),
+          ...inspectUpdateFinalizationChildren(),
         });
         writeSync(
           2,
           `[update finalize] Process still alive after terminal output: ${diagnostic}\n`,
         );
-        if (this.runId) {
-          try {
-            recordUpdateRunDiagnostic(this.runId, diagnostic, this.ledgerOptions);
-          } catch {
-            /* stderr still carries the diagnostic. */
-          }
-        }
+        this.recordDiagnostic(diagnostic);
         this.stopChildren();
       });
     // Human repair may still await a recovery choice or agent after reporting failure.

@@ -11,6 +11,13 @@ const root = process.env.HOME!;
 await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ name: "openclaw" }));
 const [runtimeProcessEntrypointsJson, scenario, ...args] = process.argv.slice(2);
 const borrowed = scenario?.startsWith("borrowed-");
+const blockedChildSource = `
+const fs = require('node:fs');
+process.title = 'node fixture-private-argument';
+fs.writeFileSync(${JSON.stringify(path.join(root, "blocked-child.pid"))}, String(process.pid));
+process.stdin.resume();
+process.stdin.on('end', () => process.exit(0));
+`;
 if (scenario === "completion-hang") {
   await fs.writeFile(
     path.join(root, "openclaw.mjs"),
@@ -107,7 +114,12 @@ const stubs = new Map<string, string>([
   [
     sourceUrl("./update-cli/update-command-config-snapshot.ts"),
     scenario === "phase-hang"
-      ? 'export const createUpdateConfigSnapshot = async () => { console.error("fixture configSnapshot entered"); setInterval(() => {}, 1000); await new Promise(() => {}); };'
+      ? `import { spawnCommand } from ${JSON.stringify(sourceUrl("../process/exec-spawn.ts"))};
+export const createUpdateConfigSnapshot = async () => {
+  const child = spawnCommand([process.execPath, '-e', ${JSON.stringify(blockedChildSource)}, '--', 'fixture-private-argument'], {stdin:'pipe', stdout:'ignore', stderr:'ignore'});
+  console.error('fixture configSnapshot entered');
+  await child;
+};`
       : scenario === "borrowed-phase"
         ? "export const createUpdateConfigSnapshot = async () => { await new Promise(resolve => setTimeout(resolve, 1_200)); };"
         : "export const createUpdateConfigSnapshot = async () => {};",
@@ -203,7 +215,22 @@ const run = () =>
       registerUpdateCli(program);
       await program.parseAsync(process.argv);
       if (scenario === "handle-hang") {
-        setInterval(() => {}, 1000);
+        const { spawn } = await import("node:child_process");
+        const { runCliDisposer } = await import("./runtime-cleanup.js");
+        const child = spawn(
+          process.execPath,
+          ["-e", blockedChildSource, "--", "fixture-private-argument"],
+          {
+            stdio: ["pipe", "ignore", "ignore"],
+          },
+        );
+        await runCliDisposer(
+          "fixture-stdin-child",
+          () =>
+            new Promise<void>((resolve) => {
+              child.once("exit", () => resolve());
+            }),
+        );
       }
       if (borrowed) {
         if (scenario === "borrowed-output") {
