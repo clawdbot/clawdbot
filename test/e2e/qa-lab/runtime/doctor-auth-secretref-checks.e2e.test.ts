@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { stripAnsiSequences } from "../../../../packages/terminal-core/src/ansi.js";
+import { createConfigIO } from "../../../../src/config/io.js";
 import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
 import { withSecureTestNodeCommand } from "../../../../src/secrets/test-node-command.test-support.js";
 import {
@@ -32,7 +33,17 @@ function normalizedOutputOf(result: { stderr: string; stdout: string }): string 
 }
 
 async function writeConfig(config: OpenClawConfig): Promise<void> {
-  await instance?.state.writeConfig(config);
+  const activeInstance = instance;
+  if (!activeInstance) {
+    throw new Error("Doctor test instance is not initialized");
+  }
+  const io = createConfigIO({
+    env: activeInstance.env,
+    configPath: activeInstance.configPath,
+    homedir: () => activeInstance.homeDir,
+  });
+  // Keep Doctor-authored fields so the next scenario is not a config-clobber recovery.
+  await io.writeConfigFile({ ...(await io.readSourceConfigBestEffort()), ...config });
 }
 
 function localGatewayConfig(token?: GatewayToken): OpenClawConfig {

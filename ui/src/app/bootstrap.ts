@@ -42,7 +42,11 @@ import { createAgentSelectionCapability } from "./agent-selection.ts";
 import type { ShellRouteState } from "./app-host-route-state.ts";
 import { resolveControlUiDocumentMode, type ControlUiDocumentMode } from "./approval-deep-link.ts";
 import { readBootRecord } from "./boot-record.ts";
-import { resolveInitialApplicationLocation } from "./bootstrap-location.ts";
+import {
+  createInitialApplicationLocationResolver,
+  normalizeInitialApplicationLocation,
+  resolveInitialApplicationLocation,
+} from "./bootstrap-location.ts";
 import { createApplicationTheme } from "./bootstrap-theme.ts";
 import {
   subscribeBootRecordPersistence,
@@ -252,34 +256,43 @@ export function bootstrapApplication(): ApplicationRuntime {
     cachedProfileId: bootRecord?.profileId ?? null,
   });
   const startupLifecycle = createStartupLifecycle();
-  const deferInitialLocationUntilGateway =
-    firstRunDefaultLanding && !parseAgentSessionKey(settings.sessionKey);
+  const parsedInitialSession = parseAgentSessionKey(settings.sessionKey);
+  const deferInitialLocationUntilGateway = firstRunDefaultLanding && !parsedInitialSession;
   let resolveInitialFirstRunDecision: (() => void) | null = null;
   const initialFirstRunDecision = deferInitialLocationUntilGateway
     ? new Promise<void>((resolve) => {
         resolveInitialFirstRunDecision = resolve;
       })
     : null;
-  const initialLocationReady = (
-    documentMode || focusLocation
-      ? Promise.resolve(applicationLocation)
-      : resolveInitialApplicationLocation({
-          location: applicationLocation,
-          basePath,
-          sessionKey: settings.sessionKey,
-          gateway,
-          agentsList: () => agents.state.agentsList,
-          selectedAgentId: settings.selectedAgentId,
-          signal: startupLifecycle.signal,
-        })
-  ).catch((error: unknown) => {
-    // stop() aborts eager session lookups even before start() reaches location
-    // resolution, so consume that teardown-only rejection here.
-    if (startupLifecycle.signal.aborted) {
-      return applicationLocation;
-    }
-    throw error;
+  const resolveInitialLocation = createInitialApplicationLocationResolver({
+    fallback: applicationLocation,
+    signal: startupLifecycle.signal,
+    resolve: () =>
+      documentMode || focusLocation
+        ? Promise.resolve(applicationLocation)
+        : resolveInitialApplicationLocation({
+            location: applicationLocation,
+            basePath,
+            sessionKey: settings.sessionKey,
+            gateway,
+            agentsList: () => agents.state.agentsList,
+            ensureAgentsList: () => agents.ensureList(),
+            selectedAgentId: settings.selectedAgentId,
+            signal: startupLifecycle.signal,
+          }),
   });
+  const initialRoutingLocation =
+    firstRunDefaultLanding && parsedInitialSession
+      ? normalizeInitialApplicationLocation(
+          applicationLocation,
+          basePath,
+          settings.sessionKey,
+          parsedInitialSession.agentId,
+        )
+      : applicationLocation;
+  const initialRoutingLocationReady = firstRunDefaultLanding
+    ? Promise.resolve(initialRoutingLocation)
+    : resolveInitialLocation();
   const agentIdentity = createAgentIdentityCapability(gateway);
   const agentSelection = createAgentSelectionCapability(
     gateway,
@@ -627,9 +640,7 @@ export function bootstrapApplication(): ApplicationRuntime {
           context,
           enabled: firstRunDefaultLanding,
           history,
-          initialLocationReady: deferInitialLocationUntilGateway
-            ? Promise.resolve(applicationLocation)
-            : initialLocationReady,
+          initialLocationReady: initialRoutingLocationReady,
           ...(deferInitialLocationUntilGateway
             ? {
                 redirect: () =>
@@ -660,16 +671,16 @@ export function bootstrapApplication(): ApplicationRuntime {
           return stopRouter;
         });
       }
-      if (deferInitialLocationUntilGateway) {
+      if (firstRunDefaultLanding) {
         steps.push(() => {
-          // The router claims the connected Gateway session before persisted
-          // location normalization can install a competing retained Chat pane.
+          // Post-connect validation may replace only the provisional landing;
+          // navigation during startup remains authoritative.
           startupLifecycle.trackDisposer(
             startModelSetupFirstRunRedirectAfterLocation({
               context,
               enabled: false,
               history,
-              initialLocationReady,
+              initialLocationReady: resolveInitialLocation(),
               installLocation: async (location) => {
                 const routeId = routeIdFromPath(location.pathname, basePath);
                 if (routeId) {
@@ -679,7 +690,9 @@ export function bootstrapApplication(): ApplicationRuntime {
                 }
               },
               shouldInstallLocation: () =>
-                isDefaultChatLanding(history.location(), basePath, routeIdFromPath),
+                parsedInitialSession
+                  ? sameRouteLocation(history.location(), initialRoutingLocation)
+                  : isDefaultChatLanding(history.location(), basePath, routeIdFromPath),
             }),
             (error) => {
               console.error("[openclaw] initial session location failed", error);

@@ -14,6 +14,7 @@ import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import {
+  createCallerModeSnapshot,
   expectBlockedTailInPlanOrder,
   expectPlanReceiptDescriptorsToMatch,
   writeLegacyStateSchemaV1,
@@ -162,11 +163,7 @@ describe("legacy state migration caller execution", () => {
     const plan = await planLegacyStateMigrationsReadOnly({
       mode: "doctor",
       candidate: { root: fixture.root, version: "test" },
-      snapshot: {
-        homeDir: fixture.homeDir,
-        configPath: fixture.configPath,
-        stateDir: fixture.stateDir,
-      },
+      snapshot: createCallerModeSnapshot(fixture),
       env: fixture.env,
     });
 
@@ -520,11 +517,7 @@ describe("legacy state migration caller execution", () => {
     const plan = await planLegacyStateMigrationsReadOnly({
       mode: "doctor",
       candidate: { root: fixture.root, version: "test" },
-      snapshot: {
-        homeDir: fixture.homeDir,
-        configPath: fixture.configPath,
-        stateDir: fixture.stateDir,
-      },
+      snapshot: createCallerModeSnapshot(fixture),
       env: fixture.env,
     });
 
@@ -568,11 +561,7 @@ describe("legacy state migration caller execution", () => {
     const plan = await planLegacyStateMigrationsReadOnly({
       mode: "doctor",
       candidate: { root: fixture.root, version: "test" },
-      snapshot: {
-        homeDir: fixture.homeDir,
-        configPath: fixture.configPath,
-        stateDir: fixture.stateDir,
-      },
+      snapshot: createCallerModeSnapshot(fixture),
       env: fixture.env,
     });
     const legacySessionSurfaces: PreparedLegacySessionSurfaces = Object.defineProperty(
@@ -637,11 +626,7 @@ describe("legacy state migration caller execution", () => {
     const plan = await planLegacyStateMigrationsReadOnly({
       mode: "doctor",
       candidate: { root: fixture.root, version: "test" },
-      snapshot: {
-        homeDir: fixture.homeDir,
-        configPath: fixture.configPath,
-        stateDir: fixture.stateDir,
-      },
+      snapshot: createCallerModeSnapshot(fixture),
       env: fixture.env,
     });
     const pluginLoader = vi.fn(() => {
@@ -717,11 +702,7 @@ describe("legacy state migration caller execution", () => {
     const healthyPlan = await planLegacyStateMigrationsReadOnly({
       mode: "doctor",
       candidate: { root: healthyFixture.root, version: "test" },
-      snapshot: {
-        homeDir: healthyFixture.homeDir,
-        configPath: healthyFixture.configPath,
-        stateDir: healthyFixture.stateDir,
-      },
+      snapshot: createCallerModeSnapshot(healthyFixture),
       env: healthyFixture.env,
     });
     const fixture = await makeFixture();
@@ -760,11 +741,7 @@ describe("legacy state migration caller execution", () => {
     const plan = await planLegacyStateMigrationsReadOnly({
       mode: "doctor",
       candidate: { root: fixture.root, version: "test" },
-      snapshot: {
-        homeDir: fixture.homeDir,
-        configPath: fixture.configPath,
-        stateDir: fixture.stateDir,
-      },
+      snapshot: createCallerModeSnapshot(fixture),
       env: fixture.env,
     });
 
@@ -809,11 +786,7 @@ describe("legacy state migration caller execution", () => {
     const plan = await planLegacyStateMigrationsReadOnly({
       mode: "doctor",
       candidate: { root: fixture.root, version: "test" },
-      snapshot: {
-        homeDir: fixture.homeDir,
-        configPath: fixture.configPath,
-        stateDir: fixture.stateDir,
-      },
+      snapshot: createCallerModeSnapshot(fixture),
       env: fixture.env,
     });
 
@@ -868,11 +841,7 @@ describe("legacy state migration caller execution", () => {
     const plan = await planLegacyStateMigrationsReadOnly({
       mode: "doctor",
       candidate: { root: fixture.root, version: "test" },
-      snapshot: {
-        homeDir: fixture.homeDir,
-        configPath: fixture.configPath,
-        stateDir: fixture.stateDir,
-      },
+      snapshot: createCallerModeSnapshot(fixture),
       env: fixture.env,
     });
 

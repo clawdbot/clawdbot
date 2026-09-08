@@ -1,6 +1,16 @@
 // Clack prompter tests cover prompt rendering, validation, and cancellation.
-import type { SpinnerOptions } from "@clack/prompts";
-import { afterAll, afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { symbol, type SpinnerOptions } from "@clack/prompts";
+import {
+  afterAll,
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+  type MockInstance,
+} from "vitest";
 
 const themeMocks = vi.hoisted(() => ({
   isRich: vi.fn(() => false),
@@ -49,7 +59,6 @@ const clackMocks = vi.hoisted(() => ({
     start: vi.fn(),
     message: vi.fn(),
     clear: vi.fn(),
-    stop: vi.fn(),
   })),
   text: vi.fn(),
 }));
@@ -72,7 +81,8 @@ vi.mock("../../packages/terminal-core/src/theme.js", async (importOriginal) => {
   };
 });
 
-vi.mock("@clack/prompts", () => ({
+vi.mock("@clack/prompts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@clack/prompts")>()),
   autocomplete: clackMocks.autocomplete,
   autocompleteMultiselect: clackMocks.autocompleteMultiselect,
   cancel: clackMocks.cancel,
@@ -88,7 +98,8 @@ vi.mock("@clack/prompts", () => ({
   text: clackMocks.text,
 }));
 
-vi.mock("../cli/progress.js", () => ({
+vi.mock("../cli/progress.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../cli/progress.js")>()),
   createCliProgress: cliProgressMocks.createCliProgress,
 }));
 
@@ -163,6 +174,11 @@ describe("tokenizedOptionFilter", () => {
 });
 
 describe("createClackPrompter", () => {
+  let stdoutWriteSpy: MockInstance<typeof process.stdout.write>;
+
+  beforeEach(() => {
+    stdoutWriteSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+  });
   it("clamps long progress labels by display width without splitting grapheme clusters", () => {
     stubStdoutColumns(20);
     const prompter = createClackPrompter();
@@ -175,7 +191,6 @@ describe("createClackPrompter", () => {
     const osc = cliProgressMocks.createCliProgress.mock.results[0]!.value;
     expect(spin.start).toHaveBeenCalledWith(theme.accent("12345678…"));
     expect(spin.message).toHaveBeenCalledWith(theme.accent("正在扫描…"));
-    expect(spin.stop).toHaveBeenCalledWith("1234567890ABC");
     expect(cliProgressMocks.createCliProgress).toHaveBeenCalledWith(
       expect.objectContaining({ label: "12345678😀ABC" }),
     );
@@ -234,15 +249,44 @@ describe("createClackPrompter", () => {
     expect(spin.start).toHaveBeenCalledWith(theme.accent("Loading"));
   });
 
-  it("uses an empty progress label when decoration consumes the terminal width", () => {
-    stubStdoutColumns(10);
-    const prompter = createClackPrompter();
+  it.each([undefined, "", "First line\nSecond line"])(
+    "preserves tiny completion %j once",
+    (message) => {
+      stubStdoutIsTTY(true);
+      stubStdoutColumns(6);
+      vi.stubEnv("CI", "");
+      vi.stubEnv("VITEST", "");
+      themeMocks.isRich.mockReturnValue(true);
+      const progress = createClackPrompter().progress("Loading");
+      onTestFinished(() => progress.stop());
+      const spin = clackMocks.spinner.mock.results[0]!.value;
 
-    const progress = prompter.progress("Loading");
+      expect(spin.start).not.toHaveBeenCalled();
+      progress.update("Still loading");
+      progress.stop(message);
+      const expected = message === undefined ? [] : [[`${symbol("submit")}  ${message}\n`]];
+      expect(stdoutWriteSpy.mock.calls).toEqual(expected);
+      progress.stop("Unexpected second completion");
+      expect(stdoutWriteSpy.mock.calls).toEqual(expected);
+      expect(process.stdout.listeners("resize")).toEqual(initialSuiteResizeListeners);
+    },
+  );
+
+  it("keeps completion after clearing tiny animation", () => {
+    stubStdoutColumns(20);
+    const progress = createClackPrompter().progress("Loading");
     onTestFinished(() => progress.stop());
-
     const spin = clackMocks.spinner.mock.results[0]!.value;
-    expect(spin.start).toHaveBeenCalledWith(theme.accent(""));
+    stubStdoutColumns(6);
+    process.stdout.emit("resize");
+    expect(spin.clear).toHaveBeenCalled();
+    stubStdoutColumns(30);
+    process.stdout.emit("resize");
+    progress.update("Still loading");
+    expect(spin.start).toHaveBeenCalledTimes(1);
+
+    progress.stop("Finished after resize");
+    expect(stdoutWriteSpy).toHaveBeenCalledWith(`${symbol("submit")}  Finished after resize\n`);
   });
 
   it("uses the claw spinner on rich interactive terminals", () => {

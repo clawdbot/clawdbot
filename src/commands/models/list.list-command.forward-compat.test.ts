@@ -239,7 +239,7 @@ function modelRegistryOptions(index = 0): Record<string, unknown> {
 }
 
 let modelsListCommand: typeof import("./list.list-command.js").modelsListCommand;
-let listRowsModule: typeof import("./list.rows.js");
+let buildModelListRows: typeof import("./list.rows.js").buildModelListRows;
 let cliBackendsTesting: typeof import("../../agents/cli-backends.test-support.js").testing;
 
 function installModelsListCommandForwardCompatMocks() {
@@ -391,13 +391,12 @@ function installModelsListCommandForwardCompatMocks() {
 beforeAll(async () => {
   installModelsListCommandForwardCompatMocks();
   ({ testing: cliBackendsTesting } = await import("../../agents/cli-backends.test-support.js"));
-  listRowsModule = await import("./list.rows.js");
+  ({ buildModelListRows } = await import("./list.rows.js"));
   ({ modelsListCommand } = await import("./list.list-command.js"));
 });
 
-async function buildAllOpenAiCodexRows(opts: { supplementCatalog?: boolean } = {}) {
+async function buildAllOpenAiCodexRows() {
   const loaded = await mocks.loadModelRegistry();
-  const rows: unknown[] = [];
   const context = {
     cfg: mocks.resolvedConfig,
     agentDir: "/tmp/openclaw-agent",
@@ -417,20 +416,13 @@ async function buildAllOpenAiCodexRows(opts: { supplementCatalog?: boolean } = {
     ),
     filter: { provider: "openai" },
   };
-  const seenKeys = await listRowsModule.appendDiscoveredRows({
-    rows: rows as never,
-    models: loaded.models as never,
+  return buildModelListRows({
+    includePreparedCatalog: true,
+    entries: [],
+    registryModels: loaded.models as never,
     modelRegistry: loaded.registry as never,
     context: context as never,
   });
-  if (opts.supplementCatalog !== false) {
-    await listRowsModule.appendPreparedModelCatalogRows({
-      rows: rows as never,
-      context: context as never,
-      seenKeys,
-    });
-  }
-  return rows;
 }
 
 beforeEach(() => {
@@ -1821,10 +1813,11 @@ describe("modelsListCommand forward-compat", () => {
 
     it("suppresses direct openai gpt-5.3-codex-spark rows in --all output", async () => {
       mocks.resolveConfiguredEntries.mockReturnValueOnce({ entries: [] });
-      const rows: unknown[] = [];
-      await listRowsModule.appendDiscoveredRows({
-        rows: rows as never,
-        models: [
+      mocks.loadModelCatalog.mockResolvedValueOnce([]);
+      const rows = await buildModelListRows({
+        includePreparedCatalog: true,
+        entries: [],
+        registryModels: [
           {
             provider: "openai",
             id: "gpt-5.3-codex-spark",

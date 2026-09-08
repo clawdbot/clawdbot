@@ -838,6 +838,7 @@ function createCronPromptExecutor(
           allowTransientCooldownProbe: runOptions.allowTransientCooldownProbe,
           contextEngineLogicalTurnLease: runOptions.contextEngineLogicalTurnLease,
           onContextEngineTurnCandidate: runOptions.onContextEngineTurnCandidate,
+          assistantErrorTranscript: runOptions.assistantErrorTranscript,
           abortSignal: params.abortSignal,
           onExecutionStarted: notifyExecutionStarted,
           onExecutionPhase: notifyExecutionPhase,
