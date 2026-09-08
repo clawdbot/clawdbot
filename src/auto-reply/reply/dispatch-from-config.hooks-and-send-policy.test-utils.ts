@@ -1,6 +1,7 @@
 // Imported by a dispatch-from-config entrypoint to keep its mocked suite in one Vitest module graph.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE } from "../../agents/failover/user-copy.js";
+import { readAgentRunTerminalOutcome } from "../../channels/turn/agent-run-terminal-outcome.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { WorkerSessionPlacementRecord } from "../../gateway/worker-environments/placement-record.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
@@ -9,7 +10,7 @@ import { setReplyPayloadMetadata } from "../reply-payload.js";
 import type { MsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import {
-  NO_VISIBLE_REPLY_FALLBACK_TEXT,
+  buildNoVisibleReplyFallbackText,
   QUEUE_CAP_REJECTION_TEXT,
 } from "./dispatch-from-config.payloads.js";
 import {
@@ -41,6 +42,8 @@ import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
 import { buildTestCtx } from "./test-ctx.js";
+
+const NO_VISIBLE_REPLY_FALLBACK_TEXT = buildNoVisibleReplyFallbackText();
 
 function sendPolicySessionEntry(sendPolicy: "allow" | "deny") {
   return { sessionId: "s1", updatedAt: 0, sendPolicy };
@@ -623,6 +626,83 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     });
     expect(result.noVisibleReplyFallbackEligible).toBeUndefined();
   });
+
+  it.each(
+    [
+      { name: "supplied", runId: "caller-run", generatedRunId: undefined, reference: "caller-run" },
+      {
+        name: "generated",
+        runId: undefined,
+        generatedRunId: "generated-run",
+        reference: "generated-run",
+      },
+      {
+        name: "observed over supplied",
+        runId: "caller-run",
+        generatedRunId: "observed-run",
+        reference: "observed-run",
+      },
+      { name: "missing", runId: undefined, generatedRunId: undefined, reference: undefined },
+      ...["run\nprivate detail", "<@everyone>", "https://example.com/private", "x".repeat(129)].map(
+        (runId) => ({
+          name: "unsafe reference",
+          runId,
+          generatedRunId: undefined,
+          reference: undefined,
+        }),
+      ),
+    ].flatMap((entry) => [
+      { entry, routed: false },
+      { entry, routed: true },
+    ]),
+  )(
+    "keeps $entry.name fallback correlation non-error (routed=$routed)",
+    async ({ entry: { runId, generatedRunId, reference }, routed }) => {
+      setNoAbort();
+      const dispatcher = createDispatcher();
+      const onAgentRunStart = vi.fn();
+      const replyOptions = { runId, onAgentRunStart };
+      const replyResolver = vi.fn(async (_ctx: MsgContext, options?: GetReplyOptions) => {
+        if (generatedRunId) {
+          options?.onAgentRunStart?.(generatedRunId);
+          options?.onAgentRunTerminalOutcome?.("completed");
+        }
+        return undefined;
+      });
+      const result = await dispatchReplyFromConfig({
+        ctx: buildTestCtx({
+          ChatType: "direct",
+          Provider: "telegram",
+          Surface: "telegram",
+          OriginatingChannel: routed ? "discord" : "telegram",
+          OriginatingTo: "user:1",
+        }),
+        cfg: emptyConfig,
+        dispatcher,
+        replyResolver,
+        replyOptions,
+      });
+      const payload = {
+        text: reference
+          ? `${NO_VISIBLE_REPLY_FALLBACK_TEXT} Reference: ${reference}.`
+          : NO_VISIBLE_REPLY_FALLBACK_TEXT,
+      };
+      if (routed) {
+        expect(firstRouteReplyCall().payload).toEqual(payload);
+        expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+      } else {
+        expect(dispatcher.sendFinalReply).toHaveBeenCalledExactlyOnceWith(payload);
+      }
+      expect(result.noVisibleReplyFallbackDelivered).toBe(true);
+      expect(readAgentRunTerminalOutcome(result)).toBe(generatedRunId ? "completed" : undefined);
+      expect(replyOptions.runId).toBe(runId);
+      if (generatedRunId) {
+        expect(onAgentRunStart).toHaveBeenCalledExactlyOnceWith(generatedRunId);
+      } else {
+        expect(onAgentRunStart).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it("keeps ambient group turns silent even when silence policy is disallow", async () => {
     setNoAbort();
