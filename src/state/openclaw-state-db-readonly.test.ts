@@ -10,6 +10,8 @@ import { acquireOpenClawStateDatabaseFileExclusion } from "./openclaw-state-db-c
 import {
   withExistingOpenClawStateDatabaseArtifactPreservingReadOnly,
   withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync,
+  withExistingOpenClawStateDatabaseReadOnly,
+  withArtifactPreservingStateReads,
 } from "./openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -27,15 +29,41 @@ afterEach(() => {
   closeOpenClawStateDatabaseForTest();
 });
 
-describe("artifact-preserving shared-state reads", () => {
-  it.each([
-    ["cached", "sync"],
-    ["cached", "async"],
-    ["uncached", "sync"],
-    ["uncached", "async"],
-  ] as const)(
-    "reads committed rows without joining a %s transaction (%s)",
-    async (cacheState, mode) => {
+describe.each(["admission", "explicit", "async"] as const)("%s read-only state reads", (mode) => {
+  const readState =
+    mode === "admission"
+      ? (
+          operation: Parameters<typeof withExistingOpenClawStateDatabaseReadOnly>[0],
+          options?: Parameters<typeof withExistingOpenClawStateDatabaseReadOnly>[1],
+        ) =>
+          withArtifactPreservingStateReads(() =>
+            withExistingOpenClawStateDatabaseReadOnly(operation, options),
+          )
+      : mode === "async"
+        ? withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync
+        : withExistingOpenClawStateDatabaseArtifactPreservingReadOnly;
+  it("reads a consolidated WAL database without creating source sidecars", async () => {
+    await withTempDir("openclaw-state-readonly-sidecars-", async (stateDir) => {
+      const options = createOptions(stateDir);
+      await fs.mkdir(path.dirname(options.path), { recursive: true });
+      const writer = new DatabaseSync(options.path);
+      writer.exec(
+        "PRAGMA journal_mode = WAL; CREATE TABLE held(value TEXT); INSERT INTO held VALUES ('committed');",
+      );
+      writer.close();
+      const before = await fs.readFile(options.path);
+      expect(await fs.readdir(path.dirname(options.path))).toEqual(["openclaw.sqlite"]);
+
+      expect(
+        await readState(({ db }) => db.prepare("SELECT value FROM held").all(), options),
+      ).toEqual([{ value: "committed" }]);
+      expect(await fs.readdir(path.dirname(options.path))).toEqual(["openclaw.sqlite"]);
+      expect(await fs.readFile(options.path)).toEqual(before);
+    });
+  });
+  it.each(["cached", "uncached"])(
+    "reads committed rows without joining a %s transaction",
+    async (cacheState) => {
       await withTempDir("openclaw-state-readonly-isolated-", async (stateDir) => {
         const options = createOptions(stateDir);
         const opened = openOpenClawStateDatabase(options);
@@ -46,11 +74,7 @@ describe("artifact-preserving shared-state reads", () => {
         const writer = cacheState === "cached" ? opened.db : new DatabaseSync(options.path);
         writer.exec("BEGIN; UPDATE held SET value = 'uncommitted';");
         try {
-          const read =
-            mode === "async"
-              ? withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync
-              : withExistingOpenClawStateDatabaseArtifactPreservingReadOnly;
-          const result = await read(({ db, path: pathname }) => {
+          const result = await readState(({ db, path: pathname }) => {
             expect(db).not.toBe(writer);
             expect(pathname).toBe(options.path);
             return db.prepare("SELECT value FROM held").all();
@@ -76,7 +100,7 @@ describe("artifact-preserving shared-state reads", () => {
       const opened = openOpenClawStateDatabase(options);
       opened.db.exec("CREATE TABLE held(value TEXT); INSERT INTO held VALUES ('original');");
 
-      const result = withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(({ db }) => {
+      const result = await readState(({ db }) => {
         expect(db).toBe(opened.db);
         return db.prepare("SELECT value FROM held").all();
       }, options);

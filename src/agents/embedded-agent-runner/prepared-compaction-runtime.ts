@@ -31,7 +31,6 @@ import {
   resolveContextInjectionMode,
 } from "../bootstrap-files.js";
 import {
-  listChannelSupportedActions,
   resolveChannelMessageToolHints,
   resolveChannelReactionGuidance,
 } from "../channel-tools.js";
@@ -69,7 +68,6 @@ import { resolveCompactionContextTokenBudget } from "./compaction-runtime-contex
 import type { DirectCompactionPreparation } from "./direct-compaction-preparation.js";
 import { applyFinalEffectiveToolPolicy } from "./effective-tool-policy.js";
 import { log } from "./logger.js";
-import { buildEmbeddedMessageActionDiscoveryInput } from "./message-action-discovery-input.js";
 import { resolvePromptModeForSession } from "./run/attempt-prompt-helpers.js";
 import { resolveAttemptSpawnWorkspaceDir } from "./run/attempt-thread-helpers.js";
 import { applyEmbeddedAttemptToolsAllow } from "./run/attempt-tool-construction-plan.js";
@@ -414,24 +412,6 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
             accountId: params.agentAccountId,
           })
         : undefined;
-    // Resolve channel-specific message actions for system prompt
-    const channelActions = runtimeChannel
-      ? listChannelSupportedActions(
-          buildEmbeddedMessageActionDiscoveryInput({
-            cfg: params.config,
-            channel: runtimeChannel,
-            chatType: params.chatType,
-            currentChannelId: params.currentChannelId,
-            currentThreadTs: params.currentThreadTs,
-            currentMessageId: params.currentMessageId,
-            accountId: params.agentAccountId,
-            sessionKey: params.sessionKey,
-            sessionId: params.sessionId,
-            agentId: sessionAgentId,
-            senderId: params.senderId,
-          }),
-        )
-      : undefined;
     const messageToolHints = runtimeChannel
       ? resolveChannelMessageToolHints({
           cfg: params.config,
@@ -453,7 +433,6 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
       channel: runtimeChannel,
       chatType: params.chatType,
       capabilities: runtimeCapabilities,
-      channelActions,
       activeProcessSessions: listActiveProcessSessionReferences({
         scopeKey: resolveProcessToolScopeKey({
           sessionKey: params.sessionKey,

@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { statSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
@@ -8,6 +9,7 @@ import {
   prepareSqliteReadOnlyLocationSync,
 } from "../infra/sqlite-readonly-location.js";
 import { withSqliteSourceHandle } from "../infra/sqlite-source-handle.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { openClawStateDatabaseCache } from "./openclaw-state-db-cache.js";
 import {
   OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
@@ -15,6 +17,16 @@ import {
 } from "./openclaw-state-db-contract.js";
 import { assertSupportedStateSchemaVersion } from "./openclaw-state-db-schema-version.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
+
+const artifactPreservingReads = resolveGlobalSingleton(
+  Symbol.for("openclaw.artifactPreservingStateReads"),
+  () => new AsyncLocalStorage<boolean>(),
+);
+
+/** Admission scopes every nested reader without changing normal live-read semantics. */
+export function withArtifactPreservingStateReads<T>(operation: () => T): T {
+  return artifactPreservingReads.run(true, operation);
+}
 
 type OpenClawStateReadOnlyDatabase = {
   db: DatabaseSync;
@@ -77,10 +89,17 @@ function withFreshOpenClawStateDatabaseReadOnly<T>(
   pathname: string,
   location = pathname,
 ): T {
+  const env = options.env ?? process.env;
+  openClawStateDatabaseCache.assertOpenClawStateDatabaseFreshOpenAllowedAtPath(pathname, env);
+  // Admission snapshots preserve the source sidecars. Explicit async readers
+  // already supplied a snapshot from their live mutation owner.
+  const prepared =
+    location === pathname && artifactPreservingReads.getStore()
+      ? prepareSqliteReadOnlyLocationSync(pathname)
+      : undefined;
+  const readLocation = prepared?.location ?? location;
   const read = () => {
-    const env = options.env ?? process.env;
-    openClawStateDatabaseCache.assertOpenClawStateDatabaseFreshOpenAllowedAtPath(pathname, env);
-    const db = openNodeSqliteDatabase(location, { readOnly: true });
+    const db = openNodeSqliteDatabase(readLocation, { readOnly: true });
     try {
       db.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
       assertSupportedStateSchemaVersion(db, pathname);
@@ -90,8 +109,12 @@ function withFreshOpenClawStateDatabaseReadOnly<T>(
       db.close();
     }
   };
-  // Private completed snapshots no longer own descriptors on the live source.
-  return location === pathname ? withSqliteSourceHandle(pathname, read) : read();
+  try {
+    // Only live-source descriptors join handle custody; snapshots remain private.
+    return readLocation === pathname ? withSqliteSourceHandle(pathname, read) : read();
+  } finally {
+    prepared?.cleanup();
+  }
 }
 
 /**
@@ -137,28 +160,9 @@ export function withExistingOpenClawStateDatabaseArtifactPreservingReadOnly<T>(
   operation: (database: OpenClawStateReadOnlyDatabase) => T,
   options: OpenClawStateDatabaseOptions = {},
 ): T | undefined {
-  const pathname = resolveReadOnlyPath(options);
-  const reused = withOpenClawStateDatabaseReadOnlyIfOpen(operation, pathname);
-  if (reused.reused) {
-    return reused.value;
-  }
-  const existingPath = existingPathOrUndefined(pathname);
-  if (existingPath === undefined) {
-    return undefined;
-  }
-  // Cache absence cannot rule out caller-owned SQLite handles. Copy in a child
-  // so closing a source descriptor cannot release this process's POSIX locks.
-  const prepared = prepareSqliteReadOnlyLocationSync(existingPath);
-  try {
-    return withFreshOpenClawStateDatabaseReadOnly(
-      operation,
-      options,
-      existingPath,
-      prepared.location,
-    );
-  } finally {
-    prepared.cleanup();
-  }
+  return withArtifactPreservingStateReads(() =>
+    withExistingOpenClawStateDatabaseReadOnly(operation, options),
+  );
 }
 
 /** Async inspection can join the live mutation owner's private snapshot provider.

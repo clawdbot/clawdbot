@@ -42,20 +42,22 @@ function appendClawHubHint(output: string, json?: boolean): string {
   return `${output}\n\nTip: use \`${command} search\`, \`${command} install\`, and \`${command} update\` for ClawHub-backed skills.`;
 }
 
-function formatSkillStatus(skill: SkillStatusEntry): string {
+function formatSkillStatus(skill: SkillStatusEntry, detailed = false): string {
   if (skill.disabled) {
-    return theme.warn(decorativePrefix("⏸", "disabled"));
+    return theme.warn(decorativePrefix("⏸", detailed ? "Disabled" : "disabled"));
   }
   if (skill.blockedByAllowlist) {
-    return theme.warn(decorativePrefix("🚫", "blocked"));
+    return theme.warn(decorativePrefix("🚫", detailed ? "Blocked by allowlist" : "blocked"));
   }
   if (skill.blockedByAgentFilter) {
-    return theme.warn(decorativePrefix("🚫", "excluded"));
+    return theme.warn(
+      decorativePrefix("🚫", detailed ? "Excluded by agent allowlist" : "excluded"),
+    );
   }
   if (skill.eligible) {
-    return theme.success("✓ ready");
+    return theme.success(detailed ? "✓ Ready" : "✓ ready");
   }
-  return theme.warn("△ needs setup");
+  return theme.warn(detailed ? "△ Needs setup" : "△ needs setup");
 }
 
 function normalizeSkillEmoji(emoji?: string): string {
@@ -209,15 +211,7 @@ export function formatSkillInfo(
 
   const lines: string[] = [];
   const emoji = normalizeSkillEmoji(skill.emoji);
-  const status = skill.disabled
-    ? theme.warn(decorativePrefix("⏸", "Disabled"))
-    : skill.blockedByAllowlist
-      ? theme.warn(decorativePrefix("🚫", "Blocked by allowlist"))
-      : skill.blockedByAgentFilter
-        ? theme.warn(decorativePrefix("🚫", "Excluded by agent allowlist"))
-        : skill.eligible
-          ? theme.success("✓ Ready")
-          : theme.warn("△ Needs setup");
+  const status = formatSkillStatus(skill, true);
 
   const safeName = sanitizeForLog(skill.name);
   const safeHomepage = skill.homepage ? sanitizeForLog(skill.homepage) : undefined;

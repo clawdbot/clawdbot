@@ -2532,7 +2532,7 @@ src/config/io.clobber-snapshot.ts	2
 src/config/io.context.ts	1
 src/config/io.health-state.ts	1
 src/config/io.load.ts	2
-src/config/io.observe-recovery.ts	11
+src/config/io.observe-recovery.ts	7
 src/config/io.observe.ts	1
 src/config/io.read-helpers.ts	3
 src/config/io.session-store-owner.ts	2
