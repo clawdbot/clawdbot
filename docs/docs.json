@@ -1735,6 +1735,16 @@
                   "plugins/tool-plugins",
                   "plugins/sdk-channel-plugins",
                   "plugins/sdk-provider-plugins",
+                  {
+                    "group": "Provider plugins",
+                    "pages": [
+                      "plugins/sdk-provider-plugins/model-catalogs",
+                      "plugins/sdk-provider-plugins/hook-families",
+                      "plugins/sdk-provider-plugins/runtime-hooks",
+                      "plugins/sdk-provider-plugins/voice-and-audio",
+                      "plugins/sdk-provider-plugins/media-and-search"
+                    ]
+                  },
                   "plugins/cli-backend-plugins",
                   "plugins/hooks",
                   "plugins/plugin-permission-requests",

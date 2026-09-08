@@ -9,6 +9,11 @@ const pluginDocs = [
   path.join(DOCS_ROOT, "plugins", "building-plugins.md"),
   path.join(DOCS_ROOT, "plugins", "sdk-setup.md"),
   path.join(DOCS_ROOT, "plugins", "sdk-provider-plugins.md"),
+  path.join(DOCS_ROOT, "plugins", "sdk-provider-plugins", "model-catalogs.md"),
+  path.join(DOCS_ROOT, "plugins", "sdk-provider-plugins", "hook-families.md"),
+  path.join(DOCS_ROOT, "plugins", "sdk-provider-plugins", "runtime-hooks.md"),
+  path.join(DOCS_ROOT, "plugins", "sdk-provider-plugins", "voice-and-audio.md"),
+  path.join(DOCS_ROOT, "plugins", "sdk-provider-plugins", "media-and-search.md"),
 ];
 
 function extractNamedJsonBlock(markdown: string, label: string) {
