@@ -9,6 +9,8 @@ import {
   ed25519PrivateKeyPemFromRaw,
   ed25519PublicKeyPemFromRaw,
   normalizeEd25519PublicKeyBase64Url,
+  signEd25519Payload,
+  verifyEd25519Signature,
 } from "./ed25519-signature.js";
 
 describe("strict base64 decoding", () => {
@@ -83,5 +85,83 @@ describe("strict Ed25519 keys", () => {
       /canonical PEM/,
     );
     expect(deriveEd25519PrivateKeyRaw(privateKeyPem.trimEnd())).toHaveLength(32);
+  });
+});
+
+describe("pre-auth input bounds", () => {
+  // Verification runs before authentication, so both inputs are attacker-chosen
+  // and unbudgeted: a handshake buys a key parse plus a verify. These assert the
+  // guard through the public API — the shape checks are internal on purpose.
+  function keyPair() {
+    const { publicKey, privateKey } = crypto.generateKeyPairSync("ed25519");
+    return {
+      publicKeyPem: publicKey.export({ type: "spki", format: "pem" }),
+      privateKeyPem: privateKey.export({ type: "pkcs8", format: "pem" }),
+    };
+  }
+
+  it("still verifies a genuine signature", () => {
+    const { publicKeyPem, privateKeyPem } = keyPair();
+    const signatureBase64Url = signEd25519Payload(privateKeyPem, "payload");
+    expect(
+      verifyEd25519Signature({ publicKey: publicKeyPem, payload: "payload", signatureBase64Url }),
+    ).toBe(true);
+  });
+
+  it("rejects an oversized public key even when it would otherwise parse", () => {
+    // The behavioural edge of the bound. Node accepts a valid PEM padded with
+    // trailing whitespace, so without a cap this verifies — and the PEM path
+    // never passes through base64UrlDecode's existing 4096-char limit, leaving
+    // crypto.createPublicKey to absorb attacker-chosen length pre-auth.
+    const { publicKeyPem, privateKeyPem } = keyPair();
+    const signatureBase64Url = signEd25519Payload(privateKeyPem, "payload");
+    const paddedPem = `${publicKeyPem}${"\n".repeat(1200)}`;
+
+    expect(paddedPem.length).toBeGreaterThan(1024);
+    expect(
+      verifyEd25519Signature({ publicKey: paddedPem, payload: "payload", signatureBase64Url }),
+    ).toBe(false);
+  });
+
+  it("rejects a junk PEM far larger than any real key", () => {
+    const { privateKeyPem } = keyPair();
+    const signatureBase64Url = signEd25519Payload(privateKeyPem, "payload");
+    const junkPem = `-----BEGIN PUBLIC KEY-----\n${"A".repeat(512 * 1024)}\n-----END PUBLIC KEY-----\n`;
+    expect(
+      verifyEd25519Signature({ publicKey: junkPem, payload: "payload", signatureBase64Url }),
+    ).toBe(false);
+  });
+
+  it("rejects an oversized signature", () => {
+    const { publicKeyPem } = keyPair();
+    expect(
+      verifyEd25519Signature({
+        publicKey: publicKeyPem,
+        payload: "payload",
+        signatureBase64Url: "A".repeat(512 * 1024),
+      }),
+    ).toBe(false);
+  });
+
+  it("still accepts a standard-base64 signature encoding", () => {
+    // The verify path tolerates base64 as well as base64url; the pre-check must
+    // not be stricter than the path it guards.
+    const { publicKeyPem, privateKeyPem } = keyPair();
+    const base64url = signEd25519Payload(privateKeyPem, "payload");
+    const standardBase64 = Buffer.from(base64url, "base64url").toString("base64");
+    expect(
+      verifyEd25519Signature({
+        publicKey: publicKeyPem,
+        payload: "payload",
+        signatureBase64Url: standardBase64,
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps the normalize contract for short non-key values", () => {
+    // normalize deliberately normalises any non-empty decode, not only 32-byte
+    // keys, so it takes the length bound only.
+    expect(normalizeEd25519PublicKeyBase64Url("-_8B")).toBe("-_8B");
+    expect(normalizeEd25519PublicKeyBase64Url("A".repeat(4096))).toBeNull();
   });
 });
