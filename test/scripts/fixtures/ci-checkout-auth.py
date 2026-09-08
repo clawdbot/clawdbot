@@ -166,8 +166,8 @@ with tempfile.TemporaryDirectory(prefix="checkout-auth-") as directory:
         remote = f"http://127.0.0.1:{server.server_port}/{bare.name}"
         workspace = root / "workspace"
         if kova:
-            # Keep the whole workflow body intact. Only unrelated OCM/npm tools
-            # are stubbed; Git talks to the real server for every object it needs.
+            # Keep the workflow statements intact. Git talks to the real server;
+            # only unrelated OCM/npm tools and retry waiting are stubbed.
             workspace = root / "kova-src"
             (root / "ocm-install").mkdir()
             (root / "ocm-install/ocm").write_text("#!/bin/sh\nexit 0\n")
@@ -178,6 +178,23 @@ npm() { test -s "$KOVA_SRC/payload.txt"; }
 node() { :; }
 ''' + sys.argv[3].replace('"https://github.com/${KOVA_REPOSITORY}.git"', json.dumps(remote)).replace(
                 'f"https://github.com/{os.environ[\'KOVA_REPOSITORY\']}.git"', repr(remote))
+            backoffs_path = root / "backoffs.json"
+            policy_start = "<<'PYTHON'\n"
+            assert script.count(policy_start) == 1, "Expected one Kova Python policy boundary"
+            # Observe retry policy on the existing owner, leaving Git deadlines
+            # and process draining real. Lifecycle tests cover elapsed backoff/cancellation.
+            script = script.replace(policy_start, policy_start + f'''import ci_git_owner as fixture_owner
+import json as fixture_json
+from pathlib import Path as FixturePath
+fixture_backoffs = []
+fixture_backoffs_path = FixturePath({str(backoffs_path)!r})
+fixture_backoffs_path.write_text(fixture_json.dumps(fixture_backoffs))
+def fixture_backoff(seconds):
+    fixture_owner.check_cancelled()
+    fixture_backoffs.append(seconds)
+    fixture_backoffs_path.write_text(fixture_json.dumps(fixture_backoffs))
+fixture_owner.backoff = fixture_backoff
+''', 1)
             result = command("bash", "-e", "-o", "pipefail", "-c", script, extra={
                 "CI_GIT_OWNER": owner, "GH_TOKEN": token,
                 "RUNNER_TEMP": str(root), "KOVA_HOME": str(home / "kova"),
@@ -195,6 +212,7 @@ node() { :; }
             print(json.dumps({"mode": mode, "exitCode": result.returncode, "stderr": result.stderr,
                               "checkoutComplete": complete, "sessions": kova_methods.count("GET"),
                               "transientFailures": transient_failures, "filteredFetch": filtered_fetch,
+                              "backoffs": json.loads(backoffs_path.read_text()),
                               "shallowCheckout": complete and checked(git, "rev-parse", "--is-shallow-repository", cwd=workspace) == "true",
                               "credentialPersisted": "extraheader" in local_config.lower(), "requests": requests}))
             raise SystemExit(0)

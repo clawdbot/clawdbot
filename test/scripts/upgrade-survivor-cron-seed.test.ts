@@ -74,6 +74,30 @@ if (args[0] === "config") {
   assert.deepEqual(args, ["config", "validate"]);
   assert.equal(config, original);
   assert.equal(fs.existsSync(path.join(state, "cron", "jobs.json")), false);
+} else if (args[0] === "gateway" && args[1] === "call") {
+  assert.equal(fs.existsSync(path.join(process.env.FIXTURE_ROOT, "restarted")), true,
+    "serving turn must follow the managed replacement");
+  assert.equal(args[args.indexOf("--token") + 1], "upgrade-survivor-token");
+  const params = JSON.parse(args[args.indexOf("--params") + 1]);
+  const markerFile = path.join(process.env.FIXTURE_ROOT, "serving-marker");
+  let result;
+  if (args[2] === "chat.send") {
+    assert.equal(params.sessionKey, "agent:main:main");
+    const marker = params.message.match(/OPENCLAW_E2E_SURVIVOR_[A-F0-9]+/)[0];
+    fs.writeFileSync(markerFile, marker);
+    result = { status: "started", runId: "fixture-serving-run" };
+  } else if (args[2] === "agent.wait") {
+    assert.equal(params.runId, "fixture-serving-run");
+    assert.equal(fs.existsSync(markerFile), true);
+    result = { runId: params.runId, status: "ok", endedAt: 1788820180863 };
+  } else {
+    assert.equal(args[2], "chat.history");
+    assert.equal(params.sessionKey, "agent:main:main");
+    result = { sessionId: "upgrade-main-session", messages: [{ role: "assistant",
+      content: [{ type: "text", text: fs.readFileSync(markerFile, "utf8") }] }] };
+    fs.writeFileSync(path.join(process.env.FIXTURE_ROOT, "served"), "complete");
+  }
+  process.stdout.write(JSON.stringify(result));
 } else if (args[0] === "gateway" && args[1] === "status") {
   assert.deepEqual(args, ["gateway", "status", "--url", "ws://127.0.0.1:18789", "--token",
     "upgrade-survivor-token", "--require-rpc", "--timeout", "30000", "--json"]);
@@ -218,6 +242,7 @@ repair_fixture_plugin_consent
   );
   expect(readFileSync(path.join(root, "updated"), "utf8")).toBe("complete");
   expect(existsSync(path.join(root, "restarted"))).toBe(mode === "auto-auth");
+  expect(existsSync(path.join(root, "served"))).toBe(mode === "auto-auth");
 });
 
 const baselineJobs = [

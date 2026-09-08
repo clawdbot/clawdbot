@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
 import type { PluginSdkApiDeclarationSection } from "./api-baseline-declaration-closure.js";
 import { renderPluginSdkApiBaseline, type PluginSdkApiExport } from "./api-baseline.js";
 
@@ -387,22 +388,6 @@ function appendText(lines: string[], label: "after" | "before", text: string | n
   }
 }
 
-function truncateUtf8(text: string, maxBytes: number): string {
-  const bytes = Buffer.from(text, "utf8");
-  if (bytes.length <= maxBytes) {
-    return text;
-  }
-  let end = maxBytes;
-  while (end > 0) {
-    const excludedByte = bytes[end];
-    if (excludedByte === undefined || (excludedByte & 0xc0) !== 0x80) {
-      break;
-    }
-    end -= 1;
-  }
-  return bytes.subarray(0, end).toString("utf8");
-}
-
 function appendExportChanges(
   lines: string[],
   title: string,
@@ -522,5 +507,5 @@ export function formatPluginSdkApiDiffReport(params: {
     return report;
   }
   const suffix = "\n\n… summary truncated; inspect the JSON artifact.\n";
-  return `${truncateUtf8(report, REPORT_BYTE_LIMIT - Buffer.byteLength(suffix, "utf8"))}${suffix}`;
+  return `${truncateUtf8Prefix(report, REPORT_BYTE_LIMIT - Buffer.byteLength(suffix, "utf8"))}${suffix}`;
 }

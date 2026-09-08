@@ -25,6 +25,7 @@ import { resolveAgentHarnessOwnerPluginIds } from "../agents/harness/runtime-plu
 import type { AgentHarnessAuthBindingFingerprintParams } from "../agents/harness/types.js";
 import type { ResolvedProviderAuth } from "../agents/model-auth-runtime-shared.js";
 import { resolveApiKeyForProviderCore } from "../agents/model-auth.js";
+import { cloneConfigWithResolutionFacts } from "../config/resolution-facts.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { passesManifestOwnerBasePolicy } from "../plugins/manifest-owner-policy.js";
@@ -48,7 +49,7 @@ import {
 type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
 type SystemAgentConfiguredRouteIdentity = DistributiveOmit<
   SystemAgentConfiguredRoute,
-  "runConfig" | "authProfileId"
+  "runConfig" | "sourceConfig" | "authProfileId"
 >;
 type SystemAgentVerifiedExecutionRoute =
   | Extract<SystemAgentConfiguredRoute, { runner: "cli" }>
@@ -219,7 +220,12 @@ async function resolveAgentHarnessAuthBindingFingerprint(params: {
 function systemAgentRouteIdentity(
   route: SystemAgentConfiguredRoute,
 ): SystemAgentConfiguredRouteIdentity {
-  const { runConfig: _runConfig, authProfileId: _authProfileId, ...identity } = route;
+  const {
+    runConfig: _runConfig,
+    sourceConfig: _sourceConfig,
+    authProfileId: _authProfileId,
+    ...identity
+  } = route;
   return identity;
 }
 
@@ -642,7 +648,7 @@ async function resolveCurrentAuthFingerprint(params: {
     ),
     ...(params.authProfileId
       ? { profileId: params.authProfileId, lockedProfile: true as const }
-      : {}),
+      : { allowAuthProfileFallback: false }),
     modelId: params.modelId,
     modelApi: params.modelApi,
     secretSentinels: true,
@@ -660,9 +666,10 @@ export async function createSystemAgentVerifiedInferenceBinding(params: {
   deps?: SystemAgentVerifiedInferenceDeps;
 }): Promise<SystemAgentVerifiedInferenceBinding> {
   const deps = params.deps ?? {};
-  const runConfig = structuredClone(params.executionRoute.runConfig);
+  const runConfig = cloneConfigWithResolutionFacts(params.executionRoute.runConfig);
   const configuredExecution = {
     ...params.executionRoute,
+    sourceConfig: cloneConfigWithResolutionFacts(params.executionRoute.sourceConfig),
     runConfig,
   } as SystemAgentConfiguredRoute;
   const authProfileId = params.auth.authProfileId ?? configuredExecution.authProfileId;
@@ -782,12 +789,12 @@ export async function createSystemAgentVerifiedInferenceBinding(params: {
   }
   if (
     pluginHarnessId &&
-    resolveRouteHarnessOwnerPluginIds(params.configuredRoute.runConfig, execution).length === 0
+    resolveRouteHarnessOwnerPluginIds(params.configuredRoute.sourceConfig, execution).length === 0
   ) {
     throw new Error("The successful inference harness has no trusted manifest owner.");
   }
   const ownerPluginArtifactSnapshot = captureSystemAgentOwnerPluginArtifacts({
-    config: params.configuredRoute.runConfig,
+    config: params.configuredRoute.sourceConfig,
     executionRoute: execution,
     deps,
   });
@@ -796,7 +803,7 @@ export async function createSystemAgentVerifiedInferenceBinding(params: {
     configuredRoute: systemAgentRouteIdentity(params.configuredRoute),
     execution,
     executionFingerprint: await projectVerifiedExecutionFingerprint(
-      params.configuredRoute.runConfig,
+      params.configuredRoute.sourceConfig,
       execution,
       ownerPluginIds,
       deps,
@@ -875,6 +882,7 @@ async function resolveSystemAgentVerifiedInferenceStateInternal(
     config,
     binding.execution.agentId,
     deps,
+    snapshot,
   );
   if (
     !currentRoute ||
@@ -886,6 +894,7 @@ async function resolveSystemAgentVerifiedInferenceStateInternal(
   // owner through current config so policy/backend changes cannot reuse proof.
   const currentExecution: SystemAgentVerifiedExecutionRoute = {
     ...binding.execution,
+    sourceConfig: currentRoute.sourceConfig,
     runConfig: currentRoute.runConfig,
   };
   let currentOwnerPluginIds: string[];

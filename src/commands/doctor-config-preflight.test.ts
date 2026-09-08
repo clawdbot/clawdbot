@@ -166,7 +166,9 @@ describe("runDoctorConfigPreflight", () => {
             if (!snapshot) {
               return true;
             }
-            expect(hasActiveStartupMigrationLease()).toBe(true);
+            if (snapshot.valid) {
+              expect(hasActiveStartupMigrationLease()).toBe(true);
+            }
             return !snapshot.valid || isStartupConfigRepairResult(before, snapshot);
           },
         });

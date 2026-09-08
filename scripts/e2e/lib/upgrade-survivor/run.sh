@@ -110,6 +110,7 @@ restart_registry_pid=""
 restart_runtime_evidence=""
 restart_fixture_package=""
 restart_inference=""
+survival_assert_stage="survival"
 baseline_spec=""
 baseline_version=""
 baseline_version_expected="0"
@@ -990,7 +991,7 @@ assert.deepEqual(result.steps, [], "second update executed package mutations");
 assert(!result.nextAction, "second update requested repair");
 console.log("Second update: already-current, no package mutations or repair required.");
 NODE
-  assert_survival
+  assert_survival || return "$?"
   check_gateway_probes
 }
 
@@ -1225,11 +1226,11 @@ prepare_update_restart_probe() {
 
 assert_baseline_state() {
   OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE=baseline \
-    node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-exec-approvals
+    node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-exec-approvals || return "$?"
   OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE=baseline \
-    node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-config
+    node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-config || return "$?"
   OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE=baseline \
-    node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-state
+    node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-state || return "$?"
 }
 
 resolve_candidate_version() {
@@ -1537,7 +1538,7 @@ fs.writeFileSync(process.env.EVIDENCE_PATH, `${JSON.stringify(evidence, null, 2)
 });
 fs.chmodSync(process.env.EVIDENCE_PATH, 0o600);
 NODE
-  assert_survival
+  assert_survival || return "$?"
 }
 
 assert_root_managed_vps_cli_usable() {
@@ -1637,7 +1638,12 @@ repair_update_restart_auth() {
     phase recovery-update-restart update_candidate 1 "file:$restart_fixture_package" "$restart_fixture_version"
     local recovery_status=$?
     [ "$recovery_status" -eq 0 ] || return "$recovery_status"
-    assert_survival
+    if [ "$SCENARIO" != "watchos-direct-node" ] && [ "$SCENARIO" != "mobile-pairing-reconnect" ]; then
+      phase assert-restart-serving-turn node scripts/e2e/lib/upgrade-survivor/assertions.mjs \
+        assert-restart-serving-turn "$ARTIFACT_ROOT/restart-serving-turn.json" || return "$?"
+      survival_assert_stage="post-inference"
+    fi
+    assert_survival || return "$?"
     if [ "$update_repair_required" = "1" ]; then
       node scripts/e2e/lib/upgrade-survivor/assertions.mjs \
         assert-recovered-plugin-installs "$UPDATE_JSON" "$candidate_version" "$initial_update_observation_root" "$baseline_version"
@@ -1656,10 +1662,10 @@ repair_fixture_plugin_consent() {
       openclaw_e2e_print_log "$REPAIR_JSON" >&2
       return 1
     fi
-    node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-repair-json "$REPAIR_JSON"
+    node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-repair-json "$REPAIR_JSON" || return "$?"
     node scripts/e2e/lib/upgrade-survivor/assertions.mjs \
-      assert-recovered-plugin-installs "$UPDATE_JSON" "$candidate_version" "$initial_update_observation_root" "$baseline_version"
-    assert_survival
+      assert-recovered-plugin-installs "$UPDATE_JSON" "$candidate_version" "$initial_update_observation_root" "$baseline_version" || return "$?"
+    assert_survival || return "$?"
   fi
   repair_update_restart_auth || return "$?"
   if [ -n "${OPENCLAW_CLAWHUB_URL:-}" ]; then
@@ -1682,7 +1688,8 @@ assert_volume_idempotence() {
     echo "SQLite volume idempotence exceeded budget: ${idempotence_seconds}s > ${budget}s" >&2
     return 1
   fi
-  node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-state
+  OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE="$survival_assert_stage" \
+    node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-state
 }
 
 validate_post_doctor_config() {
@@ -1694,10 +1701,11 @@ validate_post_doctor_config() {
 }
 
 assert_survival() {
-  node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-exec-approvals
-  node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-config
-  node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-state
-  installed_version="$(read_installed_version)"
+  node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-exec-approvals || return "$?"
+  node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-config || return "$?"
+  OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE="$survival_assert_stage" \
+    node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-state || return "$?"
+  installed_version="$(read_installed_version)" || return "$?"
   if [ "$baseline_version" = "2026.9.2" ] && [ "$candidate_version" = "2026.9.3" ]; then
     node scripts/e2e/lib/external-package-transition.mjs schema 16 \
       >"$ARTIFACT_ROOT/schema-after-update.json" || return "$?"

@@ -1,5 +1,5 @@
 /* @vitest-environment jsdom */
-import { afterEach, beforeAll, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
 import { MultiSelect, type MultiSelectOption } from "./multi-select.ts";
 
 const MULTI_SELECT_TEST_TAG = `test-openclaw-multi-select-${crypto.randomUUID()}`;
@@ -30,16 +30,19 @@ const options: MultiSelectOption[] = [
 beforeAll(() => {
   // Web Awesome's popup observes its anchor; jsdom has no ResizeObserver.
   if (!("ResizeObserver" in globalThis)) {
-    Object.assign(globalThis, {
-      ResizeObserver: class {
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
         observe() {}
         unobserve() {}
         disconnect() {}
       },
-    });
+    );
   }
   customElements.define(MULTI_SELECT_TEST_TAG, class extends MultiSelect {});
 });
+
+afterAll(() => vi.unstubAllGlobals());
 
 afterEach(() => {
   document.body.replaceChildren();
