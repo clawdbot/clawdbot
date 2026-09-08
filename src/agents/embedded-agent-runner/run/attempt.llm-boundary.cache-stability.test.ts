@@ -737,33 +737,30 @@ describe("prompt-cache tail carrier for current-turn metadata (issue #100271)", 
     expect(isCarrier(wire(turnN)[3])).toBe(true);
   });
 
-  it("runtime-only (room-event) inline context is not strip-eligible, so it stays byte-stable in both positions", () => {
-    // Runtime-only turns keep their inbound context inline (not in the carrier).
-    // That is safe ONLY because room-event/system context is not strip-eligible:
-    // the historical strip removes just the buildInboundUserContextPrefix blocks
-    // (Conversation info / Reply target / …), which room events never carry. So
-    // the inline form is byte-identical active vs historical.
-    const roomText = [
-      "[OpenClaw room event]",
-      "inbound_event_kind: room_event",
-      "Room context:\n#1 Alice: hi",
-    ].join("\n\n");
-    const asCurrent: AgentMsg[] = [currentUserMsg(roomText, TS_TURN2)];
+  it("keeps runtime-only inbound context prompt-local without changing replayed user bytes", () => {
+    const runtimePrompt = "Continue the OpenClaw runtime event.";
+    const inboundContext = "Reply target:\n#1 Alice: hi";
+    const asCurrent: AgentMsg[] = [
+      runtimeCarrier(inboundContext, TS_TURN2),
+      currentUserMsg(runtimePrompt, TS_TURN2),
+    ];
     const asHistorical: AgentMsg[] = [
-      storedUserMsg(roomText, TS_TURN2),
+      storedUserMsg(runtimePrompt, TS_TURN2),
       ASSISTANT_MSG,
       currentUserMsg("next", TS_TURN2 + 60000),
     ];
-    const cur = normalizeMessagesForLlmBoundary(asCurrent, { timezone: TZ }) as unknown as Array<{
-      content?: unknown;
-    }>;
-    const hist = normalizeMessagesForLlmBoundary(asHistorical, {
-      timezone: TZ,
-    }) as unknown as Array<{ content?: unknown }>;
-    // Byte-identical active vs historical...
-    expect(JSON.stringify(cur[0]?.content)).toBe(JSON.stringify(hist[0]?.content));
-    // ...and the room context is preserved in both (the strip does not touch it).
-    expect(JSON.stringify(hist[0]?.content)).toContain("inbound_event_kind: room_event");
+    const wireCurrent = wire(asCurrent);
+    const wireHistorical = wire(asHistorical);
+
+    expect(isCarrier(wireCurrent.at(-1))).toBe(true);
+    expect(textOf(wireCurrent.at(-1))).toContain(inboundContext);
+    const currentUser = wireCurrent.at(-2);
+    const historicalUser = wireHistorical.find((message) =>
+      textOf(message)?.endsWith(runtimePrompt),
+    );
+    expect(JSON.stringify(historicalUser)).toBe(JSON.stringify(currentUser));
+    expect(wireHistorical.some(isCarrier)).toBe(false);
+    expect(JSON.stringify(wireHistorical)).not.toContain(inboundContext);
   });
 
   it("keeps persisted group sender context byte-stable from active to historical replay", () => {

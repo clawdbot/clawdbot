@@ -443,7 +443,7 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
   });
 
   it.each([3, 4])(
-    "keeps version %s runtime-only events in system context with current facts",
+    "keeps version %s runtime-only events in system context with inbound context in the hidden carrier",
     (sessionVersion) => {
       const fixture = createInput({
         attempt: createAttempt({
@@ -464,11 +464,14 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
 
       expect(result.systemPromptForHook).toContain("OpenClaw runtime event.");
       expect(result.promptSubmission.runtimeOnly).toBe(true);
-      expect(result.promptForSession).toBe(
-        "Room conversation data\n\nContinue the OpenClaw runtime event.",
-      );
+      expect(result.promptForSession).toBe("Continue the OpenClaw runtime event.");
       expect(result.promptForModel).toBe(result.promptForSession);
+      expect(result.promptForSession).not.toContain("Room conversation data");
+      expect(result.promptForModel).not.toContain("Room conversation data");
       expect(result.systemPromptForHook).not.toContain("Room conversation data");
+      expect(result.runtimeContextMessageForCurrentTurn?.content).toContain(
+        "Room conversation data",
+      );
       expect(result.runtimeContextMessageForCurrentTurn?.content).toContain(
         "Active exec sessions:\nnone",
       );

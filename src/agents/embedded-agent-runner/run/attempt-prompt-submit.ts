@@ -185,27 +185,24 @@ export async function submitEmbeddedAttemptPrompt(input: {
   };
   attachPromptCompactionRequestBudget(promptOptions, input.compactionRequestBudget);
   const cleanupProviderPromptHistoryTransform = installProviderPromptHistoryTransform();
+  // Persist after the user (or synthetic runtime prompt), retiring unconsumed
+  // context when preflight handles or rejects the prompt before the loop starts.
+  const cleanupRuntimeContextMessage =
+    input.appendOnlyRuntimeContext && input.runtimeContextMessage
+      ? activeSession[agentSessionQueuePromptContext](input.runtimeContextMessage)
+      : installRuntimeContextMessageForPrompt({
+          session: activeSession,
+          message: input.runtimeContextMessage,
+          persistedUserIdempotencyKey,
+        });
   try {
-    // Persist after the user (or synthetic runtime prompt), retiring unconsumed
-    // context when preflight handles or rejects the prompt before the loop starts.
-    const cleanupRuntimeContextMessage =
-      input.appendOnlyRuntimeContext && input.runtimeContextMessage
-        ? activeSession[agentSessionQueuePromptContext](input.runtimeContextMessage)
-        : installRuntimeContextMessageForPrompt({
-            session: activeSession,
-            message: input.runtimeContextMessage,
-            persistedUserIdempotencyKey,
-          });
-    try {
-      await input.promptActiveSession(input.transcriptPrompt, promptOptions);
-    } finally {
-      cleanupRuntimeContextMessage();
-    }
+    await input.promptActiveSession(input.transcriptPrompt, promptOptions);
     if (input.leasedSteering) {
       ackPendingAgentSteeringItems(input.leasedSteering);
       input.onSteeringAcknowledged();
     }
   } finally {
+    cleanupRuntimeContextMessage();
     cleanupProviderPromptHistoryTransform();
     cleanupModelPromptTransform();
   }
