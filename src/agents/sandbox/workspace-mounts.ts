@@ -7,7 +7,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { isPathInside } from "../../infra/path-guards.js";
 import { splitSandboxBindSpec } from "./bind-spec.js";
-import { SANDBOX_AGENT_WORKSPACE_MOUNT } from "./constants.js";
+import { SANDBOX_AGENT_WORKSPACE_MOUNT, SANDBOX_MATERIALIZED_SKILLS_DIRNAME } from "./constants.js";
 import { resolveSandboxHostPathViaExistingAncestor } from "./host-paths.js";
 import { normalizeContainerPathCore } from "./path-utils.js";
 import type { SandboxWorkspaceAccess } from "./types.js";
@@ -72,6 +72,8 @@ export function resolveReadOnlyWorkspaceSkillMounts(params: {
   skillsWorkspaceDir?: string;
   workdir: string;
   workspaceAccess: SandboxWorkspaceAccess;
+  /** Backend whose container layout the mounts target. Defaults to the docker/podman direct mount. */
+  backendId?: string;
 }): ReadOnlyWorkspaceSkillMount[] {
   if (params.workspaceAccess === "ro") {
     return [];
@@ -96,15 +98,30 @@ export function resolveReadOnlyWorkspaceSkillMounts(params: {
   if (params.workspaceAccess === "rw") {
     const materializedSkillsWorkspaceDir =
       params.skillsWorkspaceDir ?? resolveMaterializedSandboxSkillsWorkspaceDir(rootDir);
-    mounts.push({
-      hostPath: path.join(materializedSkillsWorkspaceDir, "skills"),
-      containerPath: containerJoin(
-        params.workdir,
-        ...MATERIALIZED_SANDBOX_SKILLS_WORKSPACE_PARTS,
-        "skills",
-      ),
-      rootDir: materializedSkillsWorkspaceDir,
-    });
+    if (
+      params.backendId === undefined ||
+      params.backendId === "docker" ||
+      params.backendId === "podman"
+    ) {
+      mounts.push({
+        // Mount the generated workspace directly. A nested target under the
+        // writable workspace lets Docker create an inaccessible host ancestor.
+        hostPath: materializedSkillsWorkspaceDir,
+        containerPath: containerJoin(params.workdir, SANDBOX_MATERIALIZED_SKILLS_DIRNAME),
+        rootDir: path.dirname(materializedSkillsWorkspaceDir),
+      });
+    } else {
+      // Remote backends keep the existing remote workspace layout.
+      mounts.push({
+        hostPath: path.join(materializedSkillsWorkspaceDir, "skills"),
+        containerPath: containerJoin(
+          params.workdir,
+          ...MATERIALIZED_SANDBOX_SKILLS_WORKSPACE_PARTS,
+          "skills",
+        ),
+        rootDir: materializedSkillsWorkspaceDir,
+      });
+    }
   }
 
   return mounts
@@ -193,6 +210,7 @@ export function appendWorkspaceMountArgs(params: {
   workspaceAccess: SandboxWorkspaceAccess;
   readOnlyWorkspaceSkillMounts?: readonly ReadOnlyWorkspaceSkillMount[];
   includeReadOnlyWorkspaceSkillMounts?: boolean;
+  backendId?: string;
 }) {
   const { args, workspaceDir, agentWorkspaceDir, workdir, workspaceAccess } = params;
 
@@ -227,6 +245,7 @@ export function appendWorkspaceMountArgs(params: {
           skillsWorkspaceDir: params.skillsWorkspaceDir,
           workdir,
           workspaceAccess,
+          backendId: params.backendId,
         }),
     });
   }

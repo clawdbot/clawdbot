@@ -104,6 +104,7 @@ async function resolveCommandSkillsPrompt(params: {
           workspaceOnly,
         } = resolveSandboxSkillRuntimeInputs({
           sandbox: {
+            ...(sandboxWorkspace.backendId ? { backendId: sandboxWorkspace.backendId } : {}),
             enabled: true,
             containerWorkdir: sandboxWorkspace.containerWorkdir,
             ...(sandboxWorkspace.skillsEligibility

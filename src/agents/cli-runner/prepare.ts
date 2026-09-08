@@ -324,6 +324,7 @@ async function resolveCliSkillsPrompt(params: {
     workspaceOnly,
   } = resolveSandboxSkillRuntimeInputs({
     sandbox: {
+      ...(sandboxWorkspace.backendId ? { backendId: sandboxWorkspace.backendId } : {}),
       enabled: true,
       ...(sandboxWorkspace.containerWorkdir
         ? { containerWorkdir: sandboxWorkspace.containerWorkdir }

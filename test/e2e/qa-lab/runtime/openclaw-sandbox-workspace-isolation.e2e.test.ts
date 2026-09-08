@@ -17,9 +17,11 @@ function createConfig(params: {
   access: WorkspaceAccess;
   image: string;
   prefix: string;
+  skillsDir: string;
   workspaceRoot: string;
 }): OpenClawConfig {
   return {
+    skills: { load: { extraDirs: [params.skillsDir] } },
     agents: {
       defaults: {
         skipBootstrap: true,
@@ -70,6 +72,11 @@ test("Docker enforces none, read-only, and read-write workspace isolation", asyn
   const runtimes: string[] = [];
 
   await fs.mkdir(stateDir, { recursive: true });
+  await fs.mkdir(path.join(stateDir, "skills", "proof-skill"), { recursive: true });
+  await fs.writeFile(
+    path.join(stateDir, "skills", "proof-skill", "SKILL.md"),
+    "---\nname: proof-skill\ndescription: Docker workspace isolation proof.\n---\nreadable-skill\n",
+  );
   await fs.writeFile(unrelatedSentinel, "host-only");
   setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
 
@@ -83,19 +90,18 @@ test("Docker enforces none, read-only, and read-write workspace isolation", asyn
       const hostWorkspace = path.join(root, `agent-${access}-${randomUUID()}`);
       const hostSentinel = path.join(hostWorkspace, "host-sentinel.txt");
       await fs.mkdir(hostWorkspace, { recursive: true });
-      if (access === "rw") {
-        // Rootful Docker otherwise creates this nested bind target as root,
-        // which leaves fixture teardown unable to remove its own temp tree.
-        await fs.mkdir(path.join(hostWorkspace, ".openclaw", "sandbox-skills", "skills"), {
-          recursive: true,
-        });
-      }
       await fs.writeFile(hostSentinel, `original-${access}`);
 
       let sandbox: SandboxContext | null = null;
       try {
         sandbox = await resolveSandboxContext({
-          config: createConfig({ access, image, prefix, workspaceRoot }),
+          config: createConfig({
+            access,
+            image,
+            prefix,
+            skillsDir: path.join(stateDir, "skills"),
+            workspaceRoot,
+          }),
           agentId: `workspace-${access}`,
           sessionKey: `agent:workspace-${access}:qa-${randomUUID()}`,
           workspaceDir: hostWorkspace,
@@ -138,9 +144,12 @@ test("Docker enforces none, read-only, and read-write workspace isolation", asyn
         } else {
           await expectOk(
             sandbox,
-            'printf persisted > /workspace/host-sentinel.txt && test "$(cat /workspace/host-sentinel.txt)" = persisted',
+            'test "$(cat /workspace/.openclaw-skills/skills/proof-skill/SKILL.md | tail -n 1)" = readable-skill && printf persisted > /workspace/host-sentinel.txt && test "$(cat /workspace/host-sentinel.txt)" = persisted',
           );
           await expect(fs.readFile(hostSentinel, "utf8")).resolves.toBe("persisted");
+          await expect(fs.access(path.join(hostWorkspace, ".openclaw"))).rejects.toMatchObject({
+            code: "ENOENT",
+          });
         }
       } finally {
         if (sandbox) {

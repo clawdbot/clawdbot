@@ -43,14 +43,11 @@ describe("workspace skills bridge mount policy", () => {
       expect(resolve("normal.txt").writable).toBe(true);
       expect(resolve("skills/demo/SKILL.md").writable).toBe(false);
       expect(resolve(".agents/skills/demo/SKILL.md").writable).toBe(false);
-      expect(resolve(".openclaw/sandbox-skills/skills/demo/SKILL.md").writable).toBe(false);
-      expect(resolve(".openclaw/sandbox-skills/skills/demo/SKILL.md").hostPath).toBe(
+      expect(resolve("/workspace/.openclaw-skills/skills/demo/SKILL.md").writable).toBe(false);
+      expect(resolve("/workspace/.openclaw-skills/skills/demo/SKILL.md").hostPath).toBe(
         path.join(skillsWorkspaceDir, "skills", "demo", "SKILL.md"),
       );
       expect(resolve("/workspace/skills/demo/SKILL.md").writable).toBe(false);
-      expect(resolve("/workspace/.openclaw/sandbox-skills/skills/demo/SKILL.md").writable).toBe(
-        false,
-      );
     });
   });
 
@@ -73,6 +70,9 @@ describe("workspace skills bridge mount policy", () => {
             workspaceDir: canonicalWorkspaceDir,
             agentWorkspaceDir: canonicalWorkspaceDir,
             skillsWorkspaceDir: canonicalSkillsWorkspaceDir,
+            // Remote bridges only run for remote backends, which keep the
+            // existing remote materialized-skills layout.
+            backendId: "ssh",
           }),
           runtime: {
             remoteWorkspaceDir: canonicalRemoteWorkspaceDir,

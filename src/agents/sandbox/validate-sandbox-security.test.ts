@@ -352,17 +352,42 @@ describe("validateBindMounts", () => {
 
   it("blocks reserved container target paths by default", () => {
     const projectRoot = mkdtempSync(join(tmpdir(), "openclaw-sbx-reserved-default-"));
+    for (const target of [
+      "/workspace",
+      "/agent/cache",
+      "/workspace/.openclaw-skills",
+      "/workspace/.openclaw-skills/cache",
+      "/",
+    ]) {
+      expect(
+        () =>
+          validateBindMounts([`${projectRoot}:${target}:rw`], {
+            workdir: "/workspace",
+          }),
+        target,
+      ).toThrow(/reserved container path/);
+    }
     expect(() =>
-      validateBindMounts([`${projectRoot}:/workspace:rw`, `${projectRoot}:/agent/cache:rw`]),
+      validateBindMounts([`${projectRoot}:/openclaw-skills/.openclaw-skills/cache:rw`], {
+        workdir: "/openclaw-skills",
+      }),
     ).toThrow(/reserved container path/);
   });
 
   it("allows reserved container target paths with explicit dangerous override", () => {
     const projectRoot = mkdtempSync(join(tmpdir(), "openclaw-sbx-reserved-"));
     expect(
-      validateBindMounts([`${projectRoot}:/workspace:rw`], {
-        allowReservedContainerTargets: true,
-      }),
+      validateBindMounts(
+        [
+          `${projectRoot}:/workspace:rw`,
+          `${projectRoot}:/workspace/.openclaw-skills/cache:rw`,
+          `${projectRoot}:/:rw`,
+        ],
+        {
+          workdir: "/workspace",
+          allowReservedContainerTargets: true,
+        },
+      ),
     ).toBeUndefined();
   });
 });
