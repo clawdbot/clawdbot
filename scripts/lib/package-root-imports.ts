@@ -98,13 +98,8 @@ function union(...values: Origin[][]): Origin[] {
   return result.length ? result : ["unknown"];
 }
 
-export type PackageRootImportOccurrence = {
-  specifier: string;
-  start: number;
-};
-
 /** Read dependency ownership without resolving or executing the inspected package. */
-export function collectPackageRootImportOccurrences(source: string): PackageRootImportOccurrence[] {
+export function collectPackageRootImports(source: string): string[] {
   const ts = require("typescript") as typeof import("typescript");
   const file = ts.createSourceFile(
     "dist.js",
@@ -113,9 +108,9 @@ export function collectPackageRootImportOccurrences(source: string): PackageRoot
     true,
     ts.ScriptKind.JS,
   );
-  const imports: PackageRootImportOccurrence[] = [];
-  const recordImport = (specifier: string, node: ts.Node) => {
-    imports.push({ specifier, start: node.getStart(file) });
+  const imports: string[] = [];
+  const recordImport = (specifier: string) => {
+    imports.push(specifier);
   };
   const calls: ts.CallExpression[] = [];
   const scopes: Array<ts.SourceFile | ts.FunctionLikeDeclaration> = [file];
@@ -197,13 +192,13 @@ export function collectPackageRootImportOccurrences(source: string): PackageRoot
     if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) {
       const specifier = literal(node.moduleSpecifier);
       if (specifier !== undefined) {
-        recordImport(specifier, node.moduleSpecifier!);
+        recordImport(specifier);
       }
     }
     if (ts.isCallExpression(node)) {
       const specifier = literal(node.arguments[0]);
       if (node.expression.kind === ts.SyntaxKind.ImportKeyword && specifier !== undefined) {
-        recordImport(specifier, node.arguments[0]!);
+        recordImport(specifier);
       } else {
         calls.push(node);
       }
@@ -662,7 +657,7 @@ export function collectPackageRootImportOccurrences(source: string): PackageRoot
         callee.text === "require" &&
         !values.every((value) => value === "caller"))
     ) {
-      recordImport(specifier, node.arguments[0]!);
+      recordImport(specifier);
     }
   }
   return imports;
