@@ -66,7 +66,9 @@ Options: `--role <role>`, `--workspace <dir>`, `--model <id>`, `--agent-dir <dir
 #### Role templates
 
 `--role` works in interactive and non-interactive creation, including `--json`.
-Available roles:
+Bundled roles are [Claw sources](/cli/claws): each role directory contains a
+`CLAW.md` manifest with identity and `SOUL.md` content, plus its operating
+program in `workspace/AGENTS.md`. Available roles:
 
 | Role          | Purpose                                                                  |
 | ------------- | ------------------------------------------------------------------------ |
@@ -78,13 +80,18 @@ Available roles:
 A role seeds `AGENTS.md`, `SOUL.md`, and a complete `IDENTITY.md`; `USER.md`
 still uses the standard template. Existing workspace files are preserved. The
 role's name, emoji, and theme are saved in agent config, and new role workspaces
-skip the identity ceremony: no `BOOTSTRAP.md` is created. A manifest's `skills`
-allowlist applies only when present; the bundled roles leave skills unchanged.
+skip the identity ceremony: no `BOOTSTRAP.md` is created. The bundled roles
+leave skills unchanged.
 Role delegation settings are also applied. Standalone coordinators target the
 standard specialist ids; use the team command to create and wire all four agents.
 Unknown roles are rejected with the available role names. A workspace with an
 unfinished bootstrap cannot adopt a role; complete its bootstrap or choose a
 new workspace.
+
+With the experimental Claws surface enabled, the equivalent source path is
+`openclaw claws add docs/reference/templates/roles/<role>` from a source
+checkout. Follow the [Claw preview and consent flow](/cli/claws#inspect-and-preview)
+to add it. Use `agents team create` to wire the agents into a team.
 
 ### `agents team create`
 
@@ -112,6 +119,8 @@ The coordinator's `subagents.allowAgents` names the three specialist ids and
 `delegationMode` is `"prefer"`. Specialists receive `subagents.allowAgents: []`
 and instructions to return results without further delegation. This does not
 change global delegation defaults or tool policy. See [Team preset](/concepts/multi-agent#team-preset).
+Delegation remains team wiring in config; the role Claws will carry these
+settings once the separate Claw profile support lands.
 
 The coordinator is an explicit chat target, not a universal default agent. If
 `agents.defaults.systemAgent.agentId` is unset, team creation sets it to the

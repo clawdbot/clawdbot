@@ -13,8 +13,8 @@ import { normalizeAgentId } from "../routing/session-key.js";
 import { readAgentDeletionJournal } from "../state/agent-deletion-journal.js";
 import { resolveUserPath } from "../utils.js";
 import { createAgent, validateAgentIdInput, type CreateAgentSuccess } from "./agent-create.js";
+import { loadAgentTeamPreset, loadAgentRole } from "./agent-roles.js";
 import { listAgentEntries } from "./agent-scope-config.js";
-import { loadAgentTeamPreset, loadAgentTemplate } from "./agent-templates.js";
 import { resolveDefaultAgentWorkspaceDir } from "./workspace-default.js";
 
 type TeamResult =
@@ -57,18 +57,8 @@ export async function createAgentTeam(
         "Team member ids must be distinct after applying the coordinator and prefix options.",
     };
   }
-  // Resolve every role and delegation reference before any agent becomes visible.
-  const templates = await Promise.all(members.map(({ role }) => loadAgentTemplate(role)));
-  const idsByRole = new Map<string, string>(members.map(({ role, id }) => [role, id]));
-  const resolvedTargets = templates.map(({ manifest }) =>
-    manifest.subagents?.allowAgents?.map((ref) => {
-      const target = idsByRole.get(ref) ?? (ids.includes(ref) ? ref : undefined);
-      if (!target) {
-        throw new Error(`Role "${manifest.role}" refers to unknown team member "${ref}".`);
-      }
-      return target;
-    }),
-  );
+  // Validate every role before any agent becomes visible.
+  await Promise.all(members.map(({ role }) => loadAgentRole(role)));
   const coordinatorId = ids[0]!;
 
   return await withConfigMutationExclusive(async (lockedConfig) => {
@@ -137,7 +127,7 @@ export async function createAgentTeam(
           workspace: path.join(workspaceRoot, member.id),
           subagents:
             index === 0
-              ? { allowAgents: resolvedTargets[index] ?? ids.slice(1), delegationMode: "prefer" }
+              ? { allowAgents: ids.slice(1), delegationMode: "prefer" }
               : { allowAgents: [] },
         },
         bootstrapFirstAgent: index === 0 && bootstrapFirstAgent,

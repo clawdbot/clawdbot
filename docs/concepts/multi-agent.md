@@ -122,6 +122,13 @@ artifacts and evidence to the coordinator without delegating further. Their
 operating programs live in `AGENTS.md`, so they also apply in spawned sessions
 that do not load `SOUL.md` or `IDENTITY.md`.
 
+The bundled roles are [Claw sources](/cli/claws), sharing the portable
+`CLAW.md` format for identity, the `SOUL.md` body, and declared workspace
+files. `agents add --role <role>` loads one of these sources. With the
+experimental Claws surface enabled, the equivalent source path from a source
+checkout is `openclaw claws add docs/reference/templates/roles/<role>`; follow
+the [Claw preview and consent flow](/cli/claws#inspect-and-preview).
+
 The relevant per-agent delegation fragment is:
 
 ```json5 validate=false
@@ -147,6 +154,8 @@ not a scheduler. `allowAgents` controls explicit spawn targets. The preset keeps
 `agents.defaults.subagents` and `tools.*` unchanged, so existing tool availability
 and access policy still apply. Role instructions require human approval before
 external sends, publication, purchases, deletion, or production changes.
+These delegation settings remain team wiring in config. The role Claws will
+carry them once the separate Claw profile support lands.
 
 The coordinator is an explicit target, not a universal default. Team creation
 sets `agents.defaults.systemAgent.agentId` to the coordinator only when that

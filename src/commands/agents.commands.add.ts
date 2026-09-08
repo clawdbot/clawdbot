@@ -9,12 +9,12 @@ import {
   createAgent,
   validateAgentIdInput,
 } from "../agents/agent-create.js";
+import { loadAgentRole } from "../agents/agent-roles.js";
 import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
   tryResolveLegacyCompatibilityAgentId,
 } from "../agents/agent-scope.js";
-import { loadAgentTemplate } from "../agents/agent-templates.js";
 import {
   buildPortableAuthProfileStoreForAgentCopy,
   type AuthProfileStore,
@@ -106,7 +106,7 @@ export async function agentsAddCommand(
 ) {
   if (opts.role !== undefined) {
     try {
-      await loadAgentTemplate(opts.role);
+      await loadAgentRole(opts.role);
     } catch (error) {
       failAgentsAdd(error instanceof Error ? error.message : String(error));
     }
