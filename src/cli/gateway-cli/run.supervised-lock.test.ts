@@ -1,6 +1,7 @@
 // Gateway supervised lock tests cover single-runner locking for supervised gateway starts.
 import { createServer } from "node:http";
 import { describe, expect, it, vi } from "vitest";
+import { GatewayEffectiveConfigConflictError } from "../../gateway/server-runtime-config.js";
 import { GatewayLockError } from "../../infra/gateway-lock.js";
 import { TailscaleRouteOwnershipConflictError } from "../../infra/tailscale-route-ownership-error.js";
 import { OpenClawAgentDatabaseMediaMigrationRequiredError } from "../../state/openclaw-agent-db-migration-required.js";
@@ -25,6 +26,16 @@ describe("supervised gateway lock recovery", () => {
   it("uses exit 78 for an ambiguous persistent Tailscale route", () => {
     expect(
       testing.resolveGatewayStartupFailureExitCode(new TailscaleRouteOwnershipConflictError()),
+    ).toBe(78);
+  });
+
+  it("uses exit 78 for an effective bind/Tailscale config conflict", () => {
+    expect(
+      testing.resolveGatewayStartupFailureExitCode(
+        new GatewayEffectiveConfigConflictError(
+          "tailscale serve/funnel requires gateway bind=loopback (127.0.0.1)",
+        ),
+      ),
     ).toBe(78);
   });
 

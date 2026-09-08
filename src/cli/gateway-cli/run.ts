@@ -34,6 +34,7 @@ import {
   isLoopbackHost,
   resolveGatewayBindHost,
 } from "../../gateway/net.js";
+import { isGatewayEffectiveConfigConflictError } from "../../gateway/server-runtime-config.js";
 import { GatewayStartupCleanupError } from "../../gateway/server-shutdown.js";
 import type { GatewayWsLogStyle } from "../../gateway/ws-logging.js";
 import { setGatewayWsLogStyle } from "../../gateway/ws-logging.js";
@@ -428,6 +429,7 @@ function resolveGatewayLockErrorExitCode(err: unknown): number {
 function resolveGatewayStartupFailureExitCode(err: unknown): number {
   return isInvalidConfigError(err) ||
     isTailscaleRouteOwnershipConflictError(err) ||
+    isGatewayEffectiveConfigConflictError(err) ||
     resolveGatewayStartupMaintenanceReason(err)
     ? EXIT_CONFIG_ERROR
     : 1;
@@ -1011,6 +1013,7 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
       isGatewayLockError(error) ||
       isInvalidConfigError(error) ||
       isTailscaleRouteOwnershipConflictError(error) ||
+      isGatewayEffectiveConfigConflictError(error) ||
       collectNestedErrorCandidates(error).some(
         (candidate) => candidate instanceof GatewayStartupCleanupError,
       ) ||

@@ -38,6 +38,32 @@ type GatewayRuntimeConfig = {
   hooksConfig: ReturnType<typeof resolveHooksConfig>;
 };
 
+const GATEWAY_EFFECTIVE_CONFIG_CONFLICT_CODE = "GATEWAY_EFFECTIVE_CONFIG_CONFLICT";
+
+/**
+ * The effective bind/auth/Tailscale combination (after CLI and service overrides are
+ * applied) is invalid. A supervisor restart cannot fix this without operator action, so
+ * callers must classify it the same as a persisted-config validation failure rather than
+ * a transient startup error eligible for restart.
+ */
+export class GatewayEffectiveConfigConflictError extends Error {
+  readonly code = GATEWAY_EFFECTIVE_CONFIG_CONFLICT_CODE;
+
+  constructor(message: string) {
+    super(message);
+    this.name = "GatewayEffectiveConfigConflictError";
+  }
+}
+
+export function isGatewayEffectiveConfigConflictError(error: unknown): boolean {
+  return (
+    error instanceof GatewayEffectiveConfigConflictError ||
+    (Boolean(error) &&
+      typeof error === "object" &&
+      (error as { code?: unknown }).code === GATEWAY_EFFECTIVE_CONFIG_CONFLICT_CODE)
+  );
+}
+
 /** Startup and reload validate the same security policy against the serving listener. */
 export function assertGatewayRuntimeSecurityConfig(
   params: Pick<
@@ -61,18 +87,22 @@ export function assertGatewayRuntimeSecurityConfig(
 
   assertGatewayAuthConfigured(resolvedAuth, cfg.gateway?.auth);
   if (tailscaleMode === "funnel" && authMode !== "password") {
-    throw new Error(
+    throw new GatewayEffectiveConfigConflictError(
       "tailscale funnel requires gateway auth mode=password (set gateway.auth.password or OPENCLAW_GATEWAY_PASSWORD)",
     );
   }
   if (isUnsafeGatewayTailscaleNoAuth({ authMode, tailscaleMode })) {
-    throw new Error(formatUnsafeGatewayTailscaleNoAuthMessage(tailscaleMode));
+    throw new GatewayEffectiveConfigConflictError(
+      formatUnsafeGatewayTailscaleNoAuthMessage(tailscaleMode),
+    );
   }
   if (tailscaleMode !== "off" && !isLoopbackHost(bindHost)) {
-    throw new Error("tailscale serve/funnel requires gateway bind=loopback (127.0.0.1)");
+    throw new GatewayEffectiveConfigConflictError(
+      "tailscale serve/funnel requires gateway bind=loopback (127.0.0.1)",
+    );
   }
   if (!isLoopbackHost(bindHost) && !hasSharedSecret && authMode !== "trusted-proxy") {
-    throw new Error(
+    throw new GatewayEffectiveConfigConflictError(
       `refusing to bind gateway to ${bindHost}:${params.port} without auth (set gateway.auth.token/password, or set OPENCLAW_GATEWAY_TOKEN/OPENCLAW_GATEWAY_PASSWORD; legacy CLAWDBOT_* and MOLTBOT_* environment variables are ignored)`,
     );
   }
@@ -84,12 +114,12 @@ export function assertGatewayRuntimeSecurityConfig(
   ) {
     // Remote Control UI must use explicit origins unless the operator deliberately accepts
     // Host-header fallback; otherwise any reachable host name can become a browser origin.
-    throw new Error(
+    throw new GatewayEffectiveConfigConflictError(
       "non-loopback Control UI requires gateway.controlUi.allowedOrigins (set explicit origins), or set gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true to use Host-header origin fallback mode",
     );
   }
   if (authMode === "trusted-proxy" && !cfg.gateway?.trustedProxies?.length) {
-    throw new Error(
+    throw new GatewayEffectiveConfigConflictError(
       "gateway auth mode=trusted-proxy requires gateway.trustedProxies to be configured with at least one proxy IP",
     );
   }
