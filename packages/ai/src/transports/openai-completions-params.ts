@@ -32,10 +32,7 @@ import {
 } from "./openai-completions-compat.js";
 import { applyDirectCompletionsReasoningAndRouting } from "./openai-completions-direct-policy.js";
 import { isAzureOpenAICompatibleHost } from "./openai-completions-host.js";
-import {
-  applyCompletionsReplay,
-  COMPLETIONS_REASONING_REPLAY_FIELDS,
-} from "./openai-completions-replay.js";
+import { applyCompletionsReplay } from "./openai-completions-replay.js";
 import {
   flattenCompletionMessagesToStringContent,
   stripCompletionMessagesToRoleContent,
@@ -146,9 +143,11 @@ function estimateOpenAICompletionsMessagesChars(messages: unknown): number {
     }
     const record = message as Record<string, unknown>;
     adjustedChars += estimateOpenAICompletionsContentChars(record.content);
-    for (const field of COMPLETIONS_REASONING_REPLAY_FIELDS) {
-      adjustedChars += estimateOpenAICompletionsContentChars(record[field]);
-    }
+    // Reasoning replay fields (reasoning_content, reasoning_details, etc.) are
+    // sent for continuity but are not primary input the model re-tokenizes.
+    // For proxy-like endpoints (vLLM, LiteLLM) they are typically prefix-cached
+    // server-side. Counting them inflates the estimate unboundedly across long
+    // sessions with reasoning models, eventually clamping maxTokens to 1.
     if (record.tool_calls !== undefined) {
       try {
         adjustedChars += estimateStringChars(JSON.stringify(record.tool_calls));
