@@ -6,7 +6,6 @@ import {
   filterNonEmptyMemoryChunks,
   isRetryableMemoryEmbeddingError,
   isSplittableMemoryEmbeddingBatchError,
-  parseMemoryEmbeddingBatchItemLimit,
   resolveMemoryEmbeddingRetryDelay,
   runMemoryEmbeddingBatchRetryWithSplit,
   runMemoryEmbeddingRetryLoop,
@@ -236,27 +235,6 @@ describe("memory embedding policy", () => {
     expect(isRetryableMemoryEmbeddingError("HTTP 400: request id fixture-000597000")).toBe(false);
     expect(isRetryableMemoryEmbeddingError("HTTP 429: rate limit")).toBe(true);
     expect(isRetryableMemoryEmbeddingError("HTTP 503: service unavailable")).toBe(true);
-  });
-
-  it("parses only one positive explicit embedding item limit", () => {
-    expect(
-      parseMemoryEmbeddingBatchItemLimit(
-        "Embeddings API input limit exceeded: max 10, got 33. Request id: fixture-000597000",
-      ),
-    ).toBe(10);
-    expect(parseMemoryEmbeddingBatchItemLimit("embeddings max input length is 16")).toBe(16);
-    expect(
-      parseMemoryEmbeddingBatchItemLimit("batch size is invalid, it should not be larger than 10."),
-    ).toBe(10);
-    expect(
-      parseMemoryEmbeddingBatchItemLimit("Embeddings API input limit exceeded"),
-    ).toBeUndefined();
-    expect(
-      parseMemoryEmbeddingBatchItemLimit(
-        "embeddings max input length is 10; batch size is invalid, it should not be larger than 8",
-      ),
-    ).toBeUndefined();
-    expect(parseMemoryEmbeddingBatchItemLimit("embeddings max input length is 0")).toBeUndefined();
   });
 
   it("uses an explicit item limit while preserving output order", async () => {

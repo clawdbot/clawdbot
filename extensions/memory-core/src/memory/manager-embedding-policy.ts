@@ -60,7 +60,7 @@ const SPLITTABLE_MEMORY_EMBEDDING_BATCH_ERROR_RE =
 const MEMORY_EMBEDDING_BATCH_ITEM_LIMIT_RE =
   /\b(?:embeddings api input limit exceeded:\s*max\s+(\d+)\s*,\s*got\s+\d+|embeddings max input length is\s+(\d+)|batch size is invalid,?\s+it should not be larger than\s+(\d+))\b/gi;
 
-export function parseMemoryEmbeddingBatchItemLimit(message: string): number | undefined {
+function parseMemoryEmbeddingBatchItemLimit(message: string): number | undefined {
   const limits = new Set<number>();
   for (const match of message.matchAll(MEMORY_EMBEDDING_BATCH_ITEM_LIMIT_RE)) {
     const value = Number(match[1] ?? match[2] ?? match[3]);
