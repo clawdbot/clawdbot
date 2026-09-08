@@ -179,7 +179,14 @@ function isGptModel(id: string): boolean {
 }
 
 function isGpt5OrHigher(id: string): boolean {
-  return /\bgpt-5(?:\b|[.-])/i.test(id);
+  // Numeric generation comparison so newer majors (gpt-6, gpt-10, gpt-20+)
+  // are not misread as below the GPT-5 threshold; gpt-35-turbo is the Azure
+  // GPT-3.5 alias, not a generation, and stays flagged (#139751).
+  const generation = /\bgpt-(\d+)(?:\b|[.-])/i.exec(id)?.[1];
+  if (generation === undefined) {
+    return false;
+  }
+  return generation !== "35" && Number.parseInt(generation, 10) >= 5;
 }
 
 function isClaudeModel(id: string): boolean {
