@@ -5,6 +5,7 @@ import { findCapabilityProviderById } from "../../../packages/media-generation-c
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveImageGenerationMaxInputImages } from "../../image-generation/capabilities.js";
+import { sniffImageMimeType } from "../../image-generation/image-assets.js";
 import {
   generateImage,
   listRuntimeImageGenerationProviders,
@@ -25,7 +26,7 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { parseImageGenerationModelRef } from "../../media-generation/model-ref.js";
 import { resolveCapabilityModelCandidates } from "../../media-generation/runtime-shared.js";
 import { resolveGeneratedMediaMaxBytes } from "../../media/configured-max-bytes.js";
-import { getImageMetadata } from "../../media/media-services.js";
+import { getImageMetadata, readImageMetadataFromHeader } from "../../media/media-services.js";
 import { saveMediaBuffer } from "../../media/store.js";
 import { readSnakeCaseParamRaw } from "../../param-key.js";
 import { createEnumOptionParser } from "../../shared/enum-option.js";
@@ -578,30 +579,34 @@ async function executeImageGenerationJob(params: {
     ignoredOverrides.length > 0
       ? `Ignored unsupported overrides for ${displayProvider}/${displayModel}: ${ignoredOverrides.map(formatIgnoredImageGenerationOverride).join(", ")}.`
       : undefined;
-  const normalizedSize =
-    result.normalization?.size?.applied ??
-    (typeof result.metadata?.normalizedSize === "string" && result.metadata.normalizedSize.trim()
-      ? result.metadata.normalizedSize
-      : undefined);
-  const normalizedAspectRatio =
-    result.normalization?.aspectRatio?.applied ??
-    (typeof result.metadata?.normalizedAspectRatio === "string" &&
-    result.metadata.normalizedAspectRatio.trim()
-      ? result.metadata.normalizedAspectRatio
-      : undefined);
-  const normalizedResolution =
-    result.normalization?.resolution?.applied ??
-    (typeof result.metadata?.normalizedResolution === "string" &&
-    result.metadata.normalizedResolution.trim()
-      ? result.metadata.normalizedResolution
-      : undefined);
-  const appliedResolution = result.appliedResolution ?? normalizedResolution;
-  const sizeTranslatedToAspectRatio =
-    result.normalization?.aspectRatio?.derivedFrom === "size" ||
-    (!normalizedSize &&
-      typeof result.metadata?.requestedSize === "string" &&
-      result.metadata.requestedSize === params.size &&
-      Boolean(normalizedAspectRatio));
+  const requested = {
+    ...(params.size ? { size: params.size } : {}),
+    ...(params.aspectRatio ? { aspectRatio: params.aspectRatio } : {}),
+    ...((params.resolution ?? params.inferredResolution)
+      ? { resolution: params.resolution ?? params.inferredResolution }
+      : {}),
+    ...(params.quality ? { quality: params.quality } : {}),
+    ...(params.outputFormat ? { outputFormat: params.outputFormat } : {}),
+    ...(params.background ? { background: params.background } : {}),
+  };
+  // Submission hints and normalization are not output evidence. Read dimensions
+  // from returned bytes; missing provider quality stays unknown, including auto.
+  const outputs = result.images.map((image) => {
+    const dimensions = readImageMetadataFromHeader(image.buffer);
+    const quality = image.metadata?.quality;
+    const reportedSize = image.metadata?.size;
+    const outputFormat = sniffImageMimeType(image.buffer, "").mimeType.replace(/^image\//u, "");
+    return {
+      ...(dimensions ? { size: `${dimensions.width}x${dimensions.height}` } : {}),
+      ...(typeof reportedSize === "string" && /^[1-9]\d{0,5}x[1-9]\d{0,5}$/u.test(reportedSize)
+        ? { reportedSize }
+        : {}),
+      ...(quality === "low" || quality === "medium" || quality === "high" ? { quality } : {}),
+      ...(SUPPORTED_OUTPUT_FORMATS.some((format) => format === outputFormat)
+        ? { outputFormat }
+        : {}),
+    };
+  });
 
   const mediaMaxBytes = resolveGeneratedMediaMaxBytes(params.effectiveCfg, "image");
   const savedImages = await persistGeneratedMediaBatch({
@@ -632,6 +637,19 @@ async function executeImageGenerationJob(params: {
   const lines = [
     `Generated ${savedImages.length} image${savedImages.length === 1 ? "" : "s"} with ${displayProvider}/${displayModel}.`,
     ...(warning ? [`Warning: ${warning}`] : []),
+    ...(Object.keys(requested).length > 0
+      ? [
+          `Requested: ${Object.entries(requested)
+            .map(
+              ([key, value]) => `${key}=${sanitizeGeneratedMediaDisplayText(value.slice(0, 64))}`,
+            )
+            .join(", ")}.`,
+        ]
+      : []),
+    ...outputs.map(
+      (output, index) =>
+        `Image ${index + 1} actual output: ${output.size ?? "size unknown"}, provider-reported quality ${output.quality ?? "unknown"}, format ${output.outputFormat ?? "unknown"}${output.reportedSize && output.reportedSize !== output.size ? `; provider reported size ${output.reportedSize}` : ""}.`,
+    ),
     ...formatGeneratedAttachmentLines(attachments),
   ];
   return {
@@ -658,16 +676,8 @@ async function executeImageGenerationJob(params: {
         pluralKey: "images",
         getResolvedInput: (entry) => entry.resolvedImage,
       }),
-      ...(appliedResolution ? { resolution: appliedResolution } : {}),
-      ...(normalizedSize || (params.size && !sizeTranslatedToAspectRatio)
-        ? { size: normalizedSize ?? params.size }
-        : {}),
-      ...(normalizedAspectRatio || params.aspectRatio
-        ? { aspectRatio: normalizedAspectRatio ?? params.aspectRatio }
-        : {}),
-      ...(params.quality ? { quality: params.quality } : {}),
-      ...(params.outputFormat ? { outputFormat: params.outputFormat } : {}),
-      ...(params.background ? { background: params.background } : {}),
+      requested,
+      outputs,
       ...(params.filename ? { filename: params.filename } : {}),
       ...(params.timeoutMs !== undefined ? { timeoutMs: params.timeoutMs } : {}),
       attempts: result.attempts,

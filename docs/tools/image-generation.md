@@ -198,9 +198,13 @@ Not all providers support all parameters. When a fallback provider supports a
 nearby geometry option instead of the exact requested one, OpenClaw remaps to
 the closest supported size, aspect ratio, or resolution before submission.
 Unsupported output hints are dropped for providers that do not declare
-support and reported in the tool result. Tool results report the applied
-settings; `details.normalization` captures any requested-to-applied
-translation.
+support and reported in the tool result. Completed tool results separate
+`details.requested` hints from per-image `details.outputs`. Output size is
+read from the returned image headers; quality is reported only when the
+provider supplies a concrete value. Missing output fields remain unknown.
+`details.normalization` describes adjustments before submission, not proof
+of the settings the service ultimately used. Completion messages include
+the requested hints and each image's actual dimensions and reported quality.
 </Note>
 
 ## Configuration
@@ -322,6 +326,13 @@ and ComfyUI support 1.
     between 655,360 and 8,294,400 pixels. For example, `1024x640` is
     valid. When only `aspectRatio` is specified, OpenClaw still selects
     the closest supported size.
+
+    Codex subscription responses can report size or quality values that differ
+    from the request. OpenClaw preserves usable images and those reported
+    values, including images supplied by completed output-item events. A
+    requested size or quality is not a guarantee of the returned result;
+    public Images API geometry limits do not establish subscription-route
+    parity. This reporting does not upscale images or retry generation.
 
     OpenAI-specific options live under the `openai` object:
 

@@ -4,6 +4,7 @@ import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createSolidPngBuffer } from "../../plugin-sdk/test-helpers/image-fixtures.js";
 
 const taskRuntimeInternalMocks = vi.hoisted(() => {
   const mocks = {
@@ -666,6 +667,8 @@ describe("createImageGenerateTool", () => {
     const media = requireRecord(details.media, "media details");
     expect(details.provider).toBe("openai");
     expect(details.model).toBe("gpt-image-1");
+    expect(details).not.toHaveProperty("size");
+    expect(details).not.toHaveProperty("quality");
     expect(details.count).toBe(2);
     expect(media.mediaUrls).toEqual(["/tmp/generated-1.png", "/tmp/generated-2.png"]);
     expect(details.paths).toEqual(["/tmp/generated-1.png", "/tmp/generated-2.png"]);
@@ -1636,9 +1639,65 @@ describe("createImageGenerateTool", () => {
       },
     });
     const details = resultDetails(result);
-    expect(details.quality).toBe("low");
-    expect(details.outputFormat).toBe("jpeg");
+    expect(details.requested).toMatchObject({ quality: "low" });
+    expect(details.requested).toMatchObject({ outputFormat: "jpeg" });
   });
+
+  it.each([undefined, "auto", "unexpected"])(
+    "distinguishes requested settings from returned images with unknown quality %s",
+    async (unknownQuality) => {
+      vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
+        provider: "openai",
+        model: "gpt-image-2",
+        attempts: [],
+        ignoredOverrides: [],
+        images: [
+          {
+            buffer: createSolidPngBuffer(941, 1672, { r: 20, g: 50, b: 90 }),
+            mimeType: "image/png",
+            metadata: { size: "941x1672", quality: "medium", outputFormat: "png" },
+          },
+          {
+            buffer: createSolidPngBuffer(1024, 1024, { r: 20, g: 50, b: 90 }),
+            mimeType: "image/png",
+            metadata: { quality: unknownQuality },
+          },
+        ],
+      });
+      vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue({
+        path: "/tmp/generated.png",
+        id: "generated.png",
+        size: 5,
+        contentType: "image/png",
+      });
+      const tool = createToolWithPrimaryImageModel("openai/gpt-image-2");
+      const result = await tool.execute("call-observed-settings", {
+        prompt: "A plain blue rectangle",
+        count: 2,
+        size: "2160x3840",
+        quality: "high",
+        outputFormat: "png",
+      });
+      const details = resultDetails(result);
+      expect(details.requested).toMatchObject({
+        size: "2160x3840",
+        quality: "high",
+        outputFormat: "png",
+      });
+      expect(details.outputs).toEqual([
+        { size: "941x1672", reportedSize: "941x1672", quality: "medium", outputFormat: "png" },
+        { size: "1024x1024", outputFormat: "png" },
+      ]);
+      expect(resultText(result)).toContain("941x1672");
+      expect(resultText(result)).toContain("medium");
+      expect(resultText(result)).toContain("2160x3840");
+      expect(resultText(result)).toContain("quality unknown");
+      expect(details).not.toHaveProperty("size");
+      expect(details).not.toHaveProperty("quality");
+      expect(details.count).toBe(2);
+      expect(details.paths).toEqual(["/tmp/generated.png", "/tmp/generated.png"]);
+    },
+  );
 
   it("forwards generic fal provider options", async () => {
     const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
@@ -2070,7 +2129,7 @@ describe("createImageGenerateTool", () => {
     const details = resultDetails(result);
     expect(details.provider).toBe("openai");
     expect(details.model).toBe("gpt-image-1.5");
-    expect(details.outputFormat).toBe("png");
+    expect(details.requested).toMatchObject({ outputFormat: "png" });
   });
 
   it("includes MEDIA paths in content text so follow-up replies use the real saved file", async () => {
@@ -2239,7 +2298,7 @@ describe("createImageGenerateTool", () => {
     expect(generateArgs.aspectRatio).toBeUndefined();
     expect(generateArgs.resolution).toBeUndefined();
     expect(generateArgs.inferredResolution).toBe("4K");
-    expect(resultDetails(result).resolution).toBe("4K");
+    expect(resultDetails(result).requested).toMatchObject({ resolution: "4K" });
     expect(generateArgs.inputImages).toEqual([
       {
         buffer: Buffer.from("input-image"),
@@ -2583,7 +2642,7 @@ describe("createImageGenerateTool", () => {
     });
 
     const details = resultDetails(result);
-    expect(details.aspectRatio).toBe("16:9");
+    expect(details.requested).toEqual({ size: "1280x720" });
     expect(details.normalization).toEqual({
       aspectRatio: {
         applied: "16:9",

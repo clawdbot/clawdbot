@@ -1589,6 +1589,66 @@ describe("openai image generation provider", () => {
     expect(result.images[0]?.buffer).toEqual(Buffer.from("framed-image"));
   });
 
+  it.each(["completed", "output-item"])(
+    "preserves returned settings from %s images",
+    async (source) => {
+      mockCodexAuthOnly();
+      const buffer = Buffer.from("89504e470d0a1a0a", "hex");
+      const item = {
+        type: "image_generation_call",
+        status: "completed",
+        result: buffer.toString("base64"),
+        size: "941x1672",
+        quality: "medium",
+        output_format: "png",
+      };
+      const events = [
+        { type: "response.output_item.done", item: { ...item, quality: "low" } },
+        { type: "response.completed", response: { output: source === "completed" ? [item] : [] } },
+      ];
+      mockCodexRawStream(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""));
+      const result = await generateOpenAIImage("Draw a portrait", {
+        size: "2160x3840",
+        quality: "high",
+        outputFormat: "jpeg",
+        count: 2,
+      });
+      expect(result.images).toEqual(
+        [1, 2].map((index) => ({
+          buffer,
+          mimeType: "image/png",
+          fileName: `image-${index}.png`,
+          metadata: {
+            size: "941x1672",
+            quality: source === "completed" ? "medium" : "low",
+            outputFormat: "png",
+          },
+        })),
+      );
+      expect(jsonRequestCall().body).toMatchObject({
+        tools: [{ size: "2160x3840", quality: "high", output_format: "jpeg" }],
+      });
+    },
+  );
+
+  it("ignores absent or malformed returned settings without discarding image bytes", async () => {
+    mockCodexAuthOnly();
+    const buffer = Buffer.from("image bytes");
+    const output = [{}, { size: "0x-1", quality: "not-quality", output_format: "bogus" }].map(
+      (settings) =>
+        Object.assign(
+          { type: "image_generation_call", result: buffer.toString("base64") },
+          settings,
+        ),
+    );
+    mockCodexRawStream(
+      `data: ${JSON.stringify({ type: "response.completed", response: { output } })}\n\n`,
+    );
+    const result = await generateOpenAIImage("Draw two icons", { quality: "high" });
+    expect(result.images.map((image) => image.metadata ?? {})).toEqual([{}, {}]);
+    expect(result.images.map((image) => image.buffer)).toEqual([buffer, buffer]);
+  });
+
   it("surfaces the authoritative nested Codex response failure", async () => {
     mockCodexAuthOnly();
     mockCodexRawStream(

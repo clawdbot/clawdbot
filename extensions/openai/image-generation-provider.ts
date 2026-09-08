@@ -6,6 +6,7 @@ import type {
   ImageGenerationOutputFormat,
   ImageGenerationProvider,
   ImageGenerationResult,
+  sniffImageMimeType,
 } from "openclaw/plugin-sdk/image-generation";
 import type { resolveClosestSize } from "openclaw/plugin-sdk/media-generation-runtime";
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
@@ -454,6 +455,9 @@ type OpenAICodexImageGenerationItem = {
   type?: string;
   result?: string | null;
   revised_prompt?: string;
+  size?: unknown;
+  quality?: unknown;
+  output_format?: unknown;
   status?: "in_progress" | "completed" | "generating" | "failed";
 };
 
@@ -582,6 +586,7 @@ function decodeCodexImagePayload(payload: string): Buffer {
 function toCodexImage(
   entry: OpenAICodexImageGenerationItem,
   index: number,
+  sniffMime: typeof sniffImageMimeType,
   outputFormat?: ImageGenerationOutputFormat,
 ): ImageGenerationResult["images"][number] | null {
   if (entry.status && entry.status !== "completed") {
@@ -590,20 +595,36 @@ function toCodexImage(
   if (typeof entry.result !== "string" || entry.result.length === 0) {
     return null;
   }
-  const output = resolveOutputMime(outputFormat);
+  const quality = OPENAI_QUALITIES.find((value) => value === entry.quality);
+  const returnedFormat = OPENAI_OUTPUT_FORMATS.find((value) => value === entry.output_format);
+  const metadata = {
+    ...(typeof entry.size === "string" && /^[1-9]\d{0,5}x[1-9]\d{0,5}$/.test(entry.size)
+      ? { size: entry.size }
+      : {}),
+    ...(quality ? { quality } : {}),
+    ...(returnedFormat ? { outputFormat: returnedFormat } : {}),
+  };
+  const buffer = decodeCodexImagePayload(entry.result);
+  // Returned bytes own the file format; request hints may differ from the result.
+  const output = sniffMime(
+    buffer,
+    resolveOutputMime(metadata.outputFormat ?? outputFormat).mimeType,
+  );
   return Object.assign(
     {
-      buffer: decodeCodexImagePayload(entry.result),
+      buffer,
       mimeType: output.mimeType,
       fileName: `image-${index + 1}.${output.extension}`,
     },
     entry.revised_prompt ? { revisedPrompt: entry.revised_prompt } : {},
+    Object.keys(metadata).length > 0 ? { metadata } : {},
   );
 }
 
 function extractCodexImageGenerationResult(params: {
   body: string;
   model: string;
+  sniffMime: typeof sniffImageMimeType;
   outputFormat?: ImageGenerationOutputFormat;
 }): ImageGenerationResult {
   const events = parseCodexImageGenerationEvents(params.body);
@@ -644,7 +665,7 @@ function extractCodexImageGenerationResult(params: {
   // compatible streams that omit their image from the terminal output.
   const selectedOutputItems = completedOutputItems.length > 0 ? completedOutputItems : outputItems;
   const images = selectedOutputItems
-    .map((item, index) => toCodexImage(item, index, params.outputFormat))
+    .map((item, index) => toCodexImage(item, index, params.sniffMime, params.outputFormat))
     .filter((image): image is NonNullable<typeof image> => image !== null);
   if (images.length === 0) {
     throw new Error("OpenAI Codex image generation completed but did not produce an image");
@@ -748,7 +769,7 @@ async function generateOpenAICodexImage(params: {
       resolveProviderHttpRequestConfig,
       sanitizeConfiguredModelProviderRequest,
     },
-    { toImageDataUrl },
+    { toImageDataUrl, sniffImageMimeType },
     { resolveClosestSize },
   ] = await Promise.all([
     import("openclaw/plugin-sdk/provider-http"),
@@ -843,6 +864,7 @@ async function generateOpenAICodexImage(params: {
       results.push(
         extractCodexImageGenerationResult({
           body: await readResponseBodyText(response),
+          sniffMime: sniffImageMimeType,
           model,
           outputFormat: req.outputFormat,
         }),
@@ -852,11 +874,10 @@ async function generateOpenAICodexImage(params: {
     }
   }
   const images = results.flatMap((result) => result.images);
-  const output = resolveOutputMime(req.outputFormat);
   return {
     images: images.map((image, index) =>
       Object.assign({}, image, {
-        fileName: `image-${index + 1}.${output.extension}`,
+        fileName: `image-${index + 1}${extensionForMime(image.mimeType)}`,
       }),
     ),
     model,
