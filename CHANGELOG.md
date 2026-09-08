@@ -7,18 +7,21 @@ Docs: https://docs.openclaw.ai
 
 ### Highlights
 
-- **Watch the browser live:** see the active browser tab update as pages repaint, with screenshot fallback for unsupported routes and existing navigation controls. (#141031)
+- **Safer updates:** rehearse core and plugin changes in isolated candidate state before activation, support eligible 2026.9.2 migrations, and recover abandoned update records without stopping a healthy matching Gateway. Related #136997. (#138839, #141175, #141109, #141562)
+- **Performance:** preserve warm prompt caches, reduce unnecessary work during cold session updates and memory search, and reuse worker builds between sessions. Related #140681. (#140799, #140840, #140730, #140449, #141141) Thanks @justinkirklin-gif, @NianJiuZst, @obviyus.
+- **Skill Workshop:** keep skills in one persistent agent-owned collection across workspaces, compare complete skill instructions, and retire missing-draft suggestions safely through Doctor. Related #135291. (#135528, #139248, #140300, #141009) Thanks @khaisis, @obviyus.
+- **Browser tabs, live and native:** watch agent pages repaint and open external links in native Mac tabs that remain with their window across chat switches. (#141031, #140988)
 - **Your provider accounts, together:** manage connected accounts and supported account priority directly in Models settings. (#132451) Thanks @jesse-merhi.
-- **See work already in progress:** load permitted running and queued sessions when opening Live activity or reconnecting, before new tool events arrive. (#141045) Thanks @shakkernerd.
-- **Safer upgrade continuity:** support eligible 2026.9.2 shared-state upgrades, finish plugin maintenance through the activated installation, and preserve npm-linked development checkouts during package replacement. (#141109, #140886, #141168)
 - **Share selected conversations:** explicitly publish a revocable read-only view of a session’s existing and future conversation text, accessible to anyone with its public link. (#139489)
 - **A searchable meeting library:** browse saved notes, search full transcripts, download complete Markdown or JSONL archives, and manage capture sources from the Control UI. (#139875, #140084)
-- **Live voice from Siri:** start Talk in the current iOS chat with Siri or Shortcuts using existing pairing, permissions, and voice configuration. Related #140998. (#141003)
 - **Optional team activity reports:** install and enable Team Reports to browse authenticated GitHub activity and explicitly configured Discord discussion, with stored history and optional model summaries. (#139850, #141327)
 
 ### Changes
 
 - **Breaking — Node runtime:** require Node 24.16.0 or newer on 24.x, or Node 26.1.0 or newer; Node 26 is recommended. Upgrade Node before OpenClaw to prevent SQLite text truncation: Node 22, Node 25, and earlier 24.x/26.x builds are no longer supported. Node-based CLI/Gateway installs on macOS 11–13.4 or official Linux ARMv7 provisioning need a supported host; see [Node requirements](https://docs.openclaw.ai/install/node). (#140672)
+- **Breaking — execution-policy SDK:** move the retired exec-mode and comparator helpers from `infra-runtime` to `execPolicy` on `openclaw/plugin-sdk/agent-harness-runtime`; use `resolveExecModePolicy` and select the returned fields needed by the caller. See [runtime utility migration](https://docs.openclaw.ai/plugins/sdk-runtime/config-and-utilities).
+- **Breaking — approval SDK:** import approval account-resolution helpers from `approval-native-runtime`, adapt session filtering to the full `matchesApprovalRequestFilters` contract, and replace the retired generic forwarding evaluator with native channel route gates and shared predicates rather than assuming a drop-in alias. See [SDK migration](https://docs.openclaw.ai/plugins/sdk-migration).
+- **Breaking — SDK aliases:** replace `channel-inbound.buildChannelTurnMediaPayload` with `buildChannelInboundMediaPayload`; infer the retained `abortAndDrainAgentHarnessRun` callable’s result instead of importing the removed `AbortAndDrainAgentHarnessRunResult` named type. The callable and its result data remain available. See [SDK migration](https://docs.openclaw.ai/plugins/sdk-migration).
 - **Live browser panel:** stream the active tab as it repaints, retaining screenshot fallback for node-routed browsers, existing-session Chrome MCP, missing Playwright, or stream failures; blocked navigation stops the stream and clears the view. (#141031)
 - **Provider account controls:** add and remove individual accounts, manage supported account priority, and clear an agent’s custom order without disconnecting accounts; inherited and provider-managed order remains explicit. (#132451) Thanks @jesse-merhi.
 - **Active sessions:** show running and queued permitted sessions in Live activity on entry and reconnect, with a visible limit notice and connection status instead of claiming disconnected sessions are idle. (#141045) Thanks @shakkernerd.
@@ -55,9 +58,40 @@ Docs: https://docs.openclaw.ai
 - **Android usage:** distinguish context pressure from cumulative latest-run usage, keep optional model-call details compact, and clear stale usage after compaction and history refresh. (#137494) Thanks @IWhatsskill.
 - **Installation-owned recovery:** eligible failed updates and recorded startup failures can start a repair using existing authentication and permissions, with only one active repair per installation; verified cleanup, cancellation, and admission limits remain enforced, and recovery does not turn the original failed update into success. (#135868)
 - **Cloud setup diagnostics:** report cloud bootstrap phase timings so provisioning delays are easier to locate. (#140442)
+- **Persistent child sessions:** open visible persistent sessions created by agents as editable conversations while preserving their parent hierarchy, rather than treating them as view-only subagent runs. (#141499)
+- **macOS native Browser tabs:** open external links as native Mac tabs alongside Agent browser tabs in the Browser panel, with navigation controls and one-shot Annotate/Inspect capture. Tabs belong to the window and survive chat switches. (#140988)
+- **macOS app Gateway control CLI:** bundle `openclaw-mac` to inspect and configure the running Mac app’s primary and saved Gateway connections from Terminal or SSH, including browser sign-in, reconnect, removal, profiles, and JSON output. Browser sign-in still happens on the Mac; credentials enter through protected files or standard input.
+- **Gateway secret setup:** use one Gateway secret field in Control UI and remote onboarding, and generate a local Gateway token by default without asking users to choose token or password. (#141514, #141511)
+- **Beam deletion:** delete beamed sessions directly from their sidebar menu without affecting independent continuations. (#141467)
+- **Text attachments and Review:** read supported text attachments directly in Files while preserving indentation, and keep delayed Review previews from replacing a newer selection or reopening a closed tab. (#141469, #141567)
+- **Team Reports presentation:** expand Team Reports with activity summaries, day/week/month history, people timelines and calendars, scheduler/source health, and theme-aware navigation. (#141384)
 
 ### Fixes
 
+- **Stale update recovery:** recover abandoned update records without stopping a healthy, matching Gateway when no post-update work remains; retain live-driver protection and require explicit recovery for stale legacy records without driver identity. (#141562)
+- **Update plugin targets:** validate explicit package-artifact plugins against the privately staged core version, and restore configured formerly bundled official plugins from the selected stable release when their install record is missing. (#141610, #141478)
+- **Authored configuration preservation:** preserve authored configuration values, environment references, and omitted defaults through updates, setup, and targeted edits; retain explicitly set values even when they match runtime defaults. (#140579)
+- **Doctor maintenance admission:** acquire maintenance ownership before database inspection, bound initial database snapshots and integrity checks, and apply supported startup-blocking migrations through noninteractive Doctor repair. (#141412)
+- **Maintenance-required startup:** stop Gateway restart loops when startup needs migration or other required maintenance, and report the appropriate Doctor or backup-recovery action. (#141416)
+- **Protected HTTPS continuity:** renew protected HTTPS leaf certificates while keeping the Gateway process trust chain stable, so existing subprocesses continue working beyond one day; report certificate failures in status and Doctor. (#141484)
+- **Native CLI authentication reporting:** keep models list authentication status tied to the selected native CLI runtime instead of replacing it with unrelated provider-key hints. (#141654)
+- **Claude native Bash approvals:** honor the agent exec allowlist for fully bindable Claude native Bash commands under on-miss prompting, while retaining explicit deny and always-prompt behavior. (#141471)
+- **Native hook startup:** reduce repeated native hook relay startup work and memory overhead with a dedicated lightweight entrypoint while preserving deadlines and command outcomes. (#120340) Thanks @sightingsstellar-beep, @Takhoffman.
+- **Worktree preparation failures:** surface worktree setup failures before the first model reply with durable session notices, and fetch missing partial-clone objects in a batch before checkout sizing. (#141537)
+- **Memory recall correctness:** recall LanceDB memories against the current request rather than prior user history, and route LM Studio embeddings to the prepared instance so a smaller loaded instance cannot silently truncate them. (#141521, #141513)
+- **Memory search portability:** use a cancellable batched embedding scan when the memory search child cannot load SQLite extensions, preserving provider and source filters. (#141104)
+- **Responsive state maintenance:** keep session edits responsive while cleanup integrity checks run, and yield during repeated memory workspace-state updates. (#141434, #141613)
+- **Runtime diagnostics:** retain bounded SQLite write error causes and codes, distinguish slow integrity and index-validation stages, and include sanitized underlying causes when setup inference verification fails. (#141507, #141619, #140392)
+- **Setup choice preservation:** retain pending setup consent choices through agent roster reconciliation, and leave generated Baseten model rows to discovery during ordinary onboarding. (#141531, #141552)
+- **Bun plugin transports:** use Discord and Mattermost declared WebSocket implementations under Bun so payload and handshake options retain their intended behavior. (#141465)
+- **Codex session context:** keep reused Codex transport callbacks bound to the current attempt context rather than a previous session turn. (#141491)
+- **Private reasoning previews:** remove recognized internal runtime context, including incomplete streaming markers, before sending channel reasoning previews while preserving original reasoning for model replay. (#141544) Thanks @VACInc.
+- **Chat copy, downloads, and GitHub links:** copy code blocks containing HTML comments or closing tags correctly, preserve Unicode characters in download filenames, and render backtick-only GitHub links as chips with hover cards. (#141574, #141311, #141446) Thanks @VACInc.
+- **Usage refresh and context meter:** refresh the selected session’s usage details alongside totals, and show context pressure against the matching last-run prompt budget, falling back to the context window after model or cap changes. (#141632, #138666) Thanks @DasX.
+- **Channel progress and reasoning:** preserve every Teams progress reply across stream settlement and fallback, show Telegram compaction status in enabled answer previews, and strip recognized internal context from streamed reasoning previews. (#141551, #141199, #141544) Thanks @VACInc.
+- **Android handoff credentials:** prevent a delayed operator connection from overwriting a newer device token issued during Android bootstrap handoff. (#141518)
+- **CLI diagnostics:** report disabled channel accounts as off, use operator-assigned device labels in approval notices, and count missing skill prerequisites separately from intentionally disabled skills. (#141560, #141649, #141618)
+- **Model availability and input validation:** preserve native CLI authentication availability in model listings and reject explicitly blank numeric probe/log options. (#141654, #140907)
 - **Post-update plugin maintenance:** run service maintenance through the newly activated CLI and keep version-bound runtime plugins aligned with the activated core. (#140886)
 - **Development-to-package updates:** replace npm’s install link without modifying its development checkout; restoring a link after failed activation remains unverified recovery and does not automatically restart the Gateway. (#141168)
 - **MCP session continuity:** keep session-owned MCP servers alive between turns and quiet periods while retaining cleanup on Stop, reset, compaction rollover, and shutdown. Preserve `mcp.sessionIdleTtlMs` as an optional idle timeout in Doctor. (#141125)
