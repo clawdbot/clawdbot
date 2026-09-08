@@ -240,7 +240,7 @@ describe("worktrees gateway methods", () => {
       expect(denied?.[0]).toBe(false);
       expect(String((denied?.[2] as { message?: string })?.message)).toContain("operator.admin");
     } finally {
-      removeProjectRegistry(project.id);
+      await removeProjectRegistry(project);
     }
   });
 

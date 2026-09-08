@@ -17,6 +17,7 @@ import {
   listProjectRegistry,
   registerClonedProjectRegistry,
   removeProjectCheckoutReference,
+  resolveProjectCloneRefreshOwner,
   type ProjectRegistryRecord,
   withProjectCheckoutLifecycle,
 } from "./project-registry.js";
@@ -133,18 +134,27 @@ export async function refreshProjectClone(
   if (project.source !== "cloned") {
     return;
   }
-  // Materialization validates the source URL; retries retain that registry identity.
-  const originUrl = project.originUrl;
-  if (!originUrl) {
-    throw new ProjectCloneError(
-      "invalid_url",
-      "Saved project repository is invalid; select the repository and retry.",
-    );
-  }
   await withProjectCheckoutLifecycle(project.repoRoot, options, async (lease) => {
+    // Removal and registration share this lease. Re-read now so a queued stale record cannot
+    // authorize network, object-store, or ref effects after checkout ownership changes.
+    const current = resolveProjectCloneRefreshOwner(project, lease, options);
+    if (!current) {
+      throw new ProjectCloneError(
+        "clone_failed",
+        "This project is no longer a Gateway-managed clone. Reselect the repository and retry.",
+      );
+    }
+    // Materialization validates the source URL; retries retain that registry identity.
+    const originUrl = current.originUrl;
+    if (!originUrl) {
+      throw new ProjectCloneError(
+        "invalid_url",
+        "Saved project repository is invalid; select the repository and retry.",
+      );
+    }
     // The registry owns source identity; origin can be changed inside the shared checkout.
     await refreshProjectCheckout(
-      { target: project.repoRoot, url: originUrl },
+      { target: current.repoRoot, url: originUrl },
       { ...options, signal: lease.signal },
     );
     lease.assertOwned();

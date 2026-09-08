@@ -668,7 +668,7 @@ export function createProjectsHandlers(service: ProjectWorktreeService): Gateway
           return;
         }
       } else {
-        removed = removeProjectRegistry(params.id);
+        removed = await removeProjectRegistry(project);
       }
       if (!removed) {
         respondUnknownProject();
