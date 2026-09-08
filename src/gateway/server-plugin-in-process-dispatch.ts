@@ -8,6 +8,7 @@ import {
 } from "../plugins/runtime/gateway-request-scope.js";
 import type { PluginSubagentRequesterContext } from "../plugins/runtime/subagent-requester-context.js";
 import type { RuntimePluginToolGrant } from "../plugins/runtime/tool-grant.js";
+import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { readInProcessAgentRuntimeIdentity } from "./in-process-agent-runtime-identity.js";
 import { authorizeGatewaySessionCreation } from "./operator-role-policy.js";
 import { ADMIN_SCOPE, WRITE_SCOPE } from "./operator-scopes.js";
@@ -210,8 +211,16 @@ function resolveInProcessGatewayDispatch(
     (operatorRoleActor?.kind === "operator"
       ? (verifiedOperatorAuthority?.scopes ?? scope?.client?.connect.scopes ?? [])
       : undefined);
+  // Narrow by authority, not literal membership: write also authorizes reads
+  // and Talk, including tools called by a synthetic continuation.
   const syntheticScopes = operatorScopes
-    ? requestedSyntheticScopes.filter((requestedScope) => operatorScopes.includes(requestedScope))
+    ? requestedSyntheticScopes.filter((requestedScope) =>
+        roleScopesAllow({
+          role: "operator",
+          requestedScopes: [requestedScope],
+          allowedScopes: operatorScopes,
+        }),
+      )
     : options?.syntheticScopes;
   if (operatorScopes?.includes(ADMIN_SCOPE) && !syntheticScopes?.includes(ADMIN_SCOPE)) {
     syntheticScopes?.push(ADMIN_SCOPE);

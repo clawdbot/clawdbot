@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+import { bindGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
 import {
   prepareSystemAgentRunAdmission,
   type AdmittedRunContext,
@@ -18,9 +20,14 @@ import { prepareAndDispatchEmbeddedRunAttempt } from "./run/run-attempt-dispatch
 
 const mocks = vi.hoisted(() => ({
   runAttempt: vi.fn(),
+  prepareGitHubPublicationAvailability: vi.fn(),
   settleRequesterAfterSessionSpawns: vi.fn(),
 }));
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+vi.mock("../../gateway/github-publication-availability.js", () => ({
+  prepareGitHubPublicationAvailability: mocks.prepareGitHubPublicationAvailability,
+}));
 
 vi.mock("../delegation-capability.js", () => ({
   resolveDelegationCapability: vi.fn(() => undefined),
@@ -191,6 +198,7 @@ describe("embedded run retry dispatch", () => {
   beforeEach(async () => {
     mocks.runAttempt.mockReset().mockResolvedValue({ terminal: { kind: "ok" } });
     mocks.settleRequesterAfterSessionSpawns.mockReset();
+    mocks.prepareGitHubPublicationAvailability.mockReset().mockResolvedValue(true);
     admission = prepareSystemAgentRunAdmission({}, "run-1", "main", "dispatch-test");
     admittedRunContext = await admission.admit("plugin-harness", "dispatch-test");
   });
@@ -339,6 +347,80 @@ describe("embedded run retry dispatch", () => {
       const { dispatchedAttempt: result } = await prepareAndDispatchEmbeddedRunAttempt(input);
 
       expect(result.preparedAttempt.githubPublicationAvailable).toBe(githubPublicationAvailable);
+      expect(mocks.prepareGitHubPublicationAvailability).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([true, false])(
+    "prepares GitHub capability for a Gateway background entry (available: %s)",
+    async (available) => {
+      const input = makeDispatchInput({}, createEmbeddedRunReplayState());
+      const context = {} as GatewayRequestContext;
+      bindGatewayContextResolver(admittedRunContext, () => context);
+      mocks.prepareGitHubPublicationAvailability.mockResolvedValue(available);
+
+      const { dispatchedAttempt: result } = await prepareAndDispatchEmbeddedRunAttempt(input);
+
+      expect(result.preparedAttempt.githubPublicationAvailable).toBe(available);
+      expect(mocks.prepareGitHubPublicationAvailability).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agentId: "main",
+          sessionId: "session-1",
+          sessionKey: "agent:main:session-1",
+        }),
+      );
+    },
+  );
+
+  it.each(["standalone", "retired", "disabled", "raw", "explicit-denial"] as const)(
+    "does not discover publication capability for a %s run",
+    async (kind) => {
+      const input = makeDispatchInput({}, createEmbeddedRunReplayState());
+      const context = {
+        localEmbedded: kind === "standalone" ? true : undefined,
+      } as GatewayRequestContext;
+      bindGatewayContextResolver(admittedRunContext, () =>
+        kind === "retired" ? undefined : context,
+      );
+      if (kind === "disabled") {
+        input.runInput.runParams.disableTools = true;
+      }
+      if (kind === "raw") {
+        input.runInput.runParams.modelRun = true;
+      }
+      if (kind === "explicit-denial") {
+        input.runInput.runParams.githubPublicationAvailable = false;
+      }
+
+      const { dispatchedAttempt: result } = await prepareAndDispatchEmbeddedRunAttempt(input);
+
+      expect(result.preparedAttempt.githubPublicationAvailable).toBe(
+        kind === "explicit-denial" ? false : undefined,
+      );
+      expect(mocks.prepareGitHubPublicationAvailability).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["gateway", "run", "lane"] as const)(
+    "fences publication discovery when the %s owner retires",
+    async (owner) => {
+      const input = makeDispatchInput({}, createEmbeddedRunReplayState());
+      let current: GatewayRequestContext | undefined = {} as GatewayRequestContext;
+      bindGatewayContextResolver(admittedRunContext, () => current);
+      mocks.prepareGitHubPublicationAvailability.mockImplementation(async ({ assertCurrent }) => {
+        expect(assertCurrent()).toBe(true);
+        if (owner === "gateway") {
+          current = {} as GatewayRequestContext;
+        } else if (owner === "lane") {
+          input.runInput.laneController.laneTaskAbortController.abort(new Error("lane cancelled"));
+        } else {
+          admission.close();
+        }
+        return assertCurrent();
+      });
+
+      const { dispatchedAttempt: result } = await prepareAndDispatchEmbeddedRunAttempt(input);
+      expect(result.preparedAttempt.githubPublicationAvailable).toBe(false);
     },
   );
 

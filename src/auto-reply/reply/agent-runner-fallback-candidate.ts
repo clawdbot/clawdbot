@@ -6,7 +6,6 @@ import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-a
 import { isCliProvider } from "../../agents/model-selection.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-runtime-compat.js";
 import { buildGenericCliContextEngineHostSupport } from "../../context-engine/host-compat.js";
-import { prepareGitHubPublicationAvailability } from "../../gateway/github-publication-availability.js";
 import { RUN_STALE_TAKEOVER_MS } from "../../logging/diagnostic-run-activity.js";
 import { CommandLane } from "../../process/lanes.js";
 import { resolveSessionPinnedHarnessId } from "../../sessions/agent-harness-session-key.js";
@@ -77,7 +76,6 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
   const bootstrapContextRunKind = turn.opts?.isHeartbeat
     ? ("heartbeat" as const)
     : ("default" as const);
-  let githubPublicationAvailability: Promise<boolean> | undefined;
 
   params.timing.logMilestoneIfSlow({
     runId: params.runId,
@@ -308,14 +306,6 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
         }
         const candidate = await runEmbeddedFallbackCandidate({
           ...common,
-          githubPublicationAvailable: await (githubPublicationAvailability ??=
-            turn.sessionKey && params.effectiveRun.agentId
-              ? prepareGitHubPublicationAvailability({
-                  sessionId: turn.followupRun.run.sessionId,
-                  sessionKey: turn.sessionKey,
-                  agentId: params.effectiveRun.agentId,
-                })
-              : Promise.resolve(false)),
           effectiveRun: params.effectiveRun,
           sessionRuntimeOverride: runtime.sessionRuntimeOverride,
           getLifecycleGeneration: () => params.state.lifecycleGeneration,
