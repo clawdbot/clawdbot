@@ -20,7 +20,13 @@ import { isRecord } from "../packages/normalization-core/src/record-coerce.ts";
 import { sliceUtf16Safe } from "../packages/normalization-core/src/utf16-slice.ts";
 import { applyMockOpenAiModelConfig } from "./e2e/lib/fixtures/mock-openai-config.mjs";
 import { delay, stopChild } from "./lib/gateway-bench-child.ts";
-import { getFreePort, readProcessRssMb } from "./lib/gateway-bench-probes.ts";
+import {
+  type GatewayMemorySample,
+  type GatewayRpc,
+  getFreePort,
+  readGatewayMemory,
+  readProcessRssMb,
+} from "./lib/gateway-bench-probes.ts";
 import {
   BASE_GATEWAY_BENCH_CONFIG,
   buildGatewayBenchChildArgs,
@@ -84,15 +90,6 @@ type FreshConnectionProbe = {
   error: string | null;
   latencyMs: number;
   ok: boolean;
-};
-
-type GatewayRpc = <T>(method: string, params: unknown, timeoutMs?: number) => Promise<T>;
-
-type GatewayMemorySample = {
-  atMs: number;
-  heapTotalMb: number;
-  heapUsedMb: number;
-  rssMb: number;
 };
 
 type GatewayChildExit = {
@@ -776,29 +773,6 @@ async function connectGateway(
     setDeadlineAt: (value: number) => {
       requestDeadlineAt = value;
     },
-  };
-}
-
-async function readGatewayMemory(
-  rpc: GatewayRpc,
-  runStartedAt: number,
-): Promise<GatewayMemorySample> {
-  const result = await rpc<{
-    processMemory?: { heapTotalBytes?: number; heapUsedBytes?: number; rssBytes?: number };
-  }>("status", { includeChannelSummary: false });
-  const memory = result.processMemory;
-  const heapTotalBytes = asFiniteNumber(memory?.heapTotalBytes);
-  const heapUsedBytes = asFiniteNumber(memory?.heapUsedBytes);
-  const rssBytes = asFiniteNumber(memory?.rssBytes);
-  if (heapTotalBytes === undefined || heapUsedBytes === undefined || rssBytes === undefined) {
-    throw new Error("Gateway status did not report process memory");
-  }
-  const toMb = (bytes: number) => bytes / 1024 / 1024;
-  return {
-    atMs: performance.now() - runStartedAt,
-    heapTotalMb: toMb(heapTotalBytes),
-    heapUsedMb: toMb(heapUsedBytes),
-    rssMb: toMb(rssBytes),
   };
 }
 
@@ -1615,6 +1589,30 @@ function summarizeRuns(
       (run) =>
         run.gatewayExit && (run.gatewayExit.exitCode !== 0 || run.gatewayExit.signal !== null),
     ).length,
+    gatewayExternalGrowthMb: summarizeNumbers(
+      runs.flatMap((run) => {
+        const before = run.memory.before.externalMb;
+        const after = run.memory.after.externalMb;
+        return before === undefined || after === undefined ? [] : [after - before];
+      }),
+    ),
+    gatewayExternalMb: summarizeNumbers(
+      runs.flatMap((run) =>
+        run.memory.after.externalMb === undefined ? [] : [run.memory.after.externalMb],
+      ),
+    ),
+    gatewayArrayBuffersGrowthMb: summarizeNumbers(
+      runs.flatMap((run) => {
+        const before = run.memory.before.arrayBuffersMb;
+        const after = run.memory.after.arrayBuffersMb;
+        return before === undefined || after === undefined ? [] : [after - before];
+      }),
+    ),
+    gatewayArrayBuffersMb: summarizeNumbers(
+      runs.flatMap((run) =>
+        run.memory.after.arrayBuffersMb === undefined ? [] : [run.memory.after.arrayBuffersMb],
+      ),
+    ),
     gatewayHeapGrowthMb: summarizeNumbers(
       runs.map((run) => run.memory.after.heapUsedMb - run.memory.before.heapUsedMb),
     ),

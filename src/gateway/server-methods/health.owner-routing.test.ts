@@ -9,6 +9,7 @@ import { healthHandlers } from "./health.js";
 
 afterEach(() => {
   resetConfigRuntimeState();
+  vi.restoreAllMocks();
 });
 
 async function callStatus(config: OpenClawConfig, scopes = ["operator.read"]) {
@@ -37,6 +38,13 @@ describe("Gateway status owner routing", () => {
         session: { store: path.join(stateDir, "agents", "{agentId}", "sessions.json") },
       } satisfies OpenClawConfig;
 
+      vi.spyOn(process, "memoryUsage").mockReturnValue({
+        rss: 5120,
+        heapUsed: 3072,
+        heapTotal: 4096,
+        external: 2048,
+        arrayBuffers: 1024,
+      });
       const respond = await callStatus(config);
 
       expect(respond).toHaveBeenCalledTimes(1);
@@ -44,9 +52,11 @@ describe("Gateway status owner routing", () => {
       expect(respond.mock.calls[0]?.[1]).toEqual(
         expect.objectContaining({
           processMemory: {
-            rssBytes: expect.any(Number),
-            heapUsedBytes: expect.any(Number),
-            heapTotalBytes: expect.any(Number),
+            rssBytes: 5120,
+            heapUsedBytes: 3072,
+            heapTotalBytes: 4096,
+            externalBytes: 2048,
+            arrayBuffersBytes: 1024,
           },
         }),
       );

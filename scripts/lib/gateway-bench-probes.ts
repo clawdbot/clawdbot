@@ -2,9 +2,56 @@
 import { spawnSync } from "node:child_process";
 import { request } from "node:http";
 import { createServer } from "node:net";
+import { performance } from "node:perf_hooks";
 import { expectDefined } from "../../packages/normalization-core/src/expect.ts";
+import { asFiniteNumber } from "../../packages/normalization-core/src/number-coercion.ts";
+
+export type GatewayRpc = <T>(method: string, params: unknown, timeoutMs?: number) => Promise<T>;
+
+/** Gateway status observations; the existing Mb fields use MiB (1024 * 1024 bytes). */
+export type GatewayMemorySample = {
+  atMs: number;
+  heapTotalMb: number;
+  heapUsedMb: number;
+  rssMb: number;
+  externalMb?: number;
+  arrayBuffersMb?: number;
+};
 
 const PROBE_REQUEST_TIMEOUT_MS = 100;
+
+export async function readGatewayMemory(
+  rpc: GatewayRpc,
+  runStartedAt: number,
+): Promise<GatewayMemorySample> {
+  const result = await rpc<{
+    processMemory?: {
+      heapTotalBytes?: number;
+      heapUsedBytes?: number;
+      rssBytes?: number;
+      externalBytes?: number;
+      arrayBuffersBytes?: number;
+    };
+  }>("status", { includeChannelSummary: false });
+  const memory = result.processMemory;
+  const heapTotalBytes = asFiniteNumber(memory?.heapTotalBytes);
+  const heapUsedBytes = asFiniteNumber(memory?.heapUsedBytes);
+  const rssBytes = asFiniteNumber(memory?.rssBytes);
+  const externalBytes = asFiniteNumber(memory?.externalBytes);
+  const arrayBuffersBytes = asFiniteNumber(memory?.arrayBuffersBytes);
+  if (heapTotalBytes === undefined || heapUsedBytes === undefined || rssBytes === undefined) {
+    throw new Error("Gateway status did not report process memory");
+  }
+  const toMb = (bytes: number) => bytes / 1024 / 1024;
+  return {
+    atMs: performance.now() - runStartedAt,
+    heapTotalMb: toMb(heapTotalBytes),
+    heapUsedMb: toMb(heapUsedBytes),
+    rssMb: toMb(rssBytes),
+    ...(externalBytes === undefined ? {} : { externalMb: toMb(externalBytes) }),
+    ...(arrayBuffersBytes === undefined ? {} : { arrayBuffersMb: toMb(arrayBuffersBytes) }),
+  };
+}
 
 export async function getFreePort(): Promise<number> {
   return new Promise((resolve, reject) => {
