@@ -1,4 +1,3 @@
-import path from "node:path";
 import { resolveSkillsPrompt } from "../../skills/loading/workspace-skill-prompt.js";
 import { resolveEmbeddedRunSkillEntries } from "../../skills/runtime/embedded-run-entries.js";
 import {
@@ -69,7 +68,7 @@ export function prepareEmbeddedSkills(params: {
       // host execution skills are not mounted there.
       ...(params.sandbox?.enabled === true
         ? {}
-        : { executionSkillsDir: path.join(params.effectiveWorkspace, "skills") }),
+        : { executionWorkspaceDir: params.effectiveWorkspace }),
       workspaceOnly,
     });
   const restoreSkillEnv = skillsSnapshot

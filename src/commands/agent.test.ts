@@ -885,7 +885,7 @@ describe("agentCommand", () => {
 
       expect(resolveReusableWorkspaceSkillSnapshot).toHaveBeenCalledWith(
         expect.objectContaining({
-          executionSkillsDir: path.join(executionWorkspace, "skills"),
+          executionWorkspaceDir: executionWorkspace,
         }),
       );
     });
@@ -1001,7 +1001,7 @@ describe("agentCommand", () => {
 
       expect(resolveReusableWorkspaceSkillSnapshot).toHaveBeenCalledWith(
         expect.objectContaining({
-          executionSkillsDir: path.join(canonicalWorkspace, "skills"),
+          executionWorkspaceDir: canonicalWorkspace,
         }),
       );
     });

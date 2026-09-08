@@ -1,4 +1,3 @@
-import path from "node:path";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { VerboseLevel } from "../auto-reply/thinking.js";
@@ -431,10 +430,8 @@ async function agentCommandInternal(
             lifecycleGeneration,
             runId,
             workspaceDir,
-            executionSkillsDir: path.join(
+            executionWorkspaceDir:
               sessionEntry?.worktree?.canonicalWorkspaceDir ?? cwd ?? workspaceDir,
-              "skills",
-            ),
             watchSkills,
             isNewSession,
             isSubagentLaneTurn,

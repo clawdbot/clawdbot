@@ -624,10 +624,12 @@ describe("ensureSkillsWatcher", () => {
     expect(shallow.options.depth).toBe(7);
 
     await fs.mkdir(logicalRoot, { recursive: true });
-    refreshModule.ensureSkillsWatcher({
-      workspaceDir: secondWorkspace,
-      executionSkillsDir: logicalRoot,
-    });
+    await fs.symlink(
+      logicalRoot,
+      path.join(secondWorkspace, "skills"),
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    refreshModule.ensureSkillsWatcher({ workspaceDir: secondWorkspace });
     const deeper = watchForSkillRoot(logicalRoot);
     expect(shallow.watcher.close).toHaveBeenCalledOnce();
     expect(deeper.watchRoot).toBe(logicalRoot.replaceAll("\\", "/"));
@@ -779,20 +781,26 @@ describe("ensureSkillsWatcher", () => {
     },
   );
 
-  it.each(["add", "change", "unlink"] as const)(
-    "refreshes the owning snapshot when an execution-directory skill emits %s",
-    async (event) => {
+  it.each(
+    ["skills", ".agents/skills"].flatMap((directory) =>
+      ["add", "change", "unlink"].map((event) => ({ directory, event })),
+    ),
+  )(
+    "refreshes the owning snapshot when execution $directory emits $event",
+    async ({ directory, event }) => {
       vi.useFakeTimers();
       const workspaceDir = fixtureWorkspaceDir;
-      const executionSkillsDir = await createFixtureDirectory("execution-workspace/skills");
+      const executionWorkspaceDir = await createFixtureDirectory("execution-workspace");
+      const skillRoot = path.join(executionWorkspaceDir, directory);
+      await fs.mkdir(skillRoot, { recursive: true });
       const seen: SkillsChangeEvent[] = [];
       refreshModule.registerSkillsChangeListener((change) => {
         seen.push(change);
       });
-      refreshModule.ensureSkillsWatcher({ workspaceDir, executionSkillsDir });
+      refreshModule.ensureSkillsWatcher({ workspaceDir, executionWorkspaceDir });
       const versionBefore = getSkillsSnapshotVersion(workspaceDir);
-      const watched = watchForSkillRoot(executionSkillsDir);
-      const changedPath = path.join(executionSkillsDir, "demo", "SKILL.md");
+      const watched = watchForSkillRoot(skillRoot);
+      const changedPath = path.join(skillRoot, "demo", "SKILL.md");
       watched.watcher.emit("all", event, changedPath);
       await vi.advanceTimersByTimeAsync(250);
 

@@ -59,7 +59,7 @@ it.each([false, true])(
         lifecycleGeneration,
         runId,
         workspaceDir: "/workspace",
-        executionSkillsDir: "/workspace/skills",
+        executionWorkspaceDir: "/workspace",
         watchSkills: false,
         isNewSession: false,
         isSubagentLaneTurn: false,

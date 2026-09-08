@@ -11,10 +11,7 @@ import {
   collectStateDeepFilesystemFindings,
 } from "./audit-extra.async.js";
 
-vi.mock("../skills/loading/workspace-skill-loader.js", async () => {
-  const actual = await vi.importActual<
-    typeof import("../skills/loading/workspace-skill-loader.js")
-  >("../skills/loading/workspace-skill-loader.js");
+vi.mock("../skills/loading/workspace-skill-loader.js", () => {
   const loadWorkspaceSkills = (workspaceDir: string) => {
     const sep = workspaceDir.includes("\\") ? "\\" : "/";
     const baseDir = `${workspaceDir}${sep}skills${sep}evil-skill`;
@@ -32,10 +29,7 @@ vi.mock("../skills/loading/workspace-skill-loader.js", async () => {
     ];
   };
   return {
-    loadMergedWorkspaceSkills: (params: Parameters<typeof actual.loadMergedWorkspaceSkills>[0]) =>
-      loadWorkspaceSkills(params.agentWorkspaceDir),
     loadWorkspaceSkills,
-    normalizeWorkspaceSkillRoots: actual.normalizeWorkspaceSkillRoots,
   };
 });
 

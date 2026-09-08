@@ -15,10 +15,3 @@ export function resolveWorkshopWatchRoots(config?: OpenClawConfig, agentId?: str
     ? [{ path: resolveWorkshopSkillsDir(config, agentId), source: "openclaw-workshop" }]
     : [];
 }
-
-export function createWorkshopWatcherKey(
-  workspaceDir: string,
-  params: { executionSkillsDir?: string; agentId?: string },
-): string {
-  return JSON.stringify([workspaceDir, params.executionSkillsDir, params.agentId]);
-}

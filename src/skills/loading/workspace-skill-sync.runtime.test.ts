@@ -218,6 +218,7 @@ describe("syncWorkspaceSkills", () => {
 
   it.each([
     { source: "execution", snapshot: true },
+    { source: "execution-project", snapshot: true },
     { source: "workspace", snapshot: true },
     { source: "workspace", snapshot: false },
     { source: "workshop", snapshot: true },
@@ -245,11 +246,13 @@ describe("syncWorkspaceSkills", () => {
       ].map(({ agentId, workspace }) => ({
         agentId: source === "workshop" ? agentId : undefined,
         workspaceDir: source === "workspace" ? workspace : agentWorkspace,
-        executionSkillsDir: source === "execution" ? path.join(workspace, "skills") : undefined,
+        executionWorkspaceDir: source.startsWith("execution") ? workspace : undefined,
         skillDir: path.join(
           source === "workshop"
             ? resolveWorkshopSkillsDir(config, agentId)
-            : path.join(workspace, "skills"),
+            : source === "execution-project"
+              ? path.join(workspace, ".agents", "skills")
+              : path.join(workspace, "skills"),
           skillName,
         ),
         description: `${agentId}'s procedure`,
@@ -263,7 +266,7 @@ describe("syncWorkspaceSkills", () => {
         const skillsSnapshot = snapshot
           ? resolveReusableWorkspaceSkillSnapshot({
               workspaceDir: root.workspaceDir,
-              executionSkillsDir: root.executionSkillsDir,
+              executionWorkspaceDir: root.executionWorkspaceDir,
               agentId: root.agentId,
               config,
               skillFilter: [skillName],

@@ -21,7 +21,7 @@ const {
   buildWorkspaceSkillSnapshotMock,
   ensureSkillsWatcherMock,
   getSkillsSnapshotVersionMock,
-  loadMergedWorkspaceSkillsMock,
+  loadWorkspaceSkillsMock,
   shouldRefreshSnapshotForVersionMock,
 } = vi.hoisted(() => ({
   buildWorkspaceSkillSnapshotMock: vi.fn((..._args: unknown[]) => ({
@@ -31,8 +31,8 @@ const {
   })),
   ensureSkillsWatcherMock: vi.fn(),
   getSkillsSnapshotVersionMock: vi.fn(() => 1),
-  loadMergedWorkspaceSkillsMock: vi.fn(
-    (_params: { pluginMetadataSnapshot?: PluginMetadataSnapshot }) => [],
+  loadWorkspaceSkillsMock: vi.fn(
+    (_workspaceDir: string, _params: { pluginMetadataSnapshot?: PluginMetadataSnapshot }) => [],
   ),
   shouldRefreshSnapshotForVersionMock: vi.fn((cached = 0, next = 0) =>
     next === 0 ? cached > 0 : cached < next,
@@ -40,11 +40,7 @@ const {
 }));
 
 vi.mock("../loading/workspace-skill-loader.js", () => ({
-  loadMergedWorkspaceSkills: loadMergedWorkspaceSkillsMock,
-  normalizeWorkspaceSkillRoots: (roots: {
-    agentWorkspaceDir: string;
-    executionSkillsDir?: string;
-  }) => roots,
+  loadWorkspaceSkills: loadWorkspaceSkillsMock,
 }));
 
 vi.mock("../loading/workspace-skill-prompt.js", () => ({
@@ -80,13 +76,13 @@ describe("resolveReusableWorkspaceSkillSnapshot", () => {
 
     resolveReusableWorkspaceSkillSnapshot({
       workspaceDir: TEST_WORKSPACE_DIR,
-      executionSkillsDir: "/tmp/execution/skills",
+      executionWorkspaceDir: "/tmp/execution",
       config: {},
       pluginMetadataSnapshot,
     });
 
-    expect(loadMergedWorkspaceSkillsMock).toHaveBeenCalledOnce();
-    expect(loadMergedWorkspaceSkillsMock.mock.calls[0]?.[0].pluginMetadataSnapshot).toBe(
+    expect(loadWorkspaceSkillsMock).toHaveBeenCalledOnce();
+    expect(loadWorkspaceSkillsMock.mock.calls[0]?.[1].pluginMetadataSnapshot).toBe(
       pluginMetadataSnapshot,
     );
     expect(ensureSkillsWatcherMock).toHaveBeenCalledWith(
