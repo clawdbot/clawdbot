@@ -3,6 +3,7 @@ import type { SessionSystemPromptReport } from "../../../config/sessions/types.j
 import { buildTrajectoryRunMetadata } from "../../../trajectory/metadata.js";
 import { createTrajectoryRuntimeRecorder } from "../../../trajectory/runtime.js";
 import type { AgentSession } from "../../sessions/index.js";
+import { resolveAttemptStreamAuthProfileId } from "./attempt-run-decisions.js";
 import { resolveAttemptTrajectorySessionFile } from "./attempt-transcript-helpers.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
@@ -55,6 +56,10 @@ export async function prepareEmbeddedAttemptTrajectory(input: {
   });
   recorder?.recordEvent("session.started", {
     trigger: attempt.trigger,
+    // Same credential identity the stream transport forwards; the codex app-server
+    // path records it too, and the reasoning-replay authProfileHash is only
+    // verifiable when the plaintext id is present in the trajectory bundle.
+    authProfileId: resolveAttemptStreamAuthProfileId(attempt),
     sessionFile: attempt.sessionFile,
     workspaceDir: input.effectiveWorkspace,
     agentId: input.sessionAgentId,
