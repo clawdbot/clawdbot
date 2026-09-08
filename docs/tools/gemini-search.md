@@ -2,7 +2,7 @@
 summary: "Gemini web search with Google Search grounding"
 read_when:
   - You want to use Gemini for web_search
-  - You need a GEMINI_API_KEY or models.providers.google.apiKey
+  - You need a GEMINI_API_KEY, models.providers.google.apiKey, or GOOGLE_API_KEY
   - You want Google Search grounding
   - Your Gemini gateway requires request headers
 title: "Gemini search"
@@ -21,12 +21,14 @@ citations.
     API key.
   </Step>
   <Step title="Store the key">
-    Set `GEMINI_API_KEY` in the Gateway environment, reuse
-    `models.providers.google.apiKey`, or configure a dedicated web-search key via:
+    Configure a dedicated web-search key via:
 
     ```bash
     openclaw configure --section web
     ```
+
+    Alternatively, set `GEMINI_API_KEY` in the Gateway environment, reuse
+    `models.providers.google.apiKey`, or set `GOOGLE_API_KEY` as a fallback.
 
   </Step>
 </Steps>
@@ -40,7 +42,7 @@ citations.
       google: {
         config: {
           webSearch: {
-            apiKey: "AIza...", // optional if GEMINI_API_KEY or models.providers.google.apiKey is set
+            apiKey: "AIza...", // optional if GEMINI_API_KEY, models.providers.google.apiKey, or GOOGLE_API_KEY is set
             baseUrl: "https://generativelanguage.googleapis.com/v1beta", // optional; falls back to models.providers.google.baseUrl
             headers: {
               "X-Routing-Target": "staging",
@@ -68,7 +70,7 @@ citations.
 
 **Credential precedence:** Gemini web search uses
 `plugins.entries.google.config.webSearch.apiKey` first, then `GEMINI_API_KEY`,
-then `models.providers.google.apiKey`. For base URLs, the dedicated
+then `models.providers.google.apiKey`, and finally `GOOGLE_API_KEY`. For base URLs, the dedicated
 `plugins.entries.google.config.webSearch.baseUrl` wins before
 `models.providers.google.baseUrl`.
 

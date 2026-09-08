@@ -178,13 +178,12 @@ function resolveGeminiTimeRangeFilter(
   };
 }
 
-function resolveGeminiRuntimeApiKey(gemini?: GeminiConfig): string | undefined {
-  return (
-    readConfiguredSecretString(gemini?.apiKey, "plugins.entries.google.config.webSearch.apiKey") ??
-    readProviderEnvValue(["GEMINI_API_KEY"]) ??
-    readConfiguredSecretString(gemini?.providerApiKey, "models.providers.google.apiKey")
-  );
-}
+// Keep configured provider accounts ahead of the newly recognized ambient alias.
+const resolveGeminiRuntimeApiKey = (gemini?: GeminiConfig): string | undefined =>
+  readConfiguredSecretString(gemini?.apiKey, "plugins.entries.google.config.webSearch.apiKey") ??
+  readProviderEnvValue(["GEMINI_API_KEY"]) ??
+  readConfiguredSecretString(gemini?.providerApiKey, "models.providers.google.apiKey") ??
+  readProviderEnvValue(["GOOGLE_API_KEY"]);
 
 function resolveGeminiWebSearchHeaders(gemini?: GeminiConfig): Record<string, string> | undefined {
   if (!isRecord(gemini?.headers)) {
@@ -408,7 +407,7 @@ export async function executeGeminiSearch(
     return {
       error: "missing_gemini_api_key",
       message:
-        "web_search (gemini) needs an API key. Set GEMINI_API_KEY in the Gateway environment, configure plugins.entries.google.config.webSearch.apiKey, or reuse models.providers.google.apiKey. If you do not want to configure a search API key, use web_fetch for a specific URL or the browser tool for interactive pages.",
+        "web_search (gemini) needs an API key. Configure plugins.entries.google.config.webSearch.apiKey, set GEMINI_API_KEY in the Gateway environment, reuse models.providers.google.apiKey, or set GOOGLE_API_KEY as a fallback. If you do not want to configure a search API key, use web_fetch for a specific URL or the browser tool for interactive pages.",
       docs: "https://docs.openclaw.ai/tools/web",
     };
   }

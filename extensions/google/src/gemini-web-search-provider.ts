@@ -121,7 +121,7 @@ export function createGeminiWebSearchProvider(): WebSearchProviderPlugin {
     hint: "Requires Google Gemini API key · Google Search grounding",
     onboardingScopes: ["text-inference"],
     credentialLabel: "Google Gemini API key",
-    envVars: ["GEMINI_API_KEY"],
+    envVars: ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
     placeholder: "AIza...",
     signupUrl: "https://aistudio.google.com/apikey",
     docsUrl: "https://docs.openclaw.ai/tools/web",

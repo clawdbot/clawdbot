@@ -79,7 +79,7 @@ See [Memory](/concepts/memory).
 
 ### Web search tool
 
-`web_search` can incur usage charges depending on the selected provider. Each provider reads its key from an env var first, then `plugins.entries.<id>.config.webSearch.apiKey`:
+`web_search` can incur usage charges depending on the selected provider. Providers read keys from environment variables or `plugins.entries.<id>.config.webSearch.apiKey`; exact precedence varies by provider. Gemini keeps an explicitly configured Google model provider key ahead of `GOOGLE_API_KEY`:
 
 | Provider               | Env var(s)                                                                                                                                                             |
 | ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -87,7 +87,7 @@ See [Memory](/concepts/memory).
 | DuckDuckGo             | key-free; unofficial, HTML-based, no billing                                                                                                                           |
 | Exa                    | `EXA_API_KEY`                                                                                                                                                          |
 | Firecrawl              | `FIRECRAWL_API_KEY`                                                                                                                                                    |
-| Gemini (Google Search) | `GEMINI_API_KEY`                                                                                                                                                       |
+| Gemini (Google Search) | `GEMINI_API_KEY` or `GOOGLE_API_KEY`                                                                                                                                   |
 | Grok (xAI)             | xAI OAuth profile or `XAI_API_KEY`                                                                                                                                     |
 | Kimi (Moonshot)        | `KIMI_API_KEY` or `MOONSHOT_API_KEY`                                                                                                                                   |
 | MiniMax Search         | `MINIMAX_CODE_PLAN_KEY`, `MINIMAX_CODING_API_KEY`, `MINIMAX_OAUTH_TOKEN`, or `MINIMAX_API_KEY`                                                                         |

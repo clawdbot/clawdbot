@@ -107,8 +107,12 @@ afterEach(() => {
 });
 
 describe("google web search provider", () => {
+  it("advertises both supported Google API key environment variables", () => {
+    expect(createGeminiWebSearchProvider().envVars).toEqual(["GEMINI_API_KEY", "GOOGLE_API_KEY"]);
+  });
+
   it("points missing-key users to fetch/browser alternatives", async () => {
-    await withEnvAsync({ GEMINI_API_KEY: undefined }, async () => {
+    await withEnvAsync({ GEMINI_API_KEY: undefined, GOOGLE_API_KEY: undefined }, async () => {
       const provider = createGeminiWebSearchProvider();
       const tool = provider.createTool({ config: {}, searchConfig: {} });
       if (!tool) {
@@ -119,7 +123,7 @@ describe("google web search provider", () => {
         docs: "https://docs.openclaw.ai/tools/web",
         error: "missing_gemini_api_key",
         message:
-          "web_search (gemini) needs an API key. Set GEMINI_API_KEY in the Gateway environment, configure plugins.entries.google.config.webSearch.apiKey, or reuse models.providers.google.apiKey. If you do not want to configure a search API key, use web_fetch for a specific URL or the browser tool for interactive pages.",
+          "web_search (gemini) needs an API key. Configure plugins.entries.google.config.webSearch.apiKey, set GEMINI_API_KEY in the Gateway environment, reuse models.providers.google.apiKey, or set GOOGLE_API_KEY as a fallback. If you do not want to configure a search API key, use web_fetch for a specific URL or the browser tool for interactive pages.",
       });
     });
   });
@@ -639,7 +643,7 @@ describe("google web search provider", () => {
   });
 
   it("reuses the Google model provider key when no web search key or env key is set", async () => {
-    await withEnvAsync({ GEMINI_API_KEY: undefined }, async () => {
+    await withEnvAsync({ GEMINI_API_KEY: undefined, GOOGLE_API_KEY: undefined }, async () => {
       const mockFetch = installGeminiFetch();
       const provider = createGeminiWebSearchProvider();
       const tool = provider.createTool({
@@ -662,8 +666,52 @@ describe("google web search provider", () => {
     });
   });
 
+  it.each([
+    {
+      label: "accepts GOOGLE_API_KEY without another configured credential",
+      geminiApiKey: undefined,
+      googleApiKey: "AIza-google-env-test",
+      providerApiKey: undefined,
+      expectedApiKey: "AIza-google-env-test",
+    },
+    {
+      label: "keeps GEMINI_API_KEY ahead of GOOGLE_API_KEY",
+      geminiApiKey: "AIza-gemini-env-test",
+      googleApiKey: "AIza-google-env-test",
+      providerApiKey: "AIza-provider-test",
+      expectedApiKey: "AIza-gemini-env-test",
+    },
+    {
+      label: "preserves an explicit model provider credential over ambient GOOGLE_API_KEY",
+      geminiApiKey: undefined,
+      googleApiKey: "AIza-google-env-test",
+      providerApiKey: "AIza-provider-test",
+      expectedApiKey: "AIza-provider-test",
+    },
+  ])("$label", async ({ label, geminiApiKey, googleApiKey, providerApiKey, expectedApiKey }) => {
+    await withEnvAsync({ GEMINI_API_KEY: geminiApiKey, GOOGLE_API_KEY: googleApiKey }, async () => {
+      const mockFetch = installGeminiFetch();
+      const provider = createGeminiWebSearchProvider();
+      const config: OpenClawConfig = providerApiKey
+        ? {
+            models: {
+              providers: {
+                google: createGoogleModelProviderConfig({ apiKey: providerApiKey }),
+              },
+            },
+          }
+        : {};
+      const tool = provider.createTool({ config, searchConfig: { provider: "gemini" } });
+
+      await tool?.execute({ query: `OpenClaw ${label}` });
+
+      expect(getFetchHeaders(mockFetch)["x-goog-api-key"]).toBe(expectedApiKey);
+    });
+  });
+
   it("keeps plugin web search keys ahead of env and provider keys", async () => {
-    await withEnvAsync({ GEMINI_API_KEY: "AIza-env-test" }, async () => {
+    const envKeys = { GEMINI_API_KEY: "AIza-env-test", GOOGLE_API_KEY: "AIza-google-env-test" };
+    await withEnvAsync(envKeys, async () => {
       const mockFetch = installGeminiFetch();
       const provider = createGeminiWebSearchProvider();
       const tool = provider.createTool({
