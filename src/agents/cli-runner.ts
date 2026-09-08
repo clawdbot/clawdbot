@@ -47,7 +47,6 @@ import {
   resolveCliSourceReplyMirror,
   settleCliBackendOutcome,
   settleCliPreparationError,
-  settlePreparedCliRun,
 } from "./cli-runner/cli-run-settlement.js";
 import {
   buildCliHookAssistantMessage,
@@ -73,6 +72,7 @@ import {
   loadCliSessionContextEngineMessages,
   loadCliSessionHistoryMessages,
 } from "./cli-runner/session-history.js";
+import type { CliTrajectoryRecorder } from "./cli-runner/trajectory.js";
 import type { PreparedCliRunContext, RunCliAgentParams } from "./cli-runner/types.js";
 import { claudeCliSessionTranscriptHasContent as claudeCliSessionTranscriptHasContentImpl } from "./command/attempt-execution.helpers.js";
 import type { EmbeddedAgentRunResult } from "./embedded-agent-runner.js";
@@ -235,25 +235,24 @@ async function runCliAgentInternal(
     await settleCliPreparationError(error, params);
     throw error;
   }
-  return await settlePreparedCliRun({
-    context,
-    diagnosticLifecycle,
-    run: async () => await runPreparedCliAgent(context, diagnosticLifecycle),
-  });
+  const { settlePreparedCliRunWithTrajectory: settle } = await import("./cli-runner/trajectory.js");
+  return await settle(context, diagnosticLifecycle, runPreparedCliAgent);
 }
 
 /** Runs an already-prepared CLI agent context through hooks and execution. */
 export async function runPreparedCliAgent(
   context: PreparedCliRunContext,
   diagnosticLifecycle?: ClaudeCliRunDiagnosticLifecycle,
+  trajectoryRecorder?: CliTrajectoryRecorder,
 ): Promise<EmbeddedAgentRunResult> {
-  const run = () => runPreparedCliAgentOwned(context, diagnosticLifecycle);
+  const run = () => runPreparedCliAgentOwned(context, diagnosticLifecycle, trajectoryRecorder);
   return await runWithCliHistoryWriter(context.cliHistoryWriter, run);
 }
 
 async function runPreparedCliAgentOwned(
   context: PreparedCliRunContext,
   diagnosticLifecycle?: ClaudeCliRunDiagnosticLifecycle,
+  trajectoryRecorder?: CliTrajectoryRecorder,
 ): Promise<EmbeddedAgentRunResult> {
   const { executePreparedCliRun } = await import("./cli-runner/execute.runtime.js");
   const { params } = context;
@@ -382,11 +381,11 @@ async function runPreparedCliAgentOwned(
             },
           };
     diagnosticLifecycle?.setPhase("send");
-    const output = await executePreparedCliRun(
-      attemptContext,
-      cliSessionIdToUse,
-      diagnosticLifecycle ? { onPhase: diagnosticLifecycle.setPhase } : undefined,
-    );
+    const executeOptions =
+      diagnosticLifecycle || trajectoryRecorder
+        ? { onPhase: diagnosticLifecycle?.setPhase, trajectoryRecorder }
+        : undefined;
+    const output = await executePreparedCliRun(attemptContext, cliSessionIdToUse, executeOptions);
     // Test facades and non-instrumented executors may not signal the boundary.
     diagnosticLifecycle?.setPhase("resolve");
     const sourceReplyMirror = resolveCliSourceReplyMirror({
