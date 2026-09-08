@@ -88,7 +88,7 @@ export class SelectPicker<
 
   private openMenu(last = false) {
     if (this.params.disabled || this.mode !== "closed") {
-      return;
+      return undefined;
     }
     this.mode = this.params.searchable && this.options().length > 8 ? "search" : "compact";
     const choices = this.rows().filter((option) => !option.disabled);

@@ -22,7 +22,7 @@ afterEach(() => document.body.replaceChildren());
 async function mount(overrides: Partial<PickerParams<PickerOption>> = {}) {
   const params: PickerParams<PickerOption> = {
     label: "Model",
-    value: options[0].value,
+    value: "fixture/anchor",
     options,
     searchable: true,
     onChange: vi.fn(),
@@ -126,7 +126,7 @@ describe("renderPicker", () => {
     expect(p.params.onChange).not.toHaveBeenCalled();
     await p.search("");
     expect(p.rows()).toHaveLength(9);
-    expect(p.rows()[0].textContent).toContain("Fixture provider");
+    expect(p.rows()[0]?.textContent).toContain("Fixture provider");
     await p.key("Escape");
     expect(document.activeElement).toBe(p.trigger);
     expect(p.params.onChange).not.toHaveBeenCalled();
@@ -148,8 +148,11 @@ describe("renderPicker", () => {
   it("does not select disabled rows or a row removed by a catalog refresh", async () => {
     const p = await mount();
     await p.open();
-    const removed = p.rows()[1];
-    p.rows()[2].click();
+    const [, removed, disabled] = p.rows();
+    if (!removed || !disabled) {
+      throw new Error("Expected enabled and disabled model rows");
+    }
+    disabled.click();
     expect(p.params.onChange).not.toHaveBeenCalled();
     await p.search("aurora");
     await p.update({
@@ -227,8 +230,8 @@ describe("renderPicker", () => {
       onOpen,
     });
     const labels = p.rows().map((row) => row.querySelector<HTMLElement>(".picker-select__label")!);
-    expect(labels[0].hasAttribute("style")).toBe(false);
-    expect(labels[1].style.fontFamily).toBe("Georgia");
+    expect(labels[0]?.hasAttribute("style")).toBe(false);
+    expect(labels[1]?.style.fontFamily).toBe("Georgia");
     expect(onOpen).not.toHaveBeenCalled();
     await p.open();
     expect(onOpen).toHaveBeenCalledOnce();
