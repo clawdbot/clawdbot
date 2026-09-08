@@ -218,10 +218,10 @@ it.each([
           HOME: home,
           USERPROFILE: home,
           OPENCLAW_HOME: undefined,
-          OPENCLAW_STATE_DIR: path.join(home, packageGap ? ".openclaw" : "state"),
+          OPENCLAW_STATE_DIR: path.join(home, packageGap || nativeRetained ? ".openclaw" : "state"),
           OPENCLAW_CONFIG_PATH: path.join(
             home,
-            packageGap ? ".openclaw" : "state",
+            packageGap || nativeRetained ? ".openclaw" : "state",
             "openclaw.json",
           ),
           OPENCLAW_PROFILE: undefined,

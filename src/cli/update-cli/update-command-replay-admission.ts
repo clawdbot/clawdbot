@@ -20,6 +20,10 @@ import {
   GatewayServiceUpdateOwnershipError,
   isGatewayServiceManagementAllowedForUpdate,
 } from "./update-command-service-plan.js";
+import {
+  isPendingStoppedServiceReplay,
+  verifyStoppedServiceReplayPackage,
+} from "./update-command-stopped-admission.js";
 
 function matchesSource(record: UpdateRecoveryRecord, env: NodeJS.ProcessEnv) {
   return (
@@ -106,7 +110,25 @@ export async function resolveUpdateCommandReplayAdmission(params: {
     ) {
       throw refuse();
     }
-    return { env, found: pending, root: pending.from.root, packageGap: true };
+    return {
+      env,
+      found: pending,
+      root: pending.from.root,
+      packageGap: true,
+      stoppedService: false,
+    };
+  }
+  if (ownershipFailure && pending && isPendingStoppedServiceReplay(pending, callerEnv)) {
+    // This is a pending-only selection, never ordinary service admission. The
+    // executor/source-owned native check must finish before reclaim or effects.
+    await verifyStoppedServiceReplayPackage(pending, params.timeoutMs);
+    return {
+      env: callerEnv,
+      found: pending,
+      root: pending.from.root,
+      packageGap: false,
+      stoppedService: true,
+    };
   }
   if (ownershipFailure) {
     throw ownershipFailure;
@@ -116,5 +138,6 @@ export async function resolveUpdateCommandReplayAdmission(params: {
     found: pending,
     root: params.root,
     packageGap: false,
+    stoppedService: false,
   };
 }

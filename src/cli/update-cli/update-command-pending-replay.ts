@@ -21,6 +21,7 @@ import { resolveUpdateCommandReplayAdmission } from "./update-command-replay-adm
 import { discoverUpdateCommandRecovery } from "./update-command-replay-inspection.js";
 import { restoreUpdateCommandFailure } from "./update-command-restore.js";
 import { resumeTerminalUpdateRetirement } from "./update-command-retirement-retry.js";
+import { claimStoppedServiceReplayAdmission } from "./update-command-stopped-admission.js";
 
 /** Admission continuation, before creating a new history row. Discovery carries
  * evidence only; the new installation executor must exclude the previous actor.
@@ -35,7 +36,8 @@ export async function resumePendingUpdateCommand(params: {
   if (params.opts.dryRun || params.opts.run || params.opts.recovery) {
     return false;
   }
-  const { env, found, root, packageGap } = await resolveUpdateCommandReplayAdmission(params);
+  const { env, found, root, packageGap, stoppedService } =
+    await resolveUpdateCommandReplayAdmission(params);
   if (!found) {
     return false;
   }
@@ -91,7 +93,12 @@ export async function resumePendingUpdateCommand(params: {
         recovery,
       };
       if (!record.restore) {
-        recovery.onRecord(claimUpdateRecovery(record, fence, recovery.options));
+        if (stoppedService) {
+          await claimStoppedServiceReplayAdmission({ recovery, env, timeoutMs: params.timeoutMs });
+          fence.assertCurrent();
+        } else {
+          recovery.onRecord(claimUpdateRecovery(record, fence, recovery.options));
+        }
         if (!record.primaryFailure) {
           recovery.onRecord(
             recordUpdateRecoveryFailure(
