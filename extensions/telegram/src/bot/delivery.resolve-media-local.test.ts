@@ -853,7 +853,7 @@ describe("resolveMedia getFile retry", () => {
     expectResolvedMediaFields(result, "trusted local dot-prefixed document", {
       path: "/tmp/inbound/photo.jpg",
       contentType: "image/jpeg",
-      kind: "document",
+      kind: "image",
     });
   });
 
