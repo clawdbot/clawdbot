@@ -315,6 +315,7 @@ function loadRegistryForMinHostVersionCase(params: {
   env?: NodeJS.ProcessEnv;
 }) {
   return loadPluginManifestRegistryCore({
+    installRecords: {},
     ...(params.env ? { env: params.env } : {}),
     candidates: [
       createPluginCandidate({
@@ -341,6 +342,7 @@ function loadRegistryForPluginApiCase(params: {
   idHint?: string;
 }) {
   return loadPluginManifestRegistryCore({
+    installRecords: {},
     ...(params.env ? { env: params.env } : {}),
     candidates: [
       createPluginCandidate({
@@ -3022,6 +3024,7 @@ describe("loadPluginManifestRegistry", () => {
     writeManifest(dir, { id: "codex", configSchema: { type: "object" } });
 
     const registry = loadPluginManifestRegistryCore({
+      installRecords: {},
       candidates: [
         createPluginCandidate({
           idHint: "codex",

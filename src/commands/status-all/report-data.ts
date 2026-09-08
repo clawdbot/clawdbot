@@ -23,7 +23,7 @@ import {
   type StatusGatewayDiagnosticsResult,
   type resolveStatusServiceSummaries,
 } from "../status-runtime-shared.ts";
-import { formatUpdateRestartStatusValue } from "../status-update-restart.ts";
+import { buildStatusUpdateRows } from "../status-update-restart.ts";
 import { resolveStatusAllConnectionDetails } from "../status.gateway-connection.ts";
 import type { NodeOnlyGatewayInfo } from "../status.node-mode.js";
 import {
@@ -145,6 +145,7 @@ async function resolveStatusAllLocalDiagnosis(params: {
             });
             return buildWorkspaceSkillStatus(defaultWorkspace, {
               config: overview.cfg,
+              agentId: controlPlaneWorkspace.agentId,
               eligibility: {
                 nodeSkills,
                 remote: getRemoteSkillEligibility({
@@ -228,7 +229,7 @@ export async function buildStatusAllReportData(params: {
     configPath,
     summary,
     secretDiagnosticsCount: params.overview.secretDiagnostics.length,
-    updateRestartValue: formatUpdateRestartStatusValue(diagnosis.sentinel?.payload),
+    updateRows: buildStatusUpdateRows(diagnosis.sentinel?.payload),
     agentStatus: params.overview.agentStatus,
     tailscaleBackendState: diagnosis.tailscale.backendState,
   });

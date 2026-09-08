@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { GatewayRecoveryRuntime } from "../../gateway/server-instance-runtime.types.js";
+import { waitForAbortSignal } from "../../infra/abort-signal.js";
 import {
   getAgentEventLifecycleGeneration,
   isAgentEventLifecycleGenerationCurrent,
@@ -281,9 +282,8 @@ export function scheduleRestartAbortedMainSessionRecovery(params: {
   const handledSessionKeys = new Set<string>();
   const lifecycleGeneration = getAgentEventLifecycleGeneration();
   const abortController = new AbortController();
-  let stopped = false;
   const shouldContinue = () =>
-    !stopped &&
+    !abortController.signal.aborted &&
     params.shouldContinue?.() !== false &&
     isAgentEventLifecycleGenerationCurrent(lifecycleGeneration);
   const startupRecoveryCutoffMs = Date.now();
@@ -291,26 +291,30 @@ export function scheduleRestartAbortedMainSessionRecovery(params: {
   const runRecoveryAttempt = async (
     exhaustedTargets: Map<string, ExhaustedRestartRecoveryTarget>,
   ): Promise<RecoveryCounts> => {
-    return await runWithGatewayIndependentRootWorkAdmission(async () => {
-      const cfg = params.getConfig();
-      await markStartupOrphanedMainSessionsForRecovery({
-        cfg,
-        stateDir: params.stateDir,
-        startupCheckedStorePaths,
-        updatedBeforeMs: startupRecoveryCutoffMs,
-      });
-      return await recoverRestartAbortedMainSessions({
-        cfg,
-        onExhaustedTarget: (target) => {
-          exhaustedTargets.set(`${target.storePath}\u0000${target.sessionKey}`, target);
-        },
-        stateDir: params.stateDir,
-        handledSessionKeys,
-        lifecycleGeneration,
-        shouldContinue,
-        gatewayRuntime: params.gatewayRuntime,
-      });
-    }, "main-session:startup-recovery");
+    return await runWithGatewayIndependentRootWorkAdmission(
+      async () => {
+        const cfg = params.getConfig();
+        await markStartupOrphanedMainSessionsForRecovery({
+          cfg,
+          stateDir: params.stateDir,
+          startupCheckedStorePaths,
+          updatedBeforeMs: startupRecoveryCutoffMs,
+        });
+        return await recoverRestartAbortedMainSessions({
+          cfg,
+          onExhaustedTarget: (target) => {
+            exhaustedTargets.set(`${target.storePath}\u0000${target.sessionKey}`, target);
+          },
+          stateDir: params.stateDir,
+          handledSessionKeys,
+          lifecycleGeneration,
+          shouldContinue,
+          gatewayRuntime: params.gatewayRuntime,
+        });
+      },
+      "main-session:startup-recovery",
+      abortController.signal,
+    );
   };
   const reconcileExhaustedTargets = async (targets: Iterable<ExhaustedRestartRecoveryTarget>) => {
     const outcomes = await Promise.allSettled(
@@ -333,24 +337,30 @@ export function scheduleRestartAbortedMainSessionRecovery(params: {
               gatewayRuntime: params.gatewayRuntime,
             }),
           "main-session:target-recovery",
+          abortController.signal,
         ),
       ),
     );
     for (const outcome of outcomes) {
-      if (outcome.status === "rejected") {
+      if (
+        outcome.status === "rejected" &&
+        !(
+          abortController.signal.aborted &&
+          (outcome.reason === abortController.signal.reason ||
+            (outcome.reason instanceof Error &&
+              outcome.reason.cause === abortController.signal.reason))
+        )
+      ) {
         mainSessionRecoveryLog.warn(
           `main-session exhaustion reconciliation failed: ${String(outcome.reason)}`,
         );
       }
     }
   };
-  const cancelled = new Promise<void>((resolve) => {
-    abortController.signal.addEventListener("abort", () => resolve(), { once: true });
-  });
   let exhaustedTargets = new Map<string, ExhaustedRestartRecoveryTarget>();
   const run = Promise.resolve().then(async () => {
     if (params.waitForStart) {
-      await Promise.race([params.waitForStart(), cancelled]);
+      await Promise.race([params.waitForStart(), waitForAbortSignal(abortController.signal)]);
     }
     await runRecoveryRetries({
       initialDelayMs: params.delayMs ?? DEFAULT_RECOVERY_DELAY_MS,
@@ -382,7 +392,6 @@ export function scheduleRestartAbortedMainSessionRecovery(params: {
     stop: async () => {
       // Restart recovery belongs to its startup generation; stale timers must
       // never claim a session after that gateway begins draining.
-      stopped = true;
       abortController.abort();
       await run;
     },

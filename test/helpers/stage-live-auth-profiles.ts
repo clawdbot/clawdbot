@@ -11,8 +11,8 @@ import {
 import {
   ensureAuthProfileStoreWithoutExternalProfiles,
   saveAuthProfileStore,
-  withAuthProfileStoreAgentDir,
-} from "../../src/agents/auth-profiles/store.js";
+} from "../../src/agents/auth-profiles/store-runtime.js";
+import { withAuthProfileStoreAgentDir } from "../../src/agents/auth-profiles/store.js";
 import { DEFAULT_AGENT_ID } from "../../src/routing/session-key.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../src/state/openclaw-agent-db-readonly.js";
 

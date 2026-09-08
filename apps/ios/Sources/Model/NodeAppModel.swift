@@ -1651,10 +1651,7 @@ final class NodeAppModel {
                 paramsJSON: #"{"keys":["ui.accent"]}"#,
                 timeoutSeconds: 8,
                 ifCurrentRoute: sourceRoute)
-            guard let json = try JSONSerialization.jsonObject(with: res) as? [String: Any],
-                  json["status"] as? String == "ok"
-            else { return nil }
-            return ColorHexSupport.profileAccentHex(entries: json["entries"] as? [String: Any])
+            return try GatewayUserPreferences.decodeProfileAccentHex(res)
         } catch {
             return nil
         }
@@ -3296,6 +3293,9 @@ extension NodeAppModel {
                 NSLocalizedDescriptionKey: "The iPhone connection needs operator.admin access.",
             ])
         }
+        guard let route = await self.operatorGateway.currentRoute() else {
+            throw CancellationError()
+        }
         let status = await watchMessagingService.status()
         guard status.supported, status.paired, status.appInstalled else {
             throw NSError(domain: "WatchDirectSetup", code: 3, userInfo: [
@@ -3305,8 +3305,9 @@ extension NodeAppModel {
 
         let response = try await operatorGateway.request(
             method: "device.pair.setupCode",
-            paramsJSON: #"{"includeQr":false,"bootstrapProfile":"node"}"#,
-            timeoutSeconds: 20)
+            paramsJSON: #"{"includeQr":false,"bootstrapProfile":"voice-node"}"#,
+            timeoutSeconds: 20,
+            ifCurrentRoute: route)
         let setup = try JSONDecoder().decode(SetupCodeResponse.self, from: response)
         guard let setupLink = GatewayConnectDeepLink.fromSetupCode(setup.setupCode),
               setupLink.connectionEndpoints.contains(where: \.tls)
@@ -3315,6 +3316,8 @@ extension NodeAppModel {
                 NSLocalizedDescriptionKey: "Direct Apple Watch mode requires a trusted HTTPS Gateway endpoint.",
             ])
         }
+        try Task.checkCancellation()
+        guard await self.operatorGateway.currentRoute() == route else { throw CancellationError() }
         return try await self.watchMessagingService.sendDirectNodeSetup(setupCode: setup.setupCode)
     }
 
@@ -9863,6 +9866,9 @@ extension NodeAppModel {
             self.stageGatewaySetupLink(link)
         case .dashboard:
             self.dashboardNavigationRequestID &+= 1
+        case .gatewayAdd:
+            self.recordShareEvent(
+                "This browser sign-in link is for the OpenClaw Mac app. Use a device pairing link on iOS.")
         }
     }
 

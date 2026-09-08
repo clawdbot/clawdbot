@@ -326,8 +326,11 @@ describe("worker launch capabilities", () => {
       });
       const reconcileWorkspace = vi.fn(
         async (request: Parameters<WorkerTunnelHandle["reconcileWorkspace"]>[0]) => {
+          if (request.source.kind !== "local") {
+            throw new Error("expected a local workspace source");
+          }
           order.push("reconcile");
-          request.journal.commit(MANIFEST_REF);
+          request.source.journal.commit(MANIFEST_REF);
           return {
             manifestRef: MANIFEST_REF,
             changed: false,

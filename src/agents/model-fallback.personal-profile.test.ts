@@ -5,7 +5,7 @@ import {
 } from "../state/user-model-accounts.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { ensureAuthProfileStore } from "./auth-profiles/store.js";
+import { ensureAuthProfileStore } from "./auth-profiles/store-runtime.js";
 import { runWithModelFallback } from "./model-fallback-runner.js";
 
 describe("personal account fallback admission", () => {

@@ -1,6 +1,7 @@
 // Root-owned integration combines the real Gateway with public telemetry plugin surfaces.
 import { once } from "node:events";
 import { performance } from "node:perf_hooks";
+import { setTimeout as delay } from "node:timers/promises";
 import { beforeEach, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 import { createLazyCoreHandlers } from "../src/gateway/server-methods/lazy-core-handlers.js";
@@ -46,7 +47,7 @@ async function sendTraceRequest(ws: WebSocket, id: string, traceparent: string) 
   return await response;
 }
 
-it("exports first ACK before handler settlement through real authenticated WebSocket traffic", async () => {
+it("exports RPC phases and completed event-loop windows through the same Gateway exporters", async () => {
   await withEnvAsync(
     {
       // Scope inherited SDK/proxy options, including credentials, TLS files, and exporter flags.
@@ -126,13 +127,17 @@ it("exports first ACK before handler settlement through real authenticated WebSo
           throw new Error("Gateway test hooks did not create an isolated state directory");
         }
         const events: Extract<DiagnosticEventPayload, { type: "gateway.rpc" }>[] = [];
+        const windows: Extract<DiagnosticEventPayload, { type: "gateway.event_loop.sample" }>[] =
+          [];
         unsubscribe = onTrustedInternalDiagnosticEvent(
           (event) => {
             if (event.type === "gateway.rpc") {
               events.push(event);
+            } else if (event.type === "gateway.event_loop.sample") {
+              windows.push(event);
             }
           },
-          { include: ["gateway.rpc"] },
+          { include: ["gateway.rpc", "gateway.event_loop.sample"] },
         );
         const endpoint = `http://127.0.0.1:${receiverPort}`;
         serviceContext = {
@@ -245,6 +250,45 @@ it("exports first ACK before handler settlement through real authenticated WebSo
           { timeout: 10_000 },
         );
 
+        // The real readiness reader completes the existing monitor's window while
+        // the acknowledged RPC remains held; no synthetic diagnostic event is injected.
+        await delay(1_100);
+        const readiness = await fetch(`http://127.0.0.1:${port}/readyz`, {
+          headers: { Authorization: `Bearer ${token}` },
+          signal: AbortSignal.timeout(10_000),
+        });
+        expect(readiness.status).toBe(200);
+        const health = (await readiness.json()) as {
+          eventLoop?: { intervalMs: number; delayMaxMs: number };
+        };
+        expect(health.eventLoop?.intervalMs).toBeGreaterThanOrEqual(1_000);
+        await waitForDiagnosticEventsDrained();
+        expect(windows.length).toBeGreaterThan(0);
+        expect(windows.every((window) => window.trace === undefined)).toBe(true);
+        const windowMetrics = (body: string) => {
+          const value = (name: string) =>
+            Number(
+              body
+                .split("\n")
+                .find((line) => line.startsWith(`${name} `))
+                ?.split(" ")
+                .at(-1),
+            );
+          return {
+            count: value("openclaw_gateway_event_loop_delay_max_seconds_count"),
+            sum: value("openclaw_gateway_event_loop_delay_max_seconds_sum"),
+            observed: value("openclaw_gateway_event_loop_observed_seconds_total"),
+          };
+        };
+        const completedWindow = windowMetrics(await scrape());
+        expect(completedWindow.count).toBeGreaterThan(0);
+        expect(completedWindow.sum).toBeGreaterThanOrEqual(
+          health.eventLoop!.delayMaxMs / 1000 - 1e-9,
+        );
+        expect(completedWindow.observed).toBeGreaterThanOrEqual(
+          health.eventLoop!.intervalMs / 1000 - 1e-9,
+        );
+
         expect(
           await sendTraceRequest(
             ws,
@@ -331,6 +375,10 @@ it("exports first ACK before handler settlement through real authenticated WebSo
         );
         await waitForDiagnosticEventsDrained();
         const flooded = await scrape();
+        const retainedWindows = windowMetrics(flooded);
+        for (const key of ["count", "sum", "observed"] as const) {
+          expect(retainedWindows[key]).toBeGreaterThanOrEqual(completedWindow[key]);
+        }
         expect(flooded).toContain('openclaw_gateway_rpc_requests_total{method="unknown"} 65');
         expect(unknownSeries(flooded)).toEqual(initialUnknown);
         expect(flooded).not.toMatch(
@@ -364,8 +412,11 @@ it("exports first ACK before handler settlement through real authenticated WebSo
             "openclaw.gateway.rpc.admission_ms",
             "openclaw.gateway.rpc.queue_wait_ms",
             "openclaw.gateway.rpc.outcomes",
+            "openclaw.gateway.event_loop.delay_max_ms",
+            "openclaw.gateway.event_loop.observed_ms",
           ]),
         );
+        expect(receiver.capturedSpans.some((span) => span.name.includes("event_loop"))).toBe(false);
         expect(JSON.stringify(rpcSpans().map((span) => span.attributes))).not.toMatch(
           /private-rpc-proof|held-rpc-proof|concurrent-rpc-proof/,
         );

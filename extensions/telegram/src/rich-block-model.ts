@@ -492,10 +492,6 @@ export function boldRichText(text: string): RichText {
   return { type: "bold", text };
 }
 
-export function codeRichText(text: string): RichText {
-  return { type: "code", text };
-}
-
 export function italicRichText(text: string): RichText {
   return { type: "italic", text };
 }

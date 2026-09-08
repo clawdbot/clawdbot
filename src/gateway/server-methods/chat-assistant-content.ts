@@ -11,6 +11,7 @@ import { renderQrPngDataUrl } from "../../media/qr-image.js";
 import { renderQrTerminal } from "../../media/qr-terminal.js";
 import { stripInlineDirectiveTagsForDelivery } from "../../utils/directive-tags.js";
 import { stripEnvelopeFromMessage } from "../chat-sanitize.js";
+import { isSuppressedControlReplyText } from "../control-reply-text.js";
 import {
   buildManagedMediaFailureBlock,
   createManagedOutgoingMediaBlocks,
@@ -165,7 +166,7 @@ export async function buildAssistantDisplayContentFromReplyPayloads(params: {
         preserveBoundaries: preserveTextBoundaries,
       },
     );
-    if (text) {
+    if (text && !isSuppressedControlReplyText(text)) {
       const previousBlock = content.at(-1);
       if (previousBlock?.type === "text" && typeof previousBlock.text === "string") {
         previousBlock.text = combineNonStreamingReplyParts([previousBlock.text, text]);

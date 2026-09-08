@@ -59,7 +59,7 @@ type SpawnWithFallbackParams = {
     windowsHide?: boolean;
     windowsVerbatimArguments?: boolean;
   };
-  fallbacks?: Array<{ options?: { detached?: boolean } }>;
+  fallbacks?: Array<{ detached?: boolean }>;
 };
 
 export function firstSpawnWithFallbackParams(mock: Mock): SpawnWithFallbackParams {

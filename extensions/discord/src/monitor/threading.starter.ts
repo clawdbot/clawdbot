@@ -16,11 +16,7 @@ import {
   resolveDiscordMessageChannelId,
 } from "./message-channel-info.js";
 import type { DiscordChannelInfo, DiscordChannelInfoClient } from "./message-channel-info.js";
-import { formatDiscordMediaText } from "./message-media.js";
-import {
-  resolveDiscordEmbedText,
-  resolveDiscordForwardedMessagesTextFromSnapshots,
-} from "./message-text.js";
+import { resolveDiscordRawMessageText } from "./message-text.js";
 import { getCachedThreadStarter, setCachedThreadStarter } from "./threading.cache.js";
 import type {
   DiscordMessageEvent,
@@ -203,7 +199,7 @@ function buildDiscordThreadStarterPayload(params: {
   starter: DiscordThreadStarterRestMessage;
   resolveTimestampMs: (value?: string | null) => number | undefined;
 }): DiscordThreadStarter | null {
-  const text = resolveDiscordThreadStarterText(params.starter);
+  const text = resolveDiscordRawMessageText(params.starter);
   if (!text) {
     return null;
   }
@@ -212,18 +208,6 @@ function buildDiscordThreadStarterPayload(params: {
     ...resolveDiscordThreadStarterIdentity(params.starter),
     timestamp: params.resolveTimestampMs(params.starter.timestamp) ?? undefined,
   };
-}
-
-function resolveDiscordThreadStarterText(starter: DiscordThreadStarterRestMessage): string {
-  const content = normalizeOptionalString(starter.content) ?? "";
-  const embedText = resolveDiscordEmbedText(starter.embeds);
-  const forwardedText = resolveDiscordForwardedMessagesTextFromSnapshots(starter.message_snapshots);
-  const text = content || embedText || forwardedText;
-  const mediaText = formatDiscordMediaText({
-    attachments: starter.attachments ?? undefined,
-    stickers: starter.sticker_items ?? undefined,
-  });
-  return [text, mediaText].filter(Boolean).join("\n");
 }
 
 function resolveDiscordThreadStarterIdentity(

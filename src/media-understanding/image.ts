@@ -428,7 +428,7 @@ async function describeImagesWithModelInternal(
   let runtimeValue: string;
   let model: Model | undefined;
   let releaseRuntime: (() => void) | undefined;
-  const resolutionTask = resolveImageRuntime(params);
+  const resolutionTask = resolveImageRuntime({ ...params, signal: requestSignal });
 
   try {
     const resolved = await withImageDescriptionTimeout({
@@ -504,6 +504,7 @@ async function describeImagesWithModelInternal(
       model: requestModel,
       cfg: resolvedRuntimeContext?.cfg ?? params.cfg,
       agentDir: resolvedRuntimeContext?.agentDir ?? params.agentDir,
+      wrapProviderStream: true,
       ...(resolvedRuntimeContext?.workspaceDir
         ? { workspaceDir: resolvedRuntimeContext.workspaceDir }
         : params.workspaceDir

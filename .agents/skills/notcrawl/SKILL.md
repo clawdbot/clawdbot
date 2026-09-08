@@ -9,7 +9,7 @@ metadata:
         - notcrawl
     install:
       - kind: go
-        module: github.com/vincentkoc/notcrawl/cmd/notcrawl@latest
+        module: github.com/openclaw/notcrawl/cmd/notcrawl@latest
         bins:
           - notcrawl
 ---
@@ -33,9 +33,10 @@ notcrawl sync --source api
 Query with bounded reads:
 
 ```bash
-notcrawl search "query"
+notcrawl search --limit 20 "query"
 notcrawl databases
 notcrawl report
+notcrawl export-md  # only when Markdown files need refreshing
 notcrawl sql "select count(*) from pages;"
 ```
 

@@ -681,7 +681,6 @@ describe("package-openclaw-for-docker", () => {
       "scripts/lib/record-shared.mjs",
       "scripts/lib/release-notes-compaction.mjs",
       "scripts/lib/root-package-bundled-plugin-excludes.mjs",
-      "scripts/lib/windows-cmd-helpers-runtime.mts",
       "scripts/lib/windows-taskkill.mjs",
     ];
     try {
@@ -876,6 +875,44 @@ describe("package-openclaw-for-docker", () => {
         timeoutMs: 1234,
       },
     ]);
+  });
+
+  it("keeps root package exclusions in parity with reused private QA build inventory", async () => {
+    const sourceDir = createPackageSourceFixture("openclaw-package-qa-exclusions-source-");
+    const outputDir = tempDirs.make("openclaw-package-qa-exclusions-output-");
+    const { files, version } = JSON.parse(
+      fs.readFileSync(new URL("../../../../package.json", import.meta.url), "utf8"),
+    ) as { files: string[]; version: string };
+    fs.writeFileSync(
+      path.join(sourceDir, "package.json"),
+      JSON.stringify({ name: "openclaw", version, files }),
+    );
+    const publicFiles = ["dist/index.js", "dist/runtime-PUBLIC.mjs"];
+    const privateFiles = ["dist/qa-runtime-PRIVATE.js", "dist/qa-runtime-PRIVATE.mjs"];
+    fs.mkdirSync(path.join(sourceDir, "dist"));
+    for (const file of [...publicFiles, ...privateFiles]) {
+      fs.writeFileSync(path.join(sourceDir, file), "export {};\n");
+    }
+
+    // Reuse prepared outputs, as --skip-build does; npm owns the root files policy.
+    const tarball = await packOpenClawPackageForDocker(sourceDir, outputDir, {
+      ...skipDocsMapLifecycle,
+      prepareChangelog: async () => {},
+      restoreChangelog: async () => {},
+    });
+    const extractDir = tempDirs.make("openclaw-package-qa-exclusions-extract-");
+    await tar.x({ file: tarball, cwd: extractDir });
+    const packedDist = path.join(extractDir, "package/dist");
+    const inventory = JSON.parse(
+      fs.readFileSync(path.join(packedDist, "postinstall-inventory.json"), "utf8"),
+    ) as string[];
+    const packagedFiles = fs
+      .readdirSync(packedDist)
+      .map((file) => `dist/${file}`)
+      .toSorted();
+
+    expect(inventory).toEqual(publicFiles);
+    expect(packagedFiles).toEqual([...publicFiles, "dist/postinstall-inventory.json"].toSorted());
   });
 
   it("omits stale hashed dist output when frozen sources expose only their own build", async () => {

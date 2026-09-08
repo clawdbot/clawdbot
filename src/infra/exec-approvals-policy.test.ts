@@ -30,6 +30,7 @@ let normalizeExecApprovalUnavailableDecisions: typeof import("./exec-approvals.j
 let resolveExecApprovalUnavailableDecisions: typeof import("./exec-approvals.js").resolveExecApprovalUnavailableDecisions;
 let resolveExecApprovalRequestAllowedDecisions: typeof import("./exec-approvals.js").resolveExecApprovalRequestAllowedDecisions;
 let resolveExecModeFromPolicy: typeof import("./exec-approvals.js").resolveExecModeFromPolicy;
+let resolveExactExecModeFromPolicy: typeof import("./exec-approvals.js").resolveExactExecModeFromPolicy;
 let resolveExecModePolicy: typeof import("./exec-approvals.js").resolveExecModePolicy;
 let resolveExecPolicyForMode: typeof import("./exec-approvals.js").resolveExecPolicyForMode;
 
@@ -59,6 +60,7 @@ async function loadActualExecApprovalModules(): Promise<void> {
   resolveExecApprovalRequestAllowedDecisions =
     execApprovals.resolveExecApprovalRequestAllowedDecisions;
   resolveExecModeFromPolicy = execApprovals.resolveExecModeFromPolicy;
+  resolveExactExecModeFromPolicy = execApprovals.resolveExactExecModeFromPolicy;
   resolveExecModePolicy = execApprovals.resolveExecModePolicy;
   resolveExecPolicyForMode = execApprovals.resolveExecPolicyForMode;
 }
@@ -191,6 +193,21 @@ describe("exec approvals policy helpers", () => {
     { security: "full" as const, ask: "always" as const, expected: "ask" as const },
   ])("derives normalized exec mode from legacy policy %j", ({ security, ask, expected }) => {
     expect(resolveExecModeFromPolicy({ security, ask })).toBe(expected);
+  });
+
+  it.each([
+    { security: "deny" as const, ask: "off" as const, expected: "deny" as const },
+    { security: "deny" as const, ask: "on-miss" as const, expected: "deny" as const },
+    { security: "allowlist" as const, ask: "off" as const, expected: "allowlist" as const },
+    { security: "allowlist" as const, ask: "on-miss" as const, expected: "ask" as const },
+    { security: "full" as const, ask: "off" as const, expected: "full" as const },
+    // Only the retired pair can express these postures; migration and hints must not widen them.
+    { security: "full" as const, ask: "on-miss" as const, expected: null },
+    { security: "deny" as const, ask: "always" as const, expected: null },
+    { security: "allowlist" as const, ask: "always" as const, expected: null },
+    { security: "full" as const, ask: "always" as const, expected: null },
+  ])("resolves the exact exec mode for legacy policy %j", ({ security, ask, expected }) => {
+    expect(resolveExactExecModeFromPolicy({ security, ask })).toBe(expected);
   });
 
   it.each([

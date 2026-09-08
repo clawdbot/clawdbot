@@ -7,7 +7,7 @@ import { pathToFileURL } from "node:url";
 
 const require = createRequire(import.meta.url);
 const root = process.env.HOME!;
-// Keep real install discovery inside the fixture; no entrypoint means no completion write.
+// Keep real install discovery inside the fixture; no openclaw.mjs means no completion-cache write.
 await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ name: "openclaw" }));
 const [scenario, ...args] = process.argv.slice(2);
 const sourceUrl = (relative: string) => new URL(relative, import.meta.url).href;
@@ -55,6 +55,12 @@ async function triageCommand() {
 }
 try {
   if (process.argv[2] === 'doctor') await doctorCommand();
+  else if (process.argv.slice(2).join(' ') === 'config validate --json') {
+    if (process.env.OPENCLAW_UPDATE_IN_PROGRESS !== '0') {
+      throw new Error('Config validation must use strict mode');
+    }
+    console.log(JSON.stringify({ valid: true, path: process.env.OPENCLAW_CONFIG_PATH, warnings: [] }));
+  }
   else if (process.argv[2] === 'triage') await triageCommand();
   else throw new Error('Unexpected installed CLI command: ' + process.argv[2]);
 } catch (error) {

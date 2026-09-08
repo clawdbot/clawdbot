@@ -6,6 +6,7 @@ public enum GatewayServerCapability: String, CaseIterable, Sendable {
     case sessionUnreadAckContract = "session-unread-ack-contract"
     case sessionSettingsContract = "session-settings-contract"
     case sessionSettingsCAS = "session-settings-cas-v1"
+    case progressCardAgentScope = "progress-card-agent-scope-v1"
     case systemAgentSetupModelRef = "openclaw-setup-model-ref"
 }
 

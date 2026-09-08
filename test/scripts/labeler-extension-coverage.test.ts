@@ -24,7 +24,6 @@ const extensionDirectories = [
       .flatMap((file) => file.match(/^extensions\/([^/]+)\//)?.[1] ?? []),
   ),
 ].toSorted();
-const extensionDirectorySet = new Set(extensionDirectories);
 const labeler = parse(readFileSync(labelerPath, "utf8")) as Record<string, LabelerRule>;
 const extensionGlobDirectories = Object.values(labeler)
   .flat()
@@ -39,6 +38,10 @@ describe("labeler extension coverage", () => {
   });
 
   it("references only existing extension directories", () => {
-    expect(extensionGlobDirectories.filter((dir) => !extensionDirectorySet.has(dir))).toEqual([]);
+    expect(
+      extensionGlobDirectories.filter(
+        (glob) => !extensionDirectories.some((dir) => path.matchesGlob(dir, glob)),
+      ),
+    ).toEqual([]);
   });
 });

@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use tauri::{
     AppHandle, Emitter, LogicalSize, Manager, PhysicalPosition, State, Webview, WebviewUrl,
-    WebviewWindow, WebviewWindowBuilder, Window,
+    WebviewWindowBuilder, Window,
 };
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
 use uuid::Uuid;
@@ -454,8 +454,9 @@ pub fn quickchat_position(
     (x.clamp(monitor_pos.0, max_x), y.clamp(monitor_pos.1, max_y))
 }
 
-fn ensure_quickchat_window(app: &AppHandle) -> Result<WebviewWindow, String> {
-    if let Some(window) = app.get_webview_window(QUICKCHAT_LABEL) {
+fn ensure_quickchat_window(app: &AppHandle) -> Result<Window, String> {
+    // Widget children make Quick Chat multi-WebView; the native window remains its stable owner.
+    if let Some(window) = app.get_window(QUICKCHAT_LABEL) {
         app.state::<GatewayClient>().activate(app.clone());
         return Ok(window);
     }
@@ -475,7 +476,7 @@ fn ensure_quickchat_window(app: &AppHandle) -> Result<WebviewWindow, String> {
     .build()
     .map_err(|error| format!("Could not create Quick Chat window: {error}"))?;
     app.state::<GatewayClient>().activate(app.clone());
-    Ok(window)
+    Ok(window.as_ref().window())
 }
 
 /// Re-express a window's physical size in a target monitor's physical pixels.
@@ -537,7 +538,7 @@ pub fn request_hide(app: &AppHandle) {
 }
 
 pub fn toggle_quickchat(app: &AppHandle) {
-    if let Some(window) = app.get_webview_window(QUICKCHAT_LABEL) {
+    if let Some(window) = app.get_window(QUICKCHAT_LABEL) {
         if window.is_visible().unwrap_or(false) {
             request_hide(app);
             return;
@@ -554,7 +555,7 @@ fn show_quickchat(app: &AppHandle) -> Result<(), String> {
     window
         .set_size(LogicalSize::new(QUICKCHAT_WIDTH, QUICKCHAT_HEIGHT))
         .map_err(|error| format!("Could not reset Quick Chat size: {error}"))?;
-    position_quickchat(app, &window.as_ref().window())?;
+    position_quickchat(app, &window)?;
     app.state::<QuickChatState>()
         .hide_requested
         .store(false, Ordering::SeqCst);
@@ -580,7 +581,7 @@ fn show_quickchat(app: &AppHandle) -> Result<(), String> {
 
 // Commands take the calling WebView, not WebviewWindow: once widgets are attached the
 // host becomes multi-WebView and Tauri intentionally rejects WebviewWindow command args.
-fn require_quickchat_webview(webview: &Webview) -> Result<(), String> {
+pub(crate) fn require_quickchat_webview(webview: &Webview) -> Result<(), String> {
     if webview.label() == QUICKCHAT_LABEL && webview.window().label() == QUICKCHAT_LABEL {
         Ok(())
     } else {
@@ -756,8 +757,9 @@ pub async fn quickchat_activate(
     require_quickchat_webview(&webview)?;
     state
         .widget_state()
-        .activate(
+        .set_visible(
             &webview.window(),
+            true,
             &session_id,
             renderer_epoch,
             generation,
@@ -779,9 +781,9 @@ pub async fn quickchat_hide(
     let state = app.state::<QuickChatState>();
     state
         .widget_state()
-        .hide(
-            app,
+        .set_visible(
             &window,
+            false,
             &session_id,
             renderer_epoch,
             generation,
@@ -801,7 +803,7 @@ pub async fn quickchat_ready(
     require_quickchat_webview(&webview)?;
     if !state
         .widget_state()
-        .start_session(webview.app_handle(), &session_id, renderer_epoch)
+        .start_session(&webview, &session_id, renderer_epoch)
         .await?
     {
         return Ok(false);

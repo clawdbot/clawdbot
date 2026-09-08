@@ -276,6 +276,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "ui/**"
+          - "extensions/*/browser/**"
+          - "src/plugin-sdk/control-ui*.ts"
+          - "src/gateway/control-ui-plugin-assets*.ts"
+          - "docs/plugins/feature-plugins.md"
           - "src/gateway/control-ui.ts"
           - "src/gateway/control-ui-shared.ts"
           - "packages/gateway-protocol/src/**"

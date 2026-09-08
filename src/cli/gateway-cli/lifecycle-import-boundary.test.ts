@@ -14,11 +14,11 @@ describe("gateway lifecycle hub import boundaries", () => {
   it("re-exports primed symbols from their defining modules instead of facades", () => {
     const hub = readSource("src/cli/gateway-cli/lifecycle.runtime.ts");
 
-    // server-reload-handlers.ts also re-exports server-reload-hot.ts and
-    // server-reload-managed.ts, so routing through it loads the hot-reload and
-    // managed-reloader graphs before the gateway can accept a connection.
-    expect(hub).toContain('from "../../gateway/server-reload-contracts.js"');
-    expect(hub).not.toContain('from "../../gateway/server-reload-handlers.js"');
+    // The generation owner must not pull hot-reload or managed-reloader graphs
+    // into the lifecycle hub before the gateway can accept a connection.
+    expect(hub).toContain('from "../../gateway/server-reload-generation.js"');
+    expect(hub).not.toContain('from "../../gateway/server-reload-hot.js"');
+    expect(hub).not.toContain('from "../../gateway/server-reload-managed.js"');
 
     // Restart marking belongs to server close, after the drain identifies the
     // exact runs that still need abort. The primed run-loop hub must not regain

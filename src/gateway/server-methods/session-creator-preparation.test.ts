@@ -24,6 +24,7 @@ import { withEnvAsync } from "../../test-utils/env.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createGatewayBroadcaster } from "../server-broadcast.js";
 import { createSessionMessageSubscriberRegistry } from "../server-chat-state.js";
+import { GatewayClientRegistry } from "../server/client-registry.js";
 import type { GatewayWsClient } from "../server/ws-types.js";
 import { isSessionCreatorProfile, prepareSessionCreatorProfile } from "../session-creator.js";
 import { canReceiveSessionEvent, invalidateSessionSharingSnapshot } from "../session-sharing.js";
@@ -266,7 +267,7 @@ describe("creator preparation at synchronous fan-out boundaries", () => {
       const recipients = eventClients(callerId);
       let phase = "cold";
       const { broadcast } = createGatewayBroadcaster({
-        clients: new Set(recipients.map(({ client }) => client)),
+        clients: new GatewayClientRegistry(recipients.map(({ client }) => client)),
         canReceiveSessionEvent: (client, eventKeys, agentId, event, payload) => {
           const observer = observeAliasRootProbes(stateDir);
           const allowed = canReceiveSessionEvent({
@@ -315,7 +316,7 @@ describe("creator preparation at synchronous fan-out boundaries", () => {
       let visible = false;
       let phase = "cold-draft";
       const { broadcast } = createGatewayBroadcaster({
-        clients: new Set(recipients.map(({ client }) => client)),
+        clients: new GatewayClientRegistry(recipients.map(({ client }) => client)),
         sessionMessageSubscribers: subscribers,
         canReceiveSessionEvent: (client, sessionKeys, agentId, event, payload) => {
           const observer = observeAliasRootProbes(stateDir);
@@ -376,7 +377,7 @@ describe("creator preparation at synchronous fan-out boundaries", () => {
       let cfg: OpenClawConfig = {};
       const decisions: Array<[string, boolean]> = [];
       const { broadcast } = createGatewayBroadcaster({
-        clients: new Set(recipients.map(({ client }) => client)),
+        clients: new GatewayClientRegistry(recipients.map(({ client }) => client)),
         canReceiveSessionEvent: (client, sessionKeys, agentId, event, payload) => {
           const allowed = canReceiveSessionEvent({
             cfg,

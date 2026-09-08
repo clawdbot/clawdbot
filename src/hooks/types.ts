@@ -52,6 +52,10 @@ export type HookEntry = {
   invocation?: HookInvocationPolicy;
 };
 
+export type HookPolicyEntry = Pick<HookEntry, "metadata"> & {
+  hook: Pick<Hook, "name" | "source">;
+};
+
 export type HookEligibilityContext = {
   remote?: {
     platforms: string[];

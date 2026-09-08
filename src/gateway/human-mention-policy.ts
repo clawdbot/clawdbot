@@ -203,7 +203,7 @@ export function createHumanMentionPolicy(params: {
       }
       return ok({ target, profile: requester.profile });
     }
-    const agent = resolveRequestedSessionAgentId(cfg, `agent:${input.agentId}:main`, input.agentId);
+    const agent = resolveRequestedSessionAgentId(cfg, undefined, input.agentId);
     if (!agent.ok) {
       return err(agent.error);
     }

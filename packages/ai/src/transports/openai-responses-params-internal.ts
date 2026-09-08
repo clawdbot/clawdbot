@@ -319,7 +319,8 @@ export function buildOpenAIResponsesParams(
   };
   const effectiveMaxTokens = options?.maxTokens || model.maxTokens;
   if (effectiveMaxTokens) {
-    params.max_output_tokens = effectiveMaxTokens;
+    // Responses rejects output budgets below 16 tokens.
+    params.max_output_tokens = Math.max(effectiveMaxTokens, 16);
   }
   if (options?.temperature !== undefined && supportsOpenAITemperature(model)) {
     params.temperature = options.temperature;

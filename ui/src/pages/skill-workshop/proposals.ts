@@ -1,9 +1,11 @@
 // Control UI controller manages skill workshop gateway state.
 import { readSkillProposalRevisionChangedError } from "@openclaw/gateway-protocol";
+import { stripFrontmatterBlock } from "../../../../packages/markdown-core/src/frontmatter.js";
 import type { AgentSelectionCapability } from "../../app/agent-selection.ts";
 import type { ApplicationGateway } from "../../app/context.ts";
 import type { SkillWorkshopRevisionAdmissionOutcome } from "../../app/skill-workshop-revision-admissions.ts";
 import { t } from "../../i18n/index.ts";
+import { computeLineDiff } from "../../lib/chat/tool-call-diff.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import {
@@ -12,11 +14,13 @@ import {
   resolveUiSelectedGlobalAgentId,
 } from "../../lib/sessions/session-key.ts";
 import {
-  findSkillWorkshopAppliedPredecessor,
+  filterSkillWorkshopProposals,
+  changedSkillWorkshopVersion,
   type SkillWorkshopAction,
+  type SkillWorkshopInstalledSkill,
+  type SkillWorkshopInstalledSelection,
   type SkillWorkshopProposal,
   type SkillWorkshopProposalDecision,
-  type SkillWorkshopProposalStatus,
 } from "../../lib/skill-workshop/index.ts";
 import {
   parseDateMs,
@@ -47,10 +51,10 @@ function skillWorkshopAgentParams(context: SkillWorkshopContext): { agentId: str
   const sessionAgentId = parseAgentSessionKey(snapshot.sessionKey)?.agentId;
   const selectedAgentId = context.agentSelection.state.selectedId;
   return {
-    agentId: sessionAgentId
-      ? normalizeAgentId(sessionAgentId)
-      : selectedAgentId
-        ? normalizeAgentId(selectedAgentId)
+    agentId: selectedAgentId
+      ? normalizeAgentId(selectedAgentId)
+      : sessionAgentId
+        ? normalizeAgentId(sessionAgentId)
         : resolveUiSelectedGlobalAgentId(snapshot),
   };
 }
@@ -72,13 +76,14 @@ function resetSkillWorkshopAgentScope(state: SkillWorkshopState, agentId: string
   state.skillWorkshopAgentId = agentId;
   state.skillWorkshopLoaded = false;
   state.skillWorkshopProposals = [];
+  state.skillWorkshopInstalledSkills = [];
+  state.skillWorkshopInstalledName = null;
   state.skillWorkshopSelectedKey = null;
   state.skillWorkshopInspectingKey = null;
   state.skillWorkshopRevisionKey = null;
   state.skillWorkshopRevisionDraft = "";
   state.skillWorkshopFilePreviewKey = null;
   state.skillWorkshopFilePreviewQuery = "";
-  state.skillWorkshopAppliedDiffMode = "changes";
   state.skillWorkshopHistoryScan = createSkillWorkshopHistoryScanState();
   inspectRequestsByState.delete(state);
   selectionRequestByState.delete(state);
@@ -131,26 +136,116 @@ function showActionNotice(
   }, SKILL_WORKSHOP_NOTICE_MS);
 }
 
-export function countSkillWorkshopProposals(
-  proposals: SkillWorkshopProposal[],
-): Record<"all" | SkillWorkshopProposalStatus, number> {
-  // Applied renders one row per skill, so its tab count is grouped skills;
-  // every other status stays a per-proposal count.
-  const appliedSkills = new Set<string>();
-  const counts = proposals.reduce(
-    (accumulated, proposal) => {
-      accumulated.all += 1;
-      if (proposal.status === "applied") {
-        appliedSkills.add(proposal.slug);
-      } else {
-        accumulated[proposal.status] += 1;
-      }
-      return accumulated;
-    },
-    { all: 0, pending: 0, applied: 0, rejected: 0, quarantined: 0, stale: 0 },
+export async function selectSkillWorkshopInstalledSkill(
+  state: SkillWorkshopState,
+  context: SkillWorkshopContext,
+  name: string,
+  options?: { force?: boolean },
+): Promise<void> {
+  const skill = state.skillWorkshopInstalledSkills.find((entry) => entry.name === name);
+  if (!skill) {
+    return;
+  }
+  state.skillWorkshopInstalledName = name;
+  await loadInstalledSkill(state, context, skill, options);
+}
+
+async function loadInstalledSkill(
+  state: SkillWorkshopState,
+  context: SkillWorkshopContext,
+  skill: SkillWorkshopInstalledSkill,
+  options?: { force?: boolean },
+): Promise<void> {
+  const { client, phase } = context.gateway.snapshot;
+  const agentId = loadedSkillWorkshopAgentParams(state, context).agentId;
+  if (!client || phase !== "connected" || (skill.read && !options?.force)) {
+    return;
+  }
+  // Each inventory row owns its read. Replacing inventory or retrying revokes old results.
+  const loading = { status: "loading", name: skill.name } as const;
+  skill.read = loading;
+  const read = await readSkillWorkshopInstalledSkill(
+    client,
+    agentId,
+    skill.name,
+    state.skillWorkshopProposals,
   );
-  counts.applied = appliedSkills.size;
-  return counts;
+  if (
+    state.skillWorkshopInstalledSkills.includes(skill) &&
+    skill.read === loading &&
+    state.skillWorkshopAgentId === agentId &&
+    skillWorkshopAgentParams(context).agentId === agentId &&
+    context.gateway.snapshot.client === client
+  ) {
+    skill.read = read;
+  }
+}
+
+async function readSkillWorkshopInstalledSkill(
+  client: NonNullable<ApplicationGateway["snapshot"]["client"]>,
+  agentId: string,
+  name: string,
+  proposals: SkillWorkshopProposal[],
+): Promise<SkillWorkshopInstalledSelection> {
+  try {
+    const result = await client.request<SkillWorkshopInstalledSkill & { content: string }>(
+      "skills.workshop.read",
+      { agentId, name },
+    );
+    const saved = await Promise.allSettled(
+      proposals
+        .filter((proposal) => proposal.status === "applied" && proposal.slug === result.skillKey)
+        .map((proposal) =>
+          client.request<SkillProposalInspectResult>("skills.proposals.inspect", {
+            agentId,
+            proposalId: proposal.key,
+          }),
+        ),
+    );
+    let savedVersionsError: string | undefined;
+    // Same-named workspace proposals are not versions of this agent's installed skill.
+    // Only compare retained, applied Workshop bodies; never infer intermediate edits.
+    const savedVersions = saved
+      .flatMap((read) => {
+        if (read.status === "rejected") {
+          savedVersionsError = formatUiError(read.reason);
+          return [];
+        }
+        const { record, content } = read.value;
+        return record.status === "applied" &&
+          record.target.source === "openclaw-workshop" &&
+          record.target.skillKey === result.skillKey &&
+          (record.kind === "create" ? record.target.skillKey : record.target.skillName) ===
+            result.name
+          ? [
+              {
+                key: record.id,
+                appliedAt: record.appliedAt,
+                // Draft headers include lifecycle fields that are not skill instructions.
+                diff: computeLineDiff(
+                  stripFrontmatterBlock(content),
+                  stripFrontmatterBlock(result.content),
+                  { compactUnchanged: true },
+                ),
+              },
+            ]
+          : [];
+      })
+      .toSorted((left, right) => (right.appliedAt ?? "").localeCompare(left.appliedAt ?? ""));
+    return {
+      status: "ready",
+      name,
+      content: result.content,
+      savedVersions,
+      savedVersionsError,
+    };
+  } catch (error) {
+    return {
+      status: "error",
+      name,
+      error: formatUiError(error),
+    };
+  }
 }
 
 export async function loadSkillWorkshopProposals(
@@ -189,9 +284,27 @@ export async function loadSkillWorkshopProposals(
       .toSorted((a, b) => parseDateMs(b.updatedAt) - parseDateMs(a.updatedAt))
       .map((entry) => proposalFromManifest(entry, previousByKey.get(entry.id)));
     state.skillWorkshopProposals = proposals;
+    state.skillWorkshopInstalledSkills = result.installedSkills;
+    if (!result.installedSkills.some((skill) => skill.name === state.skillWorkshopInstalledName)) {
+      state.skillWorkshopInstalledName = null;
+    }
     state.skillWorkshopLoaded = true;
-    if (!proposals.some((proposal) => proposal.key === state.skillWorkshopSelectedKey)) {
-      state.skillWorkshopSelectedKey = proposals[0]?.key ?? null;
+    if (state.skillWorkshopMode === "skills") {
+      const installed = state.skillWorkshopInstalledSkills;
+      await Promise.all(installed.map((skill) => loadInstalledSkill(state, context, skill)));
+      if (state.skillWorkshopInstalledSkills === installed) {
+        state.skillWorkshopInstalledName ??=
+          (installed.find((skill) => changedSkillWorkshopVersion(skill.read)) ?? installed[0])
+            ?.name ?? null;
+      }
+      return;
+    }
+    const visibleProposals = filterSkillWorkshopProposals(proposals, state.skillWorkshopQuery);
+    const selectedProposal = proposals.find(
+      (proposal) => proposal.key === state.skillWorkshopSelectedKey,
+    );
+    if (!visibleProposals.some((proposal) => proposal.key === selectedProposal?.key)) {
+      state.skillWorkshopSelectedKey = visibleProposals[0]?.key ?? null;
       // Only a refresh that actually reassigns the pane owns the selection
       // fence; otherwise a background reload would silence an in-flight click.
       if (state.skillWorkshopSelectedKey) {
@@ -204,15 +317,12 @@ export async function loadSkillWorkshopProposals(
       if (!selectionRequestByState.has(state)) {
         markSkillWorkshopSelectionRequest(state, selectedKey);
       }
-      const selectedLoaded = await loadSkillWorkshopProposalDetail(state, context, selectedKey);
-      if (selectedLoaded) {
-        // The Applied tab can be opened without a fresh click, so the predecessor
-        // has to be warmed here too or the diff never has a baseline.
-        await loadSkillWorkshopPredecessorBody(state, context, selectedKey);
-      }
+      await loadSkillWorkshopProposalDetail(state, context, selectedKey);
     }
   } catch (err) {
-    state.skillWorkshopError = formatUiError(err);
+    if (skillWorkshopAgentParams(context).agentId === requestAgentId) {
+      state.skillWorkshopError = formatUiError(err);
+    }
   } finally {
     state.skillWorkshopLoading = false;
     if (skillWorkshopAgentParams(context).agentId !== requestAgentId) {
@@ -223,7 +333,7 @@ export async function loadSkillWorkshopProposals(
 
 type SkillWorkshopGatewayClient = NonNullable<ApplicationGateway["snapshot"]["client"]>;
 
-// Rapid history clicks overlap: each inspect awaits the Gateway, so a slower
+// Rapid suggestion clicks overlap: each inspect awaits the Gateway, so a slower
 // earlier request must neither re-issue the same call nor publish its selection
 // or error after a newer click won the pane. Both fences are keyed on the live
 // state object so nothing reaches the persisted route data.
@@ -274,7 +384,7 @@ async function inspectSkillWorkshopProposal(
     return true;
   } catch (err) {
     // Only the revision the operator is waiting on may publish an error; a
-    // superseded click or a background predecessor fetch stays quiet.
+    // superseded click stays quiet.
     if (
       state.skillWorkshopAgentId === requestAgentId &&
       isLatestSkillWorkshopSelection(state, proposalId)
@@ -327,17 +437,6 @@ function loadSkillWorkshopProposalDetail(
   return request;
 }
 
-function loadSkillWorkshopPredecessorBody(
-  state: SkillWorkshopState,
-  context: SkillWorkshopContext,
-  proposalId: string,
-): Promise<boolean> {
-  const previous = findSkillWorkshopAppliedPredecessor(state.skillWorkshopProposals, proposalId);
-  return previous && !previous.bodyLoaded
-    ? loadSkillWorkshopProposalDetail(state, context, previous.key)
-    : Promise.resolve(false);
-}
-
 export async function selectSkillWorkshopProposal(
   state: SkillWorkshopState,
   context: SkillWorkshopContext,
@@ -352,8 +451,6 @@ export async function selectSkillWorkshopProposal(
     }
   }
   state.skillWorkshopSelectedKey = proposalId;
-  state.skillWorkshopAppliedDiffMode = "changes";
-  await loadSkillWorkshopPredecessorBody(state, context, proposalId);
 }
 
 async function refreshAfterMutation(

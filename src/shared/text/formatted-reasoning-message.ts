@@ -3,20 +3,22 @@ import { stripReasoningTagsFromText } from "./reasoning-tags.js";
 
 /** Strip provider-formatted Reasoning/Thinking preambles from visible text. */
 export function stripFormattedReasoningMessage(text: string): string {
-  const stripped = stripReasoningTagsFromText(text);
-  const firstNewline = stripped.indexOf("\n");
-  const prefix = (firstNewline === -1 ? stripped : stripped.slice(0, firstNewline)).trim();
+  const stripped = stripReasoningTagsFromText(text, { trim: "none" });
+  // Removed tags may leave blank lines before a preamble; untouched text keeps its boundary.
+  const preamble = stripped === text ? stripped : stripped.trimStart();
+  const firstNewline = preamble.indexOf("\n");
+  const prefix = (firstNewline === -1 ? preamble : preamble.slice(0, firstNewline)).trim();
   const thinking = /^Thinking\.{0,3}$/u.test(prefix);
   if (prefix !== "Reasoning:" && !thinking) {
-    return stripped;
+    return preamble ? stripped : "";
   }
 
-  let offset = firstNewline === -1 ? stripped.length : firstNewline + 1;
+  let offset = firstNewline === -1 ? preamble.length : firstNewline + 1;
   let hasSummary = false;
-  while (offset < stripped.length) {
-    const newline = stripped.indexOf("\n", offset);
-    const end = newline === -1 ? stripped.length : newline;
-    const line = stripped.slice(offset, end).trim();
+  while (offset < preamble.length) {
+    const newline = preamble.indexOf("\n", offset);
+    const end = newline === -1 ? preamble.length : newline;
+    const line = preamble.slice(offset, end).trim();
     const isSummary = line.length >= 2 && line.startsWith("_") && line.endsWith("_");
     if (line && !isSummary) {
       break;
@@ -24,7 +26,9 @@ export function stripFormattedReasoningMessage(text: string): string {
     hasSummary ||= isSummary;
     offset = end + 1;
   }
-  // Thinking needs an italic summary. Normalize CRLF only when removing a preamble;
-  // ordinary messages retain their original bytes, including bare carriage returns.
-  return thinking && !hasSummary ? stripped : stripped.slice(offset).replace(/\r\n/g, "\n").trim();
+  // Thinking needs an italic summary. Normalize CRLF and remove trailing newlines
+  // only after a preamble; preserve the remaining body indentation.
+  return thinking && !hasSummary
+    ? stripped
+    : preamble.slice(offset).replace(/\r\n/g, "\n").replace(/\n+$/u, "");
 }

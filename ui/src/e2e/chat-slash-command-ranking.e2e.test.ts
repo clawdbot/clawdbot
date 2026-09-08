@@ -1,8 +1,10 @@
 // Control UI E2E tests cover slash command relevance and keyboard ordering.
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { text } from "node:stream/consumers";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -179,10 +181,10 @@ suite.define(() => {
           .toContain("/pair-device");
 
         if (artifactDir) {
-          await page.screenshot({
-            path: path.join(artifactDir, "slash-command-ranking-selected.png"),
-            fullPage: true,
-          });
+          await writeFile(
+            path.join(artifactDir, "slash-command-ranking-selected.png"),
+            await takeControlUiViewportScreenshot(page, page.locator(".shell"), [picker]),
+          );
         }
 
         await composer.press("Enter");

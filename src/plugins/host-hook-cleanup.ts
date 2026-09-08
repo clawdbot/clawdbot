@@ -19,7 +19,6 @@ import type { PluginRegistry } from "./registry-types.js";
 import { getActivePluginRegistry } from "./runtime.js";
 import { normalizeSessionEntrySlotKey } from "./session-entry-slot-keys.js";
 
-/** Failure captured while running plugin cleanup hooks. */
 /** Failure captured while running one plugin cleanup callback. */
 type PluginHostCleanupFailure = {
   pluginId: string;
@@ -187,7 +186,6 @@ function collectAgentHarnessIds(
 }
 
 /** Runs persistent and in-memory cleanup for a plugin, session, or host lifecycle event. */
-/** Runs cleanup callbacks for one plugin and returns failures instead of throwing. */
 export async function runPluginHostCleanup(params: {
   cfg?: OpenClawConfig;
   registry?: PluginRegistry | null;

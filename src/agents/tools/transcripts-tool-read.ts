@@ -1,14 +1,15 @@
 import type { TranscriptSessionSummary } from "../../../packages/gateway-protocol/src/schema/transcripts.js";
 import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
+import {
+  isTranscriptSelectionCurrent,
+  isTranscriptSessionActive,
+  resolveSourceProvider,
+  type TranscriptsRuntimeContext,
+} from "../../transcripts/capture.js";
 import { projectTranscriptSession, readTranscriptNotes } from "../../transcripts/read.js";
 import type { TranscriptsStore } from "../../transcripts/store.js";
 import { truncateUtf16Safe } from "../../utils.js";
-import {
-  isTranscriptSessionActive,
-  resolveSourceProvider,
-  toolText,
-  type TranscriptsRuntimeContext,
-} from "./transcripts-tool-runtime.js";
+import { toolText } from "./transcripts-tool-result.js";
 import {
   canAccessTranscriptSession,
   resolveTranscriptToolSession,
@@ -78,6 +79,16 @@ export async function showPastTranscript(params: ReadParams) {
   }
   const notes = await readTranscriptNotes(store, selection.session);
   ctx.assertCallerActive?.();
+  if (!isTranscriptSelectionCurrent(selection, store)) {
+    const text = "Transcript changed while reading. Retry show to read the current notes.";
+    return toolText(text, {
+      text,
+      sessionId: selection.session.sessionId,
+      selector: selection.selector,
+      skipped: true,
+      retryable: true,
+    });
+  }
   const session = projectTranscriptSession(
     { ...entry, session: selection.session },
     isTranscriptSessionActive(selection.session),
@@ -104,6 +115,7 @@ export async function showPastTranscript(params: ReadParams) {
   return {
     content: [{ type: "text" as const, text }],
     details: {
+      text,
       selector,
       sessionId,
       title,

@@ -49,6 +49,7 @@ import {
   type ProviderAuth,
 } from "./common.ts";
 import { runWindowsBackgroundPowerShell } from "./guest-transports.ts";
+import { resolveMacosPrlctlInvocation, runMacosHostCommand } from "./macos-exec.ts";
 import { linuxUpdateScript, macosUpdateScript, windowsUpdateScript } from "./npm-update-scripts.ts";
 import { ensureVmRunning, resolveMacosVmName, resolveUbuntuVmName } from "./parallels-vm.ts";
 import { runParallelsPrerequisiteEval } from "./provider-auth-prerequisite.mjs";
@@ -1176,9 +1177,9 @@ export class NpmUpdateSmoke {
       this.macosVm,
       script,
       "openclaw-parallels-npm-update-macos",
-      { execArgs: macosUpdateExec.execArgs, mode: "700" },
+      { execArgs: macosUpdateExec.execArgs, mode: "700", runCommand: runMacosHostCommand },
     );
-    run(
+    runMacosHostCommand(
       "prlctl",
       ["exec", this.macosVm, "/usr/sbin/chown", macosUpdateExec.ownerUser, scriptPath],
       {
@@ -1186,9 +1187,14 @@ export class NpmUpdateSmoke {
       },
     );
     try {
-      const status = await this.runStreamingToJobLog(
+      const invocation = resolveMacosPrlctlInvocation(
         "prlctl",
         ["exec", this.macosVm, ...macosUpdateExec.execArgs, "/bin/bash", scriptPath],
+        timeoutMs,
+      );
+      const status = await this.runStreamingToJobLog(
+        invocation.command,
+        invocation.args,
         timeoutMs,
         ctx,
       );
@@ -1196,18 +1202,22 @@ export class NpmUpdateSmoke {
         throw new Error(`macOS update command failed with exit code ${status}`);
       }
     } finally {
-      this.removeGuestScript(this.macosVm, scriptPath);
+      this.removeGuestScript(this.macosVm, scriptPath, runMacosHostCommand);
     }
   }
 
   private resolveMacosUpdateExec(ctx: UpdateJobContext): MacosUpdateExec {
     const guestPath =
       "/opt/homebrew/bin:/opt/homebrew/opt/node/bin:/usr/local/bin:/usr/local/sbin:/opt/homebrew/sbin:/usr/bin:/bin:/usr/sbin:/sbin";
-    const currentUser = run("prlctl", ["exec", this.macosVm, "--current-user", "whoami"], {
-      check: false,
-      quiet: true,
-      timeoutMs: 45_000,
-    });
+    const currentUser = runMacosHostCommand(
+      "prlctl",
+      ["exec", this.macosVm, "--current-user", "whoami"],
+      {
+        check: false,
+        quiet: true,
+        timeoutMs: 45_000,
+      },
+    );
     const user = currentUser.stdout.trim().replaceAll("\r", "").split("\n").at(-1) ?? "";
     if (currentUser.status === 0 && /^[A-Za-z0-9._-]+$/.test(user)) {
       return {
@@ -1244,11 +1254,15 @@ export class NpmUpdateSmoke {
 
   private resolveMacosDesktopUser(): string {
     const consoleUser =
-      run("prlctl", ["exec", this.macosVm, "/usr/bin/stat", "-f", "%Su", "/dev/console"], {
-        check: false,
-        quiet: true,
-        timeoutMs: 30_000,
-      })
+      runMacosHostCommand(
+        "prlctl",
+        ["exec", this.macosVm, "/usr/bin/stat", "-f", "%Su", "/dev/console"],
+        {
+          check: false,
+          quiet: true,
+          timeoutMs: 30_000,
+        },
+      )
         .stdout.trim()
         .replaceAll("\r", "")
         .split("\n")
@@ -1260,7 +1274,7 @@ export class NpmUpdateSmoke {
     ) {
       return consoleUser;
     }
-    const users = run(
+    const users = runMacosHostCommand(
       "prlctl",
       ["exec", this.macosVm, "/usr/bin/dscl", ".", "-list", "/Users", "NFSHomeDirectory"],
       { check: false, quiet: true, timeoutMs: 30_000 },
@@ -1282,7 +1296,7 @@ export class NpmUpdateSmoke {
   }
 
   private resolveMacosDesktopHome(user: string): string {
-    const output = run(
+    const output = runMacosHostCommand(
       "prlctl",
       ["exec", this.macosVm, "/usr/bin/dscl", ".", "-read", `/Users/${user}`, "NFSHomeDirectory"],
       { check: false, quiet: true, timeoutMs: 30_000 },
@@ -1344,12 +1358,13 @@ export class NpmUpdateSmoke {
     vm: string,
     script: string,
     prefix: string,
-    options: { execArgs?: string[]; mode?: "700" | "755" } = {},
+    options: { execArgs?: string[]; mode?: "700" | "755"; runCommand?: typeof run } = {},
   ): string {
+    const runCommand = options.runCommand ?? run;
     const execArgs = options.execArgs ?? [];
     const mode = options.mode ?? "755";
     const scriptPath = `/tmp/${prefix}-${randomUUID()}.sh`;
-    const write = run("prlctl", ["exec", vm, ...execArgs, "/usr/bin/tee", scriptPath], {
+    const write = runCommand("prlctl", ["exec", vm, ...execArgs, "/usr/bin/tee", scriptPath], {
       check: false,
       input: script,
       quiet: true,
@@ -1359,24 +1374,28 @@ export class NpmUpdateSmoke {
       throw new Error(`failed to write guest script ${scriptPath}: ${write.stderr.trim()}`);
     }
     try {
-      const chmod = run("prlctl", ["exec", vm, ...execArgs, "/bin/chmod", mode, scriptPath], {
-        check: false,
-        quiet: true,
-        timeoutMs: 30_000,
-      });
+      const chmod = runCommand(
+        "prlctl",
+        ["exec", vm, ...execArgs, "/bin/chmod", mode, scriptPath],
+        {
+          check: false,
+          quiet: true,
+          timeoutMs: 30_000,
+        },
+      );
       if (chmod.status !== 0) {
         throw new Error(`failed to chmod guest script ${scriptPath}: ${chmod.stderr.trim()}`);
       }
     } catch (error) {
-      this.removeGuestScript(vm, scriptPath);
+      this.removeGuestScript(vm, scriptPath, runCommand);
       throw error;
     }
     return scriptPath;
   }
 
-  private removeGuestScript(vm: string, scriptPath: string): void {
+  private removeGuestScript(vm: string, scriptPath: string, runCommand: typeof run = run): void {
     try {
-      run("prlctl", ["exec", vm, "/bin/rm", "-f", scriptPath], {
+      runCommand("prlctl", ["exec", vm, "/bin/rm", "-f", scriptPath], {
         check: false,
         quiet: true,
         timeoutMs: 30_000,

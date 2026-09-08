@@ -15,7 +15,6 @@ import {
   terminalizeBoundDeliveryQueueEntry,
   type DeliveryQueueDatabase,
   type DeliveryQueueReadMode,
-  type DeliveryQueueSqliteRow,
   type UpsertDeliveryQueueEntryParams,
   upsertBoundDeliveryQueueEntryInDatabase,
 } from "./delivery-queue-sqlite-bound.js";
@@ -36,13 +35,7 @@ export type {
 
 // Generic durable delivery queue storage shared by session and outbound queues.
 // Queue-specific wrappers own payload shape; this layer owns SQLite state.
-type QueueStatus = "pending" | "failed" | "completed";
-type DeliveryQueueStatusRow = {
-  queue_name: string;
-  status?: QueueStatus;
-  entry_json: string;
-  recovery_state: string | null;
-};
+type QueueStatus = NonNullable<UpsertDeliveryQueueEntryParams["status"]>;
 
 type TerminalizePendingDeliveryQueueEntryResult =
   | { status: "terminalized"; retained: boolean }
@@ -92,20 +85,21 @@ export function expireStagingAndLoadDeliveryQueueEntries(params: {
   const snapshot = runSqliteImmediateTransactionSync(
     database.db,
     () => {
-      // sqlite-allow-raw: Expiry must share the write snapshot with both ownership reads.
-      database.db
-        .prepare(
-          `DELETE FROM delivery_queue_entries
-            WHERE queue_name = ? AND status = 'pending' AND enqueued_at <= ?`,
-        )
-        .run(params.stagingQueueName, params.expireBeforeMs);
+      executeSqliteQuerySync(
+        database.db,
+        getNodeSqliteKysely<DeliveryQueueDatabase>(database.db)
+          .deleteFrom("delivery_queue_entries")
+          .where("queue_name", "=", params.stagingQueueName)
+          .where("status", "=", "pending")
+          .where("enqueued_at", "<=", params.expireBeforeMs),
+      );
       const read = (queueNames: readonly string[]) =>
         executeSqliteQuerySync(
           database.db,
           deliveryQueueEntriesQuery(database, queueNames, "unfinished")
             .orderBy("enqueued_at", "asc")
             .orderBy("id", "asc"),
-        ).rows as DeliveryQueueSqliteRow[];
+        ).rows;
       return {
         entryRows: read(params.queueNames),
         stagingRows: read([params.stagingQueueName]),
@@ -175,14 +169,23 @@ export function getDeliveryQueueEntryOwnersInDatabase(
           database.db,
           queueDb
             .selectFrom("delivery_queue_entries")
-            .select(["queue_name", "status", "entry_json", "recovery_state"])
+            .select(["queue_name", "status", "recovery_state"])
+            .select((eb) =>
+              eb
+                .case("recovery_state")
+                .when("completed_bounded")
+                .then(eb.ref("entry_json"))
+                .else(null)
+                .end()
+                .as("entry_json"),
+            )
             .where("queue_name", "in", queueNames)
             .where("id", "=", id),
-        ).rows as DeliveryQueueStatusRow[];
+        ).rows;
       let rows = readExact();
       let pruned = false;
       for (const row of rows) {
-        if (row.recovery_state !== "completed_bounded") {
+        if (row.entry_json === null) {
           continue;
         }
         const entry = safeParseJsonRecord(row.entry_json);
@@ -205,7 +208,8 @@ export function getDeliveryQueueEntryOwnersInDatabase(
                 [
                   row.queue_name,
                   {
-                    status: row.status,
+                    // Preserve the status API and ownership of unknown stored statuses.
+                    status: row.status as QueueStatus,
                     ...(row.status === "failed" && row.recovery_state === "settlement_pending"
                       ? { settlementPending: true as const }
                       : {}),
@@ -235,7 +239,7 @@ export function loadDeliveryQueueEntries(
     deliveryQueueEntriesQuery(database, [queueName], mode)
       .orderBy("enqueued_at", "asc")
       .orderBy("id", "asc"),
-  ).rows as DeliveryQueueSqliteRow[];
+  ).rows;
   return rows
     .map(inflateDeliveryQueueRow)
     .filter((entry): entry is DeliveryQueueEntryState => entry != null);

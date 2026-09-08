@@ -1,6 +1,16 @@
-import { DatabaseSync } from "node:sqlite";
+import { channel } from "node:diagnostics_channel";
+import { constants, DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
-import { assertSqliteSchemaContains, collectSqliteSchemaIssues } from "./sqlite-schema-contract.js";
+import { enableNodeSqliteKyselyStatementCache } from "./kysely-sync.js";
+import {
+  assertSqliteSchemaContains,
+  collectSqliteSchemaIssues,
+  createSqliteTableContractReader,
+} from "./sqlite-schema-contract.js";
+
+const [nodeMajor = 0, nodeMinor = 0] = process.versions.node.split(".").map(Number);
+// Node added the public SQLite query diagnostic event in 26.8.0.
+const supportsQueryDiagnostics = nodeMajor > 26 || (nodeMajor === 26 && nodeMinor >= 8);
 
 const CANONICAL_SCHEMA = `
   CREATE TABLE parents (
@@ -41,7 +51,16 @@ const CANONICAL_SCHEMA = `
   END;
 `;
 
-describe("assertSqliteSchemaContains", () => {
+describe.each([false, true])("assertSqliteSchemaContains (statement cache: %s)", (cacheEnabled) => {
+  function createDatabase(schema: string): DatabaseSync {
+    const database = new DatabaseSync(":memory:");
+    if (cacheEnabled) {
+      enableNodeSqliteKyselyStatementCache(database);
+    }
+    database.exec(schema);
+    return database;
+  }
+
   it("accepts the canonical schema plus unrelated objects", () => {
     const database = createDatabase(CANONICAL_SCHEMA);
     try {
@@ -71,14 +90,41 @@ describe("assertSqliteSchemaContains", () => {
     }
   });
 
-  it("rejects an extra unique index on a canonical table", () => {
+  it("preserves index issue order when a missing index is allowlisted", () => {
     const database = createDatabase(CANONICAL_SCHEMA);
     try {
-      database.exec("CREATE UNIQUE INDEX idx_children_value_unique ON children(value);");
+      database.exec(`
+        CREATE INDEX idx_children_value ON children(value);
+        CREATE UNIQUE INDEX idx_children_value_unique ON children(value);
+      `);
+      const unexpectedUniqueIndex = {
+        code: "unexpected-unique-index",
+        objectName: "idx_children_value_unique",
+        message: "unexpected unique index idx_children_value_unique",
+      };
+      expect(collectSqliteSchemaIssues(database, CANONICAL_SCHEMA)).toEqual([
+        unexpectedUniqueIndex,
+      ]);
 
       expect(() => assertSqliteSchemaContains(database, "test database", CANONICAL_SCHEMA)).toThrow(
         "unexpected unique index idx_children_value_unique",
       );
+
+      database.exec("DROP INDEX idx_children_parent;");
+      const compatibility = { allowedMissingIndexes: ["idx_children_parent"] };
+      expect(collectSqliteSchemaIssues(database, CANONICAL_SCHEMA, compatibility)).toEqual([
+        unexpectedUniqueIndex,
+      ]);
+
+      database.exec("CREATE INDEX idx_children_parent ON children(id, parent_id);");
+      expect(collectSqliteSchemaIssues(database, CANONICAL_SCHEMA, compatibility)).toEqual([
+        {
+          code: "missing-or-drifted-index",
+          objectName: "idx_children_parent",
+          message: "missing or drifted index idx_children_parent",
+        },
+        unexpectedUniqueIndex,
+      ]);
     } finally {
       database.close();
     }
@@ -437,13 +483,91 @@ describe("assertSqliteSchemaContains", () => {
       database.close();
     }
   });
+  it.skipIf(typeof DatabaseSync.prototype.setAuthorizer !== "function")(
+    "consults a dynamic authorizer after repeated absent-table reads",
+    () => {
+      const database = createDatabase("");
+      let allow = true;
+      try {
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+          expect(createSqliteTableContractReader(database)("missing_table")).toBeUndefined();
+        }
+        database.setAuthorizer(() => (allow ? constants.SQLITE_OK : constants.SQLITE_DENY));
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+          expect(createSqliteTableContractReader(database)("missing_table")).toBeUndefined();
+        }
+        allow = false;
+        expect(() => createSqliteTableContractReader(database)("missing_table")).toThrow(
+          /not authorized/iu,
+        );
+        allow = true;
+        expect(createSqliteTableContractReader(database)("missing_table")).toBeUndefined();
+      } finally {
+        database.setAuthorizer(null);
+        database.close();
+      }
+    },
+  );
+
+  it.skipIf(!supportsQueryDiagnostics)(
+    "keeps table reads independent during same-query diagnostic reentry",
+    () => {
+      const database = createDatabase(CANONICAL_SCHEMA);
+      const queryChannel = channel("sqlite.db.query");
+      const readTable = createSqliteTableContractReader(database);
+      let reentered = false;
+      const nestedResults: Array<ReturnType<typeof readTable>> = [];
+      let nestedError: unknown;
+      const onQuery = (message: unknown) => {
+        const event = message as { database?: DatabaseSync };
+        if (reentered || event.database !== database) {
+          return;
+        }
+        reentered = true;
+        // Subscriber errors become process errors; inspect the nested outcome after delivery.
+        try {
+          nestedResults.push(readTable("missing_table"));
+        } catch (error) {
+          nestedError = error;
+        }
+      };
+      try {
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+          expect(collectSqliteSchemaIssues(database, CANONICAL_SCHEMA)).toEqual([]);
+        }
+        queryChannel.subscribe(onQuery);
+        expect(collectSqliteSchemaIssues(database, CANONICAL_SCHEMA, {}, readTable)).toEqual([]);
+        expect(reentered).toBe(true);
+        expect(nestedError).toBeUndefined();
+        expect(nestedResults).toEqual([undefined]);
+      } finally {
+        queryChannel.unsubscribe(onQuery);
+        database.close();
+      }
+    },
+  );
 });
 
-function createDatabase(schema: string): DatabaseSync {
+it("reads schema from an unenabled nonextensible database handle", () => {
   const database = new DatabaseSync(":memory:");
-  database.exec(schema);
-  return database;
-}
+  try {
+    database.exec(CANONICAL_SCHEMA);
+    Object.preventExtensions(database);
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      expect(collectSqliteSchemaIssues(database, CANONICAL_SCHEMA)).toEqual([]);
+    }
+    database.exec("DROP INDEX idx_children_parent;");
+    expect(collectSqliteSchemaIssues(database, CANONICAL_SCHEMA)).toEqual([
+      {
+        code: "missing-or-drifted-index",
+        objectName: "idx_children_parent",
+        message: "missing or drifted index idx_children_parent",
+      },
+    ]);
+  } finally {
+    database.close();
+  }
+});
 
 function schemaWithFutureColumn(declaration: string): string {
   return CANONICAL_SCHEMA.replace(

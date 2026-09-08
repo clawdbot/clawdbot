@@ -1,6 +1,8 @@
-import { canonicalizeBase64 } from "openclaw/plugin-sdk/media-runtime";
 import type { RealtimeVoiceSessionConnection } from "openclaw/plugin-sdk/realtime-voice";
-import { normalizeRealtimeVoiceResponseOutcome } from "openclaw/plugin-sdk/realtime-voice";
+import {
+  canonicalizeBase64,
+  normalizeRealtimeVoiceResponseOutcome,
+} from "openclaw/plugin-sdk/realtime-voice-provider";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { readRealtimeErrorDetail } from "./realtime-provider-shared.js";
 import { OpenAIRealtimeProtocol } from "./realtime-voice-protocol.js";

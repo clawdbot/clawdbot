@@ -1,8 +1,8 @@
-import { canonicalizeBase64 } from "openclaw/plugin-sdk/media-runtime";
 import {
+  canonicalizeBase64,
   normalizeRealtimeVoiceResponseOutcome,
   type RealtimeVoiceSessionConnection,
-} from "openclaw/plugin-sdk/realtime-voice";
+} from "openclaw/plugin-sdk/realtime-voice-provider";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   XAI_REALTIME_ACTIVE_RESPONSE_ERROR_PREFIX,

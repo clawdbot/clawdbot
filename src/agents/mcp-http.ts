@@ -4,10 +4,7 @@
  * MCP server setup uses this to validate SSE/streamable HTTP server records,
  * sanitize headers, and redact sensitive URLs in diagnostics.
  */
-import {
-  redactSensitiveUrl,
-  redactSensitiveUrlLikeString,
-} from "@openclaw/net-policy/redact-sensitive-url";
+import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { toMcpStringRecord } from "./mcp-config-shared.js";
 
@@ -75,9 +72,4 @@ export function resolveHttpMcpServerLaunchConfig(
       headers,
     },
   };
-}
-
-/** Describes an HTTP MCP server launch config without leaking URL credentials. */
-export function describeHttpMcpServerLaunchConfig(config: HttpMcpServerLaunchConfig): string {
-  return redactSensitiveUrl(config.url);
 }

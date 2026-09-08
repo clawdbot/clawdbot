@@ -1,8 +1,6 @@
 // Lmstudio plugin module implements memory embedding adapter behavior.
-import {
-  sanitizeEmbeddingCacheHeaders,
-  type MemoryEmbeddingProviderAdapter,
-} from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+import { sanitizeEmbeddingCacheHeaders } from "openclaw/plugin-sdk/embedding-provider-adapter";
+import type { MemoryEmbeddingProviderAdapter } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import {
   createLmstudioEmbeddingProvider,
   DEFAULT_LMSTUDIO_EMBEDDING_MODEL,

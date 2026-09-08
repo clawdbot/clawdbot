@@ -54,6 +54,7 @@ import {
   renderFeishuPresentationPayload,
   renderFeishuPresentationFallbackText,
   resolveFeishuRichReply,
+  withinCardTableLimit,
 } from "./presentation-card.js";
 import {
   createFeishuPartialReplyDeliveryError,
@@ -206,24 +207,6 @@ function readFeishuPropagateMediaUploadFailure(payload: FeishuOutboundPayload): 
   return feishuData?.[FEISHU_PROPAGATE_MEDIA_UPLOAD_FAILURE_MARKER] === true;
 }
 
-// Builds a `channelData.feishu` that carries only the direct-send upload-failure
-// policy marker. The document-comment branch strips native card / interactive
-// channelData before fallback delivery (those cannot render in comments), but
-// it must not drop the propagation marker the direct `send` action stamped —
-// otherwise a media-upload failure on a comment target degrades to a
-// fallback-text `ok:true` receipt again (issue #112244, ClawSweeper P1).
-function buildFeishuPropagationOnlyChannelData(
-  payload: FeishuOutboundPayload,
-): { feishu: Record<string, unknown> } | undefined {
-  const feishuData = isRecord(payload.channelData?.feishu) ? payload.channelData.feishu : undefined;
-  if (feishuData?.[FEISHU_PROPAGATE_MEDIA_UPLOAD_FAILURE_MARKER] !== true) {
-    return undefined;
-  }
-  return {
-    feishu: { [FEISHU_PROPAGATE_MEDIA_UPLOAD_FAILURE_MARKER]: true },
-  };
-}
-
 type FeishuReplyMode =
   | { normalizedReplyToId: string; replyToMessageId: string; replyInThread: false }
   | { normalizedReplyToId: undefined; replyToMessageId: string; replyInThread: true }
@@ -320,7 +303,9 @@ async function sendOutboundText(params: {
   // Decide card routing on the original text so card content is never
   // modified by post-md newline normalization. Only the post path below
   // materializes CommonMark soft breaks for Feishu rendering.
-  const useCard = renderMode === "card" || (renderMode === "auto" && shouldUseCard(text));
+  const useCard =
+    (renderMode === "card" || (renderMode === "auto" && shouldUseCard(text))) &&
+    withinCardTableLimit(text);
 
   // Tables need contiguous source rows, so convert them before the parser
   // materializes prose soft breaks for Feishu post rendering.
@@ -547,12 +532,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
         text,
         interactive: undefined,
         presentation: undefined,
-        // Strip native card / interactive channelData (comments cannot render
-        // them) but preserve the direct-send upload-failure propagation marker
-        // so a media-upload failure on a comment target stays visible instead
-        // of degrading to a fallback-text `ok:true` receipt (issue #112244,
-        // ClawSweeper P1).
-        channelData: buildFeishuPropagationOnlyChannelData(payload),
+        channelData: undefined,
       };
       return await sendFeishuFallbackPayload({
         ctx,
@@ -840,18 +820,8 @@ export const feishuOutbound: ChannelOutboundAdapter = {
       };
       const deliveryOptions = { replyToIdSource, replyToMode, onDeliveryResult };
       if (parseFeishuCommentTarget(to)) {
-        // Feishu document comments cannot host a media attachment; the mediaUrl
-        // is rendered as a fallback text link instead. This visible-link
-        // fallback is the established comment-target behavior on main and is
-        // NOT the silent text-only `ok:true` drop issue #112244 removes — the
-        // recipient sees the media URL as a clickable link, so the attachment
-        // intent is visibly delivered even though the comment cannot render the
-        // media inline. The direct-send upload-failure propagation policy
-        // therefore does not apply here: it targets actual media-upload failures
-        // (the `sendMediaFeishu` catch below), and a comment target never
-        // reaches that upload path. Keep the fallback for both `send` and
-        // thread-reply so comment targets retain their visible media-link
-        // delivery (issue #112244, ClawSweeper fourteenth-review P1).
+        // Document comments deliver media as visible links; they never enter
+        // the upload path or use its failure-propagation policy.
         const commentText = mediaUrl?.trim()
           ? await buildFeishuMediaFallbackText({
               text,

@@ -1,5 +1,6 @@
 // Openai tests cover realtime session secret creation behavior.
 import { describe, expect, it, vi } from "vitest";
+import { openAIRealtimeHost } from "./realtime-host.js";
 import {
   createOpenAIRealtimeClientSecret,
   createOpenAIRealtimeTranscriptionClientSecret,
@@ -56,11 +57,14 @@ describe("createOpenAIRealtimeClientSecret", () => {
       ),
     );
 
-    const result = await createOpenAIRealtimeClientSecret({
-      authToken: "sk-test",
-      auditContext: "test",
-      session: { model: "gpt-4o-realtime-preview" },
-    });
+    const result = await createOpenAIRealtimeClientSecret(
+      {
+        authToken: "sk-test",
+        auditContext: "test",
+        session: { model: "gpt-4o-realtime-preview" },
+      },
+      openAIRealtimeHost,
+    );
 
     expect(result.value).toBe("eph-secret-abc");
     expect(typeof result.expiresAt).toBe("number");
@@ -75,11 +79,14 @@ describe("createOpenAIRealtimeClientSecret", () => {
     guardedFetch(streamed.response);
 
     await expect(
-      createOpenAIRealtimeClientSecret({
-        authToken: "sk-test",
-        auditContext: "test",
-        session: { model: "gpt-4o-realtime-preview" },
-      }),
+      createOpenAIRealtimeClientSecret(
+        {
+          authToken: "sk-test",
+          auditContext: "test",
+          session: { model: "gpt-4o-realtime-preview" },
+        },
+        openAIRealtimeHost,
+      ),
     ).rejects.toThrow(/openai\.realtime-session/);
 
     expect(streamed.wasCanceled()).toBe(true);
@@ -91,11 +98,14 @@ describe("createOpenAIRealtimeClientSecret", () => {
     guardedFetch(streamed.response);
 
     await expect(
-      createOpenAIRealtimeTranscriptionClientSecret({
-        authToken: "sk-test",
-        auditContext: "test",
-        session: { model: "gpt-4o-transcribe" },
-      }),
+      createOpenAIRealtimeTranscriptionClientSecret(
+        {
+          authToken: "sk-test",
+          auditContext: "test",
+          session: { model: "gpt-4o-transcribe" },
+        },
+        openAIRealtimeHost,
+      ),
     ).rejects.toThrow(/openai\.realtime-session/);
 
     expect(streamed.wasCanceled()).toBe(true);
@@ -108,11 +118,14 @@ describe("createOpenAIRealtimeClientSecret", () => {
       }),
     );
 
-    await createOpenAIRealtimeTranscriptionClientSecret({
-      authToken: "sk-test",
-      auditContext: "test",
-      session: { type: "transcription" },
-    });
+    await createOpenAIRealtimeTranscriptionClientSecret(
+      {
+        authToken: "sk-test",
+        auditContext: "test",
+        session: { type: "transcription" },
+      },
+      openAIRealtimeHost,
+    );
 
     expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -133,12 +146,15 @@ describe("createOpenAIRealtimeClientSecret", () => {
     );
 
     await expect(
-      createOpenAIRealtimeTranscriptionClientSecret({
-        authToken: "sk-test",
-        auditContext: "test",
-        session: { type: "transcription" },
-        authRejectedMessage: "Update the transcription API key",
-      }),
+      createOpenAIRealtimeTranscriptionClientSecret(
+        {
+          authToken: "sk-test",
+          auditContext: "test",
+          session: { type: "transcription" },
+          authRejectedMessage: "Update the transcription API key",
+        },
+        openAIRealtimeHost,
+      ),
     ).rejects.toThrow("Update the transcription API key");
   });
 });

@@ -333,38 +333,99 @@ describe("skill upload store", () => {
     ).resolves.toMatchObject({ sha256: sha256(archive) });
   });
 
-  it("keeps large chunks separate until one final archive write", async () => {
+  it("keeps archive bytes out of metadata reads until the install claim", async () => {
     const { databasePath, store } = await makeStore();
-    const firstChunk = Buffer.alloc(4 * 1024 * 1024, 0x61);
-    const secondChunk = Buffer.alloc(4 * 1024 * 1024, 0x62);
-    const archive = Buffer.concat([firstChunk, secondChunk]);
-    const begin = await store.begin({
-      kind: "skill-archive",
-      slug: "large-skill",
-      sizeBytes: archive.length,
+    const db = stateDatabase(databasePath);
+    const archiveReads: Array<{ bytes: number; inTransaction: boolean }> = [];
+    const nativeBlobs = new WeakSet<Uint8Array>();
+    const bufferFrom = vi.spyOn(Buffer, "from");
+    const nativePrepare = db.prepare.bind(db);
+    vi.spyOn(db, "prepare").mockImplementation((sql) => {
+      const statement = nativePrepare(sql);
+      const iterate = statement.iterate.bind(statement);
+      vi.spyOn(statement, "iterate").mockImplementation(function* (...bindings) {
+        for (const row of iterate(...bindings)) {
+          for (const bytes of [row.chunk_blob, row.archive_blob]) {
+            if (bytes instanceof Uint8Array) {
+              nativeBlobs.add(bytes);
+            }
+          }
+          if (row.archive_blob instanceof Uint8Array) {
+            archiveReads.push({
+              bytes: row.archive_blob.byteLength,
+              inTransaction: db.isTransaction,
+            });
+          }
+          yield row;
+        }
+        return undefined;
+      });
+      return statement;
     });
-    await store.chunk({
-      uploadId: begin.uploadId,
-      offset: 0,
-      dataBase64: firstChunk.toString("base64"),
-    });
-    await store.chunk({
-      uploadId: begin.uploadId,
-      offset: firstChunk.length,
-      dataBase64: secondChunk.toString("base64"),
-    });
-    const staged = stateDatabase(databasePath)
-      .prepare("SELECT length(archive_blob) AS bytes FROM skill_uploads WHERE upload_id = ?")
-      .get(begin.uploadId) as { bytes: number };
-    expect(staged.bytes).toBe(0);
-    expect(chunkCount(databasePath, begin.uploadId)).toBe(2);
+    try {
+      const firstChunk = Buffer.alloc(4 * 1024 * 1024, 0x61);
+      const secondChunk = Buffer.alloc(4 * 1024 * 1024, 0x62);
+      const archive = Buffer.concat([firstChunk, secondChunk]);
+      const begin = await store.begin({
+        kind: "skill-archive",
+        slug: "large-skill",
+        sizeBytes: archive.length,
+        idempotencyKey: "large-upload",
+      });
+      await store.chunk({
+        uploadId: begin.uploadId,
+        offset: 0,
+        dataBase64: firstChunk.toString("base64"),
+      });
+      await store.chunk({
+        uploadId: begin.uploadId,
+        offset: firstChunk.length,
+        dataBase64: secondChunk.toString("base64"),
+      });
+      const staged = stateDatabase(databasePath)
+        .prepare("SELECT length(archive_blob) AS bytes FROM skill_uploads WHERE upload_id = ?")
+        .get(begin.uploadId) as { bytes: number };
+      expect(staged.bytes).toBe(0);
+      expect(chunkCount(databasePath, begin.uploadId)).toBe(2);
 
-    await store.commit({ uploadId: begin.uploadId, sha256: sha256(archive) });
-    const committed = stateDatabase(databasePath)
-      .prepare("SELECT length(archive_blob) AS bytes FROM skill_uploads WHERE upload_id = ?")
-      .get(begin.uploadId) as { bytes: number };
-    expect(committed.bytes).toBe(archive.length);
-    expect(chunkCount(databasePath, begin.uploadId)).toBe(0);
+      await store.commit({ uploadId: begin.uploadId, sha256: sha256(archive) });
+      const committed = stateDatabase(databasePath)
+        .prepare("SELECT length(archive_blob) AS bytes FROM skill_uploads WHERE upload_id = ?")
+        .get(begin.uploadId) as { bytes: number };
+      expect(committed.bytes).toBe(archive.length);
+      expect(chunkCount(databasePath, begin.uploadId)).toBe(0);
+      await expect(
+        store.begin({
+          kind: "skill-archive",
+          slug: "large-skill",
+          sizeBytes: archive.length,
+          idempotencyKey: "large-upload",
+        }),
+      ).resolves.toMatchObject({ uploadId: begin.uploadId, receivedBytes: archive.length });
+      await expect(store.commit({ uploadId: begin.uploadId })).resolves.toMatchObject({
+        sha256: sha256(archive),
+      });
+      await expectUploadError(
+        store.chunk({ uploadId: begin.uploadId, offset: archive.length, dataBase64: "YQ==" }),
+        "upload is already committed",
+      );
+      expect(archiveReads).toEqual([]);
+      await store.withCommittedUpload(begin.uploadId, async (record) => {
+        const materialized = await fs.readFile(record.archivePath);
+        expect(materialized).toHaveLength(archive.length);
+        expect(materialized.equals(archive), "materialized archive bytes").toBe(true);
+      });
+      expect(archiveReads).toEqual([{ bytes: archive.length, inTransaction: true }]);
+      const copiedBytes = bufferFrom.mock.calls.reduce((total, [value]) => {
+        const input: unknown = value;
+        return (
+          total + (input instanceof Uint8Array && nativeBlobs.has(input) ? input.byteLength : 0)
+        );
+      }, 0);
+      expect(copiedBytes).toBe(0);
+    } finally {
+      vi.restoreAllMocks();
+    }
   });
 
   it("uses the expiry and idempotency indexes", async () => {

@@ -8,6 +8,7 @@ import { attachDiscordGatewayLogging } from "../gateway-logging.js";
 import { isFatalGatewayCloseCode } from "../internal/gateway-close-codes.js";
 import { GatewayCloseCodes } from "../internal/gateway.js";
 import { getDiscordGatewayEmitter, waitForDiscordGatewayStop } from "../monitor.gateway.js";
+import { setDiscordTranscriptsVoiceManager } from "../voice/transcripts-source.js";
 import type { DiscordVoiceManager } from "../voice/voice-runtime.js";
 import {
   DISCORD_GATEWAY_TRANSPORT_ACTIVITY_EVENT,
@@ -563,10 +564,10 @@ export async function runDiscordGatewayLifecycle(params: {
     );
     if (params.voiceManager) {
       await params.voiceManager.destroy();
-      const { setDiscordTranscriptsVoiceManager } = await import("../voice/transcripts-source.js");
       setDiscordTranscriptsVoiceManager({
         accountId: params.accountId,
         manager: null,
+        expectedManager: params.voiceManager,
       });
       params.voiceManagerRef.current = null;
     }

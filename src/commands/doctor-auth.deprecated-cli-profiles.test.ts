@@ -51,7 +51,7 @@ vi.mock("./doctor-auth-legacy-paths.js", () => ({
   listAuthProfileRepairCandidates: () => candidateMocks.candidates,
 }));
 
-vi.mock("../agents/auth-profiles/store.js", () => ({
+vi.mock("../agents/auth-profiles/store-runtime.js", () => ({
   ensureAuthProfileStoreWithoutExternalProfiles: () => authProfileStoreMock.store,
 }));
 

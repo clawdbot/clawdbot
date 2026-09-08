@@ -21,6 +21,7 @@ export default defineSingleProviderPluginEntry({
       noteMessage: "Manage API keys at https://www.gmicloud.ai/",
     },
     catalog: {
+      discoveryMode: "strict",
       allowExplicitBaseUrl: true,
       liveModelDiscovery: true,
     },

@@ -96,7 +96,7 @@ describe("provider-owned audio transcription", () => {
       withEnvAsync({ OPENAI_API_KEY: undefined }, async () => {
         const [
           { createPluginRegistryFixture },
-          { createPluginRecord },
+          { createCapturedPluginRegistration, createPluginRecord },
           { withPluginRuntimeRegistryScope },
           { default: plugin },
         ] = await Promise.all([
@@ -116,8 +116,18 @@ describe("provider-owned audio transcription", () => {
         const { registry } = createPluginRegistryFixture(cfg);
         const record = createPluginRecord({ id: "openai" });
         registry.registry.plugins.push(record);
-        // Capability discovery registers the provider before its media callback runs.
-        plugin.register(registry.createApi(record, { config: cfg, registrationMode: "discovery" }));
+        const api = registry.createApi(record, { config: cfg, registrationMode: "discovery" });
+        const captured = createCapturedPluginRegistration({
+          id: record.id,
+          config: cfg,
+          registrationMode: "discovery",
+        });
+        // Native discovery supplies auth and factories; the real scoped registry owns auth lookup.
+        plugin.register({
+          ...captured.api,
+          registerProvider: api.registerProvider,
+          registerMediaUnderstandingProvider: api.registerMediaUnderstandingProvider,
+        });
         const realAuth = await vi.importActual<
           typeof import("openclaw/plugin-sdk/provider-auth-runtime")
         >("openclaw/plugin-sdk/provider-auth-runtime");

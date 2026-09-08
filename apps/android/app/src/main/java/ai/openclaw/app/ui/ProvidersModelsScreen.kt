@@ -104,7 +104,7 @@ internal fun ProvidersModelsScreen(
             isConnected = isConnected,
             providerRows = providerRows,
             modelCount = models.size,
-            onRefresh = viewModel::refreshProviderModels,
+            onRefresh = { viewModel.refreshProviderModels(refresh = true) },
             refreshing = refreshing,
           )
         }

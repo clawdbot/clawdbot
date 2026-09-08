@@ -33,6 +33,9 @@ Auth env var: `STEPFUN_API_KEY`
 
 ## Built-in catalog
 
+Setup saves connection settings and aliases without copying generated catalog rows into your config.
+Explicit `models.mode: "replace"` keeps catalog seeding enabled; custom model rows stay intact.
+
 Standard (`stepfun`):
 
 | Model ref                | Context | Max output | Notes                          |

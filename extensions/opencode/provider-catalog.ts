@@ -140,6 +140,7 @@ export async function buildOpencodeZenLiveProviderConfig(
     // The offline seed remains usable when authoritative metadata is unavailable.
   }
   return await buildLiveModelProviderConfig({
+    discoveryMode: "strict",
     providerId: PROVIDER_ID,
     endpoint: OPENCODE_ZEN_MODELS_ENDPOINT,
     providerConfig: {

@@ -1,6 +1,7 @@
 /** Pure mount and path helpers for the remote sandbox filesystem bridge. */
 import path from "node:path";
-import { normalizeContainerPathCore } from "./path-utils.js";
+import { isPathInside } from "../../infra/path-guards.js";
+import { isPathInsideContainerRoot, normalizeContainerPathCore } from "./path-utils.js";
 
 export type RemoteMountSource = "workspace" | "agent" | "protectedSkill";
 
@@ -11,12 +12,31 @@ export type RemoteMountInfo = {
   source: RemoteMountSource;
 };
 
-export function compareRemoteMountsByContainerPath(a: RemoteMountInfo, b: RemoteMountInfo): number {
-  return b.containerRoot.length - a.containerRoot.length || mountPriority(b) - mountPriority(a);
+export function resolveRemoteMountByContainerPath(
+  mounts: RemoteMountInfo[],
+  containerPath: string,
+): RemoteMountInfo | null {
+  return (
+    mounts
+      .toSorted(
+        (a, b) =>
+          b.containerRoot.length - a.containerRoot.length || mountPriority(b) - mountPriority(a),
+      )
+      .find((mount) => isPathInsideContainerRoot(mount.containerRoot, containerPath)) ?? null
+  );
 }
 
-export function compareRemoteMountsByLocalPath(a: RemoteMountInfo, b: RemoteMountInfo): number {
-  return b.localRoot.length - a.localRoot.length || mountPriority(b) - mountPriority(a);
+export function resolveRemoteMountByLocalPath(
+  mounts: RemoteMountInfo[],
+  localPath: string,
+): RemoteMountInfo | null {
+  return (
+    mounts
+      .toSorted(
+        (a, b) => b.localRoot.length - a.localRoot.length || mountPriority(b) - mountPriority(a),
+      )
+      .find((mount) => isPathInside(mount.localRoot, localPath)) ?? null
+  );
 }
 
 export function buildRemoteProtectedSkillRoots(params: {

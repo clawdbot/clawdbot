@@ -18,7 +18,8 @@ const SHARED_IMPORT_ENV = {
 } satisfies NodeJS.ProcessEnv;
 
 export async function runDirectImportSmoke(code: string): Promise<string> {
-  const { stdout } = await execFileAsync(process.execPath, ["--import", "tsx", "-e", code], {
+  const runtimeArgs = process.versions.bun ? [] : ["--import", "tsx"];
+  const { stdout } = await execFileAsync(process.execPath, [...runtimeArgs, "-e", code], {
     cwd: repoRoot,
     env: SHARED_IMPORT_ENV,
     timeout: 40_000,

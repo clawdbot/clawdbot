@@ -98,7 +98,7 @@ describe("native image tool result context projection", () => {
   it.each([
     { contextWindowTokens: 8_000, loadedImages: 1, visibleImages: 0 },
     { contextWindowTokens: 32_000, loadedImages: 3, visibleImages: 1 },
-    { contextWindowTokens: 128_000, loadedImages: 9, visibleImages: 7 },
+    { contextWindowTokens: 128_000, loadedImages: 20, visibleImages: 7 },
   ])(
     "preserves a fitting sanitized image prefix in a $contextWindowTokens-token window",
     async ({ contextWindowTokens, loadedImages, visibleImages }) => {

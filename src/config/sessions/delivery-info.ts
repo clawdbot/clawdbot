@@ -1,7 +1,7 @@
 // Delivery lookup recovers routable channel context from persisted session stores.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
-  resolveSessionStoreAgentId,
+  resolveSessionStoreIdentity,
   resolveSessionStoreKey,
 } from "../../gateway/session-store-key.js";
 import { requiresFoldedSessionKeyAliasProof } from "../../sessions/session-key-utils.js";
@@ -201,15 +201,15 @@ function loadDeliverySessionEntry(params: {
   sessionKey: string;
   baseSessionKey: string;
 }) {
-  const canonicalKey = resolveSessionStoreKey({
-    cfg: params.cfg,
-    sessionKey: params.sessionKey,
-  });
-  const canonicalBaseKey = resolveSessionStoreKey({
+  const { agentId, canonicalKey: canonicalBaseKey } = resolveSessionStoreIdentity({
     cfg: params.cfg,
     sessionKey: params.baseSessionKey,
   });
-  const agentId = resolveSessionStoreAgentId(params.cfg, canonicalKey);
+  const canonicalKey = resolveSessionStoreKey({
+    cfg: params.cfg,
+    sessionKey: params.sessionKey,
+    storeAgentId: agentId,
+  });
   const sessionKeys = [params.sessionKey, canonicalKey];
   const baseKeys = [params.baseSessionKey, canonicalBaseKey];
   let fallback:

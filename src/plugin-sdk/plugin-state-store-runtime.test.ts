@@ -9,12 +9,12 @@ describe("plugin state store type contracts", () => {
     >().toEqualTypeOf<Required<PluginStateSyncKeyedStore<{ count: number }>>>();
   });
 
-  it("allows general stores without atomic capabilities", () => {
-    expectTypeOf<Omit<PluginStateKeyedStore<{ count: number }>, "update" | "deleteIf">>().toExtend<
-      PluginStateKeyedStore<{ count: number }>
-    >();
+  it("allows general stores without optional capabilities", () => {
     expectTypeOf<
-      Omit<PluginStateSyncKeyedStore<{ count: number }>, "update" | "deleteIf">
+      Omit<PluginStateKeyedStore<{ count: number }>, "update" | "deleteIf" | "lookupMany">
+    >().toExtend<PluginStateKeyedStore<{ count: number }>>();
+    expectTypeOf<
+      Omit<PluginStateSyncKeyedStore<{ count: number }>, "update" | "deleteIf" | "lookupMany">
     >().toExtend<PluginStateSyncKeyedStore<{ count: number }>>();
   });
 });

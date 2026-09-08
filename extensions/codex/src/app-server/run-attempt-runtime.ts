@@ -8,11 +8,11 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveCodexMcpToolOverridesForAgent } from "openclaw/plugin-sdk/codex-mcp-projection";
 import { prepareCodexAppServerAuthBinding } from "./auth-binding.js";
+import { resolveCodexAppServerAuthAccountCacheKey } from "./auth-bridge.js";
 import {
-  resolveCodexAppServerAuthAccountCacheKey,
   resolveCodexAppServerFallbackApiKeyCacheKey,
   resolveCodexAppServerPreparedApiKeyCacheKey,
-} from "./auth-bridge.js";
+} from "./auth-cache-key.js";
 import { isCodexSandboxExecServerEnabled } from "./config.js";
 import {
   resolveCodexAppServerHookChannelId,

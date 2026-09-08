@@ -1,5 +1,30 @@
 import { describe, expect, it } from "vitest";
+import { buildCodeSpanIndex } from "./code-spans.js";
 import { findMarkdownCodeSpans } from "./reasoning-tags.js";
+
+describe("buildCodeSpanIndex", () => {
+  it("supports backward queries over inline code that encloses a fence", () => {
+    const text = "`open\n~~~\ninside\n~~~\nafter` tail";
+    const index = buildCodeSpanIndex(text);
+
+    expect(
+      [text.length, text.indexOf("after"), text.indexOf("~~~"), 0, text.indexOf("tail")].map(
+        index.isInside,
+      ),
+    ).toEqual([false, true, true, true, false]);
+  });
+
+  it("includes opening delimiters and excludes ends in either query direction", () => {
+    const text = "~~~\nfenced\n~~~\n`inline` tail";
+    const index = buildCodeSpanIndex(text);
+
+    expect(
+      [text.lastIndexOf("`") + 1, 0, text.indexOf("`"), text.lastIndexOf("~~~") + 3, 0].map(
+        index.isInside,
+      ),
+    ).toEqual([false, true, true, false, true]);
+  });
+});
 
 describe("markdown-core code spans", () => {
   function expectCodeRegionSlices(text: string, expectedSlices: readonly string[]) {

@@ -16,9 +16,6 @@ type CurrentPluginMetadataCacheState = {
   defaultDiscoveryCompatible: boolean;
   compatiblePolicyHashes: readonly string[] | undefined;
   compatibleConfigFingerprints: readonly string[] | undefined;
-  modelIdNormalizationPolicies:
-    | PluginMetadataSnapshot["owners"]["modelIdNormalizationPolicies"]
-    | undefined;
   revision: symbol;
   configIdentities: WeakSet<OpenClawConfig>;
 };
@@ -59,7 +56,6 @@ export function createPluginCacheMetadata(): PluginCacheMetadata {
         defaultDiscoveryCompatible: false,
         compatiblePolicyHashes: undefined,
         compatibleConfigFingerprints: undefined,
-        modelIdNormalizationPolicies: undefined,
         revision: Symbol("plugin-metadata-snapshot"),
         configIdentities: new WeakSet(),
       },

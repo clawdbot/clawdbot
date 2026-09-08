@@ -48,6 +48,8 @@ export function normalizeSubagentRunState(entry: SubagentRunRecord): SubagentRun
   } else {
     entry.killReconciliation = {
       killedAt: killReconciliation.killedAt,
+      taskCancellationAccepted:
+        killReconciliation.taskCancellationAccepted === true ? true : undefined,
       suppressTaskDelivery: killReconciliation.suppressTaskDelivery === true ? true : undefined,
       supersededAt: Number.isFinite(killReconciliation.supersededAt)
         ? killReconciliation.supersededAt

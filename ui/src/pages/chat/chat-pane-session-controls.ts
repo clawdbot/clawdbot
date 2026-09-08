@@ -329,9 +329,25 @@ export function createChatPaneSessionActionCallbacks(params: {
   onFork: (entryId: string) => Promise<void>;
   onReset: () => void;
 }): SessionActionCallbacks {
-  const access = readChatSessionActionAccess(params.getSnapshot(), params.hasLocalRun());
+  const readAccess = () => {
+    const snapshot = params.getSnapshot();
+    const hasLocalRun = params.hasLocalRun();
+    const access = readChatSessionActionAccess(snapshot, hasLocalRun);
+    // Offline Stop captures intent only. The pane retires runs on client
+    // replacement; replay checks the original client and current write access.
+    if (
+      snapshot.client &&
+      hasLocalRun &&
+      !access.abort.allowed &&
+      access.abort.cause === "disconnected"
+    ) {
+      access.abort = { allowed: true, requiredScope: "operator.write" };
+    }
+    return access;
+  };
+  const access = readAccess();
   const requireCurrent = (action: SessionAction): boolean => {
-    const current = readChatSessionActionAccess(params.getSnapshot(), params.hasLocalRun())[action];
+    const current = readAccess()[action];
     if (current.allowed) {
       return true;
     }

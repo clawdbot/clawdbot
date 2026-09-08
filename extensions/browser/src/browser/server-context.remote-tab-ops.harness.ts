@@ -123,7 +123,6 @@ export function createTestBrowserRouteContext(opts: { getState: () => BrowserSer
       profile,
       runtime,
       getCdpControlPolicy: () => resolveCdpControlPolicy(profile, state.resolved.ssrfPolicy),
-      ensureBrowserAvailable: async () => {},
       listTabs: tabOps.listTabs,
       openTab: tabOps.openTab,
     });

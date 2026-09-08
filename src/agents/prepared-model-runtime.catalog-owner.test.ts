@@ -282,7 +282,7 @@ describe("prepared build candidate lifetime", () => {
       const builds = vi.spyOn(runtimeBuild, "startSerializedSnapshotBuildBatch");
       const first = acquire(input);
       const timedOut = expect(first).rejects.toThrow(
-        "prepared model runtime publication timed out",
+        "prepared model runtime publication (ambient credentials; agent standalone) timed out",
       );
       let retry: ReturnType<typeof acquire> | undefined;
       try {
@@ -320,13 +320,13 @@ describe("prepared build candidate lifetime", () => {
     const builds = vi.spyOn(runtimeBuild, "startSerializedSnapshotBuildBatch");
     try {
       await expect(publishPreparedModelRuntimeSnapshot(input)).rejects.toThrow(
-        "prepared model runtime publication timed out",
+        "prepared model runtime publication (agent catalog sources) timed out",
       );
       await expect(prepareModelRuntimeSnapshot(input)).rejects.toThrow(
-        "prepared model runtime publication timed out",
+        "prepared model runtime publication (agent catalog sources) timed out",
       );
       await expect(publishPreparedModelRuntimeSnapshot(input)).rejects.toThrow(
-        "prepared model runtime publication timed out",
+        "prepared model runtime publication (agent catalog sources) timed out",
       );
       expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledOnce();
 

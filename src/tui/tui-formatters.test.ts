@@ -447,20 +447,31 @@ describe("extractTextFromMessage", () => {
     expect(text).toBe("Line 1\nLine 2\nLine 3");
   });
 
-  it("places thinking before content when included", () => {
-    const text = extractTextFromMessage(
-      {
-        role: "assistant",
-        content: [
-          { type: "text", text: "hello" },
-          { type: "thinking", thinking: "ponder" },
-        ],
-      },
-      { includeThinking: true },
-    );
+  it.each([
+    [undefined, "ponder", "hello", "hello"],
+    [false, "ponder", "hello", "hello"],
+    [true, "ponder", "hello", "[thinking]\nponder\n\nhello"],
+    [true, "ponder", "", "[thinking]\nponder"],
+    [true, "", "hello", "hello"],
+    [true, "", "", ""],
+    [false, "ponder", "", ""],
+  ] as const)(
+    "renders thinking=%s, thought=%j, content=%j",
+    (includeThinking, thought, content, expected) => {
+      const text = extractTextFromMessage(
+        {
+          role: "assistant",
+          content: [
+            { type: "text", text: ` \n${content}\t ` },
+            { type: "thinking", thinking: ` \t${thought}\n ` },
+          ],
+        },
+        { includeThinking },
+      );
 
-    expect(text).toBe("[thinking]\nponder\n\nhello");
-  });
+      expect(text).toBe(expected);
+    },
+  );
 
   it("sanitizes ANSI and control chars from string content", () => {
     const text = extractTextFromMessage({

@@ -49,6 +49,7 @@ export type WorkerProviderLifecycleInputOptions = {
   ensureNodeWorkerBundle?: (params: {
     deviceId: string;
     artifact: Extract<WorkerInstallationArtifact, { install: "bundle" }>;
+    prewarm: boolean;
     signal?: AbortSignal;
   }) => Promise<WorkerAdmissionHandshake>;
   prepareNodeBootstrap?: (record: WorkerEnvironmentRecord, signal?: AbortSignal) => Promise<void>;

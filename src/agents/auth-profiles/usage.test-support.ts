@@ -1,7 +1,7 @@
 import "./usage.js";
 
 type UsageDeps = {
-  updateAuthProfileStoreWithLock: typeof import("./store.js").updateAuthProfileStoreWithLock;
+  updateAuthProfileStoreWithLock: typeof import("./store-runtime.js").updateAuthProfileStoreWithLock;
 };
 
 type AuthProfileUsageTestApi = {

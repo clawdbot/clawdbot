@@ -79,7 +79,10 @@ function normalizeFileUrl(value: string): string | undefined {
     return value;
   }
   try {
-    return fileURLToPath(value);
+    const fileUrl = new URL(value);
+    // Validate encoding explicitly because fileURLToPath validation differs by runtime.
+    decodeURIComponent(fileUrl.pathname);
+    return fileURLToPath(fileUrl);
   } catch {
     return undefined;
   }

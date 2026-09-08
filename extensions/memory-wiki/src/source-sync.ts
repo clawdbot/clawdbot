@@ -11,6 +11,7 @@ import {
   withMemoryWikiVaultMutation,
 } from "./mutation-coordinator.js";
 import { syncMemoryWikiUnsafeLocalSources } from "./unsafe-local.js";
+import { initializeMemoryWikiVault } from "./vault.js";
 
 export type MemoryWikiImportedSourceSyncResult = BridgeMemoryWikiResult & {
   indexesRefreshed: boolean;
@@ -58,6 +59,11 @@ async function syncMemoryWikiImportedSourcesOnce(
       ? await syncMemoryWikiUnsafeLocalSources(params.config, { signal: params.signal })
       : await syncMemoryWikiUnsafeLocalSources(params.config);
   } else {
+    // Local mode has no importer to activate the cache before readiness is checked.
+    await initializeMemoryWikiVault(
+      params.config,
+      params.signal ? { signal: params.signal } : undefined,
+    );
     syncResult = {
       importedCount: 0,
       updatedCount: 0,

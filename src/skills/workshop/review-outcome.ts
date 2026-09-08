@@ -1,5 +1,4 @@
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
-import { toErrorObject } from "../../infra/errors.js";
 
 export const HISTORY_SCAN_MAX_PROPOSAL_MUTATIONS = 3;
 
@@ -22,11 +21,7 @@ export function resolveSkillHistoryScanReviewOutcome(params: {
   ideasFound: number;
   proposalMutationBudgetRemaining: number;
   successfulMutations: number;
-  runError?: unknown;
 }): number {
-  if (params.runError !== undefined) {
-    throw toErrorObject(params.runError, "Historical skill scan model run failed.");
-  }
   if ((params.failedMutations ?? 0) > 0) {
     throw new Error("Historical skill scan has failed proposal mutations to retry.");
   }

@@ -1,272 +1,301 @@
-// Event-loop health tests cover delay, CPU, and utilization degradation classification.
-import type { monitorEventLoopDelay, performance } from "node:perf_hooks";
-import { describe, expect, it, vi } from "vitest";
+// Event-loop health tests cover sampling ownership and delay/load classification.
+import type { performance } from "node:perf_hooks";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  getInternalDiagnosticEventSequence,
+  onDiagnosticEvent,
+  onInternalDiagnosticEvent,
+  resetDiagnosticEventsForTest,
+  setDiagnosticsEnabledForProcess,
+  waitForDiagnosticEventsDrained,
+  type DiagnosticEventPayload,
+} from "../../infra/diagnostic-events.js";
+import {
+  createDiagnosticTraceContext,
+  getActiveDiagnosticTraceContext,
+  runWithDiagnosticTraceContext,
+} from "../../infra/diagnostic-trace-context.js";
+import {
+  startDiagnosticStabilityRecorder,
+  stopDiagnosticStabilityRecorder,
+} from "../../logging/diagnostic-stability.js";
+import { registerSkillUsageTracking } from "../../skills/workshop/curator.js";
 import { createGatewayEventLoopHealthMonitor } from "./event-loop-health.js";
 
-/**
- * Event-loop health regression tests for delay, CPU, and utilization signals.
- */
 type CpuUsage = ReturnType<typeof process.cpuUsage>;
-type DelayMonitor = ReturnType<typeof monitorEventLoopDelay>;
 type EventLoopUtilization = ReturnType<typeof performance.eventLoopUtilization>;
-type GatewayEventLoopHealthMonitorDeps = NonNullable<
-  Parameters<typeof createGatewayEventLoopHealthMonitor>[0]
->;
+const monitors: ReturnType<typeof createGatewayEventLoopHealthMonitor>[] = [];
+
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+});
+afterEach(() => {
+  for (const monitor of monitors.splice(0)) {
+    monitor.stop();
+  }
+  vi.useRealTimers();
+});
 
 function createMonitorHarness(params?: { cpuMsPerWallMs?: number; utilization?: number }) {
-  const startedAt = 10_000;
-  let nowMs = startedAt;
-  let delayP99Ms = 0;
-  let delayMaxMs = 0;
-  const cpuMsPerWallMs = params?.cpuMsPerWallMs ?? 1;
-  const utilization = params?.utilization ?? 1;
-  const delayMonitor = {
-    enable: vi.fn(),
-    disable: vi.fn(),
-    reset: vi.fn(() => {
-      delayP99Ms = 0;
-      delayMaxMs = 0;
-    }),
-    percentile: vi.fn(() => delayP99Ms * 1_000_000),
-    get max() {
-      return delayMaxMs * 1_000_000;
-    },
-  } as unknown as DelayMonitor;
+  let nowMs = 10_000;
+  const cpuMsPerWallMs = params?.cpuMsPerWallMs ?? 0.1;
+  const utilization = params?.utilization ?? 0.2;
   const cpuUsage = vi.fn((previous?: CpuUsage) => {
-    const current = {
-      user: Math.round(nowMs * cpuMsPerWallMs * 1_000),
-      system: 0,
-    };
-    if (!previous) {
-      return current;
-    }
-    return {
-      user: current.user - previous.user,
-      system: current.system - previous.system,
-    };
-  }) as NonNullable<GatewayEventLoopHealthMonitorDeps["cpuUsage"]>;
+    const current = { user: Math.round(nowMs * cpuMsPerWallMs * 1_000), system: 0 };
+    return previous
+      ? { user: current.user - previous.user, system: current.system - previous.system }
+      : current;
+  });
   const eventLoopUtilization = vi.fn(
-    (current?: EventLoopUtilization, previous?: EventLoopUtilization) => {
-      if (!current || !previous) {
-        return { idle: 0, active: nowMs, utilization };
-      }
-      return {
-        idle: 0,
-        active: current.active - previous.active,
-        utilization,
-      };
-    },
-  ) as NonNullable<GatewayEventLoopHealthMonitorDeps["eventLoopUtilization"]>;
+    (current?: EventLoopUtilization, previous?: EventLoopUtilization) => ({
+      idle: 0,
+      active: current && previous ? current.active - previous.active : nowMs,
+      utilization,
+    }),
+  );
   const monitor = createGatewayEventLoopHealthMonitor({
     now: () => nowMs,
     cpuUsage,
     eventLoopUtilization,
-    createDelayMonitor: () => delayMonitor,
   });
-
+  monitors.push(monitor);
+  const sample = (elapsedMs = 20) => {
+    nowMs += elapsedMs;
+    vi.advanceTimersByTime(20);
+  };
   return {
     monitor,
-    delayMonitor,
     cpuUsage,
     eventLoopUtilization,
-    setNow: (value: number) => {
-      nowMs = startedAt + value;
+    sample,
+    samples: (count: number, elapsedMs = 20) => {
+      for (let index = 0; index < count; index++) {
+        sample(elapsedMs);
+      }
     },
-    setDelay: (value: { p99Ms?: number; maxMs?: number }) => {
-      delayP99Ms = value.p99Ms ?? delayP99Ms;
-      delayMaxMs = value.maxMs ?? delayMaxMs;
+    elapseWithoutSampling: (elapsedMs: number) => {
+      nowMs += elapsedMs;
     },
   };
 }
 
-function expectSnapshotFields(snapshot: unknown, expected: Record<string, unknown>) {
-  if (!snapshot || typeof snapshot !== "object") {
-    throw new Error("expected event loop health snapshot");
-  }
-  const actual = snapshot as Record<string, unknown>;
-  for (const [key, value] of Object.entries(expected)) {
-    expect(actual[key]).toEqual(value);
-  }
-  return actual;
-}
-
-function expectSaturatedLoadSnapshot(snapshot: unknown) {
-  return expectSnapshotFields(snapshot, {
-    degraded: true,
-    degradedSinceMs: 0,
-    reasons: ["event_loop_utilization", "cpu"],
-    intervalMs: 1_000,
-    delayP99Ms: 30,
-    delayMaxMs: 0,
-    utilization: 1,
-    cpuCoreRatio: 1,
-  });
-}
-
 describe("createGatewayEventLoopHealthMonitor", () => {
-  it("waits for delay co-evidence before reporting load-only saturation", () => {
-    const harness = createMonitorHarness();
-
-    harness.setNow(42);
-    expect(harness.monitor.snapshot()).toBeUndefined();
+  it("does not turn reads without samples into healthy observations", () => {
+    const harness = createMonitorHarness({ cpuMsPerWallMs: 1, utilization: 1 });
+    harness.elapseWithoutSampling(1_200);
+    for (let index = 0; index < 100; index++) {
+      expect(harness.monitor.snapshot()).toBeUndefined();
+      expect(harness.monitor.persistentDegradationSnapshot()).toBeUndefined();
+    }
     expect(harness.cpuUsage).toHaveBeenCalledTimes(1);
     expect(harness.eventLoopUtilization).toHaveBeenCalledTimes(1);
+    harness.sample();
+    expect(harness.monitor.snapshot()).toMatchObject({
+      degraded: true,
+      intervalMs: 1_220,
+      delayMaxMs: 1_220.5,
+      reasons: ["event_loop_delay", "event_loop_utilization", "cpu"],
+    });
+  });
 
-    harness.setNow(1_000);
-    expectSnapshotFields(harness.monitor.snapshot(), {
+  it("waits for delay co-evidence before reporting load saturation", () => {
+    const harness = createMonitorHarness({ cpuMsPerWallMs: 1, utilization: 1 });
+    harness.samples(49);
+    expect(harness.monitor.snapshot()).toBeUndefined();
+    harness.sample();
+    expect(harness.monitor.snapshot()).toMatchObject({
       degraded: false,
-      degradedSinceMs: null,
       reasons: [],
       intervalMs: 1_000,
-      delayP99Ms: 0,
-      delayMaxMs: 0,
+      delayMaxMs: 20,
       utilization: 1,
       cpuCoreRatio: 1,
     });
   });
 
-  it("reports CPU and utilization saturation when delay co-evidence is present", () => {
-    const harness = createMonitorHarness();
-    harness.setDelay({ p99Ms: 30 });
-    harness.setNow(1_000);
-
-    expectSaturatedLoadSnapshot(harness.monitor.snapshot());
-  });
-
-  it("does not wait for the sustained sample window before reporting event-loop delay", () => {
-    const harness = createMonitorHarness();
-    harness.setDelay({ maxMs: 1_500 });
-    harness.setNow(42);
-
-    expectSnapshotFields(harness.monitor.snapshot(), {
+  it.each([
+    { cpuMsPerWallMs: 1, utilization: 0.2, reasons: ["cpu"] },
+    { cpuMsPerWallMs: 0.1, utilization: 1, reasons: ["event_loop_utilization"] },
+    { cpuMsPerWallMs: 1, utilization: 1, reasons: ["event_loop_utilization", "cpu"] },
+  ])("preserves load classification with delay co-evidence: $reasons", (params) => {
+    const harness = createMonitorHarness(params);
+    harness.samples(34, 30);
+    expect(harness.monitor.snapshot()).toMatchObject({
       degraded: true,
-      reasons: ["event_loop_delay"],
-      intervalMs: 42,
-      delayP99Ms: 0,
-      delayMaxMs: 1_500,
+      degradedSinceMs: 0,
+      intervalMs: 1_020,
+      delayP99Ms: 30,
+      delayMaxMs: 30,
+      reasons: params.reasons,
     });
   });
 
-  it("returns a non-degraded snapshot when the sustained load sample is healthy", () => {
-    const harness = createMonitorHarness({ cpuMsPerWallMs: 0.1, utilization: 0.2 });
-    harness.setNow(1_000);
+  it.each([false, true])(
+    "preserves overdue delay across reads with prior window=%s",
+    (priorWindow) => {
+      const harness = createMonitorHarness();
+      harness.samples(priorWindow ? 50 : 4);
+      const previous = harness.monitor.snapshot();
+      harness.elapseWithoutSampling(1_200);
+      for (let index = 0; index < 100; index++) {
+        expect(harness.monitor.snapshot()).toBe(previous);
+      }
+      harness.sample();
+      const current = harness.monitor.snapshot();
+      expect(current?.delayMaxMs).toBeGreaterThanOrEqual(1_200);
+      expect(current).toMatchObject({ degraded: true, reasons: ["event_loop_delay"] });
+      expect(harness.monitor.snapshot()).toBe(current);
+    },
+  );
 
-    expectSnapshotFields(harness.monitor.snapshot(), {
+  it("retains completed observations until the next sampling window", () => {
+    const harness = createMonitorHarness();
+    harness.samples(50);
+    const first = harness.monitor.snapshot();
+    expect(first).toMatchObject({ degraded: false, intervalMs: 1_000 });
+    expect(harness.cpuUsage).toHaveBeenCalledTimes(3);
+    harness.samples(12);
+    expect(harness.monitor.snapshot()).toBe(first);
+    expect(harness.cpuUsage).toHaveBeenCalledTimes(3);
+    harness.samples(38);
+    expect(harness.monitor.snapshot()).not.toBe(first);
+    expect(harness.monitor.snapshot()).toMatchObject({ intervalMs: 1_000 });
+  });
+
+  it("tracks persistent degradation at completed samples and clears on recovery", () => {
+    const harness = createMonitorHarness();
+    harness.sample(1_500);
+    expect(harness.monitor.snapshot()).toMatchObject({ degraded: true, degradedSinceMs: 0 });
+    harness.sample(59_999);
+    expect(harness.monitor.persistentDegradationSnapshot()).toBeUndefined();
+    harness.sample(1_000);
+    expect(harness.monitor.persistentDegradationSnapshot()).toMatchObject({
+      degraded: true,
+      degradedSinceMs: 60_999,
+    });
+    const degraded = harness.monitor.snapshot();
+    harness.samples(49);
+    expect(harness.monitor.snapshot()).toBe(degraded);
+    expect(harness.monitor.persistentDegradationSnapshot()).toBe(degraded);
+    harness.sample();
+    expect(harness.monitor.snapshot()).toMatchObject({ degraded: false, degradedSinceMs: null });
+    expect(harness.monitor.persistentDegradationSnapshot()).toBeUndefined();
+  });
+
+  it("discards the pending interval and rate baselines only for an explicit host-thaw reset", () => {
+    const harness = createMonitorHarness();
+    harness.sample(1_500);
+    harness.elapseWithoutSampling(90_000);
+    harness.monitor.reset();
+    expect(harness.monitor.snapshot()).toBeUndefined();
+    harness.samples(50);
+    expect(harness.monitor.snapshot()).toMatchObject({
       degraded: false,
-      degradedSinceMs: null,
-      reasons: [],
       intervalMs: 1_000,
-      utilization: 0.2,
+      delayMaxMs: 20,
       cpuCoreRatio: 0.1,
     });
   });
 
-  it("tracks continuous degradation and clears it on the first healthy snapshot", () => {
-    const harness = createMonitorHarness({ cpuMsPerWallMs: 0.1, utilization: 0.2 });
-    harness.setNow(1_000);
-    expectSnapshotFields(harness.monitor.snapshot(), {
-      degraded: false,
-      degradedSinceMs: null,
-    });
-
-    harness.setDelay({ maxMs: 1_500 });
-    harness.setNow(2_000);
-    expectSnapshotFields(harness.monitor.snapshot(), {
-      degraded: true,
-      degradedSinceMs: 0,
-    });
-
-    harness.setDelay({ maxMs: 1_500 });
-    harness.setNow(3_500);
-    expectSnapshotFields(harness.monitor.snapshot(), {
-      degraded: true,
-      degradedSinceMs: 1_500,
-    });
-
-    harness.setNow(4_500);
-    expectSnapshotFields(harness.monitor.snapshot(), {
-      degraded: false,
-      degradedSinceMs: null,
-    });
-  });
-
-  it("exposes persistent degradation only after the warning threshold", () => {
-    const harness = createMonitorHarness({ cpuMsPerWallMs: 0.1, utilization: 0.2 });
-    harness.setDelay({ maxMs: 1_500 });
-    harness.setNow(1_000);
-    expect(harness.monitor.persistentDegradationSnapshot()).toBeUndefined();
-
-    harness.setDelay({ maxMs: 1_500 });
-    harness.setNow(60_999);
-    expect(harness.monitor.persistentDegradationSnapshot()).toBeUndefined();
-
-    harness.setDelay({ maxMs: 1_500 });
-    harness.setNow(61_000);
-    expectSnapshotFields(harness.monitor.persistentDegradationSnapshot(), {
-      degraded: true,
-      degradedSinceMs: 60_000,
-    });
-  });
-
-  it("keeps rate baselines and the last snapshot until a full sample window is available", () => {
-    const harness = createMonitorHarness({ cpuMsPerWallMs: 0.1, utilization: 0.2 });
-    harness.setNow(1_000);
-    const first = harness.monitor.snapshot();
-
-    expectSnapshotFields(first, { intervalMs: 1_000 });
-    expect(harness.cpuUsage).toHaveBeenCalledTimes(3);
-    expect(harness.eventLoopUtilization).toHaveBeenCalledTimes(3);
-
-    harness.setNow(1_250);
-    expect(harness.monitor.snapshot()).toBe(first);
-    expect(harness.cpuUsage).toHaveBeenCalledTimes(3);
-    expect(harness.eventLoopUtilization).toHaveBeenCalledTimes(3);
-
-    harness.setNow(2_000);
-    const second = harness.monitor.snapshot();
-
-    expectSnapshotFields(second, { intervalMs: 1_000 });
-    expect(second).not.toBe(first);
-  });
-
-  it("preserves moderate delay co-evidence across rapid probes until the load window completes", () => {
+  it("releases its only timer and cached observation when stopped", () => {
     const harness = createMonitorHarness();
-    harness.setNow(1_000);
-    const first = harness.monitor.snapshot();
-
-    harness.setDelay({ p99Ms: 30 });
-    harness.setNow(1_250);
-    expect(harness.monitor.snapshot()).toBe(first);
-
-    harness.setNow(2_000);
-    expectSaturatedLoadSnapshot(harness.monitor.snapshot());
-  });
-
-  it("clears the cached snapshot when stopped", () => {
-    const harness = createMonitorHarness({ cpuMsPerWallMs: 0.1, utilization: 0.2 });
-    harness.setNow(1_000);
-
-    expectSnapshotFields(harness.monitor.snapshot(), { degraded: false, intervalMs: 1_000 });
-
-    harness.setNow(1_250);
+    expect(vi.getTimerCount()).toBe(1);
+    harness.samples(50);
     harness.monitor.stop();
-
-    expect(harness.delayMonitor["disable"]).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0);
+    harness.samples(100);
+    harness.monitor.reset();
     expect(harness.monitor.snapshot()).toBeUndefined();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+describe("event-loop measurement telemetry", () => {
+  beforeEach(resetDiagnosticEventsForTest);
+  afterEach(() => {
+    stopDiagnosticStabilityRecorder();
+    resetDiagnosticEventsForTest();
   });
 
-  it("resets delay and rate baselines after a host thaw", () => {
-    const harness = createMonitorHarness({ cpuMsPerWallMs: 0.1, utilization: 0.2 });
-    harness.setDelay({ maxMs: 90_000 });
-    harness.setNow(90_000);
-
-    harness.monitor.reset();
-    harness.setNow(91_000);
-
-    expectSnapshotFields(harness.monitor.snapshot(), {
-      degraded: false,
-      intervalMs: 1_000,
-      delayMaxMs: 0,
+  it("records each sampling window once without needing a reader or inheriting reader context", async () => {
+    const harness = createMonitorHarness();
+    const events: DiagnosticEventPayload[] = [];
+    onInternalDiagnosticEvent((event) => events.push(event), {
+      include: ["gateway.event_loop.sample"],
     });
+    const readerTrace = createDiagnosticTraceContext();
+    runWithDiagnosticTraceContext(readerTrace, () => {
+      harness.sample(1_500);
+      const first = harness.monitor.snapshot();
+      for (let index = 0; index < 10; index++) {
+        expect(harness.monitor.snapshot()).toBe(first);
+      }
+      expect(getActiveDiagnosticTraceContext()?.traceId).toBe(readerTrace.traceId);
+    });
+    harness.samples(50);
+    await waitForDiagnosticEventsDrained();
+    expect(events).toMatchObject([
+      { type: "gateway.event_loop.sample", intervalMs: 1_500, delayMaxMs: 1_500.5 },
+      { type: "gateway.event_loop.sample", intervalMs: 1_000, delayMaxMs: 20 },
+    ]);
+    expect(events.map((event) => event.trace)).toEqual([undefined, undefined]);
+  });
+
+  it("keeps diagnostics-disabled sampling active without emitting telemetry", async () => {
+    const listener = vi.fn();
+    onInternalDiagnosticEvent(listener, { include: ["gateway.event_loop.sample"] });
+    setDiagnosticsEnabledForProcess(false);
+    const harness = createMonitorHarness();
+    harness.sample(1_500);
+    expect(harness.monitor.snapshot()?.reasons).toEqual(["event_loop_delay"]);
+    await waitForDiagnosticEventsDrained();
+    expect(listener).not.toHaveBeenCalled();
+    expect(getInternalDiagnosticEventSequence()).toBe(0);
+  });
+
+  it.each([
+    { name: "no listener", subscribe: () => () => {} },
+    { name: "public listener", subscribe: () => onDiagnosticEvent(() => {}) },
+    {
+      name: "unrelated listener",
+      subscribe: () => onInternalDiagnosticEvent(() => {}, { include: ["diagnostic.heartbeat"] }),
+    },
+    {
+      name: "stability recorder",
+      subscribe: () => {
+        startDiagnosticStabilityRecorder();
+        return stopDiagnosticStabilityRecorder;
+      },
+    },
+    { name: "skill tracking", subscribe: () => registerSkillUsageTracking() },
+  ])("does not emit exporter windows with only $name", async ({ subscribe }) => {
+    const unsubscribe = subscribe();
+    try {
+      const harness = createMonitorHarness();
+      harness.sample(1_500);
+      expect(harness.monitor.snapshot()?.reasons).toEqual(["event_loop_delay"]);
+      await waitForDiagnosticEventsDrained();
+      expect(getInternalDiagnosticEventSequence()).toBe(0);
+    } finally {
+      unsubscribe();
+    }
+  });
+
+  it("does not turn reset, stop, or repeated reads into completed windows", async () => {
+    const events: DiagnosticEventPayload[] = [];
+    onInternalDiagnosticEvent((event) => events.push(event), {
+      include: ["gateway.event_loop.sample"],
+    });
+    const harness = createMonitorHarness();
+    harness.samples(4);
+    harness.elapseWithoutSampling(1_500);
+    harness.monitor.reset();
+    harness.samples(50);
+    harness.monitor.stop();
+    expect(harness.monitor.snapshot()).toBeUndefined();
+    await waitForDiagnosticEventsDrained();
+    expect(events).toMatchObject([
+      { type: "gateway.event_loop.sample", intervalMs: 1_000, delayMaxMs: 20 },
+    ]);
   });
 });

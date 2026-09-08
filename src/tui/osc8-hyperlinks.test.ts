@@ -133,15 +133,14 @@ describe("addOsc8Hyperlinks", () => {
     expect(addOsc8Hyperlinks(lines, [])).toEqual(lines);
   });
 
-  it("wraps a single-line URL with OSC 8", () => {
-    const url = "https://example.com";
-    const lines = [`Visit ${url} for info`];
-    const result = addOsc8Hyperlinks(lines, [url]);
-
-    expect(result[0]).toContain(`\x1b]8;;${url}\x07`);
-    expect(result[0]).toContain(`\x1b]8;;\x07`);
-    // The URL text should be between open and close
-    expect(result[0]).toBe(`Visit \x1b]8;;${url}\x07${url}\x1b]8;;\x07 for info`);
+  it.each([
+    { prefix: "Visit ", url: "https://example.com", suffix: " for info" },
+    { prefix: "🦞 東京 ", url: "https://example.com/😀/e\u0301", suffix: " 🧑‍💻" },
+    { prefix: "\ud800 ", url: "https://example.com/\udfff", suffix: " \udc00" },
+  ])("wraps a single-line URL with OSC 8 ($url)", ({ prefix, url, suffix }) => {
+    expect(addOsc8Hyperlinks([`${prefix}${url}${suffix}`], [url])).toEqual([
+      `${prefix}\x1b]8;;${url}\x07${url}\x1b]8;;\x07${suffix}`,
+    ]);
   });
 
   it.each([".", ",", ";", "!", "?", ":", "*", "_", "~", ".?!"])(
@@ -195,6 +194,16 @@ describe("addOsc8Hyperlinks", () => {
     expect(result[0]).toContain(`\x1b]8;;${fullUrl}\x07`);
     // Line 2: continuation should also be wrapped
     expect(result[1]).toContain(`\x1b]8;;${fullUrl}\x07`);
+  });
+
+  it("keeps a whole code point when a wrapped continuation matches only its high surrogate", () => {
+    const prefix = "https://example.com/";
+    const url = `${prefix}😀/path`;
+
+    expect(addOsc8Hyperlinks([prefix, "😁 next"], [url])).toEqual([
+      `\x1b]8;;${url}\x07${prefix}\x1b]8;;\x07`,
+      `\x1b]8;;${url}\x07😁\x1b]8;;\x07 next`,
+    ]);
   });
 
   it("wraps a URL with a bracketed IPv6 authority", () => {

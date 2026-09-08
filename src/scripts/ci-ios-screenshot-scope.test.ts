@@ -7,8 +7,14 @@ describe("shouldRunIosScreenshots", () => {
   it("conservatively routes screenshot-pipeline owners to release capture", () => {
     for (const changedPath of [
       "apps/ios/Sources/RootTabs.swift",
+      "apps/ios/UITests/OpenClawSnapshotUITests.swift",
+      "apps/ios/WatchApp/Sources/WatchVoiceControls.swift",
+      "apps/ios/project.yml",
+      "apps/ios/Tests/Info.plist",
+      "apps/ios/Resources/Localizable.xcstrings",
       "apps/ios/fastlane/Fastfile",
       "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatView.swift",
+      "apps/shared/OpenClawKit/Tests/OpenClawKitTests/ChatPasteboardTests.swift",
       "apps/swabble/Sources/SwabbleKit/WakeWordGate.swift",
       "scripts/ios-screenshots.sh",
       "scripts/ios-screenshot-evidence.mjs",
@@ -18,6 +24,10 @@ describe("shouldRunIosScreenshots", () => {
       "config/swiftformat",
     ]) {
       expect(shouldRunIosScreenshots([changedPath]), changedPath).toBe(true);
+      expect(
+        shouldRunIosScreenshots(["apps/ios/Tests/NodeAppModelInvokeTests.swift", changedPath]),
+        changedPath,
+      ).toBe(true);
     }
 
     for (const changedPath of [
@@ -30,6 +40,15 @@ describe("shouldRunIosScreenshots", () => {
 
     expect(shouldRunIosScreenshots([])).toBe(false);
     expect(shouldRunIosScreenshots(null)).toBe(true);
+  });
+
+  it.each([
+    "apps/ios/Tests/NodeAppModelInvokeTests.swift",
+    "apps/ios/Tests/Logic/WatchVoiceTurnTrackerTests.swift",
+    "apps/ios/WatchTests/WatchSpeechPlaybackTests.swift",
+  ])("keeps %s in native build scope without unrelated screenshot capture", (changedPath) => {
+    expect(detectChangedScope([changedPath]).runIosBuild).toBe(true);
+    expect(shouldRunIosScreenshots([changedPath])).toBe(false);
   });
 
   it("keeps screenshot capture wrappers inside the iOS build lane", () => {

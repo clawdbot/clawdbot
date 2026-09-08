@@ -624,17 +624,19 @@ export function recordAuditEvent(
   try {
     return runOpenClawStateWriteTransaction(({ db }) => {
       countCacheDatabase = db;
-      const insert = executeSqliteQuerySync(
+      // Read losslessly so Node's rowid decoding cannot preempt the safe-integer guard.
+      const insert = executeSqliteQueryTakeFirstSync(
         db,
         getAuditKysely(db)
           .insertInto("audit_events")
           .values(bindAuditEvent(db, input))
-          .onConflict((conflict) => conflict.column("source_id").doNothing()),
+          .onConflict((conflict) => conflict.column("source_id").doNothing())
+          .returning((eb) => eb.cast<string>("sequence", "text").as("sequence")),
       );
-      if (insert.insertId === undefined) {
+      if (insert === undefined) {
         return undefined;
       }
-      const insertedSequence = Number(insert.insertId);
+      const insertedSequence = Number(insert.sequence);
       if (!Number.isSafeInteger(insertedSequence) || insertedSequence < 1) {
         throw new Error("audit event sequence is outside the supported integer range");
       }

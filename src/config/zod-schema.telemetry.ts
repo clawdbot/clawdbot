@@ -1,11 +1,8 @@
 // Defines anonymous feature-usage consent and its generated field metadata.
 import { z } from "zod";
+import { type ConfigSchemaShape, projectConfigFieldMetadata } from "./schema.field-metadata.js";
 import type { TelemetryConfig } from "./types.telemetry.js";
 import { configUiMetadata } from "./zod-schema.sensitive.js";
-
-type ConfigSchemaShape<T extends object> = {
-  [Key in keyof T]-?: z.ZodType<T[Key]>;
-};
 
 const TelemetryConfigShape = {
   enabled: z.boolean().optional().register(configUiMetadata, {
@@ -20,16 +17,5 @@ const TelemetryConfigShape = {
 
 export const TelemetryConfigSchema = z.object(TelemetryConfigShape).strict().optional();
 
-const TELEMETRY_FIELD_SCHEMAS = {
-  "telemetry.enabled": TelemetryConfigShape.enabled,
-  "telemetry.consentedAt": TelemetryConfigShape.consentedAt,
-};
-
-export function projectTelemetryFieldMetadata(field: "label" | "help"): Record<string, string> {
-  return Object.fromEntries(
-    Object.entries(TELEMETRY_FIELD_SCHEMAS).flatMap(([fieldPath, schema]) => {
-      const value = configUiMetadata.get(schema)?.[field];
-      return typeof value === "string" ? [[fieldPath, value]] : [];
-    }),
-  );
-}
+export const { labels: TELEMETRY_FIELD_LABELS, help: TELEMETRY_FIELD_HELP } =
+  projectConfigFieldMetadata(TelemetryConfigSchema, "telemetry");

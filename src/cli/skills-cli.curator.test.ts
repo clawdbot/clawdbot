@@ -437,7 +437,7 @@ describe("skills curator cli", () => {
   it("prints the last collection and experience outcomes", async () => {
     await createProgram().parseAsync(["skills", "curator", "status"], { from: "user" });
     expect(mocks.defaultRuntime.writeStdout).toHaveBeenCalledWith(
-      expect.stringContaining("Collection review workspac"),
+      expect.stringContaining("Collection review: attempted"),
     );
     expect(mocks.defaultRuntime.writeStdout).toHaveBeenCalledWith(
       expect.stringContaining("Experience review workspac: proposed (proposal-1)"),

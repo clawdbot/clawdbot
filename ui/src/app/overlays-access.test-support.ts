@@ -3,11 +3,7 @@ import type { GatewayBrowserClient, GatewayEventFrame } from "../api/gateway.ts"
 import type { ApplicationGateway, ApplicationGatewaySnapshot } from "./gateway.ts";
 import { createApplicationOverlays } from "./overlays.ts";
 
-export type RequestFn = (
-  method: string,
-  params?: unknown,
-  options?: { timeoutMs?: number | null },
-) => Promise<unknown>;
+export type RequestFn = (...args: Parameters<GatewayBrowserClient["request"]>) => Promise<unknown>;
 
 const SYSTEM_APPROVAL_TITLE = "OpenClaw change";
 const SYSTEM_APPROVAL_COMMAND = "Set gateway.port to 19001";
@@ -56,6 +52,7 @@ export function createGatewayHarness(
     connection: { gatewayUrl: "ws://gateway.test", password: "", token: "", bootstrapToken: "" },
     connectionRevision: 0,
     eventLog: [],
+    eventLogRevision: 0,
     connect,
     setSessionKey() {},
     start() {},

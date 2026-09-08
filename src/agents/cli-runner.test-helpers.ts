@@ -87,9 +87,7 @@ export function createTestMcpLoopbackClientGrant(params: {
   return { token: "loopback-token", context: structuredClone(params.context) };
 }
 
-export async function createTestMcpLoopbackServer(port = 0) {
-  return { port, close: vi.fn(async () => undefined) };
-}
+export async function createTestMcpLoopbackServer(): Promise<void> {}
 
 export function buildDefaultTestCliBackend(
   params: TestCliBackendParams = {},

@@ -55,7 +55,7 @@ export async function readNativeVitestExecutionFailure(params: {
     success?: unknown;
     testResults?: Array<{
       name?: unknown;
-      assertionResults?: Array<{ fullName?: unknown; status?: unknown; title?: unknown }>;
+      assertionResults?: Array<{ ancestorTitles?: unknown; status?: unknown; title?: unknown }>;
     }>;
   };
   if (
@@ -109,9 +109,13 @@ export async function readNativeVitestExecutionFailure(params: {
     }
     if (
       !passedAssertions.some((assertion) => {
-        const assertionName =
-          typeof assertion.fullName === "string" ? assertion.fullName : assertion.title;
-        return typeof assertionName === "string" && requestedTestName.test(assertionName);
+        // Native JSON fullName uses spaces; v5 selection joins the title chain with >.
+        return (
+          typeof assertion.title === "string" &&
+          Array.isArray(assertion.ancestorTitles) &&
+          assertion.ancestorTitles.every((title) => typeof title === "string") &&
+          requestedTestName.test([...assertion.ancestorTitles, assertion.title].join(" > "))
+        );
       })
     ) {
       return `Vitest exited successfully without a passed assertion for the requested test name pattern ${JSON.stringify(testNamePattern)}.`;

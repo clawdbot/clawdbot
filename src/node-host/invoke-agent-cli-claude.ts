@@ -148,8 +148,6 @@ export async function runClaudeCliNodeCommand(params: {
     try {
       const runPromise = supervisor.spawn({
         runId,
-        sessionId: params.request.sessionKey ?? params.frame.id,
-        backendId: "node-host-claude",
         mode: "child",
         argv,
         cwd: params.cwd,

@@ -96,42 +96,6 @@ function isAllowedPluginRecoveryIssue(
   );
 }
 
-function collectRequestedPluginInstallPaths(
-  cfg: OpenClawConfig,
-  installRecords: Awaited<ReturnType<typeof loadInstalledPluginIndexInstallRecords>>,
-  request: PluginInstallRequestContext,
-  env: NodeJS.ProcessEnv,
-): Set<string> {
-  const pluginId = request.bundledPluginId?.trim();
-  if (!pluginId) {
-    return new Set();
-  }
-  const paths = new Set<string>();
-  const record = installRecords[pluginId] ?? cfg.plugins?.installs?.[pluginId];
-  for (const value of [record?.sourcePath, record?.installPath]) {
-    if (typeof value === "string" && value.trim()) {
-      paths.add(resolveUserPath(value, env));
-    }
-  }
-  return paths;
-}
-
-async function collectRequestedPluginLocationBridgePaths(
-  request: PluginInstallRequestContext,
-  env: NodeJS.ProcessEnv,
-): Promise<Set<string>> {
-  const pluginId = request.bundledPluginId?.trim();
-  if (!pluginId) {
-    return new Set();
-  }
-  const locations = await listPersistedBundledPluginRecoveryLocations({ env });
-  return new Set(
-    locations
-      .filter((location) => location.pluginId === pluginId)
-      .flatMap((location) => location.loadPaths.map((loadPath) => resolveUserPath(loadPath, env))),
-  );
-}
-
 function removeOwnedMissingPluginLoadPaths(
   cfg: OpenClawConfig,
   issues: readonly ConfigValidationIssue[],
@@ -181,7 +145,17 @@ async function resolveRequestedPluginInstallPaths(
     return new Set();
   }
   const installRecords = await loadInstalledPluginIndexInstallRecords();
-  const ownedLoadPaths = collectRequestedPluginInstallPaths(cfg, installRecords, request, env);
+  const ownedLoadPaths = new Set<string>();
+  const pluginId = request.bundledPluginId?.trim();
+  if (!pluginId) {
+    return ownedLoadPaths;
+  }
+  const record = installRecords[pluginId] ?? cfg.plugins?.installs?.[pluginId];
+  for (const value of [record?.sourcePath, record?.installPath]) {
+    if (typeof value === "string" && value.trim()) {
+      ownedLoadPaths.add(resolveUserPath(value, env));
+    }
+  }
   const stillNeedsLocationBridge = issues.some(
     (issue) =>
       extractMissingPluginLoadPath(issue) !== null &&
@@ -189,19 +163,21 @@ async function resolveRequestedPluginInstallPaths(
   );
   if (stillNeedsLocationBridge) {
     // Registry ownership, not a matching requested id, authorizes repairing a removed path.
-    for (const loadPath of await collectRequestedPluginLocationBridgePaths(request, env)) {
-      ownedLoadPaths.add(loadPath);
+    const locations = await listPersistedBundledPluginRecoveryLocations({ env });
+    const loadPaths = locations
+      .filter((location) => location.pluginId === pluginId)
+      .flatMap((location) => location.loadPaths);
+    for (const loadPath of loadPaths) {
+      ownedLoadPaths.add(resolveUserPath(loadPath, env));
     }
   }
   return ownedLoadPaths;
 }
 
-async function loadConfigFromSnapshotForInstall(
+async function recoverPluginInstallConfig(
   request: PluginInstallRequestContext,
-  prepared: Awaited<ReturnType<typeof readConfigFileSnapshotForWrite>>,
-): Promise<ConfigSnapshotForInstallExecution> {
-  const { snapshot, writeOptions } = prepared;
-  const mutationWriteOptions = selectInstallMutationWriteOptions(writeOptions);
+  snapshot: Awaited<ReturnType<typeof readConfigFileSnapshotForWrite>>["snapshot"],
+): Promise<OpenClawConfig> {
   if (resolvePluginInstallInvalidConfigPolicy(request) !== "allow-plugin-recovery") {
     throw buildInvalidPluginInstallConfigError(
       "Config invalid; run `openclaw doctor --fix` before installing plugins.",
@@ -234,24 +210,12 @@ async function loadConfigFromSnapshotForInstall(
       "Config plugin recovery uses an unsupported $include shape; use a single-file top-level plugins include or run `openclaw doctor --fix` before reinstalling it.",
     );
   }
-  const { hookMutation, pluginMutation } = resolveInstallConfigMutationPreflights({
-    parsed,
-    snapshotPath: snapshot.path,
-    writeOptions: mutationWriteOptions,
-  });
-  assertPluginConfigMutationAllowed(pluginMutation);
-  return {
-    config: removeOwnedMissingPluginLoadPaths(
-      snapshot.config,
-      snapshot.issues,
-      ownedLoadPaths,
-      process.env,
-    ),
-    baseHash: snapshot.hash,
-    writeOptions: mutationWriteOptions,
-    hookMutation,
-    pluginMutation,
-  };
+  return removeOwnedMissingPluginLoadPaths(
+    snapshot.config,
+    snapshot.issues,
+    ownedLoadPaths,
+    process.env,
+  );
 }
 
 /** Read and authorize install configuration only after mutation-free request preflight. */
@@ -265,20 +229,20 @@ export async function loadConfigForInstall(
   );
   const { snapshot, writeOptions } = prepared;
   const mutationWriteOptions = selectInstallMutationWriteOptions(writeOptions);
-  if (!snapshot.valid) {
-    return await loadConfigFromSnapshotForInstall(request, prepared);
-  }
+  const config = snapshot.valid
+    ? snapshot.sourceConfig
+    : await recoverPluginInstallConfig(request, snapshot);
   const parsed = (snapshot.parsed ?? {}) as Record<string, unknown>;
   const { hookMutation, pluginMutation } = resolveInstallConfigMutationPreflights({
     parsed,
     snapshotPath: snapshot.path,
     writeOptions: mutationWriteOptions,
   });
-  if (request.installKind === "plugin") {
+  if (!snapshot.valid || request.installKind === "plugin") {
     assertPluginConfigMutationAllowed(pluginMutation);
   }
   return {
-    config: snapshot.sourceConfig,
+    config,
     baseHash: snapshot.hash,
     writeOptions: mutationWriteOptions,
     hookMutation,

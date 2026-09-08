@@ -1,26 +1,20 @@
-import { controlUiSessionSlug, SHORT_SESSION_ID_RE } from "@openclaw/session-url-contract";
+import { SHORT_SESSION_ID_RE } from "@openclaw/session-url-contract";
+import type { SessionsResolveResult } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { pathForRoute } from "../../app-route-paths.ts";
 import { waitForGatewayClient } from "../../app/gateway-readiness.ts";
 import type { BoardFace } from "../../lib/board/settings.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import {
-  areUiSessionKeysEquivalent,
   buildAgentMainSessionKey,
-  isUiGlobalScopeConfigured,
-  isUiGlobalSessionKey,
   normalizeAgentId,
-  parseAgentSessionKey,
   resolveUiConfiguredMainKey,
-  resolveUiGlobalAliasAgentId,
 } from "../../lib/sessions/session-key.ts";
 import type { SessionRouteContext as ApplicationContext } from "./route-loader-context.ts";
-import { sessionKeyUuid } from "./route-loader-short-cache.ts";
-import type { SessionReferenceResolution } from "./route-loader-short-resolve.ts";
-
-const SESSION_REF_SEARCH_LIMIT = 20;
-const SESSION_REF_SEARCH_MAX_PAGES = 5;
+import {
+  sessionReferenceResolution,
+  type SessionReferenceResolution,
+} from "./route-loader-short-resolve.ts";
 
 export type MissingSessionRouteData = {
   kind: "missing-session";
@@ -29,10 +23,7 @@ export type MissingSessionRouteData = {
   sessionsHref: string;
 };
 
-export type SessionReferenceSearch = { agentId: string } & (
-  | { kind: "exact"; value: string }
-  | { kind: "slug"; value: string }
-);
+type SessionReferenceSearch = { agentId: string; key: string; slug?: string };
 
 type PendingSessionReference = {
   controller: AbortController;
@@ -89,64 +80,6 @@ export function uniqueShortIdPrefix(
   return uuid;
 }
 
-// The gateway matches `search` as a plain substring of the stored key, id, and title
-// fields, so every needle here has to be a run that literally appears in one of them.
-// sessionReferenceMatches still applies the exact rule per row, so a loose needle only
-// widens the candidate set; too narrow a needle loses the session entirely.
-function exactGlobalAliasAgentId(
-  context: ApplicationContext,
-  search: SessionReferenceSearch,
-): string | null {
-  if (search.kind !== "exact") {
-    return null;
-  }
-  const host = {
-    agentsList: context.agents.state.agentsList,
-    hello: context.gateway.snapshot.hello,
-  };
-  const aliasAgentId = resolveUiGlobalAliasAgentId(host, search.value);
-  const aliasRest = parseAgentSessionKey(search.value)?.rest.toLowerCase();
-  return aliasRest === "global" || isUiGlobalScopeConfigured(host) ? aliasAgentId : null;
-}
-
-function sessionReferenceSearchText(
-  context: ApplicationContext,
-  search: SessionReferenceSearch,
-): string {
-  if (search.kind === "exact") {
-    // Gateway search filters literal stored keys before client-side alias matching.
-    // A scoped main alias therefore has to request the canonical global key.
-    if (exactGlobalAliasAgentId(context, search) === normalizeAgentId(search.agentId)) {
-      return "global";
-    }
-    return search.value;
-  }
-  // controlUiSessionSlug builds every token from a contiguous alphanumeric run of the
-  // lowercased display name, so the longest token is the safest selective search term.
-  return search.value
-    .split("-")
-    .reduce((longest, token) => (token.length > longest.length ? token : longest), "");
-}
-
-function sessionReferenceMatches(
-  context: ApplicationContext,
-  result: SessionsListResult,
-  search: SessionReferenceSearch,
-): GatewaySessionRow[] {
-  if (search.kind === "exact") {
-    const aliasAgentId = exactGlobalAliasAgentId(context, search);
-    return result.sessions.filter(
-      (row) =>
-        areUiSessionKeysEquivalent(row.key, search.value) ||
-        (isUiGlobalSessionKey(row.key) && aliasAgentId === normalizeAgentId(search.agentId)),
-    );
-  }
-  return result.sessions.filter(
-    (row) =>
-      sessionKeyUuid(row.key) !== null && controlUiSessionSlug(row.displayName) === search.value,
-  );
-}
-
 export async function querySessionReference(
   context: ApplicationContext,
   search: SessionReferenceSearch,
@@ -156,15 +89,39 @@ export async function querySessionReference(
   signal.throwIfAborted();
   const cache = resolutionCache.get(client) ?? new Map<string, PendingSessionReference>();
   resolutionCache.set(client, cache);
-  const cacheKey = `${normalizeAgentId(search.agentId)}:${search.kind}:${search.value}`;
+  const cacheKey = JSON.stringify([normalizeAgentId(search.agentId), search.key, search.slug]);
   let pending = cache.get(cacheKey);
   if (!pending || pending.controller.signal.aborted) {
     const controller = new AbortController();
+    const { hello } = context.gateway.snapshot;
+    const isCurrent = () =>
+      context.gateway.snapshot.phase === "connected" &&
+      context.gateway.snapshot.client === client &&
+      context.gateway.snapshot.hello === hello;
     pending = {
       controller,
-      promise: Promise.resolve().then(() =>
-        querySessionReferencePages(context, search, controller.signal),
-      ),
+      promise: Promise.resolve().then(async () => {
+        controller.signal.throwIfAborted();
+        if (!isCurrent()) {
+          return null;
+        }
+        try {
+          const result = await client.request<SessionsResolveResult>("sessions.resolve", {
+            reference: { key: search.key, ...(search.slug ? { slug: search.slug } : {}) },
+            agentId: search.agentId,
+            includeGlobal: true,
+            includeUnknown: true,
+            allowMissing: true,
+          });
+          return isCurrent() ? sessionReferenceResolution(result) : null;
+        } catch (error) {
+          // Reconnects abandon old discovery; current failures belong to the route's error view.
+          if (!isCurrent()) {
+            return null;
+          }
+          throw error;
+        }
+      }),
       subscribers: new Set(),
     };
     cache.set(cacheKey, pending);
@@ -177,8 +134,8 @@ export async function querySessionReference(
   });
   const onAbort = () => {
     shared.subscribers.delete(signal);
-    // The producer is shared: one cancelled navigation must not cancel another
-    // active route's lookup, but the final subscriber must stop later pages.
+    // A cancelled route cannot cancel another consumer's lookup; only the last
+    // subscriber abandons the producer and prevents a not-yet-started request.
     if (shared.subscribers.size === 0) {
       shared.controller.abort(signal.reason);
     }
@@ -196,57 +153,5 @@ export async function querySessionReference(
     if (shared.subscribers.size === 0 && cache.get(cacheKey) === shared) {
       cache.delete(cacheKey);
     }
-  }
-}
-
-function incompleteSessionReferenceResolution(
-  sessions: GatewaySessionRow[],
-): SessionReferenceResolution {
-  return { kind: "ambiguous", sessions, truncated: true };
-}
-
-async function querySessionReferencePages(
-  context: ApplicationContext,
-  search: SessionReferenceSearch,
-  signal: AbortSignal,
-): Promise<SessionReferenceResolution | null> {
-  const matches = new Map<string, GatewaySessionRow>();
-  let offset = 0;
-  for (let page = 0; ; page += 1) {
-    signal.throwIfAborted();
-    const result = await context.sessions.list({
-      agentId: search.agentId,
-      archivedFilter: "all",
-      includeDerivedTitles: true,
-      limit: SESSION_REF_SEARCH_LIMIT,
-      search: sessionReferenceSearchText(context, search),
-      ...(offset > 0 ? { offset } : {}),
-    });
-    signal.throwIfAborted();
-    if (!result) {
-      return null;
-    }
-    for (const session of sessionReferenceMatches(context, result, search)) {
-      matches.set(session.key, session);
-    }
-    const sessions = [...matches.values()];
-    if (search.kind === "exact" && sessions[0]) {
-      return { kind: "unique", session: sessions[0] };
-    }
-    if (sessions.length > 1) {
-      return { kind: "ambiguous", sessions, truncated: result.hasMore === true };
-    }
-    if (result.hasMore !== true) {
-      const session = sessions[0];
-      return session ? { kind: "unique", session } : { kind: "not-found" };
-    }
-    if (page === SESSION_REF_SEARCH_MAX_PAGES - 1) {
-      return incompleteSessionReferenceResolution(sessions);
-    }
-    const nextOffset = result.nextOffset ?? offset + result.sessions.length;
-    if (nextOffset <= offset) {
-      return incompleteSessionReferenceResolution(sessions);
-    }
-    offset = nextOffset;
   }
 }

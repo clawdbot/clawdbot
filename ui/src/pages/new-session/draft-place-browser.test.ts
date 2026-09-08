@@ -7,6 +7,7 @@ import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { DraftGatewayState } from "./draft-gateway-state.ts";
 import { DraftPlaceBrowser } from "./draft-place-browser.ts";
 import type { NewSessionRouteData } from "./location.ts";
+import { PICKER_INPUT_DEBOUNCE_MS } from "./place-browser-state.ts";
 import { loadNewSessionPreference, patchNewSessionPreference } from "./preferences.ts";
 import { TestReactiveControllerHost } from "./reactive-controller-host.test-support.ts";
 
@@ -18,6 +19,7 @@ function createBrowser(
   request: (method: string) => Promise<unknown>,
   data?: NewSessionRouteData,
   recoveryReady = true,
+  isAdmin = false,
 ) {
   const host = new TestReactiveControllerHost();
   const controllers: ReactiveController[] = [];
@@ -79,17 +81,18 @@ function createBrowser(
   );
   gateway.synchronize(context.gateway);
   const onProjectMissing = vi.fn();
+  const onSelectProject = vi.fn();
   const browser = new DraftPlaceBrowser(
     host,
     gateway,
     () => ({
       context,
-      isAdmin: false,
+      isAdmin,
     }),
     {
       requestUpdate: vi.fn(),
       onProjectMissing,
-      onSelectProject: vi.fn(),
+      onSelectProject,
       onApprovedListing: vi.fn(),
       querySelector: () => null,
       activeElement: () => null,
@@ -103,6 +106,7 @@ function createBrowser(
   return {
     browser,
     onProjectMissing,
+    onSelectProject,
     onInvalidate,
     gateway,
     client,
@@ -118,6 +122,171 @@ function createBrowser(
 }
 
 describe("DraftPlaceBrowser", () => {
+  it("keeps the current listing's repository probe while filtering its entries", async () => {
+    const branches = createDeferred<{ repositoryStatus: "git" }>();
+    const request = vi.fn(async (method: string) => {
+      if (method === "worktrees.branches") {
+        return branches.promise;
+      }
+      if (method === "fs.listDir") {
+        return {
+          path: "/workspace",
+          home: "/home/test",
+          entries: [{ name: "packages", path: "/workspace/packages" }],
+        };
+      }
+      return { projects: [] };
+    });
+    const { browser } = createBrowser(request, undefined, true, true);
+    browser.selectGatewayBrowser("/workspace");
+    await waitForFast(() => expect(browser.browser.listing?.path).toBe("/workspace"));
+    browser.browser.setDraft("/workspace/pa");
+    branches.resolve({ repositoryStatus: "git" });
+    await waitForFast(() => expect(browser.browserProjectPath).toBe("/workspace"));
+  });
+
+  it.each([
+    "filtering",
+    "navigation",
+    "navigate away and back",
+    "typed directory",
+    "typed directory fails",
+    "reopen",
+  ])("selects a registered project only while its browser remains current (%s)", async (change) => {
+    const project = {
+      id: "registered-workspace",
+      displayName: "Workspace",
+      repoRoot: "/workspace",
+    };
+    const registration = createDeferred<typeof project>();
+    let directoryPath = "/workspace";
+    const request = vi.fn(async (method: string, params?: { path?: string }) => {
+      if (method === "projects.register") {
+        return registration.promise;
+      }
+      if (method === "worktrees.branches") {
+        return { repositoryStatus: "git" };
+      }
+      if (method === "fs.listDir") {
+        if (params?.path === "/elsewhere") {
+          throw new Error("directory not found");
+        }
+        return {
+          path: directoryPath,
+          home: "/home/test",
+          entries: [{ name: "packages", path: `${directoryPath}/packages` }],
+        };
+      }
+      return { projects: [project] };
+    });
+    const { browser, onSelectProject } = createBrowser(request, undefined, true, true);
+    browser.selectGatewayBrowser("/workspace");
+    await waitForFast(() => expect(browser.browserProjectPath).toBe("/workspace"));
+    const pending = browser.registerBrowserProject("/workspace");
+    const initiallyBusy = browser.browserRegistering;
+    const failedDirectory = change === "typed directory fails";
+    if (failedDirectory) {
+      vi.useFakeTimers();
+    }
+    try {
+      if (change === "filtering") {
+        browser.browser.setDraft("/workspace/pa");
+      } else if (change === "navigation" || change === "navigate away and back") {
+        directoryPath = "/other";
+        await browser.browser.navigate(directoryPath);
+        if (change === "navigate away and back") {
+          directoryPath = "/workspace";
+          await browser.browser.navigate(directoryPath);
+          await waitForFast(() => expect(browser.browserProjectPath).toBe("/workspace"));
+        }
+      } else if (change === "typed directory" || failedDirectory) {
+        browser.browser.setDraft("/elsewhere/x");
+        if (failedDirectory) {
+          await vi.advanceTimersByTimeAsync(PICKER_INPUT_DEBOUNCE_MS);
+          expect(browser.browser.listing?.path).toBe("/workspace");
+          expect(browser.browser.loading).toBe(false);
+          expect(browser.browser.error).toBeNull();
+          expect(browser.browserProjectPath).toBeNull();
+        } else {
+          // Flush request continuations while the directory debounce is still pending.
+          await Promise.resolve();
+        }
+      } else {
+        browser.close();
+        browser.selectGatewayBrowser("/workspace");
+        await waitForFast(() => expect(browser.browserProjectPath).toBe("/workspace"));
+      }
+      const stillBusy = browser.browserRegistering;
+      const duplicate =
+        change === "reopen" ? undefined : browser.registerBrowserProject(directoryPath);
+      registration.resolve(project);
+      await Promise.all([pending, duplicate]);
+
+      expect(initiallyBusy).toBe(true);
+      expect(stillBusy).toBe(change !== "reopen");
+      expect(request.mock.calls.filter(([method]) => method === "projects.register")).toHaveLength(
+        1,
+      );
+      expect(browser.browserRegistering).toBe(false);
+      if (change === "filtering") {
+        expect(onSelectProject).toHaveBeenCalledExactlyOnceWith(project.id);
+      } else {
+        expect(onSelectProject).not.toHaveBeenCalled();
+      }
+    } finally {
+      registration.resolve(project);
+      try {
+        await pending;
+      } finally {
+        if (failedDirectory) {
+          browser.browser.reset();
+          vi.useRealTimers();
+        }
+      }
+    }
+  });
+
+  it("keeps the register action available after a registration failure", async () => {
+    const project = {
+      id: "registered-workspace",
+      displayName: "Workspace",
+      repoRoot: "/workspace",
+    };
+    let registrations = 0;
+    const request = vi.fn(async (method: string) => {
+      if (method === "projects.register") {
+        registrations += 1;
+        if (registrations === 1) {
+          throw new Error("registry unavailable");
+        }
+        return project;
+      }
+      if (method === "worktrees.branches") {
+        return { repositoryStatus: "git" };
+      }
+      if (method === "fs.listDir") {
+        return {
+          path: "/workspace",
+          home: "/home/test",
+          entries: [{ name: "packages", path: "/workspace/packages" }],
+        };
+      }
+      return { projects: [project] };
+    });
+    const { browser, onSelectProject } = createBrowser(request, undefined, true, true);
+    browser.selectGatewayBrowser("/workspace");
+    await waitForFast(() => expect(browser.browserProjectPath).toBe("/workspace"));
+
+    await browser.registerBrowserProject("/workspace");
+    expect(browser.browser.error).toContain("registry unavailable");
+    expect(browser.browserRegistering).toBe(false);
+    expect(browser.browserProjectPath).toBe("/workspace");
+
+    await browser.registerBrowserProject("/workspace");
+    expect(registrations).toBe(2);
+    expect(onSelectProject).toHaveBeenCalledExactlyOnceWith(project.id);
+  });
+
   it.each(["loaded", "pending"])(
     "reloads the project catalog after an owner reset without reconnecting (%s)",
     async (initial) => {
@@ -269,7 +438,7 @@ describe("DraftGatewayState", () => {
     const fixture = createBrowser(request, undefined, false);
     fixture.hello.features.methods.push("system.info");
     fixture.hello.auth.scopes.push("operator.write");
-    fixture.browser.browserPathDraft = "/draft-folder";
+    fixture.browser.browser.setDraft("/draft-folder");
     fixture.update();
     await waitForFast(() => expect(fixture.gateway.gatewayName).toBe("Gateway A"));
     await waitForFast(() => expect(fixture.browser.projects).toHaveLength(1));
@@ -280,7 +449,7 @@ describe("DraftGatewayState", () => {
     fixture.client.recoveryScopeReady = true;
     fixture.update();
     expect(fixture.onInvalidate).not.toHaveBeenCalled();
-    expect(fixture.browser.browserPathDraft).toBe("/draft-folder");
+    expect(fixture.browser.browser.draft).toBe("/draft-folder");
     expect(fixture.browser.projectId).toBe("project");
     expect(request.mock.calls.filter(([method]) => method === "projects.list")).toHaveLength(1);
     expect(request.mock.calls.filter(([method]) => method === "environments.list")).toHaveLength(1);

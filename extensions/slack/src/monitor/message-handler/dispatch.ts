@@ -534,20 +534,19 @@ async function dispatchSlackMessageWithSetup(
         },
         onQueuedFollowupAdmitted: progress.onQueuedFollowupAdmitted,
         onQueuedFollowupSettled: progress.onQueuedFollowupSettled,
-        onReasoningStream:
-          statusReactionsEnabled || progress.previewToolProgressEnabled
-            ? async (payload) => {
-                const visible = await progress.pushReasoningProgress(payload);
-                if (!statusReactionsEnabled) {
-                  return visible;
-                }
-                await statusReactions.setThinking();
-                return visible;
-              }
-            : undefined,
+        onReasoningStream: async (payload) => {
+          const visible = await progress.pushReasoningProgress(payload);
+          if (statusReactionsEnabled) {
+            await statusReactions.setThinking();
+          }
+          return visible;
+        },
         onToolStart: async (payload) => {
           if (statusReactionsEnabled) {
             await statusReactions.setTool(payload.name);
+          }
+          if (payload.phase === "start") {
+            progress.progressWorkCounter.noteToolCall(payload.name);
           }
           return await progress.progressDraft.pushToolEvent(payload);
         },

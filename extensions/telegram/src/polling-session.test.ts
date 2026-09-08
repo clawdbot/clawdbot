@@ -2404,6 +2404,7 @@ describe("TelegramPollingSession", () => {
 
       expect(worker.workerStop).not.toHaveBeenCalled();
       expectLogExcludes(log, "Polling stall detected");
+      expectLogExcludes(log, "isolated polling worker poll-start");
     } finally {
       watchdogHarness.restore();
       abort.abort();

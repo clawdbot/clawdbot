@@ -10,6 +10,7 @@ import {
   type SessionScope,
 } from "./types.js";
 import {
+  SESSION_RESTART_RECOVERY_TOMBSTONE_ERROR_CODE,
   SESSION_WORK_START_CHANGED_ERROR_CODE,
   SESSION_WORK_START_INVALIDATED_ERROR_CODE,
 } from "./work-start-error.js";
@@ -45,7 +46,7 @@ export function isRestartRecoveryTombstone(
 
 /** Stable Gateway error detail for stale session lifecycle requests. */
 export const SESSION_LIFECYCLE_CHANGED_ERROR_REASON = "session-changed";
-export const SESSION_RESTART_RECOVERY_TOMBSTONE_ERROR_CODE = "SESSION_RESTART_RECOVERY_TOMBSTONE";
+export { SESSION_RESTART_RECOVERY_TOMBSTONE_ERROR_CODE };
 
 export class SessionWorkStartInvalidatedError extends Error {
   readonly code = SESSION_WORK_START_INVALIDATED_ERROR_CODE;

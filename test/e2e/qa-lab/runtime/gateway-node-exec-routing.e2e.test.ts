@@ -45,13 +45,14 @@ it(
     const children: CapturedChild[] = [];
     const canvasClients: GatewayClient[] = [];
     const probe = path.join(root, "probe.mjs");
+    // Login-shell profiles can reset HOME; keep effects in the node fixture's owned home.
     await fs.writeFile(
       probe,
       [
         'import fs from "node:fs";',
-        'import os from "node:os";',
         'import path from "node:path";',
-        "const home = os.homedir();",
+        "const home = process.env.OPENCLAW_HOME;",
+        'if (!home) throw new Error("Node fixture omitted OPENCLAW_HOME");',
         "const marker = process.argv[2];",
         'fs.appendFileSync(path.join(home, "exec-proof.txt"), `${marker}\\n`);',
         "console.log(JSON.stringify({ home, marker }));",

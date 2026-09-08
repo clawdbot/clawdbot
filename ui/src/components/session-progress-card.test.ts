@@ -32,7 +32,7 @@ describe("renderSessionProgressCard", () => {
     vi.useRealTimers();
   });
 
-  it.each(["board", "composer", "hovercard"] as const)(
+  it.each(["board", "composer"] as const)(
     "shows relative activity for %s cards with and without checklist steps",
     (placement) => {
       const container = document.createElement("div");
@@ -44,7 +44,7 @@ describe("renderSessionProgressCard", () => {
         expect(timestamp?.getAttribute("datetime")).toBe(
           new Date(progressCard.updatedAt).toISOString(),
         );
-        expect(timestamp?.textContent).toBe(placement === "hovercard" ? "2m" : "Updated 2m ago");
+        expect(timestamp?.textContent).toBe("Updated 2m ago");
         expect(timestamp?.getAttribute("aria-label")).toBe("Updated 2m ago");
         expect(timestamp?.getAttribute("title")).toBe(timestamp?.getAttribute("aria-label"));
         const accessibleCard =
@@ -130,7 +130,7 @@ describe("renderSessionProgressCard", () => {
 
   it("renders sanitized markdown and one accessible typed checklist", () => {
     const container = document.createElement("div");
-    render(renderSessionProgressCard(progressCard, "hovercard"), container);
+    render(renderSessionProgressCard(progressCard, "board"), container);
 
     const card = container.querySelector(".session-progress-card");
     expect(card?.getAttribute("aria-label")).toBe("1 of 3 completed");
@@ -467,7 +467,29 @@ describe("renderSessionProgressCard", () => {
 
     expect(container.querySelector("time")?.textContent).toBe("Updated 3m ago");
     expect(container.querySelector("[data-outcome=failed]")).toBeNull();
-    expect(container.querySelector(".session-run-spinner")).not.toBeNull();
+    expect(container.querySelector(".session-run-spinner")).toBeNull();
+    expect(container.querySelector(".session-progress-card__step--paused")).not.toBeNull();
+  });
+
+  it("renders a stale in-progress card as paused during a later active run", () => {
+    const container = document.createElement("div");
+    render(
+      renderSessionProgressCard(
+        { ...progressCard, updatedAt: RUN_STARTED_MS - 1 },
+        "board",
+        undefined,
+        "running",
+        RUN_STARTED_MS,
+        undefined,
+        true,
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".session-run-spinner")).toBeNull();
+    const pausedStep = container.querySelector(".session-progress-card__step--paused");
+    expect(pausedStep).not.toBeNull();
+    expect(pausedStep?.getAttribute("aria-label")).toBe("Wire the checklist, paused");
   });
 
   it("falls back safely for timestamps outside the Date range", () => {

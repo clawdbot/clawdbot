@@ -210,8 +210,8 @@ export async function refreshLegacySystemdServiceMetadata(
   env: GatewayServiceEnv,
   timeoutMs: number,
 ): Promise<boolean> {
-  const deadlineAt = Date.now() + Math.max(1, timeoutMs);
-  const remainingTimeoutMs = () => Math.max(1, deadlineAt - Date.now());
+  const deadlineAt = performance.now() + Math.max(1, timeoutMs);
+  const remainingTimeoutMs = () => Math.max(1, deadlineAt - performance.now());
   const unitPath = resolveSystemdUnitPath(env);
   const current = await fs.readFile(unitPath, "utf8").catch((error: unknown) => {
     if (hasErrnoCode(error, "ENOENT")) {

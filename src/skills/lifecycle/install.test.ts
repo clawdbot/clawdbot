@@ -2,6 +2,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { callGatewayHandler } from "../../gateway/server-methods/skills.test-helpers.js";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
@@ -10,13 +12,10 @@ import { createMockPluginRegistry } from "../../plugins/hooks.test-fixtures.js";
 import { captureEnv } from "../../test-utils/env.js";
 import { createFixtureSuite } from "../../test-utils/fixture-suite.js";
 import { buildWorkspaceSkillStatus } from "../discovery/status.js";
-import {
-  resolveSkillInvocationPolicy,
-  resolveSkillManifestMetadata,
-} from "../loading/frontmatter.js";
-import { loadSkillsFromDirSafe, readSkillFrontmatterSafe } from "../loading/local-loader.js";
+import { loadWorkspaceSkills } from "../loading/workspace-skill-loader.js";
 import { runCommandWithTimeoutMock } from "../test-support/install-test-mocks.js";
 import type { SkillEntry, SkillInstallSpec } from "../types.js";
+import { resolveWorkshopSkillsDir } from "../workshop/skills-root.js";
 import { installSkill } from "./install.js";
 import { skillsInstallTesting } from "./install.test-support.js";
 
@@ -66,29 +65,7 @@ async function writeDangerousInstallableSkill(workspaceDir: string, name: string
 }
 
 function loadTestWorkspaceSkillEntries(workspaceDir: string): SkillEntry[] {
-  const skills = loadSkillsFromDirSafe({
-    dir: path.join(workspaceDir, "skills"),
-    source: "openclaw-workspace",
-  }).skills;
-  return skills.map((skill) => {
-    const frontmatter =
-      readSkillFrontmatterSafe({
-        rootDir: skill.baseDir,
-        filePath: skill.filePath,
-      }) ?? {};
-    const invocation = resolveSkillInvocationPolicy(frontmatter);
-    return {
-      skill,
-      frontmatter,
-      metadata: resolveSkillManifestMetadata(frontmatter),
-      invocation,
-      exposure: {
-        includeInRuntimeRegistry: true,
-        includeInAvailableSkillsPrompt: !invocation.disableModelInvocation,
-        userInvocable: invocation.userInvocable,
-      },
-    };
-  });
+  return loadWorkspaceSkills(workspaceDir, { workspaceOnly: true });
 }
 
 function lastRunCommandCall(): unknown[] | undefined {
@@ -165,6 +142,77 @@ describe("installSkill before_install hooks", () => {
       expect(options.env).not.toHaveProperty("PATH");
       const stat = await fs.stat(npmPrefix);
       expect(stat.isDirectory()).toBe(true);
+    });
+  });
+
+  it("installs the advertised Workshop recipe for each agent sharing a workspace", async () => {
+    const { skillsHandlers } = await import("../../gateway/server-methods/skills.js");
+    await withWorkspaceCase(async ({ workspaceDir, stateDir }) => {
+      skillsInstallTesting.setDepsForTest({
+        loadWorkspaceSkills,
+        resolveNodeInstallStateDir: () => stateDir,
+      });
+      const config: OpenClawConfig = {
+        agents: {
+          ownership: "explicit",
+          list: [
+            { id: "ops", workspace: workspaceDir, skills: [] },
+            { id: "research", workspace: workspaceDir },
+          ],
+        },
+      };
+      const skillName = "shared-workshop-recipe";
+      for (const agentId of ["ops", "research"]) {
+        const skillDir = await writeInstallableSkill(workspaceDir, skillName, {
+          id: "deps",
+          kind: "node",
+          package: `${agentId}-package`,
+        });
+        const workshopDir = resolveWorkshopSkillsDir(config, agentId);
+        await fs.mkdir(workshopDir, { recursive: true });
+        await fs.rename(skillDir, path.join(workshopDir, skillName));
+      }
+
+      for (const agentId of ["research", "ops"]) {
+        const context = { getRuntimeConfig: () => config };
+        const status = await callGatewayHandler(
+          skillsHandlers,
+          "skills.status",
+          { agentId },
+          {
+            context,
+          },
+        );
+        expect(status.ok).toBe(true);
+        expect(status.response).toMatchObject({
+          skills: expect.arrayContaining([
+            expect.objectContaining({
+              name: skillName,
+              source: "openclaw-workshop",
+              install: expect.arrayContaining([expect.objectContaining({ id: "deps" })]),
+            }),
+          ]),
+        });
+
+        runCommandWithTimeoutMock.mockClear();
+        const result = await callGatewayHandler(
+          skillsHandlers,
+          "skills.install",
+          { agentId, name: skillName, installId: "deps" },
+          { context },
+        );
+
+        expect(result.error).toBeUndefined();
+        expect(result.response).toMatchObject({ ok: true, message: "Installed", code: 0 });
+        expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(1);
+        expect(lastRunCommandCall()?.[0]).toEqual([
+          "npm",
+          "install",
+          "-g",
+          "--ignore-scripts",
+          `${agentId}-package`,
+        ]);
+      }
     });
   });
 

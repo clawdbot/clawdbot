@@ -17,6 +17,7 @@ import { runWithGatewayIndependentRootWorkContinuation } from "../../process/gat
 import { createDeferredCore } from "../../shared/deferred.js";
 import { describeSystemAgentPersistentOperation } from "../../system-agent/operations.js";
 import type { AgentRuntimeDelegatedAuthority } from "../agent-runtime-identity-token.js";
+import { ApprovalObserverClosedError } from "../exec-approval-lifecycle.js";
 import { sameWorkerSessionTurnClaim } from "../worker-environments/placement-record.js";
 import {
   broadcastApprovalResolvedEvent,
@@ -264,7 +265,7 @@ export async function prepareDelegatedSystemAgentApproval(params: {
       if (callerIdentity?.approvalSignals?.length) {
         record.approvalSignals = callerIdentity.approvalSignals;
       }
-      const decisionPromise = manager.register(record, SYSTEM_AGENT_APPROVAL_TIMEOUT_MS);
+      void manager.register(record, SYSTEM_AGENT_APPROVAL_TIMEOUT_MS);
       const requestEvent = buildRequestedApprovalEvent(record, "system-agent");
       const publishApplicationResult = (
         decision: ExecApprovalDecision,
@@ -289,7 +290,6 @@ export async function prepareDelegatedSystemAgentApproval(params: {
       void handlePendingApprovalRequest({
         manager,
         record,
-        decisionPromise,
         respond: () => undefined,
         context: params.context,
         requestEventName: "openclaw.approval.requested",
@@ -350,7 +350,12 @@ export async function prepareDelegatedSystemAgentApproval(params: {
           }
         },
         afterDecisionErrorLabel: "OpenClaw approval apply failed",
-      }).catch(() => completion.resolve(failedReply));
+      }).catch((error: unknown) => {
+        // Gateway closure retires observation; a genuine decision still owns completion.
+        if (!(error instanceof ApprovalObserverClosedError)) {
+          completion.resolve(failedReply);
+        }
+      });
       return { kind: "approval", ...pendingApproval };
     });
   };

@@ -3,7 +3,7 @@ import { resolveConfiguredAgentId } from "../agents/agent-scope-config.js";
 import { resolveAgentMainSessionKey } from "../config/sessions/main-session.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveTalkSessionAgentId } from "../talk/agent-target.js";
-import { resolveSessionStoreAgentId, resolveSessionStoreKey } from "./session-store-key.js";
+import { resolveSessionStoreIdentity } from "./session-store-key.js";
 import { resolveGatewaySessionStoreTargetWithStore } from "./session-utils-store-lookup.js";
 import type { PreparedTalkSessionTarget } from "./talk-session-target.types.js";
 
@@ -48,15 +48,11 @@ export function assertTalkSessionStorageTarget(
 }
 
 function resolveTalkSessionStorageTarget(cfg: OpenClawConfig, sessionKey: string, owner: string) {
-  const requestedAgentId = resolveSessionStoreAgentId(
+  const { agentId, canonicalKey } = resolveSessionStoreIdentity({
     cfg,
     sessionKey,
-    resolveConfiguredAgentId(cfg, owner),
-  );
-  const canonicalKey = resolveSessionStoreKey({ cfg, sessionKey, storeAgentId: requestedAgentId });
-  // A scoped main alias may become global. Validate the fixed-store owner again,
-  // rather than dropping the explicit owner when the canonical key loses its prefix.
-  const agentId = resolveSessionStoreAgentId(cfg, canonicalKey, requestedAgentId);
+    agentId: resolveConfiguredAgentId(cfg, owner),
+  });
   const target = resolveGatewaySessionStoreTargetWithStore({
     cfg,
     key: canonicalKey,

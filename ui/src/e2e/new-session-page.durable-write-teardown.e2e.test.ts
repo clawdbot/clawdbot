@@ -2,6 +2,7 @@ import { Buffer } from "node:buffer";
 import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import {
   controlUiSessionPath,
   createNewSessionPageE2eSuite,
@@ -75,11 +76,7 @@ async function rawDraftMatches(
 
 suite.define(() => {
   it("coalesces a burst of near-limit attachment draft mutations into one write", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     try {
       const page = await context.newPage();
       await page.addInitScript(() => {
@@ -132,11 +129,7 @@ suite.define(() => {
   });
 
   it("starts an attachment write while an earlier text write is still pending", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     try {
       const text = "keep the attachment added during the pending text write";
       const fileName = "favicon-32.png";
@@ -249,11 +242,7 @@ suite.define(() => {
   });
 
   it("isolates route drafts and retires incognito and submitted drafts", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     try {
       const page = await context.newPage();
       await installMockGateway(page, {

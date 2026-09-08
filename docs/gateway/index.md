@@ -187,6 +187,12 @@ See: [Remote Gateway](/gateway/remote), [Authentication](/gateway/authentication
 
 ## Supervision and service lifecycle
 
+Native service-control commands receive only the operating-system environment
+needed for executable lookup, account identity, locale, and service-manager
+routing. They do not inherit application credentials or arbitrary shell
+variables. The Gateway payload and its installed service definition retain
+their separately configured environments.
+
 Use supervised runs for production-like reliability.
 
 <Tabs>

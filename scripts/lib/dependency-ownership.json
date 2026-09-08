@@ -189,6 +189,11 @@
       "class": "core-runtime",
       "risk": ["archive-parser", "untrusted-files"]
     },
+    "koffi": {
+      "owner": "core:process-execution",
+      "class": "core-runtime",
+      "risk": ["native", "ffi", "process-execution", "secret-input"]
+    },
     "kysely": {
       "owner": "core:sqlite-storage",
       "class": "core-runtime",

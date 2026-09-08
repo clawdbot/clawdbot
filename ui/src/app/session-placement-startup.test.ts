@@ -205,20 +205,30 @@ describe("application session placement startup", () => {
     startup.dispose();
   });
 
-  it("keeps durable recovery available after a background load rejection", async () => {
+  it("shows a failed restored startup and reloads its runtime through Retry", async () => {
     const fake = createFakeRuntime();
     const factory = vi.fn(() => fake.runtime);
     const loader = vi
       .fn<NonNullable<Parameters<typeof createApplicationPlacementStartup>[1]>>()
       .mockRejectedValueOnce(new Error("cloud startup chunk unavailable"))
       .mockResolvedValueOnce({ default: factory });
-    const { startup } = createPlacementStartupHarness(vi.fn(), { loadRuntime: loader });
+    const { startup, input } = createPlacementStartupHarness(vi.fn(), { loadRuntime: loader });
 
     startup.resumeRecovery();
     await flushStartupMicrotasks();
     expect(loader).toHaveBeenCalledOnce();
+    expect(startup.hasPendingTurn(input.recovery.sessionKey)).toBe(true);
+    expect(startup.get(input.recovery.sessionKey)).toMatchObject({
+      phase: "failed",
+      error: "cloud startup chunk unavailable",
+      retryable: true,
+    });
+    expect(startup.get(input.recovery.sessionKey)).not.toHaveProperty("targetKind");
+    expect(startup.get(input.recovery.sessionKey)).not.toHaveProperty("initialTurn");
 
-    startup.resumeRecovery();
+    startup.retry(input.recovery.sessionKey);
+    expect(startup.get(input.recovery.sessionKey)?.phase).toBe("pending");
+    expect(startup.hasPendingTurn(input.recovery.sessionKey)).toBe(true);
     await flushStartupMicrotasks();
     expect(loader).toHaveBeenCalledTimes(2);
     expect(factory).toHaveBeenCalledOnce();

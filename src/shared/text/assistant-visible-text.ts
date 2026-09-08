@@ -54,35 +54,28 @@ const NESTED_JSON_TOOL_CALL_PAYLOAD_START_RE = /^\s*(?:\r?\n\s*)?<(?:function_ca
 
 type ToolCallPayloadKind = "json" | "xml" | null;
 
-function endsInsideQuotedString(text: string, start: number, end: number): boolean {
+function createQuotedStringScanner(text: string, start: number): (end: number) => boolean {
   let quoteChar: "'" | '"' | null = null;
   let isEscaped = false;
-
-  for (let idx = start; idx < end; idx += 1) {
-    const char = text[idx];
-    if (quoteChar === null) {
-      if (char === '"' || char === "'") {
-        quoteChar = char;
+  // Candidate closing tags share one monotonic scan through their payload.
+  let cursor = start;
+  return (end) => {
+    for (; cursor < end; cursor += 1) {
+      const char = text[cursor];
+      if (quoteChar === null) {
+        if (char === '"' || char === "'") {
+          quoteChar = char;
+        }
+      } else if (isEscaped) {
+        isEscaped = false;
+      } else if (char === "\\") {
+        isEscaped = true;
+      } else if (char === quoteChar) {
+        quoteChar = null;
       }
-      continue;
     }
-
-    if (isEscaped) {
-      isEscaped = false;
-      continue;
-    }
-
-    if (char === "\\") {
-      isEscaped = true;
-      continue;
-    }
-
-    if (char === quoteChar) {
-      quoteChar = null;
-    }
-  }
-
-  return quoteChar !== null;
+    return quoteChar !== null;
+  };
 }
 
 interface ParsedToolCallTag {
@@ -252,27 +245,36 @@ function parseToolCallTagAt(text: string, start: number): ParsedToolCallTag | nu
   return tag && TOOL_CALL_TAG_NAMES.has(tag.tagName) ? tag : null;
 }
 
-function hasMatchingXmlCloseTag(text: string, start: number, tagName: string): boolean {
-  let depth = 1;
-  for (let idx = start; idx < text.length; idx += 1) {
-    if (text[idx] !== "<") {
+function scanXmlTags(text: string, codeRegions: ReturnType<typeof findCodeRegions>) {
+  type Tag = ParsedToolCallTag & { start: number; hasMatchingClose: boolean };
+  const tags: Tag[] = [];
+  const openTags = new Map<string, Tag[]>();
+  for (let start = text.indexOf("<"); start !== -1; start = text.indexOf("<", start + 1)) {
+    if (isInsideCode(start, codeRegions)) {
       continue;
     }
-    const tag = parseXmlTagAt(text, idx);
-    if (!tag || tag.tagName !== tagName || tag.isTruncated) {
+    const parsed = parseXmlTagAt(text, start);
+    if (!parsed || parsed.isTruncated) {
       continue;
     }
+    const tag: Tag = { ...parsed, start, hasMatchingClose: false };
+    tags.push(tag);
+    const parents = openTags.get(tag.tagName);
     if (tag.isClose) {
-      depth -= 1;
-      if (depth === 0) {
-        return true;
+      const opening = parents?.pop();
+      if (opening) {
+        opening.hasMatchingClose = true;
       }
     } else if (!tag.isSelfClosing) {
-      depth += 1;
+      if (parents) {
+        parents.push(tag);
+      } else {
+        openTags.set(tag.tagName, [tag]);
+      }
     }
-    idx = Math.max(idx, tag.end - 1);
+    start = tag.end - 1;
   }
-  return false;
+  return tags;
 }
 
 function isDanglingFunctionParameterParent(text: string, tag: ParsedToolCallTag): boolean {
@@ -313,14 +315,8 @@ function unwrapStandaloneParameterTags(text: string): string {
   let result = "";
   let lastIndex = 0;
 
-  for (let idx = 0; idx < text.length; idx += 1) {
-    if (text[idx] !== "<" || isInsideCode(idx, codeRegions)) {
-      continue;
-    }
-    const tag = parseXmlTagAt(text, idx);
-    if (!tag || tag.isTruncated) {
-      continue;
-    }
+  for (const tag of scanXmlTags(text, codeRegions)) {
+    const idx = tag.start;
 
     if (tag.isClose) {
       const openIndex = openTags.findLastIndex((entry) => entry.name === tag.tagName);
@@ -343,10 +339,7 @@ function unwrapStandaloneParameterTags(text: string): string {
         result += text.slice(lastIndex, idx);
         lastIndex = tag.end;
       }
-    } else if (
-      hasMatchingXmlCloseTag(text, tag.end, tag.tagName) ||
-      isDanglingFunctionParameterParent(text, tag)
-    ) {
+    } else if (tag.hasMatchingClose || isDanglingFunctionParameterParent(text, tag)) {
       const unwrap = tag.tagName === "parameter" && openTags.length === 0;
       let trimBoundaryLineBreaks = false;
       if (unwrap) {
@@ -360,7 +353,6 @@ function unwrapStandaloneParameterTags(text: string): string {
       }
       openTags.push({ name: tag.tagName, unwrap, trimBoundaryLineBreaks });
     }
-    idx = Math.max(idx, tag.end - 1);
   }
 
   return result + text.slice(lastIndex);
@@ -381,9 +373,7 @@ export function stripToolCallXmlTags(
   const codeRegions = findCodeRegions(text);
   let result = "";
   let lastIndex = 0;
-  let inToolCallBlock = false;
-  let toolCallBlockContentStart = 0;
-  let toolCallBlockNeedsQuoteBalance = false;
+  let isInsidePayloadQuote: ((end: number) => boolean) | undefined;
   let toolCallBlockStart = 0;
   let toolCallBlockTagName: string | null = null;
   let lastStrippedToolCallBlockEnd: number | null = null;
@@ -393,7 +383,7 @@ export function stripToolCallXmlTags(
     if (text[idx] !== "<") {
       continue;
     }
-    if (!inToolCallBlock && isInsideCode(idx, codeRegions)) {
+    if (toolCallBlockTagName === null && isInsideCode(idx, codeRegions)) {
       continue;
     }
 
@@ -402,7 +392,7 @@ export function stripToolCallXmlTags(
       continue;
     }
 
-    if (!inToolCallBlock) {
+    if (toolCallBlockTagName === null) {
       result += text.slice(lastIndex, idx);
       if (tag.isClose) {
         if (tag.isTruncated) {
@@ -466,11 +456,11 @@ export function stripToolCallXmlTags(
             isLineStartAt(result, result.length) &&
             isLineEndAfter(text, tag.end)));
       if ((payloadKind && shouldStripStandaloneFunction) || shouldStripStandaloneResult) {
-        inToolCallBlock = true;
-        toolCallBlockContentStart = tag.end;
-        toolCallBlockNeedsQuoteBalance =
+        isInsidePayloadQuote =
           payloadKind === "json" ||
-          (payloadKind === "xml" && startsWithNestedJsonToolCallPayload(text, payloadStart));
+          (payloadKind === "xml" && startsWithNestedJsonToolCallPayload(text, payloadStart))
+            ? createQuotedStringScanner(text, tag.end)
+            : undefined;
         toolCallBlockStart = idx;
         toolCallBlockTagName = tag.tagName;
         if (tag.isTruncated) {
@@ -491,23 +481,18 @@ export function stripToolCallXmlTags(
       tag.isClose &&
       (tag.tagName === toolCallBlockTagName ||
         (toolCallBlockTagName === "tool_result" && tag.tagName === "tool_call")) &&
-      (!toolCallBlockNeedsQuoteBalance ||
-        !endsInsideQuotedString(text, toolCallBlockContentStart, idx))
+      !isInsidePayloadQuote?.(idx)
     ) {
-      const closedBlockTagName = toolCallBlockTagName;
-      inToolCallBlock = false;
-      toolCallBlockNeedsQuoteBalance = false;
+      isInsidePayloadQuote = undefined;
       toolCallBlockTagName = null;
-      if (closedBlockTagName) {
-        lastStrippedToolCallBlockEnd = tag.end;
-      }
+      lastStrippedToolCallBlockEnd = tag.end;
     }
 
     lastIndex = tag.end;
     idx = Math.max(idx, tag.end - 1);
   }
 
-  if (!inToolCallBlock) {
+  if (toolCallBlockTagName === null) {
     result += text.slice(lastIndex);
   } else if (toolCallBlockTagName === "function") {
     result += text.slice(toolCallBlockStart);

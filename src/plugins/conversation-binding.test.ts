@@ -644,10 +644,17 @@ describe("plugin conversation binding approvals", () => {
     });
   });
 
-  it("requires a fresh approval again after allow-once is consumed", async () => {
+  it("keeps allow-once approval scoped to its requester and conversation", async () => {
     const firstRequest = await requestPendingBinding(
       createDiscordCodexBindRequest("channel:1", "Bind this conversation to Codex thread 123."),
     );
+    await expect(
+      resolvePluginConversationBindingApproval({
+        approvalId: firstRequest.approvalId,
+        decision: "allow-once",
+        senderId: "another-user",
+      }),
+    ).resolves.toEqual({ status: "expired" });
     const approved = await approveBindingRequest(firstRequest.approvalId, "allow-once");
 
     expect(approved.status).toBe("approved");

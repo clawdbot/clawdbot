@@ -6,6 +6,7 @@ import { vi } from "vitest";
 import { heartbeatRunnerTelegramPlugin } from "../../test/helpers/infra/heartbeat-runner-channel-plugins.js";
 import { resolveReplyOperationRunState } from "../auto-reply/reply/reply-operation-run-state.js";
 import { createReplyOperation } from "../auto-reply/reply/reply-run-registry.js";
+import type { MsgContext } from "../auto-reply/templating.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import {
   listSessionEntriesCore,
@@ -211,3 +212,28 @@ export function setupTelegramHeartbeatPluginRuntimeForTests() {
     ]),
   );
 }
+
+export type HeartbeatReplyContext = Pick<
+  MsgContext,
+  "InternalTurnSource" | "SessionKey" | "MessageThreadId" | "Body"
+>;
+
+export const mockCallAt = (
+  mock: { mock: { calls: Array<readonly unknown[]> } },
+  index: number,
+  label: string,
+): readonly unknown[] => {
+  const call = mock.mock.calls[index];
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  return call;
+};
+
+export const getFirstReplyContext = (replySpy: ReturnType<typeof vi.fn>): HeartbeatReplyContext => {
+  const [ctx] = mockCallAt(replySpy, 0, "heartbeat reply");
+  if (!ctx || typeof ctx !== "object") {
+    throw new Error("expected heartbeat reply context");
+  }
+  return ctx as HeartbeatReplyContext;
+};

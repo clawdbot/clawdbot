@@ -2,10 +2,13 @@
 summary: "Adds Microsoft Foundry model provider support to OpenClaw."
 read_when:
   - You are installing, configuring, or auditing the microsoft-foundry plugin
-title: "Microsoft Foundry plugin"
+title: "Microsoft Foundry plugin reference"
 ---
 
-# Microsoft Foundry plugin
+<!-- Generated file. Do not edit by hand.
+Run `pnpm plugins:inventory:gen` to rebuild it. Hand-written text survives only
+between the openclaw-plugin-reference:manual-start and
+openclaw-plugin-reference:manual-end comment markers. -->
 
 Adds Microsoft Foundry model provider support to OpenClaw.
 
@@ -16,7 +19,8 @@ Adds Microsoft Foundry model provider support to OpenClaw.
 
 ## Surface
 
-providers: `microsoft-foundry`; contracts: `imageGenerationProviders`
+- Providers: `microsoft-foundry`
+- Contracts: `imageGenerationProviders`
 
 <!-- openclaw-plugin-reference:manual-start -->
 

@@ -8,14 +8,8 @@ import {
 } from "./runtime-degraded-state.js";
 
 /** Runtime owner for one configured media-understanding model entry. */
-export function runtimeMediaModelSecretOwnerId(
-  params: {
-    index: number;
-  } & ({ source: "shared" } | { source: "capability"; capability: MediaUnderstandingCapability }),
-): string {
-  return params.source === "shared"
-    ? `media-model:shared:${params.index}`
-    : `media-model:${params.capability}:${params.index}`;
+export function runtimeMediaModelSecretOwnerId(index: number): string {
+  return `media-model:shared:${index}`;
 }
 
 /** Runtime owner for request defaults inherited by one media capability. */

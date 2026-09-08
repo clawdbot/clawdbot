@@ -14,6 +14,7 @@ function sessionRow(
   return {
     key,
     label: key,
+    renameValue: "",
     active: false,
     visuallyActive: false,
     hasActiveRun: false,

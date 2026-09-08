@@ -4,6 +4,7 @@ import { MemoryIndexRevisionConflictError } from "./manager-db.js";
 
 type MemorySearchMaintenanceManager<DirtyGeneration> = {
   adoptReindexRetryState(generation: DirtyGeneration): void;
+  takeReindexRetryStateForMaintenance(): DirtyGeneration;
   sync(params: { reason: string }): Promise<void>;
   status(): { dirty?: boolean; lastSyncError?: string };
   close(): Promise<void>;
@@ -46,9 +47,8 @@ export async function runMemorySearchMaintenance<DirtyGeneration>(params: {
     }
     const status = manager.status();
     if (status.dirty === true) {
-      // A provider fallback may deliberately resolve in keyword-only mode while
-      // retaining retry state. Return that incomplete generation to its serving owner.
-      params.restoreDirtyGeneration(dirtyGeneration);
+      // Return remaining work, including edits skipped by a completed full rebuild.
+      params.restoreDirtyGeneration(manager.takeReindexRetryStateForMaintenance());
       incompleteReason = status.lastSyncError;
     }
   } catch (err) {

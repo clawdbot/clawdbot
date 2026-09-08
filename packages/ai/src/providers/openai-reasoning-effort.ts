@@ -33,6 +33,7 @@ const GPT_5_REASONING_EFFORTS = ["minimal", "low", "medium", "high"] as const;
 const GPT_51_REASONING_EFFORTS = ["none", "low", "medium", "high"] as const;
 const GPT_52_REASONING_EFFORTS = ["none", "low", "medium", "high", "xhigh"] as const;
 const GPT_56_REASONING_EFFORTS = ["none", "low", "medium", "high", "xhigh", "max"] as const;
+const GPT_6_ASTRA_REASONING_EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
 const GPT_CODEX_REASONING_EFFORTS = ["low", "medium", "high", "xhigh"] as const;
 const GPT_PRO_REASONING_EFFORTS = ["medium", "high", "xhigh"] as const;
 const GPT_5_PRO_REASONING_EFFORTS = ["high"] as const;
@@ -107,12 +108,23 @@ function isDisabledReasoningEffort(effort: string): boolean {
 export function resolveOpenAISupportedReasoningEfforts(
   model: OpenAIReasoningModel,
 ): readonly OpenAIApiReasoningEffort[] {
+  return resolveOpenAIModelReasoningEfforts(model) ?? GENERIC_REASONING_EFFORTS;
+}
+
+/** Read a declared or known model contract, leaving unknown compatible models unspecified. */
+export function resolveOpenAIModelReasoningEfforts(
+  model: OpenAIReasoningModel,
+): readonly OpenAIApiReasoningEffort[] | undefined {
   const compatEfforts = readCompatReasoningEfforts(model.compat);
   if (compatEfforts) {
     return compatEfforts;
   }
 
   const id = normalizeModelId(typeof model.id === "string" ? model.id : undefined);
+  // Azure deployment capabilities must be declared until its Astra contract is verified.
+  if (id === "gpt-6-astra" && model.api !== "azure-openai-responses") {
+    return GPT_6_ASTRA_REASONING_EFFORTS;
+  }
   if (/^gpt-5\.6(?:-|$)/u.test(id)) {
     return GPT_56_REASONING_EFFORTS;
   }
@@ -140,12 +152,12 @@ export function resolveOpenAISupportedReasoningEfforts(
   if (/^gpt-5(?:-|$)/u.test(id)) {
     return GPT_5_REASONING_EFFORTS;
   }
-  return GENERIC_REASONING_EFFORTS;
+  return undefined;
 }
 
 /**
- * Return whether a model accepts the temperature parameter. The GPT-5.6
- * family rejects it with a 400; catalog compat can override per model.
+ * Return whether a model accepts temperature. GPT-5.6 and GPT-6 Astra
+ * reject it with a 400; catalog compat can override per model.
  */
 export function supportsOpenAITemperature(model: OpenAIReasoningModel): boolean {
   const compat = model.compat;
@@ -156,7 +168,10 @@ export function supportsOpenAITemperature(model: OpenAIReasoningModel): boolean 
     }
   }
   const id = normalizeModelId(typeof model.id === "string" ? model.id : undefined);
-  return !/^gpt-5\.6(?:-|$)/u.test(id);
+  return (
+    (id !== "gpt-6-astra" || model.api === "azure-openai-responses") &&
+    !/^gpt-5\.6(?:-|$)/u.test(id)
+  );
 }
 
 /** Return whether a model accepts a requested reasoning effort. */

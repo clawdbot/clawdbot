@@ -5,6 +5,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { withEnv } from "../../test-utils/env.js";
+import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import type { TemplateContext } from "../templating.js";
 import { INBOUND_CONTEXT_MARKER } from "./inbound-context-marker.js";
 import {
@@ -12,6 +13,7 @@ import {
   buildInboundUserContextPrefix,
   refreshActiveGoalContext,
 } from "./inbound-meta.js";
+import { prepareReplyConversation } from "./prompt-session-context.js";
 
 const EMPTY_CFG = {} as OpenClawConfig;
 
@@ -362,32 +364,30 @@ describe("buildInboundMetaSystemPrompt", () => {
     expect(formattingHintCalls).toEqual([{ cfg, accountId: "work" }]);
   });
 
-  it("resolves response format hints from formattingHintsCtx for system-event turns", () => {
-    const prompt = buildInboundMetaSystemPrompt(
-      {
-        OriginatingChannel: "heartbeat",
-        Provider: "heartbeat",
-        Surface: "heartbeat",
-        ChatType: "direct",
-      } as TemplateContext,
-      EMPTY_CFG,
-      {
-        formattingHintsCtx: {
-          OriginatingChannel: "slack",
-          Provider: "slack",
-          Surface: "slack",
-          ChatType: "channel",
-          AccountId: "work",
-        } as TemplateContext,
+  it("uses one prepared conversation for system-event metadata and response formatting", () => {
+    const conversation = prepareReplyConversation({
+      ctx: { InternalTurnSource: "heartbeat" },
+      sessionEntry: {
+        sessionId: "conversation",
+        updatedAt: 1,
+        chatType: "channel",
+        delivery: normalizeSessionDeliveryState({
+          context: { channel: "slack", to: "C123", accountId: "work" },
+          origin: { provider: "slack", surface: "slack", chatType: "channel" },
+        }),
       },
+    });
+    const payload = parseInboundMetaPayload(
+      buildInboundMetaSystemPrompt(conversation.fields, EMPTY_CFG),
     );
-
-    const payload = parseInboundMetaPayload(prompt);
-    const responseFormat = payload["response_format"] as { text_markup?: string } | undefined;
-    expect(responseFormat?.text_markup).toBe("slack_mrkdwn");
-    // Trusted metadata still identifies the system event; only authoring hints
-    // follow the delivery channel.
-    expect(payload["channel"]).toBe("heartbeat");
+    expect(payload).toMatchObject({
+      channel: "slack",
+      provider: "slack",
+      surface: "slack",
+      chat_type: "channel",
+      account_id: "work",
+      response_format: { text_markup: "slack_mrkdwn" },
+    });
   });
 
   it("omits response format hints when the channel plugin has no formatting hook", () => {

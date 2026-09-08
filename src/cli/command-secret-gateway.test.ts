@@ -732,6 +732,28 @@ describe("resolveCommandSecretRefsViaGateway", () => {
     });
   });
 
+  it("falls back to local resolution when the gateway stalls secrets.resolve past the caller's budget", async () => {
+    await withEnvValue("TALK_API_KEY", "local-fallback-key", async () => {
+      callGateway.mockImplementation(
+        (request: { timeoutMs: number }) =>
+          new Promise((_resolve, reject) => {
+            // A reachable gateway that never replies fails only at the request deadline it was given.
+            setTimeout(() => reject(new Error("gateway timeout")), request.timeoutMs);
+          }),
+      );
+      const result = await resolveCommandSecretRefsViaGateway({
+        config: makeTalkProviderApiKeySecretRefConfig("TALK_API_KEY"),
+        commandName: "status",
+        targetIds: new Set(["talk.providers.*.apiKey"]),
+        gatewaySecretResolveTimeoutMs: 50,
+      });
+
+      expect(callGateway.mock.calls[0]?.[0]).toMatchObject({ timeoutMs: 50 });
+      expect(readTalkProviderApiKey(result.resolvedConfig)).toBe("local-fallback-key");
+      expectGatewayUnavailableLocalFallbackDiagnostics(result);
+    });
+  });
+
   it("keeps local exec SecretRef fallback enabled by default", async () => {
     await withSecureTestNodeExecPath(async () => {
       const { config, markerPath } = await createExecProviderConfig("talk/providers/api-key");

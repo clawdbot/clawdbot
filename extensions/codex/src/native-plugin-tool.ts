@@ -1,15 +1,13 @@
 /** Owner-scoped, read-only discovery of plugins already known to Codex. */
-import { jsonResult, type AnyAgentTool } from "openclaw/plugin-sdk/core";
+import type { AnyAgentTool } from "openclaw/plugin-sdk/core";
 import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
 import { asOptionalRecord as readRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { jsonResult } from "openclaw/plugin-sdk/tool-results";
 import { Type } from "typebox";
-import { resolveCodexBindingAppServerConnection } from "./app-server/binding-connection.js";
 import { CODEX_CONTROL_METHODS } from "./app-server/capabilities.js";
-import {
-  sessionBindingIdentity,
-  type CodexAppServerBindingStore,
-} from "./app-server/session-binding.js";
-import { codexControlRequest } from "./command-rpc.js";
+import { sessionBindingIdentity } from "./app-server/session-binding-record.js";
+import type { CodexAppServerBindingStore } from "./app-server/session-binding.js";
+import type { codexControlRequest } from "./command-rpc.js";
 import { resolveCodexDefaultWorkspaceDir } from "./conversation-binding-data.js";
 import {
   discoverCodexMarketplacePlugins,
@@ -37,7 +35,6 @@ export function createCodexPluginsTool(options: CodexPluginsToolOptions): AnyAge
   if (options.context.senderIsOwner !== true) {
     return null;
   }
-  const request = options.request ?? codexControlRequest;
   const runtimeConfig = () =>
     options.context.getRuntimeConfig?.() ?? options.context.runtimeConfig ?? options.context.config;
 
@@ -71,6 +68,9 @@ export function createCodexPluginsTool(options: CodexPluginsToolOptions): AnyAge
         binding?.cwd?.trim() ||
         options.context.workspaceDir?.trim() ||
         resolveCodexDefaultWorkspaceDir(pluginConfig);
+      const request = options.request ?? (await import("./command-rpc.js")).codexControlRequest;
+      const { resolveCodexBindingAppServerConnection } =
+        await import("./app-server/binding-connection.js");
       const connection = resolveCodexBindingAppServerConnection({ binding, pluginConfig });
       const discovered = await discoverCodexMarketplacePlugins({
         workspaceDir,

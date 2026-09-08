@@ -36,7 +36,8 @@ vi.mock("../../config/sessions.js", () => ({
   extractDeliveryInfo: mocks.extractDeliveryInfo,
 }));
 
-vi.mock("../../globals.js", () => ({
+vi.mock("../../globals.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../globals.js")>()),
   logVerbose: vi.fn(),
 }));
 

@@ -1,4 +1,3 @@
-// Msteams plugin module implements message handler behavior.
 import {
   formatMediaPlaceholderText,
   resolveInboundMentionDecision,
@@ -10,6 +9,7 @@ import {
   createChannelHistoryWindow,
   type HistoryEntry,
 } from "openclaw/plugin-sdk/reply-history";
+import { createRuntimeConfigReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { formatUnknownError } from "../errors.js";
 import { normalizeMSTeamsConversationId, parseMSTeamsActivityTimestamp } from "../inbound.js";
@@ -60,10 +60,9 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       DEFAULT_GROUP_HISTORY_LIMIT,
   );
   const conversationHistories = new Map<string, HistoryEntry[]>();
-  const inboundDebounceMs = core.channel.debounce.resolveInboundDebounceMs({
-    cfg,
-    channel: "msteams",
-  });
+  const readConfig = createRuntimeConfigReader(cfg);
+  const resolveDebounceMs = () =>
+    core.channel.debounce.resolveInboundDebounceMs({ cfg: readConfig(), channel: "msteams" });
 
   const handleTeamsMessageNow = async (params: MSTeamsDebounceEntry) => {
     const facts = assembleMSTeamsInboundFacts({ entry: params, mediaMaxBytes });
@@ -296,7 +295,8 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
   };
 
   const inboundDebouncer = core.channel.debounce.createInboundDebouncer<MSTeamsDebounceEntry>({
-    debounceMs: inboundDebounceMs,
+    debounceMs: resolveDebounceMs(),
+    resolveDebounceMs,
     buildKey: (entry) => {
       const conversationId = normalizeMSTeamsConversationId(
         entry.context.activity.conversation?.id ?? "",

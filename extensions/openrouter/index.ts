@@ -7,6 +7,7 @@ import type {
   ProviderResolveDynamicModelContext,
   ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
+import { runLiveProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import {
   buildProviderReplayFamilyHooks,
@@ -285,14 +286,18 @@ export default defineSingleProviderPluginEntry({
             return null;
           }
           const providerConfig = ctx.config.models?.providers?.openrouter;
-          return {
-            provider: await buildOpenrouterLiveProvider({
-              apiKey,
-              discoveryApiKey: auth.discoveryApiKey,
-              baseUrl: providerConfig?.baseUrl,
-              request: providerConfig?.request,
+          return await runLiveProviderCatalog({
+            providerId: PROVIDER_ID,
+            profileId: auth.profileId,
+            run: async () => ({
+              provider: await buildOpenrouterLiveProvider({
+                apiKey,
+                discoveryApiKey: auth.discoveryApiKey,
+                baseUrl: providerConfig?.baseUrl,
+                request: providerConfig?.request,
+              }),
             }),
-          };
+          });
         },
         staticRun: async () => ({
           provider: buildOpenrouterProvider(),

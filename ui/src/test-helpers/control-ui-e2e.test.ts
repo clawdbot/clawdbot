@@ -17,43 +17,65 @@ describe("shared proof capture", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   afterEach(() => vi.unstubAllEnvs());
 
-  it("keeps each failure screenshot and report in its own retained directory", async () => {
-    const parent = tempDirs.make("control-ui-failure-proof-");
-    vi.stubEnv("OPENCLAW_UI_E2E_DIAGNOSTIC_DIR", parent);
-    writeFileSync(path.join(parent, "prior.png"), "prior-proof");
-    // SAFETY: this fixture implements the Page boundary used by failure diagnostics.
-    const page = {
-      evaluate: async () => ({ marker: "failed-page" }),
-      isClosed: () => false,
-      url: () => "http://127.0.0.1/chat",
-      screenshot: async (options: { path: string }) => {
-        writeFileSync(options.path, "failure-proof");
-        return Buffer.from("failure-proof");
-      },
-    } as unknown as Page;
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      await captureControlUiE2eFailureDiagnostics(page, {
-        error: new Error("Synthetic request timeout"),
-        label: "chat.send",
-      });
-    }
-    const directories = readdirSync(parent, { withFileTypes: true }).filter((entry) =>
-      entry.isDirectory(),
-    );
-    expect(directories).toHaveLength(2);
-    for (const directory of directories) {
-      const root = path.join(parent, directory.name);
-      const files = readdirSync(root);
-      expect(files).toHaveLength(2);
-      const reportFile = files.find((file) => file.endsWith(".json"));
-      expect(reportFile).toBeDefined();
-      const report = JSON.parse(readFileSync(path.join(root, reportFile!), "utf8"));
-      expect(report).toMatchObject({ label: "chat.send", captureErrors: [] });
-      expect(files).toContain(report.screenshot);
-      expect(readFileSync(path.join(root, report.screenshot), "utf8")).toBe("failure-proof");
-    }
-    expect(readFileSync(path.join(parent, "prior.png"), "utf8")).toBe("prior-proof");
-  });
+  it.each([
+    { shardIndex: "5", shardCount: "6" },
+    { shardIndex: undefined, shardCount: undefined },
+  ])(
+    "retains each failure capture with its shard provenance ($shardIndex/$shardCount)",
+    async ({ shardIndex, shardCount }) => {
+      const parent = tempDirs.make("control-ui-failure-proof-");
+      vi.stubEnv("OPENCLAW_UI_E2E_DIAGNOSTIC_DIR", parent);
+      vi.stubEnv("VITEST_SHARD_INDEX", shardIndex);
+      vi.stubEnv("VITEST_SHARD_COUNT", shardCount);
+      vi.stubEnv("SHARD_INDEX", shardIndex ? undefined : "unrelated-shard");
+      vi.stubEnv("GITHUB_JOB", "checks-ui-e2e");
+      vi.stubEnv("GITHUB_RUN_ID", "123456");
+      vi.stubEnv("GITHUB_RUN_ATTEMPT", "2");
+      writeFileSync(path.join(parent, "prior.png"), "prior-proof");
+      // SAFETY: this fixture implements the Page boundary used by failure diagnostics.
+      const page = {
+        evaluate: async () => ({ marker: "failed-page" }),
+        isClosed: () => false,
+        url: () => "http://127.0.0.1/chat",
+        screenshot: async (options: { path: string }) => {
+          writeFileSync(options.path, "failure-proof");
+          return Buffer.from("failure-proof");
+        },
+      } as unknown as Page;
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        await captureControlUiE2eFailureDiagnostics(page, {
+          error: new Error("Synthetic request timeout"),
+          label: "chat.send",
+        });
+      }
+      const directories = readdirSync(parent, { withFileTypes: true }).filter((entry) =>
+        entry.isDirectory(),
+      );
+      expect(directories).toHaveLength(2);
+      for (const directory of directories) {
+        const root = path.join(parent, directory.name);
+        const files = readdirSync(root);
+        expect(files).toHaveLength(2);
+        const reportFile = files.find((file) => file.endsWith(".json"));
+        expect(reportFile).toBeDefined();
+        const report = JSON.parse(readFileSync(path.join(root, reportFile!), "utf8"));
+        expect(report).toMatchObject({
+          label: "chat.send",
+          captureErrors: [],
+          ci: {
+            githubJob: "checks-ui-e2e",
+            runAttempt: "2",
+            runId: "123456",
+            shardIndex: shardIndex ?? null,
+            vitestShardCount: shardCount ?? null,
+          },
+        });
+        expect(files).toContain(report.screenshot);
+        expect(readFileSync(path.join(root, report.screenshot), "utf8")).toBe("failure-proof");
+      }
+      expect(readFileSync(path.join(parent, "prior.png"), "utf8")).toBe("prior-proof");
+    },
+  );
 
   it("keeps shared capture disabled until its gate is enabled and uses the supplied owner", async () => {
     const parent = tempDirs.make("control-ui-proof-capture-");
@@ -71,12 +93,14 @@ describe("shared proof capture", () => {
       writeFileSync(options.path, "sidebar-proof");
       return Buffer.from("sidebar-proof");
     });
-    // SAFETY: this fixture implements only the screenshot method used by the capture helper.
-    const page = { screenshot } as unknown as Page;
+    const video = vi.fn(() => null);
+    // SAFETY: this fixture implements the non-recording Page boundary used by the capture helper.
+    const page = { screenshot, video } as unknown as Page;
 
     await captureSidebarUiProof(owner, page, "state.png");
     expect(readdirSync(parent)).toEqual([]);
     expect(screenshot).not.toHaveBeenCalled();
+    expect(video).not.toHaveBeenCalled();
 
     vi.stubEnv("OPENCLAW_CAPTURE_UI_PROOF", "1");
     await captureSidebarUiProof(owner, page, "state.png");

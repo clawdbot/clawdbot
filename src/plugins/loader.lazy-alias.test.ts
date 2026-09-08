@@ -91,7 +91,7 @@ describe("native plugin alias preparation", () => {
     });
   });
 
-  it("prepares the complete map once on a late alias request and reuses it for CJS and ESM", async () => {
+  it("resolves late CJS and ESM aliases without reading artifacts until demanded", async () => {
     const f = fixture();
     const read = vi.spyOn(fs, "readFileSync");
     const load = createPluginModuleLoader({ devSourceRoot: f.root });
@@ -101,14 +101,18 @@ describe("native plugin alias preparation", () => {
     };
     expect(read.mock.calls.filter(([target]) => target === f.unused)).toEqual([]);
     expect(metadata.load("openclaw/plugin-sdk/used")).toMatchObject({ value: "dist" });
-    expect(read.mock.calls.filter(([target]) => target === f.unused)).toHaveLength(1);
+    expect(read.mock.calls.filter(([target]) => target === f.unused)).toEqual([]);
     expect(await metadata.loadEsm("@openclaw/plugin-sdk/used.js")).toMatchObject({ value: "dist" });
+    expect(read.mock.calls.filter(([target]) => target === f.unused)).toEqual([]);
+    expect(await metadata.loadEsm("@openclaw/plugin-sdk/unused.js")).toMatchObject({
+      value: "unused",
+    });
     expect(createRequire(f.entry).resolve("openclaw/plugin-sdk/unused")).toBe(f.unused);
-    expect(read.mock.calls.filter(([target]) => target === f.unused)).toHaveLength(1);
+    expect(metadata.load("openclaw/plugin-sdk/unused")).toMatchObject({ value: "unused" });
   });
 
   it.each(["cjs", "mjs"])(
-    "prepares all aliases before evaluating an alias-using %s target",
+    "resolves the demanded alias before evaluating an alias-using %s target",
     (extension) => {
       const f = fixture();
       const entry = writeFile(
@@ -120,9 +124,13 @@ describe("native plugin alias preparation", () => {
       );
       const read = vi.spyOn(fs, "readFileSync");
       const load = createPluginModuleLoader({ devSourceRoot: f.root });
-      expect(load(entry)).toMatchObject({ value: "dist" });
-      expect(load(entry)).toBe(load(entry));
-      expect(read.mock.calls.filter(([target]) => target === f.unused)).toHaveLength(1);
+      const loaded = load(entry);
+      expect(loaded).toMatchObject({ value: "dist" });
+      expect(load(entry)).toBe(loaded);
+      expect(read.mock.calls.filter(([target]) => target === f.unused)).toEqual([]);
+      expect(createRequire(entry)("@openclaw/plugin-sdk/unused")).toMatchObject({
+        value: "unused",
+      });
     },
   );
 
@@ -155,7 +163,7 @@ describe("native plugin alias preparation", () => {
     expect(load(f.entry)).toMatchObject({ marker: "metadata" });
     expect(read.mock.calls.filter(([target]) => target === f.unused)).toEqual([]);
     expect(load(entry)).toMatchObject({ value: "family" });
-    expect(read.mock.calls.filter(([target]) => target === f.unused)).toHaveLength(1);
+    expect(read.mock.calls.some(([target]) => target === f.unused)).toBe(true);
   });
 
   it("does not prepare aliases for unrelated requests or unregistered parents", () => {
@@ -264,9 +272,13 @@ describe("native plugin alias preparation", () => {
     const read = vi.spyOn(fs, "readFileSync");
     installOpenClawPluginSdkNativeResolver({ pluginModulePath: a.entry, devSourceRoot: a.root });
     installOpenClawPluginSdkNativeResolver({ pluginModulePath: a.entry, devSourceRoot: b.root });
-    expect(createRequire(a.entry).resolve("@openclaw/plugin-sdk/used")).toBe(b.used);
+    const fromPlugin = createRequire(a.entry);
+    expect(fromPlugin.resolve("@openclaw/plugin-sdk/used")).toBe(b.used);
+    expect(fromPlugin("@openclaw/plugin-sdk/used")).toMatchObject({ value: "dist" });
+    expect(read.mock.calls.filter(([target]) => target === b.unused)).toEqual([]);
+    expect(fromPlugin.resolve("@openclaw/plugin-sdk/unused")).toBe(b.unused);
+    expect(fromPlugin("@openclaw/plugin-sdk/unused")).toMatchObject({ value: "unused" });
     expect(read.mock.calls.filter(([target]) => target === a.unused)).toEqual([]);
-    expect(read.mock.calls.filter(([target]) => target === b.unused)).toHaveLength(1);
   });
 
   it("does not reuse a bundled private alias grant for an external plugin", () => {

@@ -1,13 +1,18 @@
 // Doctor memory schema tests exercise registered agent databases through the repair path.
 import fs from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { AGENT_DATABASE_MAINTENANCE_LEASE } from "../state/openclaw-agent-db-lease.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import { noteDoctorAgentMemorySchemaHealth } from "./doctor-agent-memory-schema.js";
 
 const tempDirs: string[] = [];
@@ -176,6 +181,86 @@ describe("doctor agent memory schema repair", () => {
       }
     },
   );
+
+  it("leaves a later runtime admission untouched after the first repair loses maintenance", async () => {
+    const { databasePath, env } = createRegisteredAgentDatabase();
+    const laterOptions = { agentId: "worker-2", env };
+    const laterPath = openOpenClawAgentDatabase(laterOptions).path;
+    closeOpenClawAgentDatabasesForTest();
+    recreateUnreleasedInlineMemoryMetadata(databasePath);
+    recreateUnreleasedInlineMemoryMetadata(laterPath);
+    const agentDatabase = await import("../state/openclaw-agent-db.js");
+    const integrityWorker = await import("../infra/sqlite-integrity-worker.js");
+    const sqlite = await import("../infra/node-sqlite.js");
+    const startAdmission = createDeferred();
+    const admissionChecked = createDeferred();
+    const releaseAdmission = createDeferred();
+    // Register outside the old maintenance ALS scope: this is a new runtime owner.
+    const newerAdmission = startAdmission.promise.then(() =>
+      agentDatabase.withOpenClawAgentDatabaseAsync(laterOptions, (database) =>
+        database.db.prepare("SELECT id, text FROM memory_index_chunks").all(),
+      ),
+    );
+    void newerAdmission.catch(() => {});
+    const check = integrityWorker.assertSqliteIntegrityInWorker;
+    const scan = vi
+      .spyOn(integrityWorker, "assertSqliteIntegrityInWorker")
+      .mockImplementation(async (...args) => {
+        await check(...args);
+        if (args[0] === laterPath) {
+          // Keep the real pending admission alive before it converges the legacy shape.
+          admissionChecked.resolve();
+          await releaseAdmission.promise;
+        }
+      });
+    const open = sqlite.openNodeSqliteDatabase;
+    const inspectedPaths: string[] = [];
+    const inspection = vi
+      .spyOn(sqlite, "openNodeSqliteDatabase")
+      .mockImplementation((pathname, options) => {
+        if (options?.readOnly) {
+          inspectedPaths.push(pathname);
+        }
+        return open(pathname, options);
+      });
+    const close = vi.spyOn(agentDatabase, "closeOpenClawAgentDatabaseByPath");
+    const migrate = agentDatabase.migrateOpenClawAgentDatabaseForMaintenance;
+    const repair = vi
+      .spyOn(agentDatabase, "migrateOpenClawAgentDatabaseForMaintenance")
+      .mockImplementationOnce(async (options, maintenance) => {
+        await migrate(options, maintenance);
+        const removed = openOpenClawStateDatabase({ env })
+          .db.prepare("DELETE FROM state_leases WHERE scope = ? AND lease_key = ?")
+          .run(AGENT_DATABASE_MAINTENANCE_LEASE.scope, AGENT_DATABASE_MAINTENANCE_LEASE.key);
+        expect(removed.changes).toBe(1);
+        // Earlier registry discovery may inspect targets while the lease is still valid.
+        inspectedPaths.length = 0;
+        close.mockClear();
+        startAdmission.resolve();
+        await Promise.race([admissionChecked.promise, newerAdmission]);
+      });
+    try {
+      await expect(
+        noteDoctorAgentMemorySchemaHealth({ env, shouldRepair: true }, { note: vi.fn() }),
+      ).rejects.toThrow(/maintenance lease.*was lost/iu);
+      expect(repair.mock.calls.map(([options]) => options.pathname)).toEqual([databasePath]);
+      expect(inspectedPaths).not.toContain(laterPath);
+      expect(close.mock.calls.some(([pathname]) => pathname === laterPath)).toBe(false);
+      expect(scan.mock.calls.filter(([pathname]) => pathname === laterPath)).toHaveLength(1);
+      releaseAdmission.resolve();
+      await expect(newerAdmission).resolves.toEqual([
+        { id: "pre-provenance-sentinel", text: "sentinel text" },
+      ]);
+    } finally {
+      startAdmission.resolve();
+      releaseAdmission.resolve();
+      await newerAdmission.catch(() => {});
+      repair.mockRestore();
+      close.mockRestore();
+      inspection.mockRestore();
+      scan.mockRestore();
+    }
+  });
 
   it("is idempotent on a second doctor fix run", async () => {
     const { databasePath, env } = createRegisteredAgentDatabase();
