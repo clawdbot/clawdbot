@@ -338,6 +338,56 @@ describe("Code Mode worker lifecycle", () => {
   });
 
   it.each(["exec", "resume"] as const)(
+    "bounds recursive guest execution after %s VM creation",
+    async (kind) => {
+      const config = resolveCodeModeConfig({ tools: { codeMode: true } } as never);
+      const recursion = "function recurse() { return recurse(); } return recurse();";
+      let input: Parameters<typeof runCodeModeWorker>[0] = {
+        kind: "exec",
+        source: recursion,
+        config,
+        catalog: [],
+      };
+      if (kind === "resume") {
+        const suspended = await runCodeModeWorker(
+          {
+            kind: "exec",
+            source: `await yield_control(); ${recursion}`,
+            config,
+            catalog: [],
+          },
+          10_000,
+        );
+        expect(suspended.status).toBe("waiting");
+        if (suspended.status !== "waiting") {
+          throw new Error("expected a suspended guest before recursive execution");
+        }
+        input = {
+          kind,
+          snapshot: suspended.snapshot,
+          config,
+          settledRequests: suspended.pendingRequests.map(({ id }) => ({
+            id,
+            ok: true,
+            json: "null",
+          })),
+        };
+      }
+
+      const result = await runCodeModeWorker(input, 10_000);
+      expect(result).toMatchObject({
+        status: "failed",
+        code: "internal_error",
+        error: expect.stringContaining("RangeError: Maximum call stack size exceeded"),
+        failurePhase: "guest",
+      });
+      if (result.status === "failed") {
+        expect(result.error).not.toContain("memory access out of bounds");
+      }
+    },
+  );
+
+  it.each(["exec", "resume"] as const)(
     "terminates a real CPU-active %s worker when its catalog closes",
     async (phase) => {
       // Finish hooks unwind in reverse order: stop workers before restoring their
