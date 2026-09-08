@@ -132,13 +132,9 @@ export function formatDurationHuman(ms?: number | null, fallback = t("common.na"
   return resolveSingleUnitDurationParts(ms).map(formatUnit).join(" ");
 }
 
-export function formatUnknownText(
-  value: unknown,
-  opts: { fallback?: string; pretty?: boolean } = {},
-): string {
-  const fallback = opts.fallback ?? "";
+export function formatUnknownText(value: unknown): string {
   if (value == null) {
-    return fallback;
+    return "";
   }
   if (typeof value === "string") {
     return value;
@@ -150,7 +146,7 @@ export function formatUnknownText(
     return value.description ? `Symbol(${value.description})` : "Symbol()";
   }
   try {
-    const serialized = JSON.stringify(value, null, opts.pretty ? 2 : undefined);
+    const serialized = JSON.stringify(value);
     if (serialized !== undefined) {
       return serialized;
     }
