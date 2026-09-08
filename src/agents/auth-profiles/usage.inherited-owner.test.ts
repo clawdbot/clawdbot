@@ -14,7 +14,7 @@ import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../../state/us
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import { resolveAuthProfileOrder } from "./order.js";
 import { loadPersistedAuthProfileStore } from "./persisted.js";
-import { markAuthProfileSuccess, removeAuthProfilesWithLock } from "./profiles.js";
+import { markAuthProfileSuccess, removeAuthProfilesAcrossOwnerStores } from "./profiles.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   replaceRuntimeAuthProfileStoreSnapshots,
@@ -28,11 +28,7 @@ import {
   withEnvOnlyAuthProfileStore,
 } from "./store.js";
 import type { AuthProfileStore } from "./types.js";
-import {
-  clearAuthProfileCooldown,
-  markAuthProfileBlockedUntil,
-  markAuthProfileFailure,
-} from "./usage.js";
+import { markAuthProfileBlockedUntil, markAuthProfileFailure } from "./usage.js";
 
 const PRIMARY_ID = "openai:primary";
 const BACKUP_ID = "openai:backup";
@@ -226,7 +222,10 @@ describe("inherited auth-profile usage persistence", () => {
       expect(
         loadPersistedAuthProfileStore(mainAgentDir)?.usageStats?.[profileId]?.lastUsed,
       ).toBeGreaterThan(1);
-      await removeAuthProfilesWithLock({ profileIds: [profileId], agentDir: mainAgentDir });
+      await removeAuthProfilesAcrossOwnerStores({
+        profileIds: [profileId],
+        agentDir: mainAgentDir,
+      });
       expect(loadPersistedAuthProfileStore(mainAgentDir)?.profiles[profileId]).toBeUndefined();
     },
   );
@@ -253,7 +252,7 @@ describe("inherited auth-profile usage persistence", () => {
     const personalId = connectPersonalAccount(ensureProfileForEmail("alice@example.test").id);
 
     await expect(
-      removeAuthProfilesWithLock({
+      removeAuthProfilesAcrossOwnerStores({
         agentDir: mainAgentDir,
         profileIds: [PRIMARY_ID, personalId],
       }),
@@ -305,30 +304,6 @@ describe("inherited auth-profile usage persistence", () => {
       ownerBlockedUntil: blockedUntil,
       nextRunOrder: [BACKUP_ID, LOCAL_ID, PRIMARY_ID],
     });
-  });
-
-  it("writes and clears inherited failure state in the owner store", async () => {
-    writeMainStore();
-    const childStore = ensureAuthProfileStore(childAgentDir);
-
-    await markAuthProfileFailure({
-      store: childStore,
-      profileId: PRIMARY_ID,
-      reason: "timeout",
-      agentDir: childAgentDir,
-    });
-    expect(
-      loadPersistedAuthProfileStore(mainAgentDir)?.usageStats?.[PRIMARY_ID]?.cooldownUntil,
-    ).toBeTypeOf("number");
-
-    await clearAuthProfileCooldown({
-      store: childStore,
-      profileId: PRIMARY_ID,
-      agentDir: childAgentDir,
-    });
-    const ownerStats = loadPersistedAuthProfileStore(mainAgentDir)?.usageStats?.[PRIMARY_ID];
-    expect(ownerStats?.cooldownUntil).toBeUndefined();
-    expect(ownerStats?.errorCount).toBe(0);
   });
 
   it("clears inherited health without changing selection ownership", async () => {

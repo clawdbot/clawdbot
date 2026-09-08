@@ -29,7 +29,6 @@ import {
   clearLastGoodProfileWithLock,
   markAuthProfileSuccess,
   promoteAuthProfileInOrder,
-  removeAuthProfilesWithLock,
   removeAuthProfilesAcrossOwnerStores,
   removeProviderAuthProfilesWithLock,
   setAuthProfileOrder,
@@ -1851,7 +1850,7 @@ describe("promoteAuthProfileInOrder", () => {
         });
         await locked;
 
-        const removing = removeAuthProfilesWithLock({
+        const removing = removeAuthProfilesAcrossOwnerStores({
           agentDir: mainAgentDir,
           profileIds: [profileId],
         });
@@ -1869,7 +1868,7 @@ describe("promoteAuthProfileInOrder", () => {
         releaseLock?.();
         await blocker;
 
-        await expect(removing).resolves.not.toBeNull();
+        await expect(removing).resolves.toBe(true);
         expect(loadPersistedAuthProfileStore(mainAgentDir)?.profiles[profileId]).toBeUndefined();
         expect(loadPersistedAuthProfileStore(peerAgentDir)?.profiles[profileId]).toBeUndefined();
       },

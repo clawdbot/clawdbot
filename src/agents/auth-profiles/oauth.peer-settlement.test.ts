@@ -27,7 +27,7 @@ import {
   resetOAuthProviderRuntimeMocks,
 } from "./oauth-test-utils.js";
 import { loadPersistedAuthProfileStore } from "./persisted.js";
-import { removeAuthProfilesWithLock } from "./profiles.js";
+import { removeAuthProfilesAcrossOwnerStores } from "./profiles.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "./runtime-snapshots.js";
 import { resolveAuthProfileDatabasePath } from "./sqlite.js";
 import { ensureAuthProfileStore, saveAuthProfileStore } from "./store-runtime.js";
@@ -540,7 +540,10 @@ describe("OAuth refresh peer settlement", () => {
         agentDir: peerAgentDir,
       });
       await started;
-      await removeAuthProfilesWithLock({ profileIds: [profileId], agentDir: mainAgentDir });
+      await removeAuthProfilesAcrossOwnerStores({
+        profileIds: [profileId],
+        agentDir: mainAgentDir,
+      });
       finishRefresh?.();
 
       await expect(resolving).rejects.toThrow("Failed to persist refreshed OAuth credential");

@@ -369,33 +369,6 @@ async function removeAuthProfileTargetsWithLocks(
   });
 }
 
-/** Removes selected auth profiles and every state pointer that references them. */
-export async function removeAuthProfilesWithLock(params: {
-  cfg?: OpenClawConfig;
-  profileIds: readonly string[];
-  agentDir?: string;
-}): Promise<AuthProfileStore | null> {
-  const profileIds = new Set(params.profileIds);
-  if ([...profileIds].some(isUserModelAuthProfileId)) {
-    throw new Error(
-      "Personal model accounts are managed in Settings → Profile → Connected accounts. Clearing a default keeps the credential; revoke access with the provider instead of removing a shared auth profile.",
-    );
-  }
-  for (let attempt = 0; attempt < OAUTH_REMOVAL_MAX_ATTEMPTS; attempt += 1) {
-    const result = await removeAuthProfileTargetsWithLocks(
-      [createAuthProfileRemovalTarget({ agentDir: params.agentDir, profileIds })],
-      params.cfg ?? {},
-    );
-    if (result.kind === "updated") {
-      return result.stores[0] ?? null;
-    }
-    if (result.kind === "contention") {
-      return null;
-    }
-  }
-  return null;
-}
-
 /**
  * Removes profiles from every store that owns them. Auth profiles can be
  * adopted by a provider-specific owner agent dir, so removing only the caller's
@@ -406,11 +379,17 @@ export async function removeAuthProfilesAcrossOwnerStores(params: {
   agentDir?: string;
   profileIds: readonly string[];
 }): Promise<boolean> {
+  const profileIds = new Set(params.profileIds);
+  if ([...profileIds].some(isUserModelAuthProfileId)) {
+    throw new Error(
+      "Personal model accounts are managed in Settings → Profile → Connected accounts. Clearing a default keeps the credential; revoke access with the provider instead of removing a shared auth profile.",
+    );
+  }
   for (let attempt = 0; attempt < OAUTH_REMOVAL_MAX_ATTEMPTS; attempt += 1) {
     const profilesByOwner = new Map<string | undefined, Set<string>>([
-      [params.agentDir, new Set(params.profileIds)],
+      [params.agentDir, profileIds],
     ]);
-    for (const profileId of params.profileIds) {
+    for (const profileId of profileIds) {
       const ownerAgentDir = resolvePersistedAuthProfileOwnerAgentDir({
         agentDir: params.agentDir,
         profileId,
@@ -420,8 +399,8 @@ export async function removeAuthProfilesAcrossOwnerStores(params: {
       profilesByOwner.set(ownerAgentDir, ownerProfiles);
     }
     const result = await removeAuthProfileTargetsWithLocks(
-      [...profilesByOwner].map(([agentDir, profileIds]) =>
-        createAuthProfileRemovalTarget({ agentDir, profileIds }),
+      [...profilesByOwner].map(([agentDir, ownerProfileIds]) =>
+        createAuthProfileRemovalTarget({ agentDir, profileIds: ownerProfileIds }),
       ),
       params.cfg ?? {},
     );

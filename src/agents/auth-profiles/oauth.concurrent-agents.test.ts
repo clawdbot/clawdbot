@@ -26,7 +26,7 @@ import {
   resetOAuthProviderRuntimeMocks,
 } from "./oauth-test-utils.js";
 import { loadPersistedAuthProfileStore } from "./persisted.js";
-import { removeAuthProfilesWithLock } from "./profiles.js";
+import { removeAuthProfilesAcrossOwnerStores } from "./profiles.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "./runtime-snapshots.js";
 import { resolveAuthProfileDatabasePath, writePersistedAuthProfileStoreRaw } from "./sqlite.js";
 import { ensureAuthProfileStore, saveAuthProfileStore } from "./store-runtime.js";
@@ -181,7 +181,10 @@ describe("resolveApiKeyForProfile cross-agent refresh coordination (#26322)", ()
         copyToAgents: true,
       });
 
-      await removeAuthProfilesWithLock({ profileIds: [profileId], agentDir: mainAgentDir });
+      await removeAuthProfilesAcrossOwnerStores({
+        profileIds: [profileId],
+        agentDir: mainAgentDir,
+      });
       await expect(
         resolveApiKeyForProfileInTest(resolveApiKeyForProfile, {
           store: ensureAuthProfileStore(subAgents[2]),
@@ -499,7 +502,10 @@ describe("resolveApiKeyForProfile cross-agent refresh coordination (#26322)", ()
       }
 
       saveAuthProfileStore(createExpiredOauthStore({ profileId, provider }), peers[0]);
-      await removeAuthProfilesWithLock({ profileIds: [profileId], agentDir: mainAgentDir });
+      await removeAuthProfilesAcrossOwnerStores({
+        profileIds: [profileId],
+        agentDir: mainAgentDir,
+      });
       for (const agentDir of [mainAgentDir, ...peers]) {
         expect(loadPersistedAuthProfileStore(agentDir)?.profiles[profileId]).toBeUndefined();
       }
