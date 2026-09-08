@@ -1,5 +1,6 @@
 // Metadata registry loader tests cover metadata-only plugin registry assembly.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createInfoWarnErrorLogger } from "../../../test/helpers/mock-logger.js";
 import type { PluginLoadOptions } from "../loader.js";
 
 const loadConfigMock = vi.fn();
@@ -115,11 +116,7 @@ describe("loadPluginMetadataRegistrySnapshot", () => {
   });
 
   it("forwards an explicit logger through metadata snapshots", () => {
-    const logger = {
-      info: vi.fn(),
-      warn: vi.fn(),
-      error: vi.fn(),
-    };
+    const logger = createInfoWarnErrorLogger();
 
     loadPluginMetadataRegistrySnapshot({
       config: { plugins: {} },
@@ -147,11 +144,7 @@ describe("loadPluginMetadataRegistrySnapshot", () => {
   });
 
   it("honors explicit load options when reusing a resolved runtime context", () => {
-    const logger = {
-      info: vi.fn(),
-      warn: vi.fn(),
-      error: vi.fn(),
-    };
+    const logger = createInfoWarnErrorLogger();
     const env = { HOME: "/tmp/context-home" } as NodeJS.ProcessEnv;
     const manifestRegistry = { plugins: [], diagnostics: [] };
 
