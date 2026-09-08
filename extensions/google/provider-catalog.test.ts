@@ -180,7 +180,6 @@ describe("google provider catalog", () => {
         contextWindow: 1_048_576,
         maxTokens: 65_536,
         input: ["text", "image", "video"],
-        compat: { codeMode: "preferred" },
         thinkingLevelMap: { minimal: null },
       }),
       expect.objectContaining({
