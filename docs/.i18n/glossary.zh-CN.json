@@ -2514,5 +2514,25 @@
   {
     "source": "Automation troubleshooting",
     "target": "自动化故障排查"
+  },
+  {
+    "source": "Provider model catalogs",
+    "target": "提供商模型目录"
+  },
+  {
+    "source": "Provider hook families",
+    "target": "提供商 Hook 族"
+  },
+  {
+    "source": "Provider hook wiring",
+    "target": "提供商 Hook 接线"
+  },
+  {
+    "source": "Provider voice capabilities",
+    "target": "提供商语音能力"
+  },
+  {
+    "source": "Provider media and search",
+    "target": "提供商媒体与搜索"
   }
 ]
