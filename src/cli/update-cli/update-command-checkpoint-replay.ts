@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { openNodeSqliteDatabase, resolveImmutableSqliteFileUri } from "../../infra/node-sqlite.js";
+import type { PackageRecoveryObservation } from "../../infra/package-update-recovery-contract.js";
 import type { PackageRecoveryTransaction } from "../../infra/package-update-recovery.js";
 import { assertSqliteIntegrity } from "../../infra/sqlite-integrity.js";
 import { validateUpdateCheckpointPreviousRuntimeDatabase } from "../../infra/update-checkpoint-runtime.js";
@@ -17,6 +18,7 @@ export function createUpdateCommandCheckpointReplayAccess(params: {
   databasePath: string;
   artifactRoot: string;
   transaction: PackageRecoveryTransaction;
+  expectedPackageObservation?: PackageRecoveryObservation;
   assertCurrent: () => void;
   timeoutMs?: number;
 }): NonNullable<UpdateCommandRecovery["checkpointReplay"]>["access"] {
@@ -50,16 +52,22 @@ export function createUpdateCommandCheckpointReplayAccess(params: {
       return undefined;
     },
     async prepareCanonicalWrite(record) {
-      assertCurrent();
-      const observed = await transaction.observe();
-      assertCurrent();
-      if (
-        observed.status !== "verified" ||
-        observed.observation.previous !== "live" ||
-        observed.observation.candidate === "live"
-      ) {
-        throw new Error("Previous runtime custody changed.");
-      }
+      const assertRestoredPackage = async () => {
+        assertCurrent();
+        const observed = await transaction.observe();
+        assertCurrent();
+        if (
+          observed.status !== "verified" ||
+          observed.observation.previous !== "live" ||
+          observed.observation.candidate === "live" ||
+          (params.expectedPackageObservation &&
+            !isDeepStrictEqual(observed.observation, params.expectedPackageObservation))
+        ) {
+          throw new Error("Previous runtime custody changed.");
+        }
+      };
+      validatedRuntime = undefined;
+      await assertRestoredPackage();
       const db = openNodeSqliteDatabase(resolveImmutableSqliteFileUri(databasePath), {
         readOnly: true,
       });
@@ -75,6 +83,11 @@ export function createUpdateCommandCheckpointReplayAccess(params: {
         });
         if (checked.status !== "verified") {
           throw new Error(checked.reason);
+        }
+        // A retained-runtime reader awaits external work. Its earlier package
+        // observation cannot authorize a later publication if custody changed.
+        if (params.expectedPackageObservation) {
+          await assertRestoredPackage();
         }
         validatedRuntime = record.from;
       } finally {

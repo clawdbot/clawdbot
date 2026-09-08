@@ -52,6 +52,7 @@ import {
   packageGapReplayModes,
   successfulPackageGapReplayModes,
 } from "./update-command-package-gap.test-support.js";
+import { interruptPartialPublicationReplay } from "./update-command-partial-publication.test-support.js";
 import {
   interruptSealedReplay,
   useShortRealReplayLeases,
@@ -96,6 +97,9 @@ it.each([
   "auto-restart-collected-stop-rollback",
   "auto-restart-collected-retained-rollback",
   "auto-restart-collected-native-entry-rollback",
+  "auto-restart-collected-partial-rollback",
+  "auto-restart-collected-partial-refusals-rollback",
+  "auto-restart-collected-partial-custody-rollback",
   "auto-restart-foreign-manager",
   "auto-restart-counter-drift",
   "auto-restart-unverified",
@@ -122,10 +126,15 @@ it.each([
     const packageGap = mode.startsWith("replay-package-gap");
     const autoRestart = mode.startsWith("auto-restart-");
     const nativeEntry = mode === "auto-restart-collected-native-entry-rollback";
+    const partialCustody = mode === "auto-restart-collected-partial-custody-rollback";
+    const partialRefusals =
+      mode === "auto-restart-collected-partial-refusals-rollback" || partialCustody;
+    const partialReplay = mode === "auto-restart-collected-partial-rollback" || partialRefusals;
     const collectedStop =
       mode === "auto-restart-collected-stop-rollback" ||
       mode === "auto-restart-collected-retained-rollback" ||
-      nativeEntry;
+      nativeEntry ||
+      partialReplay;
     const collectedRetained = mode === "auto-restart-collected-retained-rollback" || nativeEntry;
     const collectedRuntime = nativeEntry ? useCollectedServiceRuntime() : undefined;
     const nativeRetained = mode === "auto-restart-retained-rollback" || collectedRetained;
@@ -145,7 +154,7 @@ it.each([
       interference ||
       interrupted ||
       replay;
-    if (replay) {
+    if (replay || partialReplay) {
       useShortRealReplayLeases(mode === "replay-package-gap-slow-checkpoint" ? 10_000 : 30_000);
     }
     const lateRollback =
@@ -218,15 +227,22 @@ it.each([
     try {
       const definition = path.join(home, "gateway.service");
       await fs.writeFile(definition, "original service\n");
+      const extraDefinitions = partialReplay ? [path.join(home, "first.conf")] : [];
+      for (const file of extraDefinitions) {
+        await fs.writeFile(file, "# retained native policy\n");
+      }
       await withEnvAsync(
         {
           HOME: home,
           USERPROFILE: home,
           OPENCLAW_HOME: undefined,
-          OPENCLAW_STATE_DIR: path.join(home, packageGap || nativeRetained ? ".openclaw" : "state"),
+          OPENCLAW_STATE_DIR: path.join(
+            home,
+            packageGap || nativeRetained || partialReplay ? ".openclaw" : "state",
+          ),
           OPENCLAW_CONFIG_PATH: path.join(
             home,
-            packageGap || nativeRetained ? ".openclaw" : "state",
+            packageGap || nativeRetained || partialReplay ? ".openclaw" : "state",
             "openclaw.json",
           ),
           OPENCLAW_PROFILE: undefined,
@@ -322,6 +338,7 @@ it.each([
                     "gateway",
                   ],
                   sourcePath: definition,
+                  definitionPaths: extraDefinitions,
                 };
               },
               readRuntime: async (readEnv, inspection) => {
@@ -394,7 +411,7 @@ it.each([
             }),
           );
           const enable = async () => {
-            if (!replay && !nativeRetained) {
+            if (!replay && !nativeRetained && !partialReplay) {
               recovery.fence.assertCurrent();
             }
             const record = loadUpdateRecovery(run.runId, options)!;
@@ -582,7 +599,7 @@ it.each([
                 expect(JSON.parse(await fs.readFile(config, "utf8")).update.channel).toBe("beta");
                 break;
               }
-              expect(mutation).toHaveProperty("value");
+              expect(mutation, inspect(mutation, { depth: 8 })).toHaveProperty("value");
             }
             if (older) {
               expect(migratedVersion).toBe(16);
@@ -743,6 +760,13 @@ it.each([
                     : input,
                 ),
               );
+            }
+            if (partialReplay) {
+              resume = await interruptPartialPublicationReplay(params, {
+                refusalsOnly: partialRefusals,
+                custodyOnly: partialCustody,
+              });
+              return;
             }
             if (nativeRetained) {
               resume = await interruptNativeSuppressionReplay(
@@ -907,12 +931,15 @@ it.each([
           });
           await resume?.();
           collectedRuntime?.verify();
-          if (nativeRetained) {
+          if (partialRefusals) {
+            expect(events).toEqual(["enable", "start", "disable", "stop"]);
+            expect(start).toHaveBeenCalledOnce();
+          } else if (nativeRetained || partialReplay) {
             expect(events).toEqual([
               "enable",
               "start",
               "disable",
-              ...(collectedRetained ? ["stop"] : []),
+              ...(collectedRetained || partialReplay ? ["stop"] : []),
               "enable",
               "start",
             ]);

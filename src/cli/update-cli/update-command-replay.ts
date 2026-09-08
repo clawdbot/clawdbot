@@ -100,7 +100,9 @@ export async function resumeUpdateCommandRestorePublication(
       if (
         opened.status !== "ready" ||
         opened.observed.observation.previous !== "live" ||
-        opened.observed.observation.candidate === "live" ||
+        (sealed
+          ? opened.observed.observation.candidate !== "displaced"
+          : opened.observed.observation.candidate === "live") ||
         !["previous", "both"].includes(opened.observed.observation.launchers)
       ) {
         throw new UpdateCommandRecoveryPendingError(
@@ -160,6 +162,7 @@ export async function resumeUpdateCommandRestorePublication(
           databasePath: initial.databasePath,
           artifactRoot: source.artifactRoot,
           transaction: opened.transaction,
+          ...(sealed ? { expectedPackageObservation: opened.observed.observation } : {}),
           assertCurrent,
           timeoutMs,
         }),

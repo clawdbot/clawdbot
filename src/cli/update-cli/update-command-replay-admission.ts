@@ -10,7 +10,10 @@ import {
   inspectUpdateCommandPackageGap,
 } from "./update-command-package-replay.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery.js";
-import { discoverUpdateCommandRecovery } from "./update-command-replay-inspection.js";
+import {
+  discoverUpdateCommandRecovery,
+  inspectUpdateCommandSealedReplay,
+} from "./update-command-replay-inspection.js";
 import { resolveUpdateCommandAdmissionEnv } from "./update-command-run.js";
 import {
   resolveOwnedManagedUpdateEnv,
@@ -121,6 +124,9 @@ export async function resolveUpdateCommandReplayAdmission(params: {
   if (ownershipFailure && pending && isPendingStoppedServiceReplay(pending, callerEnv)) {
     // This is a pending-only selection, never ordinary service admission. The
     // executor/source-owned native check must finish before reclaim or effects.
+    if (pending.restore) {
+      await inspectUpdateCommandSealedReplay(pending, callerEnv);
+    }
     await verifyStoppedServiceReplayPackage(pending, params.timeoutMs);
     return {
       env: callerEnv,
