@@ -29,10 +29,11 @@ type ClaudeCliAuthCredential =
 
 type ClaudeCliPreparedExecution = CliBackendPreparedExecution & {
   isolatedCompletionEnforced?: true;
-  secretInput: {
+  secretInput?: {
     fd: 3;
     fingerprint: string;
     createData: () => Buffer;
+    envName?: "ANTHROPIC_AUTH_TOKEN";
   };
 };
 
@@ -107,8 +108,41 @@ function createClaudeCliAuthInput(params: {
   };
 }
 
+function createClaudeCliAuthTokenInput(value: string): ClaudeCliPreparedExecution | undefined {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  // Z.AI's documented Claude Code contract is specifically ANTHROPIC_AUTH_TOKEN.
+  // Claude's private OAuth descriptor selects Anthropic OAuth semantics instead
+  // and Z.AI rejects that request even when the underlying token is valid.
+  const source = Buffer.from(trimmed, "utf8");
+  let disposed = false;
+  return {
+    clearEnv: [...CLAUDE_CLI_CLEAR_ENV],
+    secretInput: {
+      fd: 3,
+      envName: "ANTHROPIC_AUTH_TOKEN",
+      fingerprint: createHmac("sha256", CLAUDE_CLI_CREDENTIAL_FINGERPRINT_KEY)
+        .update(source)
+        .digest("hex"),
+      createData: () => {
+        if (disposed) {
+          throw new Error("Claude CLI auth input is no longer available.");
+        }
+        return Buffer.from(source);
+      },
+    },
+    cleanup: async () => {
+      disposed = true;
+      source.fill(0);
+    },
+  };
+}
+
 function resolveClaudeCliAuthInput(
   credential: ClaudeCliAuthCredential | undefined,
+  options: { apiKeyAsAuthToken?: boolean } = {},
 ): ClaudeCliPreparedExecution | undefined {
   // Forwarded OAuth here is OpenClaw-managed material (its refresh path is
   // OpenClaw-owned). Native `claude` logins are never forwarded; the current
@@ -140,6 +174,9 @@ function resolveClaudeCliAuthInput(
     });
   }
   if (credential?.type === "api_key" && "key" in credential && typeof credential.key === "string") {
+    if (options.apiKeyAsAuthToken) {
+      return createClaudeCliAuthTokenInput(credential.key);
+    }
     return createClaudeCliAuthInput({
       envName: "CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR",
       value: credential.key,
@@ -148,18 +185,42 @@ function resolveClaudeCliAuthInput(
   return undefined;
 }
 
-/** Build the Claude CLI backend plugin descriptor. */
-export function buildAnthropicCliBackend(
-  options: {
-    ensureDynamicSystemPromptSectionsSupport?: () => Promise<void>;
-    supportsDynamicSystemPromptSections?: () => boolean;
-  } = {},
+export type ClaudeAgentSdkCliBackendOptions = {
+  /** Stable runtime id; the default is the bundled Anthropic runtime. */
+  backendId?: string;
+  /** Canonical provider whose configured models this runtime executes. */
+  modelProvider?: string;
+  /** Model used by the optional live CLI smoke contract. */
+  defaultModelRef?: string;
+  /** Explicit provider-owned endpoint, applied after inherited routing is cleared. */
+  endpoint?: string;
+  /** Z.AI's Anthropic-compatible endpoint requires bearer-token authentication. */
+  apiKeyAsAuthToken?: boolean;
+  /** Z.AI model ids are already literal Claude Code model ids. */
+  modelAliases?: Record<string, string>;
+  /** Only Anthropic's Claude catalog uses the `[1m]` model selector. */
+  supportsOneMillionModelSuffix?: boolean;
+  /** Whether subscription credentials must dispatch through this backend. */
+  subscriptionAuthDispatch?: boolean;
+  ensureDynamicSystemPromptSectionsSupport?: () => Promise<void>;
+  supportsDynamicSystemPromptSections?: () => boolean;
+};
+
+/**
+ * Build a Claude Agent SDK CLI backend for an Anthropic-protocol provider.
+ *
+ * The execution bridge remains deliberately shared: it owns host-mediated
+ * native-tool permissions, AskUserQuestion mediation, warm sessions, and
+ * protected descriptor-based credential delivery.
+ */
+export function buildClaudeAgentSdkCliBackend(
+  options: ClaudeAgentSdkCliBackendOptions = {},
 ): CliBackendPlugin {
   return {
-    id: CLAUDE_CLI_BACKEND_ID,
-    modelProvider: "anthropic",
+    id: options.backendId ?? CLAUDE_CLI_BACKEND_ID,
+    modelProvider: options.modelProvider ?? "anthropic",
     liveTest: {
-      defaultModelRef: CLAUDE_CLI_DEFAULT_MODEL_REF,
+      defaultModelRef: options.defaultModelRef ?? CLAUDE_CLI_DEFAULT_MODEL_REF,
       defaultImageProbe: true,
       defaultMcpProbe: true,
       docker: {
@@ -219,7 +280,7 @@ export function buildAnthropicCliBackend(
     // tokens to metered extra-usage billing (or rejects them without balance);
     // opted-in embedded runs on subscription credentials execute through this
     // backend on plan limits instead.
-    subscriptionAuthDispatch: true,
+    subscriptionAuthDispatch: options.subscriptionAuthDispatch ?? true,
     config: {
       command: "claude",
       args: [...CLAUDE_CLI_DEFAULT_ARGS],
@@ -229,10 +290,11 @@ export function buildAnthropicCliBackend(
       // emits the matching transcript UUID on assistant records.
       resumeAtArg: "--resume-session-at",
       output: "jsonl",
+      jsonlDialect: "claude-stream-json",
       liveSession: "claude-stdio",
       input: "stdin",
       modelArg: "--model",
-      modelAliases: CLAUDE_CLI_MODEL_ALIASES,
+      modelAliases: options.modelAliases ?? CLAUDE_CLI_MODEL_ALIASES,
       imageArg: "@",
       imagePathScope: "workspace",
       sessionArgs: ["--session-id", "{sessionId}"],
@@ -250,7 +312,9 @@ export function buildAnthropicCliBackend(
     // Bare ids keep the CLI default; an explicit 1M selection must override
     // Claude's settings.json 200K limit. The 200K choice is enforced by env below.
     resolveModelId: ({ modelId, contextWindow }) =>
-      contextWindow === "1m" ? `${modelId}[1m]` : modelId,
+      options.supportsOneMillionModelSuffix !== false && contextWindow === "1m"
+        ? `${modelId}[1m]`
+        : modelId,
     authEpochMode: "profile-only",
     autoSelectAuthProfile: false,
     prepareExecution: (context) => {
@@ -260,7 +324,9 @@ export function buildAnthropicCliBackend(
           isolatedCompletionPrompt?: string;
           isolatedCompletionSystemPrompt?: string;
         };
-        const authInput = resolveClaudeCliAuthInput(credentialContext.authCredential);
+        const authInput = resolveClaudeCliAuthInput(credentialContext.authCredential, {
+          apiKeyAsAuthToken: options.apiKeyAsAuthToken,
+        });
         const isolatedCompletion = credentialContext.isolatedCompletionPrompt !== undefined;
         const cliExecution =
           !isolatedCompletion && context.executionMode === "agent"
@@ -280,6 +346,7 @@ export function buildAnthropicCliBackend(
           ...resolveClaudeCliAutoCompactEnv(context.contextTokenBudget),
           ...(context.contextWindow === "200k" ? { CLAUDE_CODE_DISABLE_1M_CONTEXT: "1" } : {}),
           ...resolveClaudeCliThinkingEnv(context.thinkingLevel, context.modelId),
+          ...(options.endpoint ? { ANTHROPIC_BASE_URL: options.endpoint } : {}),
           ...authInput?.env,
         };
         return {
@@ -303,4 +370,14 @@ export function buildAnthropicCliBackend(
         excludeDynamicSystemPromptSections: options.supportsDynamicSystemPromptSections?.(),
       }),
   };
+}
+
+/** Build the bundled Anthropic Claude CLI backend plugin descriptor. */
+export function buildAnthropicCliBackend(
+  options: Pick<
+    ClaudeAgentSdkCliBackendOptions,
+    "ensureDynamicSystemPromptSectionsSupport" | "supportsDynamicSystemPromptSections"
+  > = {},
+): CliBackendPlugin {
+  return buildClaudeAgentSdkCliBackend(options);
 }

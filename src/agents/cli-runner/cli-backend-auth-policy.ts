@@ -10,6 +10,8 @@ export type BundledCliBackendAuthPolicy = {
   oauthRefreshOwner: "core" | "cli";
   /** Retired OAuth profile identities that the native runtime owns instead. */
   nativeAuthProfileIds?: readonly string[];
+  /** Allow this bundled backend to consume its canonical provider's configured API key. */
+  providerConfigApiKey?: boolean;
 };
 
 const BUNDLED_CLI_BACKEND_AUTH_POLICIES = {
@@ -21,6 +23,11 @@ const BUNDLED_CLI_BACKEND_AUTH_POLICIES = {
   "google-gemini-cli": {
     strictSelectedProfile: false,
     oauthRefreshOwner: "cli",
+  },
+  "zai-claude-agent-sdk": {
+    strictSelectedProfile: false,
+    oauthRefreshOwner: "core",
+    providerConfigApiKey: true,
   },
 } satisfies Record<string, BundledCliBackendAuthPolicy>;
 

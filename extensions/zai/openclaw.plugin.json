@@ -1,7 +1,8 @@
 {
   "id": "zai",
   "activation": {
-    "onStartup": false
+    "onStartup": false,
+    "onAgentHarnesses": ["zai-claude-agent-sdk"]
   },
   "enabledByDefault": true,
   "providers": ["zai"],

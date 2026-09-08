@@ -88,9 +88,9 @@ openclaw plugins install @openclaw/zai-provider
 | `zai-coding-cn`     | `https://open.bigmodel.cn/api/coding/paas/v4` | `glm-5.3`     |
 
 Z.AI also publishes the Anthropic-compatible Coding Plan base URL
-`https://api.z.ai/api/anthropic`. OpenClaw's Z.AI choices use the documented
-OpenAI Chat Completions endpoints above; the Anthropic URL is for clients that
-speak Anthropic Messages directly.
+`https://api.z.ai/api/anthropic`. OpenClaw's standard Z.AI choices use the
+documented OpenAI Chat Completions endpoints above. The optional native Claude
+Agent SDK runtime below uses the Anthropic URL instead.
 
 `zai-api-key` auto-detects one of these four by probing your key against each
 endpoint's chat-completions API, checking general endpoints (`zai-global`,
@@ -98,6 +98,37 @@ then `zai-cn`) before Coding Plan endpoints (`zai-coding-global`, then
 `zai-coding-cn`), and stopping at the first endpoint that accepts a request.
 Use an explicit `--auth-choice` to force a Coding Plan endpoint if your key
 works on both.
+
+## Native Claude Agent SDK runtime
+
+For a Z.AI Global Coding Plan model, OpenClaw can run Claude Code's official
+Agent SDK against Z.AI's Anthropic-compatible endpoint. This retains the
+native runtime's MCP bridge, tool-permission mediation, and resumable sessions
+while keeping Z.AI model selection and credentials under the `zai` provider.
+
+Choose the runtime explicitly for the model you want to run:
+
+```json5
+{
+  agents: {
+    defaults: {
+      model: { primary: "zai/glm-4.7" },
+      models: {
+        "zai/glm-4.7": {
+          agentRuntime: { id: "zai-claude-agent-sdk" },
+        },
+      },
+    },
+  },
+}
+```
+
+The backend clears inherited `ANTHROPIC_*` routing variables and applies
+`https://api.z.ai/api/anthropic` itself. It passes the selected Z.AI API key as
+Claude Code's protected bearer-token input; do not add an Anthropic key or
+endpoint override to this configuration. Z.AI currently documents this
+Anthropic endpoint for its Global Coding Plan, so use the normal OpenAI
+Chat-Completions route for regional endpoints.
 
 ## Rate limits and overloads
 
