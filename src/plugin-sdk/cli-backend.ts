@@ -7,6 +7,7 @@ export type {
   CliBackendExecute,
   CliBackendExecuteContext,
   CliBackendExecutionMode,
+  CliBackendFastMode,
   CliBackendJsonlUsage,
   CliBackendLiveSessionCapability,
   CliBackendLiveSessionCloseReason,

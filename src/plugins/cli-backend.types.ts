@@ -277,6 +277,14 @@ export type CliBackendExecute = (
   context: CliBackendExecuteContext,
 ) => AsyncIterable<Record<string, unknown>>;
 
+/**
+ * Fast-mode state of the run at spawn time: `true` (`/fast on`, `fastModeDefault`,
+ * `models.providers.*.fastMode`), `false`, or `"auto"` (core toggles fast after
+ * `fastModeAutoOnSeconds`; a spawned CLI turn cannot switch mid-run, so backends
+ * should treat `"auto"` as off unless their CLI has an equivalent).
+ */
+export type CliBackendFastMode = boolean | "auto";
+
 export type CliBackendResolveExecutionArgsContext = {
   config?: OpenClawConfig;
   workspaceDir: string;
@@ -284,6 +292,7 @@ export type CliBackendResolveExecutionArgsContext = {
   modelId: string;
   authProfileId?: string;
   thinkingLevel?: CliBackendThinkingLevel;
+  fastMode?: CliBackendFastMode;
   executionMode?: CliBackendExecutionMode;
   toolAvailability?: CliBackendToolAvailability;
   useResume: boolean;
