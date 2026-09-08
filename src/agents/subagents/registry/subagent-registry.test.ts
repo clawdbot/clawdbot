@@ -60,6 +60,7 @@ import type {
   SubagentRunParamsOverrides,
   SubagentRunRecordOverrides,
 } from "../../subagent-test-fixtures.test-helpers.js";
+import type { SubagentAnnounceFlowOutcome } from "../announce/subagent-announce.js";
 import { enqueueSwarmRun, releaseSwarmRun } from "../swarm/swarm-scheduler.js";
 import { testing as swarmSchedulerTesting } from "../swarm/swarm-scheduler.test-support.js";
 import {
@@ -194,7 +195,7 @@ const mocks = vi.hoisted(() => ({
   ),
   captureSubagentCompletionReply: vi.fn(async () => "final completion reply"),
   cleanupBrowserSessionsForLifecycleEnd: vi.fn(async () => {}),
-  runSubagentAnnounceFlow: vi.fn(async (): Promise<"delivered" | "retryable"> => "delivered"),
+  runSubagentAnnounceFlow: vi.fn(async (): Promise<SubagentAnnounceFlowOutcome> => "delivered"),
   maybeWakeRequesterAfterAllChildrenSettled: vi.fn(
     async (wakeParams: {
       settledEntry: SubagentRunRecord;
@@ -3998,6 +3999,52 @@ describe("subagent registry seam flow", () => {
     expect(findRequesterRun("run-expiry-retired-retry")?.waitExpiryAnnouncedAt).toBeUndefined();
     expect(mocks.cleanupBrowserSessionsForLifecycleEnd).not.toHaveBeenCalled();
   });
+
+  it.each(["intentional_non_delivery", "permanent_failure", "delivered"] as const)(
+    "settles a provisional notification with %s without settling its child",
+    async (notificationOutcome) => {
+      const startedAt = Date.now() - 1_000;
+      const runId = `run-expiry-settled-notification-${notificationOutcome}`;
+      mocks.callGateway.mockImplementation(async (request: { method?: string }) =>
+        request.method === "agent.wait" ? { status: "timeout", startedAt } : {},
+      );
+      mocks.runSubagentAnnounceFlow.mockResolvedValue(notificationOutcome);
+      mod.registerSubagentRun({
+        runId,
+        task: "do not retry a settled notification or finalize its live child",
+        runTimeoutSeconds: 1,
+      });
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledOnce();
+      const run = findRequesterRun(runId);
+      expect(run?.waitExpiryAnnouncedAt).toEqual(expect.any(Number));
+      expect(run?.execution.status).toBe("running");
+      expect(run?.execution.endedAt).toBeUndefined();
+      expect(run?.completion?.resultText).toBeUndefined();
+      expect(mocks.cleanupBrowserSessionsForLifecycleEnd).not.toHaveBeenCalled();
+      expect(mocks.onSubagentEnded).not.toHaveBeenCalled();
+      expect(observerTerminalSignals(runId)).toEqual([]);
+
+      // Notification settlement must not suppress the child's later real result.
+      getLifecycleHandler()({
+        runId,
+        stream: "lifecycle",
+        data: {
+          phase: "end",
+          startedAt,
+          endedAt: Date.now(),
+          terminalReply: { disposition: "visible", text: "FINAL after notification settlement" },
+        },
+      });
+      await waitForFast(() => {
+        expect(run?.execution.status).toBe("terminal");
+        expect(run?.completion?.resultText).toBe("FINAL after notification settlement");
+        expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(2);
+        expect(mocks.cleanupBrowserSessionsForLifecycleEnd).toHaveBeenCalledOnce();
+      });
+    },
+  );
 
   it("retries a provisional wait-expiry announcement that was not delivered", async () => {
     const startedAt = Date.now() - 1_000;

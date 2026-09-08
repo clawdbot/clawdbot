@@ -37,6 +37,12 @@ type AgentTaskCompletionInternalEvent = {
   /** Set by producers that own a child run; absent for sources without one. */
   disposition?: AgentRunDisposition;
   result: string;
+  /**
+   * `true` when `result` holds only placeholder copy because the child produced
+   * no output. Read it through `hasVisibleCompletionResult`; never re-derive it
+   * by comparing `result` against the placeholder wording.
+   */
+  noVisibleResult?: boolean;
   modelRouteChange?: string;
   attachments?: AgentGeneratedAttachment[];
   mediaUrls?: string[];

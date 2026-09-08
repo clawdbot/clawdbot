@@ -566,8 +566,12 @@ const subagentRunManager = createSubagentRunManager({
       isCompletionDeliveryAllowed: ownsObservation,
       resolveGatewayContext: getGatewayContextResolver(entry),
     });
-    if (announceResult !== "delivered") {
-      throw new Error("subagent wait-expiry announcement was not delivered");
+    if (
+      announceResult !== "delivered" &&
+      announceResult !== "intentional_non_delivery" &&
+      announceResult !== "permanent_failure"
+    ) {
+      throw new Error("subagent wait-expiry announcement did not settle");
     }
     if (ownsObservation()) {
       entry.waitExpiryAnnouncedAt = Date.now();

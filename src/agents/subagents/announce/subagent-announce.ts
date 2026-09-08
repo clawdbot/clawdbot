@@ -506,9 +506,10 @@ export async function runSubagentAnnounceFlow(params: {
     const announceSessionId = childSessionEffectsAllowed()
       ? childSessionId || "unknown"
       : "unknown";
+    // Preserve both the child-owned output fact and the provisional wait copy.
+    const childResultText = childCompletionFindings || reply;
     const findings =
-      childCompletionFindings ||
-      reply ||
+      childResultText ||
       (stillRunning
         ? "(no output observed before this wait expired; the child may still be working — re-check before acting on this)"
         : "(no output)");
@@ -606,6 +607,7 @@ export async function runSubagentAnnounceFlow(params: {
         statusLabel,
         disposition,
         result: findings,
+        ...(childResultText ? {} : { noVisibleResult: true }),
         modelRouteChange,
         statsLine,
         replyInstruction,
