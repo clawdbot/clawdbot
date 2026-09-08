@@ -1186,7 +1186,12 @@ describe("collectInstalledRootDependencyManifestErrors", () => {
           dependencies: { "@discordjs/voice": "0.19.2" },
         },
       ],
-      source: '//#region extensions/discord/src/voice.js\nrequire("@discordjs/voice");\n',
+      source: [
+        "//#region extensions/discord/src/voice.js",
+        'require("@discordjs/voice");',
+        "//#endregion",
+        "",
+      ].join("\n"),
     });
 
     try {
