@@ -257,24 +257,42 @@ openclaw_e2e_install_package() {
   local prefix="${3:-}"
   local package_tgz="${OPENCLAW_CURRENT_PACKAGE_TGZ:?missing OPENCLAW_CURRENT_PACKAGE_TGZ}"
   local timeout_value="${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-600s}"
+  local diagnostics_path="${OPENCLAW_E2E_INSTALL_DIAGNOSTICS:-}"
+  local diagnostics_tool="${BASH_SOURCE[0]%/*}/openclaw-e2e-install-diagnostics.mjs"
   local args=(-g)
   if [ -n "$prefix" ]; then
     args+=("--prefix" "$prefix")
   fi
   echo "Installing $label..."
-  if openclaw_e2e_maybe_timeout "$timeout_value" npm install "${args[@]}" "$package_tgz" --no-fund --no-audit >"$log_file" 2>&1; then
+  local install_status=0
+  if [ -n "$diagnostics_path" ]; then
+    local pipeline_status=()
+    if openclaw_e2e_maybe_timeout "$timeout_value" npm install "${args[@]}" "$package_tgz" --no-fund --no-audit 2>&1 |
+      tee "$log_file" |
+      node "$diagnostics_tool" capture "$diagnostics_path"
+    then
+      pipeline_status=("${PIPESTATUS[@]}")
+    else
+      pipeline_status=("${PIPESTATUS[@]}")
+    fi
+    install_status="${pipeline_status[0]:-1}"
+    [ "$install_status" -ne 0 ] || install_status="${pipeline_status[2]:-1}"
+    [ "$install_status" -ne 0 ] || install_status="${pipeline_status[1]:-1}"
+    if [ "$install_status" -eq 0 ]; then
+      node "$diagnostics_tool" clear "$diagnostics_path" || return $?
+      return 0
+    fi
+  elif openclaw_e2e_maybe_timeout "$timeout_value" npm install "${args[@]}" "$package_tgz" --no-fund --no-audit >"$log_file" 2>&1; then
     return 0
   else
-    local install_status=$?
-    if [ "$install_status" -eq 124 ] || [ "$install_status" -eq 137 ]; then
-      echo "npm install timed out after $timeout_value for $label" >&2
-    fi
-    echo "npm install failed for $label" >&2
-    if [ -f "$log_file" ]; then
-      openclaw_e2e_print_log "$log_file" >&2
-    fi
-    exit 1
+    install_status=$?
   fi
+  if [ "$install_status" -eq 124 ] || [ "$install_status" -eq 137 ]; then
+    echo "npm install timed out after $timeout_value for $label" >&2
+  fi
+  echo "npm install failed for $label" >&2
+  [ -n "$diagnostics_path" ] || openclaw_e2e_print_log "$log_file" >&2
+  return "$install_status"
 }
 openclaw_e2e_find_dep_package() {
   local dep_path="$1"
