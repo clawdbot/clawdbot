@@ -35,6 +35,19 @@ describe("LineConfigSchema", () => {
     );
   });
 
+  it("accepts textChunkLimit on the channel and per account", () => {
+    const result = LineConfigSchema.safeParse({
+      textChunkLimit: 900,
+      accounts: { work: { textChunkLimit: 300 } },
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.textChunkLimit).toBe(900);
+      expect(result.data.accounts?.work?.textChunkLimit).toBe(300);
+    }
+  });
+
   it('accepts dmPolicy="open" with wildcard allowFrom', () => {
     const result = LineConfigSchema.safeParse({
       channelAccessToken: "token",

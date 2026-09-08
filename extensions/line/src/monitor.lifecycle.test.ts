@@ -3,18 +3,24 @@ import crypto from "node:crypto";
 import { createServer, IncomingMessage, type ServerResponse } from "node:http";
 import { Socket } from "node:net";
 import type { webhook } from "@line/bot-sdk";
-import type { ChannelInboundTurnPlan } from "openclaw/plugin-sdk/channel-inbound";
+import {
+  buildChannelInboundEventContext,
+  type ChannelInboundTurnPlan,
+} from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { createMockIncomingRequest } from "openclaw/plugin-sdk/test-env";
 import { WEBHOOK_IN_FLIGHT_DEFAULTS } from "openclaw/plugin-sdk/webhook-request-guards";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { deliverLineAutoReply } from "./auto-reply-delivery.js";
 import { createLineWebhookSpool } from "./webhook-spool.js";
 import { createEvent, withQueue } from "./webhook-spool.test-support.js";
 
 type LineNodeWebhookHandler = (req: IncomingMessage, res: ServerResponse) => Promise<void>;
 type LineHandleWebhook = ReturnType<typeof import("./bot.js").createLineBot>["handleWebhook"];
 type LineBotOptions = Parameters<typeof import("./bot.js").createLineBot>[0];
+type ResolvedTurn = Pick<ChannelInboundTurnPlan, "delivery">;
 
 const {
   createLineBotMock,
@@ -143,12 +149,70 @@ vi.mock("./send.js", () => ({
   getUserDisplayName: vi.fn(),
   pushMessagesLine: vi.fn(),
   replyMessageLine: vi.fn(),
-  showLoadingAnimation: vi.fn(),
+  showLoadingAnimation: vi.fn(async () => {}),
 }));
 
 vi.mock("./template-messages.js", () => ({
   buildTemplateMessageFromPayload: vi.fn(),
 }));
+
+/** An inbound context shaped by the same builders the LINE inbound path uses. */
+function createInboundTextContext(params?: {
+  accountId?: string;
+  conversation?: { kind: "direct"; id: string } | { kind: "group"; id: string };
+}): Parameters<NonNullable<LineBotOptions["onMessage"]>>[0] {
+  const conversation = params?.conversation ?? { kind: "direct" as const, id: "U1" };
+  const isGroup = conversation.kind === "group";
+  const accountId = params?.accountId ?? "default";
+  const route = resolveAgentRoute({
+    cfg: {},
+    channel: "line",
+    accountId,
+    peer: conversation,
+  });
+  const address = isGroup ? `line:group:${conversation.id}` : `line:${conversation.id}`;
+  return {
+    accountId,
+    // No group skill scope configured, which is what `groupConfig?.skills` yields.
+    skillFilter: undefined,
+    ctxPayload: buildChannelInboundEventContext({
+      channel: "line",
+      accountId,
+      messageId: "m1",
+      timestamp: 1,
+      from: address,
+      sender: { id: "U1" },
+      conversation,
+      route: { agentId: route.agentId, accountId, routeSessionKey: route.sessionKey },
+      reply: { to: address, originatingTo: address },
+      message: { body: "hi", bodyForAgent: "hi", rawBody: "hi", commandBody: "hi" },
+      access: { commands: { authorized: false } },
+      media: [],
+    }),
+    event: {
+      type: "message",
+      mode: "active",
+      timestamp: 1,
+      webhookEventId: "evt-1",
+      deliveryContext: { isRedelivery: false },
+      replyToken: "reply-token",
+      source: isGroup
+        ? { type: "group", groupId: conversation.id, userId: "U1" }
+        : { type: "user", userId: "U1" },
+      message: { type: "text", id: "m1", text: "hi", quoteToken: "test-quote-placeholder" },
+    },
+    isGroup,
+    userId: "U1",
+    groupId: isGroup ? conversation.id : undefined,
+    roomId: undefined,
+    replyToken: "reply-token",
+    route,
+    turn: {
+      storePath: "store.sqlite",
+      record: { updateLastRoute: undefined, onRecordError: () => {} },
+    },
+  };
+}
 
 describe("monitorLineProvider lifecycle", () => {
   beforeAll(async () => {
@@ -337,6 +401,58 @@ describe("monitorLineProvider lifecycle", () => {
     await monitor.stop();
   });
 
+  it("chunks an inbound reply at the limit live for that event", async () => {
+    // The limit is configured per account but applied per reply: it only holds
+    // if the delivery answering an inbound event carries it.
+    const { setLineRuntime } = await import("./runtime.js");
+    const deliverMock = vi.mocked(deliverLineAutoReply);
+    deliverMock.mockReset().mockResolvedValue({
+      status: "delivered",
+      replyTokenUsed: true,
+      visibleReplySent: true,
+    });
+    const runTurn = async (params: {
+      adapter: { resolveTurn: () => ResolvedTurn };
+    }): Promise<{ dispatched: false }> => {
+      await params.adapter.resolveTurn().delivery.deliver({ text: "reply" }, { kind: "final" });
+      return { dispatched: false };
+    };
+    setLineRuntime({
+      channel: { inbound: { run: runTurn } },
+    } as unknown as Parameters<typeof setLineRuntime>[0]);
+    const monitor = await monitorLineProvider({
+      channelAccessToken: "token",
+      channelSecret: "secret", // pragma: allowlist secret
+      accountId: "work",
+      config: {
+        channels: { line: { textChunkLimit: 4000, accounts: { work: { textChunkLimit: 900 } } } },
+      },
+      runtime: {} as RuntimeEnv,
+    });
+    const onMessage = createLineBotMock.mock.calls[0]?.[0]?.onMessage;
+    if (!onMessage) {
+      throw new Error("expected the LINE bot to receive an inbound message handler");
+    }
+
+    try {
+      // Admission hands every event its live config, so a reload between monitor
+      // start and this event is the reachable case. Passing the start config back
+      // would let a stale read pass: only a differing live value can tell them apart.
+      await onMessage(createInboundTextContext({ accountId: "work" }), {
+        cfg: {
+          channels: {
+            line: { textChunkLimit: 4000, accounts: { work: { textChunkLimit: 1200 } } },
+          },
+        },
+      });
+
+      expect(deliverMock.mock.calls[0]?.[0]?.textLimit).toBe(1200);
+    } finally {
+      // A leaked registration makes later shared-path signature tests ambiguous.
+      await monitor.stop();
+    }
+  });
+
   it("does not register a webhook when bot startup fails", async () => {
     createLineBotMock.mockImplementation(() => {
       throw new Error("line bot startup failed");
@@ -379,7 +495,6 @@ describe("monitorLineProvider lifecycle", () => {
 
   it("resolves a reply's presentation into LINE controls before delivering it", async () => {
     const { setLineRuntime } = await import("./runtime.js");
-    type ResolvedTurn = Pick<ChannelInboundTurnPlan, "delivery">;
     let resolvedTurn: ResolvedTurn | undefined;
     const runTurn = async (params: {
       adapter: { resolveTurn: () => ResolvedTurn };
@@ -402,18 +517,10 @@ describe("monitorLineProvider lifecycle", () => {
     }
 
     try {
-      await onMessage(
-        {
-          ctxPayload: { From: "line:group:C1", MessageSid: "m1", RawBody: "approve?" },
-          replyToken: "reply-token",
-          route: { accountId: "default", agentId: "main", sessionKey: "line:C1" },
-          isGroup: true,
-          accountId: "default",
-          turn: { record: {} },
-        } as unknown as Parameters<typeof onMessage>[0],
+      await onMessage(createInboundTextContext({ conversation: { kind: "group", id: "C1" } }), {
         // Admission always hands the turn its live config; an empty one is unreachable.
-        { cfg: {} } as Parameters<typeof onMessage>[1],
-      );
+        cfg: {},
+      });
 
       const prepared = await resolvedTurn?.delivery.preparePayload?.(
         {
@@ -443,10 +550,10 @@ describe("monitorLineProvider lifecycle", () => {
     // humanDelay lives on the agent, but only the dispatcher can act on it, so a
     // turn that never forwards it paces every block reply at zero.
     const { setLineRuntime } = await import("./runtime.js");
-    type ResolvedTurn = { dispatcherOptions?: { humanDelay?: unknown } };
-    let resolvedTurn: ResolvedTurn | undefined;
+    type DispatcherResolvedTurn = { dispatcherOptions?: { humanDelay?: unknown } };
+    let resolvedTurn: DispatcherResolvedTurn | undefined;
     const runTurn = async (params: {
-      adapter: { resolveTurn: () => ResolvedTurn };
+      adapter: { resolveTurn: () => DispatcherResolvedTurn };
     }): Promise<{ dispatched: false }> => {
       resolvedTurn = params.adapter.resolveTurn();
       return { dispatched: false };
@@ -501,10 +608,10 @@ describe("monitorLineProvider lifecycle", () => {
     // The scope is configured per group but enforced per turn: it only applies
     // if the reply options reaching the agent carry it.
     const { setLineRuntime } = await import("./runtime.js");
-    type ResolvedTurn = { replyOptions?: { skillFilter?: string[] } };
-    let resolvedTurn: ResolvedTurn | undefined;
+    type SkillFilterTurn = { replyOptions?: { skillFilter?: string[] } };
+    let resolvedTurn: SkillFilterTurn | undefined;
     const runTurn = async (params: {
-      adapter: { resolveTurn: () => ResolvedTurn };
+      adapter: { resolveTurn: () => SkillFilterTurn };
     }): Promise<{ dispatched: false }> => {
       resolvedTurn = params.adapter.resolveTurn();
       return { dispatched: false };
