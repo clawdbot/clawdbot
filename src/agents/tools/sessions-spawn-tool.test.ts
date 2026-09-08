@@ -599,7 +599,10 @@ describe("sessions_spawn tool", () => {
     expect(tool.description).toContain("session URL on the first line");
     expect(tool.description).toContain("`Owner: <label>` on the second line");
     expect(tool.description).toContain("`tools.sessions.visibility`");
-    expect(tool.description).toContain("Hidden native accepts include durable `sessionId`");
+    expect(tool.description).toContain(
+      "Ordinary hidden native accepts include durable `sessionId`",
+    );
+    expect(tool.description).toContain("collector and `visible=true` accepts omit it");
     expect(tool.description).toContain("`visible=true` accepts omit it");
     expect(tool.description).not.toContain("ACP and `visible=true`");
     expect(schema.properties?.runtime?.description).toContain("visible=true");

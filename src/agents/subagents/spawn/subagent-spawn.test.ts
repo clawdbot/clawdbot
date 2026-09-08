@@ -464,7 +464,7 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(result.note).toContain(
       "This is the only collector child in its group so far; unless more parallel children follow, an ordinary spawn (omit collect) is simpler and can be steered.",
     );
-    expect(result.sessionId).toBeTruthy();
+    expect(result).not.toHaveProperty("sessionId");
     const registerInput = firstRegisteredSubagentRun();
     expect(registerInput).toMatchObject({
       runId: result.runId,

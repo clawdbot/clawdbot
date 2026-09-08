@@ -384,10 +384,11 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
           sessions.loadSessionEntry({ agentId: "main", sessionKey: childSessionKey, storePath }),
           "accepted child entry",
         );
-        expect(result.details).toMatchObject({ sessionId: child.sessionId });
         if ("collect" in args) {
           expect(result.details).toMatchObject({ sessionKey: childSessionKey });
+          expect(result.details).not.toHaveProperty("sessionId");
         } else {
+          expect(result.details).toMatchObject({ sessionId: child.sessionId });
           expect(result.details).not.toHaveProperty("sessionKey");
         }
         expect(prepareSubagentSpawn).toHaveBeenCalledWith(

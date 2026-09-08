@@ -87,15 +87,15 @@ describe("sessions_send tool description", () => {
 });
 
 describe("sessions_spawn tool description", () => {
-  it("scopes durable sessionId to hidden native accepts", () => {
+  it("scopes durable sessionId to ordinary hidden native accepts", () => {
     const description = describeSessionsSpawnTool();
-    expect(description).toContain("Hidden native accepts include durable `sessionId`");
+    expect(description).toContain("Ordinary hidden native accepts include durable `sessionId`");
     expect(description).toContain("prefer over parsing `childSessionKey`");
-    expect(description).toContain("ACP and `visible=true` accepts omit it");
+    expect(description).toContain("collector, ACP, and `visible=true` accepts omit it");
 
     const hiddenAcp = describeSessionsSpawnTool({ acpAvailable: false });
-    expect(hiddenAcp).toContain("Hidden native accepts include durable `sessionId`");
-    expect(hiddenAcp).toContain("`visible=true` accepts omit it");
+    expect(hiddenAcp).toContain("Ordinary hidden native accepts include durable `sessionId`");
+    expect(hiddenAcp).toContain("collector and `visible=true` accepts omit it");
     expect(hiddenAcp).not.toContain("ACP");
   });
 });

@@ -151,8 +151,8 @@ export function describeSessionsSpawnTool(options?: {
       : ['`runtime="acp"` ids: codex, claude, gemini, opencode, or configured ACP.']),
     describeSubagentSpawnContext(options?.subagentThreadAvailable === true),
     options?.acpAvailable === false
-      ? "Hidden native accepts include durable `sessionId` (transcript UUID; prefer over parsing `childSessionKey`); `visible=true` accepts omit it."
-      : "Hidden native accepts include durable `sessionId` (transcript UUID; prefer over parsing `childSessionKey`); ACP and `visible=true` accepts omit it.",
+      ? "Ordinary hidden native accepts include durable `sessionId` (transcript UUID; prefer over parsing `childSessionKey`); collector and `visible=true` accepts omit it."
+      : "Ordinary hidden native accepts include durable `sessionId` (transcript UUID; prefer over parsing `childSessionKey`); collector, ACP, and `visible=true` accepts omit it.",
     "Hidden child: research, parallel/batch reads, throwaway side tasks. Coding, PRs, long builds, anything worth keeping: `visible=true`. No spawn for quick lookup/single read.",
     "After spawn, do non-overlap work; follow the receipt's completion mode.",
   ].join(" ");
