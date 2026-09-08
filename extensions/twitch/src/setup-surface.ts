@@ -13,6 +13,7 @@ import {
   type OpenClawConfig,
   type WizardPrompter,
   normalizeAccountId,
+  patchTopLevelChannelConfigSection,
   createSetupTranslator,
   setSetupChannelEnabled,
 } from "openclaw/plugin-sdk/setup";
@@ -74,24 +75,17 @@ export function setTwitchAccount(
     obtainmentTimestamp: account.obtainmentTimestamp ?? existing?.obtainmentTimestamp,
   };
 
-  return {
-    ...cfg,
-    channels: {
-      ...cfg.channels,
-      twitch: {
-        ...((cfg.channels as Record<string, unknown>)?.twitch as
-          | Record<string, unknown>
-          | undefined),
-        enabled: true,
-        accounts: {
-          ...((
-            (cfg.channels as Record<string, unknown>)?.twitch as Record<string, unknown> | undefined
-          )?.accounts as Record<string, unknown> | undefined),
-          [resolvedAccountId]: merged,
-        },
+  return patchTopLevelChannelConfigSection({
+    cfg,
+    channel,
+    enabled: true,
+    patch: {
+      accounts: {
+        ...cfg.channels?.twitch?.accounts,
+        [resolvedAccountId]: merged,
       },
     },
-  };
+  });
 }
 
 async function noteTwitchSetupHelp(prompter: WizardPrompter): Promise<void> {
