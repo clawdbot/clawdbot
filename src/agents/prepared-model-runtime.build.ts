@@ -36,7 +36,6 @@ import {
 import {
   fingerprintPreparedRuntimeFacts,
   preparedModelInventoryKey,
-  prepareAgentCatalogSource,
   prepareConfiguredRuntimeFactsBatch,
   prepareWorkspaceBuildGroup,
 } from "./prepared-model-runtime.facts.js";
@@ -54,6 +53,7 @@ import {
   preparedModelRuntimeWorkspaceFactsKey,
 } from "./prepared-model-runtime.inbound-registry.js";
 import { createCatalogAttemptReporter } from "./prepared-model-runtime.publication-events.js";
+import { prepareAgentCatalogSource } from "./prepared-model-runtime.scoped-catalog.js";
 import type {
   PreparedModelRuntimeBuildStats,
   PreparedModelRuntimeCatalogMode,

@@ -3294,20 +3294,27 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           // Allocation may change, but every file must retain its complete execution policy.
           tooling: nonPlugin
             .filter(isRepartitionableTooling)
-            .flatMap((group) =>
-              expectDefined(group.includePatterns, "repartitionable tooling membership").map(
-                (file) => ({
-                  parent: toolingParent(group),
-                  file,
-                  configs: group.configs,
-                  env: group.env,
-                  pretestBuildMode: group.pretestBuildMode,
-                  requiresDist: group.requiresDist,
-                  runner: group.runner,
-                  exclusive: isExclusiveCompactShardName(group.shard_name),
-                }),
-              ),
-            )
+            .flatMap((group) => {
+              const files = expectDefined(
+                group.includePatterns,
+                "repartitionable tooling membership",
+              );
+              // A split can move tests out of the compiler's larger runner group.
+              expect(group.runner).toBe(
+                files.includes("test/scripts/write-unified-entry-dts.test.ts")
+                  ? DEFAULT_NODE_TEST_RUNNER
+                  : BUNDLED_NODE_TEST_RUNNER,
+              );
+              return files.map((file) => ({
+                parent: toolingParent(group),
+                file,
+                configs: group.configs,
+                env: group.env,
+                pretestBuildMode: group.pretestBuildMode,
+                requiresDist: group.requiresDist,
+                exclusive: isExclusiveCompactShardName(group.shard_name),
+              }));
+            })
             .toSorted((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b))),
         };
       };
@@ -3364,7 +3371,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           expectTimingFamilies(mutated);
           expect(
             () => expect(policies(mutated)).toEqual(policies(before)),
-            `${mutation} must fail policy equality even with valid timing keys`,
+            `${mutation} must fail policy validation even with valid timing keys`,
           ).toThrow();
         }
         for (const identity of ["parent", "part"] as const) {

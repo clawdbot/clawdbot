@@ -1,5 +1,6 @@
 // Bootstraps documented JavaScript entrypoints before the TypeScript loader is active.
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import { constants as osConstants } from "node:os";
 import path from "node:path";
@@ -10,51 +11,32 @@ const FORWARDED_SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"];
 const DEFAULT_FORCE_KILL_DELAY_MS = 5_000;
 const SHIM_CHECKOUT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 
-function resolvePrimaryRoot(checkoutRoot) {
-  const result = spawnSync("git", ["rev-parse", "--git-common-dir"], {
-    cwd: checkoutRoot,
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "ignore"],
-  });
-  if (result.status !== 0) {
-    return null;
-  }
-  const commonDir = result.stdout.trim();
-  if (!commonDir) {
-    return null;
-  }
-  const resolved = path.resolve(checkoutRoot, commonDir);
-  return path.basename(resolved) === ".git" ? path.dirname(resolved) : null;
-}
-
 export function resolveTsxImport(checkoutRoot) {
   const modulesDir =
-    process.env.PNPM_CONFIG_MODULES_DIR?.trim() || process.env.npm_config_modules_dir?.trim();
-  const hydratedTsxRoot = modulesDir
-    ? path.join(path.resolve(checkoutRoot, modulesDir), "tsx")
-    : null;
-  let resolutionError;
-  for (const candidateRoot of [
-    hydratedTsxRoot,
-    checkoutRoot,
-    resolvePrimaryRoot(checkoutRoot),
-  ].filter(Boolean)) {
-    try {
-      const require = createRequire(path.join(candidateRoot, "package.json"));
-      // Keep compiled ESM native: tsx's CJS hook rewrites its import-only
-      // dependency edges into require() calls with incompatible export conditions.
-      const importUrl = pathToFileURL(require.resolve("tsx/esm")).href;
-      const selectedModulesDir =
-        candidateRoot === hydratedTsxRoot
-          ? path.dirname(candidateRoot)
-          : path.join(candidateRoot, "node_modules");
-      ensureRepoNodeModulesLink(selectedModulesDir, { cwd: checkoutRoot });
-      return importUrl;
-    } catch (error) {
-      resolutionError = error;
+    (process.env.PNPM_CONFIG_MODULES_DIR ?? process.env.pnpm_config_modules_dir) ||
+    process.env.npm_config_modules_dir;
+  const localModulesDir = path.resolve(checkoutRoot, "node_modules");
+  const configuredModulesDir = modulesDir ? path.resolve(checkoutRoot, modulesDir) : undefined;
+  const candidates = configuredModulesDir
+    ? [configuredModulesDir, localModulesDir]
+    : [localModulesDir];
+  for (const selectedModulesDir of candidates) {
+    const tsxManifest = path.join(selectedModulesDir, "tsx", "package.json");
+    if (!existsSync(tsxManifest)) {
+      continue;
     }
+    const require = createRequire(tsxManifest);
+    // Keep compiled ESM native: tsx's CJS hook rewrites its import-only
+    // dependency edges into require() calls with incompatible export conditions.
+    const importUrl = pathToFileURL(require.resolve("tsx/esm")).href;
+    if (selectedModulesDir === configuredModulesDir) {
+      ensureRepoNodeModulesLink(selectedModulesDir, { cwd: checkoutRoot });
+    }
+    return importUrl;
   }
-  throw resolutionError;
+  throw new Error(
+    `Repository dependencies are missing from ${localModulesDir}. Run pnpm install --frozen-lockfile in an independently owned checkout.`,
+  );
 }
 
 export async function registerToolingTsx() {

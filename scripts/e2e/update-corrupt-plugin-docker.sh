@@ -7,6 +7,12 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
 source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
+source "$ROOT_DIR/scripts/lib/frozen-target-compat.sh"
+
+TARGET_ROOT_DIR="$(cd "${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$ROOT_DIR}" && pwd)"
+CORRUPT_UPDATE_SCENARIO="$(openclaw_resolve_frozen_target_file "$TARGET_ROOT_DIR" \
+  scripts/e2e/lib/plugin-update/corrupt-update-scenario.sh \
+  "$ROOT_DIR/scripts/e2e/lib/plugin-update/corrupt-update-scenario.sh")"
 
 IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-update-corrupt-plugin-e2e" OPENCLAW_UPDATE_CORRUPT_PLUGIN_E2E_IMAGE)"
 SKIP_BUILD="${OPENCLAW_UPDATE_CORRUPT_PLUGIN_E2E_SKIP_BUILD:-0}"
@@ -24,6 +30,7 @@ OPENCLAW_TEST_STATE_SCRIPT_B64="$(docker_e2e_test_state_shell_b64 update-corrupt
 
 echo "Running corrupt plugin update tolerance E2E..."
 docker_e2e_run_with_harness \
+  -v "$CORRUPT_UPDATE_SCENARIO:/app/scripts/e2e/lib/plugin-update/corrupt-update-scenario.sh:ro" \
   -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
   -e OPENCLAW_SKIP_CHANNELS=1 \
   -e OPENCLAW_SKIP_PROVIDERS=1 \
