@@ -149,15 +149,22 @@ describe("parseClawManifest", () => {
     },
   );
 
-  it("keeps harness-specific settings out of the portable agent object", () => {
-    for (const field of ["groupChat", "sandbox", "tools", "memory", "heartbeat", "humanDelay"]) {
-      expect(
-        parseClawManifest({
-          schemaVersion: 1,
-          agent: { id: "worker", [field]: {} },
-        }).ok,
-      ).toBe(false);
-    }
+  it.each([
+    "model",
+    "subagents",
+    "groupChat",
+    "sandbox",
+    "tools",
+    "memory",
+    "heartbeat",
+    "humanDelay",
+  ])("keeps harness-specific %s out of the portable agent object", (field) => {
+    expect(
+      parseClawManifest({
+        schemaVersion: 1,
+        agent: { id: "worker", [field]: {} },
+      }).ok,
+    ).toBe(false);
   });
 
   it("rejects non-v1 package fields and connector packages", () => {
@@ -1077,6 +1084,10 @@ describe("buildClawAddPlan", () => {
     });
 
     expect(repeated.planIntegrity).toBe(first.planIntegrity);
+    // Existing consent tokens bind this description for profiles without the new fields.
+    expect(first.capabilityChanges.find((change) => change.kind === "agent")?.reason).toBe(
+      "The new agent declares sandbox, tool, memory-search, or recurring heartbeat capabilities.",
+    );
     expect(changed.planIntegrity).not.toBe(first.planIntegrity);
     expect(changedCapability.planIntegrity).not.toBe(first.planIntegrity);
   });

@@ -49,6 +49,26 @@ describe("Claw project CLI", () => {
     mocks.payloads.length = 0;
   });
 
+  it("prints model, delegation targets, and notices in an offline package preview", async () => {
+    mocks.runtime.log.mockClear();
+    await runClawsDevCommand("src/claws/fixtures/delegating-agent", {
+      workspace: join(tempDirs.make("openclaw-claw-delegation-preview-"), "workspace"),
+    });
+    expect(mocks.runtime.log).toHaveBeenCalledWith(
+      'Model: {"primary":"acme/primary","fallbacks":["acme/fallback"]}',
+    );
+    expect(mocks.runtime.log).toHaveBeenCalledWith("Delegation: researcher, writer; mode: prefer");
+    expect(mocks.runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining('Notice: Model "acme/primary" is not in the local model catalog'),
+    );
+    expect(mocks.runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining(
+        'Notice: Delegation target "researcher" is not in the local agent roster',
+      ),
+    );
+    expect(mocks.runtime.log).toHaveBeenCalledWith("Blocked actions: 0");
+  });
+
   it("runs create, validate, build, and offline dev against the built artifact", async () => {
     const root = join(tempDirs.make("openclaw-claw-author-"), "author-flow");
     const artifact = join(tempDirs.make("openclaw-claw-author-output-"), "author-flow.tgz");

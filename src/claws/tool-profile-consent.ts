@@ -8,6 +8,14 @@ type ClawToolProfileSelection = Omit<
   "profile"
 > & { profile?: string };
 
+export function resolveClawProfileCapabilities(value: unknown): unknown {
+  if (typeof value !== "string") {
+    return value;
+  }
+  const policy = resolveToolProfilePolicy(value);
+  return policy?.allow ? expandToolGroups(policy.allow).toSorted() : value;
+}
+
 export function isConcreteBundleMcpToolName(name: string): boolean {
   return name.length <= 64 && /^[A-Za-z][A-Za-z0-9_-]*__[A-Za-z][A-Za-z0-9_-]*$/u.test(name);
 }

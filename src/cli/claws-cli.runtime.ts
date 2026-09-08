@@ -61,6 +61,7 @@ import { authorizeLegacyV1Resume } from "./claws-cli-legacy-resume.js";
 import {
   emitClawFailure,
   formatClawDiagnostics,
+  logClawAgentConfiguration,
   logClawExperimentalWarning,
 } from "./claws-cli-output.js";
 import { waitUntilGatewayAgentAvailable } from "./claws-cli.gateway-readiness.js";
@@ -78,6 +79,7 @@ import { callGatewayFromCli } from "./gateway-rpc.js";
 function logClawAddPlanSummary(plan: ClawAddPlan, runtime: RuntimeEnv): void {
   runtime.log(`Agent: ${plan.agent.finalId}`);
   runtime.log(`Workspace: ${plan.agent.workspace}`);
+  logClawAgentConfiguration(plan, runtime);
   runtime.log(`Actions: ${plan.summary.totalActions}`);
   runtime.log(`Packages: ${plan.summary.packageActions}`);
   for (const action of plan.actions.filter((candidate) => candidate.kind === "package")) {
@@ -286,6 +288,7 @@ export async function runClawsAddCommand(
   );
   const cronStore = await loadCronJobsStoreWithConfigJobsReadOnly(resolveCronJobsStorePath());
   const basePlanContext = {
+    config,
     ...(opts.agentId ? { agentId: opts.agentId } : {}),
     ...(opts.workspace ? { workspace: opts.workspace } : {}),
     existingAgentIds,

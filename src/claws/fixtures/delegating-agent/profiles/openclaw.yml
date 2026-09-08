@@ -6,9 +6,3 @@ agent:
   subagents:
     allowAgents: [researcher, writer]
     delegationMode: prefer
-  tools:
-    deny:
-      - exec
-      - browser
-  humanDelay:
-    mode: natural

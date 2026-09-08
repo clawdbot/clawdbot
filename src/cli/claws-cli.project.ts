@@ -23,6 +23,7 @@ import { defaultRuntime, writeRuntimeJson, type RuntimeEnv } from "../runtime.js
 import {
   emitClawFailure,
   formatClawDiagnostics,
+  logClawAgentConfiguration,
   logClawExperimentalWarning,
 } from "./claws-cli-output.js";
 import type {
@@ -62,6 +63,7 @@ function reportProjectError(
 function logDevPlanSummary(plan: ClawAddPlan, runtime: RuntimeEnv): void {
   runtime.log(`Agent: ${plan.agent.finalId}`);
   runtime.log(`Workspace: ${plan.agent.workspace}`);
+  logClawAgentConfiguration(plan, runtime);
   runtime.log(`Actions: ${plan.summary.totalActions}`);
   runtime.log(`Capability escalations: ${plan.capabilityChanges.length}`);
   runtime.log(`Blocked actions: ${plan.summary.blockedActions}`);
@@ -106,6 +108,7 @@ async function prepareDev(projectPath: string, opts: ClawsDevOptions): Promise<P
         },
         diagnostics: result.diagnostics,
         context: {
+          config,
           ...(opts.agentId ? { agentId: opts.agentId } : {}),
           ...(opts.workspace ? { workspace: opts.workspace } : {}),
           existingAgentIds,

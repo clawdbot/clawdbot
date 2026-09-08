@@ -1,4 +1,4 @@
-import type { ClawDiagnostic } from "../claws/types.js";
+import type { ClawAddPlan, ClawDiagnostic } from "../claws/types.js";
 import type { ClawUpdatePlan } from "../claws/update-plan.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
@@ -30,6 +30,25 @@ export function logClawExperimentalWarning(runtime: RuntimeEnv): void {
   runtime.log("Experimental: Claws contracts may change while RFC 0016 is under review.");
 }
 
+function logClawPlanNotices(diagnostics: ClawDiagnostic[], runtime: RuntimeEnv): void {
+  for (const diagnostic of diagnostics.filter((entry) => entry.level === "warning")) {
+    runtime.log(redactSensitiveText(`Notice: ${diagnostic.message}`));
+  }
+}
+
+export function logClawAgentConfiguration(plan: ClawAddPlan, runtime: RuntimeEnv): void {
+  const { model, subagents } = plan.agent.config;
+  if (model !== undefined) {
+    runtime.log(`Model: ${JSON.stringify(model)}`);
+  }
+  if (subagents) {
+    const targets =
+      subagents.allowAgents?.join(", ") || (subagents.allowAgents ? "none" : "inherited");
+    runtime.log(`Delegation: ${targets}; mode: ${subagents.delegationMode ?? "inherited"}`);
+  }
+  logClawPlanNotices(plan.diagnostics, runtime);
+}
+
 export function logClawUpdatePlanSummary(plan: ClawUpdatePlan, runtime: RuntimeEnv): void {
   runtime.log(`Agent: ${plan.agentId}`);
   runtime.log(`Update actions: ${plan.summary.totalActions}`);
@@ -40,6 +59,7 @@ export function logClawUpdatePlanSummary(plan: ClawUpdatePlan, runtime: RuntimeE
     `Capability changes: ${plan.summary.capabilityChanges}; escalations requiring explicit review: ${plan.summary.capabilityEscalations}`,
   );
   runtime.log(`Plan integrity: ${plan.planIntegrity}`);
+  logClawPlanNotices(plan.diagnostics, runtime);
   if (plan.summary.capabilityEscalations > 0) {
     runtime.log(
       "Capability consent: the exact plan-integrity token binds every ! change disclosed below.",
