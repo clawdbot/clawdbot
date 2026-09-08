@@ -11,6 +11,23 @@ import { resolveTaskScriptPath } from "../schtasks.js";
 export const schtasksResponses: Array<{ code: number; stdout: string; stderr: string }> = [];
 export const schtasksCalls: string[][] = [];
 
+/** Localized schtasks /Query /FO LIST /V snapshots used by runtime and inspect parsers. */
+export const SCHTASKS_SPANISH_READY_LIST = [
+  "Nombre de host: MINI-PC",
+  "Nombre de tarea: \\OpenClaw Gateway",
+  "Estado: Listo",
+  "Último tiempo de ejecución: 1/09/2026 21:13:35",
+  "Último resultado: 0",
+  "Tarea que se ejecutará: C:\\Users\\minipc\\.openclaw\\gateway.vbs",
+].join("\r\n");
+
+export const SCHTASKS_GERMAN_READY_LIST = [
+  "Aufgabenname: \\OpenClaw Gateway",
+  "Status: Bereit",
+  "Letzte Laufzeit: 02.08.2026 14:00:00",
+  "Letztes Ergebnis: 0",
+].join("\r\n");
+
 export const inspectPortUsageMock: MockFn<
   (port: number, options?: { probeHosts?: readonly string[] }) => Promise<PortUsage>
 > = vi.fn();

@@ -1,6 +1,7 @@
 // Detects Windows console/OEM code pages and decodes console output encodings.
 import { spawnSync } from "node:child_process";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import iconv from "iconv-lite";
 import { resolveDiagnosticProcessEnv } from "./process-env.js";
 import { getWindowsCmdExePath, queryWindowsRegistryValue } from "./windows-install-roots.js";
 
@@ -103,8 +104,14 @@ export function resolveWindowsConsoleEncoding(): string | null {
     });
     const raw = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
     const codePage = parseWindowsCodePage(raw);
+    // Consoles outside East Asia default to an OEM page (850 on Spanish and
+    // German hosts), which Node ICU cannot decode; those labels go to iconv-lite.
     cachedWindowsConsoleEncoding =
-      codePage !== null ? (WINDOWS_CODEPAGE_ENCODING_MAP[codePage] ?? null) : null;
+      codePage !== null
+        ? (WINDOWS_CODEPAGE_ENCODING_MAP[codePage] ??
+          WINDOWS_OEM_CODEPAGE_ENCODING_MAP[codePage] ??
+          null)
+        : null;
   } catch {
     cachedWindowsConsoleEncoding = null;
   }
@@ -217,10 +224,35 @@ function decodeWindowsBufferWithFallback(params: {
     return params.buffer.toString("utf8");
   }
   try {
-    return new TextDecoder(encoding).decode(params.buffer);
+    return (
+      createLegacyTextDecoder(encoding)?.decode(params.buffer) ?? params.buffer.toString("utf8")
+    );
   } catch {
     return params.buffer.toString("utf8");
   }
+}
+
+type LegacyTextDecoder = {
+  decode(buffer?: Buffer, options?: { stream?: boolean }): string;
+};
+
+/** Decoder for one legacy code page: Node ICU when it knows the label, iconv-lite for OEM pages. */
+function createLegacyTextDecoder(encoding: string): LegacyTextDecoder | null {
+  try {
+    return new TextDecoder(encoding);
+  } catch {
+    // Not a WHATWG label. ICU has no cp437/cp850-style OEM pages at all.
+  }
+  if (!iconv.encodingExists(encoding)) {
+    return null;
+  }
+  const decoder = iconv.getDecoder(encoding);
+  return {
+    decode(buffer, options) {
+      const text = buffer && buffer.length > 0 ? decoder.write(buffer) : "";
+      return options?.stream ? text : `${text}${decoder.end() ?? ""}`;
+    },
+  };
 }
 
 /** Creates a streaming decoder for subprocess output chunks that may split multibyte characters. */
@@ -238,7 +270,7 @@ export function createWindowsOutputDecoder(params?: {
   const normalizedEncoding = normalizeLowercaseStringOrEmpty(encoding);
   const legacyDecoder =
     platform === "win32" && encoding && normalizedEncoding !== "utf-8"
-      ? new TextDecoder(encoding)
+      ? createLegacyTextDecoder(encoding)
       : null;
   const preserveUtf8Bom = params?.preserveUtf8Bom === true;
   const utf8Decoder =

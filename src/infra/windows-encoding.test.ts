@@ -207,6 +207,63 @@ describe("windows output encoding", () => {
     ).toBe("测试～；");
   });
 
+  it("resolves an OEM console code page from a localized chcp line", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    spawnSyncMock.mockReturnValue({
+      error: undefined,
+      output: [null, "P\u00e1gina de c\u00f3digos activa: 850\r\n", ""],
+      pid: 1,
+      signal: null,
+      status: 0,
+      stderr: "",
+      stdout: "P\u00e1gina de c\u00f3digos activa: 850\r\n",
+    });
+    vi.resetModules();
+    const { decodeWindowsOutputBuffer: decodeOutputWithFreshCache } =
+      await import("./windows-encoding.js");
+    // "Tarea que se ejecutará: x" as a Spanish console emits it; 0xa0 is á in CP850.
+    const raw = Buffer.concat([
+      Buffer.from("Tarea que se ejecutar", "ascii"),
+      Buffer.from([0xa0]),
+      Buffer.from(": x", "ascii"),
+    ]);
+
+    expect(decodeOutputWithFreshCache({ buffer: raw, platform: "win32" })).toBe(
+      "Tarea que se ejecutar\u00e1: x",
+    );
+    expect(spawnSyncMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("decodes OEM 850 output that Node ICU has no label for", () => {
+    // "Auszuführende" from a German console; 0x81 is ü in CP850.
+    const raw = Buffer.concat([
+      Buffer.from("Auszuf", "ascii"),
+      Buffer.from([0x81]),
+      Buffer.from("hrende", "ascii"),
+    ]);
+
+    expect(
+      decodeWindowsOutputBuffer({
+        buffer: raw,
+        platform: "win32",
+        windowsEncoding: "cp850",
+      }),
+    ).toBe("Auszuf\u00fchrende");
+  });
+
+  it("streams OEM 850 output through the console code page fallback", () => {
+    const decoder = createWindowsOutputDecoder({ platform: "win32", windowsEncoding: "cp850" });
+    const raw = Buffer.concat([
+      Buffer.from("Tarea que se ejecutar", "ascii"),
+      Buffer.from([0xa0]),
+      Buffer.from(": x", "ascii"),
+    ]);
+
+    expect(
+      decoder.decode(raw.subarray(0, 22)) + decoder.decode(raw.subarray(22)) + decoder.flush(),
+    ).toBe("Tarea que se ejecutar\u00e1: x");
+  });
+
   it("prefers valid UTF-8 output on Windows even when the console code page is legacy", () => {
     const raw = Buffer.from("测试", "utf8");
 
