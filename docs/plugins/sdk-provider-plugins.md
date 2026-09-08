@@ -925,6 +925,16 @@ catalog, API-key auth, and dynamic model resolution.
       Explicit `tools.toolSearch` settings take precedence. This hook changes
       schema exposure, not tool permissions or availability.
 
+      `resolveFastModeSupport(ctx)` can be exported from the same policy artifact
+      and registered on the provider. Return `false` only for a confirmed no-op
+      Fast choice, `true` for an applicable local request mapping, or `undefined`
+      when facts are missing. `ProviderFastModePolicyContext` carries the selected
+      model, route, auth mode, runtime, request parameters and transport policy;
+      credentials are not included. Share the policy with request construction.
+      The host publishes only `supportsFastMode`, preserving unknown behavior
+      and clearing saved preferences. This describes local applicability, not
+      upstream entitlement or fulfillment, and does not reject `/fast` commands.
+
     </Accordion>
 
   </Step>

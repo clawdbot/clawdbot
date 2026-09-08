@@ -7,6 +7,7 @@ import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderUsageSnapshot } from "../infra/provider-usage.types.js";
+import type { ProviderFastModePolicyContext } from "../plugin-sdk/provider-model-types.js";
 import type {
   OAuthCredentials as SessionOAuthCredentials,
   OAuthLoginCallbacks,
@@ -479,6 +480,8 @@ export type ProviderPlugin = {
   resolveThinkingProfile?: (
     ctx: ProviderDefaultThinkingPolicyContext,
   ) => ProviderThinkingProfile | null | undefined;
+  /** Whether Fast can affect this selected request; undefined retains existing unknown behavior. */
+  resolveFastModeSupport?: (ctx: ProviderFastModePolicyContext) => boolean | undefined;
   /**
    * Provider-owned system-prompt contribution.
    *
