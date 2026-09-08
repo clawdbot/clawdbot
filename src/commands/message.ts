@@ -103,7 +103,10 @@ export async function messageCommand(
     runtime,
     autoEnable: true,
   });
-  const agentId = resolveAmbientOwnerAgentId(cfg);
+  const agentId = resolveAmbientOwnerAgentId(cfg, undefined, {
+    surface: "message CLI",
+    hint: `Run ${formatCliCommand("openclaw config set agents.defaults.systemAgent.agentId <id>")} with a configured agent ID.`,
+  });
   const actionMatch = (CHANNEL_MESSAGE_ACTION_NAMES as readonly string[]).find(
     (name) => normalizeLowercaseStringOrEmpty(name) === normalizedActionInput,
   );
