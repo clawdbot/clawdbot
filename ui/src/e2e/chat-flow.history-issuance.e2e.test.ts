@@ -3,6 +3,7 @@ import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import {
   chatSessionListResponse,
+  controlUiSessionUrl,
   createChatFlowE2eSuite,
   installMockGateway,
 } from "./chat-flow.test-support.ts";
@@ -21,6 +22,137 @@ async function captureHistoryIssuanceProof(page: Page, name: string): Promise<vo
 }
 
 suite.define(() => {
+  it("switches immediately but shows a skeleton only for slow history", async () => {
+    const context = await suite.newBrowserContext({
+      ...createControlUiE2eContextOptions(),
+      reducedMotion: "no-preference",
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      deferredMethods: ["chat.startup", "chat.history"],
+      sessionKey: "agent:main:session-a",
+      historyMessages: [{ role: "assistant", content: "Previous conversation." }],
+      sessionTranscripts: {
+        "agent:main:session-b": {
+          messages: [{ role: "assistant", content: "Destination conversation." }],
+        },
+      },
+      methodResponses: { "sessions.list": chatSessionListResponse() },
+    });
+    try {
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:session-a"));
+      await gateway.waitForRequest("chat.startup");
+      const loader = page.locator(
+        ".chat-pane-cache__pane--visible .chat-thread openclaw-panel-loading-skeleton",
+      );
+      await loader.waitFor({ state: "attached" });
+      expect(await loader.evaluate((node) => getComputedStyle(node).visibility)).toBe("hidden");
+      const opacity = await loader.evaluate(async (node) => {
+        const animation = node.getAnimations()[0];
+        if (!animation) {
+          throw new Error("The loading skeleton has no reveal animation");
+        }
+        await animation.ready;
+        animation.pause();
+        return [499, 575, 650].map((time) => {
+          animation.currentTime = time;
+          return Number(getComputedStyle(node).opacity);
+        });
+      });
+      expect(opacity[0]).toBe(0);
+      expect(opacity[1]).toBeGreaterThan(0);
+      expect(opacity[1]).toBeLessThan(1);
+      expect(opacity[2]).toBe(1);
+      await gateway.resolveDeferred("chat.startup");
+      const previous = page.locator(".chat-thread").getByText("Previous conversation.");
+      await previous.waitFor({ state: "visible" });
+      expect(await loader.count()).toBe(0);
+      await page.emulateMedia({ reducedMotion: "reduce" });
+      await page.waitForFunction(() => matchMedia("(prefers-reduced-motion: reduce)").matches);
+      await gateway.deferNext("chat.startup");
+      const [revealDelay] = await Promise.all([
+        page.evaluate(
+          () =>
+            new Promise<{ delay: number; previousVisible: boolean }>((resolve) => {
+              const started = performance.now();
+              let animationStart: number | undefined;
+              let previousVisible = false;
+              const sample = () => {
+                const skeleton = document.querySelector(
+                  ".chat-pane-cache__pane--visible .chat-thread openclaw-panel-loading-skeleton",
+                );
+                if (skeleton) {
+                  const startTime = skeleton.getAnimations()[0]?.startTime;
+                  if (typeof startTime === "number") {
+                    animationStart = startTime;
+                  }
+                  previousVisible ||= [...document.querySelectorAll("openclaw-chat-pane")].some(
+                    (pane) =>
+                      getComputedStyle(pane).opacity !== "0" &&
+                      pane.getAttribute("aria-hidden") === "false" &&
+                      pane.textContent.includes("Previous conversation."),
+                  );
+                  if (getComputedStyle(skeleton).visibility === "visible") {
+                    // Use the animation clock: the first sampled frame may arrive late on CI.
+                    const now = document.timeline.currentTime;
+                    resolve({
+                      delay:
+                        typeof now === "number" && animationStart !== undefined
+                          ? now - animationStart
+                          : 0,
+                      previousVisible,
+                    });
+                    return;
+                  }
+                }
+                if (performance.now() - started > 3_000) {
+                  resolve({ delay: -1, previousVisible });
+                  return;
+                }
+                requestAnimationFrame(sample);
+              };
+              sample();
+            }),
+        ),
+        page
+          .locator('[data-session-key="agent:main:session-b"] a.sidebar-recent-session__link')
+          .click(),
+      ]);
+      expect(revealDelay.delay).toBeGreaterThanOrEqual(480);
+      expect(revealDelay.previousVisible).toBe(false);
+      expect(revealDelay.delay).toBeLessThan(1_000);
+      expect(
+        await loader.evaluate((node) => ({
+          opacity: getComputedStyle(node).opacity,
+          duration: getComputedStyle(node).animationDuration,
+          reduced: matchMedia("(prefers-reduced-motion: reduce)").matches,
+        })),
+      ).toEqual({ opacity: "1", duration: "1e-05s", reduced: true });
+      expect(
+        await page
+          .locator(".chat-pane-cache__pane--visible")
+          .getByText("Previous conversation.")
+          .count(),
+      ).toBe(0);
+      await gateway.resolveDeferred("chat.startup");
+      await page
+        .locator(".chat-thread")
+        .getByText("Destination conversation.")
+        .waitFor({ state: "visible" });
+      await page
+        .locator('[data-session-key="agent:main:session-a"] a.sidebar-recent-session__link')
+        .click();
+      await previous.waitFor({ state: "visible" });
+      expect(
+        await page
+          .locator(".chat-pane-cache__pane--visible openclaw-panel-loading-skeleton")
+          .count(),
+      ).toBe(0);
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
   it.each(["named", "short"] as const)(
     "retains deferred history across %s chat canonicalization",
     async (reference) => {
