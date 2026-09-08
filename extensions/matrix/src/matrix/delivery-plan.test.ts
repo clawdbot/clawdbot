@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -6,6 +7,7 @@ import {
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { getMatrixRuntime } from "../runtime.js";
 import { installMatrixTestRuntime } from "../test-runtime.js";
 import {
   cleanupMatrixDeliveryPlans,
@@ -169,6 +171,53 @@ describe("Matrix durable delivery plans", () => {
         },
       }),
     ).rejects.toThrow("no longer matches the prepared event batch");
+  });
+
+  it("fails closed when a persisted plan contains invalid UTF-8", async () => {
+    const queueId = "queue-invalid-utf8";
+    const deliveryIdentity = identity(queueId);
+    const plan = await persist({ queueId });
+    const json = JSON.stringify(plan);
+    const marker = "durable hello";
+    const markerOffset = json.indexOf(marker);
+    if (markerOffset < 0) {
+      throw new Error("expected test plan body marker");
+    }
+    const invalidByteOffset = markerOffset + "durable".length;
+    const prefix = new TextEncoder().encode(json.slice(0, invalidByteOffset));
+    const suffix = new TextEncoder().encode(json.slice(invalidByteOffset));
+    const bytes = new Uint8Array(prefix.length + 1 + suffix.length);
+    bytes.set(prefix);
+    bytes[prefix.length] = 0xff;
+    bytes.set(suffix, prefix.length + 1);
+
+    const store = getMatrixRuntime().state.openBlobStore<Record<string, never>>({
+      namespace: "outbound-delivery-plans",
+      maxEntries: 10_000,
+      maxBytesPerEntry: 8 * 1024 * 1024,
+      maxBytesPerNamespace: 256 * 1024 * 1024,
+      overflowPolicy: "reject-new",
+      defaultTtlMs: 24 * 60 * 60 * 1000,
+    });
+    await store.register(`${createHash("sha256").update(queueId).digest("hex")}.0`, bytes, {});
+
+    await expect(reconcileMatrixUnknownSend(reconciliationContext(queueId))).resolves.toMatchObject(
+      {
+        status: "unresolved",
+        retryable: false,
+        error: expect.stringContaining("invalid JSON"),
+      },
+    );
+    expect(client.sendMessage).not.toHaveBeenCalled();
+    await expect(
+      loadMatrixDeliveryPlan({
+        identity: deliveryIdentity,
+        accountId: "default",
+        roomId: "!room:example.org",
+        transactionScopeId: "scope-1",
+        wireEventType: "m.room.message",
+      }),
+    ).resolves.toBeNull();
   });
 
   it("reissues the exact stored event with its transaction id and reports the provider event id", async () => {
