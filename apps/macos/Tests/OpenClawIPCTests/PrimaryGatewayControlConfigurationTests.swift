@@ -32,6 +32,7 @@ struct PrimaryGatewayControlConfigurationTests {
             tlsFingerprint: "replacement-pin")
         let replacement = try selection.replacingRoot(self.previous, effectiveLocalPort: 19000)
         #expect(replacement.clearsTargetDefaults)
+        #expect(!replacement.removesGatewayMode)
         #expect(GatewayRemoteConfig.resolvePasswordString(root: replacement.root) == "replacement-password")
         #expect(GatewayRemoteConfig.resolveTokenString(root: replacement.root) == nil)
         #expect(GatewayRemoteConfig.resolveTLSFingerprint(root: replacement.root) == "replacement-pin")
@@ -60,6 +61,7 @@ struct PrimaryGatewayControlConfigurationTests {
         let gateway = try #require(replacement.root["gateway"] as? [String: Any])
         let remote = try #require(gateway["remote"] as? [String: Any])
         #expect(replacement.clearsTargetDefaults == changesTarget)
+        #expect(!replacement.removesGatewayMode)
         #expect(remote["sshIdentity"] as? String == (changesTarget ? nil : "/example/old-key"))
         #expect(remote["sshHostKeyPolicy"] as? String == (changesTarget ? "strict" : "openssh"))
         #expect(GatewayRemoteConfig.resolveRemotePort(root: replacement.root) == (changesTarget ? 18789 : 19100))
@@ -125,10 +127,19 @@ struct PrimaryGatewayControlConfigurationTests {
             self.previous, effectiveLocalPort: 19000)
         let gateway = try #require(replacement.root["gateway"] as? [String: Any])
         #expect(gateway["mode"] == nil)
+        #expect(replacement.removesGatewayMode)
         #expect(GatewayRemoteConfig.resolveUrlString(root: replacement.root) == nil)
         #expect(gateway["remote"] == nil)
         #expect(gateway["auth"] as? [String: String] == ["token": "local-credential"])
         #expect(replacement.clearsTargetDefaults)
+
+        let clearedAgain = try PrimaryGatewayControlConfiguration.clear.replacingRoot(
+            replacement.root, effectiveLocalPort: 19000)
+        #expect(!clearedAgain.removesGatewayMode)
+
+        let local = try PrimaryGatewayControlConfiguration.local.replacingRoot(
+            self.previous, effectiveLocalPort: 19000)
+        #expect(!local.removesGatewayMode)
 
         let direct = try PrimaryGatewayControlConfiguration.direct(
             url: #require(URL(string: "wss://new.example/")), token: nil, password: nil, tlsFingerprint: nil)

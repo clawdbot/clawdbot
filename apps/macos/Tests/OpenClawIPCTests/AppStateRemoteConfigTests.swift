@@ -1182,12 +1182,12 @@ extension AppStateRemoteConfigTests {
                     .remoteIdentity,
                     .remoteHostKeyPolicy,
                 ]))
-        let sshRemote = (sshRoot["gateway"] as? [String: Any])?["remote"] as? [String: Any]
+        let sshRemote = (sshRoot.root["gateway"] as? [String: Any])?["remote"] as? [String: Any]
         #expect((sshRemote?["token"] as? [String: String])?["$secretRef"] ==
             "gateway-token") // pragma: allowlist secret
 
         let localRoot = AppState._testSyncedGatewayRoot(
-            currentRoot: sshRoot,
+            currentRoot: sshRoot.root,
             draft: .init(
                 connectionMode: .local,
                 remoteTransport: .ssh,
@@ -1196,7 +1196,7 @@ extension AppStateRemoteConfigTests {
                 remoteUrl: "",
                 remoteToken: "",
                 dirtyFields: [.mode]))
-        let localGateway = localRoot["gateway"] as? [String: Any]
+        let localGateway = localRoot.root["gateway"] as? [String: Any]
         let localRemote = localGateway?["remote"] as? [String: Any]
         #expect(localGateway?["mode"] as? String == "local")
         #expect((localRemote?["token"] as? [String: String])?["$secretRef"] ==
@@ -1282,10 +1282,114 @@ extension AppStateRemoteConfigTests {
                 remoteUrl: "",
                 remoteToken: "",
                 dirtyFields: [.mode]))
-        let localGateway = localRoot["gateway"] as? [String: Any]
+        let localGateway = localRoot.root["gateway"] as? [String: Any]
         let auth = localGateway?["auth"] as? [String: Any]
         #expect(localGateway?["mode"] as? String == "local")
         #expect(auth?["mode"] as? String == "token")
         #expect(auth?["token"] as? String == "test-token") // pragma: allowlist secret
+    }
+}
+
+extension AppStateRemoteConfigTests {
+    @Test(arguments: [false, true], ["local", "clear-mode", "clear-url"])
+    func `primary saves authorize removal only for an explicit unconfigured selection`(
+        fromCLI: Bool,
+        selection: String) async throws
+    {
+        let configPath = TestIsolation.tempConfigPath()
+        defer { try? FileManager.default.removeItem(atPath: configPath) }
+        try await TestIsolation.withIsolatedState(env: ["OPENCLAW_CONFIG_PATH": configPath]) {
+            let unconfigured = selection != "local"
+            let hadMode = selection != "clear-url"
+            var gateway: [String: Any] = [
+                "remote": ["transport": "direct", "url": "wss://gateway.example"],
+            ]
+            if hadMode { gateway["mode"] = "remote" }
+            let original: [String: Any] = ["gateway": gateway]
+            try JSONSerialization.data(withJSONObject: original).write(to: URL(fileURLWithPath: configPath))
+            var removalPermissions: [Bool] = []
+            let state = AppState(preview: true, gatewayConfigSaver: { _, allowGatewayModeRemoval in
+                removalPermissions.append(allowGatewayModeRemoval)
+                return false
+            })
+            state._testEnableGatewayConfigSync()
+            if fromCLI {
+                let selection: PrimaryGatewayControlConfiguration = unconfigured ? .clear : .local
+                #expect(throws: PrimaryGatewayControlError.self) {
+                    try state.setPrimaryGateway(selection)
+                }
+            } else {
+                state.connectionMode = unconfigured ? .unconfigured : .local
+                await state._testAwaitGatewayConfigSync()
+                #expect(state.gatewayConfigSyncFailure != nil)
+                #expect(!state.gatewayConfigIsCurrentForRouting)
+            }
+            #expect(removalPermissions == [unconfigured && hadMode])
+            #expect(NSDictionary(dictionary: OpenClawConfigFile.loadDict()).isEqual(to: original))
+        }
+    }
+}
+
+@MainActor
+struct AppStateGatewaySyncDraftTests {
+    @Test(arguments: [false, true], [false, true])
+    func `unconfigured draft authorizes only an owned mode removal`(hadMode: Bool, ownsMode: Bool) {
+        var gateway: [String: Any] = [
+            "remote": ["url": "wss://previous.example", "token": "previous-remote-token"],
+            "auth": ["token": "local-token"],
+        ]
+        if hadMode { gateway["mode"] = "local" }
+        let root: [String: Any] = ["gateway": gateway]
+        let replacement = AppState._testSyncedGatewayRoot(
+            currentRoot: root,
+            draft: .init(
+                connectionMode: .unconfigured,
+                remoteTransport: .direct,
+                remoteTarget: "",
+                remoteIdentity: "",
+                remoteUrl: "wss://gateway.example",
+                remoteToken: "",
+                dirtyFields: ownsMode ? [.mode, .remoteUrl] : [.remoteUrl]))
+        #expect(replacement.removesGatewayMode == (hadMode && ownsMode))
+        let nextGateway = replacement.root["gateway"] as? [String: Any]
+        #expect((nextGateway?["auth"] as? [String: String])?["token"] == "local-token")
+        if ownsMode {
+            #expect(nextGateway?["remote"] == nil)
+        } else {
+            #expect((nextGateway?["remote"] as? [String: String])?["url"] == "wss://gateway.example")
+        }
+        #expect((replacement.root["gateway"] as? [String: Any])?["mode"] as? String ==
+            (hadMode && !ownsMode ? "local" : nil))
+    }
+
+    @Test
+    func `clearing the primary ignores incomplete remote edits only when the mode is owned`() {
+        var draft = AppState.GatewayConfigSyncDraft(
+            connectionMode: .unconfigured,
+            remoteTransport: .direct,
+            remoteTarget: "",
+            remoteIdentity: "",
+            remoteUrl: "",
+            remoteToken: "",
+            dirtyFields: [.mode, .remoteUrl])
+        #expect(AppState._testGatewayDraftCanPersist(draft))
+        draft.dirtyFields = [.remoteUrl]
+        #expect(!AppState._testGatewayDraftCanPersist(draft))
+    }
+
+    @Test(arguments: [AppState.ConnectionMode.local, .remote])
+    func `configured drafts never authorize mode removal`(mode: AppState.ConnectionMode) {
+        let replacement = AppState._testSyncedGatewayRoot(
+            currentRoot: ["gateway": ["mode": "remote"]],
+            draft: .init(
+                connectionMode: mode,
+                remoteTransport: .direct,
+                remoteTarget: "",
+                remoteIdentity: "",
+                remoteUrl: "wss://gateway.example",
+                remoteToken: "",
+                dirtyFields: [.mode]))
+        #expect(!replacement.removesGatewayMode)
+        #expect((replacement.root["gateway"] as? [String: Any])?["mode"] as? String == mode.rawValue)
     }
 }

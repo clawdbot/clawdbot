@@ -615,7 +615,7 @@ struct OpenClawConfigFileTests {
 
             let selection = PrimaryGatewayControlConfiguration.clear
             let replacement = try selection.replacingRoot(OpenClawConfigFile.loadDict(), effectiveLocalPort: 18789)
-            #expect(OpenClawConfigFile.saveDict(replacement.root, allowGatewayModeRemoval: selection.isClear))
+            #expect(OpenClawConfigFile.saveDict(replacement.root, allowGatewayModeRemoval: replacement.removesGatewayMode))
             let cleared = OpenClawConfigFile.loadDict()
             let gateway = try #require(cleared["gateway"] as? [String: Any])
             #expect(gateway["mode"] == nil)

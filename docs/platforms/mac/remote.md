@@ -224,7 +224,8 @@ when the app is running.
 openclaw-mac configure-remote \
   --ssh-target user@gateway-host \
   --local-port 18789 \
-  --remote-port 18789
+  --remote-port 18789 \
+  --token-file /path/to/gateway-token
 ```
 
 The legacy `connect`, `wizard`, and `configure-remote` commands resolve config
@@ -234,10 +235,14 @@ in this order: `OPENCLAW_CONFIG_PATH`, then
 complete, and leaves the app to use the selected transport on its next start.
 Its ports default to `18789`. Additional options include `--identity`,
 `--ssh-host-key-policy`, `--project-root`, `--cli-path`, and `--json`.
-Its legacy `--token`/`--password` arguments remain supported, but expose
-credentials through process arguments; use the running app's file/stdin
-commands for credential changes. Run `configure-remote --help` for its full
-reference.
+Pass credentials with `--token-file PATH` or `--token-stdin`, and
+`--password-file PATH` or `--password-stdin`. Input is read once and trailing
+newlines are removed; standard input can supply only one secret. Keep
+credential files private. Its legacy `--token`/`--password` arguments remain
+supported with a deprecation warning on stderr because they expose credentials
+through process arguments. Choose one source per secret; combining its legacy
+argument with file/stdin input is rejected. Run `configure-remote --help` for
+its full reference.
 
 ### Configure in the app
 

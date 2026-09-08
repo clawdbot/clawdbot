@@ -1,9 +1,102 @@
+import Darwin
 import Foundation
 import Testing
 @testable import OpenClawMacCLI
 
 @Suite(.serialized)
 struct ConfigureRemoteCommandTests {
+    @Test(arguments: ["token", "password"], ["file", "stdin", "argv"])
+    @MainActor func `configure remote reads secret sources and warns only for argv`(
+        kind: String,
+        source: String) async throws
+    {
+        // Standard input belongs to the test process; keep it separate from parallel runner events.
+        let result = try await #require(processExitsWith: .success, observing: [\.standardErrorContent]) { [
+            kind = kind as String,
+            source = source as String,
+        ] in
+            try await ConfigureRemoteCommandTests.checkSecretSource(kind: kind, source: source)
+        }
+        let warningText = String(decoding: result.standardErrorContent, as: UTF8.self)
+        if source == "argv" {
+            #expect(warningText.contains("--\(kind) is deprecated; use --\(kind)-file or --\(kind)-stdin."))
+        } else {
+            #expect(!warningText.contains("deprecated"))
+        }
+        #expect(!warningText.contains("synthetic-\(kind)"))
+    }
+
+    @MainActor private static func checkSecretSource(kind: String, source: String) async throws {
+        let directory = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-configure-secret-\(UUID().uuidString)", isDirectory: true)
+        try FileManager().createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager().removeItem(at: directory) }
+        let configURL = directory.appendingPathComponent("openclaw.json")
+        let secretURL = directory.appendingPathComponent("secret.txt")
+        let secret = "synthetic-\(kind)"
+        try Data("\(secret)\r\n\n".utf8).write(to: secretURL)
+        let secretArguments = switch source {
+        case "file": ["--\(kind)-file", secretURL.path]
+        case "stdin": ["--\(kind)-stdin"]
+        default: ["--\(kind)", secret]
+        }
+        let transportArguments = kind == "token"
+            ? ["--ssh-target", "alice@gateway.example"]
+            : ["--direct-url", "wss://gateway.example"]
+
+        try await TestIsolation.withEnvValues(["OPENCLAW_CONFIG_PATH": configURL.path]) {
+            let configure: () throws -> Void = {
+                try configureRemote(
+                    ConfigureRemoteOptions.parse(transportArguments + secretArguments),
+                    defaultsSuites: [])
+            }
+            if source == "stdin" {
+                let input = try FileHandle(forReadingFrom: secretURL)
+                defer { try? input.close() }
+                try self.withStandardInput(from: input, configure)
+            } else {
+                try configure()
+            }
+        }
+
+        let root = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: configURL)) as? [String: Any])
+        let gateway = try #require(root["gateway"] as? [String: Any])
+        let remote = try #require(gateway["remote"] as? [String: Any])
+        try #require(remote[kind] as? String == secret)
+    }
+
+    @Test(arguments: ["token", "password"])
+    func `configure remote rejects conflicting secret sources before reading input`(kind: String) {
+        for arguments in [
+            ["--\(kind)", "synthetic-secret", "--\(kind)-file", "/does-not-exist"],
+            ["--\(kind)-file", "/does-not-exist", "--\(kind)", "synthetic-secret"],
+            ["--\(kind)", "synthetic-secret", "--\(kind)-stdin"],
+            ["--\(kind)-stdin", "--\(kind)", "synthetic-secret"],
+            ["--\(kind)-file", "/does-not-exist", "--\(kind)-stdin"],
+            ["--\(kind)-stdin", "--\(kind)-file", "/does-not-exist"],
+            ["--\(kind)-file"],
+            ["--\(kind)-file", "--json"],
+            ["--\(kind)", "--\(kind)-file", "/does-not-exist"],
+            ["--token-stdin", "--password-stdin"],
+        ] {
+            #expect(throws: Error.self) { try ConfigureRemoteOptions.parse(arguments) }
+        }
+    }
+
+    private static func withStandardInput(
+        from handle: FileHandle,
+        _ body: () throws -> Void) throws
+    {
+        let original = dup(STDIN_FILENO)
+        try #require(original >= 0)
+        defer {
+            dup2(original, STDIN_FILENO)
+            close(original)
+        }
+        try #require(dup2(handle.fileDescriptor, STDIN_FILENO) >= 0)
+        try body()
+    }
+
     @Test @MainActor func `configure remote writes ssh config and app defaults`() async throws {
         let configURL = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-configure-remote-\(UUID().uuidString).json")
