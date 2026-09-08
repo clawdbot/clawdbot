@@ -862,6 +862,46 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(setActivityStatus).toHaveBeenCalledWith("error");
   });
 
+  it.each(
+    [
+      null,
+      undefined,
+      true,
+      false,
+      0,
+      1,
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+      {},
+      ["anthropic/claude-sonnet-4"],
+      "",
+      "malformed",
+      "/model",
+      "provider/",
+    ].map((destination) => ({ destination })),
+  )("preserves model state for an invalid reported destination %#", ({ destination }) => {
+    const { state, handleAgentEvent, dispose } = createHandlersHarness({
+      state: {
+        activeChatRunId: "run-invalid-destination",
+        sessionInfo: { modelProvider: "openai", model: "gpt-4o" },
+      },
+    });
+    try {
+      handleAgentEvent({
+        runId: "run-invalid-destination",
+        data: {
+          phase: "fallback_step",
+          fallbackStepToModel: destination,
+        },
+      });
+      expect(state.sessionInfo.modelProvider).toBe("openai");
+      expect(state.sessionInfo.model).toBe("gpt-4o");
+      expect(state.activeChatRunId).toBe("run-invalid-destination");
+    } finally {
+      dispose();
+    }
+  });
+
   it("updates the displayed model from fallback lifecycle steps", () => {
     const { state, tui, updateFooter, handleAgentEvent } = createHandlersHarness({
       state: {
