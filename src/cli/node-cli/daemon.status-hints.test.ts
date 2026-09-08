@@ -91,24 +91,24 @@ describe("runNodeDaemonStatus launchd stderr hints", () => {
       await withEnvAsync({ HOME: homeDir, OPENCLAW_PROFILE: undefined }, async () => {
         await runNodeDaemonStatus();
       });
+
+      expect(stdout()).toContain("suppressed (/dev/null)");
+      expect(stdout()).toContain(formatCliCommand("openclaw node restart"));
+      expect(stdout()).toContain(formatCliCommand("openclaw node install --force"));
+      expect(stdout()).not.toContain("openclaw gateway restart");
+      expect(stdout()).not.toContain("openclaw gateway install");
+
+      mocks.runtime.log.mockClear();
+      await withEnvAsync(
+        { HOME: homeDir, OPENCLAW_PROFILE: undefined, OPENCLAW_NIX_MODE: "1" },
+        async () => {
+          await runNodeDaemonStatus();
+        },
+      );
+      expect(stdout()).toContain(formatCliCommand("openclaw node restart"));
+      expect(stdout()).not.toContain("openclaw node install");
     } finally {
       Object.defineProperty(process, "platform", { value: originalPlatform });
     }
-
-    expect(stdout()).toContain("suppressed (/dev/null)");
-    expect(stdout()).toContain(formatCliCommand("openclaw node restart"));
-    expect(stdout()).toContain(formatCliCommand("openclaw node install --force"));
-    expect(stdout()).not.toContain("openclaw gateway restart");
-    expect(stdout()).not.toContain("openclaw gateway install");
-
-    mocks.runtime.log.mockClear();
-    await withEnvAsync(
-      { HOME: homeDir, OPENCLAW_PROFILE: undefined, OPENCLAW_NIX_MODE: "1" },
-      async () => {
-        await runNodeDaemonStatus();
-      },
-    );
-    expect(stdout()).toContain(formatCliCommand("openclaw node restart"));
-    expect(stdout()).not.toContain("openclaw node install");
   });
 });
