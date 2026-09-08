@@ -349,6 +349,7 @@ export function createTelegramPreparedSender(config: {
       operation: "sendMediaGroup",
       requestParams: params.requestParams,
       plainCaption: params.plainCaption,
+      shouldLog: (error) => !isTelegramPhotoLimitError(error),
       send: (requestParams, shouldLog) =>
         request(
           "sendMediaGroup",

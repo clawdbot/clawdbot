@@ -1,5 +1,6 @@
 // Update-channel config repair for legacy config files before normal command startup.
 import { readConfigFileSnapshot, replaceConfigFile } from "../../config/config.js";
+import type { ConfigWriteOptions } from "../../config/io.js";
 import { configWriteTargetsIncludeBoundary } from "../../config/mutate.js";
 import { validateConfigObjectRawWithPlugins } from "../../config/validation.js";
 import { containsAuthoredInclude } from "./shared/include-migration-ownership.js";
@@ -10,6 +11,7 @@ type ConfigSnapshot = Awaited<ReturnType<typeof readConfigFileSnapshot>>;
 /** Migrate a legacy config snapshot during update, unless validation blocks it. */
 export async function repairLegacyConfigForUpdateChannel(params: {
   configSnapshot: ConfigSnapshot;
+  configWriteOptions: ConfigWriteOptions;
   jsonMode: boolean;
 }): Promise<{ snapshot: ConfigSnapshot; repaired: boolean }> {
   const hasAuthoredIncludes = containsAuthoredInclude(params.configSnapshot.parsed);
@@ -23,8 +25,7 @@ export async function repairLegacyConfigForUpdateChannel(params: {
     return { snapshot: params.configSnapshot, repaired: false };
   }
 
-  const nextConfig =
-    hasAuthoredIncludes && migrated.sourceConfig ? migrated.sourceConfig : validated.config;
+  const nextConfig = migrated.sourceConfig ?? migrated.config;
   if (
     hasAuthoredIncludes &&
     !configWriteTargetsIncludeBoundary({ snapshot: params.configSnapshot, nextConfig })
@@ -33,9 +34,10 @@ export async function repairLegacyConfigForUpdateChannel(params: {
   }
 
   await replaceConfigFile({
-    nextConfig,
+    sourceConfig: nextConfig,
     baseHash: params.configSnapshot.hash,
     writeOptions: {
+      ...params.configWriteOptions,
       auditOrigin: "doctor",
       allowConfigSizeDrop: true,
       skipOutputLogs: params.jsonMode,

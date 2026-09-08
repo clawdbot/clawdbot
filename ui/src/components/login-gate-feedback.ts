@@ -9,6 +9,7 @@ import {
   shouldShowInsecureContextHint,
 } from "../lib/connection-hints.ts";
 import { formatGatewayHost } from "../lib/gateway-host.ts";
+import { classifyGatewaySecret } from "../lib/gateway-secret-shape.ts";
 
 function isPasswordModeErrorCode(code: string | null): boolean {
   return (
@@ -74,6 +75,7 @@ export type LoginFailureFeedback = {
 
 export type LoginFailureFeedbackParams = Parameters<typeof resolveAuthHintKind>[0] & {
   gatewayUrl?: string;
+  secret?: string;
   reconnectPending?: boolean;
 };
 
@@ -318,7 +320,12 @@ export function resolveLoginFailureFeedback(
         : lastErrorCode === ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH
           ? "login.failure.authRequired.title"
           : "login.failure.authFailed.title",
-      summaryKey: "login.failure.authFailed.summary",
+      summaryKey:
+        (lastErrorCode === ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH ||
+          lastErrorCode === ConnectErrorDetailCodes.AUTH_PASSWORD_MISMATCH) &&
+        classifyGatewaySecret(params.secret ?? "") === "setup-code"
+          ? "login.setupCodeHint"
+          : "login.failure.authFailed.summary",
       stepKeys: expectsPassword
         ? ["login.failure.authRequired.stepPassword", "login.failure.authRequired.stepConnect"]
         : [

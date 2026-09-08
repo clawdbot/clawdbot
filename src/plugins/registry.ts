@@ -1,6 +1,7 @@
 /** In-memory plugin registry builder and mutation API for plugin runtime registration. */
 import { cleanupPluginSessionSchedulerJobs } from "./host-hook-runtime.js";
 import { createPluginApiFactory } from "./registry-api.js";
+import { getPluginRegistryInspectionResources } from "./registry-inspection-resources.js";
 import { createPluginRegistrars } from "./registry-registrars.js";
 import { createPluginRuntimeResolver } from "./registry-runtime.js";
 import { createPluginRegistryState } from "./registry-state.js";
@@ -51,6 +52,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
   const rollbackPluginGlobalSideEffects = (pluginId: string, record?: RegistryPluginRecord) => {
     deactivatePluginSideEffectGuards(pluginId);
     runtimeResolver.revokePluginRuntimeRecord(pluginId, record);
+    getPluginRegistryInspectionResources(state.registry)?.rollback(pluginId);
     const schedulerRecords = state.registry.sessionSchedulerJobs.filter(
       (r) => r.pluginId === pluginId,
     );

@@ -86,13 +86,12 @@ export type SlackReplyDeliveryMessage = {
   textIsSlackPlainText?: true;
 };
 
-/** Convert compiled segments into ordered sender calls without re-inferring text placement. */
-export function resolveSlackReplyDeliveryMessages(params: {
+/** Project each segment only when the caller is ready to deliver it. */
+export function* iterateSlackReplyDeliveryMessages(params: {
   authoredTextPlacement: SlackAuthoredTextPlacement;
   segments: readonly SlackReplyBlockSegment[];
   text?: string;
-}): SlackReplyDeliveryMessage[] {
-  const messages: SlackReplyDeliveryMessage[] = [];
+}): Iterable<SlackReplyDeliveryMessage> {
   let outsideText =
     params.authoredTextPlacement === "outside-blocks" ? (params.text?.trim() ?? "") : "";
   for (const segment of params.segments) {
@@ -100,7 +99,7 @@ export function resolveSlackReplyDeliveryMessages(params: {
       const text = [outsideText, segment.text].filter(Boolean).join("\n\n");
       outsideText = "";
       if (text) {
-        messages.push({ text, textIsSlackPlainText: true });
+        yield { text, textIsSlackPlainText: true };
       }
       continue;
     }
@@ -114,17 +113,22 @@ export function resolveSlackReplyDeliveryMessages(params: {
       : params.authoredTextPlacement === "blocks"
         ? "blocks"
         : "none";
-    messages.push({
+    yield {
       text,
       blocks: segment.blocks,
       authoredTextPlacement,
       ...(baseText ? { nativeDataFallbackBaseText: baseText } : {}),
-    });
+    };
   }
   if (outsideText) {
-    messages.push({ text: outsideText, authoredTextPlacement: "outside-blocks" });
+    yield { text: outsideText, authoredTextPlacement: "outside-blocks" };
   }
-  return messages;
+}
+
+export function resolveSlackReplyDeliveryMessages(
+  params: Parameters<typeof iterateSlackReplyDeliveryMessages>[0],
+): SlackReplyDeliveryMessage[] {
+  return Array.from(iterateSlackReplyDeliveryMessages(params));
 }
 
 function resolveSlackReplyText(payload: ReplyPayload, text = payload.text): string {

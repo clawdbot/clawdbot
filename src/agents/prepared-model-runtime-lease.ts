@@ -12,13 +12,11 @@ import {
   preparedModelRuntimeConfigsMatch,
   publishModelRuntimeSnapshot,
   rebindInputToCommittedConfiguredOwner,
-  retirePreparedModelRuntimeOwnerIfUnused,
   resolveConfiguredOwner,
   resolveConfiguredOwnerPublication,
   type PreparedModelRuntimeInput,
   type PreparedModelRuntimeLease,
   type PreparedModelRuntimeOwner,
-  type PreparedModelRuntimeOwnerRetention,
   type PreparedModelRuntimeReplacement,
   type PreparedModelRuntimeSnapshot,
 } from "./prepared-model-runtime.owner.js";
@@ -26,6 +24,10 @@ import {
   preparedPluginGenerationReusesBase,
   preparedPluginGenerationSupportsSelections,
 } from "./prepared-model-runtime.plugin-generation.js";
+import {
+  retirePreparedModelRuntimeOwnerIfUnused,
+  type PreparedModelRuntimeOwnerRetention,
+} from "./prepared-model-runtime.retention.js";
 import type { PreparedModelRuntimeLeaseOptions } from "./prepared-model-runtime.types.js";
 
 type PreparedModelRuntimeLeaseContext = {

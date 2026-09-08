@@ -14,7 +14,6 @@ import {
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
 import {
-  createHeartbeatToolResponsePayload,
   resolveHeartbeatScratchProposalFromReplyResult,
   resolveHeartbeatToolResponseFromReplyResult,
 } from "../heartbeat-tool-response.js";
@@ -69,25 +68,46 @@ function buildTestReplyPayloads(overrides: TestReplyPayloadParams) {
 
 describe("heartbeat reply scratch", () => {
   it.each([
-    { proposals: ["private replacement"], expected: "private replacement" },
-    { proposals: ["old proposal", "new proposal"], expected: "new proposal" },
-    { proposals: ["old proposal", undefined], expected: undefined },
+    { notify: false, proposals: ["  PRIVATE_SCRATCH\n\n- keep exact spacing  \n"] },
+    { notify: true, proposals: ["  PRIVATE_SCRATCH\n\n- keep exact spacing  \n"] },
+    { notify: false, proposals: [""] },
+    { notify: true, proposals: [""] },
+    { notify: false, proposals: ["old proposal", "new proposal"] },
+    { notify: false, proposals: ["old proposal", undefined] },
   ])(
-    "preserves the latest decision through final reply construction: $proposals",
-    async ({ proposals, expected }) => {
-      const response = { outcome: "done" as const, notify: false, summary: "Monitor checked." };
-      const { replyPayloads } = await buildTestReplyPayloads({
-        isHeartbeat: true,
-        payloads: proposals.map((scratch) =>
-          createHeartbeatToolResponsePayload({ ...response, scratch }),
-        ),
-      });
+    "preserves the latest private decision through embedded and final payloads: %j",
+    async ({ notify, proposals }) => {
+      const responses = proposals.map((scratch, index) => ({
+        outcome: "done" as const,
+        notify,
+        summary: `Monitor checked ${index + 1}.`,
+        ...(scratch !== undefined ? { scratch } : {}),
+      }));
+      const payloads = responses.flatMap((heartbeatToolResponse) =>
+        buildEmbeddedRunPayloads({
+          assistantTexts: [],
+          lastAssistant: undefined,
+          sessionKey: "agent:main:main",
+          isHeartbeatTrigger: true,
+          heartbeatToolResponse,
+        }),
+      );
+      const expected = proposals.at(-1);
+      expect(resolveHeartbeatScratchProposalFromReplyResult(payloads)).toBe(expected);
+      const { replyPayloads } = await buildTestReplyPayloads({ isHeartbeat: true, payloads });
 
+      expect(replyPayloads).toHaveLength(proposals.length);
       expect(resolveHeartbeatScratchProposalFromReplyResult(replyPayloads)).toBe(expected);
-      expect(resolveHeartbeatToolResponseFromReplyResult(replyPayloads)).toEqual(response);
+      expect(resolveHeartbeatToolResponseFromReplyResult(replyPayloads)).toEqual({
+        outcome: "done",
+        notify,
+        summary: `Monitor checked ${proposals.length}.`,
+      });
+      const serialized = JSON.stringify(replyPayloads);
+      expect(serialized).not.toContain('"scratch"');
       for (const scratch of proposals) {
-        if (scratch !== undefined) {
-          expect(JSON.stringify(replyPayloads)).not.toContain(scratch);
+        if (scratch) {
+          expect(serialized).not.toContain(JSON.stringify(scratch));
         }
       }
     },

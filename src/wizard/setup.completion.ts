@@ -1,5 +1,5 @@
 // Setup completion helpers render completion instructions after onboarding.
-import { resolveCliName } from "../cli/cli-name.js";
+import { CLI_NAME } from "../cli/cli-name.js";
 import {
   findCompletionProfileWriteError,
   formatCompletionReloadCommand,
@@ -35,7 +35,7 @@ export async function setupWizardShellCompletion(params: {
   deps?: Partial<CompletionDeps>;
 }): Promise<void> {
   const deps: CompletionDeps = {
-    resolveCliName,
+    resolveCliName: () => CLI_NAME,
     checkShellCompletionStatus,
     ensureCompletionCacheExists,
     installCompletion,

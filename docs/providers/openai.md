@@ -1168,6 +1168,12 @@ value into `plugins.entries.openai.config.personality` when that key is unset.
     exchanges the browser's SDP and returns only the answer SDP; it does not
     send an OAuth token, Platform key, or ephemeral client secret to the browser.
 
+    Gateway-relay WebRTC calls conceal malformed incoming audio packets and
+    continue playing later audio. One rejected audio packet send does not end
+    an otherwise connected call. Unusable codec state, unexpected stream changes,
+    and terminal connection states still end the call. Packet-drop diagnostics
+    omit raw error details.
+
     The enabled OpenAI plugin starts the broker automatically, including when
     you sign in after the Gateway has started. The broker opens a provider
     session only when you start Talk; signing in does not open the microphone or

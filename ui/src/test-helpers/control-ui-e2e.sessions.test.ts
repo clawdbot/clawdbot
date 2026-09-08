@@ -569,7 +569,7 @@ it.for(["sessions.create", "sessions.catalog.continue"])(
 
 it.for([
   { sessionKey: "agent:ops:notes", sessionScope: "global" as const, kind: "direct" },
-  { sessionKey: "global", sessionScope: "agent" as const, kind: "global" },
+  { sessionKey: "global", sessionScope: "per-sender" as const, kind: "global" },
 ])(
   "derives selected row kind from its key under $sessionScope scope",
   async ({ kind, ...scenario }, { connect }) => {

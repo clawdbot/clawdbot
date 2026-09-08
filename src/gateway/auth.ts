@@ -18,7 +18,7 @@ import {
   type GatewayIngressAttribution,
   type VerifiedTailscaleIngressIdentity,
 } from "./ingress-attribution.js";
-import { isInvalidGatewayToken } from "./known-weak-gateway-secrets.js";
+import { isInvalidGatewaySecret } from "./known-weak-gateway-secrets.js";
 import {
   isLocalDirectRequest,
   isLoopbackAddress,
@@ -159,7 +159,7 @@ export function assertGatewayAuthConfigured(
   auth: ResolvedGatewayAuth,
   rawAuthConfig?: GatewayAuthConfig | null,
 ): void {
-  if (auth.mode === "token" && isInvalidGatewayToken(auth.token)) {
+  if (auth.mode === "token" && isInvalidGatewaySecret(auth.token)) {
     throw new Error(
       "Gateway token must not be blank or the literal string undefined/null. Run `openclaw doctor --fix --generate-gateway-token` for an inline token, or rotate its external secret source.",
     );
@@ -324,7 +324,7 @@ async function authorizeTokenAuth(params: {
   deferRateLimitFailure?: boolean;
   resetOnSuccess?: boolean;
 }): Promise<GatewayAuthResult> {
-  if (!params.authToken || isInvalidGatewayToken(params.authToken)) {
+  if (!params.authToken || isInvalidGatewaySecret(params.authToken)) {
     return { ok: false, reason: "token_missing_config" };
   }
   if (!params.connectToken) {

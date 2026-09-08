@@ -551,10 +551,11 @@ async function runSetupWizardOnce(
     workspace: workspaceDir,
     preserveCandidateRoster: usedImportFlow && hasAuthoredRoster,
     // Pending setup choices must remain changes relative to the saved snapshot.
-    baseConfig: currentSetupSnapshot.runtimeConfig ?? currentSetupSnapshot.config,
+    baseConfig: setupConfigMergeBase,
     ...(firstAgent ? { firstAgent } : {}),
   });
   nextConfig = onboardingAgent.config;
+  setupConfigMergeBase = structuredClone(onboardingAgent.configBase);
   const migrationWarnings = onboardingAgent.sessionMigrationWarnings;
   await firstAgentOnboarding.showSessionMigrationWarnings(prompter, migrationWarnings);
 

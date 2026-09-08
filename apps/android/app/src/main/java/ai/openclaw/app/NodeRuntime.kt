@@ -5945,26 +5945,20 @@ class NodeRuntime private constructor(
           loadedPageDepthsByHost = previousPageDepths,
           isCurrent = { sessionCatalogRefreshSeq.get() == requestSeq },
         ) { catalogId, hostId, cursor ->
-          try {
-            val pageResponse =
-              requestGatewayData(
-                gatewayScope,
-                "sessions.catalog.list",
-                sessionCatalogPageParams(
-                  normalizedAgentId,
-                  catalogId,
-                  mapOf(hostId to cursor),
-                ),
-              )
-            parseSessionCatalogs(pageResponse, normalizedAgentId, json)
-              .firstOrNull { it.id == catalogId }
-              ?.hosts
-              ?.firstOrNull { it.hostId == hostId }
-          } catch (err: CancellationException) {
-            throw err
-          } catch (_: Throwable) {
-            null
-          }
+          val pageResponse =
+            requestGatewayData(
+              gatewayScope,
+              "sessions.catalog.list",
+              sessionCatalogPageParams(
+                normalizedAgentId,
+                catalogId,
+                mapOf(hostId to cursor),
+              ),
+            )
+          parseSessionCatalogs(pageResponse, normalizedAgentId, json)
+            .firstOrNull { it.id == catalogId }
+            ?.hosts
+            ?.firstOrNull { it.hostId == hostId }
         }
       publishGatewayData(gatewayScope) {
         if (sessionCatalogRefreshSeq.get() == requestSeq) {

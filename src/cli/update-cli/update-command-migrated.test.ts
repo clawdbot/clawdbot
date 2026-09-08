@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
@@ -6,7 +7,11 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { asResolvedSourceConfig, asRuntimeConfig } from "../../config/materialize.js";
 import { appendTranscriptEventsInTransaction } from "../../config/sessions/session-accessor.sqlite-transcript-store.js";
 import { readUpdateStateSchemaVersions } from "../../infra/update-candidate-state.js";
-import { createUpdateRun, recordUpdateRunStep } from "../../infra/update-run-ledger.js";
+import {
+  adoptUpdateRun,
+  createUpdateRun,
+  recordUpdateRunStep,
+} from "../../infra/update-run-ledger.js";
 import { defaultRuntime } from "../../runtime.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db-contract.js";
 import {
@@ -192,9 +197,12 @@ it.each([
   },
 );
 
-it.each([false, true])(
-  "finishes the same real ledger from the candidate after the old updater is fenced by migration (json=%s)",
-  async (json) => {
+it.each([
+  { json: false, parentOwns: false },
+  { json: true, parentOwns: true },
+])(
+  "finishes the same real ledger from the candidate after the old updater is fenced by migration (json=$json, parentOwns=$parentOwns)",
+  async ({ json, parentOwns }) => {
     const stateDir = await fs.realpath(dirs.make("migrated-update-"));
     const env = {
       ...process.env,
@@ -204,6 +212,9 @@ it.each([false, true])(
     };
     const root = process.cwd();
     const created = createUpdateRun({ trigger: "cli" }, { env });
+    const parentDriver = parentOwns
+      ? adoptUpdateRun(created.runId, { env }).origin.driver
+      : undefined;
     const run = { runId: created.runId, env };
     const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
     vi.useFakeTimers();
@@ -328,12 +339,21 @@ it.each([false, true])(
     const inspected = new DatabaseSync(database.path, { readOnly: true });
     try {
       const row = inspected
-        .prepare("SELECT status, reason, steps_json FROM update_runs WHERE run_id = ?")
+        .prepare("SELECT status, reason, origin_json, steps_json FROM update_runs WHERE run_id = ?")
         .get(created.runId);
       expect(row).toMatchObject({ status: "failed", reason: "state-migrated-no-rollback" });
       expect(JSON.parse(String(row?.steps_json))).toEqual(
         expect.arrayContaining([progress.pendingSteps.at(-1)]),
       );
+      const origin = JSON.parse(String(row?.origin_json));
+      const driver = origin.driver;
+      expect(driver).toMatchObject({
+        host: os.hostname(),
+        pid: expect.any(Number),
+        startIdentity: expect.any(String),
+      });
+      expect(driver.pid).not.toBe(process.pid);
+      expect(origin.previousDrivers).toEqual(parentOwns ? [parentDriver] : undefined);
     } finally {
       inspected.close();
     }

@@ -17,8 +17,8 @@ import {
 } from "./kysely-sync.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { hasNodeErrorCode, isPathInside } from "./path-guards.js";
+import { resolveUpdateCandidatePluginPath } from "./update-candidate-paths.js";
 import { copyUpdateCandidatePluginTrees } from "./update-candidate-plugin-tree.js";
-import { resolveUpdateCandidatePluginPath } from "./update-candidate-state.js";
 
 async function resolvePluginFilePackageRoot(file: string): Promise<string> {
   const directory = path.dirname(file);

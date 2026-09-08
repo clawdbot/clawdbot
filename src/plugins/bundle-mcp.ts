@@ -452,29 +452,7 @@ function loadBundleFileBackedMcpConfig(params: {
   };
 }
 
-function loadBundleInlineMcpConfig(params: {
-  raw: Record<string, unknown>;
-  baseDir: string;
-}): BundleMcpRuntimeConfig {
-  if (!isRecord(params.raw.mcpServers)) {
-    return { mcpServers: {}, prepareDataDirsByServer: {} };
-  }
-  const baseDir = normalizeBundlePath(params.baseDir);
-  const servers = extractMcpServerMap(params.raw.mcpServers);
-  return {
-    mcpServers: Object.fromEntries(
-      Object.entries(servers).map(([serverName, server]) => [
-        serverName,
-        absolutizeBundleMcpServer({ rootDir: baseDir, baseDir, server }),
-      ]),
-    ),
-    prepareDataDirsByServer: Object.fromEntries(
-      Object.keys(servers).map((serverName) => [serverName, null]),
-    ),
-  };
-}
-
-function loadNativePluginMcpConfig(params: {
+function loadRootRelativeMcpConfig(params: {
   rootDir: string;
   mcpServers: Record<string, BundleMcpServerConfig>;
 }): { config: BundleMcpRuntimeConfig; diagnostics: string[] } {
@@ -539,10 +517,10 @@ function loadBundleMcpConfig(params: {
   if (params.bundleFormat !== "agent") {
     merged = applyMergePatch(
       merged,
-      loadBundleInlineMcpConfig({
-        raw: manifestLoaded.raw,
-        baseDir: params.rootDir,
-      }),
+      loadRootRelativeMcpConfig({
+        rootDir: params.rootDir,
+        mcpServers: extractMcpServerMap(manifestLoaded.raw.mcpServers),
+      }).config,
     ) as BundleMcpRuntimeConfig;
   }
 
@@ -561,7 +539,7 @@ export function inspectNativePluginMcpRuntimeSupport(params: {
   rootDir: string;
   mcpServers: Record<string, BundleMcpServerConfig>;
 }): BundleMcpRuntimeSupport {
-  return inspectMcpServerRuntimeSupport(loadNativePluginMcpConfig(params));
+  return inspectMcpServerRuntimeSupport(loadRootRelativeMcpConfig(params));
 }
 
 function inspectMcpServerRuntimeSupport(loaded: {
@@ -609,7 +587,7 @@ export function loadEnabledBundleMcpConfig(params: {
     loadBundleConfig: loadBundleMcpConfig,
     loadNativePluginConfig: ({ record }) =>
       record.mcpServers
-        ? loadNativePluginMcpConfig({
+        ? loadRootRelativeMcpConfig({
             rootDir: record.rootDir,
             mcpServers: record.mcpServers,
           })

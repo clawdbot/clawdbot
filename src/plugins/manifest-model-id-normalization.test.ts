@@ -4,12 +4,12 @@ import path from "node:path";
 import { normalizeConfiguredProviderCatalogModelId } from "@openclaw/model-catalog-core/provider-model-id-normalization";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { normalizeStaticProviderModelId } from "../agents/model-ref-shared.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { withPluginMetadataSnapshotScope } from "./current-plugin-metadata-snapshot.js";
 import { setCurrentPluginMetadataSnapshot } from "./current-plugin-metadata.test-support.js";
 import { writePersistedInstalledPluginIndexSync } from "./installed-plugin-index-store-write.js";
 import { listOpenClawPluginManifestMetadata } from "./manifest-metadata-scan.js";
-import { normalizeProviderModelIdWithManifest } from "./manifest-model-id-normalization.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 // Registers the snapshot resolver in the runtime bridge slot. Production and
 // jiti load it via the bridge's require fallback; vitest workers lack a CJS TS
@@ -89,11 +89,8 @@ function writeNormalizerManifest(params: { pluginDir: string; prefix: string }):
   );
 }
 
-function normalizeDemoModel(modelId = "demo-model"): string | undefined {
-  return normalizeProviderModelIdWithManifest({
-    provider: "demo",
-    context: { provider: "demo", modelId },
-  });
+function normalizeDemoModel(modelId = "demo-model"): string {
+  return normalizeStaticProviderModelId("demo", modelId);
 }
 
 describe("manifest model id normalization", () => {
@@ -128,7 +125,7 @@ describe("manifest model id normalization", () => {
       });
 
     expect(normalize(snapshot)).toBe("scoped/demo-model");
-    expect(normalize(narrowed)).toBeUndefined();
+    expect(normalize(narrowed)).toBe("demo-model");
     expect(normalizeConfiguredProviderCatalogModelId("demo", "demo-model")).toBe(
       "scoped/demo-model",
     );

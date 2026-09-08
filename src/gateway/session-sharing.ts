@@ -508,6 +508,7 @@ export function canReceiveSessionEvent(params: {
   const lookup: Omit<Parameters<typeof resolveSessionSharingTarget>[0], "sessionKey"> = {
     cfg,
     agentId: params.agentId,
+    exactRead: sessionKeys.length === 1,
     storeCache: new Map(),
     targetDiscoveryCache: new Map(),
   };

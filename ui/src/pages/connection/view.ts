@@ -13,6 +13,7 @@ import {
 import { t } from "../../i18n/index.ts";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { formatGatewayHost } from "../../lib/gateway-host.ts";
+import { classifyGatewaySecret } from "../../lib/gateway-secret-shape.ts";
 import { renderSystemSection } from "./system-section.ts";
 
 registerSettingsEnglish();
@@ -80,17 +81,26 @@ function renderSecretRow(props: ConnectionProps, authMode: GatewayAuthMode | und
   return renderSettingsRow({
     title: t("connection.access.secret"),
     description: t(hintKey),
-    control: renderSettingsSecretInput({
-      ariaLabel: t("connection.access.secret"),
-      value: props.secret,
-      placeholder: t("connection.access.secretPlaceholder"),
-      visible: props.showGatewaySecret,
-      showLabel: t("connection.access.showSecret"),
-      hideLabel: t("connection.access.hideSecret"),
-      toggleLabel: t("connection.access.toggleSecretVisibility"),
-      onInput: props.onSecretChange,
-      onToggle: props.onToggleGatewaySecretVisibility,
-    }),
+    control: html`<div class="settings-input-with-hint">
+      ${renderSettingsSecretInput({
+        ariaLabel: t("connection.access.secret"),
+        value: props.secret,
+        placeholder: t("connection.access.secretPlaceholder"),
+        visible: props.showGatewaySecret,
+        showLabel: t("connection.access.showSecret"),
+        hideLabel: t("connection.access.hideSecret"),
+        toggleLabel: t("connection.access.toggleSecretVisibility"),
+        onInput: props.onSecretChange,
+        onToggle: props.onToggleGatewaySecretVisibility,
+      })}
+      ${
+        classifyGatewaySecret(props.secret) === "setup-code"
+          ? html`<p class="settings-row__desc" role="status">
+              ${t("connection.access.setupCodeHint")}
+            </p>`
+          : nothing
+      }
+    </div>`,
     stackedOnNarrow: true,
   });
 }

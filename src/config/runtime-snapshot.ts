@@ -1,11 +1,16 @@
 // Produces redacted runtime config snapshots for diagnostics and UI surfaces.
+import { isDeepStrictEqual } from "node:util";
 import { sha256Base64Url } from "../infra/crypto-digest.js";
 import { clearExecutablePathCache } from "../infra/executable-path.js";
 import {
   resetPublishedConfigRuntimeEnv,
   type PreparedConfigRuntimeEnv,
 } from "./config-env-vars.js";
-import { copyConfigResolutionFacts, getConfigResolutionFacts } from "./resolution-facts.js";
+import {
+  copyConfigResolutionFacts,
+  getConfigResolutionFacts,
+  serializeConfigResolutionFacts,
+} from "./resolution-facts.js";
 import type { OpenClawConfig } from "./types.js";
 
 export type RuntimeConfigSnapshotRefreshOptions = {
@@ -140,8 +145,12 @@ function configSnapshotsMatch(left: OpenClawConfig, right: OpenClawConfig): bool
   if (left === right) {
     return true;
   }
-  // Authored SecretRefs live outside the JSON bytes. Projection must not replace their provenance.
-  if (getConfigResolutionFacts(left) !== getConfigResolutionFacts(right)) {
+  // Fresh reads allocate new facts. Compare their complete provenance, not object identity
+  // or just JSON config bytes: same-byte values can name different authored SecretRefs.
+  if (
+    getConfigResolutionFacts(left) !== getConfigResolutionFacts(right) &&
+    !isDeepStrictEqual(serializeConfigResolutionFacts(left), serializeConfigResolutionFacts(right))
+  ) {
     return false;
   }
   try {

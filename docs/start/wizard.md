@@ -211,9 +211,13 @@ Local mode (default) walks through these steps:
    model/auth setup once or be ignored without blocking the rest of the
    classic wizard. Ignoring it does not unlock OpenClaw; conversational setup
    still requires a passing inference check.
-3. **Gateway** - port, bind address, auth mode, Tailscale exposure. In
-   interactive token mode, choose plaintext token storage (default) or opt
-   into a SecretRef. Non-interactive SecretRef path: `--gateway-token-ref-env <ENV_VAR>`.
+3. **Gateway** - port, bind address, secret storage, and Tailscale exposure.
+   Generates a Gateway secret in token mode by default, without asking you to
+   choose token or password. Existing password-mode configs are preserved;
+   `--gateway-auth password` or `--gateway-password <value>` selects password
+   mode explicitly. Tailscale Funnel still requires password mode. Choose
+   plaintext secret storage (default) or opt into a SecretRef. Non-interactive
+   token SecretRef path: `--gateway-token-ref-env <ENV_VAR>`.
 4. **Channels** - built-in and official plugin chat channels, including
    Discord, Feishu, Google Chat, iMessage, Mattermost, Microsoft Teams,
    QQ Bot, Signal, Slack, Telegram, WhatsApp, and more.

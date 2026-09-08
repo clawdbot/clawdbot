@@ -198,7 +198,7 @@ set +e
 dirty_json="$(openclaw update "${dev_channel_args[@]}" --yes --json --no-restart)"
 dirty_status=$?
 set -e
-if [ "$dirty_status" -eq 0 ]; then
+if [ "$dirty_status" -eq 0 ] && [ "$OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT" != "1" ]; then
   echo "Git update unexpectedly admitted ordinary untracked user notes" >&2
   exit 1
 fi

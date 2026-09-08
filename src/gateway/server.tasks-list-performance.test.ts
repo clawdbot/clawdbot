@@ -11,6 +11,7 @@ import {
 } from "../tasks/runtime-internal.js";
 import { configureTaskRegistryRuntime } from "../tasks/task-registry.store.js";
 import { resetTaskRegistryForTests } from "../tasks/task-runtime.test-helpers.js";
+import { createInMemoryTaskRegistryStore } from "../test-utils/task-registry-store.js";
 import { installGatewayTestHooks } from "./server.auth.test-helpers.js";
 import {
   createTaskSnapshot,
@@ -48,11 +49,11 @@ describe("tasks.list Gateway performance", () => {
       resetTaskRegistryForTests({ persist: false });
       configureTaskRegistryRuntime({
         store: {
+          ...createInMemoryTaskRegistryStore(),
           loadSnapshot: () => {
             onSnapshotLoad?.();
             return { tasks, deliveryStates: new Map() };
           },
-          saveSnapshot: () => {},
         },
       });
     };
@@ -236,6 +237,7 @@ describe("tasks.list Gateway performance", () => {
         };
         configureTaskRegistryRuntime({
           store: {
+            ...createInMemoryTaskRegistryStore(),
             loadSnapshot: () => {
               if (!convergingChurnStarted) {
                 convergingChurnStarted = true;
@@ -243,7 +245,6 @@ describe("tasks.list Gateway performance", () => {
               }
               return { tasks: convergingTasks, deliveryStates: new Map() };
             },
-            saveSnapshot: () => {},
           },
         });
         const convergedRegistry = await sendRpc<TasksListResult>(
@@ -279,6 +280,7 @@ describe("tasks.list Gateway performance", () => {
         };
         configureTaskRegistryRuntime({
           store: {
+            ...createInMemoryTaskRegistryStore(),
             loadSnapshot: () => {
               if (!taskChurnStarted) {
                 taskChurnStarted = true;
@@ -286,7 +288,6 @@ describe("tasks.list Gateway performance", () => {
               }
               return { tasks: churnTasks, deliveryStates: new Map() };
             },
-            saveSnapshot: () => {},
           },
         });
         const unstableRegistry = await sendRpc<Record<string, unknown>>(
@@ -330,11 +331,11 @@ describe("tasks.list Gateway performance", () => {
         resetTaskRegistryForTests({ persist: false });
         configureTaskRegistryRuntime({
           store: {
+            ...createInMemoryTaskRegistryStore(),
             loadSnapshot: () => {
               scopedChurn = setImmediate(mutateUnrelatedTask);
               return { tasks: scopedTasks, deliveryStates: new Map() };
             },
-            saveSnapshot: () => {},
           },
         });
         try {
@@ -354,8 +355,8 @@ describe("tasks.list Gateway performance", () => {
         resetTaskRegistryForTests({ persist: false });
         configureTaskRegistryRuntime({
           store: {
+            ...createInMemoryTaskRegistryStore(),
             loadSnapshot: () => ({ tasks: accessTasks, deliveryStates: new Map() }),
-            saveSnapshot: () => {},
           },
         });
         let accessChurnActive = true;

@@ -88,7 +88,7 @@ export function formatTuiFooter(params: {
   return sanitizeRenderableLine(footer);
 }
 
-function sanitizeTerminalControlsAndBinary(text: string): string {
+export function sanitizeTerminalControlsAndBinary(text: string): string {
   const hasAnsi = text.includes("\u001b") || text.includes("\u009b") || text.includes("\u009d");
   const withoutAnsi = hasAnsi ? stripAnsi(text) : text;
   const withoutControlChars = withoutAnsi.replace(RENDER_CONTROL_CHARS_RE, "");

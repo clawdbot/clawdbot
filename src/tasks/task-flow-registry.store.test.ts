@@ -10,6 +10,7 @@ import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { createInMemoryTaskFlowRegistryStore } from "../test-utils/task-registry-store.js";
 import {
   createManagedTaskFlow as createManagedTaskFlowOrNull,
   getTaskFlowById,
@@ -20,7 +21,8 @@ import {
   bindTaskFlowExecution,
   loadTaskFlowRegistryStateFromSqlite,
   loadTaskFlowRegistryStateFromSqliteReadOnly,
-  saveTaskFlowRegistryStateToSqlite,
+  deleteTaskFlowRegistryRecordFromSqlite,
+  upsertTaskFlowRegistryRecordToSqlite,
 } from "./task-flow-registry.store.sqlite.js";
 import {
   parseOptionalTaskFlowSyncMode,
@@ -122,18 +124,14 @@ describe("task-flow-registry store runtime", () => {
     );
   });
 
-  it("uses the configured flow store for restore and save", () => {
+  it("uses the configured flow store for restore and writes", () => {
     const storedFlow = createStoredFlow();
-    const loadSnapshot = vi.fn(() => ({
+    const store = createInMemoryTaskFlowRegistryStore({
       flows: new Map([[storedFlow.flowId, storedFlow]]),
-    }));
-    const saveSnapshot = vi.fn();
-    configureTaskFlowRegistryRuntime({
-      store: {
-        loadSnapshot,
-        saveSnapshot,
-      },
     });
+    const loadSnapshot = vi.fn(store.loadSnapshot);
+    const upsertFlow = vi.fn(store.upsertFlow);
+    configureTaskFlowRegistryRuntime({ store: { ...store, loadSnapshot, upsertFlow } });
 
     const restored = getTaskFlowById("flow-restored");
     expect(restored?.flowId).toBe("flow-restored");
@@ -153,14 +151,8 @@ describe("task-flow-registry store runtime", () => {
       currentStep: "wait_for",
     });
 
-    expect(saveSnapshot).toHaveBeenCalled();
-    const latestCall = saveSnapshot.mock.calls[saveSnapshot.mock.calls.length - 1];
-    if (!latestCall) {
-      throw new Error("Expected task flow snapshot save call");
-    }
-    const latestSnapshot = latestCall[0] as {
-      flows: ReadonlyMap<string, TaskFlowRecord>;
-    };
+    expect(upsertFlow).toHaveBeenCalledTimes(1);
+    const latestSnapshot = store.loadSnapshot();
     expect(latestSnapshot.flows.size).toBe(2);
     const restoredFlow = latestSnapshot.flows.get("flow-restored");
     if (!restoredFlow) {
@@ -296,54 +288,6 @@ describe("task-flow-registry store runtime", () => {
     });
   });
 
-  it("prunes large sqlite snapshots without binding every flow id at once", async () => {
-    await withFlowRegistryTempDir(async () => {
-      const flows = new Map<string, TaskFlowRecord>();
-      for (let index = 0; index < 1_200; index++) {
-        const flow: TaskFlowRecord = {
-          ...createStoredFlow(),
-          flowId: `flow-large-${index}`,
-          controllerId: `tests/large-flow-${index}`,
-          status: "running",
-          createdAt: index,
-          updatedAt: index,
-          cancelRequestedAt: undefined,
-          endedAt: undefined,
-        };
-        flows.set(flow.flowId, flow);
-      }
-
-      saveTaskFlowRegistryStateToSqlite({ flows });
-      const admitted: AdmittedRunContext = {
-        operationalRunInstance: { instanceId: "instance-flow-prune", runId: "run-flow-prune" },
-        executionIdentityToken: createExecutionIdentityAdmissionToken("run-flow-prune", {
-          contextId: "context-flow-prune",
-          executionId: "execution-flow-prune",
-        }),
-      };
-      expect(bindTaskFlowExecution({ admitted, flowId: "flow-large-0" })).toBe("bound");
-      expect(bindTaskFlowExecution({ admitted, flowId: "flow-large-1199" })).toBe("bound");
-      const retainedFlows = new Map([...flows].slice(100));
-      saveTaskFlowRegistryStateToSqlite({ flows: retainedFlows });
-
-      const restored = loadTaskFlowRegistryStateFromSqlite();
-      expect(restored.flows.size).toBe(1_100);
-      expect(restored.flows.has("flow-large-0")).toBe(false);
-      expect(restored.flows.has("flow-large-1199")).toBe(true);
-      expect(loadTaskFlowRegistryStateFromSqliteReadOnly()).toEqual(restored);
-      expect(
-        openOpenClawStateDatabase()
-          .db.prepare(
-            `SELECT owner_id
-             FROM execution_owner_lifecycle_bindings
-             WHERE owner_kind = 'flow'
-             ORDER BY owner_id`,
-          )
-          .all(),
-      ).toEqual([{ owner_id: "flow-large-1199" }]);
-    });
-  });
-
   it("binds only source-live flow owners across managed and mirrored lifecycles", async () => {
     await withFlowRegistryTempDir(async () => {
       const managed: TaskFlowRecord = {
@@ -380,14 +324,15 @@ describe("task-flow-registry store runtime", () => {
         status: "running",
         cancelRequestedAt: 199,
       };
-      saveTaskFlowRegistryStateToSqlite({
-        flows: new Map(
-          [managed, mirrored, managedTerminal, mirroredTerminal, managedCancelling].map((flow) => [
-            flow.flowId,
-            flow,
-          ]),
-        ),
-      });
+      for (const flow of [
+        managed,
+        mirrored,
+        managedTerminal,
+        mirroredTerminal,
+        managedCancelling,
+      ]) {
+        upsertTaskFlowRegistryRecordToSqlite(flow);
+      }
       const admitted: AdmittedRunContext = {
         operationalRunInstance: { instanceId: "instance-flow-owner", runId: "run-flow-owner" },
         executionIdentityToken: createExecutionIdentityAdmissionToken("run-flow-owner", {
@@ -408,15 +353,8 @@ describe("task-flow-registry store runtime", () => {
       expect(bindTaskFlowExecution({ admitted, flowId: managed.flowId })).toBe("bound");
       expect(bindTaskFlowExecution({ admitted, flowId: mirrored.flowId })).toBe("bound");
 
-      saveTaskFlowRegistryStateToSqlite({
-        flows: new Map([
-          [managed.flowId, { ...managed, status: "succeeded", endedAt: 210 }],
-          [mirrored.flowId, { ...mirrored, status: "blocked", endedAt: 211 }],
-          [managedTerminal.flowId, managedTerminal],
-          [mirroredTerminal.flowId, mirroredTerminal],
-          [managedCancelling.flowId, managedCancelling],
-        ]),
-      });
+      upsertTaskFlowRegistryRecordToSqlite({ ...managed, status: "succeeded", endedAt: 210 });
+      upsertTaskFlowRegistryRecordToSqlite({ ...mirrored, status: "blocked", endedAt: 211 });
       expect(bindTaskFlowExecution({ admitted, flowId: managed.flowId })).toBe("missing");
       expect(bindTaskFlowExecution({ admitted, flowId: mirrored.flowId })).toBe("missing");
       expect(
@@ -429,6 +367,25 @@ describe("task-flow-registry store runtime", () => {
           )
           .all(),
       ).toEqual([{ owner_id: managed.flowId }, { owner_id: mirrored.flowId }]);
+
+      deleteTaskFlowRegistryRecordFromSqlite(managed.flowId);
+      const restored = loadTaskFlowRegistryStateFromSqlite();
+      expect([...restored.flows.keys()].toSorted()).toEqual(
+        [
+          mirrored.flowId,
+          managedTerminal.flowId,
+          mirroredTerminal.flowId,
+          managedCancelling.flowId,
+        ].toSorted(),
+      );
+      expect(loadTaskFlowRegistryStateFromSqliteReadOnly()).toEqual(restored);
+      expect(
+        openOpenClawStateDatabase()
+          .db.prepare(
+            "SELECT owner_id FROM execution_owner_lifecycle_bindings WHERE owner_kind = 'flow'",
+          )
+          .all(),
+      ).toEqual([{ owner_id: mirrored.flowId }]);
     });
   });
 

@@ -42,9 +42,7 @@ function parseQaLabUpArgs(argv: readonly string[]) {
 }
 
 export const qaLabUpTesting = {
-  parseQaLabUpArgs,
   runQaLabUp,
-  usage,
 };
 
 type QaLabRuntime = typeof import("../extensions/qa-lab/src/cli.runtime.ts");
