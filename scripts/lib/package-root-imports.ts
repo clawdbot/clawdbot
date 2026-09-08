@@ -667,7 +667,3 @@ export function collectPackageRootImportOccurrences(source: string): PackageRoot
   }
   return imports;
 }
-
-export function collectPackageRootImports(source: string): Set<string> {
-  return new Set(collectPackageRootImportOccurrences(source).map((entry) => entry.specifier));
-}
