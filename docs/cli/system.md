@@ -14,13 +14,15 @@ heartbeats, and view presence.
 
 All `system` subcommands use Gateway RPC and accept the shared client flags:
 
-| Flag              | Default                              | Description                                                                                                                                                                                            |
-| ----------------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `--url <url>`     | `gateway.remote.url` when configured | Gateway WebSocket URL.                                                                                                                                                                                 |
-| `--token <token>` | none                                 | Gateway token (if required).                                                                                                                                                                           |
-| `--timeout <ms>`  | `30000`                              | RPC timeout in milliseconds.                                                                                                                                                                           |
-| `--expect-final`  | off                                  | Wait for final response (agent).                                                                                                                                                                       |
-| `--json`          | off                                  | Output JSON. `heartbeat last/enable/disable` and `system presence` always print the raw RPC JSON payload regardless of this flag; `system event` uses it to switch between JSON and a plain `ok` line. |
+| Flag                    | Default                              | Description                                                                                                                                                                                            |
+| ----------------------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `--url <url>`           | `gateway.remote.url` when configured | Gateway WebSocket URL.                                                                                                                                                                                 |
+| `--port <port>`         | none                                 | Local Gateway port.                                                                                                                                                                                    |
+| `--token <token>`       | none                                 | Gateway token (if required).                                                                                                                                                                           |
+| `--password <password>` | none                                 | Gateway password (if required).                                                                                                                                                                        |
+| `--timeout <ms>`        | `30000`                              | RPC timeout in milliseconds.                                                                                                                                                                           |
+| `--expect-final`        | off                                  | Wait for final response (agent).                                                                                                                                                                       |
+| `--json`                | off                                  | Output JSON. `heartbeat last/enable/disable` and `system presence` always print the raw RPC JSON payload regardless of this flag; `system event` uses it to switch between JSON and a plain `ok` line. |
 
 ## Common commands
 
