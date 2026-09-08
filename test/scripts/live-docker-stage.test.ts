@@ -373,6 +373,35 @@ export function parseRegistryNpmSpec(spec: string) {
     expect(malformed.stderr).toContain("invalid OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS");
   });
 
+  it("can omit a contract file absent from an authorized frozen target", () => {
+    const selectedSha = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: repoRoot,
+      encoding: "utf8",
+    }).trim();
+    const result = spawnSync(
+      "bash",
+      [
+        "-c",
+        'set -euo pipefail; source "$1"; openclaw_resolve_frozen_target_file "$2" missing/path current-path ""',
+        "test",
+        stageScriptPath,
+        repoRoot,
+      ],
+      {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: "1",
+          OPENCLAW_SELECTED_SHA: selectedSha,
+          OPENCLAW_TOOLING_SHA: "b".repeat(40),
+        },
+      },
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toBe("\n");
+  });
+
   it("keeps a matching frozen-source capability under pipefail", () => {
     const root = tempDirs.make("openclaw-frozen-target-capability-");
     const sourcePath = path.join(root, "scripts/e2e/lib/plugins/assertions.mjs");

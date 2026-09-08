@@ -43,6 +43,7 @@ openclaw_resolve_frozen_target_file() {
   local source_root="${1:?missing selected source root}" \
     relative_path="${2:?missing selected relative path}" \
     fallback_path="${3:-}" context_status=0
+  local frozen_missing_path="${4-$fallback_path}"
 
   openclaw_prepare_frozen_target_context "$source_root" || context_status=$?
   case "$context_status" in
@@ -51,6 +52,8 @@ openclaw_resolve_frozen_target_file() {
         printf '%s\n' "$source_root/$relative_path"
         return
       fi
+      printf '%s\n' "$frozen_missing_path"
+      return
       ;;
     1) ;;
     *) return "$context_status" ;;
