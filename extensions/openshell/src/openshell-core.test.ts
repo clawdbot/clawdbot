@@ -342,6 +342,24 @@ describe("openshell backend manager", () => {
     });
   });
 
+  it("passes an OpenShell-compatible name through the backend factory", async () => {
+    const factory = createOpenShellSandboxBackendFactory({
+      pluginConfig: resolveOpenShellPluginConfig({ command: "openshell" }),
+    });
+
+    const backend = await factory({
+      sessionKey: "agent:somalley_alice:dashboard-8:turn",
+      scopeKey: "agent:somalley_alice:dashboard-8",
+      workspaceDir: "/tmp/workspace",
+      agentWorkspaceDir: "/tmp/workspace",
+      cfg: createOpenShellBackendSandboxConfig(),
+    });
+
+    expect(backend.runtimeId).toMatch(/^oc-[a-f0-9]{16}$/u);
+    expect(backend.runtimeId).toHaveLength(19);
+    expect(backend.runtimeLabel).toBe(backend.runtimeId);
+  });
+
   it("rejects malformed exec commands before opening an OpenShell SSH session", async () => {
     const factory = createOpenShellSandboxBackendFactory({
       pluginConfig: resolveOpenShellPluginConfig({
