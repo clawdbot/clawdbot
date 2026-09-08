@@ -42,9 +42,9 @@ const suite = createControlUiE2eSuite({
     });
     const closeProvider = async () => {
       provider.closeAllConnections();
-      await new Promise<void>((resolve, reject) =>
-        provider.close((error) => (error ? reject(error) : resolve())),
-      );
+      await new Promise<void>((resolve, reject) => {
+        provider.close((error) => (error ? reject(error) : resolve()));
+      });
     };
     provider.listen(0, "127.0.0.1");
     await once(provider, "listening");
