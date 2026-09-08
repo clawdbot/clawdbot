@@ -5,7 +5,12 @@ const [ref, workflowSha, allowFrozenSource] = process.argv.slice(2);
 const isSha = (value) => /^[0-9a-f]{40}$/u.test(value ?? "");
 const NATIVE_MARKER =
   /\b(?:configureFsSafeNative|getFsSafeNativeConfig|getNativeBinding)\b|@openclaw\/fs-safe\/native/u;
-const LEGACY_PYTHON_ONLY_FS_SAFE_VERSION = "0.3.0";
+const LEGACY_PYTHON_ONLY_CONTRACTS = new Set([
+  // 2026.6.33 and earlier frozen lines selected the Python-only fs-safe 0.3 API.
+  "*:0.3.0",
+  // 2026.7.33 upgraded the package without adopting the native durability API.
+  "2026.7.33:0.4.1",
+]);
 assert.ok(isSha(ref), "ref must be a full lowercase commit SHA");
 assert.ok(isSha(workflowSha), "workflow SHA must be a full lowercase commit SHA");
 
@@ -41,7 +46,12 @@ function isLegacyPythonOnlySource() {
         stdio: ["ignore", "pipe", "ignore"],
       });
     const packageJson = JSON.parse(readSource("package.json"));
-    if (packageJson.dependencies?.["@openclaw/fs-safe"] !== LEGACY_PYTHON_ONLY_FS_SAFE_VERSION) {
+    const fsSafeVersion = packageJson.dependencies?.["@openclaw/fs-safe"];
+    const contractKey = `${packageJson.version ?? ""}:${fsSafeVersion ?? ""}`;
+    if (
+      !LEGACY_PYTHON_ONLY_CONTRACTS.has(`*:${fsSafeVersion ?? ""}`) &&
+      !LEGACY_PYTHON_ONLY_CONTRACTS.has(contractKey)
+    ) {
       return false;
     }
     const defaults = readSource("src/infra/fs-safe-defaults.ts");

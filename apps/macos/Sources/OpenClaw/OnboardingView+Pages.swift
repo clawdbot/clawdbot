@@ -454,7 +454,7 @@ extension OnboardingView {
         GridRow {
             Text("")
                 .frame(width: labelWidth, alignment: .leading)
-            Text("Only needed when the gateway requires token auth.")
+            Text("Only needed when the gateway requires token or password auth.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .frame(width: fieldWidth, alignment: .leading)

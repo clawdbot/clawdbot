@@ -1,7 +1,7 @@
 // Shared mocks and harness for the non-interactive gateway onboarding suites.
 // vi.mock calls live here so sibling suites share one config-write/daemon/health surface.
 import path from "node:path";
-import { vi } from "vitest";
+import { afterEach, vi } from "vitest";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import {
   createOnboardTestConfigStore,
@@ -10,9 +10,12 @@ import {
 } from "./onboard-non-interactive.test-helpers.js";
 import type { WaitForGatewayReachableMock } from "./onboard-non-interactive.test-helpers.js";
 import type { installGatewayDaemonNonInteractive } from "./onboard-non-interactive/local/daemon-install.js";
+import { createTestConfigFileStore } from "./test-runtime-config-helpers.js";
 
 export const ensureWorkspaceAndSessionsMock = vi.fn(async (..._args: unknown[]) => {});
 const onboardTestConfigStore = createOnboardTestConfigStore();
+const committedConfigFiles = createTestConfigFileStore();
+afterEach(() => committedConfigFiles.clear());
 export const {
   configStore: testConfigStore,
   resolveConfigPath: resolveTestConfigPath,
@@ -101,6 +104,7 @@ vi.mock("../config/config.js", async (importActual) => {
         ...(writeOptions ? { writeOptions } : {}),
       });
       testConfigStore.set(resolveTestConfigPath(), nextConfig);
+      return committedConfigFiles.write(nextConfig, resolveTestConfigPath());
     },
     resolveConfigWriteAfterWrite: actual.resolveConfigWriteAfterWrite,
     resolveGatewayPort: (cfg: OpenClawConfig) => cfg.gateway?.port ?? 18789,
@@ -121,7 +125,7 @@ vi.mock("../config/config.js", async (importActual) => {
         writeOptions: params.writeOptions,
         afterWrite: { mode: "auto" },
       });
-      return { nextConfig: committed.config };
+      return committedConfigFiles.write(committed.config, snapshot.path);
     },
   };
 });

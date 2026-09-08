@@ -184,7 +184,7 @@ describe("isLikelyContextOverflowError", () => {
   it("keeps too-many-tokens-per-request context overflow errors out of the rate-limit lane", () => {
     const sample = "Context window exceeded: too many tokens per request.";
     expect(isLikelyContextOverflowError(sample)).toBe(true);
-    expect(classifyFailoverReason(sample)).toBeNull();
+    expect(classifyFailoverReason(sample)).toBe("context_overflow");
   });
 
   it("excludes billing errors even when text matches context overflow patterns", () => {

@@ -9,6 +9,7 @@ const sleepMock = vi.hoisted(() => vi.fn<(ms: number) => Promise<void>>());
 
 vi.mock("../utils/sleep.js", () => ({ sleep: sleepMock }));
 
+import { createInfoWarnErrorLogger } from "../../test/helpers/mock-logger.js";
 import {
   drainPendingSessionDelivery,
   recoverPendingSessionDeliveries,
@@ -49,11 +50,7 @@ describe("session-delivery queue recovery", () => {
         deliver,
         onSettled,
         stateDir: tempDir,
-        log: {
-          info: vi.fn(),
-          warn: vi.fn(),
-          error: vi.fn(),
-        },
+        log: createInfoWarnErrorLogger(),
       });
 
       expect(deliver).toHaveBeenCalledTimes(1);
@@ -213,11 +210,7 @@ describe("session-delivery queue recovery", () => {
       const summary = await recoverPendingSessionDeliveries({
         deliver,
         stateDir: tempDir,
-        log: {
-          info: vi.fn(),
-          warn: vi.fn(),
-          error: vi.fn(),
-        },
+        log: createInfoWarnErrorLogger(),
       });
 
       expect(deliver).not.toHaveBeenCalled();
@@ -303,11 +296,7 @@ describe("session-delivery queue recovery", () => {
         const recovery = recoverPendingSessionDeliveries({
           deliver,
           stateDir: tempDir,
-          log: {
-            info: vi.fn(),
-            warn: vi.fn(),
-            error: vi.fn(),
-          },
+          log: createInfoWarnErrorLogger(),
         });
 
         await expect(controlledSleep.started).resolves.toBe(RECOVERY_REPLAY_SPACING_MS);
@@ -351,11 +340,7 @@ describe("session-delivery queue recovery", () => {
           deliver,
           stateDir: tempDir,
           maxRecoveryMs: 1,
-          log: {
-            info: vi.fn(),
-            warn: vi.fn(),
-            error: vi.fn(),
-          },
+          log: createInfoWarnErrorLogger(),
         });
 
         await expect(controlledSleep.started).resolves.toBe(1);
@@ -431,11 +416,7 @@ describe("session-delivery queue recovery", () => {
         }),
         onSettled,
         stateDir: tempDir,
-        log: {
-          info: vi.fn(),
-          warn: vi.fn(),
-          error: vi.fn(),
-        },
+        log: createInfoWarnErrorLogger(),
       });
 
       const [failedEntry] = await loadPendingSessionDeliveries(tempDir);
@@ -613,11 +594,7 @@ describe("session-delivery queue recovery", () => {
         bypassBackoff: true,
         deliver,
         stateDir: tempDir,
-        log: {
-          info: vi.fn(),
-          warn: vi.fn(),
-          error: vi.fn(),
-        },
+        log: createInfoWarnErrorLogger(),
       });
 
       expect(deliver).toHaveBeenCalledTimes(1);
@@ -822,11 +799,7 @@ describe("session-delivery queue recovery", () => {
         deliver,
         stateDir: tempDir,
         maxEnqueuedAt,
-        log: {
-          info: vi.fn(),
-          warn: vi.fn(),
-          error: vi.fn(),
-        },
+        log: createInfoWarnErrorLogger(),
       });
 
       expect(deliver).toHaveBeenCalledTimes(1);

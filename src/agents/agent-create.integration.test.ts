@@ -372,7 +372,11 @@ describe("agent roster persistence", () => {
     try {
       await state.writeConfig(config);
       const result = await createAgent({ name: "Worker", workspace: state.path("worker") });
-      expect(result).toMatchObject({ status: "created", agentId: "worker" });
+      expect(result).toMatchObject({
+        status: "created",
+        agentId: "worker",
+        configPath: state.configPath,
+      });
       return JSON.parse(await fs.readFile(state.configPath, "utf8")) as OpenClawConfig;
     } finally {
       closeOpenClawStateDatabaseForTest();

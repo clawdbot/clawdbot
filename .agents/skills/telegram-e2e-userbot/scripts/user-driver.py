@@ -1095,35 +1095,99 @@ def serve_message(message, users):
         "contentType": normalized["contentType"],
         "text": normalized["text"],
         "entities": normalized["entities"],
+        "richMessage": normalized["richMessage"],
     }
 
 
-def serve_update(update, users, known_messages):
+def update_chat_id(update):
+    message = update.get("message")
+    if isinstance(message, dict) and "chat_id" in message:
+        return message["chat_id"]
+    return update.get("chat_id")
+
+
+def serve_update(update, client, known_messages):
     update_type = update.get("@type")
     if update_type == "updateNewMessage":
         message = update.get("message") or {}
-        normalized = serve_message(message, users)
-        if isinstance(normalized["messageId"], int):
-            known_messages[normalized["messageId"]] = normalized
-        return {"kind": "message", **normalized}
-    if update_type != "updateMessageContent":
+        normalized = serve_message(message, client.users)
+        kind = "message"
+    elif update_type == "updateMessageContent":
+        known = known_messages.get((update["chat_id"], update["message_id"]))
+        if not known:
+            return None
+        normalized = {**known, **message_content(update.get("new_content") or {})}
+        kind = "edit"
+    else:
         return None
-    message_id = update.get("message_id")
-    known = known_messages.get(message_id)
-    if not known:
-        return None
-    content = update.get("new_content") or {}
-    normalized = {**known, **message_content(content)}
-    known_messages[message_id] = normalized
-    return {"kind": "edit", **normalized}
+    key = (normalized["chatId"], normalized["messageId"])
+    rich_message = normalized["richMessage"]
+    if rich_message is not None and not rich_message["is_full"]:
+        # Serve exposes complete snapshots, unlike the raw recorder. request()
+        # queues intervening updates; publish this result before draining them.
+        rich_message = client.request({
+            "@type": "getFullRichMessage", "chat_id": key[0], "message_id": key[1],
+        })
+        if rich_message.get("@type") != "richMessage" or rich_message.get("is_full") is not True:
+            raise DriverError("getFullRichMessage did not return a complete rich message")
+        normalized = {**normalized, **message_content({
+            "@type": "messageRichMessage", "message": rich_message,
+        })}
+    known_messages[key] = normalized
+    return {"kind": kind, **normalized}
+
+
+def rich_text(value):
+    if not isinstance(value, dict):
+        return ""
+    kind = value.get("@type", "")
+    if kind == "richTextPlain":
+        return value.get("text", "")
+    if kind == "richTextCustomEmoji":
+        return value.get("alternative_text", "")
+    if kind == "richTextMathematicalExpression":
+        return value.get("expression", "")
+    if kind == "richTexts":
+        return "".join(rich_text(item) for item in value.get("texts") or [])
+    return rich_text(value.get("text"))
+
+
+def rich_message_text(value):
+    if not isinstance(value, dict):
+        return ""
+    parts = []
+
+    def visit(node):
+        if isinstance(node, list):
+            for item in node:
+                visit(item)
+            return
+        if not isinstance(node, dict):
+            return
+        if str(node.get("@type", "")).startswith("richText"):
+            text = rich_text(node)
+            if text:
+                parts.append(text)
+            return
+        for child in node.values():
+            visit(child)
+
+    visit(value.get("blocks") or [])
+    return "\n".join(parts)
 
 
 def message_content(content):
+    if content.get("@type") == "messageRichMessage":
+        message = content["message"]
+        return {
+            "contentType": "messageRichMessage", "text": rich_message_text(message),
+            "entities": [], "richMessage": message,
+        }
     key = "text" if content.get("@type") == "messageText" else "caption"
     formatted = content.get(key)
     if isinstance(formatted, dict) and isinstance(formatted.get("text"), str):
-        return {"contentType": content.get("@type"), "text": formatted["text"], "entities": formatted["entities"]}
-    return {"contentType": content.get("@type"), "text": "", "entities": []}
+        return {"contentType": content.get("@type"), "text": formatted["text"], "entities": formatted["entities"], "richMessage": None}
+    return {"contentType": content.get("@type"), "text": "", "entities": [], "richMessage": None}
 
 
 def write_ndjson(payload):
@@ -1147,8 +1211,8 @@ def command_serve(args):
     known_messages = {}
     while True:
         update = driver.client.next_update(timeout=0.1)
-        if update:
-            event = serve_update(update, driver.client.users, known_messages)
+        if update and update_chat_id(update) == chat_id:
+            event = serve_update(update, driver.client, known_messages)
             if event:
                 write_ndjson({"type": "update", "update": event})
         readable, _, _ = select.select([sys.stdin], [], [], 0)
@@ -1171,7 +1235,7 @@ def command_serve(args):
             reply_to = request.get("replyToMessageId")
             sent = driver.send_text(chat_id, text, reply_to=reply_to)
             normalized = serve_message(sent, driver.client.users)
-            known_messages[normalized["messageId"]] = normalized
+            known_messages[(normalized["chatId"], normalized["messageId"])] = normalized
             write_ndjson({"type": "response", "id": request_id, "result": normalized})
         except (DriverError, ValueError, TypeError) as error:
             write_ndjson(

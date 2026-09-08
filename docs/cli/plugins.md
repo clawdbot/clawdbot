@@ -602,6 +602,11 @@ openclaw plugins doctor --json
 With `--json`, the same discovery, compatibility, and configuration diagnostics
 are returned as one machine-readable object.
 
+Doctor waits for its inspection registration resources to be released before
+printing the report and setting the diagnostic exit status. Cleanup failures
+produce a command error instead of a successful report. Running Gateway
+registrations are not disposed by this inspection.
+
 If a configured plugin is present on disk but blocked by the loader's path-safety checks, config validation keeps the plugin entry and reports it as `present but blocked`. Fix the preceding blocked-plugin diagnostic, such as path ownership or world-writable permissions, instead of removing the `plugins.entries.<id>` or `plugins.allow` config.
 
 For module-shape failures such as missing `register`/`activate` exports, rerun with `OPENCLAW_PLUGIN_LOAD_DEBUG=1` to include a compact export-shape summary in the diagnostic output.

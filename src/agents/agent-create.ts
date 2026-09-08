@@ -64,7 +64,9 @@ type CreateError = {
   message: string;
 };
 
-type CreateAgentResult = (CreateAgentSuccess & { config: OpenClawConfig }) | CreateError;
+type CreateAgentResult =
+  | (CreateAgentSuccess & { config: OpenClawConfig; configPath: string })
+  | CreateError;
 type AgentEntryConfig = NonNullable<NonNullable<OpenClawConfig["agents"]>["entries"]>[string];
 type CreateAgentEntry = AgentEntryConfig & { id: string };
 type ConfigCommitRollback = () => void | Promise<void>;
@@ -502,6 +504,7 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
       return {
         ...result,
         config: committed.nextConfig,
+        configPath: committed.path,
         ...(typeof committed.persistedHash === "string"
           ? { configHash: committed.persistedHash }
           : {}),

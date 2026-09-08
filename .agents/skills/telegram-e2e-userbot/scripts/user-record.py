@@ -4,9 +4,8 @@
 # ///
 """Record every observable Telegram event as the QA user, not just new messages.
 
-`user-driver.py` handles only updateNewMessage, and no bot can observe deletions
-at all. Progress drafts are built on edit-in-place plus delete-on-cleanup, so
-proving them needs the full update stream:
+`user-driver.py` serves normalized message/edit snapshots. Progress drafts also
+need raw revisions and delete-on-cleanup evidence from the full update stream:
 
   updateNewMessage      -> message
   updateMessageContent  -> edit      (carries the new body; one per revision)
@@ -38,52 +37,13 @@ def formatted_text(value):
     return value.get("text", "") if isinstance(value, dict) else ""
 
 
-def rich_text(value):
-    if not isinstance(value, dict):
-        return ""
-    kind = value.get("@type", "")
-    if kind == "richTextPlain":
-        return value.get("text", "")
-    if kind == "richTextCustomEmoji":
-        return value.get("alternative_text", "")
-    if kind == "richTextMathematicalExpression":
-        return value.get("expression", "")
-    if kind == "richTexts":
-        return "".join(rich_text(item) for item in value.get("texts") or [])
-    return rich_text(value.get("text"))
-
-
-def rich_message_text(value):
-    if not isinstance(value, dict):
-        return ""
-    parts = []
-
-    def visit(node):
-        if isinstance(node, list):
-            for item in node:
-                visit(item)
-            return
-        if not isinstance(node, dict):
-            return
-        if str(node.get("@type", "")).startswith("richText"):
-            text = rich_text(node)
-            if text:
-                parts.append(text)
-            return
-        for child in node.values():
-            visit(child)
-
-    visit(value.get("blocks") or [])
-    return "\n".join(parts)
-
-
 def content_text(content):
     for key in ("text", "caption"):
         value = content.get(key)
         if isinstance(value, dict) and isinstance(value.get("text"), str):
             return value["text"]
     if content.get("@type") == "messageRichMessage":
-        return rich_message_text(content.get("message") or {})
+        return driver.rich_message_text(content.get("message") or {})
     return ""
 
 
@@ -120,8 +80,8 @@ class EventRecorder:
             "elapsedMs": int((time.time() - self.started_at) * 1000),
             "kind": kind,
             "messageId": message_id,
-            # Bot API ids are TDLib ids >> 20; keep both so bot-lane and
-            # userbot-lane recordings can be correlated by message.
+            # Historical field name: this is the observing account's server ID,
+            # not another account's Bot API receipt in DMs or basic groups.
             "botApiMessageId": (message_id >> 20) if isinstance(message_id, int) else None,
             **fields,
         }
@@ -170,17 +130,10 @@ class EventRecorder:
             self.record_handle = None
 
     def ingest(self, update):
-        if self._chat_id_of(update) != self.chat_id:
+        if driver.update_chat_id(update) != self.chat_id:
             return
         for kind, message_id, fields in self._events_for(update):
             self._append(kind, message_id, **fields)
-
-    def _chat_id_of(self, update):
-        """updateNewMessage nests chat_id under message; the rest keep it top level."""
-        message = update.get("message")
-        if isinstance(message, dict) and "chat_id" in message:
-            return message["chat_id"]
-        return update.get("chat_id")
 
     def _events_for(self, update):
         """One update yields zero or more events; a delete batch yields many."""

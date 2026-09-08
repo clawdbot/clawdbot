@@ -7,7 +7,7 @@ export function matchMarkdownHtmlTag(source: string): string | undefined {
   return MARKDOWN_HTML_TAG_RE.exec(source)?.[0];
 }
 
-type HtmlTagToken = {
+export type HtmlTagToken = {
   raw: string;
   start: number;
   end: number;

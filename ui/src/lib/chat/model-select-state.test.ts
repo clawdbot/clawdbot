@@ -926,3 +926,68 @@ describe("chat-model-select-state", () => {
     ]);
   });
 });
+
+describe("selected Fast applicability", () => {
+  function state(
+    support: boolean | undefined,
+    fastMode?: boolean | "auto",
+    selected = "claude-sonnet-5",
+  ) {
+    const sessionsResult = createSessionsListResult({
+      model: "claude-sonnet-5",
+      modelProvider: "anthropic",
+    });
+    const session = expectDefined(sessionsResult.sessions[0], "Fast applicability session");
+    return resolveChatFastModeSelectState({
+      activeRunId: null,
+      connected: true,
+      gatewayAvailable: true,
+      loading: false,
+      sending: false,
+      stream: null,
+      currentModelOverride: `anthropic/${selected}`,
+      sessionsResult,
+      fastModeTarget: { ...session, ...(fastMode === undefined ? {} : { fastMode }) },
+      catalog: [
+        {
+          id: "claude-sonnet-5",
+          name: "Sonnet 5",
+          provider: "anthropic",
+          supportsFastMode: support,
+        },
+        { id: "claude-opus-5", name: "Opus 5", provider: "anthropic", supportsFastMode: true },
+      ],
+    });
+  }
+
+  it("disables a confirmed no-op offer", () => {
+    expect(state(false)).toMatchObject({ supported: false, disabled: true, nextValue: "" });
+  });
+  it("uses canonical spelling when matching the selected applicability", () => {
+    expect(state(false, undefined, "CLAUDE-SONNET-5")).toMatchObject({
+      supported: false,
+      disabled: true,
+      nextValue: "",
+    });
+  });
+  it.each([true, false, "auto"] as const)(
+    "keeps saved %s clearable on a no-op route",
+    (fastMode) => {
+      expect(state(false, fastMode)).toMatchObject({
+        supported: true,
+        disabled: false,
+        nextValue: "",
+      });
+    },
+  );
+  it("preserves the existing unknown behavior", () => {
+    expect(state(undefined)).toMatchObject({ supported: true, disabled: false, nextValue: "on" });
+  });
+  it("uses the selected model's support before the stale session model", () => {
+    expect(state(false, undefined, "claude-opus-5")).toMatchObject({
+      supported: true,
+      disabled: false,
+      nextValue: "on",
+    });
+  });
+});

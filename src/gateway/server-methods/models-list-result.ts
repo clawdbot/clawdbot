@@ -18,6 +18,7 @@ import {
   prepareLogicalVisibleModelCatalog,
 } from "../../agents/model-catalog-visibility.js";
 import type { ModelCatalogSnapshot, ModelCatalogEntry } from "../../agents/model-catalog.types.js";
+import { createModelFastModeResolver } from "../../agents/model-fast-mode.js";
 import { modelKey } from "../../agents/model-ref-shared.js";
 import {
   dedupeModelCatalogEntries,
@@ -111,6 +112,7 @@ export function createGatewayAgentModelCatalogProjector(params: ModelsListAuthPr
 
 function createPublicModelsListProjector(params: {
   thinkingCatalog: ModelCatalogEntry[];
+  fastMode: ReturnType<typeof createModelFastModeResolver>;
   cfg: OpenClawConfig;
   agentId: string;
   configuredEntriesByKey: ReturnType<typeof resolveConfiguredModelEntries>["byKey"];
@@ -176,9 +178,11 @@ function createPublicModelsListProjector(params: {
     const projectedAvailability = params.preserveUnknownAvailability
       ? evaluation.availability
       : (evaluation.availability ?? false);
+    const supportsFastMode = params.fastMode(entry, evaluation, preparedEntry.agentRuntime?.id);
     return Object.assign(
       {},
       preparedEntry,
+      supportsFastMode === undefined ? {} : { supportsFastMode },
       projectedAvailability === undefined ? {} : { available: projectedAvailability },
       projectedAvailability === false && evaluation.unavailableReason
         ? {
@@ -469,6 +473,13 @@ export async function prepareModelsListResult(
     );
     const projectPublic = createPublicModelsListProjector({
       thinkingCatalog: catalog,
+      fastMode: createModelFastModeResolver({
+        cfg,
+        agentId,
+        catalog: inventory,
+        metadataSnapshot,
+        pluginRegistry: preparedPluginRegistry,
+      }),
       cfg,
       agentId,
       configuredEntriesByKey,
@@ -529,6 +540,13 @@ export async function prepareModelsListResult(
   });
   const projectPublic = createPublicModelsListProjector({
     thinkingCatalog: catalog,
+    fastMode: createModelFastModeResolver({
+      cfg,
+      agentId,
+      catalog,
+      metadataSnapshot,
+      pluginRegistry: preparedPluginRegistry,
+    }),
     cfg,
     agentId,
     configuredEntriesByKey,

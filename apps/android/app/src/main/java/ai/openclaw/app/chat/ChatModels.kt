@@ -492,6 +492,17 @@ data class ChatSessionEntry(
     status != null || startedAt != null || endedAt != null || runtimeMs != null || outputTokens != null,
 )
 
+// Match Gateway precedence: terminal status wins; only missing live flags use historical status.
+internal fun isSessionRunActive(
+  hasActiveRun: Boolean?,
+  status: String?,
+): Boolean =
+  when (status?.trim()?.lowercase()) {
+    null, "" -> hasActiveRun == true
+    "queued", "running" -> hasActiveRun ?: true
+    else -> false
+  }
+
 data class ChatSessionUnreadExpectation(
   val markedUnreadAt: Long?,
 )

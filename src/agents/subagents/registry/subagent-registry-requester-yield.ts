@@ -68,8 +68,14 @@ export function settleRequesterTurnAfterSessionSpawns(params: {
       entry.requesterTurnRunId === requesterTurnRunId &&
       entry.expectsCompletionMessage === true,
   );
+  const requiredRunIds = new Set(
+    params.acceptedSessionSpawns
+      .filter((spawn) => spawn.expectsCompletionMessage === true)
+      .map((spawn) => spawn.runId),
+  );
   for (const entry of entries) {
-    const spawn = spawnsByRunId.get(entry.taskRunId ?? entry.runId);
+    const taskRunId = entry.taskRunId ?? entry.runId;
+    const spawn = spawnsByRunId.get(taskRunId);
     if (
       !spawn ||
       entry.childSessionKey !== spawn.childSessionKey ||
@@ -77,6 +83,12 @@ export function settleRequesterTurnAfterSessionSpawns(params: {
     ) {
       return false;
     }
+    requiredRunIds.delete(taskRunId);
+  }
+  // Accepted completion receipts outlive registry rows. A surviving subset
+  // cannot attest that the whole requester obligation transferred to a wake.
+  if (requiredRunIds.size > 0) {
+    return false;
   }
 
   const firstEntry = entries[0];

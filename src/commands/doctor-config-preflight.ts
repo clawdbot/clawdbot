@@ -101,6 +101,7 @@ export async function runDoctorConfigPreflight(
     measure?: ConfigSnapshotReadMeasure;
     /** Return false or reject on config drift; the preflight always unwinds owned resources. */
     beforeStateMigrations?: (snapshot?: ConfigFileSnapshot) => Promise<boolean>;
+    beforeWorkspaceStateMigration?: (config: OpenClawConfig) => Promise<void>;
     /** CLI readiness policy evaluates the dry repaired config before any startup writes. */
     validateStartupConfig?: (snapshot: ConfigFileSnapshot) => void | Promise<void>;
     requireStateMigrationCheckpoint?: boolean;
@@ -575,6 +576,7 @@ export async function runDoctorConfigPreflight(
                 log: migrationLog,
                 recoverCorruptTargetStore: options.recoverCorruptTargetStore,
                 doctorOnlyStateMigrations: options.doctorOnlyStateMigrations,
+                beforeWorkspaceStateMigration: options.beforeWorkspaceStateMigration,
                 onStepReceipt: (receipt) => stateMigrationStepReceipts.push(receipt),
                 ...(gatewayStartupCheckpointRequired
                   ? { allowLegacyDeviceIdentityImport: true }

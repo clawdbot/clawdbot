@@ -43,11 +43,7 @@ enum PrimaryGatewayControlConfiguration: Sendable {
     struct Replacement {
         let root: [String: Any]
         let clearsTargetDefaults: Bool
-    }
-
-    var isClear: Bool {
-        if case .clear = self { return true }
-        return false
+        let removesGatewayMode: Bool
     }
 
     var requestedLocalPort: Int? {
@@ -62,9 +58,10 @@ enum PrimaryGatewayControlConfiguration: Sendable {
         var gateway = root["gateway"] as? [String: Any] ?? [:]
         let previousRemote = gateway["remote"] as? [String: Any] ?? [:]
         let clearsTargetDefaults: Bool
+        var removesGatewayMode = false
         switch self {
         case .clear:
-            gateway.removeValue(forKey: "mode")
+            removesGatewayMode = gateway.removeValue(forKey: "mode") != nil
             gateway.removeValue(forKey: "remote")
             clearsTargetDefaults = true
         case .local:
@@ -124,7 +121,10 @@ enum PrimaryGatewayControlConfiguration: Sendable {
         } else {
             root["gateway"] = gateway
         }
-        return Replacement(root: root, clearsTargetDefaults: clearsTargetDefaults)
+        return Replacement(
+            root: root,
+            clearsTargetDefaults: clearsTargetDefaults,
+            removesGatewayMode: removesGatewayMode)
     }
 
     private static func replacingRemoteRoute(_ previous: [String: Any]) -> [String: Any] {

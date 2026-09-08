@@ -10,7 +10,10 @@ import { pathMayExistSync } from "../infra/path-existence.js";
 import { StartupMaintenanceRequiredError } from "../infra/startup-maintenance-required.js";
 import { formatDoctorStateRepairFailure } from "../infra/state-repair-message.js";
 import { resolveUserPath } from "../utils.js";
-import { resolveWorkspaceStateIdentity } from "./workspace-state-identity.js";
+import {
+  resolveCanonicalWorkspacePath,
+  resolveWorkspaceStateIdentity,
+} from "./workspace-state-identity.js";
 
 export const LEGACY_WORKSPACE_STATE_DIRNAME = ".openclaw";
 const LEGACY_WORKSPACE_STATE_FILENAME = "workspace-state.json";
@@ -73,11 +76,12 @@ export function resolveLegacyWorkspaceSourcePaths(
   // while it still exists; destructive cleanup may remove the alias first.
   const workspacePath = path.resolve(resolveUserPath(workspaceDir));
   const canonicalIdentity = resolveWorkspaceStateIdentity(workspaceDir);
+  const canonicalDirectoryPath = resolveCanonicalWorkspacePath(workspaceDir);
   const workspaceKeys = [
     createHash("sha256").update(workspacePath).digest("hex"),
     canonicalIdentity.workspaceKey,
   ];
-  const workspacePaths = [workspacePath, canonicalIdentity.workspacePath];
+  const workspacePaths = [workspacePath, canonicalDirectoryPath];
   const env = options?.env ?? process.env;
   const stateDirs = [
     resolveStateDir(env, options?.homedir),
@@ -86,9 +90,9 @@ export function resolveLegacyWorkspaceSourcePaths(
   return {
     workspacePath,
     setupStatePaths: [
-      path.join(canonicalIdentity.workspacePath, LEGACY_WORKSPACE_STATE_CURRENT_FILENAME),
+      path.join(canonicalDirectoryPath, LEGACY_WORKSPACE_STATE_CURRENT_FILENAME),
       path.join(
-        canonicalIdentity.workspacePath,
+        canonicalDirectoryPath,
         LEGACY_WORKSPACE_STATE_DIRNAME,
         LEGACY_WORKSPACE_STATE_FILENAME,
       ),

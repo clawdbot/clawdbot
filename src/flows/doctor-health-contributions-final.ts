@@ -31,6 +31,7 @@ import {
   runMemorySearchHealthContribution,
   runSkillsHealth,
   runToolsMdMigrationHealth,
+  runWorkspaceAliasHealth,
   runWorkspaceStatusHealth,
   runWorkspaceSuggestionsHealth,
 } from "./doctor-health-contribution-runners.workspace.js";
@@ -266,6 +267,21 @@ export function resolveFinalDoctorHealthContributions(params: {
           }),
         ]
       : []),
+    createDoctorHealthContribution({
+      id: "doctor:workspace-alias",
+      label: "Workspace alias",
+      healthChecks: {
+        description:
+          "Persisted workspace aliases must resolve to the canonical target that owns their stored state.",
+        defaultEnabled: true,
+        async detect(ctx) {
+          const { collectRepointedWorkspaceAliasFindings } =
+            await import("../commands/doctor-workspace-alias.js");
+          return collectRepointedWorkspaceAliasFindings(ctx.cfg);
+        },
+      },
+      run: runWorkspaceAliasHealth,
+    }),
     createDoctorHealthContribution({
       id: "doctor:skills",
       label: "Skills",

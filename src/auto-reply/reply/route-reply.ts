@@ -105,6 +105,8 @@ type RouteReplyParams = {
   requesterSenderE164?: string;
   /** Thread id for replies (Telegram topic id or Matrix thread event id). */
   threadId?: string | number;
+  /** Originating inbound message fact for the owning channel's reply resolver. */
+  currentMessageId?: string;
   /** Reply policy fallback for delivery kinds that do not carry payload metadata. */
   replyDelivery?: ReplyDeliveryContext;
   /** Config for provider-specific settings. */
@@ -315,6 +317,7 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
       accountId,
       threadId,
       replyToId,
+      currentMessageId: params.currentMessageId,
       replyToIsExplicit: Boolean(
         payloadMetadata?.replyToIdExplicit || normalized.replyToTag || normalized.replyToCurrent,
       ),

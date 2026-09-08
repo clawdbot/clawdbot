@@ -7,10 +7,7 @@ import { streamSimple } from "openclaw/plugin-sdk/llm";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
   resolveProviderEndpoint,
-  resolveClaudeOpus5ModelIdentity,
-  resolveClaudeSonnet5ModelIdentity,
   supportsClaude1MContext,
-  supportsClaudeFastMode,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   applyAnthropicPayloadPolicyToParams,
@@ -27,6 +24,12 @@ import {
   normalizeLowercaseStringOrEmpty,
   readStringValue,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeAnthropicServiceTier,
+  resolveAnthropicFastModePlan,
+  supportsAnthropicPriorityTier,
+  type AnthropicServiceTier,
+} from "./fast-mode-policy.js";
 
 const log = createSubsystemLogger("anthropic-stream");
 
@@ -44,7 +47,6 @@ const OPENCLAW_OAUTH_ANTHROPIC_BETAS = [
   ...OPENCLAW_DEFAULT_ANTHROPIC_BETAS,
 ] as const;
 
-type AnthropicServiceTier = "auto" | "standard_only";
 type DynamicFastMode = boolean | (() => boolean | undefined);
 
 function isAnthropic1MModel(modelId: string): boolean {
@@ -82,17 +84,6 @@ function resolveAnthropicFastServiceTier(enabled: boolean): AnthropicServiceTier
   return enabled ? "auto" : "standard_only";
 }
 
-function isDirectAnthropicApiModel(model: Parameters<StreamFn>[0]): boolean {
-  if (
-    normalizeLowercaseStringOrEmpty(model.provider) !== "anthropic" ||
-    normalizeLowercaseStringOrEmpty(model.api) !== "anthropic-messages"
-  ) {
-    return false;
-  }
-  const endpointClass = resolveProviderEndpoint(model.baseUrl).endpointClass;
-  return endpointClass === "default" || endpointClass === "anthropic-public";
-}
-
 function applyAnthropicFastModePricing(model: Parameters<StreamFn>[0]): Parameters<StreamFn>[0] {
   const scaleRates = (rates: Parameters<StreamFn>[0]["cost"]) => ({
     input: rates.input * ANTHROPIC_FAST_MODE_COST_MULTIPLIER,
@@ -114,17 +105,6 @@ function applyAnthropicFastModePricing(model: Parameters<StreamFn>[0]): Paramete
         : {}),
     },
   };
-}
-
-function normalizeAnthropicServiceTier(value: unknown): AnthropicServiceTier | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const normalized = normalizeLowercaseStringOrEmpty(value);
-  if (normalized === "auto" || normalized === "standard_only") {
-    return normalized;
-  }
-  return undefined;
 }
 
 function hasConfiguredAnthropicBeta(extraParams: Record<string, unknown> | undefined): boolean {
@@ -191,6 +171,7 @@ export function createAnthropicBetaHeadersWrapper(
 export function createAnthropicFastModeWrapper(
   baseStreamFn: StreamFn | undefined,
   enabled: DynamicFastMode,
+  extraParams?: Record<string, unknown>,
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   const fastPayloadWrapper = createPayloadPatchStreamWrapper(underlying, ({ payload }) => {
@@ -202,12 +183,25 @@ export function createAnthropicFastModeWrapper(
     if (resolved === undefined) {
       return underlying(model, context, options);
     }
-    if (supportsClaudeFastMode(model)) {
-      if (
-        !resolved ||
-        isAnthropicOAuthApiKey(options?.apiKey) ||
-        !isDirectAnthropicApiModel(model)
-      ) {
+    const plan = resolveAnthropicFastModePlan({
+      provider: model.provider,
+      modelId: model.id,
+      api: model.api,
+      baseUrl: model.baseUrl,
+      modelParams: model.params,
+      params: extraParams,
+      authMode: isAnthropicOAuthApiKey(options?.apiKey) ? "oauth" : "api_key",
+      requestCapabilities: {
+        endpointClass: resolveProviderEndpoint(model.baseUrl).endpointClass,
+        allowsAnthropicServiceTier: resolveAnthropicPayloadPolicy({
+          provider: model.provider,
+          api: model.api,
+          baseUrl: model.baseUrl,
+        }).allowsServiceTier,
+      },
+    });
+    if (plan === "native") {
+      if (!resolved) {
         return underlying(model, context, options);
       }
       return fastPayloadWrapper(applyAnthropicFastModePricing(model), context, {
@@ -215,11 +209,13 @@ export function createAnthropicFastModeWrapper(
         headers: mergeAnthropicBetaHeader(options?.headers, [ANTHROPIC_FAST_MODE_BETA]),
       });
     }
-    return createAnthropicServiceTierWrapper(underlying, resolveAnthropicFastServiceTier(resolved))(
-      model,
-      context,
-      options,
-    );
+    return plan === "service-tier"
+      ? createAnthropicServiceTierWrapper(underlying, resolveAnthropicFastServiceTier(resolved))(
+          model,
+          context,
+          options,
+        )
+      : underlying(model, context, options);
   };
 }
 
@@ -263,11 +259,7 @@ export function createAnthropicServiceTierWrapper(
     {
       shouldPatch: ({ model, options }) => {
         // Opus 5 and Sonnet 5 do not support Priority Tier; omit service_tier entirely.
-        if (
-          isAnthropicOAuthApiKey(options?.apiKey) ||
-          resolveClaudeOpus5ModelIdentity(model) !== undefined ||
-          resolveClaudeSonnet5ModelIdentity(model) !== undefined
-        ) {
+        if (isAnthropicOAuthApiKey(options?.apiKey) || !supportsAnthropicPriorityTier(model)) {
           return false;
         }
         return resolveAnthropicPayloadPolicy({
@@ -336,9 +328,13 @@ export function wrapAnthropicProviderStream(
     serviceTier
       ? (streamFn) => createAnthropicServiceTierWrapper(streamFn, serviceTier)
       : undefined,
-    hasFastModeParam && serviceTier === undefined
+    hasFastModeParam
       ? (streamFn) =>
-          createAnthropicFastModeWrapper(streamFn, () => resolveAnthropicFastMode(ctx.extraParams))
+          createAnthropicFastModeWrapper(
+            streamFn,
+            () => resolveAnthropicFastMode(ctx.extraParams),
+            ctx.extraParams,
+          )
       : undefined,
     ctx.extraParams?.anthropicServerCompaction === true
       ? (streamFn) => createAnthropicCompactionWrapper(streamFn, ctx.extraParams)

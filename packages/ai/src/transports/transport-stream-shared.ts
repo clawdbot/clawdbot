@@ -74,6 +74,11 @@ export function coerceTransportToolCallArguments(argumentsValue: unknown): Recor
   return {};
 }
 
+/** Stable terminal fact: presentation must not infer unfinished calls from provider prose. */
+export class IncompleteToolCallError extends Error {
+  readonly code = "incomplete_tool_call";
+}
+
 /** Admit only complete object-shaped terminal tool arguments; partial parsing is preview-only. */
 export function parseTerminalToolCallArguments(
   value: unknown,

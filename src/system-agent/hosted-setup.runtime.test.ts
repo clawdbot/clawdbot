@@ -1,5 +1,6 @@
 import "./chat-engine.mocks.test-support.js";
 import { describe, expect, it, vi } from "vitest";
+import { committedConfigFiles as hostedConfigFiles } from "../commands/committed-config.test-support.js";
 import {
   fakeOverviewLoader,
   sharedVerifiedInferenceConfig,
@@ -87,7 +88,9 @@ describe("SystemAgentChatEngine runtime", () => {
         return { ...config, skills: { install: { nodeManager: "npm" } } };
       },
     );
-    mocks.writeWizardConfigFile.mockImplementation(async (config: OpenClawConfig) => config);
+    mocks.writeWizardConfigFile.mockImplementation(async (config: OpenClawConfig) =>
+      hostedConfigFiles.write(config),
+    );
     const engine = new SystemAgentChatEngine({
       surface: "gateway",
       runAgentTurn: async () => null,
@@ -154,7 +157,9 @@ describe("SystemAgentChatEngine runtime", () => {
         };
       },
     );
-    mocks.writeWizardConfigFile.mockImplementation(async (config: OpenClawConfig) => config);
+    mocks.writeWizardConfigFile.mockImplementation(async (config: OpenClawConfig) =>
+      hostedConfigFiles.write(config),
+    );
     const engine = new SystemAgentChatEngine({
       surface: "gateway",
       runAgentTurn: async () => null,
@@ -200,7 +205,9 @@ describe("SystemAgentChatEngine runtime", () => {
       config: baseConfig,
       sourceConfig: baseConfig,
     });
-    mocks.writeWizardConfigFile.mockImplementation(async (config: OpenClawConfig) => config);
+    mocks.writeWizardConfigFile.mockImplementation(async (config: OpenClawConfig) =>
+      hostedConfigFiles.write(config),
+    );
     const engine = new SystemAgentChatEngine({
       surface: "gateway",
       runAgentTurn: async () => null,
@@ -274,7 +281,9 @@ describe("SystemAgentChatEngine runtime", () => {
       config: baseConfig,
       sourceConfig: baseConfig,
     });
-    mocks.writeWizardConfigFile.mockImplementation(async (config: OpenClawConfig) => config);
+    mocks.writeWizardConfigFile.mockImplementation(async (config: OpenClawConfig) =>
+      hostedConfigFiles.write(config),
+    );
     const changedConfig: OpenClawConfig = {
       agents: { defaults: { model: "anthropic/claude-opus-4-8" } },
       models: {
@@ -493,7 +502,7 @@ describe("SystemAgentChatEngine runtime", () => {
         }
         currentConfig = structuredClone(nextConfig);
         currentHash = "committed-hash";
-        return nextConfig;
+        return hostedConfigFiles.write(nextConfig);
       },
     );
     const engine = new SystemAgentChatEngine({
@@ -569,7 +578,9 @@ describe("SystemAgentChatEngine runtime", () => {
         };
       },
     );
-    mocks.writeWizardConfigFile.mockImplementation(async (config: OpenClawConfig) => config);
+    mocks.writeWizardConfigFile.mockImplementation(async (config: OpenClawConfig) =>
+      hostedConfigFiles.write(config),
+    );
     const engine = new SystemAgentChatEngine({
       surface: "gateway",
       verifiedInference,
@@ -586,7 +597,6 @@ describe("SystemAgentChatEngine runtime", () => {
 
     expect(stopped.text).toContain("Telegram setup stopped");
     expect(mocks.writeWizardConfigFile).not.toHaveBeenCalled();
-    expect(mocks.runCollectedChannelOnboardingPostWriteHooks).not.toHaveBeenCalled();
   });
 
   it("rechecks inference authority before hosted channel post-write hooks", async () => {
@@ -637,13 +647,8 @@ describe("SystemAgentChatEngine runtime", () => {
     );
     mocks.writeWizardConfigFile.mockImplementation(async (config: OpenClawConfig) => {
       currentConfig = structuredClone(changedConfig);
-      return config;
+      return hostedConfigFiles.write(config);
     });
-    mocks.runCollectedChannelOnboardingPostWriteHooks.mockImplementationOnce(
-      async (params?: { beforePersistentEffect?: () => Promise<void> }) => {
-        await params?.beforePersistentEffect?.();
-      },
-    );
     const engine = new SystemAgentChatEngine({
       surface: "gateway",
       verifiedInference,
@@ -686,7 +691,7 @@ describe("hosted channel post-write hooks", () => {
       },
     );
     const committed = { channels: { matrix: { enabled: true, committed: true } } };
-    mocks.writeWizardConfigFile.mockResolvedValue(committed);
+    mocks.writeWizardConfigFile.mockResolvedValue(hostedConfigFiles.write(committed));
     const engine = new SystemAgentChatEngine({
       surface: "gateway",
       runAgentTurn: async () => null,

@@ -3,6 +3,7 @@ import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { ConfigMutationConflictError } from "../config/mutate.js";
+import { committedConfigFiles } from "./committed-config.test-support.js";
 import {
   createEnabledWebSearchConfig,
   createWizardTestRuntime as createRuntime,
@@ -410,6 +411,7 @@ describe("runConfigureWizard", () => {
         // Second call: succeeds with refreshed hash
         expect(params.baseHash).toBe(newHashAfterMutation);
         await mocks.writeConfigFile(params.nextConfig);
+        return committedConfigFiles.write(params.nextConfig as OpenClawConfig);
       },
     );
 
@@ -499,6 +501,7 @@ describe("runConfigureWizard", () => {
       }) => {
         params.writeOptions?.assertConfigPathForWrite?.();
         await mocks.writeConfigFile(params.nextConfig);
+        return committedConfigFiles.write(params.nextConfig as OpenClawConfig);
       },
     );
 

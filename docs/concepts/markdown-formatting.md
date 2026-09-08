@@ -26,6 +26,13 @@ splits formatting mid-span.
 3. **Render per channel** (`renderMarkdownWithMarkers`) - a style-marker map
    turns spans into the channel's native markup.
 
+Raw inline HTML lexemes retain their original bytes during parsing. Markdown
+markers and entities inside attribute values or recognized inline comments are
+not parsed as Markdown content. Non-serialized authored-tag ranges let
+HTML-aware renderers interpret those tags; other renderers keep them literal or
+escape them. HTML block parsing stays disabled so Markdown inside containers
+still works, and bare URLs in their bodies retain normal linkification.
+
 Examples of shared IR renderers:
 
 | Channel  | Renderer                                                                             | Notes                                                                                    |

@@ -100,6 +100,7 @@ function classifyAssistantErrorFacts(msg: AssistantMessage, opts?: AssistantErro
     status: signal.status ?? extractErrorHttpStatus(signal.message ?? "")?.code,
     providerRuntimeFailureKind: classifyProviderRuntimeFailureKind(signal, { providerPlugin }),
     storageFailure: classifyGatewayStorageFailure(msg),
+    code: signal.code,
   };
 }
 function isMissingToolCallInputError(raw: string): boolean {

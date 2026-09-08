@@ -443,7 +443,6 @@ describe("comfy video-generation provider", () => {
       filename: "cloud.mp4",
       outputKind: "gifs",
       promptId: "cloud-video-1",
-      redirectLocation: "https://cdn.example.com/cloud.mp4",
     });
 
     const provider = buildComfyVideoGenerationProvider();

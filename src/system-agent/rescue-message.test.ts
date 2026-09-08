@@ -669,6 +669,7 @@ describe("OpenClaw rescue message", () => {
           agentDir: "/tmp/agent-work",
           bootstrapPending: true,
           config: cfg,
+          configPath: "/tmp/openclaw.json",
         })),
       };
 

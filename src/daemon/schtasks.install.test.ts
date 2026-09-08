@@ -365,9 +365,7 @@ describe("installScheduledTask", () => {
       const xml = xmlPayloadCaptures.find((entry) => entry.index === xmlIndex)?.xml;
       expect(xml).toContain("<UserId>WORKSTATION\\alice</UserId>");
       expect(xml).toContain("<LogonType>InteractiveToken</LogonType>");
-      expect(launcher).toContain(
-        `WScript.Quit CreateObject("WScript.Shell").Run("""${scriptPath}""", 0, True)`,
-      );
+      expect(launcher).toContain(`WScript.Quit shell.Run("""${scriptPath}""", 0, True)`);
       expectTaskRunCall(xmlIndex + 1);
     });
   });
@@ -389,7 +387,7 @@ describe("installScheduledTask", () => {
       expect(scriptPath).toContain("苗振");
       expect(rawLauncher.subarray(0, 2)).toEqual(Buffer.from([0xff, 0xfe]));
       expect(rawLauncher.subarray(2).toString("utf16le")).toContain(
-        `WScript.Quit CreateObject("WScript.Shell").Run("""${scriptPath}""", 0, True)`,
+        `WScript.Quit shell.Run("""${scriptPath}""", 0, True)`,
       );
     });
   });
@@ -459,10 +457,12 @@ describe("installScheduledTask", () => {
       expect(captured?.xml).toContain("<UserId>WORKSTATION\\alice</UserId>");
       expect(captured?.xml).toContain("<LogonType>InteractiveToken</LogonType>");
       expect(script).toContain('set "OPENCLAW_WINDOWS_TASK_NAME=OpenClaw Custom Gateway"');
-      expect(launcher).toContain("WScript.Shell");
+      expect(script).not.toContain('set "OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER=');
       expect(launcher).toContain(
-        `WScript.Quit CreateObject("WScript.Shell").Run("""${scriptPath}""", 0, True)`,
+        'shell.Environment("Process")("OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER") = "wscript"',
       );
+      expect(launcher).toContain("WScript.Shell");
+      expect(launcher).toContain(`WScript.Quit shell.Run("""${scriptPath}""", 0, True)`);
       expectTaskRunCall(2, "OpenClaw Custom Gateway");
     });
   });

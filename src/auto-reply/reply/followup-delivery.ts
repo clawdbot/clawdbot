@@ -419,6 +419,12 @@ async function sendFollowupPayloads(params: {
         requesterSenderUsername: turn.queued.run.senderUsername,
         requesterSenderE164: turn.queued.run.senderE164,
         threadId: turn.queued.originatingThreadId,
+        currentMessageId:
+          sameChannelOrigin &&
+          (turn.queued.run.inputProvenance?.kind === undefined ||
+            turn.queued.run.inputProvenance.kind === "external_user")
+            ? turn.queued.messageId
+            : undefined,
         cfg: turn.config,
         mirror:
           metadata?.assistantMessageIndex !== undefined ||

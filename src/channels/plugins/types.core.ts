@@ -438,6 +438,8 @@ export type ChannelThreadingAdapter = {
   resolveReplyTransport?: (params: {
     cfg: OpenClawConfig;
     accountId?: string | null;
+    /** Originating inbound message in this routed channel; not an explicit reply target. */
+    currentMessageId?: string;
     threadId?: string | number | null;
     replyToId?: string | null;
     /** True when replyToId came from an explicit payload target or reply tag. */

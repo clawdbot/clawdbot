@@ -1,5 +1,6 @@
 // Child-process entrypoint for one hard-cancellable sqlite-vec KNN query.
 import {
+  ensureSqliteLibrarySelected,
   loadSqliteVecExtension,
   openNodeSqliteDatabase,
   supportsNodeSqliteExtensionLoading,
@@ -17,6 +18,7 @@ const MAX_STDOUT_BYTES = 2 * 1024 * 1024;
 export type VectorKnnChildInput = {
   databasePath: string;
   extensionPath?: string;
+  sqliteLibraryPath?: string;
   request: VectorKnnRequest;
 };
 
@@ -33,6 +35,8 @@ function isChildInput(value: unknown): value is VectorKnnChildInput {
   return (
     typeof input.databasePath === "string" &&
     input.databasePath.length > 0 &&
+    (input.sqliteLibraryPath === undefined ||
+      (typeof input.sqliteLibraryPath === "string" && input.sqliteLibraryPath.trim().length > 0)) &&
     Boolean(input.request) &&
     typeof input.request === "object"
   );
@@ -43,6 +47,7 @@ async function run(input: unknown): Promise<VectorKnnChildResult> {
     return { status: "failed", error: "invalid memory vector KNN child input" };
   }
   validateVectorKnnRequest(input.request);
+  ensureSqliteLibrarySelected({ explicitPath: input.sqliteLibraryPath });
   const extensionLoadingSupported = supportsNodeSqliteExtensionLoading();
   const db = openNodeSqliteDatabase(input.databasePath, {
     allowExtension: extensionLoadingSupported,

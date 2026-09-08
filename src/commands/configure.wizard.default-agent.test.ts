@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { committedConfigFiles as configFiles } from "./committed-config.test-support.js";
 
 type SetupChannels = typeof import("./onboard-channels.js").setupChannels;
 
@@ -45,7 +46,7 @@ vi.mock("../plugins/install-record-commit.js", () => ({
     };
     const nextConfig = params.transform(snapshot.sourceConfig ?? snapshot.config).nextConfig;
     const committed = await mocks.commitConfig({ nextConfig, writeOptions: params.writeOptions });
-    return { nextConfig: committed.config };
+    return committed;
   },
 }));
 
@@ -102,6 +103,7 @@ const runtime = {
 describe("runConfigureWizard default-agent ownership", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    configFiles.clear();
     mocks.select.mockReset();
     mocks.text.mockReset();
     const baseConfig = {
@@ -130,8 +132,8 @@ describe("runConfigureWizard default-agent ownership", () => {
       async ({ config }: { config: OpenClawConfig }) => config,
     );
     mocks.setupSkills.mockImplementation(async (config: OpenClawConfig) => config);
-    mocks.commitConfig.mockImplementation(
-      async ({ nextConfig }: { nextConfig: OpenClawConfig }) => ({ config: nextConfig }),
+    mocks.commitConfig.mockImplementation(async ({ nextConfig }: { nextConfig: OpenClawConfig }) =>
+      configFiles.write(nextConfig),
     );
   });
 
