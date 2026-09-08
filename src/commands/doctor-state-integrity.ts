@@ -110,6 +110,11 @@ export type StateIntegrityHealthIssue =
       storage: string;
     }
   | {
+      kind: "windows-cloud-state-dir";
+      path: string;
+      storage: string;
+    }
+  | {
       kind: "linux-sd-state-dir";
       path: string;
       mountPoint: string;
@@ -644,6 +649,79 @@ export function detectMacCloudSyncedStateDir(
   return null;
 }
 
+/** Detects Windows state directories under OneDrive sync roots. */
+export function detectWindowsCloudSyncedStateDir(
+  stateDir: string,
+  deps?: {
+    platform?: NodeJS.Platform;
+    env?: NodeJS.ProcessEnv;
+    resolveRealPath?: (targetPath: string) => string | null;
+  },
+): {
+  path: string;
+  storage: "OneDrive" | "OneDrive for Business";
+} | null {
+  const platform = deps?.platform ?? process.platform;
+  if (platform !== "win32") {
+    return null;
+  }
+
+  // The OneDrive sync client maintains these variables, so they are the
+  // canonical sync-root source; path-shape heuristics would misfire on
+  // ordinary local folders that merely contain "OneDrive" in a segment.
+  const env = deps?.env ?? process.env;
+  const roots: { storage: "OneDrive" | "OneDrive for Business"; root: string }[] = [];
+  const addRoot = (storage: "OneDrive" | "OneDrive for Business", root: string | undefined) => {
+    if (root && root.trim() !== "") {
+      roots.push({ storage, root });
+    }
+  };
+  addRoot("OneDrive", env.OneDrive);
+  addRoot("OneDrive", env.OneDriveConsumer);
+  addRoot("OneDrive for Business", env.OneDriveCommercial);
+  if (roots.length === 0) {
+    return null;
+  }
+
+  const resolveRealPath = deps?.resolveRealPath ?? tryResolveRealPath;
+  // A state dir that does not exist yet cannot be resolved directly, and
+  // falling back to the lexical path misreads a not-yet-created leaf beneath a
+  // OneDrive-named junction that actually resolves to local storage. Resolve
+  // through the nearest existing ancestor, as the Linux detectors do, so the
+  // junction is followed even when the leaf is absent.
+  const resolvedStatePath =
+    resolvePathThroughExistingAncestor(stateDir, resolveRealPath, path) ?? path.resolve(stateDir);
+
+  for (const { storage, root } of roots) {
+    // Windows filesystems are case-insensitive by default; compare folded.
+    if (isPathUnderRoot(resolvedStatePath.toLowerCase(), root.toLowerCase())) {
+      return { path: resolvedStatePath, storage };
+    }
+  }
+
+  return null;
+}
+
+type WindowsCloudSyncedStateDir = NonNullable<ReturnType<typeof detectWindowsCloudSyncedStateDir>>;
+
+/** Formats the warning for state stored under a OneDrive sync root. */
+export function formatWindowsCloudSyncedStateDirWarning(
+  displayStateDir: string,
+  windowsCloudSyncedStateDir: WindowsCloudSyncedStateDir,
+): string {
+  return [
+    `- State directory is under Windows cloud-synced storage (${displayStateDir}; ${windowsCloudSyncedStateDir.storage}).`,
+    "- This can cause slow I/O, sync/lock races, and Files On-Demand dehydration for sessions and credentials.",
+    "- Prefer a local non-synced state dir (for example: %USERPROFILE%\\.openclaw).",
+    // No one-shot `OPENCLAW_STATE_DIR=... openclaw doctor` hint here: that
+    // retargets only the doctor process, while the managed Gateway keeps
+    // using the synced directory, so it reads as a fix but is not one.
+    "- To relocate: stop the Gateway, move the whole state directory, set",
+    "  OPENCLAW_STATE_DIR to the new path for the Gateway service (not just",
+    "  one shell), then restart it and re-run doctor to verify.",
+  ].join("\n");
+}
+
 function isPairingPolicy(value: unknown): boolean {
   return normalizeOptionalLowercaseString(value) === "pairing";
 }
@@ -737,6 +815,15 @@ export function detectStateIntegrityHealthIssues(
       kind: "mac-cloud-state-dir",
       path: cloudSyncedStateDir.path,
       storage: cloudSyncedStateDir.storage,
+    });
+  }
+
+  const windowsCloudSyncedStateDir = detectWindowsCloudSyncedStateDir(stateDir);
+  if (windowsCloudSyncedStateDir) {
+    issues.push({
+      kind: "windows-cloud-state-dir",
+      path: windowsCloudSyncedStateDir.path,
+      storage: windowsCloudSyncedStateDir.storage,
     });
   }
 
@@ -852,6 +939,15 @@ export function stateIntegrityIssueToHealthFinding(
         path: issue.path,
         fixHint: "Move OPENCLAW_STATE_DIR to local non-synced storage such as ~/.openclaw.",
       };
+    case "windows-cloud-state-dir":
+      return {
+        checkId: STATE_INTEGRITY_CHECK_ID,
+        severity: "warning",
+        message: `State directory is under Windows cloud-synced storage (${issue.storage}), which can cause slow I/O, sync races, and Files On-Demand dehydration.`,
+        path: issue.path,
+        fixHint:
+          "Move OPENCLAW_STATE_DIR to local non-synced storage such as %USERPROFILE%\\.openclaw.",
+      };
     case "linux-sd-state-dir":
       return {
         checkId: STATE_INTEGRITY_CHECK_ID,
@@ -932,6 +1028,7 @@ export function stateIntegrityIssueToRepairEffect(
 ): HealthRepairEffect {
   switch (issue.kind) {
     case "mac-cloud-state-dir":
+    case "windows-cloud-state-dir":
     case "linux-sd-state-dir":
     case "linux-volatile-state-dir":
       return {
@@ -1014,6 +1111,7 @@ export async function noteStateIntegrity(
   const displayConfigPath = configPath ? shortenHomePath(configPath) : undefined;
   const requireOAuthDir = shouldRequireOAuthDir(cfg, env);
   const cloudSyncedStateDir = detectMacCloudSyncedStateDir(stateDir);
+  const windowsCloudSyncedStateDir = detectWindowsCloudSyncedStateDir(stateDir);
   const linuxSdBackedStateDir = detectLinuxSdBackedStateDir(stateDir);
   const linuxVolatileStateDir = detectLinuxVolatileStateDir(stateDir);
 
@@ -1025,6 +1123,11 @@ export async function noteStateIntegrity(
         "- Prefer a local non-synced state dir (for example: ~/.openclaw).",
         `  Set locally: OPENCLAW_STATE_DIR=~/.openclaw ${formatCliCommand("openclaw doctor")}`,
       ].join("\n"),
+    );
+  }
+  if (windowsCloudSyncedStateDir) {
+    warnings.push(
+      formatWindowsCloudSyncedStateDirWarning(displayStateDir, windowsCloudSyncedStateDir),
     );
   }
   if (linuxSdBackedStateDir) {
