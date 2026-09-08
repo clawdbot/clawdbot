@@ -27,11 +27,17 @@ describe("zalouser target classification", () => {
     expect(zalouserMessagingAdapter.inferTargetChatType({ to: "group:456" })).toBe("group");
   });
 });
+import { zalouserPlugin } from "./channel.js";
 import { setZalouserRuntime } from "./runtime.js";
 import { sendMessageZalouser, sendReactionZalouser } from "./send.js";
 
+const PNG_1X1 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=";
+
+const writeQrDataUrlToTempFileMock = vi.hoisted(() => vi.fn());
+
 vi.mock("./qr-temp-file.js", () => ({
-  writeQrDataUrlToTempFile: vi.fn(async () => null),
+  writeQrDataUrlToTempFile: writeQrDataUrlToTempFileMock,
 }));
 
 vi.mock("./send.js", async () => {
@@ -486,6 +492,8 @@ describe("zalouser account resolution", () => {
     listZaloFriendsMatchingMock.mockReset();
     startZaloQrLoginMock.mockReset();
     waitForZaloQrLoginMock.mockReset();
+    writeQrDataUrlToTempFileMock.mockReset();
+    writeQrDataUrlToTempFileMock.mockResolvedValue("/tmp/zalouser-qr.png");
   });
 
   it("uses the configured default account for omitted target lookup", async () => {
@@ -536,7 +544,7 @@ describe("zalouser account resolution", () => {
 
     startZaloQrLoginMock.mockResolvedValue({
       message: "qr ready",
-      qrDataUrl: "data:image/png;base64,abc",
+      qrDataUrl: `data:image/png;base64,${PNG_1X1}`,
     } as never);
     waitForZaloQrLoginMock.mockResolvedValue({
       connected: true,
@@ -570,6 +578,95 @@ describe("zalouser account resolution", () => {
       profile: "work-profile",
       timeoutMs: 180_000,
     });
+  });
+
+  it("keeps the QR generation cancel capability inside the plugin", async () => {
+    const cancel = vi.fn();
+    startZaloQrLoginMock.mockResolvedValue({
+      message: "scan qr",
+      qrDataUrl: `data:image/png;base64,${PNG_1X1}`,
+      cancel,
+    } as never);
+    const loginWithQrStart = zalouserPlugin.gateway?.loginWithQrStart;
+    if (!loginWithQrStart) {
+      throw new Error("zalouser gateway.loginWithQrStart unavailable");
+    }
+
+    await expect(loginWithQrStart({ accountId: "work", timeoutMs: 1000 })).resolves.toEqual({
+      message: "scan qr",
+      qrDataUrl: `data:image/png;base64,${PNG_1X1}`,
+    });
+    expect(cancel).not.toHaveBeenCalled();
+  });
+
+  it("stops direct qr login before polling when the image is unusable", async () => {
+    const login = zalouserAuthAdapter.login;
+    if (!login) {
+      throw new Error("zalouser auth.login unavailable");
+    }
+
+    const cancel = vi.fn();
+    startZaloQrLoginMock.mockResolvedValue({
+      message: "qr ready",
+      qrDataUrl: `data:image/png;base64,${PNG_1X1}`,
+      cancel,
+    } as never);
+    writeQrDataUrlToTempFileMock.mockResolvedValue(null);
+
+    await expect(
+      login({
+        cfg: {
+          channels: {
+            zalouser: {
+              defaultAccount: "work",
+              accounts: {
+                work: {
+                  profile: "work-profile",
+                },
+              },
+            },
+          },
+        } as never,
+        runtime: createNonExitingRuntimeEnv(),
+      }),
+    ).rejects.toThrow("Zalo QR login returned an unusable image. Start login again.");
+    expect(waitForZaloQrLoginMock).not.toHaveBeenCalled();
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+
+  it("cancels direct qr login when writing its image throws", async () => {
+    const login = zalouserAuthAdapter.login;
+    if (!login) {
+      throw new Error("zalouser auth.login unavailable");
+    }
+
+    const cancel = vi.fn();
+    startZaloQrLoginMock.mockResolvedValue({
+      message: "qr ready",
+      qrDataUrl: `data:image/png;base64,${PNG_1X1}`,
+      cancel,
+    } as never);
+    writeQrDataUrlToTempFileMock.mockRejectedValueOnce(new Error("disk full"));
+
+    await expect(
+      login({
+        cfg: {
+          channels: {
+            zalouser: {
+              defaultAccount: "work",
+              accounts: {
+                work: {
+                  profile: "work-profile",
+                },
+              },
+            },
+          },
+        } as never,
+        runtime: createNonExitingRuntimeEnv(),
+      }),
+    ).rejects.toThrow("disk full");
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(waitForZaloQrLoginMock).not.toHaveBeenCalled();
   });
 });
 

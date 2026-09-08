@@ -1,8 +1,8 @@
-import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 // Zalouser plugin module implements zalo js behavior.
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
+import { sanitizeInlineImageDataUrl } from "openclaw/plugin-sdk/inline-image-data-url-runtime";
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import {
   asDateTimestampMs,
@@ -76,7 +76,6 @@ type CredentialPersistenceOptions = { credentialPersistence?: CredentialPersiste
 type ZaloCredentialPayload = Omit<StoredZaloCredentials, "profile" | "createdAt" | "lastUsedAt">;
 
 type ActiveZaloQrLogin = {
-  id: string;
   profile: string;
   startedAt: number;
   beforeCredentialPersistence?: () => Promise<void>;
@@ -85,6 +84,13 @@ type ActiveZaloQrLogin = {
   error?: string;
   abort?: () => void;
   waitPromise: Promise<void>;
+};
+
+type ZaloQrLoginStartResult = {
+  qrDataUrl?: string;
+  message: string;
+  /** Cancels only the QR generation represented by this result. */
+  cancel?: () => void;
 };
 
 const activeQrLogins = new Map<string, ActiveZaloQrLogin>();
@@ -737,18 +743,26 @@ function isQrLoginFresh(login: ActiveZaloQrLogin): boolean {
   return Date.now() - login.startedAt < QR_LOGIN_TTL_MS;
 }
 
-function resetQrLogin(profileInput?: string | null): void {
-  const profile = normalizeProfile(profileInput);
-  const active = activeQrLogins.get(profile);
-  if (!active) {
+function resetQrLogin(active: ActiveZaloQrLogin): void {
+  const current = activeQrLogins.get(active.profile);
+  if (current !== active) {
     return;
   }
+  // Relinquish ownership before invoking vendor code so synchronous callbacks
+  // and promise continuations cannot observe this generation as writable.
+  activeQrLogins.delete(active.profile);
   try {
     active.abort?.();
   } catch {
     // ignore
   }
-  activeQrLogins.delete(profile);
+}
+
+function resetCurrentQrLogin(profileInput?: string | null): void {
+  const active = activeQrLogins.get(normalizeProfile(profileInput));
+  if (active) {
+    resetQrLogin(active);
+  }
 }
 
 async function fetchGroupsByIds(api: API, ids: string[]): Promise<Map<string, GroupInfo>> {
@@ -1452,7 +1466,7 @@ export async function startZaloQrLogin(params: {
   force?: boolean;
   timeoutMs?: number;
   beforeCredentialPersistence?: () => Promise<void>;
-}): Promise<{ qrDataUrl?: string; message: string }> {
+}): Promise<ZaloQrLoginStartResult> {
   const profile = normalizeProfile(params.profile);
 
   if (!params.force && (await checkZaloAuthenticated(profile))) {
@@ -1475,7 +1489,7 @@ export async function startZaloQrLogin(params: {
   ) {
     // A QR flow may outlive its setup turn. Never let a new setup owner adopt
     // another owner's pending login and bypass its persistence revalidation.
-    resetQrLogin(profile);
+    resetQrLogin(existing);
     existing = undefined;
   }
   if (existing && isQrLoginFresh(existing)) {
@@ -1483,15 +1497,15 @@ export async function startZaloQrLogin(params: {
       return {
         qrDataUrl: existing.qrDataUrl,
         message: "QR already active. Scan it with the Zalo app.",
+        cancel: () => resetQrLogin(existing),
       };
     }
   } else if (existing) {
-    resetQrLogin(profile);
+    resetQrLogin(existing);
   }
 
   if (!activeQrLogins.has(profile)) {
     const login: ActiveZaloQrLogin = {
-      id: randomUUID(),
       profile,
       startedAt: Date.now(),
       ...(params.beforeCredentialPersistence
@@ -1507,7 +1521,7 @@ export async function startZaloQrLogin(params: {
         const zalo = await createZalo({ logging: false, selfListen: false });
         const api = await zalo.loginQR(undefined, (event: LoginQRCallbackEvent) => {
           const current = activeQrLogins.get(profile);
-          if (!current || current.id !== login.id) {
+          if (current !== login) {
             return;
           }
 
@@ -1523,10 +1537,18 @@ export async function startZaloQrLogin(params: {
 
           switch (event.type) {
             case LoginQRCallbackEventType.QRCodeGenerated: {
-              const image = event.data.image.replace(/^data:image\/png;base64,/, "");
-              current.qrDataUrl = image.startsWith("data:image")
+              const image = event.data.image.trim();
+              const candidate = image.toLowerCase().startsWith("data:")
                 ? image
                 : `data:image/png;base64,${image}`;
+              const normalized = sanitizeInlineImageDataUrl(candidate);
+              if (!normalized?.startsWith("data:image/png;base64,")) {
+                delete current.qrDataUrl;
+                current.error = "Zalo returned an invalid or non-PNG QR image.";
+                resetQrLogin(current);
+                break;
+              }
+              current.qrDataUrl = normalized;
               break;
             }
             case LoginQRCallbackEventType.QRCodeExpired: {
@@ -1555,7 +1577,7 @@ export async function startZaloQrLogin(params: {
         });
 
         const current = activeQrLogins.get(profile);
-        if (!current || current.id !== login.id) {
+        if (current !== login) {
           return;
         }
 
@@ -1573,7 +1595,7 @@ export async function startZaloQrLogin(params: {
 
         await login.beforeCredentialPersistence?.();
         const owned = activeQrLogins.get(profile);
-        if (!owned || owned.id !== login.id) {
+        if (owned !== login) {
           return;
         }
         writeApiCredentials(profile, api, capturedCredentials ?? undefined, true);
@@ -1582,7 +1604,7 @@ export async function startZaloQrLogin(params: {
         current.connected = true;
       } catch (error) {
         const current = activeQrLogins.get(profile);
-        if (current && current.id === login.id) {
+        if (current === login) {
           current.error = formatErrorMessage(error);
         }
       }
@@ -1601,13 +1623,13 @@ export async function startZaloQrLogin(params: {
 
   while (Date.now() < deadline) {
     if (active.error) {
-      resetQrLogin(profile);
+      resetQrLogin(active);
       return {
         message: `Failed to start QR login: ${active.error}`,
       };
     }
     if (active.connected) {
-      resetQrLogin(profile);
+      resetQrLogin(active);
       return {
         message: "Zalo already connected.",
       };
@@ -1616,6 +1638,7 @@ export async function startZaloQrLogin(params: {
       return {
         qrDataUrl: active.qrDataUrl,
         message: "Scan this QR with the Zalo app.",
+        cancel: () => resetQrLogin(active),
       };
     }
     await sleep(150);
@@ -1623,6 +1646,7 @@ export async function startZaloQrLogin(params: {
 
   return {
     message: "Still preparing QR. Call wait to continue checking login status.",
+    cancel: () => resetQrLogin(active),
   };
 }
 
@@ -1642,7 +1666,7 @@ export async function waitForZaloQrLogin(params: {
   }
 
   if (!isQrLoginFresh(active)) {
-    resetQrLogin(profile);
+    resetQrLogin(active);
     return {
       connected: false,
       message: "QR login expired. Start again to generate a fresh QR code.",
@@ -1655,14 +1679,14 @@ export async function waitForZaloQrLogin(params: {
   while (Date.now() < deadline) {
     if (active.error) {
       const message = `Zalo login failed: ${active.error}`;
-      resetQrLogin(profile);
+      resetQrLogin(active);
       return {
         connected: false,
         message,
       };
     }
     if (active.connected) {
-      resetQrLogin(profile);
+      resetQrLogin(active);
       return {
         connected: true,
         message: "Login successful.",
@@ -1683,7 +1707,7 @@ export async function logoutZaloProfile(profileInput?: string | null): Promise<{
   message: string;
 }> {
   const profile = normalizeProfile(profileInput);
-  resetQrLogin(profile);
+  resetCurrentQrLogin(profile);
   clearCachedGroupContext(profile);
 
   const listener = activeListeners.get(profile);

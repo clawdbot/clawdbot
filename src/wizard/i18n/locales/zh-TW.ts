@@ -991,6 +991,7 @@ export const zh_TW = {
       peersLookupTip: "提示：onboarding 後用 `{command}` 查找聯絡人。",
       qrImageSaved: "QR code 圖片已儲存到：{path}",
       qrImageWriteFailed: "無法寫入 QR code 圖片檔；請改用 gateway web login UI。",
+      qrLoginRetry: "QR code 登入已停止。請重新開始登入以重試。",
       qrLoginTitle: "QR code 登入",
       qrScannedPrompt: "你已經在手機上掃描並核准 QR code 了嗎？",
       scanApproveContinue: "在手機上掃描並核准，然後繼續。",

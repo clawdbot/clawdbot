@@ -1026,6 +1026,7 @@ export const en = {
       peersLookupTip: "Tip: use `{command}` to look up people after onboarding.",
       qrImageSaved: "QR image saved to: {path}",
       qrImageWriteFailed: "Could not write QR image file; use gateway web login UI instead.",
+      qrLoginRetry: "QR login stopped. Start login again to retry.",
       qrLoginTitle: "QR Login",
       qrScannedPrompt: "Did you scan and approve the QR on your phone?",
       scanApproveContinue: "Scan + approve on phone, then continue.",

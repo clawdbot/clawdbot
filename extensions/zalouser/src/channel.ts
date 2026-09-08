@@ -165,11 +165,15 @@ export const zalouserPlugin: ChannelPlugin<ResolvedZalouserAccount, ZalouserProb
         loginWithQrStart: async (params) => {
           const { startZaloQrLogin } = await loadZalouserChannelRuntime();
           const profile = resolveZalouserQrProfile(params.accountId);
-          return await startZaloQrLogin({
+          const started = await startZaloQrLogin({
             profile,
             force: params.force,
             timeoutMs: params.timeoutMs,
           });
+          return {
+            ...(started.qrDataUrl ? { qrDataUrl: started.qrDataUrl } : {}),
+            message: started.message,
+          };
         },
         loginWithQrWait: async (params) => {
           const { waitForZaloQrLogin } = await loadZalouserChannelRuntime();

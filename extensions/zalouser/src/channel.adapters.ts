@@ -416,18 +416,28 @@ export const zalouserAuthAdapter = {
       timeoutMs: 35_000,
     });
     if (!started.qrDataUrl) {
-      throw new Error(started.message || "Failed to start QR login");
+      started.cancel?.();
+      throw new Error("Zalo QR login did not produce a scannable image. Start login again.");
     }
 
-    const qrPath = await writeQrDataUrlToTempFile(started.qrDataUrl, account.profile);
-    if (qrPath) {
-      runtime.log(`Scan QR image: ${qrPath}`);
-    } else {
-      runtime.log("QR generated but could not be written to a temp file.");
+    let qrPath: string | null = null;
+    try {
+      qrPath = await writeQrDataUrlToTempFile(started.qrDataUrl, account.profile);
+    } finally {
+      if (!qrPath) {
+        // The QR vendor login can persist credentials asynchronously. Cancel at
+        // its lifecycle owner whenever presentation fails or throws.
+        started.cancel?.();
+      }
     }
+    if (!qrPath) {
+      throw new Error("Zalo QR login returned an unusable image. Start login again.");
+    }
+    runtime.log(`Scan QR image: ${qrPath}`);
 
     const waited = await waitForZaloQrLogin({ profile: account.profile, timeoutMs: 180_000 });
     if (!waited.connected) {
+      started.cancel?.();
       throw new Error(waited.message || "Zalouser login failed");
     }
 

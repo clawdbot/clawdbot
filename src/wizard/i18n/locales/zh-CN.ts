@@ -990,6 +990,7 @@ export const zh_CN = {
       peersLookupTip: "提示：onboarding 后用 `{command}` 查找联系人。",
       qrImageSaved: "二维码图片已保存到：{path}",
       qrImageWriteFailed: "无法写入二维码图片文件；请改用 gateway web login UI。",
+      qrLoginRetry: "二维码登录已停止。请重新开始登录以重试。",
       qrLoginTitle: "二维码登录",
       qrScannedPrompt: "你已经在手机上扫描并批准二维码了吗？",
       scanApproveContinue: "在手机上扫描并批准，然后继续。",

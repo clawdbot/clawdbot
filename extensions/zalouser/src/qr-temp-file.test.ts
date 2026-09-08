@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { writeQrDataUrlToTempFile } from "./qr-temp-file.js";
 
 describe("writeQrDataUrlToTempFile", () => {
+  const pngHeader = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
   const profile = `test/profile-${process.pid}`;
   const expectedPath = path.join(
     resolvePreferredOpenClawTmpDir(),
@@ -16,8 +17,8 @@ describe("writeQrDataUrlToTempFile", () => {
   });
 
   it("overwrites the stable per-profile path and enforces private mode", async () => {
-    const firstData = Buffer.from("first-qr-image");
-    const secondData = Buffer.from("second-qr-image");
+    const firstData = Buffer.concat([pngHeader, Buffer.from("first-qr-image")]);
+    const secondData = Buffer.concat([pngHeader, Buffer.from("second-qr-image")]);
     const first = await writeQrDataUrlToTempFile(
       `data:image/png;base64,${firstData.toString("base64")}`,
       profile,
