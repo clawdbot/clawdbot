@@ -118,24 +118,61 @@ function isComputerAllowedByMcpScope(
   return applyEmbeddedAttemptToolsAllow([{ name: "computer" }], toolsAllow).length === 1;
 }
 
+type ResolvedNodeScope = {
+  params: McpLoopbackScopeParams;
+  policyResolved?: {
+    agentId: string | undefined;
+    workspaceDir?: string;
+    tools: McpLoopbackTool[];
+  };
+};
+
 async function resolveNodeScope(
   input: McpLoopbackScopeParams,
   mode: LoopbackToolsAllowMode,
-): Promise<McpLoopbackScopeParams> {
-  const params = await resolveNodeExecScope(input, mode);
+): Promise<ResolvedNodeScope> {
+  return resolvePairedComputerNodeScope(await resolveNodeExecScope(input, mode), mode);
+}
+
+async function resolvePairedComputerNodeScope(
+  params: McpLoopbackScopeParams,
+  mode: LoopbackToolsAllowMode,
+): Promise<ResolvedNodeScope> {
+  const canReachOrdinaryComputerSurface =
+    isComputerAllowedByMcpScope(params, mode) &&
+    params.context.modelHasVision !== false &&
+    !params.rootedExecution;
+  if (!canReachOrdinaryComputerSurface) {
+    return { params };
+  }
+  // Resolve the actual configured surface before contacting Gateway. Grant policy
+  // alone is insufficient: profile, agent, sandbox, sender, and Gateway policy
+  // can all remove computer from the final catalog.
+  const policyResolved = resolveMcpLoopbackTools(params, mode);
+  const computerAllowed = policyResolved.tools.some(
+    (tool) => readMcpLoopbackToolName(tool) === "computer",
+  );
   const pairedComputerUseAvailability = await loadPairedComputerUseAvailabilityForSurface({
-    computerAllowed: isComputerAllowedByMcpScope(params, mode),
+    computerAllowed,
     modelHasVision: params.context.modelHasVision,
     computerTransport: params.rootedExecution ? null : undefined,
     signal: params.signal,
   });
   if (!pairedComputerUseAvailability) {
-    return params;
+    return { params, policyResolved };
   }
-  return {
-    ...params,
-    pairedComputerUseAvailability,
+  const resolvedParams = {
+    params: {
+      ...params,
+      pairedComputerUseAvailability,
+    },
   };
+  // An empty inventory preserves the fallback schema, so the policy-resolved
+  // catalog is already final. A prepared inventory must rebuild computer with
+  // the paired action projection.
+  return pairedComputerUseAvailability.prepared
+    ? resolvedParams
+    : { ...resolvedParams, policyResolved };
 }
 
 function resolveMcpLoopbackTools(
@@ -198,7 +235,8 @@ export async function resolveMcpLoopbackScopedTools(params: McpLoopbackScopePara
   workspaceDir?: string;
   tools: McpLoopbackTool[];
 }> {
-  return resolveMcpLoopbackTools(await resolveNodeScope(params, "exact"), "exact");
+  const resolved = await resolveNodeScope(params, "exact");
+  return resolved.policyResolved ?? resolveMcpLoopbackTools(resolved.params, "exact");
 }
 
 /** Materializes runtime policy expressions against the concrete loopback catalog. */
@@ -206,7 +244,8 @@ export async function resolveMcpLoopbackPolicyTools(params: McpLoopbackScopePara
   agentId: string | undefined;
   tools: McpLoopbackTool[];
 }> {
-  return resolveMcpLoopbackTools(await resolveNodeScope(params, "policy"), "policy");
+  const resolved = await resolveNodeScope(params, "policy");
+  return resolved.policyResolved ?? resolveMcpLoopbackTools(resolved.params, "policy");
 }
 
 /**
@@ -247,6 +286,32 @@ function applyPolicyToolsAllow(
   }).map((candidate) => candidate.tool);
 }
 
+function buildMcpLoopbackToolCacheKey(params: McpLoopbackScopeParams): string {
+  const { context } = params;
+  // Only the serializable grant context enters this key. Prepared credentials,
+  // authoring capabilities, and callbacks stay bound to their grant lifetime.
+  return `${params.grantToken ?? ""}\u0000${stableStringify({
+    context: {
+      ...context,
+      clientCaps: [...new Set(context.clientCaps ?? [])].toSorted(),
+      // Missing allows all; an empty list denies all.
+      toolsAllow: context.toolsAllow ? [...new Set(context.toolsAllow)].toSorted() : undefined,
+      modelHasVision: context.modelHasVision,
+      pinnedWidgetAuthoring: context.pinnedWidgetAuthoring === true,
+      currentInboundAudio: context.currentInboundAudio === true,
+      sourceReplyOnly: context.sourceReplyOnly === true,
+      requireExplicitMessageTarget: context.requireExplicitMessageTarget === true,
+      nodeExecAllowed: context.nodeExecAllowed === true,
+      delegationCapability:
+        context.delegationCapability === "report_only" ? "report_only" : undefined,
+    },
+    authProfileStoreAgentDir: params.authProfileStoreAgentDir,
+    yieldContextCacheKey: params.yieldContextCacheKey,
+    nodeExecAvailability: params.nodeExecAvailability?.cacheKey,
+    pairedComputerUseAvailability: params.pairedComputerUseAvailability?.cacheKey,
+  })}`;
+}
+
 /** Short-lived cache for loopback tool lists keyed by session/channel context. */
 export class McpLoopbackToolCache {
   #entries = new DirectoryCache<CachedScopedTools>(TOOL_CACHE_TTL_MS, TOOL_CACHE_MAX_ENTRIES);
@@ -256,38 +321,27 @@ export class McpLoopbackToolCache {
 
   async resolve(input: McpLoopbackScopeParams): Promise<CachedScopedTools> {
     const epoch = this.#epoch;
-    // Availability belongs to the current connection, not the schema TTL.
-    const params = await resolveNodeScope(input, "exact");
+    const nodeExecParams = await resolveNodeExecScope(input, "exact");
     input.signal?.throwIfAborted();
-    const { context } = params;
-    // Only the serializable grant context enters this key. Prepared credentials,
-    // authoring capabilities, and callbacks stay bound to their grant lifetime.
-    const cacheKey = `${params.grantToken ?? ""}\u0000${stableStringify({
-      context: {
-        ...context,
-        clientCaps: [...new Set(context.clientCaps ?? [])].toSorted(),
-        // Missing allows all; an empty list denies all.
-        toolsAllow: context.toolsAllow ? [...new Set(context.toolsAllow)].toSorted() : undefined,
-        modelHasVision: context.modelHasVision,
-        pinnedWidgetAuthoring: context.pinnedWidgetAuthoring === true,
-        currentInboundAudio: context.currentInboundAudio === true,
-        sourceReplyOnly: context.sourceReplyOnly === true,
-        requireExplicitMessageTarget: context.requireExplicitMessageTarget === true,
-        nodeExecAllowed: context.nodeExecAllowed === true,
-        delegationCapability:
-          context.delegationCapability === "report_only" ? "report_only" : undefined,
-      },
-      authProfileStoreAgentDir: params.authProfileStoreAgentDir,
-      yieldContextCacheKey: params.yieldContextCacheKey,
-      nodeExecAvailability: params.nodeExecAvailability?.cacheKey,
-      pairedComputerUseAvailability: params.pairedComputerUseAvailability?.cacheKey,
-    })}`;
+    // A policy-excluded computer scope has no inventory component. It can use
+    // the ordinary cached catalog without touching Gateway again.
+    const preDiscoveryCacheKey = buildMcpLoopbackToolCacheKey(nodeExecParams);
+    const preDiscoveryCached = this.#entries.get(preDiscoveryCacheKey, nodeExecParams.cfg);
+    if (preDiscoveryCached) {
+      return preDiscoveryCached;
+    }
+
+    // Availability belongs to the current connection, not the schema TTL.
+    const resolved = await resolvePairedComputerNodeScope(nodeExecParams, "exact");
+    input.signal?.throwIfAborted();
+    const { params } = resolved;
+    const cacheKey = buildMcpLoopbackToolCacheKey(params);
     const cached = this.#entries.get(cacheKey, params.cfg);
     if (cached) {
       return cached;
     }
 
-    const next = resolveMcpLoopbackTools(params, "exact");
+    const next = resolved.policyResolved ?? resolveMcpLoopbackTools(params, "exact");
     const nextEntry: CachedScopedTools = {
       agentId: next.agentId,
       workspaceDir: next.workspaceDir,

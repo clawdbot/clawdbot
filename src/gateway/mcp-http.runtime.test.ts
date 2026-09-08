@@ -605,10 +605,15 @@ describe("McpLoopbackToolCache", () => {
 
 describe("MCP loopback Computer Use schema", () => {
   beforeEach(() => {
-    resolveGatewayScopedTools.mockImplementation(({ pairedNodeComputerUse }) => ({
-      agentId: "main",
-      tools: [createComputerTool({ modelHasVision: true, pairedNodeComputerUse })],
-    }));
+    resolveGatewayScopedTools.mockImplementation(({ cfg, pairedNodeComputerUse }) => {
+      const computerDenied = cfg.tools?.deny?.includes("computer");
+      return {
+        agentId: "main",
+        tools: computerDenied
+          ? []
+          : [createComputerTool({ modelHasVision: true, pairedNodeComputerUse })],
+      };
+    });
   });
 
   it("does not query node inventory when the grant excludes computer", async () => {
@@ -618,6 +623,24 @@ describe("MCP loopback Computer Use schema", () => {
         senderIsOwner: true,
         modelHasVision: true,
         toolsAllow: ["memory_search"],
+      }),
+    );
+
+    expect(resolved.toolSchema.some((tool) => tool.name === "computer")).toBe(false);
+    expect(listNodes).not.toHaveBeenCalled();
+  });
+
+  it("does not query node inventory when configured policy excludes computer", async () => {
+    listNodes.mockImplementation(() => {
+      throw new Error("node inventory must not be queried");
+    });
+
+    const resolved = await new McpLoopbackToolCache().resolve(
+      scopeParams({
+        cfg: { tools: { deny: ["computer"] } } as OpenClawConfig,
+        sessionKey: "agent:main:main",
+        senderIsOwner: true,
+        modelHasVision: true,
       }),
     );
 
