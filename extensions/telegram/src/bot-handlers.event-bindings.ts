@@ -1,4 +1,9 @@
-import type { ChatMember, ReactionTypeEmoji } from "grammy/types";
+import type {
+  ChatMember,
+  ReactionType,
+  ReactionTypeCustomEmoji,
+  ReactionTypeEmoji,
+} from "grammy/types";
 import { resolveChannelConfigWrites } from "openclaw/plugin-sdk/channel-config-helpers";
 import { reportChannelRoomJoin } from "openclaw/plugin-sdk/channel-join-intro-runtime";
 import { mutateConfigFile } from "openclaw/plugin-sdk/config-mutation";
@@ -175,14 +180,18 @@ export function createTelegramEventBindings({
         }
 
         // Detect additions before topic recovery so no-op reactions avoid cache work and warnings.
-        const oldEmojis = new Set(
-          reaction.old_reaction
-            .filter((item): item is ReactionTypeEmoji => item.type === "emoji")
-            .map((item) => item.emoji),
+        const isSupportedReaction = (
+          item: ReactionType,
+        ): item is ReactionTypeEmoji | ReactionTypeCustomEmoji =>
+          item.type === "emoji" || item.type === "custom_emoji";
+        const reactionKey = (item: ReactionTypeEmoji | ReactionTypeCustomEmoji) =>
+          item.type === "emoji" ? item.emoji : `custom_emoji:${item.custom_emoji_id}`;
+        const oldReactionKeys = new Set(
+          reaction.old_reaction.filter(isSupportedReaction).map(reactionKey),
         );
         const addedReactions = reaction.new_reaction
-          .filter((item): item is ReactionTypeEmoji => item.type === "emoji")
-          .filter((item) => !oldEmojis.has(item.emoji));
+          .filter(isSupportedReaction)
+          .filter((item) => !oldReactionKeys.has(reactionKey(item)));
         if (addedReactions.length === 0) {
           return;
         }
@@ -248,7 +257,7 @@ export function createTelegramEventBindings({
           }
         }
 
-        const sessionKey = resolveTelegramConversationRoute({
+        const { route } = resolveTelegramConversationRoute({
           cfg: eventAuthContext.cfg,
           accountId,
           chatId,
@@ -256,7 +265,7 @@ export function createTelegramEventBindings({
           threadSpec: recoveredThreadSpec ?? eventAuthContext.threadSpec,
           senderId,
           topicAgentId: eventAuthContext.topicConfig?.agentId,
-        }).route.sessionKey;
+        });
 
         const senderName = user
           ? [user.first_name, user.last_name].filter(Boolean).join(" ").trim() || user.username
@@ -274,11 +283,13 @@ export function createTelegramEventBindings({
         senderLabel = senderLabel || "unknown";
 
         for (const addedReaction of addedReactions) {
-          const emoji = addedReaction.emoji;
+          const emoji =
+            addedReaction.type === "emoji"
+              ? addedReaction.emoji
+              : `custom emoji ${addedReaction.custom_emoji_id}`;
           const text = `Telegram reaction added: ${emoji} by ${senderLabel} on msg ${messageId}`;
-          telegramDeps.enqueueSystemEvent(text, {
-            sessionKey,
-            contextKey: `telegram:reaction:add:${chatId}:${messageId}:${user?.id ?? "anon"}:${emoji}`,
+          telegramDeps.enqueueRoutedSystemEvent(text, route, {
+            contextKey: `telegram:reaction:add:${chatId}:${messageId}:${user?.id ?? "anon"}:${reactionKey(addedReaction)}`,
           });
           logVerbose(`telegram: reaction event enqueued: ${text}`);
         }

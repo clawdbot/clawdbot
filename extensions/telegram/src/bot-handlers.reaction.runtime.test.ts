@@ -1,6 +1,12 @@
 // Telegram tests cover forum reaction topic recovery before authorization and routing.
+import type { ReactionType } from "grammy/types";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { getChildLogger } from "openclaw/plugin-sdk/runtime-env";
+import {
+  enqueueRoutedSystemEvent as enqueueActualRoutedSystemEvent,
+  peekSystemEventEntries,
+  resetSystemEventsForTest,
+} from "openclaw/plugin-sdk/system-event-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { defaultTelegramBotDeps } from "./bot-deps.js";
 import { createTelegramEventBindings } from "./bot-handlers.event-bindings.js";
@@ -13,10 +19,15 @@ const FIRE_EMOJI = "\u{1F525}";
 const FORUM_CHAT_ID = 5678;
 const FORUM_TOPIC_ID = 77;
 const REACTED_MESSAGE_ID = 100;
+const CUSTOM_EMOJI_ID = "5368324170671202286";
 
 type ReactionHandler = (ctx: Record<string, unknown>) => Promise<void>;
 
 const enqueueSystemEvent = vi.fn();
+const enqueueRoutedSystemEvent = vi.fn<typeof enqueueActualRoutedSystemEvent>(
+  (text, route, options = {}) =>
+    Boolean(enqueueSystemEvent(text, { ...options, sessionKey: route.sessionKey })),
+);
 const runtimeLog = vi.fn();
 const runtimeError = vi.fn();
 const resolveCachedMessageThreadSpec = vi.fn<
@@ -103,7 +114,7 @@ function registerHandler(cfg: OpenClawConfig): ReactionHandler {
       ...defaultTelegramBotDeps,
       getRuntimeConfig: () => cfg,
       wasSentByBot: () => true,
-      enqueueSystemEvent,
+      enqueueRoutedSystemEvent,
       readChannelAllowFromStore: async () => [],
     },
   };
@@ -125,8 +136,8 @@ function registerHandler(cfg: OpenClawConfig): ReactionHandler {
 }
 
 function forumReactionContext(overrides?: {
-  oldReaction?: Array<{ type: string; emoji: string }>;
-  newReaction?: Array<{ type: string; emoji: string }>;
+  oldReaction?: ReactionType[];
+  newReaction?: ReactionType[];
   isForum?: boolean;
   isDirectMessages?: boolean;
   chatType?: string;
@@ -158,7 +169,9 @@ function systemEventOptions(): { sessionKey?: string; contextKey?: string } {
 
 describe("registerTelegramReactionHandler forum topic recovery", () => {
   beforeEach(() => {
+    resetSystemEventsForTest();
     enqueueSystemEvent.mockClear();
+    enqueueRoutedSystemEvent.mockClear();
     runtimeLog.mockClear();
     runtimeError.mockClear();
     resolveCachedMessageThreadSpec.mockReset();
@@ -185,6 +198,10 @@ describe("registerTelegramReactionHandler forum topic recovery", () => {
 
   it("routes a recovered topic through its configured topic agent", async () => {
     resolveCachedMessageThreadSpec.mockResolvedValue({ scope: "forum", id: FORUM_TOPIC_ID });
+    enqueueRoutedSystemEvent.mockImplementationOnce((text, route, options) => {
+      enqueueSystemEvent(text, { ...options, sessionKey: route.sessionKey });
+      return enqueueActualRoutedSystemEvent(text, route, options);
+    });
     const handler = registerHandler(
       buildTelegramConfig({
         topics: { [String(FORUM_TOPIC_ID)]: { enabled: true, agentId: "topicbot" } },
@@ -195,6 +212,39 @@ describe("registerTelegramReactionHandler forum topic recovery", () => {
 
     expect(enqueueSystemEvent).toHaveBeenCalledTimes(1);
     expect(String(systemEventOptions().sessionKey)).toContain("topicbot");
+    expect(enqueueRoutedSystemEvent.mock.calls[0]?.[1]).toMatchObject({
+      agentId: "topicbot",
+      sessionKey: systemEventOptions().sessionKey,
+    });
+    const [text, route, options] = enqueueRoutedSystemEvent.mock.calls[0]!;
+    expect(
+      enqueueActualRoutedSystemEvent(text, { ...route, agentId: "another-agent" }, options),
+    ).toBe(true);
+    expect(peekSystemEventEntries(route.sessionKey)).toHaveLength(2);
+  });
+
+  it("enqueues custom emoji reactions for their recovered topic and routed agent", async () => {
+    resolveCachedMessageThreadSpec.mockResolvedValue({ scope: "forum", id: FORUM_TOPIC_ID });
+    const handler = registerHandler(
+      buildTelegramConfig({
+        topics: { [String(FORUM_TOPIC_ID)]: { enabled: true, agentId: "topicbot" } },
+      }),
+    );
+
+    await handler(
+      forumReactionContext({
+        newReaction: [{ type: "custom_emoji", custom_emoji_id: CUSTOM_EMOJI_ID }],
+      }),
+    );
+
+    expect(enqueueSystemEvent).toHaveBeenCalledOnce();
+    expect(String(enqueueSystemEvent.mock.calls[0]?.[0])).toContain(
+      `custom emoji ${CUSTOM_EMOJI_ID}`,
+    );
+    expect(systemEventOptions().contextKey).toBe(
+      `telegram:reaction:add:${FORUM_CHAT_ID}:${REACTED_MESSAGE_ID}:10:custom_emoji:${CUSTOM_EMOJI_ID}`,
+    );
+    expect(enqueueRoutedSystemEvent.mock.calls[0]?.[1]).toMatchObject({ agentId: "topicbot" });
   });
 
   it("applies the recovered topic's disabled config instead of the General topic's", async () => {
@@ -282,22 +332,34 @@ describe("registerTelegramReactionHandler forum topic recovery", () => {
     expect(String(systemEventOptions().sessionKey)).not.toContain(":group:");
   });
 
-  it("skips the cache lookup entirely when no reaction was added", async () => {
-    const handler = registerHandler(
-      buildTelegramConfig({ topics: { [String(FORUM_TOPIC_ID)]: { enabled: true } } }),
-    );
+  it.each([
+    {
+      name: "an ordinary reaction was removed",
+      oldReaction: [{ type: "emoji", emoji: FIRE_EMOJI }],
+      newReaction: [],
+    },
+    {
+      name: "a custom emoji reaction is unchanged",
+      oldReaction: [{ type: "custom_emoji", custom_emoji_id: CUSTOM_EMOJI_ID }],
+      newReaction: [{ type: "custom_emoji", custom_emoji_id: CUSTOM_EMOJI_ID }],
+    },
+    {
+      name: "only a paid reaction was added",
+      oldReaction: [],
+      newReaction: [{ type: "paid" }],
+    },
+  ] satisfies Array<{ name: string; oldReaction: ReactionType[]; newReaction: ReactionType[] }>)(
+    "skips the cache lookup entirely when $name",
+    async ({ oldReaction, newReaction }) => {
+      const handler = registerHandler(
+        buildTelegramConfig({ topics: { [String(FORUM_TOPIC_ID)]: { enabled: true } } }),
+      );
 
-    // A removal-only update enqueues nothing, so it must not spend a cache lookup
-    // or log an unresolved-topic warning.
-    await handler(
-      forumReactionContext({
-        oldReaction: [{ type: "emoji", emoji: FIRE_EMOJI }],
-        newReaction: [],
-      }),
-    );
+      await handler(forumReactionContext({ oldReaction, newReaction }));
 
-    expect(resolveCachedMessageThreadSpec).not.toHaveBeenCalled();
-    expect(enqueueSystemEvent).not.toHaveBeenCalled();
-    expect(runtimeLog).not.toHaveBeenCalled();
-  });
+      expect(resolveCachedMessageThreadSpec).not.toHaveBeenCalled();
+      expect(enqueueSystemEvent).not.toHaveBeenCalled();
+      expect(runtimeLog).not.toHaveBeenCalled();
+    },
+  );
 });

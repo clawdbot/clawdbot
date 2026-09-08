@@ -181,7 +181,7 @@ function createTelegramDeps(stateDir: string): TelegramBotDeps {
     resolveStorePath: (storePath?: string) => storePath ?? path.join(stateDir, "sessions.json"),
     readChannelAllowFromStore: async () => [],
     upsertChannelPairingRequest: async () => ({ code: "PAIRCODE", created: true }),
-    enqueueSystemEvent: () => false,
+    enqueueRoutedSystemEvent: () => false,
     dispatchReplyWithBufferedBlockDispatcher: async () => ({
       queuedFinal: false,
       counts: { block: 0, final: 0, tool: 0 },

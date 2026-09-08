@@ -30,7 +30,7 @@ import {
   resolveStorePath,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { listSkillCommandsForAgents } from "openclaw/plugin-sdk/skill-commands-runtime";
-import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
+import { enqueueRoutedSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import { syncTelegramMenuCommands } from "./bot-native-command-menu.js";
 import { deliverReplies, emitTelegramMessageSentHooks } from "./bot/delivery.js";
@@ -69,7 +69,7 @@ export type TelegramBotDeps = {
   buildChannelInboundEventContext?: typeof buildChannelInboundEventContext;
   readChannelAllowFromStore: typeof readChannelAllowFromStore;
   upsertChannelPairingRequest: typeof upsertChannelPairingRequest;
-  enqueueSystemEvent: typeof enqueueSystemEvent;
+  enqueueRoutedSystemEvent: typeof enqueueRoutedSystemEvent;
   dispatchReplyWithBufferedBlockDispatcher: typeof dispatchReplyWithBufferedBlockDispatcher;
   loadWebMedia?: typeof loadWebMedia;
   buildModelsProviderData: typeof buildPreparedModelsProviderData;
@@ -126,8 +126,8 @@ export const defaultTelegramBotDeps: TelegramBotDeps = {
   get upsertChannelPairingRequest() {
     return upsertChannelPairingRequest;
   },
-  get enqueueSystemEvent() {
-    return enqueueSystemEvent;
+  get enqueueRoutedSystemEvent() {
+    return enqueueRoutedSystemEvent;
   },
   get dispatchReplyWithBufferedBlockDispatcher() {
     return dispatchReplyWithBufferedBlockDispatcher;
