@@ -386,18 +386,61 @@ describe("openclaw-github-link-hovercard-provider", () => {
     provider.client = { request } as unknown as GatewayBrowserClient;
 
     await hover(anchor);
-    expect(hovercard()?.dataset.state).toBe("unavailable");
+    expect(hovercard()).toBeNull();
+    expect(anchor.hasAttribute("aria-haspopup")).toBe(false);
+    expect(anchor.hasAttribute("aria-expanded")).toBe(false);
+    expect(anchor.hasAttribute("aria-controls")).toBe(false);
+    // Observe mounts, not just the settled DOM: cached errors must not flash a skeleton.
+    const mountedCards: Node[] = [];
+    const observer = new MutationObserver((records) => {
+      for (const record of records) {
+        mountedCards.push(
+          ...[...record.addedNodes].filter(
+            (node) => node instanceof Element && node.matches(".github-link-hovercard"),
+          ),
+        );
+      }
+    });
+    observer.observe(document.body, { childList: true });
+    anchor.focus();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(document.activeElement).toBe(anchor);
+    expect(anchor.hasAttribute("aria-haspopup")).toBe(false);
+    anchor.blur();
     leave(anchor);
     await vi.advanceTimersByTimeAsync(29_000);
     await hover(anchor);
     expect(request).toHaveBeenCalledTimes(1);
-    expect(hovercard()?.dataset.state).toBe("unavailable");
+    expect(hovercard()).toBeNull();
 
+    expect(mountedCards).toEqual([]);
+    observer.disconnect();
     leave(anchor);
     await vi.advanceTimersByTimeAsync(1_000);
     await hover(anchor);
     expect(request).toHaveBeenCalledTimes(2);
     expect(hovercard()?.textContent).toContain("Keep hover previews reachable");
+  });
+
+  it("dismisses a pending preview rejection without moving keyboard focus", async () => {
+    const pending = createDeferred<unknown>();
+    const { anchor, provider } = createLink(ISSUE_HREF);
+    provider.client = {
+      request: vi.fn().mockReturnValue(pending.promise),
+    } as unknown as GatewayBrowserClient;
+    anchor.focus();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(hovercard()?.dataset.loading).toBe("true");
+    pending.reject(new Error("Gateway request timed out"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(hovercard()).toBeNull();
+    expect(document.activeElement).toBe(anchor);
+    expect(anchor.hasAttribute("aria-controls")).toBe(false);
+    expect(anchor.hasAttribute("aria-expanded")).toBe(false);
+    expect(anchor.hasAttribute("aria-haspopup")).toBe(false);
+    const tab = new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Tab" });
+    anchor.dispatchEvent(tab);
+    expect(tab.defaultPrevented).toBe(false);
   });
 
   it("stays open while the pointer travels from the link onto the card", async () => {
@@ -525,7 +568,7 @@ describe("openclaw-github-link-hovercard-provider", () => {
     expect(anchor.hasAttribute("aria-expanded")).toBe(false);
   });
 
-  it("ignores unsupported GitHub links and shows a quiet unavailable state", async () => {
+  it("ignores unsupported GitHub links and dismisses failed previews", async () => {
     const request = vi.fn().mockRejectedValue(new Error("Not Found"));
     const unsupportedLink = createLink("https://github.com/openclaw/openclaw", "repository");
     unsupportedLink.provider.client = { request } as unknown as GatewayBrowserClient;
@@ -537,12 +580,8 @@ describe("openclaw-github-link-hovercard-provider", () => {
     const missingLink = createLink("https://github.com/openclaw/openclaw/issues/999999", "missing");
     missingLink.provider.client = { request } as unknown as GatewayBrowserClient;
     await hover(missingLink.anchor);
-    expect(document.querySelector(".github-link-hovercard")?.textContent).toContain(
-      "GitHub preview unavailable",
-    );
-    expect(hovercard()?.querySelector(".github-link-hovercard__error")?.textContent).toBe(
-      "Not Found",
-    );
+    expect(hovercard()).toBeNull();
+    expect(request).toHaveBeenCalledTimes(1);
   });
 
   it("discards cached and pending previews when the selected agent changes", async () => {

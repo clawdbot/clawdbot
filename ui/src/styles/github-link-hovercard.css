@@ -204,24 +204,6 @@
   color: var(--danger);
 }
 
-.github-link-hovercard__unavailable {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  min-height: 80px;
-  color: var(--muted);
-  font-size: var(--control-ui-text-sm);
-  text-align: center;
-}
-
-.github-link-hovercard__error {
-  font-size: var(--control-ui-text-xs);
-  line-height: 1.5;
-  overflow-wrap: anywhere;
-}
-
 .github-link-hovercard__skeleton .skeleton {
   display: block;
   height: 14px;

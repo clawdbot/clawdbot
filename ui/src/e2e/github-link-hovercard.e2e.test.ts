@@ -206,20 +206,65 @@ describeControlUiE2e("GitHub link hover cards", () => {
       if (scenario.fails) {
         const error = "GitHub API rate limit exceeded (HTTP 403). Try again in 2 minutes.";
         await gateway.rejectDeferred("controlUi.githubPreview", { message: error });
-        await expectText(card, "GitHub preview unavailable");
-        const detail = card.locator(".github-link-hovercard__error");
-        await expectText(detail, error);
-        expect(await card.getAttribute("aria-describedby")).toBe(await detail.getAttribute("id"));
-        expect(await detail.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
-        await captureArtifact(card, "github-hovercard-error-subtext");
+        await expect.poll(() => card.count()).toBe(0);
+        expect(await pullLink.getAttribute("aria-controls")).toBeNull();
+        expect(await pullLink.getAttribute("aria-expanded")).toBeNull();
+        expect(await pullLink.getAttribute("aria-haspopup")).toBeNull();
+        expect(await pullLink.evaluate((element) => element === document.activeElement)).toBe(true);
+        await captureArtifact(page, "github-hovercard-failure-dismissed");
       } else {
         await gateway.resolveDeferred("controlUi.githubPreview");
         await expectText(card, pullPreviewResponse.title);
+        expect(await card.getAttribute("aria-label")).not.toBe("Loading GitHub details…");
       }
       expect(await card.locator(".skeleton").count()).toBe(0);
-      expect(await card.getAttribute("aria-label")).not.toBe("Loading GitHub details…");
     },
   );
+
+  it("keeps failed permalinks silent during backoff and leaves keyboard navigation usable", async () => {
+    const { card, commentLink, gateway, page, pullLink } = await openPullPreviewPage(true);
+    await pullLink.focus();
+    await gateway.waitForRequest("controlUi.githubPreview");
+    await gateway.rejectDeferred("controlUi.githubPreview", {
+      message: "GitHub request timed out",
+    });
+    await expect.poll(() => card.count()).toBe(0);
+
+    // Record transient portal mounts too: a loading flash would disappear before a count assertion.
+    await page.evaluate(() => {
+      document.body.dataset.previewMounts = "0";
+      const observer = new MutationObserver((records) => {
+        for (const record of records) {
+          for (const node of record.addedNodes) {
+            if (node instanceof Element && node.matches(".github-link-hovercard")) {
+              document.body.dataset.previewMounts = String(
+                Number(document.body.dataset.previewMounts) + 1,
+              );
+            }
+          }
+        }
+      });
+      observer.observe(document.body, { childList: true });
+    });
+    await page.keyboard.press("Tab");
+    expect(await commentLink.evaluate((element) => element === document.activeElement)).toBe(true);
+    await commentLink.hover();
+    await page.clock.runFor(300);
+    await page.mouse.move(1, 1);
+    await pullLink.focus();
+    await pullLink.hover();
+    await page.clock.runFor(300);
+    expect(await card.count()).toBe(0);
+    expect(await page.locator("body").getAttribute("data-preview-mounts")).toBe("0");
+    expect((await gateway.getRequests("controlUi.githubPreview")).length).toBe(1);
+    expect(await pullLink.getAttribute("aria-haspopup")).toBeNull();
+
+    const popupPromise = page.waitForEvent("popup");
+    await page.keyboard.press("Enter");
+    const popup = await popupPromise;
+    await popup.waitForLoadState("domcontentloaded");
+    expect(popup.url()).toBe(PULL_HREF);
+  });
 
   it("reloads a dismissed pending preview on rehover and caches the successful response", async () => {
     const proofDir =
@@ -420,8 +465,11 @@ describeControlUiE2e("GitHub link hover cards", () => {
 
     const missingLink = page.getByRole("link", { name: "missing item" });
     await missingLink.hover();
-    await expectText(card, "GitHub preview unavailable");
-    expect((await gateway.getRequests("controlUi.githubPreview")).length).toBe(3);
+    await expect
+      .poll(async () => (await gateway.getRequests("controlUi.githubPreview")).length)
+      .toBe(3);
+    await expect.poll(() => card.count()).toBe(0);
+    expect(await missingLink.getAttribute("aria-haspopup")).toBeNull();
     expect(await missingLink.getAttribute("href")).toBe(
       "https://github.com/openclaw/openclaw/issues/999999",
     );

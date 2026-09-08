@@ -2,13 +2,11 @@ import { initialState, Task } from "@lit/task";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing, ReactiveElement, render, type TemplateResult } from "lit";
 import type { ControlUiGitHubPreview } from "../../../src/gateway/control-ui-contract.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { i18n, t } from "../i18n/index.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
-import { formatUiError } from "../lib/format-error.ts";
 import { formatRelativeTimestamp } from "../lib/format.ts";
 import "../styles/github-link-hovercard.css";
 import {
@@ -32,6 +30,7 @@ type PreviewState = {
 };
 
 type CacheEntry = {
+  failed?: boolean;
   expiresAt: number;
   promise: Promise<ControlUiGitHubPreview>;
   signal: AbortSignal;
@@ -205,29 +204,6 @@ function renderLoading(card: HTMLDivElement): void {
   );
 }
 
-function renderUnavailable(card: HTMLDivElement, error: string): void {
-  card.dataset.loading = "false";
-  card.dataset.state = "unavailable";
-  const label = t("githubPreview.unavailable");
-  card.setAttribute("aria-label", label);
-  const showError = error && error !== label;
-  const errorId = `${card.id}-error`;
-  if (showError) {
-    card.setAttribute("aria-describedby", errorId);
-  }
-  render(
-    html`<div class="github-link-hovercard__unavailable">
-      <div>${label}</div>
-      ${
-        showError
-          ? html`<div class="github-link-hovercard__error" id=${errorId}>${error}</div>`
-          : nothing
-      }
-    </div>`,
-    card,
-  );
-}
-
 function renderPreview(card: HTMLDivElement, preview: GitHubPreview): void {
   card.dataset.loading = "false";
   const state = previewState(preview);
@@ -390,12 +366,11 @@ export class GitHubLinkHovercardProvider extends ReactiveElement {
     if (!card) {
       return;
     }
-    card.removeAttribute("aria-describedby");
     this.previewTask.render({
       initial: () => renderLoading(card),
       pending: () => renderLoading(card),
       complete: (preview) => renderPreview(card, preview),
-      error: (error) => renderUnavailable(card, truncateUtf16Safe(formatUiError(error), 320)),
+      error: () => this.close(),
     });
     this.hovercard.position();
   }
@@ -522,6 +497,10 @@ export class GitHubLinkHovercardProvider extends ReactiveElement {
       return;
     }
     this.close();
+    // A known failure has no popup affordance or loading skeleton until its backoff expires.
+    if (this.cachedPreview(target)?.failed) {
+      return;
+    }
     this.activeAnchor = anchor;
     this.activeTarget = target;
     // Announce the popup affordance as soon as the link is recognized; show()
@@ -550,16 +529,25 @@ export class GitHubLinkHovercardProvider extends ReactiveElement {
     void this.previewTask.run([target]);
   }
 
+  private cacheKey(target: GitHubLinkTarget): string {
+    return `${target.kind}:${target.owner.toLowerCase()}/${target.repo.toLowerCase()}#${target.number}`;
+  }
+
+  private cachedPreview(target: GitHubLinkTarget): CacheEntry | undefined {
+    const cached = this.cache.get(this.cacheKey(target));
+    return cached && !cached.signal.aborted && cached.expiresAt > Date.now() ? cached : undefined;
+  }
+
   private loadPreview(
     target: GitHubLinkTarget,
     signal: AbortSignal,
   ): Promise<ControlUiGitHubPreview> {
-    const key = `${target.kind}:${target.owner.toLowerCase()}/${target.repo.toLowerCase()}#${target.number}`;
+    const key = this.cacheKey(target);
     const now = Date.now();
-    const cached = this.cache.get(key);
+    const cached = this.cachedPreview(target);
     this.cache.delete(key);
     // Dismissal invalidates only that request, even before its rejection settles.
-    if (cached && !cached.signal.aborted && cached.expiresAt > now) {
+    if (cached) {
       this.cache.set(key, cached);
       return cached.promise;
     }
@@ -588,6 +576,7 @@ export class GitHubLinkHovercardProvider extends ReactiveElement {
       promise: load().catch((error: unknown) => {
         // Keep short-lived failures cached so repeatedly crossing a broken or
         // private link does not burn GitHub's anonymous rate limit.
+        entry.failed = true;
         entry.expiresAt = Date.now() + FAILURE_CACHE_MS;
         throw error;
       }),
