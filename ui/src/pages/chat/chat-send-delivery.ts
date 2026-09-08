@@ -430,13 +430,9 @@ async function sendQueuedChatMessage(
         }
       }
     }
-    if (prepared.refreshSessions) {
+    if (prepared.refreshSessions && ack.status === "ok") {
       const target = { sessionKey, agentId: prepared.agentId };
-      if (ack.status === "ok") {
-        void refreshChatSessionListForTarget(host, target);
-      } else if (isNonTerminalAgentRunStatus(ack.status)) {
-        host.refreshSessionsAfterChat.set(ack.runId, target);
-      }
+      void refreshChatSessionListForTarget(host, target);
     }
     discardChatAttachmentDataUrls(excludeComposerAttachments(host, attachments));
     if (retirementFailed) {

@@ -1905,7 +1905,7 @@ describe("handleSendChat", () => {
     expect(host.chatMessage).toBe("");
   });
 
-  it("does not seed refreshSessionsAfterChat for a terminal timeout ack on a refreshing send", async () => {
+  it("reconciles a terminal timeout ack on a refreshing send", async () => {
     const host = makeChatHost({
       requestHandlers: {
         "chat.send": { status: "timeout" },
@@ -1931,7 +1931,6 @@ describe("handleSendChat", () => {
       sessionKey: "agent:main",
       sessionStatus: "killed",
     });
-    expect(host.refreshSessionsAfterChat.size).toBe(0);
   });
 
   it("keeps a completed reset successful without replacing the Sessions table", async () => {
@@ -5442,7 +5441,6 @@ describe("handleSendChat", () => {
     );
     expect(host.lastError).toBe("Replacement Gateway error");
     expect(host.chatError).toBe("Replacement Gateway error");
-    expect(host.refreshSessionsAfterChat).toEqual(new Map());
     expect(refreshSessions).not.toHaveBeenCalled();
     expect(replacementRequest).not.toHaveBeenCalled();
   });

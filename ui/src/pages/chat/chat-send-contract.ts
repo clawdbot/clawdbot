@@ -11,7 +11,7 @@ import type {
   HumanMention,
 } from "../../lib/chat/chat-types.ts";
 import type { ControlUiFollowUpMode } from "../../lib/chat/follow-up-mode.ts";
-import type { SessionCapability, SessionRefreshTarget } from "../../lib/sessions/index.ts";
+import type { SessionCapability } from "../../lib/sessions/index.ts";
 import type { ChatCommandHost } from "./chat-commands.ts";
 import type { ChatRunStartupState } from "./chat-run-startup.ts";
 import type { ChatSendTimingEntry } from "./chat-send-ack.ts";
@@ -66,7 +66,6 @@ export type ChatHost = ChatInputHistoryState &
     hello: GatewayHelloOk | null;
     selfUser?: AuthenticatedUser | null;
     requestUpdate?: () => void;
-    refreshSessionsAfterChat: Map<string, SessionRefreshTarget>;
     chatSubmitGuards?: Map<string, Promise<void>>;
     chatSendTimingsByRun?: Map<string, ChatSendTimingEntry>;
     eventLogBuffer?: unknown[];
