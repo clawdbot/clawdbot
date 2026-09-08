@@ -337,6 +337,20 @@ describe("createOpenClawCodingTools availability guidance", () => {
     expect(tool?.description).toContain("persistent/thread-bound");
     expect(tool?.description).toContain("(self: current session only)");
     expect(tool?.description).not.toContain('runtime="acp"');
+    // sessions_history alone can't report a child's terminal status (transcript
+    // only, no run outcome) -- the follow-up check must not claim otherwise.
+    expect(tool?.description).not.toContain("Before moving on, check own spawned children");
+  });
+
+  it("gates the terminal-status follow-up check on subagents, not sessions_history alone", () => {
+    const [tool] = applyToolAvailabilityDescriptions([
+      { name: "sessions_spawn", description: describeSessionsSpawnTool() },
+      { name: "subagents", description: "status" },
+    ] as AnyAgentTool[]);
+
+    expect(tool?.description).toContain(
+      "After spawn, do non-overlap work; follow the receipt's completion mode. Before moving on, check own spawned children via `subagents` for failed/timed_out/cancelled status and follow up instead of leaving them stalled.",
+    );
   });
 
   it("preserves original inline spawn guidance when every follow-up remains available", () => {
@@ -354,6 +368,9 @@ describe("createOpenClawCodingTools availability guidance", () => {
     expect(tool?.description).toContain("(all: all sessions, cross-agent per tools.agentToAgent)");
     expect(tool?.description).toContain(
       "No spawn for quick lookup/single read. Check spawns via `subagents`/`sessions_history`. After spawn,",
+    );
+    expect(tool?.description).toContain(
+      "Before moving on, check own spawned children via `subagents` for failed/timed_out/cancelled status and follow up instead of leaving them stalled.",
     );
   });
 });
