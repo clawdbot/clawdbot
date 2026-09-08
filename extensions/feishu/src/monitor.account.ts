@@ -24,6 +24,7 @@ import { botNames, botOpenIds } from "./monitor.state.js";
 import { FeishuRetryableSyntheticEventError } from "./monitor.synthetic-error.js";
 import { monitorWebhook, monitorWebSocket } from "./monitor.transport.js";
 import { createFeishuVcMeetingInvitedHandler } from "./monitor.vc-meeting-invited-handler.js";
+import { createFeishuOrganizationEventHandlers } from "./organization-event-bridge.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { getMessageFeishu } from "./send.js";
 import { getFeishuSequentialKey } from "./sequential-key.js";
@@ -460,6 +461,12 @@ function registerEventHandlers(
         error(`feishu[${accountId}]: error handling card action: ${String(err)}`);
       }
     },
+    ...createFeishuOrganizationEventHandlers({
+      accountId,
+      onConsumerError: (_cause, eventType) => {
+        error(`feishu[${accountId}]: organization event consumer failed for ${eventType}`);
+      },
+    }),
   });
 }
 
