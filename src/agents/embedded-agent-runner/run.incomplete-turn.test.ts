@@ -25,6 +25,7 @@ import {
   DEFAULT_REASONING_ONLY_RETRY_LIMIT,
   EMPTY_RESPONSE_RETRY_INSTRUCTION,
   REASONING_ONLY_RETRY_INSTRUCTION,
+  SETTLED_TOOL_CONTINUATION_INSTRUCTION,
   resolveEmptyResponseRetryInstruction,
   isIncompleteTerminalAssistantTurn,
   resolveIncompleteTurnPayloadText as resolveIncompleteTurnPayloadTextCore,
@@ -72,14 +73,18 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(warnMessages().join("\n")).not.toContain(text);
   }
 
-  function runAttemptCall(index: number): { prompt?: string } {
+  function runAttemptCall(index: number): {
+    prompt?: string;
+    disableTools?: boolean;
+    clientTools?: unknown[];
+  } {
     // Continuation prompt assertions read the exact prompt passed to the runner
     // attempt rather than derived result metadata.
     const call = mockedRunEmbeddedAttempt.mock.calls[index];
     if (!call) {
       throw new Error(`Expected run embedded attempt call ${index}`);
     }
-    return call[0] as { prompt?: string };
+    return call[0] as { prompt?: string; disableTools?: boolean; clientTools?: unknown[] };
   }
 
   it("emits the before_agent_run hook block message as the agent payload", async () => {
@@ -3232,6 +3237,95 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(result.meta.terminalReplyKind).toBeUndefined();
     expect(result.meta.finalAssistantVisibleText).toBe("Visible StepFun answer.");
     expectWarnMessageWith("empty response detected");
+  });
+
+  it("continues once after a settled side-effecting write without exposing tools", async () => {
+    const emptyStopAssistant = {
+      role: "assistant",
+      api: "openai-responses",
+      stopReason: "stop",
+      provider: "openai",
+      model: "gpt-5.5",
+      content: [],
+    } as unknown as EmbeddedRunAttemptResult["lastAssistant"];
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          assistantTexts: [],
+          toolMetas: [{ toolName: "write", meta: "path=note.txt", replaySafe: false }],
+          itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
+          lastAssistant: emptyStopAssistant,
+          currentAttemptAssistant: emptyStopAssistant,
+        }),
+      )
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          assistantTexts: ["Write completed."],
+          lastAssistant: {
+            role: "assistant",
+            api: "openai-responses",
+            stopReason: "stop",
+            provider: "openai",
+            model: "gpt-5.5",
+            content: [{ type: "text", text: "Write completed." }],
+          } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        }),
+      );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.5",
+      runId: "run-settled-write-empty-stop",
+      agentHarnessRuntimeOverride: "openclaw",
+      clientTools: [
+        {
+          type: "function",
+          function: { name: "host_write", description: "Write through the host" },
+        },
+      ],
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(runAttemptCall(1)).toMatchObject({
+      disableTools: true,
+      clientTools: undefined,
+      prompt: expect.stringContaining(SETTLED_TOOL_CONTINUATION_INSTRUCTION),
+    });
+    expect(result.meta.finalAssistantVisibleText).toBe("Write completed.");
+    expectWarnMessageWith("settled post-tool turn lacked a final answer");
+  });
+
+  it("does not continue a settled side-effecting turn through a native tool backend", async () => {
+    const emptyStopAssistant = {
+      role: "assistant",
+      api: "openai-responses",
+      stopReason: "stop",
+      provider: "openai",
+      model: "gpt-5.5",
+      content: [],
+    } as unknown as EmbeddedRunAttemptResult["lastAssistant"];
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [],
+        toolMetas: [{ toolName: "write", meta: "path=note.txt", replaySafe: false }],
+        itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
+        lastAssistant: emptyStopAssistant,
+        currentAttemptAssistant: emptyStopAssistant,
+      }),
+    );
+
+    await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.5",
+      runId: "run-native-settled-write-empty-stop",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect(warnMessages().join("\n")).not.toContain("settled post-tool turn lacked a final answer");
   });
 
   it("returns NO_REPLY without retrying post-tool exact silent assistant replies", async () => {
