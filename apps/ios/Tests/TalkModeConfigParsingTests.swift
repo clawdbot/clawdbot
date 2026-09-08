@@ -319,6 +319,19 @@ struct TalkModeManagerTests {
         #expect(manager._test_realtimeModelId() == "gpt-live-1-codex")
     }
 
+    @Test func `on device voice selection round trips through user defaults`() {
+        let defaults = UserDefaults.standard
+        defaults.set("com.apple.voice.enhanced.en-US.Samantha", forKey: TalkSystemVoiceSelection.storageKey)
+        defer { defaults.removeObject(forKey: TalkSystemVoiceSelection.storageKey) }
+
+        let stored = defaults.string(forKey: TalkSystemVoiceSelection.storageKey)
+
+        #expect(TalkSystemVoiceSelection.resolvedOverride(
+            stored,
+            isVoiceInstalled: { $0 == "com.apple.voice.enhanced.en-US.Samantha" })
+            == "com.apple.voice.enhanced.en-US.Samantha")
+    }
+
     @Test func `formats open AI realtime voice mode`() {
         let descriptor = TalkVoiceModeDescriptorBuilder.build(
             providerId: "openai",

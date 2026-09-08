@@ -83,6 +83,8 @@ export type NativeDeviceSettingsSnapshot = {
     talkBackgroundEnabled?: boolean;
     speakerphoneEnabled?: boolean;
     microphone?: { selectedId: string | null; devices: Array<{ id: string; name: string }> }; // null = System Default
+    // Installed on-device TTS voices, pre-filtered by the host's synthesis language; null = Apple's language default
+    systemVoice?: { selectedId: string | null; available: Array<{ id: string; name: string }> };
     locale?: {
       primary: string;
       additional: string[];
@@ -131,6 +133,7 @@ export type SettingKey =
   | "voice.talkBackgroundEnabled"
   | "voice.speakerphoneEnabled"
   | "voice.microphone" // value: string id | null
+  | "voice.systemVoiceId" // value: string id | null
   | "voice.locale.primary" // value: string
   | "voice.locale.additional" // value: string[]
   | "updates.automatic";
@@ -263,6 +266,7 @@ function isSnapshot(value: unknown): value is NativeDeviceSettingsSnapshot {
   const cookieSync = browser?.cookieSync;
   const location = permissions.location;
   const microphone = voice.microphone;
+  const systemVoice = voice.systemVoice;
   const locale = voice.locale;
   if (!isRecord(location)) {
     return false;
@@ -343,6 +347,10 @@ function isSnapshot(value: unknown): value is NativeDeviceSettingsSnapshot {
       (isRecord(microphone) &&
         nullableString(microphone.selectedId) &&
         namedDevices(microphone.devices))) &&
+    (systemVoice === undefined ||
+      (isRecord(systemVoice) &&
+        nullableString(systemVoice.selectedId) &&
+        namedDevices(systemVoice.available))) &&
     (locale === undefined ||
       (isRecord(locale) &&
         typeof locale.primary === "string" &&

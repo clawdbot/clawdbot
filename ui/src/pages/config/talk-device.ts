@@ -156,6 +156,11 @@ export function renderDeviceTalk(capability: NativeDeviceSettingsCapability | nu
       label: t("configPage.deviceTalk.disconnectedMicrophone", { id: microphone.selectedId }),
     });
   }
+  const systemVoice = voice.systemVoice;
+  const systemVoiceOptions = [
+    { value: "", label: t("configPage.deviceTalk.systemDefault") },
+    ...(systemVoice?.available.map(({ id, name }) => ({ value: id, label: name })) ?? []),
+  ];
   const languageOptions = (voice.locale?.available ?? []).map(({ id, name }) => ({
     value: id,
     label: name,
@@ -204,6 +209,15 @@ export function renderDeviceTalk(capability: NativeDeviceSettingsCapability | nu
           value: microphone.selectedId ?? "",
           options: microphoneOptions,
           onChange: (value) => capability.set("voice.microphone", value || null),
+        })
+      : nothing,
+    systemVoice
+      ? renderSettingsSelectRow({
+          title: t("configPage.deviceTalk.systemVoice"),
+          description: t("configPage.deviceTalk.systemVoiceHint"),
+          value: systemVoice.selectedId ?? "",
+          options: systemVoiceOptions,
+          onChange: (value) => capability.set("voice.systemVoiceId", value || null),
         })
       : nothing,
     locale

@@ -89,6 +89,9 @@ extension DashboardWindowController {
                 microphone: .init(
                     selectedId: state.voiceWakeMicID.isEmpty ? nil : state.voiceWakeMicID,
                     devices: VoiceWakeDeviceOptions.microphones()),
+                systemVoice: .init(
+                    selectedId: state.talkSystemVoiceID.isEmpty ? nil : state.talkSystemVoiceID,
+                    available: VoiceWakeDeviceOptions.systemVoices(languageID: state.voiceWakeLocaleID)),
                 locale: VoiceWakeDeviceOptions.localeSettings(
                     primary: state.voiceWakeLocaleID,
                     additional: state.voiceWakeAdditionalLocaleIDs)),

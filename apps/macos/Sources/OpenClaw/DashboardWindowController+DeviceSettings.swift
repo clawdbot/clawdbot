@@ -126,10 +126,14 @@ extension DashboardWindowController {
                 guard values.allSatisfy(available.contains) else { return }
                 state.voiceWakeAdditionalLocaleIDs = values
             }
-        case (_, .null):
-            guard key == .microphone else { return }
+        case (.microphone, .null):
             AppStateStore.shared.voiceWakeMicName = ""
             AppStateStore.shared.voiceWakeMicID = ""
+        case (.systemVoiceID, .null):
+            // Empty means System Default: fall back to today's language-only voice lookup.
+            AppStateStore.shared.talkSystemVoiceID = ""
+        case (_, .null):
+            break
         }
     }
 
@@ -191,6 +195,10 @@ extension DashboardWindowController {
             state.voiceWakeMicName = MicRefreshSupport.selectedMicName(
                 selectedID: value, in: devices, uid: \.id, name: \.name)
             state.voiceWakeMicID = value
+        case .systemVoiceID:
+            let voices = VoiceWakeDeviceOptions.systemVoices(languageID: state.voiceWakeLocaleID)
+            guard voices.contains(where: { $0.id == value }) else { return }
+            state.talkSystemVoiceID = value
         case .localePrimary:
             guard VoiceWakeDeviceOptions.locales().contains(where: { $0.id == value }) else { return }
             // The System option carries a concrete locale identifier, as the native picker did; never store a sentinel.

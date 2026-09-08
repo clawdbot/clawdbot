@@ -38,6 +38,10 @@ struct IOSDeviceSettingsSnapshotTests {
         #expect(snapshot.voice.talkButtonEnabled == true)
         #expect(snapshot.voice.talkBackgroundEnabled == false)
         #expect(snapshot.voice.speakerphoneEnabled == true)
+        // No stored pick publishes the family with an explicit null so the row still renders.
+        #expect(snapshot.voice.systemVoice?.selectedId == nil)
+        let voice = try #require(json["voice"] as? [String: Any])
+        #expect(try #require(voice["systemVoice"] as? [String: Any])["selectedId"] is NSNull)
         #expect(snapshot.permissions.location.preciseEditable == false)
         #expect(snapshot.permissions.entries.map(\.id) == [
             .notifications, .camera, .microphone, .speechRecognition, .location,
@@ -66,6 +70,7 @@ struct IOSDeviceSettingsSnapshotTests {
         defaults.set(false, forKey: TalkDefaults.speakerphoneEnabledKey)
         defaults.set(false, forKey: NotificationServingPreference.storageKey)
         defaults.set("always", forKey: "location.enabledMode")
+        defaults.set("fixture-voice", forKey: TalkSystemVoiceSelection.storageKey)
         appearance.select(.dark, userDefaults: defaults)
         let reduced = producer.snapshot(notificationStatus: .provisional, locationServicesEnabled: true)
 
@@ -76,6 +81,9 @@ struct IOSDeviceSettingsSnapshotTests {
         #expect(reduced.voice.talkButtonEnabled == false)
         #expect(reduced.voice.talkBackgroundEnabled == true)
         #expect(reduced.voice.speakerphoneEnabled == false)
+        // A stored pick is republished verbatim; the option list comes from the installed catalog,
+        // which is empty on the simulator, so only the selection is asserted here.
+        #expect(reduced.voice.systemVoice?.selectedId == "fixture-voice")
         #expect(reduced.permissions.location.mode == .always)
         #expect(!reduced.permissions.location.precise)
         #expect(reduced.permissions.entries.first?.status == .granted)

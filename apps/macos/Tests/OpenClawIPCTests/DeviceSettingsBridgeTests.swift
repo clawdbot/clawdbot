@@ -72,6 +72,8 @@ struct DeviceSettingsBridgeTests {
             ("permissions.location.mode", "always", .set(.locationMode, .string("always"))),
             ("voice.microphone", "fixture-mic", .set(.microphone, .string("fixture-mic"))),
             ("voice.microphone", NSNull(), .set(.microphone, .null)),
+            ("voice.systemVoiceId", "fixture-voice", .set(.systemVoiceID, .string("fixture-voice"))),
+            ("voice.systemVoiceId", NSNull(), .set(.systemVoiceID, .null)),
             ("voice.locale.primary", "en-US", .set(.localePrimary, .string("en-US"))),
             ("voice.locale.additional", ["de-DE"], .set(.localeAdditional, .strings(["de-DE"]))),
             ("voice.locale.additional", [String](), .set(.localeAdditional, .strings([]))),
@@ -104,6 +106,7 @@ struct DeviceSettingsBridgeTests {
             ("voice.locale.additional", "en-US"),
             ("voice.locale.additional", ["en-US", NSNull()]),
             ("voice.microphone", ["fixture-mic"]),
+            ("voice.systemVoiceId", ["fixture-voice"]),
             ("voice.locale.primary", ["en-US"]),
             ("browser.cookieSync.targetProfile", ["work"]),
         ]
@@ -113,15 +116,18 @@ struct DeviceSettingsBridgeTests {
         let typedKeys = [
             "app.appearance", "app.iconStyle",
             "capabilities.computerControlProvider", "permissions.location.mode", "browser.cookieSync.domains",
-            "browser.cookieSync.targetProfile", "voice.microphone", "voice.locale.primary", "voice.locale.additional",
+            "browser.cookieSync.targetProfile", "voice.microphone", "voice.systemVoiceId", "voice.locale.primary",
+            "voice.locale.additional",
         ]
+        // Only these clear to System Default; every other typed key must still reject a null value.
+        let nullableKeys: Set<String> = ["voice.microphone", "voice.systemVoiceId"]
         #expect(Set(DeviceSettingKey.allCases.map(\.rawValue)) == Set(Self.toggleKeys.map(\.0) + typedKeys))
         let invalidScalars: [Any] = [true, NSNumber(value: 1)]
         for key in typedKeys {
             for value in invalidScalars {
                 #expect(DeviceSettingsRequest(body: ["type": "set", "key": key, "value": value]) == nil)
             }
-            if key != "voice.microphone" {
+            if !nullableKeys.contains(key) {
                 #expect(DeviceSettingsRequest(body: ["type": "set", "key": key, "value": NSNull()]) == nil)
             }
             #expect(DeviceSettingsRequest(body: ["type": "set", "key": key]) == nil)

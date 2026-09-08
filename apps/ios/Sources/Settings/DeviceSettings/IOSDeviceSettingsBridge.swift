@@ -337,6 +337,7 @@ final class IOSDeviceSettingsBridge: NSObject, WKScriptMessageHandlerWithReply {
         case let (.talkBackgroundEnabled, .boolean(enabled)):
             UserDefaults.standard.set(enabled, forKey: "talk.background.enabled")
         case let (.speakerphoneEnabled, .boolean(enabled)): self.appModel.setTalkSpeakerphoneEnabled(enabled)
+        case (.systemVoiceID, _): self.setSystemVoice(value)
         case let (.locationMode, .string(raw)):
             guard let mode = DeviceSettingsLocationMode(rawValue: raw) else { return false }
             return await IOSDeviceSettingsActions.applyLocationMode(
@@ -348,6 +349,20 @@ final class IOSDeviceSettingsBridge: NSObject, WKScriptMessageHandlerWithReply {
             break
         }
         return false
+    }
+
+    /// Null clears to System Default, which falls back to the language-only voice lookup. A pick
+    /// outside the list this snapshot published is rejected, mirroring the macOS bridge; the setter
+    /// separately clears one whose voice is no longer installed.
+    private func setSystemVoice(_ value: DeviceSettingValue) {
+        guard case let .string(identifier) = value else {
+            self.appModel.setTalkSystemVoiceSelection("")
+            return
+        }
+        guard TalkSystemVoiceSelection.resolvedOverride(
+            identifier,
+            languageID: self.appModel.talkMode.gatewaySpeechLocaleID) != nil else { return }
+        self.appModel.setTalkSystemVoiceSelection(identifier)
     }
 
     private func confirm(_ request: IOSDeviceSettingsConsent) async -> Bool {

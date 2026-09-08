@@ -180,6 +180,15 @@ describe("native device settings wire contract", () => {
         },
       },
     ],
+    [
+      "system voice",
+      {
+        voice: {
+          ...createNativeDeviceSettingsSnapshot().voice,
+          systemVoice: { selectedId: 7, available: [] },
+        },
+      },
+    ],
     ["updates", { updates: { available: true, automatic: true } }],
   ] as const)("ignores malformed %s snapshots without notifying subscribers", (_name, change) => {
     installBridge();
@@ -266,6 +275,7 @@ describe("native device settings wire contract", () => {
     capability?.set("app.showDockIcon", false);
     capability?.set("app.iconStyle", "origami");
     capability?.set("voice.microphone", null);
+    capability?.set("voice.systemVoiceId", "voice-1");
     capability?.set("browser.cookieSync.domains", ["example.com"]);
     capability?.set("voice.locale.primary", "de-DE");
     capability?.requestPermission("microphone");
@@ -276,6 +286,7 @@ describe("native device settings wire contract", () => {
       { type: "set", key: "app.showDockIcon", value: false },
       { type: "set", key: "app.iconStyle", value: "origami" },
       { type: "set", key: "voice.microphone", value: null },
+      { type: "set", key: "voice.systemVoiceId", value: "voice-1" },
       { type: "set", key: "browser.cookieSync.domains", value: ["example.com"] },
       { type: "set", key: "voice.locale.primary", value: "de-DE" },
       { type: "request-permission", id: "microphone" },
