@@ -52,6 +52,12 @@ export function notifyPreparedModelRuntimePublication(
   }
 }
 
+export function reportPreparedModelRuntimeAuthRefreshFailure(error: unknown): void {
+  const refreshError = toStringifiedError(error);
+  notifyPreparedModelRuntimePublication({ phase: "failed", error: refreshError });
+  log.warn(`auth-triggered model runtime refresh failed: ${String(refreshError)}`);
+}
+
 export function resetPreparedModelRuntimePublicationListenersForTest(): void {
   publicationListeners.clear();
 }

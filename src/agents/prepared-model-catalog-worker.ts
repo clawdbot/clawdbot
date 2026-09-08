@@ -27,7 +27,10 @@ import type {
   PreparedModelRuntimeAgentFacts,
   PreparedModelRuntimeCatalogFacts,
 } from "./prepared-model-runtime.catalog-contract.js";
-import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
+import {
+  PreparedModelCatalogGenerationMismatchError,
+  PreparedModelRuntimePublicationSupersededError,
+} from "./prepared-model-runtime.errors.js";
 import { fingerprintPreparedRuntimeFacts } from "./prepared-model-runtime.facts.js";
 import { markPreparedModelCatalogFull } from "./prepared-model-runtime.full-catalog.js";
 import { registerPreparedModelRuntimeClose } from "./prepared-model-runtime.lifecycle.js";
@@ -88,26 +91,12 @@ export type PreparedModelWorkerResult =
 const PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS = 180_000;
 const PREPARED_MODEL_CATALOG_WORKER_GENERATION_POLL_MS = 25;
 
-class PreparedModelCatalogGenerationMismatchError extends Error {
-  constructor(
-    readonly agentDir: string,
-    readonly generationFingerprint: string,
-    readonly reconstructedFingerprint: string,
-  ) {
-    super(
-      `prepared model catalog worker reconstructed a different runtime generation for ${agentDir} (owner=${generationFingerprint} worker=${reconstructedFingerprint})`,
-    );
-    this.name = "PreparedModelCatalogGenerationMismatchError";
-  }
-}
-
 export function fingerprintPreparedModelWorkerRequest(
   input: PreparedModelCatalogWorkerInput,
   request: PreparedModelWorkerRequest,
 ): string {
   return fingerprintPreparedRuntimeFacts([input.generationFingerprint, request]);
 }
-
 function fingerprintPreparedModelCatalogPlugins(snapshot: PluginMetadataSnapshot): string {
   return fingerprintPreparedRuntimeFacts({
     config: snapshot.configFingerprint ?? null,
