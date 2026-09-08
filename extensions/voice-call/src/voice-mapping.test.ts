@@ -17,4 +17,14 @@ describe("voice mapping", () => {
     expect(mapVoiceToPolly("unknown")).toBe("Polly.Joanna");
     expect(mapVoiceToPolly(undefined)).toBe("Polly.Joanna");
   });
+
+  it.each(["constructor", "__proto__", "toString"])(
+    "falls back to the default Polly voice for prototype key %s",
+    (voice) => {
+      const mapped = mapVoiceToPolly(voice);
+      expect(mapped).toBe("Polly.Joanna");
+      expect(typeof mapped).toBe("string");
+      expect(`<Say voice="${mapped}">`).toBe('<Say voice="Polly.Joanna">');
+    },
+  );
 });
