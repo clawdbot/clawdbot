@@ -372,14 +372,14 @@ describe("collectBundledExtensionManifestErrors", () => {
 });
 
 describe("bundled plugin package dependency checks", () => {
-  it("does not require root deps for root chunks sourced from the owning installed plugin", () => {
+  it("does not require root deps for legacy 7.33 chunks sourced from the owning plugin", () => {
     const tempRoot = mkdtempSync(join(tmpdir(), "openclaw-root-owned-installed-"));
 
     try {
       mkdirSync(join(tempRoot, "dist", "extensions", "memory-lancedb"), { recursive: true });
       writeFileSync(
         join(tempRoot, "package.json"),
-        `{"name":"openclaw","dependencies":{}}\n`,
+        `{"name":"openclaw","version":"2026.7.33","dependencies":{}}\n`,
         "utf8",
       );
       writeFileSync(

@@ -5,7 +5,7 @@ export const RUNTIME_DEPENDENCY_OWNERSHIP_RELATIVE_PATH = "dist/runtime-dependen
 export const RUNTIME_DEPENDENCY_OWNERSHIP_ASSET_NAME = "runtime-dependency-ownership.json";
 export const RUNTIME_DEPENDENCY_OWNERSHIP_FORMAT_VERSION = 1;
 
-export type RuntimeDependencyOwners = {
+type RuntimeDependencyOwners = {
   extensions: string[];
   root: boolean;
 };
