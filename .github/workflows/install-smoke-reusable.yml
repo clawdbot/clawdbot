@@ -489,14 +489,22 @@ jobs:
       - *trusted_workflow_subdir_checkout_step
       - *trusted_workflow_subdir_identity_step
 
+      - name: Prepare trusted selected-source Git owner
+        uses: ./.release-harness/.github/actions/git-owner
+
       - name: Checkout selected source for gateway network provenance
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: openclaw/openclaw
-          ref: ${{ needs.preflight.outputs.target_sha }}
-          path: .release-source
-          fetch-depth: 1
-          persist-credentials: false
+        env:
+          CHECKOUT_KIND: preflight
+          CHECKOUT_REPO: openclaw/openclaw
+          CHECKOUT_REF: ${{ needs.preflight.outputs.target_sha }}
+          CHECKOUT_FALLBACK_REF: ${{ needs.preflight.outputs.target_sha }}
+          CHECKOUT_TOKEN: ""
+          SELECTED_SOURCE_DIR: ${{ github.workspace }}/.release-source
+          WORKFLOW_SHA: ${{ steps.workflow.outputs.sha }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$SELECTED_SOURCE_DIR"
+          GITHUB_WORKSPACE="$SELECTED_SOURCE_DIR" python3 -I -S "$CI_GIT_OWNER"
 
       - name: Validate root Dockerfile image artifact binding
         env:

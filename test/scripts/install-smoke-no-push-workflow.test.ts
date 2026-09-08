@@ -1,6 +1,7 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -398,12 +399,17 @@ describe("install smoke no-push root image transport", () => {
         consumer,
         "Checkout selected source for gateway network provenance",
       );
-      expect(selectedCheckout.with).toMatchObject({
-        repository: "openclaw/openclaw",
-        ref: "${{ needs.preflight.outputs.target_sha }}",
-        path: ".release-source",
-        "fetch-depth": 1,
-        "persist-credentials": false,
+      expect(step(consumer, "Prepare trusted selected-source Git owner").uses).toBe(
+        "./.release-harness/.github/actions/git-owner",
+      );
+      expect(selectedCheckout.env).toMatchObject({
+        CHECKOUT_KIND: "preflight",
+        CHECKOUT_REPO: "openclaw/openclaw",
+        CHECKOUT_REF: "${{ needs.preflight.outputs.target_sha }}",
+        CHECKOUT_FALLBACK_REF: "${{ needs.preflight.outputs.target_sha }}",
+        CHECKOUT_TOKEN: "",
+        SELECTED_SOURCE_DIR: "${{ github.workspace }}/.release-source",
+        WORKFLOW_SHA: "${{ steps.workflow.outputs.sha }}",
       });
       const gatewayNetwork = step(consumer, "Run Docker gateway network e2e");
       expect(gatewayNetwork.env, jobName).toMatchObject({
@@ -426,11 +432,12 @@ describe("install smoke no-push root image transport", () => {
       const workspace = tempDirs.make("install-smoke-source-binding-");
       const selected = path.join(workspace, ".release-source");
       const tooling = process.cwd();
-      mkdirSync(selected);
-      execFileSync("git", ["init", "--quiet", selected]);
+      const origin = path.join(workspace, "source-origin");
+      mkdirSync(origin);
+      execFileSync("git", ["init", "--quiet", origin]);
       execFileSync("git", [
         "-C",
-        selected,
+        origin,
         "-c",
         "user.name=Fixture",
         "-c",
@@ -441,7 +448,7 @@ describe("install smoke no-push root image transport", () => {
         "-m",
         "selected source",
       ]);
-      const selectedSha = execFileSync("git", ["-C", selected, "rev-parse", "HEAD"], {
+      const selectedSha = execFileSync("git", ["-C", origin, "rev-parse", "HEAD"], {
         encoding: "utf8",
       }).trim();
       const toolingSha = execFileSync("git", ["-C", tooling, "rev-parse", "HEAD"], {
@@ -457,6 +464,38 @@ describe("install smoke no-push root image transport", () => {
         { mode: 0o755 },
       );
       const consumer = job(readWorkflow(INSTALL_SMOKE_REUSABLE), "root_dockerfile_smokes");
+      const checkout = step(consumer, "Checkout selected source for gateway network provenance");
+      const checkoutEnv = Object.fromEntries(
+        Object.entries(checkout.env ?? {}).map(([key, value]) => [
+          key,
+          value
+            .replace("${{ github.workspace }}", workspace)
+            .replace("${{ needs.preflight.outputs.target_sha }}", selectedSha)
+            .replace("${{ steps.workflow.outputs.sha }}", toolingSha),
+        ]),
+      );
+      const fetched = spawnSync("bash", ["-c", checkout.run!], {
+        cwd: workspace,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          ...checkoutEnv,
+          CI_GIT_OWNER: path.join(tooling, ".github/actions/git-owner/owner.py"),
+          GITHUB_EVENT_NAME: "workflow_dispatch",
+          GIT_CONFIG_NOSYSTEM: "1",
+          GIT_CONFIG_GLOBAL: "/dev/null",
+          GIT_CONFIG_COUNT: "1",
+          GIT_CONFIG_KEY_0: `url.${pathToFileURL(origin).href}.insteadOf`,
+          GIT_CONFIG_VALUE_0: "https://github.com/openclaw/openclaw.git",
+        },
+      });
+      expect(fetched.status, fetched.stdout + fetched.stderr).toBe(0);
+      expect(
+        execFileSync("git", ["-C", selected, "rev-parse", "HEAD"], { encoding: "utf8" }).trim(),
+      ).toBe(selectedSha);
+      expect(
+        execFileSync("git", ["-C", selected, "config", "--local", "--list"], { encoding: "utf8" }),
+      ).not.toMatch(/extraheader|AUTHORIZATION/i);
       const network = step(consumer, "Run Docker gateway network e2e");
       const configuredRoot = network.env?.OPENCLAW_DOCKER_E2E_REPO_ROOT?.replace(
         "${{ github.workspace }}",
