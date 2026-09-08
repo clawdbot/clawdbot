@@ -45,6 +45,7 @@ const testing = {
     nativeHookRelayUnregisterQueue.flush();
   },
 };
+import { CODEX_FROZEN_EMPTY_PROJECT_DOCS_AUTHORITY } from "./session-binding.js";
 import {
   readCodexAppServerBinding,
   writeCodexAppServerBinding as writeRawCodexAppServerBinding,
@@ -895,6 +896,7 @@ describe("runCodexAppServerAttempt native lifecycle", () => {
       model: "gpt-5.4-codex",
       modelProvider: "openai",
       dynamicToolsFingerprint: "[]",
+      agentWorkspaceDeveloperInstructions: CODEX_FROZEN_EMPTY_PROJECT_DOCS_AUTHORITY,
     });
 
     // Turn 1: resume an existing thread, then remain active until the execution deadline.
