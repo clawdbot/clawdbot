@@ -249,6 +249,22 @@ describe("Feishu read policy", () => {
     ).toBe("oc_group");
   });
 
+  it("fails closed to allowlist for group reads when groupPolicy is unset", () => {
+    const account = createAccount();
+    account.config = { dmPolicy: "pairing" } as ResolvedFeishuAccount["config"];
+
+    expect(() =>
+      assertFeishuChatReadAllowed({
+        cfg,
+        account,
+        chatId: "oc_group",
+        chatType: "group",
+        ctx: {},
+      }),
+    ).toThrow("Feishu read target is not allowed.");
+    expect(canEnumerateAllFeishuGroups(cfg, account)).toBe(false);
+  });
+
   it("allows the trusted current DM when groups are disabled", () => {
     const account = createAccount();
     account.config = {
