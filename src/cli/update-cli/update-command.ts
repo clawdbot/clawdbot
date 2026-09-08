@@ -557,8 +557,7 @@ async function updateCommandInternal(
       return;
     }
 
-    const targetLabel = targetVersion ?? `${tag} (unknown)`;
-    const message = `Downgrading from ${currentVersion} to ${targetLabel} can break configuration. Continue?`;
+    const message = `Downgrading from ${currentVersion} to ${targetVersion ?? `${tag} (unknown)`} can break configuration. Continue?`;
     const ok = await confirm({
       message: stylePromptMessage(message),
       initialValue: false,
