@@ -28,8 +28,12 @@ A second `prepare_patch` for that skill is rejected until the active authorizati
 is consumed or invalidated. A runtime usage receipt prevents foreground repair of
 skills that the run did not use. Autonomous mode controls the outcome: `off`
 disables the repair, `propose` leaves it pending for explicit review and apply,
-and `auto` scans and applies it immediately. The repair still goes through
-proposal storage, hash binding, the security scanner, and rollback capture.
+and `auto` scans and applies it immediately unless
+`skills.workshop.approvalPolicy` is `"pending"`. With pending approval, the patch
+stays pending for operator review without invoking apply. An omitted or explicit
+`"auto"` approval policy never overrides autonomous `off` or `propose`.
+The repair still goes through proposal storage, hash binding, the security
+scanner, and rollback capture when applied.
 
 Immediate repair changes the live skill for new sessions. It does not rewrite the
 skill snapshot already loaded into the running session. The delayed experience

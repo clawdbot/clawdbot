@@ -160,6 +160,12 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
     );
   }
   const workshopConfig = resolveSkillWorkshopConfig(options.config);
+  // Pending approval can restrict automatic repair, never promote off/propose.
+  // This also preserves those choices when approvalPolicy is omitted (default auto).
+  const foregroundRepairMode =
+    workshopConfig.autonomous.mode === "auto" && workshopConfig.approvalPolicy === "pending"
+      ? "propose"
+      : workshopConfig.autonomous.mode;
   const projectionBudgets = resolveSkillWorkshopProjectionBudgets(options.modelContextWindowTokens);
   const readSkillHashes =
     options.proposalMutationBudget?.readSkillHashes ?? new Map<string, string>();
@@ -173,7 +179,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
     name: "skill_workshop",
     displaySummary: "Propose or improve a reusable skill",
     description: buildSkillWorkshopToolDescription({
-      autonomousMode: workshopConfig.autonomous.mode,
+      autonomousMode: foregroundRepairMode,
       proposalRevision: options.proposalRevision !== undefined,
     }),
     parameters: buildSkillWorkshopToolSchema(options.proposalRevision !== undefined),
@@ -407,7 +413,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
         throw new ToolInputError("this Skill Workshop session cannot patch live skills");
       }
       const foregroundRepair = action === "patch" && options.proposalOnly !== true;
-      if (foregroundRepair && workshopConfig.autonomous.mode === "off") {
+      if (foregroundRepair && foregroundRepairMode === "off") {
         throw new ToolInputError("foreground skill repair is disabled by autonomous mode off");
       }
       let expectedCurrentContentHash: string | undefined;
@@ -563,8 +569,8 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
             evidence,
           });
           contentText =
-            foregroundRepair && workshopConfig.autonomous.mode === "propose"
-              ? `Created skill patch proposal ${proposal.record.id} (pending) for ${proposal.record.target.skillName}; autonomous mode propose requires operator review.`
+            foregroundRepair && foregroundRepairMode === "propose"
+              ? `Created skill patch proposal ${proposal.record.id} (pending) for ${proposal.record.target.skillName}; ${workshopConfig.approvalPolicy === "pending" ? "approval policy pending requires operator review" : "autonomous mode propose requires explicit apply"}.`
               : proposalMutationText(`Created skill ${action} proposal`, proposal.record);
         } else if (action === "revise") {
           let proposalId = options.proposalRevision?.proposalId;
@@ -619,7 +625,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
           });
         }
 
-        if (foregroundRepair && workshopConfig.autonomous.mode === "auto") {
+        if (foregroundRepair && foregroundRepairMode === "auto") {
           const applied = await applySkillProposal({
             workspaceDir: options.workspaceDir,
             agentId: options.agentId,

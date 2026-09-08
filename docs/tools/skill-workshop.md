@@ -277,8 +277,11 @@ does not fit the selected model's read budget, the agent can prepare one unique
 exact span and review its bounded surrounding context before patching it. A
 runtime receipt limits this flow to skills used in that run. Autonomous mode
 `off` disables repair, `propose` leaves the patch pending until explicitly
-applied, and `auto` scans and applies it immediately. The repaired skill is
-loaded by new sessions; the running session keeps its original skill snapshot.
+applied, and `auto` scans and applies it immediately only when `approvalPolicy`
+is `auto` (the default). With `approvalPolicy: "pending"`, an otherwise automatic
+repair stays pending for operator review without invoking apply. The repaired
+skill is loaded by new sessions; the running session keeps its original skill
+snapshot.
 
 Iterate on a pending proposal:
 
@@ -547,12 +550,26 @@ the proposal threshold, and troubleshooting.
 }
 ```
 
-| Setting           | Default  | Effect                                                                                                                                                              |
-| ----------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `autonomous.mode` | `"auto"` | `"off"` disables autonomous capture, `"propose"` creates pending proposals, and `"auto"` enables direct per-turn and weekly Workshop maintenance.                   |
-| `approvalPolicy`  | `"auto"` | `"auto"` skips an additional prompt for agent-initiated `apply`, `reject`, or `quarantine` (the agent still has to call the action). `"pending"` requires approval. |
-| `maxPending`      | `50`     | Caps pending and quarantined proposals per agent (1-200).                                                                                                           |
-| `maxSkillBytes`   | `40000`  | Caps proposal body size in bytes (1024-200000). Autonomous proposals also have a 10,000-character cap; direct maintenance does not use proposal limits.             |
+| Setting           | Default  | Effect                                                                                                                                                                                                              |
+| ----------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `autonomous.mode` | `"auto"` | `"off"` disables autonomous capture, `"propose"` creates pending proposals, and `"auto"` enables direct per-turn and weekly Workshop maintenance.                                                                   |
+| `approvalPolicy`  | `"auto"` | `"auto"` skips an additional prompt for agent-initiated `apply`, `reject`, or `quarantine` (the agent still has to call the action). `"pending"` requires approval and leaves automatic foreground patches pending. |
+| `maxPending`      | `50`     | Caps pending and quarantined proposals per agent (1-200).                                                                                                                                                           |
+| `maxSkillBytes`   | `40000`  | Caps proposal body size in bytes (1024-200000). Autonomous proposals also have a 10,000-character cap; direct maintenance does not use proposal limits.                                                             |
+
+Foreground patches to skills used in the current run follow both settings:
+
+| `autonomous.mode` | `approvalPolicy` omitted | Explicit `"auto"` | Explicit `"pending"` |
+| ----------------- | ------------------------ | ----------------- | -------------------- |
+| `"off"`           | Disabled                 | Disabled          | Disabled             |
+| `"propose"`       | Pending                  | Pending           | Pending              |
+| `"auto"`          | Scan and apply           | Scan and apply    | Pending              |
+
+Omitting `approvalPolicy` retains its effective `"auto"` default; it is not an
+opt-in to override `off` or `propose`. Explicit `"auto"` also respects those
+modes. Existing configurations need no migration. With both settings omitted,
+foreground repair remains automatic. This approval guard does not change direct
+background maintenance or the approval flow for later explicit lifecycle actions.
 
 The selected model reviews retained evidence before deciding whether a durable
 procedure needs an update. Foreground work does not wait for that review. It
@@ -568,8 +585,9 @@ proposal scanner or create rollback snapshots. Use backups for unwanted edits.
 In `propose` mode, the reviewer can read or prepare an exact span before staging
 one pending mutation. Existing-skill proposals retain read receipts, content-hash
 binding, size validation, and normal apply-time scanning and rollback metadata.
-Immediate foreground repair also retains the normal proposal apply path in
-`auto` mode; it is separate from direct background maintenance.
+Immediate foreground repair also retains the normal proposal apply path when
+both effective settings are `auto`; it is separate from direct background
+maintenance.
 
 See [Self-learning](/tools/self-learning) for the complete autonomous review behavior and safety
 model.

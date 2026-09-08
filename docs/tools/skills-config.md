@@ -361,11 +361,12 @@ different visible skill set per agent.
 ## Workshop (`skills.workshop`)
 
 <ParamField path="skills.workshop.autonomous.mode" type='"off" | "propose" | "auto"' default='"auto"'>
-  `off` disables autonomous capture while keeping the durable-instruction
+  `off` disables autonomous capture and foreground repair while keeping the durable-instruction
   suggestion nudge. `propose` creates pending proposals from corrections and
   substantial completed work. `auto` uses normal agent tools for direct per-turn
   and weekly Workshop maintenance, without proposal scanning or automatic rollback
-  snapshots. Immediate foreground repairs still use scanner-gated proposal apply.
+  snapshots. Foreground repairs stay pending in `propose` mode. In `auto` mode,
+  they use scanner-gated proposal apply only when `approvalPolicy` is also `auto`.
   User-prompted skill creation,
   `/learn`, and manual history scan continue to work in every mode.
 </ParamField>
@@ -375,7 +376,12 @@ proposal-only permissions, and troubleshooting.
 
 <ParamField path="skills.workshop.approvalPolicy" type='"pending" | "auto"' default='"auto"'>
   `auto` allows agent-initiated apply, reject, or quarantine without an
-  additional approval prompt. `pending` requires operator approval.
+  additional approval prompt. `pending` requires operator approval and leaves
+  otherwise automatic foreground patches pending without invoking apply.
+  Omitting this setting defaults to `auto`, but neither omitted nor explicit
+  `auto` overrides autonomous `off` or `propose`. Existing configurations need no
+  migration; direct background maintenance is unchanged. See the
+  [foreground repair matrix](/tools/skill-workshop#approval-and-autonomy).
 </ParamField>
 
 <ParamField path="skills.workshop.maxPending" type="number" default="50">
