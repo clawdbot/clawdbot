@@ -372,6 +372,16 @@ describe("owned recovery inspection of collected systemd units", () => {
           return success(JSON.stringify({ type: "o", data: [unitPath] }));
         }
         if (args.includes("GetProcesses")) {
+          // systemd registers the cgroup methods on the type-specific Service
+          // interface, not the generic Unit interface (src/core/dbus.c).
+          if (!args.includes("org.freedesktop.systemd1.Service")) {
+            return {
+              code: 1,
+              termination: "exit",
+              stdout: "",
+              stderr: "Unknown method GetProcesses",
+            };
+          }
           return success(JSON.stringify({ type: "a(sus)", data: [[]] }));
         }
         return managerReply(args, {

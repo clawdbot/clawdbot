@@ -24,6 +24,7 @@ export async function interruptNativeSuppressionReplay(
   params: FinishUpdateParams,
   releaseInspection: () => void,
   action: "stop" | "suppress" = "suppress",
+  fixtureOptions: { verifyRefusals?: boolean } = {},
 ): Promise<() => Promise<void>> {
   const recovery = params.opts.recovery!;
   const env = params.opts.run!.env;
@@ -78,7 +79,9 @@ export async function interruptNativeSuppressionReplay(
         },
         () => updateCommand({ json: true, yes: true }),
       ).catch((error: unknown) => error);
-    if (action === "stop") {
+    // The dedicated wire-protocol entry scenario shares the successful replay;
+    // the retained scenario continues to exercise every refusal independently.
+    if (action === "stop" && fixtureOptions.verifyRefusals !== false) {
       const service = resolveGatewayService();
       const command = service.readCommand;
       const runtime = service.readRuntime;
@@ -179,7 +182,7 @@ export async function interruptNativeSuppressionReplay(
     const resumed = await invoke();
     claimSpy.mockRestore();
     if (action === "stop") {
-      expect(checkedClaim).toBe(true);
+      expect(checkedClaim, inspect(resumed, { depth: 12 })).toBe(true);
     }
     root.mockRestore();
     exit.mockRestore();

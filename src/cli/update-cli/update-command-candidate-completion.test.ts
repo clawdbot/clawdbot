@@ -42,6 +42,7 @@ import * as healthProbe from "../daemon-cli/restart-health.js";
 import { seedReplayAgentDatabase } from "./update-command-agent-family.test-support.js";
 import { completeUpdateCommandCandidate } from "./update-command-candidate-completion.js";
 import { captureStoppedState } from "./update-command-checkpoint.js";
+import { useCollectedServiceRuntime } from "./update-command-collected-runtime.test-support.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import { runUpdateCommandMutation } from "./update-command-mutation.js";
 import { withUpdateCommandNativePreparation } from "./update-command-native-preparation.js";
@@ -94,6 +95,7 @@ it.each([
   "auto-restart-retained-rollback",
   "auto-restart-collected-stop-rollback",
   "auto-restart-collected-retained-rollback",
+  "auto-restart-collected-native-entry-rollback",
   "auto-restart-foreign-manager",
   "auto-restart-counter-drift",
   "auto-restart-unverified",
@@ -119,10 +121,13 @@ it.each([
     const replay = mode.startsWith("replay-");
     const packageGap = mode.startsWith("replay-package-gap");
     const autoRestart = mode.startsWith("auto-restart-");
+    const nativeEntry = mode === "auto-restart-collected-native-entry-rollback";
     const collectedStop =
       mode === "auto-restart-collected-stop-rollback" ||
-      mode === "auto-restart-collected-retained-rollback";
-    const collectedRetained = mode === "auto-restart-collected-retained-rollback";
+      mode === "auto-restart-collected-retained-rollback" ||
+      nativeEntry;
+    const collectedRetained = mode === "auto-restart-collected-retained-rollback" || nativeEntry;
+    const collectedRuntime = nativeEntry ? useCollectedServiceRuntime() : undefined;
     const nativeRetained = mode === "auto-restart-retained-rollback" || collectedRetained;
     const observedStop = mode === "auto-restart-observed-stop-rollback";
     const nativeStopped =
@@ -319,7 +324,7 @@ it.each([
                   sourcePath: definition,
                 };
               },
-              readRuntime: async () => {
+              readRuntime: async (readEnv, inspection) => {
                 const last = recovery?.getRecord().nativeManager?.effects.at(-1);
                 if (
                   observedStop &&
@@ -332,6 +337,18 @@ it.each([
                 }
                 if (inspectionUnavailable) {
                   throw new Error("fixture interrupted after suppression dispatch");
+                }
+                if (
+                  collectedRuntime &&
+                  recovery?.getRecord().primaryFailure &&
+                  !enabled &&
+                  !running &&
+                  !autoRestarting
+                ) {
+                  const observed = await collectedRuntime.read(readEnv, inspection);
+                  if (observed) {
+                    return observed;
+                  }
                 }
                 return {
                   status: autoRestarting ? "unknown" : running ? "running" : "stopped",
@@ -734,6 +751,7 @@ it.each([
                   inspectionUnavailable = false;
                 },
                 collectedRetained ? "stop" : "suppress",
+                { verifyRefusals: !nativeEntry },
               );
               expect(events).toEqual(
                 collectedRetained
@@ -888,6 +906,7 @@ it.each([
             expect(recovery.assertReady).toThrow("No serving proof");
           });
           await resume?.();
+          collectedRuntime?.verify();
           if (nativeRetained) {
             expect(events).toEqual([
               "enable",

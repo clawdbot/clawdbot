@@ -163,11 +163,12 @@ export async function readLoadedSystemdServiceRuntime(
       // Ask the pinned manager for descendants and main/control PIDs instead.
       // Admission never loads. Owned inspection uses the unit-object method so
       // collection between queries can reload a definition, never start a process.
+      // GetProcesses belongs to the Service cgroup interface, not Unit.
       // Any failed or nonempty enumeration remains unknown.
       remainingQueries++;
       const [processes] = await query(
         inspection
-          ? ["call", owner, unitPath, `${MANAGER}.Unit`, "GetProcesses"]
+          ? ["call", owner, unitPath, `${MANAGER}.Service`, "GetProcesses"]
           : [
               "call",
               owner,

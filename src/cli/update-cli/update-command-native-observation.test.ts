@@ -181,3 +181,22 @@ it.each([undefined, true] as const)(
     expect(f.service.isEnabled).not.toHaveBeenCalled();
   },
 );
+
+it("identifies the runtime-state refusal without exposing native diagnostic payloads", async () => {
+  const f = await fixture();
+  vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+  vi.mocked(f.service.readRuntime).mockResolvedValue({
+    status: "unknown",
+    inspectionFailure: {
+      code: "service-runtime-inspection-failed",
+      detail: "private native payload must not be rendered",
+    },
+  });
+  const error = await readUpdateCommandNativeObservation(f.params).catch((value: unknown) => value);
+  expect(error).toBeInstanceOf(Error);
+  expect(String(error)).toContain(
+    "Original native-manager state cannot be verified. [runtime-state]",
+  );
+  expect(String(error)).not.toContain("private native payload");
+  expect(f.service.isEnabled).not.toHaveBeenCalled();
+});

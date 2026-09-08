@@ -32,8 +32,10 @@ export async function readUpdateCommandNativeObservation(params: {
   /** Only a live source/executor owner may reload a checkpoint-bound unit definition. */
   inspectOwnedUnit?: () => void;
 }): Promise<UpdateRecoveryNativeObservation> {
-  const unavailable = () =>
-    new UpdateCommandRecoveryPendingError("Original native-manager state cannot be verified.");
+  const unavailable = (reason?: string) =>
+    new UpdateCommandRecoveryPendingError(
+      `Original native-manager state cannot be verified.${reason ? ` [${reason}]` : ""}`,
+    );
   const source = params.record.source;
   if (!source || source.profile === undefined) {
     throw unavailable();
@@ -97,20 +99,36 @@ export async function readUpdateCommandNativeObservation(params: {
     timeoutMs: params.timeoutMs,
   });
   params.assertCurrent();
-  if (
-    !state.installed ||
-    !state.command?.sourcePath ||
-    state.loadState.status === "unknown" ||
-    (!["running", "stopped"].includes(state.runtime?.status ?? "") && !autoRestarting(state)) ||
-    resolveStateDir(state.env) !== source.stateDir ||
-    resolveConfigPath(state.env) !== source.configPath ||
-    (state.env.OPENCLAW_PROFILE?.trim() || null) !== source.profile ||
-    !isDeepStrictEqual(
-      [...new Set([state.command.sourcePath, ...(state.command.definitionPaths ?? [])])].toSorted(),
-      [...new Set(params.definitionPaths)].toSorted(),
-    )
-  ) {
-    throw unavailable();
+  // Report only fixed predicate names, never native output, paths or environment values.
+  if (!state.installed) {
+    throw unavailable("installation");
+  }
+  if (!state.command?.sourcePath) {
+    throw unavailable("command");
+  }
+  const failedStateChecks = [
+    [state.loadState.status === "unknown", "load-state"],
+    [
+      !(["running", "stopped"].includes(state.runtime?.status ?? "") || autoRestarting(state)),
+      "runtime-state",
+    ],
+    [resolveStateDir(state.env) !== source.stateDir, "state-directory"],
+    [resolveConfigPath(state.env) !== source.configPath, "config-path"],
+    [(state.env.OPENCLAW_PROFILE?.trim() || null) !== source.profile, "profile"],
+    [
+      !isDeepStrictEqual(
+        [
+          ...new Set([state.command.sourcePath, ...(state.command.definitionPaths ?? [])]),
+        ].toSorted(),
+        [...new Set(params.definitionPaths)].toSorted(),
+      ),
+      "definition-paths",
+    ],
+  ] as const;
+  for (const [failed, reason] of failedStateChecks) {
+    if (failed) {
+      throw unavailable(reason);
+    }
   }
   let belongsToRoot = await gatewayServiceCommandUsesRoot({
     root: params.record.from.root,
