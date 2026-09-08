@@ -1395,6 +1395,37 @@ describe("handleLineWebhookEvents", () => {
     expect(resolveLineQuotedMessage("default", messageId, "group-other")).toBeUndefined();
   });
 
+  it("makes a sticker quotable as the description the agent was given", async () => {
+    const processMessage = vi.fn();
+    const event = createTestMessageEvent({
+      message: {
+        id: "m-sticker-quotable",
+        type: "sticker",
+        packageId: "6136",
+        stickerId: "10979904",
+        stickerResourceType: "STATIC",
+        keywords: ["Thank you", "Thanks", "Grateful"],
+        quoteToken: "q-sticker",
+      },
+      source: { type: "group", groupId: "group-sticker", userId: "user-sticker" },
+      webhookEventId: "evt-sticker-quotable",
+    } as never);
+
+    await handleLineWebhookEvents(
+      [event],
+      createLineWebhookTestContext({ processMessage, groupPolicy: "open", requireMention: false }),
+    );
+
+    // A quote has to answer with what the reader already saw. The agent is given
+    // LINE's own keywords for a sticker, so `<sticker>` would be a second, poorer
+    // rendering of a message the turn already described.
+    expect(resolveLineQuotedMessage("default", "m-sticker-quotable", "group-sticker")).toEqual({
+      fromBot: false,
+      body: "[Sent a sticker: Thank you, Thanks, Grateful]",
+      senderId: "user-sticker",
+    });
+  });
+
   it("skips a group message quoting a message the bot did not send", async () => {
     const processMessage = vi.fn();
     const event = createTestMessageEvent({

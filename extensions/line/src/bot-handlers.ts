@@ -49,6 +49,7 @@ import {
   resolveLineConversationId,
   buildLinePostbackContext,
   getLineSourceInfo,
+  extractLineMessageText,
   readLineTextMessageBody,
   type LineInboundContext,
   type LineInboundMentionAccess,
@@ -411,10 +412,11 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
   }
 
   const { isGroup, groupId, roomId, userId } = getLineSourceInfo(event.source);
-  // Text a later quote of this message must resolve to. Non-text messages keep
-  // the same kind marker the ambient window shows, so both readers agree.
-  const quotableBody =
-    (message.type === "text" ? readLineTextMessageBody(message) : "") || `<${message.type}>`;
+  // Text a later quote of this message must resolve to. It is the same string the
+  // agent is given for this message — a sticker's description, a formatted
+  // location — so a quote answers with what the reader already saw. A message that
+  // carried only media has no such text and keeps its kind marker.
+  const quotableBody = extractLineMessageText(message) || `<${message.type}>`;
   if (isGroup && decision.access.activationAccess.shouldSkip) {
     const historyKey = groupId ?? roomId;
     const groupsConfigPath = resolveChannelGroupsConfigPath({

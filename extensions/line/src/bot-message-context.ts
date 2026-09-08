@@ -229,7 +229,8 @@ export function readLineTextMessageBody(message: webhook.TextMessageContent): st
   return text;
 }
 
-function extractMessageText(message: MessageEvent["message"]): string {
+/** The text this message reaches the agent as; empty when it carries only media. */
+export function extractLineMessageText(message: MessageEvent["message"]): string {
   if (message.type === "text") {
     return readLineTextMessageBody(message);
   }
@@ -341,12 +342,9 @@ async function finalizeLineInboundContext(params: {
     params.quote?.messageId,
     params.source.peerId,
   );
-  // A LINE webhook carries no display name and no group name, so each of those is
-  // its own lookup. They are cached and run together below, and none of them can
-  // reject: `getUserProfile` and `getLineGroupName` answer null on any failure
-  // (`send.ts`), so an unreachable profile costs a name, never the turn. The
-  // access-group expansion joins them as the fourth input this context needs; it
-  // reads config only and has no failure to absorb.
+  // A LINE webhook carries no display name and no group name, so each is its own
+  // cached lookup. None can reject — `getUserProfile` and `getLineGroupName` answer
+  // null on any failure — so an unreachable profile costs a name, never the turn.
   const resolveDisplayName = (userId: string | undefined) =>
     userId
       ? getUserProfile(userId, {
@@ -378,14 +376,10 @@ async function finalizeLineInboundContext(params: {
     resolveDisplayName(quoted?.senderId),
     resolveQuotedSenderAccessGroup(),
   ]);
-  // A quote carries one sender string and no id field, so this label is the only place
-  // the author survives: the id rides along with the name because two group members can
-  // share a display name, the same pairing the ambient window makes (`bot-handlers.ts`),
-  // and the bot's own message is named rather than left blank so that "you said that"
-  // and "I no longer hold that message" stop reading alike. "Assistant" is core's own
-  // word for an assistant turn in rendered context
-  // (`session-transcript-context.runtime.ts`). An unreachable profile degrades to the
-  // raw id rather than erasing the author.
+  // One sender string, no id field, so both facts ride in the label: the id because
+  // group members can share a display name (the pairing `bot-handlers.ts` already
+  // makes), and the bot's own name because otherwise "you said that" and "I no longer
+  // hold that message" read alike. "Assistant" is core's word for an assistant turn.
   const quotedSenderLabel = quoted?.fromBot
     ? "Assistant"
     : quoted?.senderId
@@ -465,10 +459,9 @@ async function finalizeLineInboundContext(params: {
     channel: "line",
     accountId: params.account.accountId,
   });
-  // A quote the policy drops leaves no trace of its own: core filters silently, and an
-  // operator cannot otherwise tell a policy decision apart from a quote this account no
-  // longer remembers. Ask the owner of the rule rather than re-deriving it here, so the
-  // `allowlist_quote` exception cannot drift out of this log line.
+  // Core filters silently, so without this an operator cannot tell a policy decision
+  // apart from a quote this account no longer holds. Asked of the rule's owner rather
+  // than re-derived, so the `allowlist_quote` exception cannot drift out of the log.
   if (
     quoteFacts &&
     !evaluateSupplementalContextVisibility({
@@ -477,7 +470,14 @@ async function finalizeLineInboundContext(params: {
       senderAllowed: quoteFacts.senderAllowed,
     }).include
   ) {
-    logVerbose(`line: drop quoted context (mode=${contextVisibilityMode})`);
+    // Name which of the two it was: an author the policy refused, or an id this
+    // account no longer holds and so has no author to check. They call for
+    // different answers and the message is the only place they differ.
+    logVerbose(
+      `line: drop quoted context (mode=${contextVisibilityMode}, ${
+        quoted ? "sender not allowed" : "message not held"
+      })`,
+    );
   }
 
   const ctxPayload = (params.buildContext ?? buildChannelInboundEventContext)({
@@ -603,7 +603,7 @@ export async function buildLineMessageContext(params: BuildLineMessageContextPar
   const quotedMessageId = readLineQuotedMessageId(message);
   const timestamp = event.timestamp;
 
-  const textContent = extractMessageText(message);
+  const textContent = extractLineMessageText(message);
   const nativeMediaKind = extractNativeMediaKind(message);
   const mediaFacts: ChannelInboundMediaInput[] =
     allMedia.length > 0

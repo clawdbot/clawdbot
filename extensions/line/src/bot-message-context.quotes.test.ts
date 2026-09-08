@@ -202,7 +202,29 @@ describe("buildLineMessageContext quotes", () => {
       commandAuthorized: true,
     });
 
-    expect(logVerboseMock).toHaveBeenCalledWith("line: drop quoted context (mode=allowlist)");
+    expect(logVerboseMock).toHaveBeenCalledWith(
+      "line: drop quoted context (mode=allowlist, sender not allowed)",
+    );
+  });
+
+  it("distinguishes a dropped quote this account no longer holds", async () => {
+    logVerboseMock.mockClear();
+
+    await buildLineMessageContext({
+      groupPolicy: "allowlist",
+      groupAllowFrom: ["user-asking"],
+      event: quotingEvent("m-evicted", "what about this?"),
+      allMedia: [],
+      cfg: { ...cfg, channels: { defaults: { contextVisibility: "allowlist" } } },
+      account,
+      commandAuthorized: true,
+    });
+
+    // Same mode, same outcome, different cause: one is a policy decision the
+    // operator can change, the other is a message that aged out.
+    expect(logVerboseMock).toHaveBeenCalledWith(
+      "line: drop quoted context (mode=allowlist, message not held)",
+    );
   });
 
   it("keeps a quote from a sender named only through a static access group", async () => {

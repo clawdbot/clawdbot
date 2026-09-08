@@ -6,12 +6,9 @@ import { truncateCodePoints } from "openclaw/plugin-sdk/text-utility-runtime";
 /** One message a later quote can name, as this account already knew it. */
 export type LineQuotedMessage = {
   /**
-   * Text of a message this conversation already admitted. Admission, not the
-   * prompt, is the boundary: the ambient window and the prompt each keep far
-   * fewer messages than this store, so a body here may be older than anything
-   * the agent can still see. A non-text message keeps the marker the ambient
-   * window shows (`<image>`); only a message this account sent has no body,
-   * because outbound text is never retained.
+   * The text this conversation already admitted, as the agent was given it. This
+   * store outlives both the chat window and the prompt, so a body here can be
+   * older than anything still visible; only a message this account sent has none.
    */
   body?: string;
   /** LINE user id of the sender; absent for a message this account sent. */
@@ -21,36 +18,24 @@ export type LineQuotedMessage = {
 };
 
 /**
- * A stored answer plus the conversation that is allowed to receive it. An event
- * whose source names no group, room, or user shares one bucket with every other
- * such event; that needs a signed webhook with no identifiable source, so the
- * bucket is accepted rather than guarded.
+ * A stored answer plus the conversation allowed to receive it. Events whose source
+ * names nothing share one bucket, which needs a signed webhook with no source.
  */
 type LineInboundRecord = { quoted: LineQuotedMessage; conversationId: string };
 
-// LINE's webhook reports a quoted message's id but never its author or its text,
-// so the only way to answer "what was quoted" is to remember what passed through.
-// Bounded and in memory on purpose: after a restart a quote resolves to its id
-// alone, which is all LINE carries, rather than to a stale body.
+// LINE's webhook names a quoted message by id alone, so answering "what was quoted"
+// means remembering what passed through. In memory on purpose: after a restart a
+// quote resolves to the id LINE carries rather than to a stale body.
 const MESSAGE_LIMIT = 500;
 
-// Bounds the store against a body LINE should not have accepted in the first
-// place. It sits at LINE's own text limit, deliberately above the prompt's cap:
-// shortening a quote for the model belongs to the prompt layer, which keeps the
-// actionable tail that a cut here would drop. LINE counts that limit in code
-// points, so this one is measured the same way — counting UTF-16 units would cut
-// a body of emoji or other non-BMP text at half the length LINE accepted.
+// LINE's own text limit, deliberately above the prompt's cap: shortening a quote
+// for the model belongs to the prompt layer. Counted in code points as LINE counts
+// it, so emoji are not cut at half the length LINE accepted.
 const QUOTED_BODY_MAX_CODE_POINTS = 5000;
 
-// The bounds are per account, not shared: LINE runs several configured accounts in
-// one process, and a busy account must not evict a quiet one's entries or the
-// quiet bot silently stops resolving quotes. The registries only grow with
-// configured accounts that have actually seen a message.
-//
-// Sent ids and received messages are also bounded apart, one budget each. A group
-// produces inbound traffic in bursts while the bot answers a handful of times, so
-// one shared bound would evict the bot's own ids within minutes and quoting the
-// bot would silently stop counting as addressing it.
+// Per account, and sent ids apart from received ones: a busy account must not evict
+// a quiet one's entries, and one shared bound would let a group's inbound burst
+// evict the bot's own ids, silently ending quote-the-bot as a way of addressing it.
 const sentByAccount = new Map<string, Map<string, true>>();
 const receivedByAccount = new Map<string, Map<string, LineInboundRecord>>();
 
@@ -80,12 +65,9 @@ export function recordLineSentMessages(accountId: string, messageIds: readonly s
 }
 
 /**
- * Records an admitted inbound message on its way to the agent, either as the
- * turn's own message or as an entry in the group's ambient window. Admission,
- * not the turn's outcome, is the boundary: a failed turn does not roll the
- * ambient window back, and quotes stay answerable to match. Messages the
- * allowlist turned away never reach a caller, so a quote can only ever resolve
- * to content this conversation had already admitted.
+ * Records an admitted inbound message on its way to the agent. Admission, not the
+ * turn's outcome, is the boundary: a failed turn does not roll the ambient window
+ * back, and a message the allowlist turned away never reaches this at all.
  */
 export function recordLineAgentVisibleMessage(
   accountId: string,
