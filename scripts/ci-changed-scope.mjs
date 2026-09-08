@@ -110,7 +110,7 @@ const WINDOWS_WORKSPACE_QUIESCENCE_SCOPE_RE =
 const WINDOWS_WORKER_BUNDLE_SCOPE_RE =
   /^src\/(?:shared\/worker-bundle-(?:archive|hash)(?:\.test)?|gateway\/worker-environments\/bundle(?:-staging)?(?:\.test)?|node-host\/node-worker-bundle-installer(?:\.test)?)\.ts$/;
 const WINDOWS_WORKER_WORKSPACE_SCOPE_RE =
-  /^src\/(?:node-host\/node-worker-transfer-client(?:\.test)?|gateway\/worker-environments\/(?:node-worker-tunnel(?:\.test)?|workspace-sync-(?:scripts|manifest\.test)))\.ts$/;
+  /^src\/(?:infra\/git-exec(?:\.test)?|agents\/worktrees\/(?:git|base-ref)(?:\.test)?|node-host\/node-worker-transfer-client(?:\.test)?|gateway\/worker-environments\/(?:node-worker-tunnel(?:\.test)?|workspace-result-(?:git(?:\.test)?|staging|ref-mutation\.test)|session-repository-checkpoints(?:\.test)?|workspace-sync-(?:scripts|manifest\.test)))\.ts$/;
 const CONTROL_UI_I18N_SCOPE_RE =
   /^(ui\/src\/i18n\/|ui\/config\/control-ui-locales\.ts$|scripts\/(?:control-ui-i18n(?:-verify)?\.ts|lib\/control-ui-i18n-(?:(?:catalog|config|raw-copy|sync-plan)\.ts|config\.json))$|\.github\/workflows\/control-ui-locale-refresh\.yml$)/;
 const CONTROL_UI_RAW_COPY_SOURCE_RE = /^ui\/src\/(?:app|components|lib|pages)\/.*\.tsx?$/;
@@ -566,7 +566,7 @@ export function shouldRunNativeI18n(changedPaths) {
   return (
     !Array.isArray(changedPaths) ||
     changedPaths.length === 0 ||
-    changedPaths.some((path) => NATIVE_I18N_SCOPE_RE.test(path.trim()))
+    changedPaths.some((path) => NATIVE_I18N_SCOPE_RE.test(path))
   );
 }
 
@@ -670,15 +670,16 @@ export function listChangedPaths(
     cwd,
     preferFirstParent: preferMergeHeadFirstParent,
   });
-  const output = execFileSync("git", ["diff", "--no-renames", "--name-only", diffBase, head], {
-    cwd,
-    stdio: ["ignore", "pipe", "pipe"],
-    encoding: "utf8",
-  });
-  return output
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0);
+  const output = execFileSync(
+    "git",
+    ["diff", "--no-renames", "--name-only", "-z", diffBase, head],
+    {
+      cwd,
+      stdio: ["ignore", "pipe", "pipe"],
+      encoding: "utf8",
+    },
+  );
+  return output.split("\0").filter(Boolean);
 }
 
 /**

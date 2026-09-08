@@ -1,6 +1,22 @@
 import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import type { ClientOptions } from "ws";
+
+const { captureWsEventMock, webSocketConstructorMock } = vi.hoisted(() => ({
+  captureWsEventMock: vi.fn(),
+  webSocketConstructorMock: vi.fn(),
+}));
+
+vi.mock("openclaw/plugin-sdk/proxy-capture", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/proxy-capture")>();
+  return { ...actual, captureWsEvent: captureWsEventMock };
+});
+
+vi.mock("ws", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("ws")>();
+  return { ...actual, default: webSocketConstructorMock };
+});
+
 import { openAIRealtimeHost } from "./realtime-host.js";
 import { OpenAIQuicksilverVoiceBridge } from "./realtime-quicksilver-bridge.js";
 import type {
@@ -69,7 +85,9 @@ function createHarness(params?: {
   autoStart?: boolean;
   deferClose?: boolean;
   afterOpen?: (socket: FakeSocket) => void;
+  model?: string;
   resolveAuth?: () => Promise<{ type: "api-key"; token: string }>;
+  useDefaultSocket?: boolean;
 }) {
   const socket = new FakeSocket(params?.autoStart, params?.afterOpen);
   socket.deferClose = params?.deferClose ?? false;
@@ -79,7 +97,15 @@ function createHarness(params?: {
     queueMicrotask(() => socket.open());
     return socket as unknown as OpenAIQuicksilverSocket;
   };
+  if (params?.useDefaultSocket) {
+    webSocketConstructorMock.mockImplementation(function (url: string, options: ClientOptions) {
+      connections.push({ url, options });
+      queueMicrotask(() => socket.open());
+      return socket;
+    });
+  }
   const onAudio = vi.fn();
+  const onClearAudio = vi.fn();
   const onTranscript = vi.fn();
   const onToolCall = vi.fn();
   const onReady = vi.fn();
@@ -90,7 +116,7 @@ function createHarness(params?: {
   const bridge = new OpenAIQuicksilverVoiceBridge(
     {
       providerConfig: {},
-      model: "gpt-live-1-codex",
+      model: params?.model ?? "gpt-live-test-canary",
       voice: "spruce",
       instructions: "Use delegation for real work.",
       audioFormat:
@@ -98,9 +124,9 @@ function createHarness(params?: {
           ? { encoding: "g711_ulaw", sampleRateHz: 8000, channels: 1 }
           : { encoding: "pcm16", sampleRateHz: 24000, channels: 1 },
       resolveAuth: params?.resolveAuth ?? (async () => ({ type: "api-key", token: "test-key" })),
-      webSocketFactory,
+      ...(params?.useDefaultSocket ? {} : { webSocketFactory }),
       onAudio,
-      onClearAudio: vi.fn(),
+      onClearAudio,
       onTranscript,
       onToolCall,
       onReady,
@@ -116,6 +142,7 @@ function createHarness(params?: {
     connections,
     logger,
     onAudio,
+    onClearAudio,
     onClose,
     onError,
     onEvent,
@@ -136,7 +163,9 @@ describe("OpenAIQuicksilverVoiceBridge", () => {
     await harness.bridge.connect();
 
     expect(harness.connections).toHaveLength(1);
-    expect(harness.connections[0]?.url).toBe("wss://api.openai.com/v1/live?model=gpt-live-1-codex");
+    expect(harness.connections[0]?.url).toBe(
+      "wss://api.openai.com/v1/live?model=gpt-live-test-canary",
+    );
     expect(harness.connections[0]?.options.headers).toMatchObject({
       Authorization: "Bearer test-key",
       "OpenAI-Alpha": "quicksilver=v2",
@@ -145,7 +174,7 @@ describe("OpenAIQuicksilverVoiceBridge", () => {
       type: "session.update",
       session: {
         instructions: "Use delegation for real work.",
-        audio: { output: { voice: "spruce" } },
+        audio: { output: { voice: "marin" } },
         delegation: { type: "client" },
       },
     });
@@ -261,7 +290,7 @@ describe("OpenAIQuicksilverVoiceBridge", () => {
     const bridge = new OpenAIQuicksilverVoiceBridge(
       {
         providerConfig: {},
-        model: "gpt-live-1-codex",
+        model: "gpt-live-test-canary",
         audioFormat: { encoding: "pcm16", sampleRateHz: 24000, channels: 1 },
         resolveAuth: async () => ({ type: "api-key", token: "test-key" }),
         webSocketFactory: (_url, _options) => {
@@ -311,7 +340,7 @@ describe("OpenAIQuicksilverVoiceBridge", () => {
       error: { message: "invalid live session" },
     });
 
-    await expect(connecting).rejects.toThrow("invalid live session");
+    await expect(connecting).rejects.toThrow("OpenAI GPT-Live transport failed");
     expect(harness.onError).not.toHaveBeenCalled();
     expect(harness.onClose).not.toHaveBeenCalled();
     expect(harness.bridge.isConnected()).toBe(false);
@@ -372,9 +401,11 @@ describe("OpenAIQuicksilverVoiceBridge", () => {
 
     expect(harness.onReady).toHaveBeenCalledOnce();
     if (reason === "error") {
-      expect(harness.onError).toHaveBeenCalledWith(
-        new Error("GPT-Live WebSocket closed during startup"),
-      );
+      expect(harness.onError).toHaveBeenCalledOnce();
+      expect(harness.onError.mock.calls[0]?.[0]).toMatchObject({
+        message: "OpenAI GPT-Live transport failed",
+        name: "Error",
+      });
     } else {
       expect(harness.onError).not.toHaveBeenCalled();
     }
@@ -389,6 +420,7 @@ describe("OpenAIQuicksilverVoiceBridge", () => {
       type: "output_audio.delta",
       audio: Buffer.from([1, 2, 3, 4]).toString("base64"),
     });
+    harness.socket.serverEvent({ type: "output_audio_buffer.cleared" });
     harness.socket.serverEvent({
       type: "input_transcript.added",
       item: { text: "hello" },
@@ -408,6 +440,11 @@ describe("OpenAIQuicksilverVoiceBridge", () => {
     });
 
     expect(harness.onAudio).toHaveBeenCalledWith(Buffer.from([1, 2, 3, 4]));
+    expect(harness.onEvent).toHaveBeenCalledWith({
+      direction: "server",
+      type: "output_audio_buffer.cleared",
+    });
+    expect(harness.onClearAudio).toHaveBeenCalledExactlyOnceWith("barge-in");
     expect(harness.onTranscript).toHaveBeenNthCalledWith(1, "user", "hello", false);
     expect(harness.onTranscript).toHaveBeenNthCalledWith(2, "user", "hello there", true);
     expect(harness.onToolCall).toHaveBeenCalledWith({
@@ -424,6 +461,98 @@ describe("OpenAIQuicksilverVoiceBridge", () => {
       channel: "speakable",
       content: [{ type: "input_text", text: "The repository is clean." }],
     });
+  });
+
+  it("redacts the opaque model from direct provider errors", async () => {
+    const model = "gpt-live-test-canary";
+    const sensitiveDetails = ["sensitive-route", "sensitive-session", "sensitive-transcript"];
+    const harness = createHarness();
+    await harness.bridge.connect();
+    harness.socket.serverEvent({
+      type: "error",
+      error: {
+        message: `provider rejected ${model} ${sensitiveDetails.join(" ")}`,
+        code: "invalid_api_key",
+      },
+    });
+
+    expect(harness.onError).toHaveBeenCalledOnce();
+    const projectedError = harness.onError.mock.calls[0]?.[0];
+    expect(projectedError).toBeInstanceOf(Error);
+    expect(projectedError?.name).toBe("Error");
+    expect(projectedError?.message).toBe("OpenAI GPT-Live transport failed");
+    expect(projectedError?.cause).toBeUndefined();
+    const projected = JSON.stringify({
+      events: harness.onEvent.mock.calls,
+    });
+    for (const privateValue of [model, ...sensitiveDetails]) {
+      expect(projected).not.toContain(privateValue);
+    }
+  });
+
+  it("redacts raw startup and active transport errors", async () => {
+    const model = "sensitive-model-marker";
+    const sensitiveDetails = ["sensitive-route", "sensitive-session", "sensitive-transcript"];
+    const startup = createHarness({
+      autoStart: false,
+      model,
+      afterOpen: (socket) => {
+        const error = new Error(`startup rejected ${model} ${sensitiveDetails.join(" ")}`);
+        error.name = `Transport${model}`;
+        socket.emit("error", error);
+      },
+    });
+
+    const startupError = await startup.bridge.connect().catch((error: unknown) => error);
+    expect(startupError).toBeInstanceOf(Error);
+    expect(startupError).toMatchObject({
+      message: "OpenAI GPT-Live transport failed",
+      name: "Error",
+    });
+
+    const active = createHarness({ model });
+    await active.bridge.connect();
+    const error = new Error(`active transport failed ${model}`);
+    error.name = `Socket${model}`;
+    active.socket.emit("error", error);
+
+    expect(active.onError).toHaveBeenCalledOnce();
+    const activeError = active.onError.mock.calls[0]?.[0] as Error;
+    expect(activeError).toBeInstanceOf(Error);
+    expect(activeError).toMatchObject({
+      message: "OpenAI GPT-Live transport failed",
+      name: "Error",
+    });
+  });
+
+  it("captures only fixed metadata for private transport activity", async () => {
+    captureWsEventMock.mockClear();
+    const model = "sensitive-model-marker";
+    const transcript = "sensitive-frame-marker";
+    const harness = createHarness({ model, useDefaultSocket: true });
+
+    await harness.bridge.connect();
+    harness.bridge.sendUserMessage(transcript);
+    harness.socket.serverEvent({
+      type: "turn.done",
+      turn: { role: "user", transcript },
+    });
+
+    expect(harness.connections[0]?.options).not.toHaveProperty("agent");
+    expect(captureWsEventMock).toHaveBeenCalled();
+    const captureCalls = captureWsEventMock.mock.calls as Array<[Record<string, unknown>]>;
+    for (const [event] of captureCalls) {
+      expect(event).toEqual({
+        url: "wss://realtime.invalid/private",
+        direction: expect.stringMatching(/^(inbound|outbound|local)$/),
+        kind: expect.stringMatching(/^ws-(frame|open)$/),
+        flowId: "private-realtime",
+        meta: { provider: "openai", capability: "gpt-live-voice" },
+      });
+    }
+    const captured = JSON.stringify(captureCalls);
+    expect(captured).not.toContain(model);
+    expect(captured).not.toContain(transcript);
   });
 
   it("bounds direct tool results before sideband sends", async () => {

@@ -78,8 +78,8 @@ When `hooks.enabled=true`, the Gateway also exposes a webhook endpoint on the sa
 
 - Gateway auth is required by default: token, password, trusted-proxy, or Tailscale Serve identity headers when enabled.
 - Non-loopback binds still **require** gateway auth: token/password auth or an identity-aware reverse proxy with `gateway.auth.mode: "trusted-proxy"`.
-- The onboarding wizard creates shared-secret auth by default and usually generates a gateway token, even on loopback.
-- In shared-secret mode, the UI sends `connect.params.auth.token` or `connect.params.auth.password` during the WebSocket handshake.
+- Local onboarding generates a Gateway secret in token mode by default, even on loopback, without asking token versus password. Existing password mode is preserved; `--gateway-auth password` or `--gateway-password <value>` selects it explicitly. Funnel still requires password mode.
+- The UI uses one **Gateway secret** field. The Gateway accepts the secret in either `connect.params.auth.token` or `connect.params.auth.password`; `gateway.auth.mode` selects the configured value. After a successful token-mode connection, the UI remembers the secret in session storage for the current browser tab and Gateway only. Passwords stay in memory and are never persisted.
 - With `gateway.tls.enabled: true`, local dashboard/status helpers render `https://` URLs and `wss://` WebSocket URLs.
 - In identity-bearing modes (Tailscale Serve, `trusted-proxy`), the WebSocket auth check is satisfied from request headers instead of a shared secret.
 - For public non-loopback Control UI deployments, set `gateway.controlUi.allowedOrigins` explicitly (full origins). Private same-origin loads are accepted without it for loopback, RFC1918/link-local, `.local`, `.ts.net`, and Tailscale CGNAT hosts.

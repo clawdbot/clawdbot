@@ -100,6 +100,8 @@ default agent.
 
 The skills table renders horizontal tabs as single spaces so descriptions
 stay aligned with the neighboring columns.
+JSON output preserves tabs and line endings in descriptions and paths as escaped
+characters.
 
 `info` resolves an exact skill name before a metadata key. Key, case-insensitive,
 and separator-normalized matches must identify one skill; ambiguous selectors

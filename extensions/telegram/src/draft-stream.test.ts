@@ -563,8 +563,7 @@ describe("createTelegramDraftStream", () => {
           },
         });
         // Reposition: rewind for a new message; the old one's delete is deferred.
-        const superseded = stream.rotateToNewMessageDeferringDelete();
-        expect(superseded).toBe(17);
+        stream.rotateToNewMessageDeferringDelete();
 
         // The replacement lands before detached cleanup, so the old message
         // still owns the single-use reply and the replacement must omit it.
@@ -601,7 +600,7 @@ describe("createTelegramDraftStream", () => {
     const api = createMockDraftApi();
     const stream = createThreadedDraftStream(api, { id: 42, scope: "dm" });
 
-    expect(stream.rotateToNewMessageDeferringDelete()).toBeUndefined();
+    stream.rotateToNewMessageDeferringDelete();
     expect(api.deleteMessage).not.toHaveBeenCalled();
   });
 

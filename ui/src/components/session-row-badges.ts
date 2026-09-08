@@ -205,14 +205,12 @@ export function renderSessionRowBadges(params: {
 
 export function resolveSidebarConnectionStatus(props: {
   offline: boolean;
+  phase?: ApplicationGatewaySnapshot["phase"];
   restartPending?: boolean;
   suspensionPhase?: ApplicationGatewaySnapshot["suspensionPhase"];
 }) {
   if (props.restartPending) {
     return "restarting";
-  }
-  if (props.offline) {
-    return "offline";
   }
   switch (props.suspensionPhase) {
     case "preparing":
@@ -221,7 +219,10 @@ export function resolveSidebarConnectionStatus(props: {
     case "prepared":
       return "suspended";
     default:
-      return null;
+      if (props.phase === "connecting" || props.phase === "starting") {
+        return "connecting";
+      }
+      return props.offline ? "offline" : null;
   }
 }
 

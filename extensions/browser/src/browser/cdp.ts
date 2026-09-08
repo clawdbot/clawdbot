@@ -108,7 +108,7 @@ export async function captureScreenshot(opts: {
       await send("Page.enable");
 
       // Headless background tabs need activation to produce a frame. Preserve
-      // focus only when the launched process is authoritatively known headed.
+      // focus only when the browser process is authoritatively known headed.
       if (opts.headless !== false) {
         await send("Page.bringToFront").catch(() => {});
       }

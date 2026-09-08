@@ -115,12 +115,10 @@ export function renderNewSessionPlaceControls({
   return html`${
     nativeTerminal
       ? renderNewSessionTerminalHost({
-          hosts: data?.terminalHosts ?? [],
+          hosts: data?.terminalHosts,
           hostId: place.terminalHostId,
           submitting,
-          refreshing: gateway.catalogRetrying,
           onSelect: (hostId) => place.selectTerminalHost(hostId),
-          onRefresh: gateway.handleCatalogRetry,
         })
       : renderWhereChip({
           state: whereState,

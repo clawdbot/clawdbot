@@ -143,6 +143,28 @@ describe("skills-cli (e2e)", () => {
     },
   );
 
+  it("preserves description and path whitespace in skills JSON output", async () => {
+    const workspaceDir = fs.mkdtempSync(path.join(tempWorkspaceDir, "json-whitespace-"));
+    const managedSkillsDir = path.join(workspaceDir, "managed\tlocal");
+    const description = "First paragraph.\nSecond\tcolumn.\r\nThird paragraph.";
+    await writeWorkspaceSkills(workspaceDir, [
+      { name: "json-whitespace", description: JSON.stringify(description) },
+    ]);
+    const report = buildWorkspaceSkillStatus(workspaceDir, {
+      managedSkillsDir,
+      config: { plugins: { enabled: false } },
+    });
+    expect(report.skills[0]?.description).toBe(description);
+
+    const list = JSON.parse(formatSkillsList(report, { json: true }));
+    const info = JSON.parse(formatSkillInfo(report, "json-whitespace", { json: true }));
+    const check = JSON.parse(formatSkillsCheck(report, { json: true }));
+    expect(list.skills[0].description).toBe(description);
+    expect(info.description).toBe(description);
+    expect(list.managedSkillsDir).toBe(managedSkillsDir);
+    expect(check.managedSkillsDir).toBe(managedSkillsDir);
+  });
+
   it("reports missing prerequisites for discovered agent-excluded skills", async () => {
     const missingBin = "qa35-fixture-absent-binary";
     await writeWorkspaceSkills(tempWorkspaceDir, [

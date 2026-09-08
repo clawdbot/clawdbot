@@ -55,9 +55,6 @@ const POLL_SPAWN_TIMEOUT_MS = 400;
 const MAX_ANCESTOR_WALK_DEPTH = 32;
 
 const restartLog = createSubsystemLogger("restart");
-const sleepSyncOverride: ((ms: number) => void) | null = null;
-const dateNowOverride: (() => number) | null = null;
-const parentPidOverride: (() => number) | null = null;
 
 /** Terminate externally discovered stale gateway processes and allow cleanup to settle. */
 export async function terminateStaleGatewayPids(pids: number[]): Promise<number[]> {
@@ -73,17 +70,9 @@ export async function terminateStaleGatewayPids(pids: number[]): Promise<number[
   return targets;
 }
 
-function getTimeMs(): number {
-  return dateNowOverride ? dateNowOverride() : Date.now();
-}
-
 function sleepSync(ms: number): void {
   const timeoutMs = Math.max(0, Math.floor(ms));
   if (timeoutMs <= 0) {
-    return;
-  }
-  if (sleepSyncOverride) {
-    sleepSyncOverride(timeoutMs);
     return;
   }
   try {
@@ -95,10 +84,6 @@ function sleepSync(ms: number): void {
       // Best-effort fallback when Atomics.wait is unavailable.
     }
   }
-}
-
-function getParentPid(): number {
-  return parentPidOverride ? parentPidOverride() : process.ppid;
 }
 
 /**
@@ -178,7 +163,7 @@ export function getSelfAndAncestorPidsSync(
   spawnTimeoutMs = PROCESS_INSPECTION_TIMEOUT_MS,
 ): Set<number> {
   const pids = new Set<number>([process.pid]);
-  const immediateParent = getParentPid();
+  const immediateParent = process.ppid;
   if (!Number.isFinite(immediateParent) || immediateParent <= 0) {
     return pids;
   }
@@ -640,8 +625,8 @@ function isProcessAlive(pid: number): boolean {
  *   - Wall-clock deadline exceeded                               → log warning, proceed anyway
  */
 function waitForPortFreeSync(port: number): void {
-  const deadline = getTimeMs() + PORT_FREE_TIMEOUT_MS;
-  while (getTimeMs() < deadline) {
+  const deadline = Date.now() + PORT_FREE_TIMEOUT_MS;
+  while (Date.now() < deadline) {
     const result = pollPortOnce(port);
     if (result.free === true) {
       return;

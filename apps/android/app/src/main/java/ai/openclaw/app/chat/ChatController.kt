@@ -398,6 +398,7 @@ class ChatController internal constructor(
   private val activeSessionReads = mutableSetOf<SessionSettingsRead>()
   private val progressCardUpgradeError = nativeText("Update the gateway to load progress cards for this agent.")
   private val sessionSettingsRefreshError = nativeText("Could not refresh session settings. Refresh before sending.")
+  private val chatMetadataRefreshError = nativeText("Could not refresh models. Previous choices are unchanged. Tap Refresh to retry.")
 
   // Guarded by gatewayScopeApplyLock; stable gateway keys retain choices across reconnects.
   private val lastSelectedChatSessionByOwner = mutableMapOf<ChatAgentSessionSelectionOwner, RememberedChatSession>()
@@ -1228,9 +1229,12 @@ class ChatController internal constructor(
     bootstrap(sessionKey = nextState.currentSessionKey, generation = generation)
   }
 
-  /** Refreshes current chat history and session list without clearing optimistic messages first. */
+  /** Refreshes chat history, sessions, and model choices without clearing optimistic messages first. */
   fun refresh() {
-    updateErrorText(null)
+    synchronized(gatewayScopeApplyLock) {
+      if (_errorText.value != chatMetadataRefreshError) updateErrorText(null)
+    }
+    refreshCommands()
     refreshHistoryForRecovery(forceHealth = true)
   }
 
@@ -5156,13 +5160,15 @@ class ChatController internal constructor(
   private suspend fun fetchChatMetadata(requestSequence: Long = chatMetadataRequestSequence.incrementAndGet()) {
     val requestCacheScope = currentCacheScope()
     val metadataScope = currentChatMetadataScope() ?: return
-    synchronized(gatewayScopeApplyLock) {
-      if (requestSequence != chatMetadataRequestSequence.get()) return
-      if (chatMetadataScope != metadataScope) {
-        clearChatMetadata(metadataScope)
-        disableSwarmProgress()
+    val requestSelection =
+      synchronized(gatewayScopeApplyLock) {
+        if (requestSequence != chatMetadataRequestSequence.get()) return
+        if (chatMetadataScope != metadataScope) {
+          clearChatMetadata(metadataScope)
+          disableSwarmProgress()
+        }
+        currentSessionActionSnapshot(_sessionKey.value)
       }
-    }
     var shouldRefreshSwarm = false
     var shouldDisableSwarm = false
     try {
@@ -5189,10 +5195,26 @@ class ChatController internal constructor(
           synchronized(swarmLock) { swarmEnabled = metadataSwarmEnabled }
           shouldRefreshSwarm = metadataSwarmEnabled
           shouldDisableSwarm = !metadataSwarmEnabled
+          if (requestSelection != null && isCurrentSessionAction(requestSelection) && _errorText.value == chatMetadataRefreshError) {
+            updateErrorText(null)
+          }
         }
       }
+    } catch (err: CancellationException) {
+      throw err
     } catch (_: Throwable) {
-      // A transport failure is not a replacement availability or capability snapshot.
+      synchronized(gatewayScopeApplyLock) {
+        if (
+          requestSequence == chatMetadataRequestSequence.get() &&
+          requestCacheScope == currentCacheScope() &&
+          metadataScope == currentChatMetadataScope() &&
+          requestSelection != null &&
+          isCurrentSessionAction(requestSelection) &&
+          _errorText.value == null
+        ) {
+          updateLocalizedErrorText(chatMetadataRefreshError)
+        }
+      }
     }
     when {
       shouldRefreshSwarm -> refreshSwarmSessions()

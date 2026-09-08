@@ -457,13 +457,26 @@ suite.define(() => {
       });
     },
   );
-  it.each(["openai", "example"])(
-    "keeps %s non-reasoning capabilities reachable without a model-menu bridge",
-    async (provider) => {
+  it.each([
+    { provider: "openai", reasoning: false, capability: "non-reasoning" },
+    { provider: "example", reasoning: false, capability: "non-reasoning" },
+    { provider: "metadata-fixture", reasoning: true, capability: "no-effort" },
+  ])(
+    "keeps $provider $capability capabilities reachable without a model-menu bridge",
+    async ({ provider, reasoning }) => {
       await suite.withPage({ viewport: { width: 320, height: 852 } }, async ({ page }) => {
         const gateway = await installMockGateway(page, {
           agentModel: `${provider}/basic`,
-          models: [{ id: "basic", provider, name: "Basic", reasoning: false, thinkingLevels: [] }],
+          models: [
+            {
+              id: "basic",
+              provider,
+              name: "Basic",
+              reasoning,
+              thinkingLevels: [],
+              thinkingDefault: "off",
+            },
+          ],
           methodResponses: {
             "sessions.list": {
               count: 1,
@@ -473,6 +486,7 @@ suite.define(() => {
                 model: "basic",
                 modelProvider: provider,
                 thinkingLevels: [],
+                thinkingDefault: "off",
                 contextTokens: 200_000,
               },
               sessions: [
@@ -482,6 +496,7 @@ suite.define(() => {
                   model: "basic",
                   modelProvider: provider,
                   thinkingLevels: [],
+                  thinkingDefault: "off",
                   contextTokens: 200_000,
                   totalTokens: 46_000,
                   totalTokensFresh: true,
@@ -496,8 +511,13 @@ suite.define(() => {
         const model = composer.locator('[data-chat-model-select="true"]');
         await expect.poll(() => model.getAttribute("aria-busy")).toBe("false");
         const effort = composer.locator('[data-chat-thinking-select="true"]');
-        if (provider === "example") {
+        if (provider !== "openai") {
           await expect.poll(() => effort.count()).toBe(0);
+          expect(
+            (await gateway.getRequests("sessions.patch")).some(
+              ({ params }) => params && Object.hasOwn(params, "thinkingLevel"),
+            ),
+          ).toBe(false);
           return;
         }
         await expect.poll(() => effort.getAttribute("aria-label")).toBe("Fast mode: Standard");
@@ -532,6 +552,63 @@ suite.define(() => {
           await page.screenshot({
             path: `${artifactDir}/chat-speed-only-320.png`,
             animations: "disabled",
+          });
+        }
+      });
+    },
+  );
+
+  it.each(["chat", "new"])(
+    "clears %s model search before Escape dismisses the picker",
+    async (route) => {
+      await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+        const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+        const artifactDir = artifactRoot
+          ? createControlUiE2eArtifactDir(`model-search-escape-${route}`, artifactRoot)
+          : undefined;
+        const gateway = await installMockGateway(page, {
+          agentModel: "openai/gpt-5.5",
+          models: [
+            { id: "gpt-5.5", name: "GPT-5.5", provider: "openai" },
+            { id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6", provider: "anthropic" },
+          ],
+        });
+        await page.goto(`${suite.server.baseUrl}${route}`);
+        const composer = page.locator(".agent-chat__input").first();
+        const picker = composer.locator(".chat-controls__model-picker");
+        const trigger = picker.locator('[data-chat-model-select="true"]');
+        await expect.poll(() => picker.locator("[data-chat-model-option]").count()).toBe(2);
+        await expect.poll(() => trigger.getAttribute("aria-disabled")).toBe("false");
+        await trigger.click();
+        const search = picker.locator("[data-chat-model-search]");
+        await search.fill("anthropic");
+        await expect.poll(() => picker.locator("[data-chat-model-option]:visible").count()).toBe(1);
+        if (artifactDir) {
+          await page.screenshot({
+            animations: "disabled",
+            path: `${artifactDir}/01-filtered.png`,
+          });
+        }
+        await search.press("Escape");
+        if (artifactDir) {
+          await page.screenshot({
+            animations: "disabled",
+            path: `${artifactDir}/02-first-escape.png`,
+          });
+        }
+        await expect.poll(() => picker.getAttribute("open")).toBe("");
+        expect(await search.inputValue()).toBe("");
+        expect(await search.evaluate((input) => input === document.activeElement)).toBe(true);
+        await expect.poll(() => picker.locator("[data-chat-model-option]:visible").count()).toBe(2);
+        expect(await gateway.getRequests("sessions.patch")).toEqual([]);
+
+        await search.press("Escape");
+        await expect.poll(() => picker.getAttribute("open")).toBe(null);
+        expect(await trigger.evaluate((summary) => summary === document.activeElement)).toBe(true);
+        if (artifactDir) {
+          await page.screenshot({
+            animations: "disabled",
+            path: `${artifactDir}/03-second-escape.png`,
           });
         }
       });

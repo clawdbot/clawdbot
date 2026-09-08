@@ -80,6 +80,9 @@ export async function resolveDiscordDmPreflightAccess(params: {
       ...(contextBinding ? { contextBinding } : {}),
     });
   const dmAccess = await resolveChannelIngress();
+  if (params.preflight.isPolicyCurrent?.() === false) {
+    return null;
+  }
   const commandAuthorized =
     (dmAccess.senderAccess.allowed && dmAccess.commandAccess.authorized) ||
     directBindingRecord != null;

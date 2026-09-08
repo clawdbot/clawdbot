@@ -57,3 +57,11 @@ renderSettingsPage([
 ```
 
 Custom content inside a group (tables, meters) is allowed as an escape hatch — keep it inside one `.settings-group` and match row paddings (`--space-3 --space-4`).
+
+## Phone and native embed layouts
+
+Settings, Skills, and Automations use 44px control targets on phones and coarse-pointer devices. Native embedded settings use the same targets at every width. Text inputs, selects, and textareas keep a 16px font floor to prevent focus zoom.
+
+At 640px and below, form controls fill the row beneath their labels. Navigation rows keep their chevrons beside the label, and toggle rows keep their switches beside the label. Use the existing `stacked` and `stackedOnNarrow` variants for wide editors; short number and time controls can stay together in their control slot. Action clusters wrap, and key/value facts become a single column.
+
+For settings tables, add `.settings-table--stacked` and a translated `data-label` matching each cell's column heading. On phones, each record becomes a group of labeled key/value rows; the table header remains available to assistive technology. Cells without a label, such as an action-only cell, occupy the full record width. Keep the regular table markup and headings for desktop rendering.

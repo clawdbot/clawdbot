@@ -14,13 +14,15 @@ import {
   stopTranscriptCapture,
 } from "../../transcripts/capture-operations.js";
 import {
+  persistTranscriptSummary,
+  readTranscriptSummary,
+} from "../../transcripts/capture-summary.js";
+import {
   activeSessions,
   authorizeTranscriptSource,
   createTranscriptSessionId,
   isTranscriptSelectionCurrent,
-  persistTranscriptSummary,
   readTranscriptStringParam,
-  readTranscriptSummary,
   resolveTranscriptSourceOwnership,
   resolveSourceProvider,
   sourceFromParams,
@@ -116,15 +118,19 @@ async function importTranscripts(params: {
     provider,
     source: providerSource,
   });
+  const requestedSessionId = readTranscriptStringParam(params.rawParams, "sessionId", {
+    trim: true,
+  });
   const session: TranscriptSessionDescriptor = {
-    sessionId:
-      readTranscriptStringParam(params.rawParams, "sessionId", { trim: true }) ??
-      createTranscriptSessionId(),
+    sessionId: requestedSessionId ?? createTranscriptSessionId(),
     title: readTranscriptStringParam(params.rawParams, "title", { trim: true }),
     source: sanitizeTranscriptSourceLocator(providerSource),
     startedAt: new Date().toISOString(),
     stoppedAt: new Date().toISOString(),
-    metadata: params.ctx.agentId ? { agentId: params.ctx.agentId } : {},
+    metadata: {
+      ...(params.ctx.agentId ? { agentId: params.ctx.agentId } : {}),
+      sessionIdOrigin: requestedSessionId ? "supplied" : "generated",
+    },
   };
   const transcript = readTranscriptStringParam(params.rawParams, "transcript", {
     required: true,
@@ -133,7 +139,7 @@ async function importTranscripts(params: {
   await params.store.writeSession(session);
   const utterances = await provider.importTranscript({
     cfg: params.ctx.config,
-    session: { ...session, source: providerSource },
+    session: { ...session, source: providerSource, metadata: { ...session.metadata } },
     text: transcript,
     speakerLabel: readTranscriptStringParam(params.rawParams, "speakerLabel", { trim: true }),
   });

@@ -3,6 +3,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildConfiguredAgentSystemPrompt } from "./system-prompt-config.js";
+import * as systemPrompt from "./system-prompt.js";
 
 vi.mock("../tts/tts-settings.js", () => ({
   buildTtsSystemPromptHint: vi.fn(() => undefined),
@@ -21,6 +22,48 @@ function buildPrompt(config: OpenClawConfig, agentId = "main", sessionKey?: stri
 }
 
 describe("buildConfiguredAgentSystemPrompt", () => {
+  it.each([
+    { name: "absent", config: undefined },
+    { name: "empty", config: {} },
+    {
+      name: "retired hash",
+      config: {
+        commands: { ownerDisplay: "hash", ownerDisplaySecret: "retired-secret" },
+      } as OpenClawConfig,
+    },
+    {
+      name: "retired raw",
+      config: {
+        commands: { ownerDisplay: "raw", ownerDisplaySecret: "retired-secret" },
+      } as OpenClawConfig,
+    },
+  ])("preserves owner display semantics with $name config", ({ config }) => {
+    const render = vi.spyOn(systemPrompt, "buildAgentSystemPrompt");
+    try {
+      const prompt = buildConfiguredAgentSystemPrompt({
+        config,
+        workspaceDir: "/tmp/openclaw",
+        ownerNumbers: ["owner-a"],
+        ownerDisplay: "hash",
+        ownerDisplaySecret: "caller-secret", // pragma: allowlist secret
+      });
+
+      expect(render).toHaveBeenCalledTimes(1);
+      const renderParams = render.mock.calls[0]?.[0];
+      expect(Object.hasOwn(renderParams ?? {}, "ownerDisplay")).toBe(true);
+      expect(Object.hasOwn(renderParams ?? {}, "ownerDisplaySecret")).toBe(true);
+      expect(renderParams?.ownerDisplay).toBe(config ? "raw" : "hash");
+      expect(renderParams?.ownerDisplaySecret).toBe(config ? undefined : "caller-secret");
+      expect(prompt).toMatch(
+        config
+          ? /Allowlisted senders: owner-a\. Allowlisted != owner\./
+          : /Allowlisted senders: [a-f0-9]{12}\. Allowlisted != owner\./,
+      );
+    } finally {
+      render.mockRestore();
+    }
+  });
+
   it.each([
     {
       name: "prefers delegation in the canonical main session",

@@ -3,6 +3,9 @@ import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { once } from "node:events";
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
+import { StringDecoder } from "node:string_decoder";
+import { stripVTControlCharacters } from "node:util";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { OpenClawPluginNodeHostCommandIo } from "openclaw/plugin-sdk/node-host";
 import { killProcessTree } from "openclaw/plugin-sdk/process-runtime";
 import { sanitizeEnvVars } from "openclaw/plugin-sdk/sandbox";
@@ -18,6 +21,10 @@ import { closeCodexAppServerTransportAndWait } from "./app-server/transport.js";
 
 const MAX_CODEX_EXEC_SERVER_MESSAGE_BYTES = 64 * 1024 * 1024;
 const MAX_CODEX_EXEC_SERVER_STDERR_BYTES = 4 * 1024;
+// Pinned Codex 0.153.4 transport.rs:149 emits this before reading the one-shot
+// initialize request. Its package integration test guards this internal contract.
+const CODEX_EXEC_SERVER_READY_LINE =
+  "codex_exec_server::server::transport: codex-exec-server listening on stdio";
 const CODEX_EXEC_SERVER_TERMINATION_GRACE_MS = 1_000;
 const CODEX_EXEC_SERVER_REAP_TIMEOUT_MS = 5_000;
 const NODE_EXEC_SERVER_PLATFORM_ENVIRONMENT =
@@ -209,6 +216,12 @@ export async function runCodexNodeExecServer(params: {
         }
         // Awaited setup is complete; policy and invocation closure win at spawn.
         params.assertExecAuthorized();
+        const nativeReady = createDeferred<void>();
+        const exit = createDeferred<{ code: number | null; signal: NodeJS.Signals | null }>();
+        let stderr = Buffer.alloc(0);
+        let startupSettled = false;
+        let pendingLine = "";
+        const decoder = new StringDecoder("utf8");
         const child = await createStdioTransport(
           {
             transport: "stdio",
@@ -220,6 +233,8 @@ export async function runCodexNodeExecServer(params: {
             env: {
               HOME: dir,
               CODEX_HOME: codexHome,
+              RUST_LOG:
+                "error,opentelemetry_sdk=off,opentelemetry_otlp=off,codex_exec_server::server::transport=info",
               ...(process.platform === "win32" ? { USERPROFILE: dir } : {}),
             },
             clearEnv: ["NODE_OPTIONS"],
@@ -231,23 +246,51 @@ export async function runCodexNodeExecServer(params: {
             }
             params.assertExecAuthorized();
           },
-        );
-        child.stdin.on("error", (error) => {
-          rejectDisconnected(error);
-        });
-        let stderr = Buffer.alloc(0);
-        child.stderr.on("data", (chunk: Buffer | string) => {
-          const next = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-          const bounded = next.subarray(-MAX_CODEX_EXEC_SERVER_STDERR_BYTES);
-          stderr = Buffer.concat([stderr, bounded]).subarray(-MAX_CODEX_EXEC_SERVER_STDERR_BYTES);
-        });
-        const closed = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
-          (resolve) => {
-            child.once("close", (code, signal) => resolve({ code, signal }));
+          (spawned) => {
+            // Observe before process registration yields: a fast child can emit
+            // readiness or exit before createStdioTransport returns.
+            spawned.once("close", (code, signal) => exit.resolve({ code, signal }));
+            spawned.once("error", rejectDisconnected);
+            spawned.stdin.on("error", rejectDisconnected);
+            spawned.stderr.on("data", (chunk: Buffer | string) => {
+              const next = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+              stderr = Buffer.concat([
+                stderr,
+                next.subarray(-MAX_CODEX_EXEC_SERVER_STDERR_BYTES),
+              ]).subarray(-MAX_CODEX_EXEC_SERVER_STDERR_BYTES);
+              if (startupSettled) {
+                return;
+              }
+              const lines = (pendingLine + decoder.write(next)).split("\n");
+              pendingLine = lines.pop()!;
+              for (const line of [...lines, pendingLine]) {
+                if (Buffer.byteLength(line, "utf8") > MAX_CODEX_EXEC_SERVER_STDERR_BYTES) {
+                  startupSettled = true;
+                  pendingLine = "";
+                  rejectDisconnected(
+                    new Error("Codex node startup diagnostic line exceeded 4 KiB."),
+                  );
+                  return;
+                }
+              }
+              if (
+                lines.some((line) =>
+                  stripVTControlCharacters(line).trimEnd().endsWith(CODEX_EXEC_SERVER_READY_LINE),
+                )
+              ) {
+                startupSettled = true;
+                pendingLine = "";
+                nativeReady.resolve();
+              }
+            });
           },
         );
-        child.once("error", (error) => {
-          rejectDisconnected(error);
+        const closed = exit.promise;
+        const stopped = closed.then((outcome) => {
+          const diagnostic = stderr.toString("utf8").trim();
+          throw new Error(
+            `Codex node exec-server exited (code ${outcome.code ?? "none"}, signal ${outcome.signal ?? "none"})${diagnostic ? `: ${diagnostic}` : "."}`,
+          );
         });
         const owner = createNodeExecServerProcessOwner(child, closed);
         params.activeProcesses.add(owner.terminate);
@@ -256,11 +299,16 @@ export async function runCodexNodeExecServer(params: {
           rejectDisconnected(error instanceof Error ? error : new Error(String(error)));
         });
         try {
+          await Promise.race([nativeReady.promise, stopped, disconnected]);
           if (io.signal.aborted) {
             throw nodeExecServerAbortError(io.signal);
           }
-          // Registration publishes framed readiness; avoid promising it before
-          // the child and every cleanup/error owner can consume incoming frames.
+          if (child.exitCode !== null || child.signalCode !== null) {
+            await stopped;
+          }
+          params.assertExecAuthorized();
+          // Framed readiness starts Codex's initialize budget. Native startup
+          // belongs to this cancellable launch, before that handshake begins.
           params.onFrameReceiver((message) => {
             const encoded = validateNodeExecServerMessage(message);
             const operation = writes
@@ -278,11 +326,7 @@ export async function runCodexNodeExecServer(params: {
             });
             return operation;
           });
-          const outcome = await Promise.race([closed, disconnected]);
-          const diagnostic = stderr.toString("utf8").trim();
-          throw new Error(
-            `Codex node exec-server exited (code ${outcome.code ?? "none"}, signal ${outcome.signal ?? "none"})${diagnostic ? `: ${diagnostic}` : "."}`,
-          );
+          return await Promise.race([stopped, disconnected]);
         } finally {
           await owner.terminate();
           params.activeProcesses.delete(owner.terminate);

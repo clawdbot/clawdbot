@@ -18,6 +18,16 @@ function isXaiNativeEndpoint(baseUrl: unknown): boolean {
   );
 }
 
+export function supportsXaiPromptCacheKey(params: { api?: unknown; baseUrl?: unknown }): boolean {
+  const baseUrl = normalizeOptionalString(params.baseUrl) ?? XAI_BASE_URL;
+  // Native Chat Completions routes are normalized to Responses after model compat.
+  return (
+    (params.api === "openai-responses" || params.api === "openai-completions") &&
+    (isXaiNativeEndpoint(baseUrl) ||
+      (params.api === "openai-responses" && resolveHostname(baseUrl) === "cli-chat-proxy.grok.com"))
+  );
+}
+
 function shouldUseXaiResponsesTransport(params: {
   provider: string;
   api?: unknown;

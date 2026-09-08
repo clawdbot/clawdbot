@@ -5,7 +5,6 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 type TelegramPollingLivenessTrackerOptions = {
   now?: () => number;
   monotonicNow?: () => number;
-  onPollSuccess?: (finishedAt: number) => void;
 };
 
 type TelegramPollingStall = {
@@ -32,10 +31,6 @@ export class TelegramPollingLivenessTracker {
     this.#lastStallCheckMonotonicAt = monotonicNow;
   }
 
-  get inFlightGetUpdates() {
-    return this.#inFlightGetUpdates;
-  }
-
   noteGetUpdatesStarted(payload: unknown, at = this.#now()) {
     const startedMonotonicAt = this.#monotonicNow();
     this.#retryAfterUntilMonotonicAt = null;
@@ -50,17 +45,10 @@ export class TelegramPollingLivenessTracker {
     this.#lastGetUpdatesError = null;
   }
 
-  noteGetUpdatesSuccess(result: unknown, at = this.#now()) {
-    this.#noteGetUpdatesCompleted(at);
-    this.#lastGetUpdatesOutcome = Array.isArray(result) ? `ok:${result.length}` : "ok";
-    this.options.onPollSuccess?.(at);
-  }
-
   noteGetUpdatesSuccessCount(count: number, at = this.#now()) {
     this.#noteGetUpdatesCompleted(at);
     const normalizedCount = Number.isFinite(count) ? Math.max(0, Math.floor(count)) : 0;
     this.#lastGetUpdatesOutcome = `ok:${normalizedCount}`;
-    this.options.onPollSuccess?.(at);
   }
 
   noteGetUpdatesError(err: unknown, at = this.#now(), retryAfterMs?: number) {

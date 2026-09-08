@@ -37,6 +37,8 @@ For `models status`, `OPENCLAW_AGENT_DIR` overrides the inspected auth directory
 
 `models set` and `models set-image` require the provider to be declared by an installed plugin or configured under `models.providers`. An unknown provider exits nonzero without changing config. If the provider is known but the model is absent from the local catalog, the command saves the selection and prints a warning because newly released and self-hosted models may not be cataloged yet. `openclaw doctor --json` reports configured unknown providers; add `--severity-min info` to also see active models that the local catalog cannot confirm.
 
+Default-model, alias, and fallback changes resolve provider-owned model aliases using the current plugin configuration. When stored entries resolve to the selected model, their settings move to its canonical key; existing canonical settings take precedence. Adding an alias replaces the model's previous alias. If config changes during that preparation, the command rejects the write; rerun it against the updated config.
+
 ### Status
 
 Bare `openclaw models` is equivalent to `openclaw models status`.
@@ -60,6 +62,8 @@ Options:
 | `--probe-concurrency <n>` | Concurrent probes.                                                                                                                       |
 | `--probe-max-tokens <n>`  | Probe max tokens (best effort).                                                                                                          |
 | `--agent <id>`            | Configured agent id; overrides `OPENCLAW_AGENT_DIR`.                                                                                     |
+
+`--probe-timeout` requires a positive number; `--probe-concurrency` and `--probe-max-tokens` require positive integers. Omit these options to use their defaults (`8000`, `2`, and `8`, respectively); explicitly empty values are rejected.
 
 Probe rows can come from auth profiles, env credentials, or `models.json`. Probe status buckets: `ok`, `auth`, `rate_limit`, `billing`, `timeout`, `format`, `unknown`, `no_model`.
 
@@ -96,6 +100,7 @@ Notes:
 - `models list` keeps native model metadata and runtime caps distinct. In table output, `Ctx` shows `contextTokens/contextWindow` when an effective runtime cap differs from the native context window; JSON rows include `contextTokens` when a provider exposes that cap.
 - For provider-owned routes, `models list` projects one logical provider/model row onto the selected route. `Input` and `Ctx` come only from an exact physical-route catalog row, with explicit configured logical overrides applied last; unresolved route selection shows unknown capability fields instead of borrowing sibling-route metadata.
 - Configured model IDs retain their case. For example, `Reader` and `reader` keep separate rows with their own names, context limits, and input types. Provider-declared aliases still apply.
+- Models marked `missing` retain their configured aliases in the `Tags` column and JSON `tags`.
 - `models list --provider <id>` filters by provider id, such as `moonshot` or `openai`. It does not accept display labels from interactive provider pickers, such as `Moonshot AI`.
 - Model refs are parsed by splitting on the **first** `/`. If the model ID includes `/` (OpenRouter-style), include the provider prefix (example: `openrouter/moonshotai/kimi-k2`).
 - If you omit the provider, OpenClaw resolves the input as an alias first, then as a unique configured-provider match for that exact model id, and only then falls back to the configured default provider with a deprecation warning. If that provider no longer exposes the configured default model, OpenClaw falls back to the first configured provider/model instead of surfacing a stale removed-provider default.
@@ -130,6 +135,8 @@ Options:
 - `--set-default`
 - `--set-image`
 - `--json`
+
+Numeric scan options reject empty and whitespace-only values. Omit a flag to retain its default behavior.
 
 `--set-default` and `--set-image` require live probes; metadata-only scan results are informational and are not applied to config.
 

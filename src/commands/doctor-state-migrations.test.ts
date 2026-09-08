@@ -3594,7 +3594,13 @@ describe("doctor legacy state migrations", () => {
     expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(true);
   });
 
-  it("keeps the plugin-state sidecar when the sidecar has a newer row than canonical state", async () => {
+  it.each<[name: string, sidecarCreatedAt: number]>([
+    ["keeps the plugin-state sidecar when the sidecar has a newer row than canonical state", 3000],
+    [
+      "keeps the plugin-state sidecar when sidecar and canonical rows have equal timestamps but different values",
+      1000,
+    ],
+  ])("%s", async (_name, sidecarCreatedAt) => {
     const root = makeDoctorStateDir();
     const sourcePath = path.join(root, "plugin-state", "state.sqlite");
     fs.mkdirSync(path.dirname(sourcePath), { recursive: true });
@@ -3617,61 +3623,7 @@ describe("doctor legacy state migrations", () => {
           plugin_id, namespace, entry_key, value_json, created_at, expires_at
         ) VALUES (?, ?, ?, ?, ?, ?)
       `);
-      insert.run("discord", "components", "interaction:1", '{"ok":true}', 3000, null);
-    } finally {
-      db.close();
-    }
-    await withStateDir(root, async () => {
-      seedPluginStateEntriesForTests([
-        {
-          pluginId: "discord",
-          namespace: "components",
-          key: "interaction:1",
-          value: { ok: false },
-          createdAt: 1000,
-          expiresAt: null,
-        },
-      ]);
-    });
-    resetPluginStateStoreForTests();
-
-    const detected = await detectLegacyStateMigrations({
-      cfg: {},
-      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
-    });
-    const result = await runLegacyStateMigrations({ detected });
-
-    expect(result.warnings).toStrictEqual([
-      "Left plugin-state sidecar in place because 1 row differs from shared state without a newer canonical timestamp. First key: discord/components/interaction:1",
-    ]);
-    expect(fs.existsSync(sourcePath)).toBe(true);
-    expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(false);
-  });
-
-  it("keeps the plugin-state sidecar when sidecar and canonical rows have equal timestamps but different values", async () => {
-    const root = makeDoctorStateDir();
-    const sourcePath = path.join(root, "plugin-state", "state.sqlite");
-    fs.mkdirSync(path.dirname(sourcePath), { recursive: true });
-    const sqlite = requireNodeSqlite();
-    const db = new sqlite.DatabaseSync(sourcePath);
-    try {
-      db.exec(`
-        CREATE TABLE plugin_state_entries (
-          plugin_id TEXT NOT NULL,
-          namespace TEXT NOT NULL,
-          entry_key TEXT NOT NULL,
-          value_json TEXT NOT NULL,
-          created_at INTEGER NOT NULL,
-          expires_at INTEGER,
-          PRIMARY KEY (plugin_id, namespace, entry_key)
-        );
-      `);
-      const insert = db.prepare(`
-        INSERT INTO plugin_state_entries (
-          plugin_id, namespace, entry_key, value_json, created_at, expires_at
-        ) VALUES (?, ?, ?, ?, ?, ?)
-      `);
-      insert.run("discord", "components", "interaction:1", '{"ok":true}', 1000, null);
+      insert.run("discord", "components", "interaction:1", '{"ok":true}', sidecarCreatedAt, null);
     } finally {
       db.close();
     }

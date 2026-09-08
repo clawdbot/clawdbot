@@ -456,9 +456,15 @@ that grace cancels the stop. Otherwise, OpenClaw stops capture and generates not
 Occupancy episodes use generated IDs; an entry's `sessionId` is ignored. To
 continue a meeting across a Gateway restart, OpenClaw reopens the most recent
 session for the same provider, account, guild, and channel when it stopped within
-the last 10 minutes. The session keeps its original ID, title, and start time, and new
+the last 10 minutes and its stored ID origin is `generated`. The session keeps its original ID, title, and start time, and new
 utterances append to it. A later return within that window also reuses the meeting;
 outside the window, capture gets a new ID.
+New admissions record whether the transcript ID was generated or supplied. If
+the newest candidate has a supplied ID, or its origin is missing or invalid,
+capture starts fresh without searching older history. Existing notes remain
+unchanged and readable. Legacy generated meetings without a recorded origin may
+therefore split after an upgrade or restart. Doctor preserves recorded origins
+when restoring metadata; it does not infer or backfill missing origins.
 If the room is routed to a different agent, that agent starts a new capture;
 the original agent retains its stored meeting and summary permissions.
 

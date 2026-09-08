@@ -57,7 +57,6 @@ export type CliCommandCatalogEntry = {
   policy?: Partial<CliCommandPathPolicy>;
   route?: {
     id: CliRoutedCommandId;
-    preloadPlugins?: boolean;
   };
 };
 

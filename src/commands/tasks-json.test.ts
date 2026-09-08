@@ -21,6 +21,7 @@ import type {
   TaskSystemAuditSeverity,
 } from "../tasks/task-system-audit.types.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { createInMemoryTaskFlowRegistryStore } from "../test-utils/task-registry-store.js";
 import { tasksAuditJsonCommand, tasksListJsonCommand } from "./tasks-json.js";
 import { tasksListCommand, tasksShowCommand } from "./tasks.js";
 
@@ -385,8 +386,8 @@ describe("tasks JSON commands", () => {
       });
       configureTaskFlowRegistryRuntime({
         store: {
+          ...createInMemoryTaskFlowRegistryStore(),
           loadSnapshot,
-          saveSnapshot: () => {},
         },
       });
       const runtime = createRuntime();

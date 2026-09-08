@@ -185,6 +185,7 @@ const APPLE_BUILTIN_UI_CALLS = new Set([
   "SecureField",
   "ShareLink",
   "Stepper",
+  "Tab",
   "Text",
   "TextEditor",
   "TextField",

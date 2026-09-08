@@ -19,7 +19,7 @@ import {
   type ResolvedSessionEntryRow,
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
-import { emitCommittedSessionIdentityDiff } from "./session-accessor.sqlite-identity.js";
+import { prepareSessionIdentityPublication } from "./session-accessor.sqlite-identity.js";
 import type { SessionEntryMaintenancePlan } from "./session-accessor.sqlite-lifecycle-types.js";
 import {
   applySessionEntryMaintenance,
@@ -191,7 +191,7 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
     return {
       deletedEntries: deletedOwners,
       commit: () => {
-        runOpenClawAgentWriteTransaction(
+        const publish = runOpenClawAgentWriteTransaction(
           (transactionDb) => {
             // Planning can await providers or hooks. Recheck uniqueness under the
             // write transaction so an external label claim cannot race this snapshot.
@@ -258,11 +258,17 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
                 storePath: params.storePath,
               }),
             );
+            return prepareSessionIdentityPublication(
+              transactionDb,
+              resolved.agentId,
+              previous,
+              current,
+            );
           },
           toDatabaseOptions(resolved),
           { operationLabel: "session.entry-replacements" },
         );
-        emitCommittedSessionIdentityDiff(resolved.agentId, previous, current);
+        publish();
         return { maintenancePlans, result: operation.result };
       },
     };

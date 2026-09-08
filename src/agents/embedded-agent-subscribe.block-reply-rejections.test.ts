@@ -147,7 +147,7 @@ describe("subscribeEmbeddedAgentSession block reply rejections", () => {
   });
 
   it.each([false, true])(
-    "retains rejected assistant media without retrying during terminal delivery (deferred: %s)",
+    "retains rejected assistant media after a revised answer without retrying (deferred: %s)",
     async (deferred) => {
       const onBlockReply = vi.fn().mockRejectedValue(new Error("assistant media rejected"));
       const { emit, subscription } = createSubscribedSessionHarness({
@@ -189,10 +189,11 @@ describe("subscribeEmbeddedAgentSession block reply rejections", () => {
       });
 
       emitMessageStartAndEndForAssistantText({ emit, text: "Here is your track." });
+      emitMessageStartAndEndForAssistantText({ emit, text: "Updated answer." });
       emit({ type: "agent_end", messages: [], willRetry: false });
       await subscription.waitForPendingEvents();
 
-      expect(onBlockReply).toHaveBeenCalledOnce();
+      expect(onBlockReply).toHaveBeenCalledTimes(2);
       expect(subscription.getPendingToolMediaReply()).toEqual(expectedMedia);
       expect(subscription.getVisibleBlockReplyCount()).toBe(0);
       expect(subscription.hasToolMediaBlockReply()).toBe(false);

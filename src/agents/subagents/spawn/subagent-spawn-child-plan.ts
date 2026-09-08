@@ -157,6 +157,9 @@ export async function resolveSubagentChildPlan(params: {
   targetAgentId: string;
   sandboxMode: "require" | "inherit";
   swarmEnabled: boolean;
+  /** Active requester sandbox classification from the spawn tool, preferred over key-derived
+   * status so durable-lineage key substitution does not weaken sandbox admission. */
+  requesterSandboxed?: boolean;
 }): Promise<ResolveSubagentChildPlanResult> {
   const requestedCwd = normalizeOptionalString(params.request.cwd);
   const spawnedCwd = requestedCwd ? resolveUserPath(requestedCwd) : undefined;
@@ -218,7 +221,10 @@ export async function resolveSubagentChildPlan(params: {
     resolveSandboxRuntimeStatus({ cfg: params.cfg, sessionKey: childSessionKey }).sandboxed;
   const sandboxError = resolveSpawnSandboxError({
     backend: "subagent",
-    requesterSandboxed: requesterRuntime.sandboxed,
+    // Prefer the explicit active classification from the spawn tool; fall back to key-derived
+    // status. Mirrors the visible/ACP paths so durable parent-lineage keys do not reclassify
+    // an actively sandboxed requester as unsandboxed.
+    requesterSandboxed: params.requesterSandboxed === true || requesterRuntime.sandboxed,
     childSandboxed: childRuntimeSandboxed,
     sandbox: params.sandboxMode,
   });

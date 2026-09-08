@@ -11,7 +11,7 @@ import {
   clearCurrentProviderAuthState,
   warmCurrentProviderAuthStateOffMainThread,
 } from "../../agents/model-provider-auth.js";
-import { refreshPreparedModelRuntimeSnapshots } from "../../agents/prepared-model-runtime.js";
+import { prepareModelRuntimeSnapshot } from "../../agents/prepared-model-runtime.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { refreshActiveProviderAuthRuntimeSnapshot } from "../../secrets/runtime.js";
@@ -21,6 +21,7 @@ import { modelAuthAgentScopeError, resolveModelAuthAgentScope } from "./model-au
 import { resolveConfigBoundProfileIds } from "./models-auth-status-config.js";
 import { clearModelAuthStatusUsageCache } from "./models-auth-status-usage-cache.js";
 import type { ModelAuthOrderSetResult } from "./models-auth-status.types.js";
+import { respondUnavailableOnThrow } from "./response.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -37,7 +38,7 @@ export const modelsAuthOrderHandlers: GatewayRequestHandlers = {
     const profileIds = params.profileIds ?? null;
     const rejectInvalidOrder = (message: string) =>
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, message));
-    try {
+    await respondUnavailableOnThrow(respond, async () => {
       const cfg = context.getRuntimeConfig();
       const scope = resolveModelAuthAgentScope(cfg, params.agentId);
       if (!scope.ok) {
@@ -108,7 +109,6 @@ export const modelsAuthOrderHandlers: GatewayRequestHandlers = {
         agentDir: preparedSnapshot.agentDir,
         provider: authProvider,
         order: profileIds,
-        sharedStoreWrite: true,
       });
       if (!updated) {
         respond(
@@ -121,21 +121,27 @@ export const modelsAuthOrderHandlers: GatewayRequestHandlers = {
       clearModelAuthStatusUsageCache();
       clearCurrentProviderAuthState();
       const result: ModelAuthOrderSetResult = { provider, profileIds };
+      // The store already started auth publication. Await that owner so immediate status
+      // is current, but do not report a committed write as failed if publication rejects.
+      try {
+        await prepareModelRuntimeSnapshot({
+          agentId: scope.agentId,
+          agentDir: preparedSnapshot.agentDir,
+          workspaceDir: preparedSnapshot.workspaceDir,
+          config: preparedSnapshot.config,
+        });
+      } catch (err) {
+        log.warn(`auth profile order saved but runtime publication failed: ${formatForLog(err)}`);
+        result.warning =
+          "Profile priority saved. Live status is unavailable; refresh Models or restart the Gateway.";
+      }
       respond(true, result, undefined);
       void Promise.all([
         refreshActiveProviderAuthRuntimeSnapshot(),
-        refreshPreparedModelRuntimeSnapshots(cfg, {
-          catalogMode: "static",
-          allowGatewaySubagentBinding: true,
-          agentIds: new Set([scope.agentId]),
-          pluginMetadataSnapshot: preparedSnapshot.metadataSnapshot,
-        }),
         warmCurrentProviderAuthStateOffMainThread(cfg),
       ]).catch((err: unknown) => {
         log.warn(`provider auth state refresh after reorder failed: ${formatForLog(err)}`);
       });
-    } catch (err) {
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
-    }
+    });
   },
 };

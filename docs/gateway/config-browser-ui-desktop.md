@@ -148,7 +148,7 @@ For the full key index and the other top-level config domains, see [Configuratio
 }
 ```
 
-Agent display names, emoji, and avatars belong to each agent's `identity` block under `agents.entries`; see [Agent configuration](/gateway/config-agents#agentsentries-per-agent-overrides).
+Agent display names, emoji, and avatars belong to each agent's `identity` block under `agents.entries`; see [Agent configuration](/gateway/config-agents/entries-and-multi-agent#agentsentries-per-agent-overrides).
 
 - `seamColor`: operator accent color for native app UI chrome (Talk Mode bubble
   tint, etc.). The Control UI user accent (`ui.prefs.accent`) takes precedence in
@@ -179,6 +179,11 @@ The host desktop source lets the Control UI Desktop panel connect to the Gateway
 machine. It can attach to an existing loopback RFB server, or supervise a
 headless TigerVNC/XFCE desktop on Linux. It is a Labs feature and is off by
 default.
+
+Observer tokens and observer connections are bound to the Gateway connection
+that requested them. Ending or revoking that connection refuses unused tokens
+and closes its observers with `4006 authority_revoked`. Internal callers without
+a Gateway connection keep TTL-only tokens.
 
 ```json5
 {
@@ -211,6 +216,13 @@ managed mode. Managed mode requires `Xtigervnc`, `tigervncpasswd`, and
 `tigervnc-standalone-server tigervnc-tools xfce4-session`. The Gateway creates a
 fresh temporary VNC password for each managed session, never persists it, and
 supervises both the VNC server and XFCE session.
+
+If desktop teardown fails, the Gateway retains the session's cleanup owner and
+reports the failure in its logs. A new observation retries cleanup before
+starting a replacement. For SSH-backed worker desktops, temporary connection
+files remain until the transport has closed; a late process exit triggers
+another cleanup attempt. Check the reported process or filesystem error before
+retrying an observation that cannot finish cleanup.
 
 Without managed mode, configure third-party servers to listen on loopback when
 they support it. On Linux, use loopback-only TigerVNC or `x11vnc`; GNOME Remote

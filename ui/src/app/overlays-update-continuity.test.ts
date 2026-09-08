@@ -78,7 +78,6 @@ describe("server-owned update continuity", () => {
           serviceRunning: true,
           versionMatch: true,
           channelsReady: true,
-          inferenceProbe: "passed",
         },
       };
       harness.emitEvent("update.run.changed", run);

@@ -15,6 +15,7 @@ import android.accessibilityservice.AccessibilityServiceInfo
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.graphics.Rect
 import android.text.InputType
 import android.view.View
 import android.view.accessibility.AccessibilityManager
@@ -33,6 +34,9 @@ import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.InterceptPlatformTextInput
 import androidx.compose.ui.platform.LocalDensity
@@ -78,6 +82,7 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModelStore
+import androidx.window.layout.DisplayFeature
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.serialization.json.Json
@@ -606,6 +611,9 @@ class SettingsDetailInsetsTest {
   fun keyboardInsetsResizeSettingsInWideSidebarShell() = verifyInsets()
 
   @Test
+  fun keyboardInsetsRemainPaneRelativeAcrossHorizontalAndVerticalFolds() = verifyInsets(foldChanges = true)
+
+  @Test
   @Config(qualifiers = "w320dp-h800dp-mdpi")
   fun appearanceSwatchesKeepAccessibleTouchTargetsInANarrowWindow() {
     val app = RuntimeEnvironment.getApplication() as NodeApp
@@ -1048,9 +1056,10 @@ class SettingsDetailInsetsTest {
     }
   }
 
-  private fun verifyInsets() {
+  private fun verifyInsets(foldChanges: Boolean = false) {
     lateinit var view: View
     var observedBottomInsets: Pair<Int, Int>? = null
+    var features by mutableStateOf(emptyList<DisplayFeature>())
     composeRule.setContent {
       val activity = requireNotNull(LocalActivity.current)
       val localView = LocalView.current
@@ -1064,14 +1073,18 @@ class SettingsDetailInsetsTest {
       }
       ClawDesignTheme {
         Box(Modifier.fillMaxSize().testTag("settings-host")) {
-          SidebarNavigationShell(
-            drawerState = rememberDrawerState(initialValue = DrawerValue.Closed),
-            drawerContent = {},
-          ) {
-            SettingsDetailFrame(title = "Gateway", subtitle = "", icon = Icons.Default.Settings, onBack = {}) {
-              repeat(20) { index -> ClawTextField("Field $index", {}, "") }
-              ClawTextField("Unsubmitted draft", {}, "Password", modifier = Modifier.testTag("last-field"))
-              ClawPrimaryButton(text = "Save", onClick = {})
+          FoldAwareContent(features) {
+            Box(Modifier.fillMaxSize().testTag("settings-pane")) {
+              SidebarNavigationShell(
+                drawerState = rememberDrawerState(initialValue = DrawerValue.Closed),
+                drawerContent = {},
+              ) {
+                SettingsDetailFrame(title = "Gateway", subtitle = "", icon = Icons.Default.Settings, onBack = {}) {
+                  repeat(20) { index -> ClawTextField("Field $index", {}, "") }
+                  ClawTextField("Unsubmitted draft", {}, "Password", modifier = Modifier.testTag("last-field"))
+                  ClawPrimaryButton(text = "Save", onClick = {})
+                }
+              }
             }
           }
         }
@@ -1081,37 +1094,70 @@ class SettingsDetailInsetsTest {
     val density = view.resources.displayMetrics.density
     val navigationBottom = (24 * density).toInt()
     val keyboardBottom = (320 * density).toInt()
+    val hostBounds = composeRule.onNodeWithTag("settings-host").getUnclippedBoundsInRoot()
+    val windowOffset = IntArray(2).also(view::getLocationInWindow)
+    val top = (hostBounds.top.value * density).toInt() + windowOffset[1]
+    val left = (hostBounds.left.value * density).toInt() + windowOffset[0]
+    val bottom = (hostBounds.bottom.value * density).toInt() + windowOffset[1]
+    val right = (hostBounds.right.value * density).toInt() + windowOffset[0]
+    // Round toward the top/start pane when an odd pixel count prevents an exact tie.
+    val middleY = (top + bottom + 1) / 2
+    val middleX = (left + right + 1) / 2
+    val horizontal = listOf(testFold(Rect(left, middleY - 10, right, middleY + 10)))
+    val vertical = listOf(testFold(Rect(middleX - 10, top, middleX + 10, bottom)))
+    val postures = if (foldChanges) listOf(emptyList(), horizontal, vertical, emptyList()) else listOf(emptyList())
 
     // Deliver platform insets, rather than shrinking a fake viewport that would hide the defect.
-    for (imeBottom in listOf(0, keyboardBottom, 0)) {
-      composeRule.runOnIdle {
-        val insets =
-          WindowInsetsCompat
-            .Builder()
-            .setInsets(WindowInsetsCompat.Type.navigationBars(), Insets.of(0, 0, 0, navigationBottom))
-            .setInsets(WindowInsetsCompat.Type.ime(), Insets.of(0, 0, 0, imeBottom))
-            .setVisible(WindowInsetsCompat.Type.ime(), imeBottom > 0)
-            .build()
-        ViewCompat.dispatchApplyWindowInsets(view, insets)
+    for (posture in postures) {
+      composeRule.runOnIdle { features = posture }
+      val stationaryPane = composeRule.onNodeWithTag("settings-pane").getUnclippedBoundsInRoot()
+      if (posture == horizontal) {
+        assertEquals(hostBounds.top, stationaryPane.top)
+        assertEquals(
+          "The upper pane must leave room for a keyboard that partially overlaps it",
+          (middleY - 10 - windowOffset[1]) / density,
+          stationaryPane.bottom.value,
+          1f / density,
+        )
       }
-      composeRule.waitForIdle()
-      composeRule.runOnIdle {
-        assertEquals("Compose must observe the delivered insets before geometry is judged", imeBottom to maxOf(navigationBottom, imeBottom), observedBottomInsets)
+      val keyboardSizes =
+        if (foldChanges) {
+          listOf(0, keyboardBottom, (hostBounds.height.value * density * 0.6f).toInt(), 0)
+        } else {
+          listOf(0, keyboardBottom, 0)
+        }
+      for (imeBottom in keyboardSizes) {
+        composeRule.runOnIdle {
+          val insets =
+            WindowInsetsCompat
+              .Builder()
+              .setInsets(WindowInsetsCompat.Type.navigationBars(), Insets.of(0, 0, 0, navigationBottom))
+              .setInsets(WindowInsetsCompat.Type.ime(), Insets.of(0, 0, 0, imeBottom))
+              .setVisible(WindowInsetsCompat.Type.ime(), imeBottom > 0)
+              .build()
+          ViewCompat.dispatchApplyWindowInsets(view, insets)
+        }
+        composeRule.waitForIdle()
+        composeRule.runOnIdle {
+          assertEquals("Compose must observe the delivered insets before geometry is judged", imeBottom to maxOf(navigationBottom, imeBottom), observedBottomInsets)
+        }
+        composeRule.onNodeWithText("Save").performScrollTo()
+        val host = composeRule.onNodeWithTag("settings-host").getUnclippedBoundsInRoot()
+        val pane = composeRule.onNodeWithTag("settings-pane").getUnclippedBoundsInRoot()
+        val viewport = composeRule.onNode(hasScrollAction()).getUnclippedBoundsInRoot()
+        assertEquals("Keyboard visibility must not move or resize the selected pane", stationaryPane, pane)
+        val safeBottom = minOf(pane.bottom.value, host.bottom.value - maxOf(navigationBottom, imeBottom) / density)
+        assertEquals(
+          "Sidebar settings must consume the bottom inset once (IME=$imeBottom)",
+          safeBottom - settingsFrameBottomPadding.value,
+          viewport.bottom.value,
+          1f / density,
+        )
+        val button = composeRule.onNodeWithText("Save").getUnclippedBoundsInRoot()
+        val editor = composeRule.onNodeWithTag("last-field").getUnclippedBoundsInRoot()
+        org.junit.Assert.assertTrue("Save must be reachable", button.bottom <= viewport.bottom)
+        org.junit.Assert.assertTrue("Last field must be reachable with Save", editor.top >= viewport.top && editor.bottom <= viewport.bottom)
       }
-      composeRule.onNodeWithText("Save").performScrollTo()
-      val host = composeRule.onNodeWithTag("settings-host").getUnclippedBoundsInRoot()
-      val viewport = composeRule.onNode(hasScrollAction()).getUnclippedBoundsInRoot()
-      val remainingBottom = maxOf(navigationBottom, imeBottom) / density
-      assertEquals(
-        "Sidebar settings must consume the bottom inset once (IME=$imeBottom)",
-        host.bottom.value - remainingBottom - settingsFrameBottomPadding.value,
-        viewport.bottom.value,
-        1f / density,
-      )
-      val button = composeRule.onNodeWithText("Save").getUnclippedBoundsInRoot()
-      val editor = composeRule.onNodeWithTag("last-field").getUnclippedBoundsInRoot()
-      org.junit.Assert.assertTrue("Save must be reachable", button.bottom <= viewport.bottom)
-      org.junit.Assert.assertTrue("Last field must be reachable with Save", editor.top >= viewport.top && editor.bottom <= viewport.bottom)
     }
   }
 

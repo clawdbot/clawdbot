@@ -1,3 +1,5 @@
+import { spawnSync } from "node:child_process";
+
 const FULL_GIT_COMMIT_RE = /^[0-9a-f]{40}$/iu;
 
 type BuildIdentityOptions = {
@@ -6,6 +8,14 @@ type BuildIdentityOptions = {
   now?: () => Date;
   readGitCommit: () => string | null;
 };
+
+export function readCurrentGitCommit(): string | null {
+  const result = spawnSync("git", ["rev-parse", "HEAD"], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  return result.status === 0 ? result.stdout.trim() : null;
+}
 
 /** Pins one timestamp and source commit across every child in a build lifecycle. */
 export function resolveBuildIdentityEnvironment({

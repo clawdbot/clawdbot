@@ -358,10 +358,7 @@ export function assertCodexThreadAcceptsDirectInput(
 
 /** Asserts and normalizes a Codex turn/start response. */
 export function assertCodexTurnStartResponse(value: unknown): CodexTurnStartResponse {
-  const normalized = normalizeWithDefaults(
-    turnStartResponseSchema,
-    normalizeTurnStartResponse(value),
-  );
+  const normalized = normalizeWithDefaults(turnStartResponseSchema, normalizeTurnEnvelope(value));
   return assertCodexShape(validateTurnStartResponse, normalized, "turn/start response");
 }
 
@@ -435,10 +432,7 @@ export function readCodexTurnCompletedNotification(
 ): CodexTurnCompletedNotification | undefined {
   return readCodexShape(
     validateTurnCompletedNotification,
-    normalizeWithDefaults(
-      turnCompletedNotificationSchema,
-      normalizeTurnCompletedNotification(value),
-    ),
+    normalizeWithDefaults(turnCompletedNotificationSchema, normalizeTurnEnvelope(value)),
   );
 }
 
@@ -496,17 +490,7 @@ function normalizeThreadItem(value: unknown): unknown {
   }
 }
 
-function normalizeTurnStartResponse(value: unknown): unknown {
-  if (!value || typeof value !== "object" || Array.isArray(value) || !("turn" in value)) {
-    return value;
-  }
-  return {
-    ...value,
-    turn: normalizeTurn((value as { turn?: unknown }).turn),
-  };
-}
-
-function normalizeTurnCompletedNotification(value: unknown): unknown {
+function normalizeTurnEnvelope(value: unknown): unknown {
   if (!value || typeof value !== "object" || Array.isArray(value) || !("turn" in value)) {
     return value;
   }

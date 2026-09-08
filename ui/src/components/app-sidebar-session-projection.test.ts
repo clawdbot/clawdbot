@@ -20,6 +20,7 @@ function sessionRow(
     hasActiveRun: false,
     modelSelectionLocked: false,
     pinned: false,
+    pinnable: true,
     cloudWorkerStopAction: null,
     hasAutomation: false,
     unread: false,

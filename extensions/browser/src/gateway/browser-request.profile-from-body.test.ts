@@ -1,6 +1,7 @@
 // Browser tests cover browser request.profile from body plugin behavior.
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { GatewayRequestHandlers } from "../core-api.js";
 
 const {
   loadConfigMock,
@@ -107,6 +108,9 @@ async function runBrowserRequest(
   params: Record<string, unknown>,
   invokeResult?: unknown,
   connectedNodes?: TestNode[],
+  requester: Partial<
+    Pick<Parameters<GatewayRequestHandlers[string]>[0], "client" | "hasCurrentClientAuthority">
+  > = {},
 ) {
   const respond = vi.fn();
   const nodeRegistry = createContext(invokeResult, connectedNodes);
@@ -120,6 +124,7 @@ async function runBrowserRequest(
     client: null,
     req: { type: "req", id: "req-1", method: "browser.request" },
     isWebchatConnect: () => false,
+    ...requester,
   });
   return { respond, nodeRegistry };
 }
@@ -156,6 +161,96 @@ describe("browser.request profile selection", () => {
       .mockReset()
       .mockImplementation(async ({ body }: { body: unknown }) => ({ body }));
   });
+
+  function requesterClient(
+    connectionSignal: AbortSignal,
+  ): NonNullable<Parameters<GatewayRequestHandlers[string]>[0]["client"]> {
+    return {
+      connId: "requester-1",
+      connectionSignal,
+      connect: {
+        minProtocol: 3,
+        maxProtocol: 3,
+        client: { id: "test", version: "1", platform: "test", mode: "test" },
+      },
+    };
+  }
+
+  it("invalidates dispatched requester authority immediately before the Gateway close handshake finishes", async () => {
+    const connection = new AbortController();
+    const client = requesterClient(connection.signal);
+    startBrowserControlServiceFromConfigMock.mockResolvedValueOnce(true);
+    dispatchBrowserRouteMock.mockResolvedValueOnce({ status: 200, body: {} });
+    await runBrowserRequest(
+      { method: "POST", path: "/screencast", target: "host" },
+      undefined,
+      [],
+      {
+        client,
+      },
+    );
+    const dispatched = dispatchBrowserRouteMock.mock.calls[0]?.[0];
+    expect(dispatched.requester).toMatchObject({
+      connId: "requester-1",
+      signal: connection.signal,
+    });
+    expect(dispatched.requester.signal.aborted).toBe(false);
+    expect(dispatched.requester.isCurrent()).toBe(true);
+    client.invalidated = true;
+    expect(dispatched.requester.isCurrent()).toBe(false);
+    expect(dispatched.requester.signal.aborted).toBe(false);
+    connection.abort();
+    expect(dispatched.requester.signal.aborted).toBe(true);
+  });
+
+  it.each(["connection closed", "authority revoked"])(
+    "dispatches a requester without current authority when %s",
+    async (reason) => {
+      const connection = new AbortController();
+      if (reason === "connection closed") {
+        connection.abort();
+      }
+      startBrowserControlServiceFromConfigMock.mockResolvedValueOnce(true);
+      dispatchBrowserRouteMock.mockResolvedValueOnce({ status: 200, body: {} });
+      await runBrowserRequest(
+        { method: "POST", path: "/screencast", target: "host", timeoutMs: 1000 },
+        undefined,
+        [],
+        {
+          client: requesterClient(connection.signal),
+          hasCurrentClientAuthority: () => reason !== "authority revoked",
+        },
+      );
+      const requester = dispatchBrowserRouteMock.mock.calls[0]?.[0].requester;
+      expect(requester.signal).toBe(connection.signal);
+      expect(requester.isCurrent()).toBe(false);
+    },
+  );
+
+  it.each([undefined, "node"] as const)(
+    "rejects screencast on the %s node route before invoking the node",
+    async (target) => {
+      const { respond, nodeRegistry } = await runBrowserRequest({
+        method: "POST",
+        path: "/screencast",
+        target,
+        ...(target === "node" ? { node: "node-1" } : {}),
+      });
+
+      expect(firstRespondCall(respond)).toEqual([
+        false,
+        undefined,
+        {
+          code: "INVALID_REQUEST",
+          message: "browser screencast is not available over a node proxy",
+          details: { code: "SCREENCAST_UNSUPPORTED", reason: "node" },
+        },
+      ]);
+      expect(nodeRegistry.invoke).not.toHaveBeenCalled();
+      expect(uploadMocks.prepareBrowserProxyUploadRequest).not.toHaveBeenCalled();
+      expect(startBrowserControlServiceFromConfigMock).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([undefined, "host", "node"] as const)(
     "dispatches the requested %s execution host while preserving the profile",

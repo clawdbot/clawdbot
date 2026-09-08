@@ -1,12 +1,18 @@
 import type { RouteLocation } from "@openclaw/uirouter";
+import type { SessionsResolveResult } from "../../../packages/gateway-protocol/src/index.js";
 import type { AgentsListResult } from "../api/types.ts";
 import { pathForRoute } from "../app-route-paths.ts";
 import { routeIdFromPath } from "../app-routes.ts";
 import { pathForSession } from "../app-session-path-builder.ts";
 import type { BoardFace } from "../lib/board/settings.ts";
+import { parseCatalogSessionKey } from "../lib/sessions/catalog-key.ts";
+import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import {
+  buildAgentMainSessionKey,
+  isUiGlobalSessionKey,
   normalizeAgentId,
   parseAgentSessionKey,
+  resolveUiConversationIdentity,
   resolveUiConfiguredMainKey,
   resolveUiDefaultAgentId,
 } from "../lib/sessions/session-key.ts";
@@ -112,7 +118,7 @@ async function normalizeReleasedSessionQueryLocation(params: {
   };
 }
 
-function normalizeInitialApplicationLocation(
+export function normalizeInitialApplicationLocation(
   location: RouteLocation,
   basePath: string,
   sessionKey: string,
@@ -126,8 +132,35 @@ function normalizeInitialApplicationLocation(
   if (!agentId) {
     return location;
   }
-  const pathname = pathForSession("chat", agentId, sessionKey, basePath, { mainKey });
-  return pathname ? { ...location, pathname } : location;
+  const { options } = sessionNavigationTarget({
+    face: "chat",
+    sessionKey,
+    fallbackAgentId: agentId,
+    basePath,
+    mainKey,
+    exactKey: true,
+  });
+  if (options.pathname === pathForRoute("chat", basePath)) {
+    return location;
+  }
+  const search = new URLSearchParams(location.search);
+  new URLSearchParams(options.search).forEach((value, key) => search.set(key, value));
+  return { ...location, pathname: options.pathname, search: search.size ? `?${search}` : "" };
+}
+
+export function createInitialApplicationLocationResolver(params: {
+  fallback: RouteLocation;
+  signal: AbortSignal;
+  resolve: () => Promise<RouteLocation>;
+}): () => Promise<RouteLocation> {
+  let ready: Promise<RouteLocation> | null = null;
+  return () =>
+    (ready ??= params.resolve().catch((error: unknown) => {
+      if (params.signal.aborted) {
+        return params.fallback;
+      }
+      throw error;
+    }));
 }
 
 export async function resolveInitialApplicationLocation(params: {
@@ -136,6 +169,7 @@ export async function resolveInitialApplicationLocation(params: {
   sessionKey: string;
   gateway: Pick<ApplicationGateway, "snapshot" | "subscribe">;
   agentsList: () => AgentsListResult | null;
+  ensureAgentsList?: () => Promise<AgentsListResult | null>;
   selectedAgentId?: string | null;
   signal: AbortSignal;
 }): Promise<RouteLocation> {
@@ -146,21 +180,77 @@ export async function resolveInitialApplicationLocation(params: {
   if (!isPersistedSessionLanding(params.location, params.basePath)) {
     return params.location;
   }
-  // Explicit routes must start immediately; only the implicit session landing
-  // needs gateway defaults before its key and agent can be made authoritative.
-  if (!parseAgentSessionKey(params.sessionKey)) {
-    await waitForGatewayClient(params.gateway, params.signal);
-  }
-  const defaults = {
-    agentsList: params.agentsList(),
+  const client = await waitForGatewayClient(params.gateway, params.signal);
+  const hello = params.gateway.snapshot.hello;
+  let agentsList = params.agentsList();
+  const initialDefaults = {
+    agentsList,
     hello: params.gateway.snapshot.hello,
   };
+  let sessionKey = params.sessionKey.trim() || params.gateway.snapshot.sessionKey;
+  let defaultAgentId = resolveUiDefaultAgentId(initialDefaults);
+  let agentId =
+    parseAgentSessionKey(sessionKey)?.agentId ??
+    resolvePersistedAgentId(params.selectedAgentId, agentsList) ??
+    defaultAgentId;
+
+  agentsList = (await params.ensureAgentsList?.()) ?? agentsList;
+  params.signal.throwIfAborted();
+  if (params.gateway.snapshot.client !== client || params.gateway.snapshot.hello !== hello) {
+    return resolveInitialApplicationLocation(params);
+  }
+  defaultAgentId = resolveUiDefaultAgentId({ agentsList, hello });
+  if (agentsList && !resolvePersistedAgentId(agentId, agentsList)) {
+    agentId = resolvePersistedAgentId(params.selectedAgentId, agentsList) ?? defaultAgentId;
+    sessionKey = buildAgentMainSessionKey({
+      agentId,
+      mainKey: resolveUiConfiguredMainKey({ agentsList, hello: params.gateway.snapshot.hello }),
+    });
+  }
+
+  const defaults = { agentsList, hello: params.gateway.snapshot.hello };
+  const mainKey = resolveUiConfiguredMainKey(defaults);
+  const identity = resolveUiConversationIdentity(defaults, sessionKey, agentId);
+  sessionKey = identity.sessionKey;
+  agentId = identity.agentId ?? agentId;
+  const parsed = parseAgentSessionKey(sessionKey);
+  const isMain =
+    isUiGlobalSessionKey(sessionKey) ||
+    (parsed?.rest ?? sessionKey).toLowerCase() === mainKey.toLowerCase();
+  let resolved: SessionsResolveResult | null = null;
+  if (!isMain && !parseCatalogSessionKey(sessionKey)) {
+    try {
+      resolved = await client.request<SessionsResolveResult>(
+        "sessions.resolve",
+        {
+          key: sessionKey,
+          agentId,
+          allowMissing: true,
+        },
+        { signal: params.signal },
+      );
+    } catch {
+      params.signal.throwIfAborted();
+      // Validation is optional during a connection failure. The exact route below
+      // preserves the saved identity without guessing from a shortened key.
+    }
+    params.signal.throwIfAborted();
+    if (params.gateway.snapshot.client !== client || params.gateway.snapshot.hello !== hello) {
+      // The response belongs to the captured Gateway generation. Re-entering
+      // prevents a reconnect from installing state the replacement never confirmed.
+      return resolveInitialApplicationLocation(params);
+    }
+    if (resolved && !resolved.ok) {
+      sessionKey = buildAgentMainSessionKey({ agentId, mainKey });
+    }
+  }
+
+  const row = resolved?.ok ? resolved : undefined;
   return normalizeInitialApplicationLocation(
     params.location,
     params.basePath,
-    params.sessionKey.trim() || params.gateway.snapshot.sessionKey,
-    resolvePersistedAgentId(params.selectedAgentId, defaults.agentsList) ||
-      resolveUiDefaultAgentId(defaults),
-    resolveUiConfiguredMainKey(defaults),
+    row?.key ?? sessionKey,
+    row?.agentId ?? agentId,
+    mainKey,
   );
 }

@@ -81,7 +81,7 @@ struct RealtimeTalkRelaySessionTests {
         #expect(statuses == ["OpenAI API key rejected with 401"])
     }
 
-    @Test func `pre-ready relay failure throws and closes created session`() async throws {
+    @Test func `gateway-owned model is omitted and pre-ready failure closes created session`() async throws {
         let requests = RealtimeRelayStartupRequestLog()
         let result = TalkSessionCreateResult(
             sessionid: "talk-session",
@@ -132,6 +132,8 @@ struct RealtimeTalkRelaySessionTests {
 
         let recorded = await requests.snapshot()
         #expect(recorded.map(\.method) == ["talk.session.create", "talk.session.close"])
+        let createParams = try #require(recorded.first?.params)
+        #expect(!createParams.keys.contains("model"))
         #expect(recorded.last?.params?["sessionId"]?.stringValue == "relay-1")
         #expect(!audioCapture.isStarted)
     }

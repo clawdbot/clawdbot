@@ -51,6 +51,7 @@ import {
   waitForReplyRunEndBySessionId,
   waitForReplyRunSuccessorAdmission,
 } from "./reply-run-registry.js";
+import { lifecycleAdmissionByOperation } from "./reply-run-registry.state.js";
 import { testing } from "./reply-run-registry.test-support.js";
 import {
   prepareReplyToolAuthority,
@@ -932,6 +933,54 @@ describe("reply run registry", () => {
     });
   });
 
+  it.each([
+    { firstStore: "store-a", laterStore: "store-a", expected: "rotated-session" },
+    { firstStore: "store-a", laterStore: "store-b", expected: "first-session" },
+    { firstStore: "store-a", laterStore: undefined, expected: "first-session" },
+    { firstStore: undefined, laterStore: "store-b", expected: "first-session" },
+    { firstStore: undefined, laterStore: undefined, expected: "rotated-session" },
+  ])(
+    "keeps after-clear session rotation with its database ($firstStore -> $laterStore)",
+    async ({ firstStore, laterStore, expected }) => {
+      const first = createTestReplyOperation({ sessionKey: "global", sessionId: "first-session" });
+      lifecycleAdmissionByOperation.set(first, { databaseIdentity: firstStore });
+      const barrier = createDeferred();
+      const afterClear = vi.fn();
+      runAfterReplyOperationClear(first, afterClear);
+      first.completeWithAfterClearBarrier(barrier.promise);
+
+      const later = createTestReplyOperation({ sessionKey: "global", sessionId: "first-session" });
+      lifecycleAdmissionByOperation.set(later, { databaseIdentity: laterStore });
+      later.updateSessionId("rotated-session");
+      later.complete();
+      expect(afterClear).not.toHaveBeenCalled();
+      barrier.resolve();
+      await vi.waitFor(() => expect(afterClear).toHaveBeenCalledWith(expected));
+    },
+  );
+
+  it("keeps a late callback behind its own delivery when a foreign store replaces the global barrier", async () => {
+    const first = createTestReplyOperation({ sessionKey: "global", sessionId: "first-session" });
+    lifecycleAdmissionByOperation.set(first, { databaseIdentity: "store-a" });
+    const firstBarrier = createDeferred();
+    first.completeWithAfterClearBarrier(firstBarrier.promise);
+    const later = createTestReplyOperation({ sessionKey: "global", sessionId: "later-session" });
+    lifecycleAdmissionByOperation.set(later, { databaseIdentity: "store-b" });
+    const laterBarrier = createDeferred();
+    later.completeWithAfterClearBarrier(laterBarrier.promise);
+
+    const afterClear = vi.fn();
+    runAfterReplyOperationClear(first, afterClear);
+    try {
+      expect(afterClear).not.toHaveBeenCalled();
+      firstBarrier.resolve();
+      await vi.waitFor(() => expect(afterClear).toHaveBeenCalledWith("first-session"));
+    } finally {
+      firstBarrier.resolve();
+      laterBarrier.resolve();
+    }
+  });
+
   it("keeps later after-clear work behind earlier delivery barriers", async () => {
     const first = createTestReplyOperation({
       sessionId: "first-session",
@@ -1051,7 +1100,14 @@ describe("reply run registry", () => {
       for (const wait of [requestWait, canonicalWait]) {
         await expect(wait).resolves.toEqual({
           settled: true,
-          sessionId: "rotated-alias-session",
+          sources: [
+            {
+              sessionId: "rotated-alias-session",
+              sessionIds: operation.captureOwnedSessionIds(),
+              operation,
+              databaseIdentity: undefined,
+            },
+          ],
         });
       }
       expect(() => createTestReplyOperation({ sessionKey: adoptedKey })).toThrow(
@@ -1060,7 +1116,14 @@ describe("reply run registry", () => {
       releaseSecondBarrier();
       await expect(waitForReplyRunSuccessorAdmission(adoptedKey, 100)).resolves.toEqual({
         settled: true,
-        sessionId: "rotated-alias-session",
+        sources: [
+          {
+            sessionId: "rotated-alias-session",
+            sessionIds: operation.captureOwnedSessionIds(),
+            operation,
+            databaseIdentity: undefined,
+          },
+        ],
       });
       const successor = createTestReplyOperation({ sessionKey: canonicalKey });
       successor.complete();

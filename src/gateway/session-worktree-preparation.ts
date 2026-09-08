@@ -158,9 +158,7 @@ export async function prepareSessionWorktree(params: {
         error instanceof WorktreeRepositoryError
           ? ErrorCodes.INVALID_REQUEST
           : ErrorCodes.UNAVAILABLE,
-        error instanceof WorktreeRepositoryError
-          ? "agent workspace is not a git checkout"
-          : formatErrorMessage(error),
+        formatErrorMessage(error),
       ),
     );
   }

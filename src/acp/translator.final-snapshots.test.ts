@@ -4,8 +4,11 @@ import { describe, expect, it, vi } from "vitest";
 import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
 import type { GatewayClient } from "../gateway/client.js";
 import { createLoadSessionRequest, createPromptRequest } from "./translator.bridge-test-helpers.js";
-import { AcpGatewayAgent } from "./translator.js";
-import { createAcpConnection, createAcpGateway } from "./translator.test-helpers.js";
+import {
+  createAcpConnection,
+  createAcpGateway,
+  createAcpGatewayAgent,
+} from "./translator.test-helpers.js";
 
 vi.mock("./commands.js", () => ({
   getAvailableCommands: () => [],
@@ -22,7 +25,7 @@ describe("acp final chat snapshots", () => {
       }
       return { ok: true };
     }) as GatewayClient["request"];
-    const agent = new AcpGatewayAgent(connection, createAcpGateway(request), {
+    const agent = createAcpGatewayAgent(connection, createAcpGateway(request), {
       sessionStore,
     });
     await agent.loadSession(createLoadSessionRequest("snapshot-session"));

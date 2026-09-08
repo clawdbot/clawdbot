@@ -9,7 +9,6 @@ import {
   acquireOpenAIQuicksilverBrowserSessionBroker,
   releaseOpenAIQuicksilverBrowserSessionBroker,
 } from "./realtime-quicksilver-session-owner.js";
-import { OPENAI_GPT_LIVE_MODELS } from "./realtime-quicksilver.js";
 import {
   createBroker,
   createRequest,
@@ -17,6 +16,7 @@ import {
 } from "./realtime-quicksilver.test-helpers.js";
 
 const AUDIO_ONLY_SDP = "v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n";
+const OPAQUE_REALTIME_MODEL = "gpt-live-test-canary";
 
 function requestTarget(url: string | URL | Request): string {
   return typeof url === "string" ? url : url instanceof URL ? url.href : url.url;
@@ -515,7 +515,7 @@ describe("GA Realtime call retirement", () => {
           ? current.broker.createBrowserSession(
               {
                 providerConfig: {},
-                model: OPENAI_GPT_LIVE_MODELS[0],
+                model: OPAQUE_REALTIME_MODEL,
                 ownerConnId: clientOwner,
                 runAgentConsult: vi.fn(async () => ({ text: "Done" })),
                 clientControl: { owner: "gateway" },

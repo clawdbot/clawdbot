@@ -2,25 +2,29 @@
 import { describe, expect, it } from "vitest";
 import { testing } from "../../../../scripts/e2e/lib/openai-web-search-minimal/client.mjs";
 
+// Keep scenario defaults independent so changing the client cannot rewrite its expected inputs.
+const RAW_SCHEMA_ERROR =
+  "400 The following tools cannot be used with reasoning.effort 'minimal': web_search.";
+const GATEWAY_SCHEMA_ERROR = "provider rejected the request schema or tool payload";
+const SUCCESS_MARKER = "OPENCLAW_SCHEMA_E2E_OK";
+
 describe("scripts/e2e/lib/openai-web-search-minimal/client.mjs", () => {
   it("accepts only the expected raw schema rejection in reject mode", () => {
     expect(
       testing.validateRejectResult({
         ok: false,
-        error: new Error(`gateway failed: ${testing.DEFAULT_RAW_SCHEMA_ERROR}`),
+        error: new Error(`gateway failed: ${RAW_SCHEMA_ERROR}`),
       }),
-    ).toContain(testing.DEFAULT_RAW_SCHEMA_ERROR);
+    ).toContain(RAW_SCHEMA_ERROR);
   });
 
   it("accepts the gateway schema rejection wrapper in reject mode", () => {
     expect(
       testing.validateRejectResult({
         ok: false,
-        error: new Error(
-          `GatewayClientRequestError: FailoverError: ${testing.DEFAULT_GATEWAY_SCHEMA_ERROR}.`,
-        ),
+        error: new Error(`GatewayClientRequestError: FailoverError: ${GATEWAY_SCHEMA_ERROR}.`),
       }),
-    ).toContain(testing.DEFAULT_GATEWAY_SCHEMA_ERROR);
+    ).toContain(GATEWAY_SCHEMA_ERROR);
   });
 
   it("fails reject mode when the agent run unexpectedly succeeds", () => {
@@ -50,7 +54,7 @@ describe("scripts/e2e/lib/openai-web-search-minimal/client.mjs", () => {
       testing.validateSuccessResult({
         ok: true,
         value: {
-          meta: { finalAssistantVisibleText: `done: ${testing.SUCCESS_MARKER}` },
+          meta: { finalAssistantVisibleText: `done: ${SUCCESS_MARKER}` },
           status: "ok",
         },
       }),
@@ -62,7 +66,7 @@ describe("scripts/e2e/lib/openai-web-search-minimal/client.mjs", () => {
       testing.validateSuccessResult({
         ok: true,
         value: {
-          payloads: [{ text: testing.SUCCESS_MARKER }],
+          payloads: [{ text: SUCCESS_MARKER }],
           status: "ok",
         },
       }),
@@ -75,7 +79,7 @@ describe("scripts/e2e/lib/openai-web-search-minimal/client.mjs", () => {
         ok: true,
         value: {
           result: {
-            meta: { finalAssistantVisibleText: testing.SUCCESS_MARKER },
+            meta: { finalAssistantVisibleText: SUCCESS_MARKER },
             payloads: [{ text: "secondary reply" }],
           },
           status: "ok",
@@ -98,7 +102,7 @@ describe("scripts/e2e/lib/openai-web-search-minimal/client.mjs", () => {
       testing.validateSuccessResult({
         ok: true,
         value: {
-          payloads: [{ isError: true, text: testing.SUCCESS_MARKER }],
+          payloads: [{ isError: true, text: SUCCESS_MARKER }],
           status: "ok",
         },
       }),
@@ -110,7 +114,7 @@ describe("scripts/e2e/lib/openai-web-search-minimal/client.mjs", () => {
       testing.validateSuccessResult({
         ok: true,
         value: {
-          meta: { finalAssistantVisibleText: testing.SUCCESS_MARKER },
+          meta: { finalAssistantVisibleText: SUCCESS_MARKER },
           status: "blocked",
         },
       }),

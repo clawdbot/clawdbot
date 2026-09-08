@@ -247,7 +247,7 @@ function canReconcileTelegramLegacyLane(params: {
   );
 }
 
-export type TelegramIngressDrainLifecycle = Omit<
+type TelegramIngressDrainLifecycle = Omit<
   ChannelIngressMonitorLifecycle,
   "admission" | "onFailed" | "onCancelled"
 > & {

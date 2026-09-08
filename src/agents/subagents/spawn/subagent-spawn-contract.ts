@@ -45,6 +45,9 @@ export type SpawnSubagentContext = SpawnedToolContext & {
   requesterTurnRunId?: string;
   /** Separate key used only for completion routing, not sandbox policy. */
   completionOwnerKey?: string;
+  /** Active requester sandbox classification, preserved separately from the durable lineage key.
+   * Hidden native spawn derives sandbox admission from this when set, mirroring visible/ACP paths. */
+  sandboxed?: boolean;
   agentChannel?: string;
   agentAccountId?: string;
   agentTo?: string;

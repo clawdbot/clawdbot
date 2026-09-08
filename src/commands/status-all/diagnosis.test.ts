@@ -1,6 +1,10 @@
 // Status-all diagnosis tests cover port checks, restart logs, config issues, and safe diagnostic output.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { ProgressReporter } from "../../cli/progress.js";
+import { buildWorkspaceSkillStatus } from "../../skills/discovery/status.js";
+import { createCanonicalFixtureSkill } from "../../skills/test-support/test-helpers.js";
 
 type GatewayLogPaths = {
   logDir: string;
@@ -41,6 +45,7 @@ vi.mock("./gateway.js", () => ({
 import { appendStatusAllDiagnosis } from "./diagnosis.js";
 
 type DiagnosisParams = Parameters<typeof appendStatusAllDiagnosis>[0];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function createProgressReporter(): ProgressReporter {
   return {
@@ -148,6 +153,60 @@ describe("status-all diagnosis port checks", () => {
       "  … +2 more",
     ]);
     expect(params.snap).toEqual(original);
+  });
+
+  it.each([
+    { state: "ready", eligible: 1, missing: 0 },
+    { state: "missing", eligible: 0, missing: 1 },
+    { state: "disabled", eligible: 0, missing: 0 },
+    { state: "blocked", eligible: 0, missing: 0 },
+    { state: "agent-excluded", eligible: 0, missing: 1 },
+    { state: "always", eligible: 1, missing: 0 },
+    { state: "unsupported-os", eligible: 0, missing: 1 },
+  ] as const)("reports skill readiness for $state", async ({ state, eligible, missing }) => {
+    const workspaceDir = tempDirs.make("openclaw-status-skills-");
+    const baseDir = path.join(workspaceDir, "skills", "fixture");
+    const params = createBaseParams([]);
+    params.skillStatus = buildWorkspaceSkillStatus(workspaceDir, {
+      managedSkillsDir: path.join(workspaceDir, "managed"),
+      agentId: "qa",
+      config: {
+        plugins: { enabled: false },
+        agents: { entries: { qa: { skills: state === "agent-excluded" ? [] : ["fixture"] } } },
+        skills: {
+          allowBundled: ["other-fixture"],
+          entries: { fixture: { enabled: state !== "disabled" } },
+        },
+      },
+      entries: [
+        {
+          skill: createCanonicalFixtureSkill({
+            name: "fixture",
+            description: "Synthetic status readiness fixture",
+            filePath: path.join(baseDir, "SKILL.md"),
+            baseDir,
+            source: state === "blocked" ? "openclaw-bundled" : "openclaw-workspace",
+          }),
+          frontmatter: {},
+          metadata: {
+            always: state === "always",
+            requires: {
+              bins:
+                state === "ready" || state === "unsupported-os"
+                  ? []
+                  : ["openclaw-qa-readiness-absent-binary"],
+            },
+            ...(state === "unsupported-os" ? { os: ["openclaw-qa-unsupported-os"] } : {}),
+          },
+        },
+      ],
+    });
+
+    await appendStatusAllDiagnosis(params);
+
+    expect(params.lines.find((line) => line.includes("Skills:"))).toBe(
+      `${missing > 0 ? "!" : "✓"} Skills: ${eligible} eligible · ${missing} missing · ${workspaceDir}`,
+    );
   });
 
   it("retains queue warnings from a successful gateway health snapshot", async () => {

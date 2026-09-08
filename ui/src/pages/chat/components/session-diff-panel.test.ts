@@ -135,11 +135,12 @@ describe("SessionDiffPanel", () => {
       const patch = [
         "--- a/example.ts",
         "+++ b/example.ts",
-        "@@ -1,4 +1,4 @@",
+        "@@ -1,5 +1,5 @@",
         " /* comment",
         "-old comment",
         "+new comment",
         " */",
+        " ",
         '-const value = "before";',
         '+const value = "<img src=x onerror=alert(1)>";',
       ].join("\n");
@@ -158,6 +159,10 @@ describe("SessionDiffPanel", () => {
       expect(panel.querySelector(".tok-keyword")?.textContent).toBe("const");
       expect(panel.textContent).toContain("<img src=x onerror=alert(1)>");
       expect(panel.querySelector("img")).toBeNull();
+      const textSelector = split ? ".session-diff-split__text" : ".chat-diff__text";
+      expect([...panel.querySelectorAll(textSelector)].map((line) => line.textContent)).toContain(
+        "",
+      );
 
       // Reusing the panel for an unknown file type must discard the prior language.
       panel.loader = async () => ({ ...data, files: [{ ...data.files[0]!, path: "example.txt" }] });
@@ -165,6 +170,9 @@ describe("SessionDiffPanel", () => {
         expect(panel.querySelector(".session-diff__filename")?.textContent).toBe("example.txt"),
       );
       expect(panel.querySelector(".tok-keyword")).toBeNull();
+      expect([...panel.querySelectorAll(textSelector)].map((line) => line.textContent)).toContain(
+        "",
+      );
     },
   );
 

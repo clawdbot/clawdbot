@@ -26,34 +26,20 @@ export async function readDescendantSubagentFallbackReply(params: {
   sessionKey: string;
   runStartedAt: number;
 }): Promise<string | undefined> {
-  const descendants = listDescendantRunsForRequester(params.sessionKey)
-    .filter(
-      (entry) =>
-        typeof entry.execution.endedAt === "number" &&
-        entry.execution.endedAt >= params.runStartedAt &&
-        entry.childSessionKey.trim().length > 0,
-    )
-    .toSorted((a, b) => (a.execution.endedAt ?? 0) - (b.execution.endedAt ?? 0));
+  const descendants = listDescendantRunsForRequester(params.sessionKey).filter(
+    (entry) =>
+      typeof entry.execution.endedAt === "number" &&
+      entry.execution.endedAt >= params.runStartedAt &&
+      entry.childSessionKey.trim().length > 0,
+  );
   if (descendants.length === 0) {
     return undefined;
-  }
-
-  const latestByChild = new Map<string, (typeof descendants)[number]>();
-  for (const entry of descendants) {
-    const childKey = entry.childSessionKey.trim();
-    if (!childKey) {
-      continue;
-    }
-    const current = latestByChild.get(childKey);
-    if (!current || (entry.execution.endedAt ?? 0) >= (current.execution.endedAt ?? 0)) {
-      latestByChild.set(childKey, entry);
-    }
   }
 
   const replies: string[] = [];
   // Limit fallback synthesis to the latest few children so a noisy run does not
   // flood the cron announce with stale descendant output.
-  const latestRuns = [...latestByChild.values()]
+  const latestRuns = descendants
     .toSorted((a, b) => (a.execution.endedAt ?? 0) - (b.execution.endedAt ?? 0))
     .slice(-4);
   for (const entry of latestRuns) {

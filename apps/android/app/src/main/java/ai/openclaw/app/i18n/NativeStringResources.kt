@@ -424,6 +424,7 @@ internal val nativeStringResourceIds: Map<String, Int> =
     "Could not queue message for later delivery." to R.string.native_f2316e644b1d2621,
     "Could not read a QR code from that image. Choose a clearer image or enter the setup code manually." to R.string.native_e3f0caab85e62600,
     "Could not read that image. Choose a clear screenshot or image of the QR from openclaw qr." to R.string.native_06ee275ccdbbf862,
+    "Could not refresh models. Previous choices are unchanged. Tap Refresh to retry." to R.string.native_afe91c77b317d099,
     "Could not refresh session settings. Refresh before sending." to R.string.native_de98ee02f0411e5c,
     "Could not resolve approval. Refresh and try again." to R.string.native_d93e2b7a15efbc1e,
     "Could not restore the last chat. Select a chat from the sidebar." to R.string.native_0138259aa2e15ead,

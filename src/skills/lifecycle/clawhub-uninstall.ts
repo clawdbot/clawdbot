@@ -190,6 +190,7 @@ export async function applyClawHubSkillUninstall(
     removeDir?: typeof fs.rm;
     rename?: typeof fs.rename;
     untrack?: typeof untrackClawHubSkill;
+    beforePersistentApply?: () => void;
   } = {},
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   const current = await planClawHubSkillUninstall({
@@ -214,6 +215,7 @@ export async function applyClawHubSkillUninstall(
   let restoreTracking: (() => Promise<void>) | undefined;
   const rename = deps.rename ?? fs.rename;
   try {
+    deps.beforePersistentApply?.();
     await rename(plan.targetDir, stagedDir);
     staged = true;
     const stagedPlan = await checkClawHubSkillPlanAtPath(
@@ -225,7 +227,13 @@ export async function applyClawHubSkillUninstall(
       await rename(stagedDir, plan.targetDir);
       return { ok: false, error: `Skill ${JSON.stringify(plan.slug)} changed during removal.` };
     }
-    restoreTracking = await (deps.untrack ?? untrackClawHubSkill)(plan.workspaceDir, plan.slug);
+    deps.beforePersistentApply?.();
+    restoreTracking = await (deps.untrack ?? untrackClawHubSkill)(
+      plan.workspaceDir,
+      plan.slug,
+      deps.beforePersistentApply,
+    );
+    deps.beforePersistentApply?.();
     await (deps.removeDir ?? fs.rm)(stagedDir, { recursive: true, force: false });
     if (shouldDispatchChange) {
       await dispatchCommittedSkillChangeBestEffort({

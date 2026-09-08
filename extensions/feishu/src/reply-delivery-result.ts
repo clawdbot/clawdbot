@@ -1,9 +1,8 @@
-import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import {
-  createMessageReceiptFromOutboundResults,
-  type MessageReceipt,
-  type MessageReceiptPartKind,
-} from "openclaw/plugin-sdk/channel-outbound";
+  createAcceptedChannelDeliveryResult,
+  createChannelPartialDeliveryError,
+} from "openclaw/plugin-sdk/channel-inbound";
+import type { MessageReceipt, MessageReceiptPartKind } from "openclaw/plugin-sdk/channel-outbound";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 
 export type FeishuReplyDeliverySource = {
@@ -47,25 +46,17 @@ export function createFeishuReplyDeliveryResult(params: {
   kind?: MessageReceiptPartKind;
 }): FeishuReplyDeliveryResult {
   const results = params.visibleReplySent ? (params.results ?? []).filter(hasProviderIdentity) : [];
-  const receipt =
-    results.length > 0
-      ? createMessageReceiptFromOutboundResults({
-          results,
-          ...(params.kind ? { kind: params.kind } : {}),
-        })
-      : undefined;
-  if (!receipt) {
+  if (results.length === 0) {
     return {
       visibleReplySent: params.visibleReplySent,
       ...(params.content === undefined ? {} : { content: params.content }),
     };
   }
-  return {
-    messageIds: [...receipt.platformMessageIds],
-    receipt,
-    visibleReplySent: params.visibleReplySent,
-    ...(params.content === undefined ? {} : { content: params.content }),
-  };
+  return createAcceptedChannelDeliveryResult({
+    results,
+    kind: params.kind,
+    content: params.content,
+  });
 }
 
 /** Preserves the first result's provider identity while retaining supplemental ids. */

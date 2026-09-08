@@ -40,6 +40,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -92,7 +93,7 @@ internal fun ChatInlineWidget(
 ) {
   var resolvedResource by remember(preview.path) { mutableStateOf<ChatWidgetResource?>(null) }
   var unavailable by remember(preview.path) { mutableStateOf(false) }
-  var recoveryAttempts by remember(preview.path) { mutableStateOf(0) }
+  var recoveryAttempts by remember(preview.path) { mutableIntStateOf(0) }
   var refreshInFlight by remember(preview.path) { mutableStateOf(false) }
   var refreshRequestId by remember(preview.path) { mutableStateOf<UUID?>(null) }
   var exportMenuExpanded by remember(preview.path) { mutableStateOf(false) }

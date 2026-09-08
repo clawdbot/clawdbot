@@ -13,6 +13,7 @@ import type {
   PluginManifestRegistry,
 } from "../../plugins/manifest-registry.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
+import { buildDeclaredProviderOwnerIndex } from "../../plugins/provider-owner-index.js";
 import { bumpSkillsSnapshotVersion } from "../runtime/refresh-state.js";
 import { writeSkill, writeWorkspaceSkills } from "../test-support/e2e-test-helpers.js";
 import {
@@ -140,6 +141,7 @@ function createWorkspacePluginMetadataSnapshot(params: {
     diagnostics: params.manifestRegistry.diagnostics,
     byPluginId: new Map(params.manifestRegistry.plugins.map((plugin) => [plugin.id, plugin])),
     normalizePluginId: (pluginId) => pluginId,
+    declaredProviderOwners: buildDeclaredProviderOwnerIndex(params.manifestRegistry.plugins),
     owners: ownerMaps,
     metrics: {
       registrySnapshotMs: 0,

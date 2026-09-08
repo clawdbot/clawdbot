@@ -212,17 +212,25 @@ These are intentionally guarded by `test/scripts/ci-workflow-guards.test.ts`:
   each; hosted fallbacks remain serial. Runtime preparation completes before
   project readers start. Native proof must cover available CPUs/RAM, concurrent
   fixture memory and cleanup. This adds no runner registrations.
-- macOS Swift uses two mandatory matrix phases with `max-parallel: 2`:
-  release compilation and the complete shared/app test workload. Both phases
-  always use the existing GitHub-hosted `macos-26` image and 30-minute budget;
-  unassigned Blacksmith Mac jobs must not hold both main parity slots.
-  This removes two Blacksmith registrations per previously eligible native run.
-  Build caches are phase-owned; only the release phase writes the shared
-  SwiftPM dependency cache.
-- iOS Release, Debug/simulator tests, and both screenshot shards always use
-  `macos-26`. Repeated Blacksmith admission stalls were recovered by the same
-  hosted image; do not require a failed first attempt to select that capacity.
-  The conservative non-Node inventory, including Control UI performance, is
+- macOS Swift regular PR/main and PR `release_gate` CI retains the complete
+  shared/app test workload plus lint/schema guards in one `tests` phase.
+  Ordinary full-scope manual validation adds independent release compilation,
+  moves the guards to `release`, and retains health renders in `tests`.
+  Both phases use GitHub-hosted `macos-26`, `max-parallel: 2`, and the existing
+  30-minute budget. Build caches stay phase-owned; the sole eligible shared
+  SwiftPM cache writer is regular `tests` or full-validation `release`.
+- Android regular CI uses four test/lint rows, including benchmark compilation
+  in the Kotlin-lint row when benchmark/build/dependency inputs change or the
+  changed-path manifest is unusable. Full manual validation retains all six
+  rows and memory-bounded phone/Wear/benchmark builds without duplicate lint.
+  The cap stays at two; frozen task contracts and npm native deferral are unchanged.
+- iOS regular PR/main and PR `release_gate` CI runs one required Debug build
+  and Swift lint smoke. Ordinary full-scope manual validation retains Release
+  and Debug/native-test phases, both screenshot shards, and the evidence reducer.
+  Frozen full-manual targets keep their Debug-only contract without screenshots;
+  npm qualification still defers native jobs. All iOS build phases and screenshot
+  shards use `macos-26` from the first attempt.
+  The conservative full-tier non-Node inventory, including Control UI performance, is
   86 rows, or 87 for historical UI targets. Excluding those four hosted rows
   plus both macOS Swift phases and the always-hosted aggregate gate leaves at
   most 80 potentially eligible jobs. The enforced Node caps therefore give

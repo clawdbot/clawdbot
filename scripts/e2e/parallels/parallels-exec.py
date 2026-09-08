@@ -220,7 +220,6 @@ def main() -> int:
         deadline = time.monotonic() + options.timeout_ms / 1000
         if not uses_verified_sdk():
             os.execvp("prlctl", ["prlctl", *argv])
-            raise RuntimeError("prlctl exec unexpectedly returned")
         if len(argv) < 3 or argv[0] != "exec":
             raise ValueError("SDK route supports only exec VM [--current-user] COMMAND...")
         vm_name, command_args = argv[1], argv[2:]

@@ -943,6 +943,72 @@ describe("installPluginFromNpmSpec", () => {
     },
   );
 
+  it.each(["npm", "npm-pack"] as const)(
+    "preserves a successor %s project when an older install rolls back after losing ownership",
+    async (source) => {
+      const stateDir = suiteTempRootTracker.makeTempDir();
+      const npmRoot = path.join(stateDir, "npm");
+      const packageName = "rollback-owner-plugin";
+      const expired = new Error("install owner closed");
+      let ownerActive = true;
+      const assertOwned = () => {
+        if (!ownerActive) {
+          throw expired;
+        }
+      };
+      const install = async (version: string, guard = () => {}) => {
+        const spec = `${packageName}@${version}`;
+        const archivePath = path.join(stateDir, `${packageName}-${version}.tgz`);
+        fs.writeFileSync(archivePath, `archive ${version}`, "utf8");
+        mockNpmViewAndInstallMany([
+          { spec, packArchivePath: archivePath, packageName, version, npmRoot },
+        ]);
+        const params = requestDeferredPluginInstall(
+          { npmDir: npmRoot, mode: "update" as const },
+          undefined,
+          guard,
+        );
+        const result =
+          source === "npm"
+            ? await installPluginFromNpmSpec({ ...params, spec })
+            : await installPluginFromNpmPackArchive({ ...params, archivePath });
+        if (!result.ok) {
+          throw new Error(result.error);
+        }
+        const transaction = resolvePluginInstallTransaction(result);
+        if (!transaction) {
+          throw new Error("expected deferred npm install");
+        }
+        return { result, transaction };
+      };
+
+      const initial = await install("1.0.0");
+      await initial.transaction.commit();
+      const older = await install("2.0.0", assertOwned);
+      ownerActive = false;
+      const successor = await install("2.0.0");
+      await successor.transaction.commit();
+      expect(successor.result.targetDir).toBe(older.result.targetDir);
+      const projectRoot = resolveTestPluginGenerationProjectDir({
+        npmRoot,
+        packageName,
+        version: "2.0.0",
+      });
+      const projectBefore = readTextFileTree(projectRoot);
+      if (source === "npm-pack") {
+        expect(Object.keys(projectBefore).some((file) => file.endsWith(".tgz"))).toBe(true);
+      }
+
+      const rollbackError = await older.transaction.rollback().then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      expect.soft(rollbackError).toBe(expired);
+      expect(fs.existsSync(projectRoot)).toBe(true);
+      expect(readTextFileTree(projectRoot)).toEqual(projectBefore);
+    },
+  );
+
   it.each(["commit", "rollback"] as const)(
     "settles staged npm pack updates with %s",
     async (settlement) => {
@@ -3122,6 +3188,60 @@ describe("installPluginFromNpmSpec", () => {
     }
     await expect(fs.promises.access(npmProjectRoot)).rejects.toHaveProperty("code", "ENOENT");
   });
+
+  it.each(["npm", "npm-pack"] as const)(
+    "rejects %s publication when caller authority closes during artifact review",
+    async (source) => {
+      const stateDir = suiteTempRootTracker.makeTempDir();
+      const npmRoot = path.join(stateDir, "npm");
+      const packageName = "caller-authority-plugin";
+      const spec = `${packageName}@1.0.0`;
+      const archivePath = path.join(stateDir, "plugin.tgz");
+      fs.writeFileSync(archivePath, "fixture archive", "utf8");
+      const projectRoot = resolvePluginNpmProjectDir({ npmDir: npmRoot, packageName });
+      fs.mkdirSync(projectRoot, { recursive: true });
+      fs.writeFileSync(path.join(projectRoot, "package.json"), '{"private":true}\n', "utf8");
+      fs.writeFileSync(path.join(projectRoot, "keep.txt"), "existing project", "utf8");
+      const projectBefore = readTextFileTree(projectRoot);
+      mockNpmViewAndInstallMany([
+        { spec, packArchivePath: archivePath, packageName, version: "1.0.0", npmRoot },
+      ]);
+      let callerActive = true;
+      const params = requestDeferredPluginInstall(
+        {
+          npmDir: npmRoot,
+          mode: "update" as const,
+          beforePersistentApply: () => {
+            if (!callerActive) {
+              throw new Error("caller authority closed");
+            }
+          },
+          onBeforePluginArtifactCommit: async (artifact: PluginInstallArtifactConsentRequest) => {
+            expect(fs.existsSync(path.join(artifact.stagedArtifactDir, "dist", "index.js"))).toBe(
+              true,
+            );
+            await Promise.resolve();
+            callerActive = false;
+          },
+        },
+        undefined,
+        // The lifecycle lease remains valid while the initiating caller closes during review.
+        () => {},
+      );
+
+      const result =
+        source === "npm"
+          ? await installPluginFromNpmSpec({ ...params, spec })
+          : await installPluginFromNpmPackArchive({ ...params, archivePath });
+
+      expect(callerActive).toBe(false);
+      expect.soft(result).toMatchObject({
+        ok: false,
+        error: expect.stringContaining("caller authority closed"),
+      });
+      expect(readTextFileTree(projectRoot)).toEqual(projectBefore);
+    },
+  );
 
   it.each(["npm", "npm-pack"] as const)(
     "restores the managed project after a post-install throw from %s and allows retry",

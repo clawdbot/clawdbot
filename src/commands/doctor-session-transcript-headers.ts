@@ -16,6 +16,7 @@ import {
   isCanonicalSessionTranscriptEntry,
   isSessionTranscriptLeafControl,
 } from "../config/sessions/transcript-tree.js";
+import { MIN_READABLE_SESSION_VERSION } from "../config/sessions/version.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { executeSqliteQueryTakeFirstSync } from "../infra/kysely-sync.js";
@@ -265,6 +266,8 @@ export async function noteSessionTranscriptHeaderHealth(params: {
                 );
               }
               const header = createSessionTranscriptHeader({
+                // Retained headerless history keeps the legacy projection.
+                version: MIN_READABLE_SESSION_VERSION,
                 cwd: context.spawnedCwd ?? workspaceCwd,
                 sessionId,
                 timestamp: headerTimestamp,
@@ -314,7 +317,7 @@ export async function noteSessionTranscriptHeaderHealth(params: {
 
   if (params.shouldRepair && repaired > 0) {
     note(
-      `- Prepended current headers to ${formatCount(repaired, "session transcript")}.`,
+      `- Prepended missing headers to ${formatCount(repaired, "session transcript")}.`,
       NOTE_TITLE,
     );
   } else if (!params.shouldRepair && found > 0) {

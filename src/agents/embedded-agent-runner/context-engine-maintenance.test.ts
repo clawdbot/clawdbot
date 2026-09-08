@@ -8,7 +8,7 @@ import {
   registerContextEngineForOwner,
   resolveLogicalTurnContextEngines,
 } from "../../context-engine/registry.js";
-import type { ContextEngineRuntimeContext } from "../../context-engine/types.js";
+import type { ContextEngine, ContextEngineRuntimeContext } from "../../context-engine/types.js";
 import { peekSystemEvents, resetSystemEventsForTest } from "../../infra/system-events.js";
 import {
   enqueueCommandInLane,
@@ -63,6 +63,18 @@ let runContextEngineMaintenance: typeof import("./context-engine-maintenance.js"
 // Keep this literal aligned with the production module; tests use dynamic
 // import reloading, so they cannot safely import the constant directly.
 const TURN_MAINTENANCE_TASK_KIND = "context_engine_turn_maintenance";
+
+function createBackgroundMaintenanceEngine(
+  maintain: NonNullable<ContextEngine["maintain"]>,
+): ContextEngine {
+  return {
+    info: { id: "test", name: "Test Engine", turnMaintenanceMode: "background" },
+    ingest: async () => ({ ingested: true }),
+    assemble: async ({ messages }) => ({ messages, estimatedTokens: 0 }),
+    compact: async () => ({ ok: true, compacted: false }),
+    maintain,
+  };
+}
 
 async function flushAsyncWork(times = 4): Promise<void> {
   for (let index = 0; index < times; index += 1) {
@@ -486,20 +498,7 @@ describe("runContextEngineMaintenance", () => {
           };
         });
 
-        const backgroundEngine = {
-          info: {
-            id: "test",
-            name: "Test Engine",
-            turnMaintenanceMode: "background" as const,
-          },
-          ingest: async () => ({ ingested: true }),
-          assemble: async ({ messages }: { messages: unknown[] }) => ({
-            messages,
-            estimatedTokens: 0,
-          }),
-          compact: async () => ({ ok: true, compacted: false }),
-          maintain,
-        } as NonNullable<Parameters<typeof runContextEngineMaintenance>[0]["contextEngine"]>;
+        const backgroundEngine = createBackgroundMaintenanceEngine(maintain);
 
         const result = await runContextEngineMaintenance({
           contextEngine: backgroundEngine,
@@ -612,20 +611,7 @@ describe("runContextEngineMaintenance", () => {
           };
         });
 
-        const backgroundEngine = {
-          info: {
-            id: "test",
-            name: "Test Engine",
-            turnMaintenanceMode: "background" as const,
-          },
-          ingest: async () => ({ ingested: true }),
-          assemble: async ({ messages }: { messages: unknown[] }) => ({
-            messages,
-            estimatedTokens: 0,
-          }),
-          compact: async () => ({ ok: true, compacted: false }),
-          maintain,
-        } as NonNullable<Parameters<typeof runContextEngineMaintenance>[0]["contextEngine"]>;
+        const backgroundEngine = createBackgroundMaintenanceEngine(maintain);
 
         await runContextEngineMaintenance({
           contextEngine: backgroundEngine,
@@ -697,20 +683,7 @@ describe("runContextEngineMaintenance", () => {
           };
         });
 
-        const backgroundEngine = {
-          info: {
-            id: "test",
-            name: "Test Engine",
-            turnMaintenanceMode: "background" as const,
-          },
-          ingest: async () => ({ ingested: true }),
-          assemble: async ({ messages }: { messages: unknown[] }) => ({
-            messages,
-            estimatedTokens: 0,
-          }),
-          compact: async () => ({ ok: true, compacted: false }),
-          maintain,
-        } as NonNullable<Parameters<typeof runContextEngineMaintenance>[0]["contextEngine"]>;
+        const backgroundEngine = createBackgroundMaintenanceEngine(maintain);
         const deferredPromises: Promise<void>[] = [];
 
         await runContextEngineMaintenance({
@@ -1171,20 +1144,7 @@ describe("runContextEngineMaintenance", () => {
       }));
       const onDeferredMaintenance = vi.fn();
       const onDeferredMaintenanceFailure = vi.fn();
-      const backgroundEngine = {
-        info: {
-          id: "test",
-          name: "Test Engine",
-          turnMaintenanceMode: "background" as const,
-        },
-        ingest: async () => ({ ingested: true }),
-        assemble: async ({ messages }: { messages: unknown[] }) => ({
-          messages,
-          estimatedTokens: 0,
-        }),
-        compact: async () => ({ ok: true, compacted: false }),
-        maintain,
-      } as NonNullable<Parameters<typeof runContextEngineMaintenance>[0]["contextEngine"]>;
+      const backgroundEngine = createBackgroundMaintenanceEngine(maintain);
 
       markGatewayDraining();
       const result = await runContextEngineMaintenance({
@@ -1232,20 +1192,7 @@ describe("runContextEngineMaintenance", () => {
             rewrittenEntries: 0,
           };
         });
-        const backgroundEngine = {
-          info: {
-            id: "test",
-            name: "Test Engine",
-            turnMaintenanceMode: "background" as const,
-          },
-          ingest: async () => ({ ingested: true }),
-          assemble: async ({ messages }: { messages: unknown[] }) => ({
-            messages,
-            estimatedTokens: 0,
-          }),
-          compact: async () => ({ ok: true, compacted: false }),
-          maintain,
-        } as NonNullable<Parameters<typeof runContextEngineMaintenance>[0]["contextEngine"]>;
+        const backgroundEngine = createBackgroundMaintenanceEngine(maintain);
         const firstDeferred: Promise<void>[] = [];
 
         await runContextEngineMaintenance({
@@ -1322,20 +1269,7 @@ describe("runContextEngineMaintenance", () => {
           bytesFreed: 0,
           rewrittenEntries: 0,
         }));
-        const backgroundEngine = {
-          info: {
-            id: "test",
-            name: "Test Engine",
-            turnMaintenanceMode: "background" as const,
-          },
-          ingest: async () => ({ ingested: true }),
-          assemble: async ({ messages }: { messages: unknown[] }) => ({
-            messages,
-            estimatedTokens: 0,
-          }),
-          compact: async () => ({ ok: true, compacted: false }),
-          maintain,
-        } as NonNullable<Parameters<typeof runContextEngineMaintenance>[0]["contextEngine"]>;
+        const backgroundEngine = createBackgroundMaintenanceEngine(maintain);
 
         await runContextEngineMaintenance({
           contextEngine: backgroundEngine,
@@ -1385,20 +1319,7 @@ describe("runContextEngineMaintenance", () => {
           bytesFreed: 0,
           rewrittenEntries: 0,
         }));
-        const backgroundEngine = {
-          info: {
-            id: "test",
-            name: "Test Engine",
-            turnMaintenanceMode: "background" as const,
-          },
-          ingest: async () => ({ ingested: true }),
-          assemble: async ({ messages }: { messages: unknown[] }) => ({
-            messages,
-            estimatedTokens: 0,
-          }),
-          compact: async () => ({ ok: true, compacted: false }),
-          maintain,
-        } as NonNullable<Parameters<typeof runContextEngineMaintenance>[0]["contextEngine"]>;
+        const backgroundEngine = createBackgroundMaintenanceEngine(maintain);
 
         await runContextEngineMaintenance({
           contextEngine: backgroundEngine,
@@ -1454,20 +1375,7 @@ describe("runContextEngineMaintenance", () => {
           };
         });
 
-        const backgroundEngine = {
-          info: {
-            id: "test",
-            name: "Test Engine",
-            turnMaintenanceMode: "background" as const,
-          },
-          ingest: async () => ({ ingested: true }),
-          assemble: async ({ messages }: { messages: unknown[] }) => ({
-            messages,
-            estimatedTokens: 0,
-          }),
-          compact: async () => ({ ok: true, compacted: false }),
-          maintain,
-        } as NonNullable<Parameters<typeof runContextEngineMaintenance>[0]["contextEngine"]>;
+        const backgroundEngine = createBackgroundMaintenanceEngine(maintain);
 
         await runContextEngineMaintenance({
           contextEngine: backgroundEngine,
@@ -1564,20 +1472,7 @@ describe("runContextEngineMaintenance", () => {
           };
         });
 
-        const backgroundEngine = {
-          info: {
-            id: "test",
-            name: "Test Engine",
-            turnMaintenanceMode: "background" as const,
-          },
-          ingest: async () => ({ ingested: true }),
-          assemble: async ({ messages }: { messages: unknown[] }) => ({
-            messages,
-            estimatedTokens: 0,
-          }),
-          compact: async () => ({ ok: true, compacted: false }),
-          maintain,
-        } as NonNullable<Parameters<typeof runContextEngineMaintenance>[0]["contextEngine"]>;
+        const backgroundEngine = createBackgroundMaintenanceEngine(maintain);
 
         await runContextEngineMaintenance({
           contextEngine: backgroundEngine,
@@ -1638,20 +1533,7 @@ describe("runContextEngineMaintenance", () => {
           bytesFreed: 0,
           rewrittenEntries: 0,
         }));
-        const backgroundEngine = {
-          info: {
-            id: "test",
-            name: "Test Engine",
-            turnMaintenanceMode: "background" as const,
-          },
-          ingest: async () => ({ ingested: true }),
-          assemble: async ({ messages }: { messages: unknown[] }) => ({
-            messages,
-            estimatedTokens: 0,
-          }),
-          compact: async () => ({ ok: true, compacted: false }),
-          maintain,
-        } as NonNullable<Parameters<typeof runContextEngineMaintenance>[0]["contextEngine"]>;
+        const backgroundEngine = createBackgroundMaintenanceEngine(maintain);
 
         await runContextEngineMaintenance({
           contextEngine: backgroundEngine,
@@ -1710,20 +1592,7 @@ describe("runContextEngineMaintenance", () => {
             rewrittenEntries: 0,
           };
         });
-        const backgroundEngine = {
-          info: {
-            id: "test",
-            name: "Test Engine",
-            turnMaintenanceMode: "background" as const,
-          },
-          ingest: async () => ({ ingested: true }),
-          assemble: async ({ messages }: { messages: unknown[] }) => ({
-            messages,
-            estimatedTokens: 0,
-          }),
-          compact: async () => ({ ok: true, compacted: false }),
-          maintain,
-        } as NonNullable<Parameters<typeof runContextEngineMaintenance>[0]["contextEngine"]>;
+        const backgroundEngine = createBackgroundMaintenanceEngine(maintain);
 
         await runContextEngineMaintenance({
           contextEngine: backgroundEngine,

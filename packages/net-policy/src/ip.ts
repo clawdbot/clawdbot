@@ -1,4 +1,3 @@
-// Network Policy module implements ip behavior.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -213,6 +212,18 @@ export function isLinkLocalIpAddress(raw: string | undefined): boolean {
     return true;
   }
   return normalized.range() === "linkLocal";
+}
+
+/** True for unspecified IPs, including IPv4 embedded in IPv6 transition forms. */
+export function isUnspecifiedIpAddress(raw: string | undefined): boolean {
+  const parsed = parseCanonicalIpAddress(raw);
+  if (!parsed || parsed.range() === "loopback") {
+    return false;
+  }
+  const normalized = isIpv6Address(parsed)
+    ? (extractEmbeddedIpv4FromIpv6(parsed) ?? parsed)
+    : parsed;
+  return normalized.range() === "unspecified";
 }
 
 /** True for cloud metadata IP literals, including mapped and embedded forms. */

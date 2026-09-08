@@ -30,6 +30,7 @@ import {
 } from "../infra/exec-approvals.js";
 import type { ExecAutoReviewer } from "../infra/exec-auto-review.js";
 import type { ExecHostResponse } from "../infra/exec-host.js";
+import { sanitizeHostExecEnv } from "../infra/host-env-security.js";
 import { formatExecCommand } from "../infra/system-run-command.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -1854,6 +1855,23 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
         expectInvokeErrorMessage(sendInvokeResult, detail);
       }
     }
+  });
+
+  it.each([
+    ["echo", "ok"],
+    ["/bin/sh", "./script.sh"],
+  ])("normalizes pager overrides before node execution: %j", async (...command) => {
+    const { runCommand, sendInvokeResult } = await runLocalSystemInvokeWithPolicy("full", "off", {
+      command,
+      env: { GIT_PAGER: "cat", PAGER: "cat" },
+      sanitizeEnv: (overrides) => sanitizeHostExecEnv({ baseEnv: {}, overrides }),
+    });
+    expect(runCommand).toHaveBeenCalledTimes(1);
+    expect(firstMockCallArg(runCommand, "runCommand", 2)).toMatchObject({
+      GIT_PAGER: "",
+      PAGER: "",
+    });
+    expectInvokeOk(sendInvokeResult);
   });
 
   it("applies shell-wrapper env allowlist for shell executable commands without inline payload", async () => {

@@ -10,10 +10,8 @@ import {
 import { runWithFailedTrailer } from "./lib/failed-trailer.mts";
 import {
   CI_PARALLEL_MIN_MEMORY_BYTES,
-  ensureRepoToolNodeModulesLink,
   isConstrainedCiCheckHost,
   resolveLocalCheckEnv,
-  resolveRepoToolBinPath,
 } from "./lib/local-check-runtime.mts";
 import {
   inspectManagedProcessGroup,
@@ -282,7 +280,6 @@ export async function main(
     shardArgs.extensionStripe,
   );
 
-  ensureRepoToolNodeModulesLink(resolveRepoToolBinPath("oxlint"));
   const needsArtifacts = shouldPrepareExtensionPackageBoundaryArtifactsForShards(
     selectedShards,
     shardArgs.oxlintArgs,

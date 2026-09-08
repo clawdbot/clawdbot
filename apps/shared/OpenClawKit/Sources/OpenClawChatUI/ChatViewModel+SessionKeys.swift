@@ -294,7 +294,7 @@ extension OpenClawChatViewModel {
         syncSelection: Bool)
     {
         let existingIndex = self.sessionIndexForModelState(sessionKey: sessionKey)
-        var updated = existingIndex.map { self.sessions[$0] } ?? self.placeholderSession(key: sessionKey)
+        var updated = existingIndex.map { self.sessions[$0] } ?? OpenClawChatSessionEntry.placeholder(key: sessionKey)
         // Thinking metadata follows model identity; stale options must not survive a model change.
         let preservesThinkingMetadata =
             Self.normalizedModelIdentityComponent(updated.model) ==
@@ -338,29 +338,6 @@ extension OpenClawChatViewModel {
         return "\(provider)/\(modelID)"
     }
 
-    func placeholderSession(key: String) -> OpenClawChatSessionEntry {
-        OpenClawChatSessionEntry(
-            key: key,
-            kind: nil,
-            displayName: nil,
-            surface: nil,
-            subject: nil,
-            room: nil,
-            space: nil,
-            updatedAt: nil,
-            sessionId: nil,
-            systemSent: nil,
-            abortedLastRun: nil,
-            thinkingLevel: nil,
-            verboseLevel: nil,
-            inputTokens: nil,
-            outputTokens: nil,
-            totalTokens: nil,
-            modelProvider: nil,
-            model: nil,
-            contextTokens: nil)
-    }
-
     public var sessionChoices: [OpenClawChatSessionEntry] {
         let now = Date().timeIntervalSince1970 * 1000
         let cutoff = now - (24 * 60 * 60 * 1000)
@@ -375,7 +352,7 @@ extension OpenClawChatViewModel {
             result.append(main)
             included.insert(main.key)
         } else {
-            result.append(self.placeholderSession(key: mainSessionKey))
+            result.append(OpenClawChatSessionEntry.placeholder(key: mainSessionKey))
             included.insert(mainSessionKey)
         }
 
@@ -393,7 +370,7 @@ extension OpenClawChatViewModel {
             if let current = sorted.first(where: { $0.key == self.sessionKey }) {
                 result.append(current)
             } else {
-                result.append(self.placeholderSession(key: sessionKey))
+                result.append(OpenClawChatSessionEntry.placeholder(key: sessionKey))
             }
         }
 

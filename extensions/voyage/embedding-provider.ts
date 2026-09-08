@@ -1,9 +1,8 @@
 // Voyage provider module implements model/runtime integration.
 import {
-  fetchRemoteEmbeddingVectors,
+  createRemoteEmbeddingProvider,
   normalizeEmbeddingModelWithPrefixes,
-  resolveEmbeddingEndpointUrl,
-  resolveRemoteEmbeddingBearerClient,
+  resolveRemoteEmbeddingClient,
   type MemoryEmbeddingProvider,
   type MemoryEmbeddingProviderCreateOptions,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
@@ -35,74 +34,18 @@ function normalizeVoyageModel(model: string): string {
 export async function createVoyageEmbeddingProvider(
   options: MemoryEmbeddingProviderCreateOptions,
 ): Promise<{ provider: MemoryEmbeddingProvider; client: VoyageEmbeddingClient }> {
-  const client = await resolveVoyageEmbeddingClient(options);
-  const url = resolveEmbeddingEndpointUrl(client.baseUrl, "embeddings");
-
-  const embedMany = async (
-    input: string[],
-    input_type?: "query" | "document",
-    signal?: AbortSignal,
-  ): Promise<number[][]> => {
-    if (input.length === 0) {
-      return [];
-    }
-    const body: { model: string; input: string[]; input_type?: "query" | "document" } = {
-      model: client.model,
-      input,
-    };
-    if (input_type) {
-      body.input_type = input_type;
-    }
-
-    return await fetchRemoteEmbeddingVectors({
-      url,
-      headers: client.headers,
-      ssrfPolicy: client.ssrfPolicy,
-      signal,
-      body,
-      errorPrefix: "voyage embeddings failed",
-    });
-  };
-
-  return {
-    provider: {
-      id: "voyage",
-      model: client.model,
-      maxInputTokens: VOYAGE_MAX_INPUT_TOKENS[client.model],
-      embed: async (input, optionsValue) => {
-        const text = typeof input === "string" ? input : input.text;
-        const [vec] = await embedMany(
-          [text],
-          optionsValue?.inputType === "query" ? "query" : "document",
-          optionsValue?.signal,
-        );
-        return vec ?? [];
-      },
-      embedBatch: async (inputs, optionsLocal) => {
-        const texts = inputs.map((input) => (typeof input === "string" ? input : input.text));
-        if (optionsLocal?.inputType === "query") {
-          return await Promise.all(
-            texts.map(async (text) => {
-              const [vec] = await embedMany([text], "query", optionsLocal.signal);
-              return vec ?? [];
-            }),
-          );
-        }
-        return await embedMany(texts, "document", optionsLocal?.signal);
-      },
-    },
-    client,
-  };
-}
-
-async function resolveVoyageEmbeddingClient(
-  options: MemoryEmbeddingProviderCreateOptions,
-): Promise<VoyageEmbeddingClient> {
-  const { baseUrl, headers, ssrfPolicy } = await resolveRemoteEmbeddingBearerClient({
+  const client = await resolveRemoteEmbeddingClient({
     provider: "voyage",
     options,
     defaultBaseUrl: DEFAULT_VOYAGE_BASE_URL,
+    normalizeModel: normalizeVoyageModel,
   });
-  const model = normalizeVoyageModel(options.model);
-  return { baseUrl, headers, ssrfPolicy, model };
+  const provider = createRemoteEmbeddingProvider({
+    id: "voyage",
+    client,
+    errorPrefix: "voyage embeddings failed",
+    buildRequestFields: (kind) => ({ input_type: kind }),
+  });
+  provider.maxInputTokens = VOYAGE_MAX_INPUT_TOKENS[client.model];
+  return { provider, client };
 }

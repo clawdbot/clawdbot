@@ -208,7 +208,9 @@ describe("scripts/release-preflight.mjs", () => {
     const result = runIsolatedPreflight(["--macos-versions-only", "--check"]);
 
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain("Cannot find module 'tsx/esm'");
+    expect(result.stderr).toContain(
+      "Run pnpm install --frozen-lockfile in an independently owned checkout.",
+    );
     expect(result.stderr).toContain("[release-preflight] FAILED (exit 1)");
   });
 

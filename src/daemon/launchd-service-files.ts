@@ -3,11 +3,11 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeEnvVarKey } from "../infra/host-env-security.js";
-import { GATEWAY_LAUNCH_AGENT_LABEL, resolveGatewayServiceDescription } from "./constants.js";
+import { resolveGatewayServiceDescription } from "./constants.js";
 import { resolveLaunchAgentLabel } from "./launchd-label.js";
 import {
   LAUNCH_AGENT_ENV_WRAPPER_SHELL,
-  buildLaunchAgentPlist as buildLaunchAgentPlistImpl,
+  buildLaunchAgentPlist,
   quoteLaunchAgentEnvironmentValue,
   readLaunchAgentProgramArgumentsFromFile,
 } from "./launchd-plist.js";
@@ -198,33 +198,6 @@ export function resolveLaunchAgentEnvironmentReadOptions(env: GatewayServiceEnv,
   };
 }
 
-function buildLaunchAgentPlist({
-  label = GATEWAY_LAUNCH_AGENT_LABEL,
-  comment,
-  programArguments,
-  workingDirectory,
-  stdoutPath,
-  stderrPath,
-  environment,
-}: {
-  label?: string;
-  comment?: string;
-  programArguments: string[];
-  workingDirectory?: string;
-  stdoutPath: string;
-  stderrPath: string;
-  environment?: Record<string, string | undefined>;
-}): string {
-  return buildLaunchAgentPlistImpl({
-    label,
-    comment,
-    programArguments,
-    workingDirectory,
-    stdoutPath,
-    stderrPath,
-    environment,
-  });
-}
 async function ensureLaunchAgentPlistReadable(plistPath: string): Promise<void> {
   await fs.chmod(plistPath, LAUNCH_AGENT_PLIST_MODE).catch(() => undefined);
 }

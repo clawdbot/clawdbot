@@ -11,11 +11,8 @@ import {
 } from "../../app/user-identity.ts";
 import { icons } from "../../components/icons.ts";
 import {
-  identityAvatarClass,
   identityAvatarImage,
-  renderIdentityAvatarImage,
   resolveIdentityAvatarView,
-  type IdentityAvatarView,
 } from "../../components/identity-avatar-view.ts";
 import type { AssistantIdentity } from "../../lib/assistant-identity.ts";
 import {
@@ -38,6 +35,7 @@ import {
   parseAgentSessionKey,
   resolveUiSelectedGlobalAgentId,
 } from "../../lib/sessions/session-key.ts";
+import { renderUserAvatarSlot } from "./components/chat-author-avatar.ts";
 
 export function renderChatAvatar(
   role: string,
@@ -179,33 +177,6 @@ export function renderForwardedAvatar(agentId: string | undefined, opts: Forward
       "assistant",
     ),
   );
-}
-
-/**
- * The avatar URL may 404 or be unreachable (missing upload, dead Gravatar,
- * stale configured URL); swap to initials instead of a broken image. Lit
- * reuses DOM parts, so a load must clear a prior identity's error state.
- */
-function renderUserAvatarSlot(view: IdentityAvatarView, label: string, role = "user") {
-  const initialsAvatar = html`<div
-    class="chat-avatar ${role} chat-avatar--sender-initials"
-    style=${`background: hsl(${view.fallback.colorSeed % 360} 48% 42%)`}
-    role="img"
-    aria-label="${label}"
-  >
-    ${view.fallback.initials}
-  </div>`;
-  if (!view.imageUrl) {
-    return initialsAvatar;
-  }
-  return html`<span class=${identityAvatarClass("chat-avatar-slot", view)}>
-    ${renderIdentityAvatarImage({
-      view,
-      fallbackSelector: ".chat-avatar-slot",
-      className: `chat-avatar ${role}`,
-      alt: label,
-    })}${initialsAvatar}
-  </span>`;
 }
 
 function isAvatarUrl(value: string): boolean {

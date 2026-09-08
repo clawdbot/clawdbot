@@ -11,17 +11,12 @@ import type {
   SessionsUsageTotals,
   SessionUsageTimePoint,
 } from "./data-types.ts";
-import type { ProviderUsageSnapshot, UsageSnapshotResult } from "./request-usage-snapshot.ts";
+import type { ProviderUsageSnapshot } from "./request-usage-snapshot.ts";
 
 export type UsageSessionEntry = SessionsUsageEntry;
 export type UsageTotals = SessionsUsageTotals;
 export type CostDailyEntry = CostUsageDailyEntry;
 export type UsageAggregates = SessionsUsageResult["aggregates"];
-
-export type UsageTaskValue = {
-  epoch: object;
-  snapshot: UsageSnapshotResult;
-};
 
 export type UsageContextDetail = {
   weight: UsageSessionEntry["contextWeight"];
@@ -180,9 +175,6 @@ type UsageCallbacks = {
     onTimeSeriesModeChange: (mode: "cumulative" | "per-turn") => void;
     onTimeSeriesBreakdownChange: (mode: "total" | "by-type") => void;
     onTimeSeriesCursorRangeChange: (start: number | null, end: number | null) => void;
-    onRetryTimeSeries: () => void;
-    onRetrySessionLogs: () => void;
-    onRetryContextWeight: () => void;
   };
 };
 

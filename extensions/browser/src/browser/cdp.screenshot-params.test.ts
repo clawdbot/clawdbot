@@ -104,6 +104,11 @@ describe("CDP screenshot params", () => {
   it.each([
     { name: "headed managed browser", headless: false, activates: false },
     { name: "headless managed browser", headless: true, activates: true },
+    {
+      name: "external browser without authoritative launch state",
+      headless: undefined,
+      activates: true,
+    },
   ])("activates only when needed for a $name", async ({ headless, activates }) => {
     await captureScreenshot({
       wsUrl: "ws://localhost:9222/devtools/page/X",

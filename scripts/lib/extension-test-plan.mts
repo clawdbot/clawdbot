@@ -176,7 +176,7 @@ export const GIT_LS_FILES_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
 export function listTrackedTestPlanFiles(cwd: string, pathspecs: readonly string[]) {
   // Query only the planner-owned tree: a full-repo inventory can overflow
   // spawnSync's buffer and either truncate the plan or force directory walks.
-  const result = spawnSync("git", ["ls-files", "--", ...pathspecs], {
+  const result = spawnSync("git", ["ls-files", "-z", "--", ...pathspecs], {
     cwd,
     encoding: "utf8",
     maxBuffer: GIT_LS_FILES_MAX_BUFFER_BYTES,
@@ -185,10 +185,7 @@ export function listTrackedTestPlanFiles(cwd: string, pathspecs: readonly string
   if (result.status !== 0 || result.error) {
     return null;
   }
-  return result.stdout
-    .split("\n")
-    .map((line) => line.trim().replaceAll("\\", "/"))
-    .filter(Boolean);
+  return result.stdout.split("\0").filter(Boolean);
 }
 
 function loadTrackedRepoTestFiles() {
@@ -306,9 +303,25 @@ export function splitExtensionTestJobTargets(config: string, targets: string[]) 
 
 /** Whether a Vitest invocation can safely be split into independent one-shot processes. */
 export function shouldSplitExtensionTestProcesses(config: string, vitestArgs: string[] = []) {
-  // Passthrough options can carry suite-wide semantics such as bail thresholds,
-  // filtering, watch state, or shared artifacts. Only plain one-shot runs are splittable.
-  return EXTENSION_TEST_PROCESS_FILE_LIMITS.has(config) && vitestArgs.length === 0;
+  if (!EXTENSION_TEST_PROCESS_FILE_LIMITS.has(config)) {
+    return false;
+  }
+  // Per-test retries and exact file exclusions preserve independent process scopes.
+  // Other options may own suite-wide bail, watch, sharding, or report state.
+  for (let index = 0; index < vitestArgs.length; index++) {
+    const option = /^(--retry|--exclude)(?:=(.+))?$/u.exec(vitestArgs[index]!);
+    if (!option) {
+      return false;
+    }
+    const value = option[2] ?? vitestArgs[++index];
+    if (!value || value.startsWith("-")) {
+      return false;
+    }
+    if (option[1] === "--retry" ? !/^\d+$/u.test(value) : /[*!?[\]{}()]/u.test(value)) {
+      return false;
+    }
+  }
+  return true;
 }
 
 /** Resolve process targets for an extension config, expanding roots only when it is bounded. */
