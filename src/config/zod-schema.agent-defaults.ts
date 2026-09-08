@@ -198,7 +198,8 @@ export const AgentDefaultsSchema = z
     mediaMaxMb: z.number().positive().optional(),
     /**
      * Extra absolute (or `~/…`) directories outbound MEDIA/local-file delivery may read.
-     * Merged into the shared agent-scoped media-root allowlist used by all channels.
+     * Applied by policy-gated message actions and Telegram reply/native-command delivery.
+     * Other channel reply paths keep managed roots until they carry requester identity.
      * Relative values are rejected — they must not resolve against the gateway cwd.
      */
     mediaLocalRoots: z
