@@ -77,7 +77,7 @@ Manage profiles in the Control UI under **Settings → Connections → Cloud wor
 
 **Machine class** is required in the class-based editor. Enter a class accepted by the selected Crabbox backend and binary; the provider determines its effective sizing. Changing the backend or binary leaves the class unchanged, so verify that it is accepted before saving. To configure a classless profile, use **Settings → Advanced** and omit `settings.class`; **Edit** on an existing classless profile opens Advanced. OpenClaw then omits `--class` unless the placement supplies a class, leaving resource selection to Crabbox without claiming a default size. Explicit `null`, empty or whitespace strings, and nonstring class values are invalid.
 
-Add a profile under `cloudWorkers.profiles` in `openclaw.json`. This Debian/Ubuntu setup example installs Node.js and GitHub CLI when missing:
+Add a profile under `cloudWorkers.profiles` in `openclaw.json`. This Debian/Ubuntu setup example preserves supported Node.js installations, installs Node.js 24 when Node is missing or unsupported (including downgrading unsupported newer APT packages), and installs GitHub CLI when missing. It rechecks Node and npm before enrollment. The current runtime requires Node.js 24.16.0 or newer on the 24.x line, or 26.1.0 or newer; Node.js 22 and 25 are unsupported.
 
 ```json
 {
@@ -93,7 +93,7 @@ Add a profile under `cloudWorkers.profiles` in `openclaw.json`. This Debian/Ubun
           "ttl": "8h",
           "idleTimeout": "45m",
           "warmImage": true,
-          "setup": "(test -x /usr/bin/node || (curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - && sudo apt-get install -y nodejs)) && (command -v gh >/dev/null || (sudo apt-get update && sudo apt-get install -y gh))"
+          "setup": "#!/usr/bin/env bash\nset -euo pipefail\nnode_supported() { command -v node >/dev/null && node -e 'const [major, minor, patch] = process.versions.node.split(\".\").map(Number); process.exit([major, minor, patch].every(Number.isInteger) && ((major === 24 && minor >= 16) || (major === 26 && minor >= 1) || major > 26) ? 0 : 1)'; }\nif ! node_supported; then\n  curl -fsSL https://deb.nodesource.com/setup_24.x | sudo -E bash -\n  sudo apt-get install -y --allow-downgrades 'nodejs=24.*'\nfi\nnode_supported || { printf '%s\\n' 'Worker setup requires a supported Node.js version; inspect PATH and the package installation above.' >&2; exit 1; }\nnpm --version\ncommand -v gh >/dev/null || { sudo apt-get update && sudo apt-get install -y gh; }"
         }
       }
     }
@@ -210,7 +210,7 @@ An interrupted legacy dispatch may have allocated a random lease without recordi
 
 ### The setup command
 
-`settings.setup` runs on the leased box after Crabbox reports it ready and before ephemeral node enrollment. It runs on **every** provision attempt, including replay after an interrupted dispatch, so it must be idempotent — guard installs with a `command -v`/`test -x` check as in the example. At minimum, the resulting machine needs a supported Node.js release and npm. If setup or enrollment fails, the provider stops the lease and the dispatch fails closed; no half-configured paid box is hidden behind terminal state.
+`settings.setup` runs on the leased box after Crabbox reports it ready and before ephemeral node enrollment. It runs on **every** provision attempt, including replay after an interrupted dispatch, so it must be idempotent. Check Node's version, not just executable presence, and preserve supported installations as in the example. Recheck the installed version and npm after any repair. If the final check still fails, fix the image's PATH or package selection before dispatching again. Automatic bootstrap installs the Gateway-matched OpenClaw runtime, not Node.js; keep the image or setup prerequisites aligned with the serving Gateway's `package.json` `engines.node` requirement when upgrading. If setup or enrollment fails, the provider stops the lease and the dispatch fails closed; no half-configured paid box is hidden behind terminal state.
 
 The example profile supports both OpenClaw and Codex. Keep setup focused on machine prerequisites and project tools. You do not need to install OpenClaw globally, append a versioned Codex plugin install, or maintain a package URL in the profile. Remove those old runtime-install steps when updating an existing profile; bootstrap supplies the running Gateway's runtime automatically.
 
