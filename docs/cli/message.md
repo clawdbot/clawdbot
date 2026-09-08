@@ -89,6 +89,9 @@ unresolved SecretRef on the selected channel/account fails the action closed.
 | `search`        | Discord                                                                                                         | `--guild-id`, `--query`                                        | `--channel-id`, `--channel-ids` (repeat), `--author-id`, `--author-ids` (repeat), `--limit`.                                                                                                                                                                                                           |
 | `member info`   | Discord, Matrix, Microsoft Teams, Slack                                                                         | `--user-id`                                                    | `--guild-id` (Discord).                                                                                                                                                                                                                                                                                |
 
+Reaction listings show labels, counts, and available users as plain terminal text.
+Use `--json` for the complete channel result.
+
 The legacy `message read --include-thread` spelling remains accepted for existing
 scripts but has no effect.
 
