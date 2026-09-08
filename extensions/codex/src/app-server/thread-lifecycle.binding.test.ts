@@ -10,6 +10,7 @@ import { resolveCodexCommandDeps } from "../command-handler-deps.js";
 import {
   claimCodexAppServerLiveThread,
   ensureCodexAppServerClientRuntime,
+  hasCodexAppServerLiveThread,
   isCodexAppServerLiveThreadClaimed,
   retainCodexAppServerLiveThread,
 } from "./client-runtime.js";
@@ -2488,6 +2489,99 @@ describe("Codex app-server thread lifecycle bindings", () => {
     expect(resumed.liveThreadConfigFingerprint).not.toBe(started.liveThreadConfigFingerprint);
   });
 
+  it("starts and resumes with ordered refreshable workspace instructions", async () => {
+    const sessionFile = path.join(tempDir, "warm-skills-session.jsonl");
+    const workspaceDir = path.join(tempDir, "warm-skills-workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    const respond = vi.fn(async (method: string) => {
+      if (method === "config/read") {
+        return { config: {}, origins: {}, layers: [] };
+      }
+      if (method === "configRequirements/read") {
+        return { requirements: null };
+      }
+      if (method === "thread/start" || method === "thread/resume") {
+        return threadStartResult("thread-warm-skills");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const fixture = await createLeasedCodexLifecycleHarness({
+      agentDir: path.join(tempDir, "agent"),
+      respond,
+    });
+    const { client, request } = fixture;
+    const common = {
+      client,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer: createThreadLifecycleAppServerOptions(),
+      userMcpServersEnabled: false,
+      developerInstructions: "generic policy",
+    };
+    const skills = "## OpenClaw Skills\n\nweather";
+    const firstPersona = "<AGENT_SOUL>persona A</AGENT_SOUL>";
+    const secondPersona = "<AGENT_SOUL>persona B</AGENT_SOUL>";
+    const memory = "## OpenClaw Workspace Memory\n\nMEMORY.md pointer";
+    const firstInstructions = `${skills}\n\n${firstPersona}\n\n${memory}`;
+    const secondInstructions = `${skills}\n\n${secondPersona}\n\n${memory}`;
+    const started = await startOrResumeThread({
+      ...common,
+      refreshableInstructions: firstInstructions,
+    });
+    // The complete refreshable section follows the generic policy in exact order.
+    expect(request.mock.calls.find(([method]) => method === "thread/start")?.[1]).toMatchObject({
+      developerInstructions: `generic policy\n\n${firstInstructions}`,
+    });
+    await retainCodexAppServerLiveThread(
+      client,
+      started.threadId,
+      undefined,
+      started.liveThreadConfigFingerprint,
+    );
+
+    // Editing persona must reach a live persistent conversation. The refreshable
+    // section invalidates warm reuse so the same thread cold-resumes with the edit.
+    const resumed = await startOrResumeThread({
+      ...common,
+      refreshableInstructions: secondInstructions,
+    });
+
+    expect(resumed).toMatchObject({
+      threadId: "thread-warm-skills",
+      lifecycle: { action: "resumed" },
+    });
+    expect(resumed.liveThreadConfigFingerprint).not.toBe(started.liveThreadConfigFingerprint);
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "config/read",
+      "configRequirements/read",
+      "thread/start",
+      "config/read",
+      "configRequirements/read",
+      "thread/read",
+      "thread/unsubscribe",
+      "thread/resume",
+      "thread/inject_items",
+    ]);
+    const resumeParams = request.mock.calls.find(([method]) => method === "thread/resume")?.[1];
+    expect(resumeParams).toMatchObject({
+      developerInstructions: `generic policy\n\n${secondInstructions}`,
+    });
+    // The refreshed section also reaches the live conversation through the existing
+    // generic policy handoff, so the resumed turn is not answered from stale persona.
+    const injected = request.mock.calls.find(([method]) => method === "thread/inject_items")?.[1];
+    expect(injected).toMatchObject({
+      threadId: "thread-warm-skills",
+      items: [
+        {
+          type: "message",
+          role: "developer",
+          content: [{ type: "input_text", text: expect.stringContaining(secondInstructions) }],
+        },
+      ],
+    });
+  });
+
   it("releases and resumes a retained thread when its auth profile changes", async () => {
     const sessionFile = path.join(tempDir, "warm-auth-session.jsonl");
     const workspaceDir = path.join(tempDir, "warm-auth-workspace");
@@ -2836,6 +2930,157 @@ describe("Codex app-server thread lifecycle bindings", () => {
       const threadCalls = request.mock.calls.filter(([method]) => method.startsWith("thread/"));
       expect(threadCalls.map(([method]) => method)).toEqual(["thread/start"]);
       expect(threadCalls[0]?.[1]).toEqual(expect.objectContaining({ ephemeral: true }));
+    },
+  );
+
+  it.each([
+    {
+      change: "instructions",
+      policy: "generic policy",
+      instructions: "## OpenClaw Skills\n\nweather\n\n<AGENT_SOUL>persona B</AGENT_SOUL>",
+    },
+    {
+      change: "policy",
+      policy: "generic policy v2",
+      instructions: "## OpenClaw Skills\n\nweather\n\n<AGENT_SOUL>persona A</AGENT_SOUL>",
+    },
+    { change: "instructions", policy: "generic policy", instructions: undefined },
+  ] as const)(
+    "refreshes live incognito workspace instructions but refuses generic policy drift ($change)",
+    async ({ change, policy, instructions }) => {
+      const sessionFile = path.join(tempDir, "incognito-session.jsonl");
+      const workspaceDir = path.join(tempDir, "incognito-workspace");
+      const params = createParams(sessionFile, workspaceDir);
+      params.sessionKey = "agent:main:dashboard:incognito-skill-refresh";
+      const request = vi.fn(async (method: string, _params?: unknown) => {
+        if (method === "config/read") {
+          return { layers: [], config: { mcp_servers: {} } };
+        }
+        if (method === "configRequirements/read") {
+          return { requirements: null };
+        }
+        if (method === "thread/start") {
+          return threadStartResult("thread-incognito");
+        }
+        if (method === "thread/inject_items") {
+          return {};
+        }
+        throw new Error(`unexpected method: ${method}`);
+      });
+      const client = {
+        getInstanceId: () => "client-incognito",
+        request,
+        addNotificationHandler: () => () => undefined,
+        addRequestHandler: () => () => undefined,
+        addCloseHandler: () => () => undefined,
+      } as never;
+      ensureCodexAppServerClientRuntime(client, { agentDir: workspaceDir });
+      const common = {
+        client,
+        params,
+        cwd: workspaceDir,
+        dynamicTools: [],
+        appServer: createThreadLifecycleAppServerOptions(),
+        userMcpServersEnabled: false,
+      };
+      const firstInstructions =
+        "## OpenClaw Skills\n\nweather\n\n<AGENT_SOUL>persona A</AGENT_SOUL>";
+      const first = await startOrResumeThread({
+        ...common,
+        developerInstructions: "generic policy",
+        refreshableInstructions: firstInstructions,
+      });
+      expect(first.liveThreadEphemeralPolicy).toEqual({
+        developerInstructions: "generic policy",
+        refreshableInstructions: firstInstructions,
+        // Creation carries the section natively, so compaction restores this one.
+        nativeRefreshableInstructions: firstInstructions,
+      });
+      expect(request.mock.calls.find(([method]) => method === "thread/start")?.[1]).toEqual(
+        expect.objectContaining({
+          ephemeral: true,
+          developerInstructions: `generic policy\n\n${firstInstructions}`,
+        }),
+      );
+      await retainCodexAppServerLiveThread(
+        client,
+        first.threadId,
+        undefined,
+        first.liveThreadConfigFingerprint,
+        null,
+        first.liveThreadEphemeralPolicy,
+      );
+      const threadCalls = () =>
+        request.mock.calls
+          .filter(([method]) => method.startsWith("thread/"))
+          .map(([method, requestParams]) => [method, requestParams]);
+      const secondTurn = {
+        ...common,
+        developerInstructions: policy,
+        refreshableInstructions: instructions,
+      };
+
+      if (change === "policy") {
+        await expect(startOrResumeThread(secondTurn)).rejects.toBeInstanceOf(
+          CodexIncognitoPolicyChangeError,
+        );
+        expect(threadCalls().map(([method]) => method)).toEqual(["thread/start"]);
+        // The refusal keeps the ephemeral conversation retained for a corrected turn.
+        expect(hasCodexAppServerLiveThread(client, first.threadId)).toBe(true);
+        return;
+      }
+
+      const second = await startOrResumeThread(secondTurn);
+      expect(second).toMatchObject({
+        threadId: first.threadId,
+        lifecycle: { action: "resumed" },
+        liveThreadEphemeralPolicy: {
+          developerInstructions: "generic policy",
+          refreshableInstructions: instructions,
+          // A refresh never rewrites native instructions, so the creation-time
+          // section stays recorded as the one compaction will restore.
+          nativeRefreshableInstructions: firstInstructions,
+        },
+      });
+      expect(threadCalls()).toEqual([
+        ["thread/start", expect.objectContaining({ ephemeral: true })],
+        [
+          "thread/inject_items",
+          {
+            threadId: first.threadId,
+            items: [
+              {
+                type: "message",
+                role: "developer",
+                content: [
+                  {
+                    type: "input_text",
+                    text: expect.stringContaining(
+                      instructions ?? "refreshable thread instructions are empty",
+                    ),
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      ]);
+      // The delivered section travels with the binding so cleanup retains it and
+      // an unchanged section on the next turn is not re-delivered.
+      await retainCodexAppServerLiveThread(
+        client,
+        second.threadId,
+        second.liveThreadOwnership?.release,
+        second.liveThreadConfigFingerprint,
+        null,
+        second.liveThreadEphemeralPolicy,
+      );
+      const third = await startOrResumeThread(secondTurn);
+      expect(third.lifecycle).toEqual({ action: "resumed" });
+      expect(threadCalls().map(([method]) => method)).toEqual([
+        "thread/start",
+        "thread/inject_items",
+      ]);
     },
   );
 

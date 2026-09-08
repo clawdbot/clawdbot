@@ -30,7 +30,7 @@ type ClientRuntime = {
 
 type RetainedLiveThread = {
   configFingerprint?: string;
-  ephemeralPolicy?: string;
+  ephemeralPolicy?: CodexEphemeralThreadPolicy;
   serviceTier?: CodexServiceTier | null;
   expiresAt: number;
   release: (threadId: string, assertCurrent?: () => void) => Promise<void>;
@@ -42,11 +42,26 @@ type ThreadReleaseTransition = {
   invalidated?: boolean;
 };
 
+/**
+ * Exact lifecycle inputs a live ephemeral thread was told. The generic policy is
+ * creation-owned and cannot be refreshed or cold-resumed; workspace instructions
+ * are refreshable and record the complete section last delivered to the thread.
+ */
+export type CodexEphemeralThreadPolicy = {
+  developerInstructions?: string;
+  refreshableInstructions?: string;
+  /**
+   * Refreshable section carried by the creation-time native developer instructions.
+   * Compaction rebuilds initial context from those instructions and drops the
+   * client-authored refresh, so this is the section a compacted thread reverts to.
+   */
+  nativeRefreshableInstructions?: string;
+};
+
 export type CodexAppServerLiveThreadOwnership = {
   assertCurrent: () => void;
   configFingerprint?: string;
-  /** Ephemeral configuration is creation-owned and cannot be refreshed or cold-resumed. */
-  ephemeralPolicy?: string;
+  ephemeralPolicy?: CodexEphemeralThreadPolicy;
   serviceTier?: CodexServiceTier | null;
   release: (threadId: string, assertCurrent?: () => void) => Promise<void>;
 };
@@ -409,7 +424,7 @@ export async function retainCodexAppServerLiveThread(
   releaseThread?: (threadId: string, assertCurrent?: () => void) => Promise<void>,
   configFingerprint?: string,
   serviceTier?: CodexServiceTier | null,
-  ephemeralPolicy?: string,
+  ephemeralPolicy?: CodexEphemeralThreadPolicy,
 ): Promise<boolean> {
   const runtime = configuredClients.get(client);
   if (!runtime || runtime.closed) {
@@ -596,6 +611,31 @@ function claimCodexAppServerThreadOwnership(
     ephemeralPolicy: retained.ephemeralPolicy,
     serviceTier: retained.serviceTier,
     release,
+  };
+}
+
+/**
+ * Records that compaction rebuilt this thread from its creation-time developer
+ * instructions and discarded the injected refreshable instructions. Incognito compaction
+ * keeps its separately owned subscription, so there is no claim/retain cycle to
+ * carry the reversion and the retained record has to be corrected in place.
+ */
+export function revertCodexAppServerLiveThreadInstructions(
+  client: CodexAppServerClient,
+  threadId: string,
+): void {
+  const runtime = configuredClients.get(client);
+  if (!runtime || runtime.closed) {
+    return;
+  }
+  const retained = runtime.retainedThreads.get(threadId);
+  const ephemeralPolicy = retained?.ephemeralPolicy;
+  if (!retained || !ephemeralPolicy) {
+    return;
+  }
+  retained.ephemeralPolicy = {
+    ...ephemeralPolicy,
+    refreshableInstructions: ephemeralPolicy.nativeRefreshableInstructions,
   };
 }
 

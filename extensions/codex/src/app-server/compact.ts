@@ -25,6 +25,7 @@ import { resolveCodexBindingAppServerConnection } from "./binding-connection.js"
 import {
   consumeCodexAppServerLiveThread,
   retainCodexAppServerLiveThread,
+  revertCodexAppServerLiveThreadInstructions,
   type CodexAppServerLiveThreadOwnership,
 } from "./client-runtime.js";
 import {
@@ -862,6 +863,12 @@ async function compactCodexNativeThread(
         } finally {
           completionWatch.cancel();
           try {
+            if (compactionSucceeded) {
+              // An incognito thread keeps its separately owned subscription, so
+              // it never reaches the re-retain below. Correct its record in place
+              // or the discarded instructions refresh is never delivered again.
+              revertCodexAppServerLiveThreadInstructions(client, binding.threadId);
+            }
             if (
               (compactionSucceeded || compactionRequestDefinitelyRejected) &&
               retainedThreadOwnership
@@ -883,6 +890,19 @@ async function compactCodexNativeThread(
                     ownership.release,
                     ownership.configFingerprint,
                     ownership.serviceTier,
+                    // Creation policy has to survive standalone compaction, or the
+                    // next turn reads a live ephemeral thread as policy drift. A
+                    // completed compaction rebuilt initial context from the
+                    // creation-time developer instructions and discarded the
+                    // injected instructions refresh, so record that reversion and let
+                    // the next turn deliver the current instructions again.
+                    ownership.ephemeralPolicy && compactionSucceeded
+                      ? {
+                          ...ownership.ephemeralPolicy,
+                          refreshableInstructions:
+                            ownership.ephemeralPolicy.nativeRefreshableInstructions,
+                        }
+                      : ownership.ephemeralPolicy,
                   );
                 }));
               if (!retained) {

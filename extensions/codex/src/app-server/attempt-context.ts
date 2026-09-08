@@ -642,8 +642,8 @@ function shouldInjectCodexOpenClawPromptContext(params: EmbeddedRunAttemptParams
   );
 }
 
-/** Renders loaded OpenClaw skill prompts as Codex collaboration instructions. */
-export function renderCodexSkillsCollaborationInstructions(params: {
+/** Renders loaded OpenClaw skill prompts as Codex developer instructions. */
+export function renderCodexSkillsInstructions(params: {
   attempt: EmbeddedRunAttemptParams;
   skillsPrompt?: string;
 }): string | undefined {
@@ -754,7 +754,7 @@ function renderCodexWorkspaceBootstrapPromptContext(
     return undefined;
   }
   const lines = [
-    "OpenClaw loaded these user-editable workspace files for the current turn. Codex loads project-local AGENTS.md natively. When execution uses another folder, OpenClaw supplies the agent workspace AGENTS.md as thread-level developer instructions. SOUL.md, IDENTITY.md, and USER.md remain turn-scoped collaboration instructions. Those files are not repeated here.",
+    "OpenClaw loaded these user-editable workspace files for the current turn. Codex loads project-local AGENTS.md natively. When execution uses another folder, OpenClaw supplies the agent workspace AGENTS.md as thread-level developer instructions. OpenClaw also supplies SOUL.md, IDENTITY.md, and USER.md through the refreshable thread developer instructions. Those files are not repeated here.",
     "",
     "# Project Context",
     "",

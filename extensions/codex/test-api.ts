@@ -68,7 +68,6 @@ export function buildCodexHarnessPromptSnapshot(params: {
   config?: JsonObject;
   promptText?: string;
   developerInstructionAdditions?: string;
-  turnScopedDeveloperInstructions?: string;
 }): CodexHarnessPromptSnapshot {
   const developerInstructions = joinPresentSections(
     buildDeveloperInstructions(params.attempt, {
@@ -96,7 +95,6 @@ export function buildCodexHarnessPromptSnapshot(params: {
       cwd: params.cwd,
       appServer: params.appServer,
       promptText: params.promptText,
-      turnScopedDeveloperInstructions: params.turnScopedDeveloperInstructions,
       messageToolAvailable: flattenCodexDynamicToolFunctions(params.dynamicTools).some(
         (tool) => tool.name === "message",
       ),

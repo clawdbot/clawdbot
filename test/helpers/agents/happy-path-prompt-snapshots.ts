@@ -110,7 +110,6 @@ type CodexPromptSnapshotApi = {
     config?: Record<string, unknown>;
     promptText?: string;
     developerInstructionAdditions?: string;
-    turnScopedDeveloperInstructions?: string;
   }) => {
     developerInstructions: string;
     threadStartParams: Record<string, unknown>;
@@ -902,7 +901,7 @@ function renderScenarioSnapshot(
       appServer,
       config: CODEX_PROMPT_SNAPSHOT_THREAD_CONFIG,
       promptText: codexTurnPromptText,
-      turnScopedDeveloperInstructions: CODEX_WORKSPACE_TURN_SCOPED_DEVELOPER_INSTRUCTIONS,
+      developerInstructionAdditions: CODEX_WORKSPACE_TURN_SCOPED_DEVELOPER_INSTRUCTIONS,
     }),
   );
   const dynamicToolFunctions = flattenCodexDynamicToolSpecs(scenario.dynamicTools);

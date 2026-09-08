@@ -56,6 +56,7 @@ import {
   resolveCodexAppServerRuntimeOptions,
   resolveCodexSupervisionAppServerRuntimeOptions,
 } from "./config.js";
+import { joinPresentSections } from "./developer-instruction-sections.js";
 import { dynamicToolBuildState } from "./dynamic-tool-build-state.js";
 import {
   buildDynamicTools,
@@ -404,6 +405,10 @@ async function buildCodexTurnContextForTest(
     ringZeroActive: false,
   });
   const threadDeveloperInstructions = testing.buildDeveloperInstructions(params, { dynamicTools });
+  const refreshableInstructions = joinPresentSections(
+    workspaceBootstrapContext.turnScopedDeveloperInstructions,
+    workspaceBootstrapContext.memoryCollaborationInstructions,
+  );
   const openClawPromptContext = buildCodexOpenClawPromptContext({
     params,
     workspacePromptContext: workspaceBootstrapContext.promptContext,
@@ -417,23 +422,28 @@ async function buildCodexTurnContextForTest(
     cwd: workspaceDir,
     appServer: resolveCodexAppServerRuntimeOptions({}),
     promptText: codexTurnPromptText,
-    turnScopedDeveloperInstructions: workspaceBootstrapContext.turnScopedDeveloperInstructions,
-    memoryCollaborationInstructions: workspaceBootstrapContext.memoryCollaborationInstructions,
   });
-  const collaborationInstructions =
+  const turnCollaborationInstructions =
     turnStartParams.collaborationMode?.settings?.developer_instructions ?? "";
   const inputText = turnStartParams.input?.find((item) => item.type === "text")?.text ?? "";
   const systemPromptReport = buildCodexSystemPromptReport({
     attempt: params,
     sessionKey: params.sessionKey ?? params.sessionId,
     workspaceDir,
-    developerInstructions: [threadDeveloperInstructions, collaborationInstructions].join("\n\n"),
+    developerInstructions: joinPresentSections(
+      threadDeveloperInstructions,
+      refreshableInstructions,
+      turnCollaborationInstructions,
+    ),
     workspaceBootstrapContext,
     skillsPrompt: "",
     tools: dynamicTools,
   });
   return {
-    collaborationInstructions,
+    // Preserve the fixture's historical name while its assertions move with the
+    // workspace text from the collaboration slot to the thread carrier.
+    collaborationInstructions: refreshableInstructions,
+    turnCollaborationInstructions,
     inputText,
     systemPromptReport,
     threadDeveloperInstructions,
@@ -1724,7 +1734,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(instructions).not.toContain("Unscoped structured command guidance.");
     expect(instructions).not.toContain("OpenClaw main command guidance.");
   });
-  it("passes OpenClaw skills as turn collaboration developer instructions", async () => {
+  it("passes OpenClaw skills independently of model-owned collaboration instructions", async () => {
     const llmInput = vi.fn();
     initializeGlobalHookRunner(
       createMockPluginRegistry([{ hookName: "llm_input", handler: llmInput }]),
@@ -1759,7 +1769,7 @@ describe("runCodexAppServerAttempt", () => {
     const result = await run;
     const threadStart = harness.requests.find((request) => request.method === "thread/start");
     const threadStartParams = threadStart?.params as { developerInstructions?: string };
-    expect(threadStartParams.developerInstructions).not.toContain("<available_skills>");
+    expect(threadStartParams.developerInstructions).toContain(params.skillsSnapshot.prompt);
     const turnStart = harness.requests.find((request) => request.method === "turn/start");
     const turnStartParams = turnStart?.params as {
       input?: Array<{ text?: string }>;
@@ -1771,8 +1781,8 @@ describe("runCodexAppServerAttempt", () => {
     };
     const collaborationInstructions =
       turnStartParams.collaborationMode?.settings?.developer_instructions ?? "";
-    expect(collaborationInstructions).toContain("## OpenClaw Skills");
-    expect(collaborationInstructions).toContain("<available_skills>");
+    expect(collaborationInstructions).not.toContain("## OpenClaw Skills");
+    expect(collaborationInstructions).not.toContain("<available_skills>");
     const inputText = turnStartParams.input?.[0]?.text ?? "";
     expect(inputText).not.toContain("## OpenClaw Skills");
     expect(inputText).not.toContain("<available_skills>");
@@ -4461,8 +4471,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(threadDeveloperInstructions).not.toContain(memorySummary);
     expect(threadDeveloperInstructions).not.toContain("Codex loads AGENTS.md natively");
     expect(threadDeveloperInstructions).not.toContain(agentsGuidance);
-    expect(collaborationInstructions).toContain("# Collaboration Mode: Default");
-    expect(collaborationInstructions).toContain("request_user_input availability");
+    expect(collaborationInstructions).not.toContain("# Collaboration Mode: Default");
     expect(collaborationInstructions).toContain("OpenClaw Agent Soul");
     expect(collaborationInstructions).toContain("<AGENT_SOUL>");
     expect(collaborationInstructions).toContain("</AGENT_SOUL>");
@@ -4499,7 +4508,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(inputText).not.toContain(agentsGuidance);
     expect(inputText).toBe("hello");
     expect(systemPromptReport.systemPrompt.chars).toBe(
-      [threadDeveloperInstructions, collaborationInstructions].join("\n\n").length,
+      joinPresentSections(threadDeveloperInstructions, collaborationInstructions).length,
     );
     const fileStats = new Map(
       systemPromptReport.injectedWorkspaceFiles.map((file) => [file.name, file]),
@@ -4585,19 +4594,31 @@ describe("runCodexAppServerAttempt", () => {
     expect(inputText).toBe("hello");
     expect(inputText).not.toContain(memorySummary);
   });
-  it("sends turn-scoped workspace instructions through Codex app-server payloads", async () => {
+  it("sends workspace persona through Codex thread developer instructions", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();
     const agentsGuidance = "Follow AGENTS guidance.";
     const soulGuidance = "Soul voice goes here.";
     const identityGuidance = "Identity guidance goes here.";
     const userProfile = "User profile goes here.";
+    const memorySummary = "Memory details stay behind the workspace memory pointer.";
+    const skillsCatalog = "<available_skills><skill><name>demo</name></skill></available_skills>";
     await fs.mkdir(workspaceDir, { recursive: true });
     await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), agentsGuidance);
     await fs.writeFile(path.join(workspaceDir, "SOUL.md"), soulGuidance);
     await fs.writeFile(path.join(workspaceDir, "IDENTITY.md"), identityGuidance);
     await fs.writeFile(path.join(workspaceDir, "USER.md"), userProfile);
+    await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), memorySummary);
+    registerMemoryPromptForTest();
+    testing.setOpenClawCodingToolsFactoryForTests(() => [
+      createRuntimeDynamicTool("memory_search"),
+      createRuntimeDynamicTool("memory_get"),
+    ]);
     const harness = createStartedThreadHarness();
     const params = createParams(sessionFile, workspaceDir);
+    params.skillsSnapshot = { prompt: skillsCatalog, skills: [] };
+    params.disableTools = false;
+    setCodexTestModelSupportsTools(params, true);
+    params.runtimePlan = createCodexRuntimePlanFixture();
     setAgentWorkspaceForTest(params, workspaceDir);
     const run = runCodexAppServerAttempt(params);
     await harness.waitForMethod("turn/start");
@@ -4613,9 +4634,20 @@ describe("runCodexAppServerAttempt", () => {
     };
     expect(threadStartParams.config?.instructions).toBeUndefined();
     expect(threadStartParams.developerInstructions).not.toContain(agentsGuidance);
-    expect(threadStartParams.developerInstructions).not.toContain(soulGuidance);
-    expect(threadStartParams.developerInstructions).not.toContain(identityGuidance);
-    expect(threadStartParams.developerInstructions).not.toContain(userProfile);
+    expect(threadStartParams.developerInstructions).toContain("<AGENT_SOUL>");
+    expect(threadStartParams.developerInstructions).toContain("</AGENT_SOUL>");
+    expect(threadStartParams.developerInstructions).toContain(soulGuidance);
+    expect(threadStartParams.developerInstructions).toContain(identityGuidance);
+    expect(threadStartParams.developerInstructions).toContain(userProfile);
+    expect(threadStartParams.developerInstructions).toContain("OpenClaw Workspace Memory");
+    const developerInstructions = threadStartParams.developerInstructions ?? "";
+    expect(developerInstructions.indexOf(skillsCatalog)).toBeGreaterThan(0);
+    expect(developerInstructions.indexOf("<AGENT_SOUL>")).toBeGreaterThan(
+      developerInstructions.indexOf(skillsCatalog),
+    );
+    expect(developerInstructions.indexOf("OpenClaw Workspace Memory")).toBeGreaterThan(
+      developerInstructions.indexOf("<AGENT_SOUL>"),
+    );
     const turnStart = harness.requests.find((request) => request.method === "turn/start");
     const turnStartParams = turnStart?.params as {
       input?: Array<{ text?: string }>;
@@ -4627,18 +4659,19 @@ describe("runCodexAppServerAttempt", () => {
     };
     const collaborationInstructions =
       turnStartParams.collaborationMode?.settings?.developer_instructions ?? "";
-    expect(collaborationInstructions).toContain("OpenClaw Agent Soul");
-    expect(collaborationInstructions).toContain("<AGENT_SOUL>");
-    expect(collaborationInstructions).toContain("</AGENT_SOUL>");
-    expect(collaborationInstructions).toContain(soulGuidance);
-    expect(collaborationInstructions).toContain(identityGuidance);
-    expect(collaborationInstructions).toContain(userProfile);
+    expect(collaborationInstructions).not.toContain("OpenClaw Agent Soul");
+    expect(collaborationInstructions).not.toContain("<AGENT_SOUL>");
+    expect(collaborationInstructions).not.toContain("</AGENT_SOUL>");
+    expect(collaborationInstructions).not.toContain(soulGuidance);
+    expect(collaborationInstructions).not.toContain(identityGuidance);
+    expect(collaborationInstructions).not.toContain(userProfile);
+    expect(collaborationInstructions).not.toContain("OpenClaw Workspace Memory");
+    expect(turnStartParams.collaborationMode?.settings?.developer_instructions).toBeNull();
     const inputText = turnStartParams.input?.[0]?.text ?? "";
     expect(inputText).toBe("hello");
     expect(inputText).not.toContain(agentsGuidance);
     expect(result.systemPromptReport?.systemPrompt.chars).toBe(
-      [threadStartParams.developerInstructions ?? "", collaborationInstructions].join("\n\n")
-        .length,
+      (threadStartParams.developerInstructions ?? "").length,
     );
   });
 
@@ -4671,7 +4704,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(threadInstructions).toContain("OpenClaw Agent Workspace Instructions");
     expect(threadInstructions).toContain(path.join(agentWorkspaceDir, "AGENTS.md"));
     expect(threadInstructions).toContain(agentsGuidance);
-    expect(threadInstructions).not.toContain(soulGuidance);
+    expect(threadInstructions).toContain(soulGuidance);
 
     const turnStart = harness.requests.find((request) => request.method === "turn/start");
     if (!turnStart) {
@@ -4683,7 +4716,7 @@ describe("runCodexAppServerAttempt", () => {
           collaborationMode?: { settings?: { developer_instructions?: string | null } };
         }
       ).collaborationMode?.settings?.developer_instructions ?? "";
-    expect(collaborationInstructions).toContain(soulGuidance);
+    expect(collaborationInstructions).not.toContain(soulGuidance);
     expect(collaborationInstructions).not.toContain(agentsGuidance);
     const agentWorkspaceStats = result.systemPromptReport?.injectedWorkspaceFiles.find(
       (file) => file.path === path.join(agentWorkspaceDir, "AGENTS.md"),

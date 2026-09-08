@@ -60,15 +60,23 @@ internal turns suppress project-doc loading and that fallback carrier.
 
 OpenClaw developer instructions cover OpenClaw runtime concerns: source-channel
 delivery, OpenClaw dynamic tools, ACP delegation, adapter context, and the
-active agent workspace profile files. Skill catalogs and tool-routed
-`MEMORY.md` pointers are projected as turn-scoped collaboration developer
-instructions. Active `BOOTSTRAP.md` and, when memory tools are unavailable,
-bounded `MEMORY.md` content travel as plain turn input references. They are
-introduced on a new native thread, after a cold resume or native compaction,
-and when their rendered content changes. Consecutive warm turns omit unchanged
-references once the complete block has been submitted. References dropped or
-truncated by prompt fitting are introduced again on a later turn. Process-local
-tracking resets when the Gateway restarts.
+active agent workspace profile files. The eligible skill catalog, persona
+(`SOUL.md`, `IDENTITY.md`, and `USER.md`), and memory guidance are carried
+with those thread developer instructions, after the generic policy and in that order, because
+Codex prefers model-catalog collaboration messages over caller collaboration
+instructions. This combined section is refreshable context, not generic policy: a changed
+section reaches a persistent thread through the normal policy resume, and
+reaches a live incognito thread as an injected developer message, so editing a
+skill or persona file does not end an incognito conversation. Native Codex
+subagents intentionally inherit the persona and memory guidance from the thread
+carrier. Tool-routed `MEMORY.md` pointers use the same carrier. Active
+`BOOTSTRAP.md` and, when memory tools are unavailable, bounded `MEMORY.md`
+content travel as plain turn input references. They are introduced on a new
+native thread, after a cold resume or native compaction, and when their rendered
+content changes. Consecutive warm turns omit unchanged references once the
+complete block has been submitted. References dropped or truncated by prompt
+fitting are introduced again on a later turn. Process-local tracking resets when
+the Gateway restarts.
 
 Delivery mode and the current message target requirement arrive as compact
 application context before each user turn. They explicitly supersede earlier

@@ -78,10 +78,6 @@ export function isCodexActiveCompactTurnError(error: unknown): boolean {
   return activeTurn?.turnKind === "compact";
 }
 
-export function joinPresentSections(...sections: Array<string | undefined>): string {
-  return sections.filter((section): section is string => Boolean(section?.trim())).join("\n\n");
-}
-
 export function prependCurrentInboundContext(
   prompt: string,
   context: EmbeddedRunAttemptParams["currentInboundContext"],
