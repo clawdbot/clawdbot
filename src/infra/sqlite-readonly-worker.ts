@@ -1,5 +1,6 @@
 import { execFile, spawnSync } from "node:child_process";
 import path from "node:path";
+import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { hasErrnoCode } from "./errno.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
@@ -33,7 +34,7 @@ function isSqliteReadOnlyWorkerResult(value: unknown): value is SqliteReadOnlyWo
 }
 
 function createSqliteReadOnlyWorkerError(message: string, stderr: string): Error {
-  const stderrTail = stderr.trim().slice(-SQLITE_READONLY_STDERR_TAIL_CHARS);
+  const stderrTail = sliceUtf16Safe(stderr.trim(), -SQLITE_READONLY_STDERR_TAIL_CHARS);
   return new Error(
     `SQLite read-only worker ${message}${stderrTail ? `\nstderr (tail): ${stderrTail}` : ""}`,
   );
