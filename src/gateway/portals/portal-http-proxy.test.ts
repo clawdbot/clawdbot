@@ -831,6 +831,43 @@ describe("portal HTTP proxy", () => {
         port: portal.listenPort,
         path: `/?${portal.tokenQuery}`,
       });
+      // Observe only after the response so diagnostics cannot affect the original dial.
+      const runtime = { node: process.version, platform: process.platform };
+      try {
+        const { ADDRCONFIG, promises: dns } = await import("node:dns");
+        const { networkInterfaces } = await import("node:os");
+        const { isLoopbackIpAddress } = await import("@openclaw/net-policy/ip");
+        const { extractErrorCode } = await import("@openclaw/normalization-core/error-coercion");
+        const lookups = await Promise.allSettled(
+          [0, ADDRCONFIG].map((hints) => dns.lookup("localhost", { all: true, hints })),
+        );
+        console.error(
+          "portal IPv6 diagnostics",
+          JSON.stringify({
+            ...runtime,
+            nonLoopbackIpv6: Object.values(networkInterfaces()).some((entries) =>
+              entries?.some((entry) => entry.family === "IPv6" && !entry.internal),
+            ),
+            lookups: lookups.map((lookup, index) => {
+              const code =
+                lookup.status === "rejected" ? extractErrorCode(lookup.reason) : undefined;
+              return {
+                hints: index === 0 ? "none" : "ADDRCONFIG",
+                errorCode: code && /^E[A-Z0-9_]{0,63}$/u.test(code) ? code : null,
+                addresses:
+                  lookup.status === "fulfilled"
+                    ? lookup.value.map(({ address, family }) => ({
+                        family,
+                        loopback: isLoopbackIpAddress(address),
+                      }))
+                    : null,
+              };
+            }),
+          }),
+        );
+      } catch {
+        console.error("portal IPv6 diagnostics unavailable", runtime);
+      }
       expect(result).toMatchObject({ status: 200, body: "v6 proxied" });
     } finally {
       await new Promise<void>((resolve) => {
