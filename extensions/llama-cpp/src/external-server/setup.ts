@@ -210,8 +210,9 @@ function buildSetupResult(params: {
   };
 }
 
-async function removeDefaultAuthProfile(agentDir?: string): Promise<void> {
+async function removeDefaultAuthProfile(config: OpenClawConfig, agentDir?: string): Promise<void> {
   const updated = await removeProviderAuthProfilesWithLock({
+    cfg: config,
     agentDir,
     provider: LLAMA_CPP_PROVIDER_ID,
     profileIds: [PROFILE_ID],
@@ -389,7 +390,7 @@ export async function runLlamaServerSetup(ctx: ProviderAuthContext): Promise<Pro
     throw new Error(`No llama-server text models were found at ${discovery.endpoint.origin}.`);
   }
   if (persistence.kind === "remove") {
-    await removeDefaultAuthProfile(ctx.agentDir);
+    await removeDefaultAuthProfile(ctx.config, ctx.agentDir);
   }
   return buildSetupResult({
     config: ctx.config,
@@ -529,7 +530,7 @@ export async function configureLlamaServerNonInteractive(
       mode: "api_key",
     });
   } else if (validated.persistence.kind === "remove") {
-    await removeDefaultAuthProfile(ctx.agentDir);
+    await removeDefaultAuthProfile(ctx.config, ctx.agentDir);
     config = removeAuthProfileConfig(config, PROFILE_ID);
   }
 

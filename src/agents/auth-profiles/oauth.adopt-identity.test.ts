@@ -72,10 +72,10 @@ describe("OAuth credential adoption is identity-gated", () => {
       formatProviderAuthProfileApiKeyWithPluginMock,
     });
     clearRuntimeAuthProfileStoreSnapshots();
+    resetOAuthRefreshQueuesForTest();
     caseIndex += 1;
     const caseRoot = path.join(tempRoot, `case-${caseIndex}`);
     mainAgentDir = await createOAuthMainAgentDir(caseRoot);
-    resetOAuthRefreshQueuesForTest();
   });
 
   afterEach(async () => {
@@ -291,15 +291,18 @@ describe("OAuth credential adoption is identity-gated", () => {
       }),
     ).rejects.toThrow(/OAuth token refresh failed for openai/);
 
-    // Sub-agent store must still have its own stale cred \u2014 no leak.
+    // The failed owner stays fenced, preserving identity without leaking main.
     const subRaw = readAuthProfileStoreForTest(subAgentDir);
-    expectPersistedOpenAICodexProfile(
-      expectDefined(subRaw.profiles[profileId], "subRaw.profiles[profileId] test invariant"),
-      {
-        access: "sub-stale",
-        refresh: "sub-refresh-token",
-        accountId: "acct-sub",
-      },
+    const fenced = expectDefined(
+      subRaw.profiles[profileId],
+      "subRaw.profiles[profileId] test invariant",
+    );
+    expectPersistedOpenAICodexProfile(fenced, { accountId: "acct-sub" });
+    expect(fenced.type === "oauth" ? fenced.access : "").toMatch(
+      /^openclaw-oauth-refresh-fence:v1:[a-f0-9]{32}:failed:access:[a-f0-9]{64}$/,
+    );
+    expect(fenced.type === "oauth" ? fenced.refresh : "").toMatch(
+      /^openclaw-oauth-refresh-fence:v1:[a-f0-9]{32}:failed:refresh:[a-f0-9]{64}$/,
     );
     expect(JSON.stringify(subRaw)).not.toContain("main-foreign-refreshed");
   });

@@ -204,6 +204,9 @@ describe("production lint suppressions", () => {
         "scripts/e2e/lib/upgrade-survivor/probe-volume-gateway.mjs|preserve-caught-error|1",
         "src/agents/agent-bundle-mcp-runtime.ts|unicorn/prefer-add-event-listener|1",
         "src/agents/agent-tools.abort.ts|typescript/prefer-promise-reject-errors|1",
+        // Cleanup stays in AggregateError.errors; the initiating failure remains cause for classification and remediation.
+        "src/agents/auth-profiles/oauth-refresh-fence.ts|preserve-caught-error|1",
+        "src/agents/auth-profiles/oauth-refresh-peers.ts|preserve-caught-error|1",
         "src/agents/mcp-http-transport.ts|unicorn/prefer-add-event-listener|6",
         // JSON parser causes can quote reflected credentials from authenticated provider responses.
         "src/agents/provider-http-errors.ts|preserve-caught-error|1",
@@ -250,6 +253,8 @@ describe("production lint suppressions", () => {
         "src/plugins/lazy-service-module.ts|typescript/no-unnecessary-type-parameters|1",
         // These snapshots own their arrays, so sorting in place avoids another copy.
         "src/plugins/loader-load-context.ts|unicorn/no-array-sort|1",
+        // Cleanup stays in AggregateError.errors; the initiating failure remains cause for classification and remediation.
+        "src/plugins/provider-auth-persistence.ts|preserve-caught-error|2",
         "src/plugins/public-surface-loader.ts|typescript/no-unnecessary-type-parameters|3",
         "src/plugins/registry-state.ts|unicorn/no-array-sort|1",
         "src/plugins/runtime/runtime-plugin-boundary.ts|typescript/no-unnecessary-type-parameters|1",
@@ -261,6 +266,8 @@ describe("production lint suppressions", () => {
         "src/state/config-machine-state.ts|typescript/no-unnecessary-type-parameters|2",
         "src/system-agent/setup-inference-activate.ts|no-unsafe-finally|1",
         "src/system-agent/setup-inference-activate.ts|preserve-caught-error|1",
+        // Cleanup stays in AggregateError.errors; the initiating failure remains cause for classification and remediation.
+        "src/system-agent/setup-inference-persist.ts|preserve-caught-error|2",
         "src/tasks/task-registry.sqlite.shared.ts|typescript/no-unnecessary-type-parameters|1",
         "src/test-utils/vitest-mock-fn.ts|typescript/no-explicit-any|1",
         "src/utils.ts|typescript/no-unnecessary-type-parameters|1",

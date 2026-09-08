@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import type { Selectable } from "kysely";
 import { ENV_SECRET_REF_ID_RE } from "../../config/types.secrets.js";
@@ -46,6 +47,23 @@ type SecretStoreRow = Selectable<OpenClawStateKyselyDatabase["secret_store_entri
 type SecretStoreScope = { kind: "team" };
 type SecretStoreKind = "secret" | "env";
 
+export type SecretStoreWriteParams = {
+  scope: SecretStoreScope;
+  name: string;
+  value: string;
+  kind: SecretStoreKind;
+  allowedHosts?: readonly string[];
+  updatedBy: string | null;
+  database?: OpenClawStateDatabaseOptions;
+};
+
+type SecretStoreWriteSnapshot = {
+  value: string;
+  kind: SecretStoreKind;
+  allowedHosts: string | null;
+  updatedBy: string | null;
+};
+
 export type SecretStoreEntryMetadata = {
   name: string;
   kind: SecretStoreKind;
@@ -58,7 +76,7 @@ export type SecretStoreEntryMetadata = {
   valuePreview?: string;
 };
 
-export type SecretStoreEgressBinding = {
+type SecretStoreEgressBinding = {
   name: string;
   sentinel: string;
   allowedHosts: string[];
@@ -383,15 +401,10 @@ export function readSecretStoreValue(params: {
   }
 }
 
-export function writeSecretStoreEntry(params: {
-  scope: SecretStoreScope;
-  name: string;
-  value: string;
-  kind: SecretStoreKind;
-  allowedHosts?: readonly string[];
-  updatedBy: string | null;
-  database?: OpenClawStateDatabaseOptions;
-}): void {
+function writeSecretStoreEntryInternal(
+  params: SecretStoreWriteParams,
+  capturePrevious: boolean,
+): SecretStoreWriteSnapshot | undefined {
   assertSecretStoreMutationName(params.name);
   assertSecretStoreValue(params.value, params.kind);
   if (params.kind === "env" && params.allowedHosts !== undefined) {
@@ -407,10 +420,22 @@ export function writeSecretStoreEntry(params: {
   const allowedHostsJson = allowedHosts?.length ? JSON.stringify(allowedHosts) : null;
   const { scopeKind, scopeId } = normalizeScope(params.scope);
   const now = Date.now();
-  runOpenClawStateWriteTransaction(
+  return runOpenClawStateWriteTransaction(
     ({ db: sqlite }) => {
       ensureSecretStoreSchema(sqlite);
       const db = getNodeSqliteKysely<SecretStoreDatabase>(sqlite);
+      const previous = capturePrevious
+        ? executeSqliteQueryTakeFirstSync(
+            sqlite,
+            db
+              .selectFrom("secret_store_entries")
+              .select(["value", "kind", "allowed_hosts", "updated_by"])
+              .where("scope_kind", "=", scopeKind)
+              .where("scope_id", "=", scopeId)
+              .where("name", "=", params.name)
+              .where("deleted_at_ms", "is", null),
+          )
+        : undefined;
       executeSqliteQuerySync(
         sqlite,
         db
@@ -442,10 +467,100 @@ export function writeSecretStoreEntry(params: {
             }),
           ),
       );
+      return previous
+        ? {
+            value: previous.value,
+            // SAFETY: The canonical secret_store schema and write validation restrict kind to secret|env.
+            kind: previous.kind as SecretStoreKind,
+            allowedHosts: previous.allowed_hosts,
+            updatedBy: previous.updated_by,
+          }
+        : undefined;
     },
     params.database,
     { operationLabel: "secrets.store.write" },
   );
+}
+
+export function writeSecretStoreEntry(params: SecretStoreWriteParams): void {
+  writeSecretStoreEntryInternal(params, false);
+}
+
+function rollbackSecretStoreEntryWrite(params: {
+  scope: SecretStoreScope;
+  name: string;
+  expectedUpdatedBy: string;
+  previous: SecretStoreWriteSnapshot | undefined;
+  database?: OpenClawStateDatabaseOptions;
+}): boolean {
+  assertSecretStoreMutationName(params.name);
+  const { scopeKind, scopeId } = normalizeScope(params.scope);
+  const now = Date.now();
+  try {
+    return runOpenClawStateWriteTransaction(
+      ({ db: sqlite }) => {
+        const db = getNodeSqliteKysely<SecretStoreDatabase>(sqlite);
+        const query =
+          params.previous === undefined
+            ? db
+                .updateTable("secret_store_entries")
+                .set({ deleted_at_ms: now, updated_at_ms: now })
+                .where("scope_kind", "=", scopeKind)
+                .where("scope_id", "=", scopeId)
+                .where("name", "=", params.name)
+                .where("updated_by", "=", params.expectedUpdatedBy)
+                .where("deleted_at_ms", "is", null)
+            : db
+                .updateTable("secret_store_entries")
+                .set({
+                  value: params.previous.value,
+                  kind: params.previous.kind,
+                  allowed_hosts: params.previous.allowedHosts,
+                  updated_at_ms: now,
+                  updated_by: params.previous.updatedBy,
+                  deleted_at_ms: null,
+                })
+                .where("scope_kind", "=", scopeKind)
+                .where("scope_id", "=", scopeId)
+                .where("name", "=", params.name)
+                .where("updated_by", "=", params.expectedUpdatedBy)
+                .where("deleted_at_ms", "is", null);
+        const result = executeSqliteQuerySync(sqlite, query);
+        return Number(result.numAffectedRows ?? 0n) === 1;
+      },
+      params.database,
+      { operationLabel: "secrets.store.rollback-write" },
+    );
+  } catch (error) {
+    if (isMissingSecretStoreTableError(error)) {
+      return false;
+    }
+    throw error;
+  }
+}
+
+/** Writes one entry and returns owner-checked compensation for that exact write. */
+export function writeSecretStoreEntryWithRollback(params: SecretStoreWriteParams): {
+  rollback: () => boolean;
+} {
+  const writer = `${params.updatedBy ?? "secret-store"}:${randomUUID()}`;
+  const previous = writeSecretStoreEntryInternal({ ...params, updatedBy: writer }, true);
+  let rollbackResult: boolean | undefined;
+  return {
+    rollback: () => {
+      if (rollbackResult !== undefined) {
+        return rollbackResult;
+      }
+      rollbackResult = rollbackSecretStoreEntryWrite({
+        scope: params.scope,
+        name: params.name,
+        expectedUpdatedBy: writer,
+        previous,
+        ...(params.database !== undefined ? { database: params.database } : {}),
+      });
+      return rollbackResult;
+    },
+  };
 }
 
 export function updateSecretStoreAllowedHosts(params: {

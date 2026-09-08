@@ -12,7 +12,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { enablePluginInConfig } from "../plugins/enable.js";
-import { prepareProviderAuthProfilesForPersistence } from "../plugins/provider-auth-persistence.js";
+import {
+  stageProviderAuthProfilesForPersistence,
+  type ProviderAuthProtectedProfilesReceipt,
+} from "../plugins/provider-auth-persistence.js";
 import type { ProviderAuthResult } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { type ActivateSetupInferenceDeps, setupInferenceLog } from "./setup-inference-core.js";
@@ -208,7 +211,7 @@ export type ManualAuthPersistenceReceipt = {
   }>;
   /** Profiles created by this activation; rollback must not delete prior identical entries. */
   insertedProfileIds: ReadonlySet<string>;
-  rollbackProtectedSecretStorage: () => void;
+  protectedPersistence?: ProviderAuthProtectedProfilesReceipt;
 };
 
 type ManualAuthProfilesReadback = "present" | "absent" | "mismatch" | "unknown";
@@ -298,65 +301,82 @@ export async function persistManualAuthProfiles(params: {
   secretStorage?: { config: OpenClawConfig; env?: NodeJS.ProcessEnv };
 }): Promise<ManualAuthPersistenceResult> {
   const prepared = params.secretStorage
-    ? prepareProviderAuthProfilesForPersistence({
+    ? await stageProviderAuthProfilesForPersistence({
         profiles: params.profiles,
         config: params.secretStorage.config,
         ...(params.secretStorage.env ? { env: params.secretStorage.env } : {}),
       })
-    : { profiles: [...params.profiles], rollback: () => {} };
-  const profiles = prepared.profiles.map((profile) => ({
-    profileId: profile.profileId,
-    credential: normalizeAuthProfileCredential(profile.credential),
-  }));
-  const insertedProfileIds = new Set<string>();
-  const receipt = {
-    agentDir: params.agentDir,
-    profiles,
-    insertedProfileIds,
-    rollbackProtectedSecretStorage: prepared.rollback,
-  };
-  let collision = false;
-  const update = params.deps.updateAuthProfileStoreWithLock ?? updateAuthProfileStoreWithLock;
-  const updated = await update({
-    agentDir: params.agentDir,
-    saveOptions: { filterExternalAuthProfiles: false, syncExternalCli: false },
-    updater: (store) => {
-      let changed = false;
-      for (const profile of profiles) {
-        const existing = store.profiles[profile.profileId];
-        if (existing && !isDeepStrictEqual(existing, profile.credential)) {
-          collision = true;
-          return false;
+    : undefined;
+  try {
+    const preparedProfiles = prepared?.profiles ?? [...params.profiles];
+    const profiles = preparedProfiles.map((profile) => ({
+      profileId: profile.profileId,
+      credential: normalizeAuthProfileCredential(profile.credential),
+    }));
+    const insertedProfileIds = new Set<string>();
+    const receipt = {
+      agentDir: params.agentDir,
+      profiles,
+      insertedProfileIds,
+      ...(prepared ? { protectedPersistence: prepared } : {}),
+    };
+    let collision = false;
+    const update = params.deps.updateAuthProfileStoreWithLock ?? updateAuthProfileStoreWithLock;
+    const updated = await update({
+      agentDir: params.agentDir,
+      saveOptions: { filterExternalAuthProfiles: false, syncExternalCli: false },
+      updater: (store) => {
+        let changed = false;
+        for (const profile of profiles) {
+          const existing = store.profiles[profile.profileId];
+          if (existing && !isDeepStrictEqual(existing, profile.credential)) {
+            collision = true;
+            return false;
+          }
+          if (!existing) {
+            store.profiles[profile.profileId] = profile.credential;
+            insertedProfileIds.add(profile.profileId);
+            changed = true;
+          }
         }
-        if (!existing) {
-          store.profiles[profile.profileId] = profile.credential;
-          insertedProfileIds.add(profile.profileId);
-          changed = true;
-        }
-      }
-      return changed;
-    },
-  });
-  if (collision) {
-    prepared.rollback();
-    return { status: "not-persisted" };
+        return changed;
+      },
+    });
+    if (collision) {
+      await prepared?.rollback();
+      return { status: "not-persisted" };
+    }
+    // The store helper can report a post-commit chmod failure as null. Read back
+    // the exact unique profiles before deciding whether the transaction failed.
+    const readback = readManualAuthProfiles(receipt, params.deps);
+    if (updated !== null || readback === "present") {
+      return { status: "persisted", receipt };
+    }
+    if (readback === "absent") {
+      await prepared?.rollback();
+      return { status: "not-persisted" };
+    }
+    return { status: "unknown", receipt };
+  } catch (error) {
+    try {
+      await prepared?.rollback();
+    } catch (rollbackError) {
+      // oxlint-disable-next-line preserve-caught-error -- AggregateError.errors retains rollbackError; cause remains the initiating persistence failure.
+      throw new AggregateError(
+        [error, rollbackError],
+        "Manual provider auth persistence failed and protected storage could not be released.",
+        { cause: error },
+      );
+    }
+    throw error;
   }
-  // The store helper can report a post-commit chmod failure as null. Read back
-  // the exact unique profiles before deciding whether the transaction failed.
-  const readback = readManualAuthProfiles(receipt, params.deps);
-  if (updated !== null || readback === "present") {
-    return { status: "persisted", receipt };
-  }
-  if (readback === "absent") {
-    prepared.rollback();
-    return { status: "not-persisted" };
-  }
-  return { status: "unknown", receipt };
 }
 
-function rollbackManualAuthSecretStorage(receipt: ManualAuthPersistenceReceipt): boolean {
+async function rollbackManualAuthSecretStorage(
+  receipt: ManualAuthPersistenceReceipt,
+): Promise<boolean> {
   try {
-    receipt.rollbackProtectedSecretStorage();
+    await receipt.protectedPersistence?.rollback();
     return true;
   } catch {
     return false;
@@ -368,7 +388,7 @@ export async function rollbackManualAuthProfiles(
   deps: ActivateSetupInferenceDeps,
 ): Promise<boolean> {
   if (receipt.insertedProfileIds.size === 0) {
-    return rollbackManualAuthSecretStorage(receipt);
+    return await rollbackManualAuthSecretStorage(receipt);
   }
   const update = deps.updateAuthProfileStoreWithLock ?? updateAuthProfileStoreWithLock;
   for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -404,7 +424,7 @@ export async function rollbackManualAuthProfiles(
           updated.profiles[profile.profileId] === undefined,
       )
     ) {
-      return rollbackManualAuthSecretStorage(receipt);
+      return await rollbackManualAuthSecretStorage(receipt);
     }
     let persistedStore: ReturnType<typeof loadPersistedAuthProfileStore>;
     try {
@@ -422,8 +442,29 @@ export async function rollbackManualAuthProfiles(
           persistedStore.profiles[profile.profileId] === undefined,
       )
     ) {
-      return rollbackManualAuthSecretStorage(receipt);
+      return await rollbackManualAuthSecretStorage(receipt);
     }
   }
+  // Profile removal is indeterminate, so retain every protected write that a
+  // surviving profile may reference. Commit releases the staged locks, and its
+  // failure must remain visible instead of hiding a lock leak.
+  await receipt.protectedPersistence?.commit();
   return false;
+}
+
+export async function commitManualAuthProfiles(
+  receipt: ManualAuthPersistenceReceipt,
+  failure?: { primaryError: unknown; message: string },
+): Promise<void> {
+  try {
+    await receipt.protectedPersistence?.commit();
+  } catch (releaseError) {
+    if (!failure || releaseError === failure.primaryError) {
+      throw releaseError;
+    }
+    // oxlint-disable-next-line preserve-caught-error -- AggregateError.errors retains releaseError; cause remains the primary activation failure.
+    throw new AggregateError([failure.primaryError, releaseError], failure.message, {
+      cause: failure.primaryError,
+    });
+  }
 }

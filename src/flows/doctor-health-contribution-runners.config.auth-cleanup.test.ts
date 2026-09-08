@@ -70,6 +70,7 @@ describe("Doctor retired auth profile cleanup", () => {
     expect(mocks.replaceConfigFile).toHaveBeenCalledOnce();
     expect(mocks.removeAuthProfilesAcrossOwnerStores).toHaveBeenCalledWith({
       agentDir: "/tmp/openclaw/agents/main",
+      cfg: { gateway: { mode: "local" } },
       profileIds: ["anthropic:claude-cli"],
     });
     expect(mocks.replaceConfigFile.mock.invocationCallOrder[0]).toBeLessThan(

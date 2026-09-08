@@ -435,6 +435,7 @@ export async function resolveApiKeyForProviderCore(params: {
           provider,
           preferredProfile,
           forModel: params.modelId,
+          includePendingOAuthRefresh: true,
         });
   let deferredAuthProfileResult: ResolvedProviderAuth | null = null;
   let refreshFailure: OAuthRefreshFailureError | undefined;

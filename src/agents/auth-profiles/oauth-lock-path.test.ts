@@ -91,6 +91,21 @@ describe("resolveOAuthRefreshLockPath", () => {
     expect(first).toBe(second);
   });
 
+  it("anchors the lock to an explicitly targeted state directory", () => {
+    const first = resolveOAuthRefreshLockPath("openai", "openai:default", {
+      ...process.env,
+      OPENCLAW_STATE_DIR: path.join(stateDir, "first"),
+    });
+    const second = resolveOAuthRefreshLockPath("openai", "openai:default", {
+      ...process.env,
+      OPENCLAW_STATE_DIR: path.join(stateDir, "second"),
+    });
+
+    expect(first).not.toBe(second);
+    expect(path.dirname(first)).toBe(path.join(stateDir, "first", "locks", "oauth-refresh"));
+    expect(path.dirname(second)).toBe(path.join(stateDir, "second", "locks", "oauth-refresh"));
+  });
+
   it("returns a valid path on a clean install where the locks/ directory does not yet exist", async () => {
     // Defensive check: even on a fresh install with no lock hierarchy
     // populated, the function must return a safe path. withFileLock

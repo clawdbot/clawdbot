@@ -7,7 +7,7 @@ import { AUTH_STORE_VERSION } from "./constants.js";
 import type { AuthProfileCredential, AuthProfileSecretsStore, AuthProfileStore } from "./types.js";
 
 /** Reason a credential is or is not portable into an agent copy. */
-export type AuthProfilePortabilityReason =
+type AuthProfilePortabilityReason =
   | "portable-static-credential"
   | "non-portable-oauth-refresh-token"
   | "credential-opted-out"
@@ -54,9 +54,7 @@ export function resolveAuthProfilePortability(
 }
 
 /** Returns true when a credential can be copied into an agent-local store. */
-export function isAuthProfileCredentialPortableForAgentCopy(
-  credential: AuthProfileCredential,
-): boolean {
+function isAuthProfileCredentialPortableForAgentCopy(credential: AuthProfileCredential): boolean {
   return resolveAuthProfilePortability(credential).portable;
 }
 

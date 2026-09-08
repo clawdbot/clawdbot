@@ -318,21 +318,20 @@ async function runWithModelFallbackInternal<T>(
           store: authStore,
           provider: candidate.provider,
           profileId: userLockedAuthProfileId,
+          includePendingOAuthRefresh: true,
         }).eligible;
       if (!candidateHarnessAuth.skipsProviderAuthCooldown) {
-        const orderedProfileIds = authRuntime.resolveAuthProfileOrder({
+        candidateAuthProfileIds = authRuntime.resolveAuthProfileOrder({
           cfg: params.cfg,
           store: authStore,
           provider: candidate.provider,
           forModel: candidate.model,
+          includePendingOAuthRefresh: true,
         });
-        candidateAuthProfileIds =
-          userLockedAuthProfileEligible && userLockedAuthProfileId
-            ? [
-                userLockedAuthProfileId,
-                ...orderedProfileIds.filter((profileId) => profileId !== userLockedAuthProfileId),
-              ]
-            : orderedProfileIds;
+        if (userLockedAuthProfileEligible && userLockedAuthProfileId) {
+          candidateAuthProfileIds.unshift(userLockedAuthProfileId);
+          candidateAuthProfileIds = [...new Set(candidateAuthProfileIds)];
+        }
         profileIdsByCandidate.set(candidate, candidateAuthProfileIds);
         authRuntime.maybeReprobeWhamBlockedProfiles({
           store: authStore,

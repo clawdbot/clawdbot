@@ -101,6 +101,7 @@ let prepareProviderDynamicModel: typeof import("./provider-runtime.js").prepareP
 let prepareProviderRuntimeAuth: typeof import("./provider-runtime.js").prepareProviderRuntimeAuth;
 let refreshProviderOAuthCredentialWithPlugin: typeof import("./provider-runtime.js").refreshProviderOAuthCredentialWithPlugin;
 let resolveProviderOAuthCredentialWithPlugin: typeof import("./provider-runtime.js").resolveProviderOAuthCredentialWithPlugin;
+let resolveProviderOAuthRefreshCapabilityWithPlugin: typeof import("./provider-runtime.js").resolveProviderOAuthRefreshCapabilityWithPlugin;
 let resolveProviderRuntimePlugin: typeof import("./provider-runtime.js").resolveProviderRuntimePlugin;
 let runProviderDynamicModel: typeof import("./provider-runtime.js").runProviderDynamicModel;
 let validateProviderReplayTurnsWithPlugin: typeof import("./provider-runtime.js").validateProviderReplayTurnsWithPlugin;
@@ -399,6 +400,7 @@ describe("provider-runtime", () => {
       prepareProviderRuntimeAuth,
       refreshProviderOAuthCredentialWithPlugin,
       resolveProviderOAuthCredentialWithPlugin,
+      resolveProviderOAuthRefreshCapabilityWithPlugin,
       resolveProviderRuntimePlugin,
       runProviderDynamicModel,
       validateProviderReplayTurnsWithPlugin,
@@ -502,6 +504,9 @@ describe("provider-runtime", () => {
       apiKey: "formatted:refreshed-access",
       credential: { access: "refreshed-access" },
     });
+    expect(resolveProviderOAuthRefreshCapabilityWithPlugin({ provider: "plugin-oauth" })).toEqual({
+      status: "available",
+    });
     expect(loginOAuth).toHaveBeenCalledOnce();
     expect(refreshOAuth).toHaveBeenCalledOnce();
   });
@@ -529,6 +534,9 @@ describe("provider-runtime", () => {
         refresh: true,
       }),
     ).resolves.toEqual({ status: "configured-unavailable" });
+    expect(resolveProviderOAuthRefreshCapabilityWithPlugin({ provider: "plugin-oauth" })).toEqual({
+      status: "configured-unavailable",
+    });
   });
 
   it("auto-discovers only usage providers declared by their owning plugin", () => {

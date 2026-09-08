@@ -137,10 +137,14 @@ export function resolveSharedAuthStorePath(env: NodeJS.ProcessEnv = process.env)
  * happen to share a `profileId` across providers (operator-renamed profile,
  * test fixture, etc.) do not needlessly serialize against each other.
  */
-export function resolveOAuthRefreshLockPath(provider: string, profileId: string): string {
+export function resolveOAuthRefreshLockPath(
+  provider: string,
+  profileId: string,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
   const lockKey = JSON.stringify([provider, profileId]);
   const safeId = `lock-${oauthLockPathDigest(lockKey)}`;
-  return path.join(resolveStateDir(), "locks", "oauth-refresh", safeId);
+  return path.join(resolveStateDir(env), "locks", "oauth-refresh", safeId);
 }
 
 function oauthLockPathDigest(value: string): string {

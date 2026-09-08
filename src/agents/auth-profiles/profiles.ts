@@ -7,16 +7,21 @@ import { isDeepStrictEqual } from "node:util";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
 import { normalizeAuthProfileCredential } from "./credential-normalize.js";
+import { withOAuthProfileLocks, type OAuthProfileLockKey } from "./oauth-profile-lock.js";
+import { removeOAuthRefreshGenerationPeers } from "./oauth-refresh-peers.js";
+import { resolveSharedAuthStorePath } from "./path-resolve.js";
 import { dedupeProfileIds, listProfilesForProvider } from "./profile-list.js";
 import { removeRuntimeExternalProfileReferences } from "./runtime-external-profile-references.js";
 import { resolveSharedMainAuthAgentDir } from "./shared-main-dir.js";
 import { resolveAuthProfileDatabasePath } from "./sqlite.js";
 import {
   ensureAuthProfileStoreForLocalUpdate,
+  loadAuthProfileStoreWithoutExternalProfiles,
   saveAuthProfileStore,
   updateAuthProfileStoreWithLock,
 } from "./store-runtime.js";
@@ -32,13 +37,10 @@ export {
   listProfilesForProvider,
   resolveSubscriptionAuthModeForProfiles,
 } from "./profile-list.js";
-export {
-  upsertAuthProfileAfterLoginWithLockOrThrow,
-  upsertAuthProfileWithLock,
-  upsertAuthProfileWithLockOrThrow,
-} from "./upsert-with-lock.js";
+export { upsertAuthProfileWithLock, upsertAuthProfileWithLockOrThrow } from "./upsert-with-lock.js";
 
 const authProfileProfilesLog = createSubsystemLogger("agent/embedded");
+const OAUTH_REMOVAL_MAX_ATTEMPTS = 3;
 
 function listProviderAuthStateEntries<T>(
   entries: Record<string, T> | undefined,
@@ -201,6 +203,7 @@ export function upsertAuthProfile(params: {
 
 /** Removes auth profiles and related state for a provider, optionally narrowed to exact IDs. */
 export async function removeProviderAuthProfilesWithLock(params: {
+  cfg?: OpenClawConfig;
   provider: string;
   agentDir?: string;
   profileIds?: readonly string[];
@@ -217,22 +220,24 @@ export async function removeProviderAuthProfilesWithLock(params: {
     // Other agents must not erase credentials inherited from the shared store.
     owners.unshift(undefined);
   }
-  let updated: AuthProfileStore | null = null;
-  for (const owner of owners) {
-    updated = await updateAuthProfileStoreWithLock({
-      agentDir: owner,
-      updater: (store) =>
-        removeProfileReferences(
-          store,
-          new Set(params.profileIds ?? listProfilesForProvider(store, params.provider)),
-          params.profileIds ? undefined : params.provider,
-        ),
-    });
-    if (updated === null) {
+  for (let attempt = 0; attempt < OAUTH_REMOVAL_MAX_ATTEMPTS; attempt += 1) {
+    const targets = owners.map((owner) =>
+      createAuthProfileRemovalTarget({
+        agentDir: owner,
+        ...(params.profileIds
+          ? { profileIds: new Set(params.profileIds) }
+          : { provider: params.provider }),
+      }),
+    );
+    const result = await removeAuthProfileTargetsWithLocks(targets, params.cfg ?? {});
+    if (result.kind === "updated") {
+      return result.stores.at(-1) ?? null;
+    }
+    if (result.kind === "contention") {
       return null;
     }
   }
-  return updated;
+  return null;
 }
 
 function removeProfileReferences(
@@ -254,20 +259,113 @@ function removeProfileReferences(
   return true;
 }
 
-/** Removes selected auth profiles and every state pointer that references them. */
-export async function removeAuthProfilesWithLock(params: {
-  profileIds: readonly string[];
+type AuthProfileRemovalTarget = {
   agentDir?: string;
-}): Promise<AuthProfileStore | null> {
-  const profileIds = new Set(params.profileIds);
-  if ([...profileIds].some(isUserModelAuthProfileId)) {
-    throw new Error(
-      "Personal model accounts are managed in Settings → Profile → Connected accounts. Clearing a default keeps the credential; revoke access with the provider instead of removing a shared auth profile.",
-    );
-  }
-  return await updateAuthProfileStoreWithLock({
+  profileIds: ReadonlySet<string>;
+  provider?: string;
+  expectedProfiles: ReadonlyMap<string, AuthProfileCredential | undefined>;
+};
+
+function createAuthProfileRemovalTarget(params: {
+  agentDir?: string;
+  profileIds?: ReadonlySet<string>;
+  provider?: string;
+}): AuthProfileRemovalTarget {
+  const store = loadAuthProfileStoreWithoutExternalProfiles(params.agentDir, {
+    allowKeychainPrompt: false,
+  });
+  const profileIds =
+    params.profileIds ?? new Set(listProfilesForProvider(store, params.provider ?? ""));
+  return {
     agentDir: params.agentDir,
-    updater: (store) => removeProfileReferences(store, profileIds),
+    profileIds,
+    ...(params.provider ? { provider: params.provider } : {}),
+    expectedProfiles: new Map(
+      [...profileIds].map((profileId) => [profileId, store.profiles[profileId]]),
+    ),
+  };
+}
+
+function authProfileRemovalTargetMatches(
+  target: AuthProfileRemovalTarget,
+  store: AuthProfileStore,
+): boolean {
+  if (target.provider) {
+    const currentProfileIds = new Set(listProfilesForProvider(store, target.provider));
+    if (
+      currentProfileIds.size !== target.profileIds.size ||
+      [...currentProfileIds].some((profileId) => !target.profileIds.has(profileId))
+    ) {
+      return false;
+    }
+  }
+  return [...target.expectedProfiles].every(([profileId, expected]) =>
+    isDeepStrictEqual(store.profiles[profileId], expected),
+  );
+}
+
+type AuthProfileRemovalResult =
+  | { kind: "retry" }
+  | { kind: "contention" }
+  | { kind: "updated"; stores: AuthProfileStore[] };
+
+async function removeAuthProfileTargetsWithLocks(
+  targets: readonly AuthProfileRemovalTarget[],
+  cfg: OpenClawConfig,
+): Promise<AuthProfileRemovalResult> {
+  const lockKeys: OAuthProfileLockKey[] = targets.flatMap((target) =>
+    [...target.expectedProfiles].flatMap(([profileId, credential]) =>
+      credential?.type === "oauth" ? [{ profileId, provider: credential.provider }] : [],
+    ),
+  );
+  return await withOAuthProfileLocks(lockKeys, async () => {
+    for (const target of targets) {
+      const current = loadAuthProfileStoreWithoutExternalProfiles(target.agentDir, {
+        allowKeychainPrompt: false,
+      });
+      if (!authProfileRemovalTargetMatches(target, current)) {
+        return { kind: "retry" };
+      }
+    }
+
+    for (const target of targets) {
+      for (const [profileId, credential] of target.expectedProfiles) {
+        if (credential?.type !== "oauth") {
+          continue;
+        }
+        await removeOAuthRefreshGenerationPeers({
+          cfg,
+          ownerDatabasePath: target.agentDir
+            ? resolveAuthProfileDatabasePath(target.agentDir)
+            : resolveSharedAuthStorePath(),
+          profileId,
+          generation: credential,
+        });
+      }
+    }
+
+    const stores: AuthProfileStore[] = [];
+    for (const target of targets) {
+      let stale = false;
+      const updated = await updateAuthProfileStoreWithLock({
+        agentDir: target.agentDir,
+        updater: (store) => {
+          if (!authProfileRemovalTargetMatches(target, store)) {
+            stale = true;
+            return false;
+          }
+          return removeProfileReferences(store, target.profileIds, target.provider);
+        },
+      });
+      if (updated === null) {
+        return { kind: "contention" };
+      }
+      if (stale) {
+        return { kind: "retry" };
+      }
+      stores.push(updated);
+    }
+    return { kind: "updated", stores };
   });
 }
 
@@ -277,31 +375,43 @@ export async function removeAuthProfilesWithLock(params: {
  * store lets the profile reappear on the next status read and auth warmup.
  */
 export async function removeAuthProfilesAcrossOwnerStores(params: {
+  cfg?: OpenClawConfig;
   agentDir?: string;
   profileIds: readonly string[];
 }): Promise<boolean> {
-  const profilesByOwner = new Map<string | undefined, Set<string>>([
-    [params.agentDir, new Set(params.profileIds)],
-  ]);
-  for (const profileId of params.profileIds) {
-    const ownerAgentDir = resolvePersistedAuthProfileOwnerAgentDir({
-      agentDir: params.agentDir,
-      profileId,
-    });
-    const ownerProfiles = profilesByOwner.get(ownerAgentDir) ?? new Set<string>();
-    ownerProfiles.add(profileId);
-    profilesByOwner.set(ownerAgentDir, ownerProfiles);
+  const profileIds = new Set(params.profileIds);
+  if ([...profileIds].some(isUserModelAuthProfileId)) {
+    throw new Error(
+      "Personal model accounts are managed in Settings → Profile → Connected accounts. Clearing a default keeps the credential; revoke access with the provider instead of removing a shared auth profile.",
+    );
   }
-  for (const [ownerAgentDir, profileIds] of profilesByOwner) {
-    const updatedStore = await removeAuthProfilesWithLock({
-      profileIds: [...profileIds],
-      agentDir: ownerAgentDir,
-    });
-    if (!updatedStore) {
+  for (let attempt = 0; attempt < OAUTH_REMOVAL_MAX_ATTEMPTS; attempt += 1) {
+    const profilesByOwner = new Map<string | undefined, Set<string>>([
+      [params.agentDir, profileIds],
+    ]);
+    for (const profileId of profileIds) {
+      const ownerAgentDir = resolvePersistedAuthProfileOwnerAgentDir({
+        agentDir: params.agentDir,
+        profileId,
+      });
+      const ownerProfiles = profilesByOwner.get(ownerAgentDir) ?? new Set<string>();
+      ownerProfiles.add(profileId);
+      profilesByOwner.set(ownerAgentDir, ownerProfiles);
+    }
+    const result = await removeAuthProfileTargetsWithLocks(
+      [...profilesByOwner].map(([agentDir, ownerProfileIds]) =>
+        createAuthProfileRemovalTarget({ agentDir, profileIds: ownerProfileIds }),
+      ),
+      params.cfg ?? {},
+    );
+    if (result.kind === "updated") {
+      return true;
+    }
+    if (result.kind === "contention") {
       return false;
     }
   }
-  return true;
+  return false;
 }
 
 /** Clear the last-good profile pointer for a provider under the store lock. */

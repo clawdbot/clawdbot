@@ -35,7 +35,7 @@ export async function runRetiredAuthProfileCleanup(ctx: DoctorHealthFlowContext)
   }
   const { removeAuthProfilesAcrossOwnerStores } = await import("../agents/auth-profiles.js");
   for (const plan of retiredAuthProfileCleanupPlans) {
-    if (!(await removeAuthProfilesAcrossOwnerStores(plan))) {
+    if (!(await removeAuthProfilesAcrossOwnerStores({ ...plan, cfg: ctx.cfg }))) {
       throw new Error(`Failed to remove retired auth profile "${plan.profileIds.join(", ")}".`);
     }
   }

@@ -243,6 +243,7 @@ function createOAuthHandler(region: MiniMaxRegion) {
         access: result.access,
         refresh: result.refresh,
         expires: result.expires,
+        credentialExtra: { authFlow: "device-code" },
         configPatch: {
           models: {
             providers: {

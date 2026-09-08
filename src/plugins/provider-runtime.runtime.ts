@@ -32,6 +32,11 @@ export const resolveProviderOAuthCredentialWithPlugin = bindProviderRuntime(
   (runtime) => runtime.resolveProviderOAuthCredentialWithPlugin,
 );
 
+/** Lazily checks whether a provider plugin owns OAuth refresh. */
+export const resolveProviderOAuthRefreshCapabilityWithPlugin = bindProviderRuntime(
+  (runtime) => runtime.resolveProviderOAuthRefreshCapabilityWithPlugin,
+);
+
 /** Lazily prepares provider runtime auth for model execution. */
 export const prepareProviderRuntimeAuth = bindProviderRuntime(
   (runtime) => runtime.prepareProviderRuntimeAuth,

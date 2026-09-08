@@ -23,7 +23,11 @@ import {
   AuthProfileMigrationRequiredError,
   AuthProfileStoreUnreadableError,
 } from "../auth-profiles/legacy-source-diagnostic.js";
-import { resolveOAuthRefreshLockPath } from "../auth-profiles/paths.js";
+import { normalizeOAuthRefreshCredential } from "../auth-profiles/oauth-refresh-fence.js";
+import {
+  isOAuthRefreshFence,
+  isPendingOAuthRefreshFence,
+} from "../auth-profiles/oauth-refresh-marker.js";
 import { loadPersistedAuthProfileStore } from "../auth-profiles/persisted.js";
 import { getRuntimeAuthProfileStoreSnapshotCore } from "../auth-profiles/runtime-snapshots.js";
 import {
@@ -41,30 +45,30 @@ import {
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { getAgentDir } from "../config.js";
 import {
+  isAuthStorageOAuthRefreshFence,
+  refreshAuthStorageOAuthCredential,
+} from "./auth-storage-oauth-refresh.js";
+import {
   getAuthStorageOAuthProviderRegistry,
   loginAuthStorageOAuthProvider,
   resolveAuthStoragePluginOAuthCredential,
 } from "./auth-storage-oauth-registry.js";
+import type {
+  AuthCredential,
+  AuthStorageBackend,
+  AuthStorageData,
+  LockResult,
+} from "./auth-storage-types.js";
 import { resolveConfigValue } from "./resolve-config-value.js";
 
-export type ApiKeyCredential = {
-  type: "api_key";
-  key: string;
-};
-
-export type OAuthCredential = {
-  type: "oauth";
-} & OAuthCredentials;
-
-export type TokenCredential = {
-  type: "token";
-  token: string;
-  expires?: number;
-};
-
-export type AuthCredential = ApiKeyCredential | OAuthCredential | TokenCredential;
-
-export type AuthStorageData = Record<string, AuthCredential>;
+export type {
+  ApiKeyCredential,
+  AuthCredential,
+  AuthStorageBackend,
+  AuthStorageData,
+  OAuthCredential,
+  TokenCredential,
+} from "./auth-storage-types.js";
 export { OAuthProviderConfiguredUnavailableError };
 export const AUTH_STORAGE_CREATE_DEPRECATION_CODE = "AUTH_STORAGE_CREATE_DEPRECATED" as const;
 export const FILE_AUTH_STORAGE_BACKEND_DEPRECATION_CODE =
@@ -119,17 +123,6 @@ export type AuthStatus = {
     | "models_json_command";
   label?: string;
 };
-
-type LockResult<T> = {
-  result: T;
-  next?: string;
-};
-
-export interface AuthStorageBackend {
-  readonly migrationOwnerAgentDir?: string;
-  withLock<T>(fn: (current: string | undefined) => LockResult<T>): T;
-  withLockAsync<T>(fn: (current: string | undefined) => Promise<LockResult<T>>): Promise<T>;
-}
 
 function projectAuthStorageData(store: AuthProfileStore | null): AuthStorageData {
   const projected: AuthStorageData = {};
@@ -594,7 +587,8 @@ export class AuthStorage {
    * Get credential for a provider.
    */
   get(provider: string): AuthCredential | undefined {
-    return this.data[provider] ?? undefined;
+    const credential = this.data[provider];
+    return isAuthStorageOAuthRefreshFence(provider, credential) ? undefined : credential;
   }
 
   /**
@@ -615,14 +609,16 @@ export class AuthStorage {
    * List all providers with credentials.
    */
   list(): string[] {
-    return Object.keys(this.data);
+    return Object.keys(this.data).filter(
+      (provider) => !isAuthStorageOAuthRefreshFence(provider, this.data[provider]),
+    );
   }
 
   /**
    * Check if credentials exist for a provider in auth.json.
    */
   has(provider: string): boolean {
-    return provider in this.data;
+    return this.get(provider) !== undefined;
   }
 
   /**
@@ -633,7 +629,7 @@ export class AuthStorage {
     if (this.runtimeOverrides.has(provider)) {
       return true;
     }
-    if (this.data[provider]) {
+    if (this.get(provider)) {
       return true;
     }
     if (getEnvApiKey(provider)) {
@@ -649,7 +645,7 @@ export class AuthStorage {
    * Return auth status without exposing credential values or refreshing tokens.
    */
   getAuthStatus(provider: string): AuthStatus {
-    if (this.data[provider]) {
+    if (this.get(provider)) {
       return { configured: true, source: "stored" };
     }
 
@@ -673,7 +669,11 @@ export class AuthStorage {
    * Get all credentials (for passing to getOAuthApiKey).
    */
   getAll(): AuthStorageData {
-    return { ...this.data };
+    return Object.fromEntries(
+      Object.entries(this.data).filter(
+        ([provider, credential]) => !isAuthStorageOAuthRefreshFence(provider, credential),
+      ),
+    );
   }
 
   drainErrors(): Error[] {
@@ -704,62 +704,20 @@ export class AuthStorage {
   private async refreshOAuthTokenWithLock(
     providerId: OAuthProviderId,
   ): Promise<{ apiKey: string; newCredentials: OAuthCredentials } | null> {
-    const provider = getAuthStorageOAuthProviderRegistry(this).get(providerId);
-
-    const refresh = async () =>
-      await this.storage.withLockAsync(async (current) => {
-        const currentData = this.parseStorageData(current);
-        this.data = currentData;
+    const result = await refreshAuthStorageOAuthCredential({
+      authStorage: this,
+      storage: this.storage,
+      providerId,
+      parse: (current) => this.parseStorageData(current),
+      commit: (data) => {
+        this.data = data;
         this.loadError = null;
-
-        const cred = currentData[providerId];
-        if (cred?.type !== "oauth") {
-          return { result: null };
-        }
-
-        if (Date.now() < cred.expires) {
-          if (provider) {
-            return { result: { apiKey: provider.getApiKey(cred), newCredentials: cred } };
-          }
-          return { result: await resolveAuthStoragePluginOAuthCredential(providerId, cred, false) };
-        }
-
-        const oauthCreds: Record<string, OAuthCredentials> = {};
-        for (const [key, value] of Object.entries(currentData)) {
-          if (value.type === "oauth") {
-            oauthCreds[key] = value;
-          }
-        }
-
-        const refreshed = provider
-          ? await getAuthStorageOAuthProviderRegistry(this).getApiKey(providerId, oauthCreds)
-          : await resolveAuthStoragePluginOAuthCredential(providerId, cred, true);
-        if (!refreshed) {
-          return { result: null };
-        }
-
-        const refreshedCredential: OAuthCredential = {
-          ...cred,
-          ...refreshed.newCredentials,
-          type: "oauth",
-        };
-        const merged: AuthStorageData = {
-          ...currentData,
-          [providerId]: refreshedCredential,
-        };
-        this.data = merged;
-        this.loadError = null;
-        return { result: refreshed, next: JSON.stringify(merged, null, 2) };
-      });
-
-    const result = this.migrationOwnerAgentDir
-      ? await withFileLock(
-          resolveOAuthRefreshLockPath(providerId, `${providerId}:default`),
-          OAUTH_REFRESH_LOCK_OPTIONS,
-          refresh,
-        )
-      : await refresh();
-
+      },
+    });
+    if (!result) {
+      this.reload();
+      return null;
+    }
     return result;
   }
 
@@ -793,7 +751,16 @@ export class AuthStorage {
       throw canonicalLoadError;
     }
 
-    const cred = this.data[providerId];
+    let cred = this.data[providerId];
+    if (isAuthStorageOAuthRefreshFence(providerId, cred)) {
+      this.reload();
+      cred = this.data[providerId];
+      const normalizedFence =
+        cred?.type === "oauth" ? normalizeOAuthRefreshCredential(cred, providerId) : undefined;
+      if (isOAuthRefreshFence(normalizedFence) && !isPendingOAuthRefreshFence(normalizedFence)) {
+        cred = undefined;
+      }
+    }
 
     if (cred?.type === "api_key") {
       return resolveConfigValue(cred.key);

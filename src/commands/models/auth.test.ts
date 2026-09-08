@@ -20,15 +20,17 @@ type ResolvePluginProvidersCall = {
   workspaceDir?: string;
 };
 
-type UpsertAuthProfileCall = {
+type PersistProviderAuthCall = {
   agentDir?: string;
-  credential?: {
-    provider?: string;
-    token?: string;
-    tokenRef?: unknown;
-    type?: string;
-  };
-  profileId?: string;
+  profiles?: Array<{
+    profileId?: string;
+    credential?: {
+      provider?: string;
+      token?: string;
+      tokenRef?: unknown;
+      type?: string;
+    };
+  }>;
 };
 
 function readMockCallArg(mock: { mock: { calls: unknown[][] } }, index = 0): unknown {
@@ -52,8 +54,8 @@ const mocks = vi.hoisted(() => ({
   resolveDefaultAgentWorkspaceDir: vi.fn(),
   isCliProvider: vi.fn(),
   upsertAuthProfile: vi.fn(),
-  upsertAuthProfileAfterLoginWithLock: vi.fn(),
   upsertAuthProfileWithLock: vi.fn(),
+  persistProviderAuthProfilesAfterLogin: vi.fn(),
   removeProviderAuthProfilesWithLock: vi.fn(),
   resolvePluginProvidersCore: vi.fn(),
   createClackPrompter: vi.fn(),
@@ -85,9 +87,12 @@ vi.mock("../../agents/auth-profiles/profiles.js", () => ({
   promoteAuthProfileInOrder: mocks.promoteAuthProfileInOrder,
   removeProviderAuthProfilesWithLock: mocks.removeProviderAuthProfilesWithLock,
   upsertAuthProfile: mocks.upsertAuthProfile,
-  upsertAuthProfileAfterLoginWithLockOrThrow: mocks.upsertAuthProfileAfterLoginWithLock,
   upsertAuthProfileWithLock: mocks.upsertAuthProfileWithLock,
   upsertAuthProfileWithLockOrThrow: mocks.upsertAuthProfileWithLock,
+}));
+
+vi.mock("../../plugins/provider-auth-persistence.js", () => ({
+  persistProviderAuthProfilesAfterLogin: mocks.persistProviderAuthProfilesAfterLogin,
 }));
 
 vi.mock("../../plugins/provider-auth-helpers.js", () => ({
@@ -379,8 +384,10 @@ describe("modelsAuthLoginCommand", () => {
     mocks.validateAnthropicSetupToken.mockReturnValue(undefined);
     mocks.upsertAuthProfileWithLock.mockReset();
     mocks.upsertAuthProfileWithLock.mockResolvedValue({ version: 1, profiles: {} });
-    mocks.upsertAuthProfileAfterLoginWithLock.mockReset();
-    mocks.upsertAuthProfileAfterLoginWithLock.mockResolvedValue(undefined);
+    mocks.persistProviderAuthProfilesAfterLogin.mockReset();
+    mocks.persistProviderAuthProfilesAfterLogin.mockImplementation(
+      async (params: PersistProviderAuthCall) => params.profiles ?? [],
+    );
     mocks.promoteAuthProfileInOrder.mockReset();
     mocks.promoteAuthProfileInOrder.mockResolvedValue({
       ok: true,
@@ -469,13 +476,13 @@ describe("modelsAuthLoginCommand", () => {
     await modelsAuthLoginCommand({ provider: "openai" }, runtime);
 
     expect(runProviderAuth).toHaveBeenCalledOnce();
-    const upsertCall = readMockCallArg(
-      mocks.upsertAuthProfileAfterLoginWithLock,
-    ) as UpsertAuthProfileCall;
-    expect(upsertCall.profileId).toBe("openai:user@example.com");
-    expect(upsertCall.credential?.type).toBe("oauth");
-    expect(upsertCall.credential?.provider).toBe("openai");
-    expect(upsertCall.agentDir).toBe("/tmp/openclaw/agents/main");
+    const persistCall = readMockCallArg(
+      mocks.persistProviderAuthProfilesAfterLogin,
+    ) as PersistProviderAuthCall;
+    expect(persistCall.profiles?.[0]?.profileId).toBe("openai:user@example.com");
+    expect(persistCall.profiles?.[0]?.credential?.type).toBe("oauth");
+    expect(persistCall.profiles?.[0]?.credential?.provider).toBe("openai");
+    expect(persistCall.agentDir).toBe("/tmp/openclaw/agents/main");
     expect(mocks.promoteAuthProfileInOrder).toHaveBeenCalledWith({
       agentDir: "/tmp/openclaw/agents/main",
       provider: "openai",
@@ -526,21 +533,33 @@ describe("modelsAuthLoginCommand", () => {
         run: runProviderAuth as ProviderPlugin["auth"][number]["run"],
       }),
     ]);
+    mocks.persistProviderAuthProfilesAfterLogin.mockResolvedValueOnce([
+      {
+        profileId: "github-copilot:github",
+        credential: {
+          type: "token",
+          provider: "github-copilot",
+          tokenRef: {
+            source: "store",
+            provider: "default",
+            id: "GITHUB_COPILOT_TOKEN_0123456789ABCDEF01234567",
+          },
+        },
+      },
+    ]);
 
     await modelsAuthLoginCommand({ provider: "github-copilot" }, runtime);
 
-    expect(mocks.writeSecretStoreEntry).toHaveBeenCalledWith(
-      expect.objectContaining({ value: "synthetic-device-token" }),
+    expect(mocks.persistProviderAuthProfilesAfterLogin).toHaveBeenCalledWith(
+      expect.objectContaining({
+        profiles: [
+          expect.objectContaining({
+            profileId: "github-copilot:github",
+            credential: expect.objectContaining({ token: "synthetic-device-token" }),
+          }),
+        ],
+      }),
     );
-    const upsertCall = readMockCallArg(
-      mocks.upsertAuthProfileAfterLoginWithLock,
-    ) as UpsertAuthProfileCall;
-    expect(upsertCall.credential).not.toHaveProperty("token");
-    expect(upsertCall.credential?.tokenRef).toEqual({
-      source: "store",
-      provider: "default",
-      id: expect.stringMatching(/^GITHUB_COPILOT_TOKEN_[A-F0-9]{24}$/),
-    });
   });
 
   it("keeps the prior auth profile when protected storage is unavailable", async () => {
@@ -568,15 +587,15 @@ describe("modelsAuthLoginCommand", () => {
         run: runProviderAuth as ProviderPlugin["auth"][number]["run"],
       }),
     ]);
-    mocks.writeSecretStoreEntry.mockImplementationOnce(() => {
-      throw new Error("read-only database");
-    });
+    mocks.persistProviderAuthProfilesAfterLogin.mockRejectedValueOnce(
+      new Error("Could not write the protected secret store"),
+    );
 
     await expect(modelsAuthLoginCommand({ provider: "github-copilot" }, runtime)).rejects.toThrow(
       "Could not write the protected secret store",
     );
 
-    expect(mocks.upsertAuthProfileAfterLoginWithLock).not.toHaveBeenCalled();
+    expect(mocks.persistProviderAuthProfilesAfterLogin).toHaveBeenCalledOnce();
     expect(mocks.promoteAuthProfileInOrder).not.toHaveBeenCalled();
   });
 
@@ -586,7 +605,7 @@ describe("modelsAuthLoginCommand", () => {
 
     await expect(modelsAuthLoginCommand({ provider: "openai" }, runtime)).resolves.toBeUndefined();
 
-    expect(mocks.upsertAuthProfileAfterLoginWithLock).toHaveBeenCalledOnce();
+    expect(mocks.persistProviderAuthProfilesAfterLogin).toHaveBeenCalledOnce();
     expect(mocks.callGateway).toHaveBeenCalledWith({
       method: "models.authStatus",
       params: { refresh: true, agentId: "main" },
@@ -873,7 +892,7 @@ describe("modelsAuthLoginCommand", () => {
     expect(authRunCall.agentDir).toBe("/tmp/openclaw/agents/coder");
     expect(authRunCall.workspaceDir).toBe("/tmp/openclaw/workspaces/coder");
     expect(
-      (readMockCallArg(mocks.upsertAuthProfileAfterLoginWithLock) as UpsertAuthProfileCall)
+      (readMockCallArg(mocks.persistProviderAuthProfilesAfterLogin) as PersistProviderAuthCall)
         .agentDir,
     ).toBe("/tmp/openclaw/agents/coder");
     expect(mocks.callGateway).toHaveBeenCalledWith({
@@ -933,7 +952,7 @@ describe("modelsAuthLoginCommand", () => {
     ).rejects.toBe(cancellation);
 
     expect(mocks.upsertAuthProfileWithLock).not.toHaveBeenCalled();
-    expect(mocks.upsertAuthProfileAfterLoginWithLock).not.toHaveBeenCalled();
+    expect(mocks.persistProviderAuthProfilesAfterLogin).not.toHaveBeenCalled();
     expect(mocks.promoteAuthProfileInOrder).not.toHaveBeenCalled();
     expect(mocks.updateConfig).not.toHaveBeenCalled();
   });
@@ -1261,7 +1280,7 @@ describe("modelsAuthLoginCommand", () => {
     );
 
     expect(runProviderAuth).toHaveBeenCalledOnce();
-    expect(mocks.upsertAuthProfileAfterLoginWithLock).not.toHaveBeenCalled();
+    expect(mocks.persistProviderAuthProfilesAfterLogin).not.toHaveBeenCalled();
     expect(mocks.upsertAuthProfileWithLock).not.toHaveBeenCalled();
   });
 
@@ -1271,6 +1290,7 @@ describe("modelsAuthLoginCommand", () => {
     await modelsAuthLoginCommand({ provider: "openai", force: true }, runtime);
 
     expect(mocks.removeProviderAuthProfilesWithLock).toHaveBeenCalledWith({
+      cfg: expect.any(Object),
       provider: "openai",
       agentDir: "/tmp/openclaw/agents/main",
     });
@@ -1735,15 +1755,21 @@ describe("modelsAuthLoginCommand", () => {
     await modelsAuthSetupTokenCommand({ provider: "moonshot", yes: true }, runtime);
 
     expect(runTokenAuth).toHaveBeenCalledOnce();
-    expect(mocks.upsertAuthProfileAfterLoginWithLock).toHaveBeenCalledWith({
-      profileId: "moonshot:token",
-      credential: {
-        type: "token",
-        provider: "moonshot",
-        token: "moonshot-token",
-      },
-      agentDir: "/tmp/openclaw/agents/main",
-    });
+    expect(mocks.persistProviderAuthProfilesAfterLogin).toHaveBeenCalledWith(
+      expect.objectContaining({
+        profiles: [
+          {
+            profileId: "moonshot:token",
+            credential: {
+              type: "token",
+              provider: "moonshot",
+              token: "moonshot-token",
+            },
+          },
+        ],
+        agentDir: "/tmp/openclaw/agents/main",
+      }),
+    );
   });
 
   it("uses the requested agent store for setup-token provider auth", async () => {
@@ -1783,7 +1809,7 @@ describe("modelsAuthLoginCommand", () => {
     expect(tokenAuthCall.agentDir).toBe("/tmp/openclaw/agents/coder");
     expect(tokenAuthCall.workspaceDir).toBe("/tmp/openclaw/workspaces/coder");
     expect(
-      (readMockCallArg(mocks.upsertAuthProfileAfterLoginWithLock) as UpsertAuthProfileCall)
+      (readMockCallArg(mocks.persistProviderAuthProfilesAfterLogin) as PersistProviderAuthCall)
         .agentDir,
     ).toBe("/tmp/openclaw/agents/coder");
   });
@@ -1826,7 +1852,7 @@ describe("modelsAuthLoginCommand", () => {
     expect(tokenAuthCall.agentDir).toBe("/tmp/openclaw/agents/coder");
     expect(tokenAuthCall.workspaceDir).toBe("/tmp/openclaw/workspaces/coder");
     expect(
-      (readMockCallArg(mocks.upsertAuthProfileAfterLoginWithLock) as UpsertAuthProfileCall)
+      (readMockCallArg(mocks.persistProviderAuthProfilesAfterLogin) as PersistProviderAuthCall)
         .agentDir,
     ).toBe("/tmp/openclaw/agents/coder");
   });

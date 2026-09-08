@@ -795,6 +795,25 @@ export async function resolveProviderOAuthCredentialWithPlugin(params: {
   return { status: "available" as const, credential, apiKey };
 }
 
+/** Resolve whether the current provider plugin generation owns OAuth refresh. */
+export function resolveProviderOAuthRefreshCapabilityWithPlugin(params: {
+  provider: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+}) {
+  const ownership = resolveProviderRefOwnership(params);
+  const plugin = resolveProviderRuntimePlugin(params);
+  if (!plugin) {
+    return {
+      status: ownership.status === "unowned" ? "unowned" : "configured-unavailable",
+    } as const;
+  }
+  return plugin.refreshOAuth
+    ? ({ status: "available" } as const)
+    : ({ status: "unhandled" } as const);
+}
+
 export async function refreshProviderOAuthCredentialWithPlugin(params: {
   provider: string;
   config?: OpenClawConfig;

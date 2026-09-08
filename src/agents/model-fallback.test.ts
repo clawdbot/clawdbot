@@ -18,6 +18,11 @@ import { GatewayDrainingError } from "../process/gateway-work-admission.js";
 import { AgentRunTerminalOutcomeError } from "./agent-run-terminal-error.js";
 import { resolveEffectiveModelFallbacks } from "./agent-scope.js";
 import { AUTH_STORE_VERSION, MINIMAX_CLI_PROFILE_ID } from "./auth-profiles/constants.js";
+import {
+  createOAuthRefreshFence,
+  isOAuthRefreshFence,
+  isPendingOAuthRefreshFence,
+} from "./auth-profiles/oauth-refresh-marker.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { testing as cliBackendsTesting } from "./cli-backends.test-support.js";
 import { createCliTimeoutError } from "./cli-runner/no-output-timeout-policy.js";
@@ -120,6 +125,7 @@ const authRuntimeMock = vi.hoisted(() => {
     store: AuthProfileStore;
     provider: string;
     profileId: string;
+    includePendingOAuthRefresh?: boolean;
   }) => {
     const credential = params.store.profiles[params.profileId];
     if (!credential) {
@@ -141,6 +147,11 @@ const authRuntimeMock = vi.hoisted(() => {
         return { eligible: false, reasonCode: "expired" as const };
       }
       return { eligible: true, reasonCode: "ok" as const };
+    }
+    if (isOAuthRefreshFence(credential)) {
+      return params.includePendingOAuthRefresh && isPendingOAuthRefreshFence(credential)
+        ? { eligible: true, reasonCode: "ok" as const }
+        : { eligible: false, reasonCode: "expired" as const };
     }
     return credential.access || credential.refresh
       ? { eligible: true, reasonCode: "ok" as const }
@@ -203,8 +214,24 @@ const authRuntimeMock = vi.hoisted(() => {
     runtime: {
       ensureAuthProfileStore: vi.fn((agentDir?: string, _options?: unknown) => getStore(agentDir)),
       loadAuthProfileStoreForRuntime: vi.fn((agentDir?: string) => getStore(agentDir)),
-      resolveAuthProfileOrder: (params: { store: AuthProfileStore; provider: string }) =>
-        params.store.order?.[params.provider] ?? getProfileIds(params.store, params.provider),
+      resolveAuthProfileOrder: vi.fn(
+        (params: {
+          store: AuthProfileStore;
+          provider: string;
+          includePendingOAuthRefresh?: boolean;
+        }) =>
+          (
+            params.store.order?.[params.provider] ?? getProfileIds(params.store, params.provider)
+          ).filter((profileId) => {
+            const credential = params.store.profiles[profileId];
+            if (credential?.type !== "oauth" || !isOAuthRefreshFence(credential)) {
+              return true;
+            }
+            return (
+              params.includePendingOAuthRefresh === true && isPendingOAuthRefreshFence(credential)
+            );
+          }),
+      ),
       resolveAuthProfileEligibility,
       maybeReprobeWhamBlockedProfiles: vi.fn(),
       isProfileInCooldown,
@@ -287,6 +314,8 @@ function resetModelFallbackTestState(): void {
   authRuntimeMock.clear();
   authRuntimeMock.runtime.ensureAuthProfileStore.mockClear();
   authRuntimeMock.runtime.loadAuthProfileStoreForRuntime.mockClear();
+  authRuntimeMock.runtime.resolveAuthProfileOrder.mockClear();
+  authRuntimeMock.runtime.maybeReprobeWhamBlockedProfiles.mockClear();
   authSourceCheckMock.hasAnyAuthProfileStoreSource.mockReset().mockReturnValue(false);
   providerModelNormalizationMock.normalizeProviderModelIdWithRuntime
     .mockReset()
@@ -3543,6 +3572,49 @@ describe("runWithModelFallback", () => {
     expect(result.result).toBe("ok");
     expect(run.mock.calls).toMatchObject([[provider, "m1", { isFinalFallbackAttempt: false }]]);
     expect(store.order?.[provider]).toEqual(orderedProfileIds);
+  });
+
+  it("keeps a pending OAuth user lock in the fallback auth scope", async () => {
+    const provider = `pending-lock-${crypto.randomUUID()}`;
+    const pendingProfileId = `${provider}:pending`;
+    const backupProfileId = `${provider}:backup`;
+    const pending = createOAuthRefreshFence({
+      profileId: pendingProfileId,
+      credential: {
+        type: "oauth",
+        provider,
+        access: "expired-access",
+        refresh: "refresh-token",
+        expires: 1,
+      },
+    });
+    const store: AuthProfileStore = {
+      version: AUTH_STORE_VERSION,
+      profiles: {
+        [pendingProfileId]: pending,
+        [backupProfileId]: { type: "api_key", provider, key: "backup-key" },
+        "fallback:default": { type: "api_key", provider: "fallback", key: "fallback-key" },
+      },
+      order: { [provider]: [backupProfileId] },
+      usageStats: {
+        [backupProfileId]: { cooldownUntil: Date.now() + 60_000 },
+      },
+    };
+    const run = vi.fn().mockResolvedValue("ok");
+
+    const result = await runWithStoredAuth({
+      cfg: makeProviderFallbackCfg(provider),
+      store,
+      provider,
+      run,
+      userLockedAuthProfileId: pendingProfileId,
+    });
+
+    expect(result.result).toBe("ok");
+    expect(run.mock.calls).toMatchObject([[provider, "m1", { isFinalFallbackAttempt: false }]]);
+    expect(authRuntimeMock.runtime.maybeReprobeWhamBlockedProfiles).toHaveBeenCalledWith(
+      expect.objectContaining({ profileIds: [pendingProfileId, backupProfileId] }),
+    );
   });
 
   it("does not skip a provider when only its user-pinned profile is cooling down", async () => {

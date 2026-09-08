@@ -810,6 +810,7 @@ async function prepareCliRunContextWithinReadFence(
         cfg: params.config,
         store: authStore,
         provider: params.provider,
+        includePendingOAuthRefresh: true,
       })[0]?.trim() || undefined;
     if (effectiveAuthProfileId) {
       authCredential = authStore.profiles[effectiveAuthProfileId];

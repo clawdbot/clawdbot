@@ -48,6 +48,7 @@ export function createExpiredOauthStore(params: {
   refresh?: string;
   accountId?: string;
   email?: string;
+  authFlow?: string;
 }): AuthProfileStore {
   return {
     version: 1,
@@ -60,6 +61,7 @@ export function createExpiredOauthStore(params: {
         expires: Date.now() - 60_000,
         accountId: params.accountId,
         email: params.email,
+        authFlow: params.authFlow,
       } satisfies OAuthCredential,
     },
   };

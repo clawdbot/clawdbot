@@ -92,6 +92,7 @@ export function listRuntimeLocalProfileIds(
   return Object.entries(store.profiles).flatMap(([profileId, credential]) =>
     mainStore &&
     shouldUseMainOwnerForLocalOAuthCredential({
+      profileId,
       local: credential,
       main: mainStore.profiles[profileId],
     })

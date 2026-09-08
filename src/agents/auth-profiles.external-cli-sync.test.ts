@@ -15,7 +15,6 @@ let readExternalCliBootstrapCredential: typeof import("./auth-profiles/external-
 let resolveExternalCliAuthProfiles: typeof import("./auth-profiles/external-cli-sync.js").resolveExternalCliAuthProfiles;
 let hasUsableOAuthCredential: typeof import("./auth-profiles/credential-state.js").hasUsableOAuthCredential;
 let shouldBootstrapFromExternalCliCredential: typeof import("./auth-profiles/oauth-shared.js").shouldBootstrapFromExternalCliCredential;
-let shouldReplaceStoredOAuthCredential: typeof import("./auth-profiles/oauth-shared.js").shouldReplaceStoredOAuthCredential;
 let OPENAI_CODEX_DEFAULT_PROFILE_ID: typeof import("./auth-profiles/constants.js").OPENAI_CODEX_DEFAULT_PROFILE_ID;
 let MINIMAX_CLI_PROFILE_ID: typeof import("./auth-profiles/constants.js").MINIMAX_CLI_PROFILE_ID;
 
@@ -95,61 +94,10 @@ describe("external cli oauth resolution", () => {
     ({ readExternalCliBootstrapCredential, resolveExternalCliAuthProfiles } =
       await import("./auth-profiles/external-cli-sync.js"));
     ({ hasUsableOAuthCredential } = await import("./auth-profiles/credential-state.js"));
-    ({ shouldBootstrapFromExternalCliCredential, shouldReplaceStoredOAuthCredential } =
+    ({ shouldBootstrapFromExternalCliCredential } =
       await import("./auth-profiles/oauth-shared.js"));
     ({ OPENAI_CODEX_DEFAULT_PROFILE_ID, MINIMAX_CLI_PROFILE_ID } =
       await import("./auth-profiles/constants.js"));
-  });
-
-  describe("shouldReplaceStoredOAuthCredential", () => {
-    it("keeps equivalent stored credentials", () => {
-      const expires = Date.now() + 60_000;
-      const stored = makeOAuthCredential({
-        provider: "openai",
-        access: "a",
-        refresh: "r",
-        expires,
-      });
-      const incoming = makeOAuthCredential({
-        provider: "openai",
-        access: "a",
-        refresh: "r",
-        expires,
-      });
-
-      expect(shouldReplaceStoredOAuthCredential(stored, incoming)).toBe(false);
-    });
-
-    it("keeps the newer stored credential", () => {
-      const incoming = makeOAuthCredential({
-        provider: "openai",
-        expires: Date.now() + 60_000,
-      });
-      const stored = makeOAuthCredential({
-        provider: "openai",
-        access: "fresh-access",
-        refresh: "fresh-refresh",
-        expires: Date.now() + 5 * 24 * 60 * 60_000,
-      });
-
-      expect(shouldReplaceStoredOAuthCredential(stored, incoming)).toBe(false);
-    });
-
-    it("replaces when incoming credentials are fresher", () => {
-      const stored = makeOAuthCredential({
-        provider: "openai",
-        expires: Date.now() + 60_000,
-      });
-      const incoming = makeOAuthCredential({
-        provider: "openai",
-        access: "new-access",
-        refresh: "new-refresh",
-        expires: Date.now() + 5 * 24 * 60 * 60_000,
-      });
-
-      expect(shouldReplaceStoredOAuthCredential(stored, incoming)).toBe(true);
-      expect(shouldReplaceStoredOAuthCredential(undefined, incoming)).toBe(true);
-    });
   });
 
   describe("external cli bootstrap policy", () => {

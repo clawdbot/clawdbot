@@ -752,5 +752,10 @@ describe("minimax provider hooks", () => {
       authHeader: true,
       models: [],
     });
+    expect(result?.profiles[0]?.credential).toMatchObject({
+      type: "oauth",
+      provider: "minimax-portal",
+      authFlow: "device-code",
+    });
   });
 });

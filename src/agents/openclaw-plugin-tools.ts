@@ -247,6 +247,7 @@ export function resolveOpenClawPluginToolsForOptions(params: {
           cfg,
           store: authProfileStore,
           provider: providerId,
+          includePendingOAuthRefresh: true,
         })) {
           const resolved = await resolveApiKeyForProfile({
             cfg,

@@ -124,6 +124,7 @@ describe("models auth logout", () => {
 
     expect(mocks.removeAuthProfilesAcrossOwnerStores).toHaveBeenCalledWith({
       agentDir: "/tmp/agent-poe",
+      cfg: {},
       profileIds: ["openai:manual"],
     });
     expect(mocks.refreshRunningGatewayAuthState).toHaveBeenCalledWith("poe");

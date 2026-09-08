@@ -20,14 +20,13 @@ vi.mock("../plugins/provider-external-auth-core.js", () => ({
   }),
 }));
 
+import { setAuthProfileFailureHook } from "./auth-profiles/failure-hook.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "./auth-profiles/runtime-snapshots.js";
 import { ensureAuthProfileStore, saveAuthProfileStore } from "./auth-profiles/store-runtime.js";
 import {
-  calculateAuthProfileCooldownMs,
   markAuthProfileFailure,
   markInlineProviderApiKeyFailure,
   resolveInlineProviderApiKeyUsageId,
-  setAuthProfileFailureHook,
 } from "./auth-profiles/usage.js";
 
 type AuthProfileStore = ReturnType<typeof ensureAuthProfileStore>;
@@ -487,15 +486,5 @@ describe("markAuthProfileFailure", () => {
         setAuthProfileFailureHook(undefined);
       }
     });
-  });
-});
-
-describe("calculateAuthProfileCooldownMs", () => {
-  it("applies stepped backoff with a 5-min cap", () => {
-    expect(calculateAuthProfileCooldownMs(1)).toBe(30_000); // 30 seconds
-    expect(calculateAuthProfileCooldownMs(2)).toBe(60_000); // 1 minute
-    expect(calculateAuthProfileCooldownMs(3)).toBe(5 * 60_000); // 5 minutes
-    expect(calculateAuthProfileCooldownMs(4)).toBe(5 * 60_000); // 5 minutes (cap)
-    expect(calculateAuthProfileCooldownMs(5)).toBe(5 * 60_000); // 5 minutes (cap)
   });
 });

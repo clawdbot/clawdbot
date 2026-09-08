@@ -19,6 +19,7 @@ import { OAuthProviderConfiguredUnavailableError } from "../../plugins/provider-
 import {
   formatProviderAuthProfileApiKeyWithPlugin,
   resolveProviderOAuthCredentialWithPlugin,
+  resolveProviderOAuthRefreshCapabilityWithPlugin,
 } from "../../plugins/provider-runtime.runtime.js";
 import { secretRefKey } from "../../secrets/ref-contract.js";
 import { resolveAuthProfileSecretOwnerId } from "../../secrets/runtime-auth-profile-owner.js";
@@ -216,6 +217,23 @@ async function refreshOAuthCredential(
   return result?.newCredentials ?? null;
 }
 
+async function canRefreshOAuthCredential(
+  credential: OAuthCredential,
+  context: { cfg?: OpenClawConfig } = {},
+): Promise<boolean> {
+  const pluginCapability = await resolveProviderOAuthRefreshCapabilityWithPlugin({
+    provider: credential.provider,
+    config: context.cfg,
+  });
+  if (pluginCapability.status === "available") {
+    return true;
+  }
+  if (pluginCapability.status === "configured-unavailable") {
+    throw new OAuthProviderConfiguredUnavailableError(credential.provider);
+  }
+  return resolveOAuthProvider(credential.provider) !== null && typeof getOAuthApiKey === "function";
+}
+
 /** Refresh one OAuth credential and merge provider-returned token fields. */
 export async function refreshOAuthCredentialForRuntime(params: {
   credential: OAuthCredential;
@@ -234,13 +252,13 @@ export async function refreshOAuthCredentialForRuntime(params: {
 const oauthManager = createOAuthManager({
   buildApiKey: buildOAuthApiKey,
   refreshCredential: refreshOAuthCredential,
+  canRefreshCredential: canRefreshOAuthCredential,
   readBootstrapCredential: ({ store, profileId, credential }) =>
     readExternalCliBootstrapCredential({
       store,
       profileId,
       credential,
     }),
-  isRefreshTokenReusedError,
 });
 
 /** Clear in-process OAuth refresh queues between isolated tests. */

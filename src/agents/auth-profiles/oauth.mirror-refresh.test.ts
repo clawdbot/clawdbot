@@ -434,16 +434,9 @@ describe("resolveApiKeyForProfile OAuth refresh mirror-to-main (#26322)", () => 
     expect(result?.apiKey).toBe("main-side-refreshed-access");
     expect(result?.provider).toBe(provider);
 
-    // Sub-agent's store keeps its local expired credential; inherited OAuth is read-through.
+    // The concurrent winner consumes the shared generation, so the stale peer is retired.
     const subRaw = readAuthProfileStoreForTest(subAgentDir);
-    expectPersistedOpenAICodexProfile(
-      expectDefined(subRaw.profiles[profileId], "subRaw.profiles[profileId] test invariant"),
-      {
-        access: "cached-access-token",
-        refresh: "refresh-token",
-        accountId: "acct-shared",
-      },
-    );
+    expect(subRaw.profiles[profileId]).toBeUndefined();
   });
 
   it("does not satisfy forced refresh from unchanged main-agent credentials after refresh fails", async () => {

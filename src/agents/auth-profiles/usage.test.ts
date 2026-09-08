@@ -10,7 +10,6 @@ import { setLoggerOverride } from "../../logging/logger.js";
 import type { AuthProfileStore, ProfileUsageStats } from "./types.js";
 import { resolveProfileUnusableUntil } from "./usage-state.js";
 import {
-  clearAuthProfileCooldown,
   clearExpiredCooldowns,
   getSoonestCooldownExpiry,
   isProfileInCooldown,
@@ -857,58 +856,6 @@ describe("clearExpiredCooldowns", () => {
     // OpenAI: still active → untouched
     expect(store.usageStats?.["openai:default"]?.cooldownUntil).toBeGreaterThan(Date.now());
     expect(store.usageStats?.["openai:default"]?.errorCount).toBe(2);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// clearAuthProfileCooldown
-// ---------------------------------------------------------------------------
-
-describe("clearAuthProfileCooldown", () => {
-  it("clears all error state fields including disabledUntil and failureCounts", async () => {
-    const store = makeStore({
-      "anthropic:default": {
-        cooldownUntil: Date.now() + 60_000,
-        cooldownClassification: "wham_token_expired",
-        disabledUntil: Date.now() + 3_600_000,
-        disabledReason: "billing",
-        errorCount: 5,
-        failureCounts: { billing: 3, rate_limit: 2 },
-      },
-    });
-    mockLockedUpdateForStore(store);
-
-    await clearAuthProfileCooldown({ store, profileId: "anthropic:default" });
-
-    const stats = store.usageStats?.["anthropic:default"];
-    expectProfileErrorStateCleared(stats);
-  });
-
-  it("preserves lastUsed and lastFailureAt timestamps", async () => {
-    const lastUsed = Date.now() - 10_000;
-    const lastFailureAt = Date.now() - 5_000;
-    const store = makeStore({
-      "anthropic:default": {
-        cooldownUntil: Date.now() + 60_000,
-        errorCount: 3,
-        lastUsed,
-        lastFailureAt,
-      },
-    });
-    mockLockedUpdateForStore(store);
-
-    await clearAuthProfileCooldown({ store, profileId: "anthropic:default" });
-
-    const stats = store.usageStats?.["anthropic:default"];
-    expect(stats?.lastUsed).toBe(lastUsed);
-    expect(stats?.lastFailureAt).toBe(lastFailureAt);
-  });
-
-  it("no-ops for unknown profile id", async () => {
-    const store = makeStore(undefined);
-    mockLockedUpdateForStore(store);
-    await clearAuthProfileCooldown({ store, profileId: "nonexistent" });
-    expect(store.usageStats).toBeUndefined();
   });
 });
 
