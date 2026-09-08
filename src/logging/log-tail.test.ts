@@ -98,6 +98,33 @@ describe("readConfiguredLogTail", () => {
     expect(result.lines).toEqual(["custom…wxyz", "second line"]);
   });
 
+  it("does not expose raw generation samples with parsed tails", async () => {
+    const { readConfiguredParsedLogTail } = await import("./log-tail.js");
+    const tempDir = tempDirs.make("openclaw-log-tail-");
+    const file = path.join(tempDir, "openclaw-2026-01-22.log");
+    const rawLine = `${JSON.stringify({
+      0: "custom-secret-abcdefghijklmnopqrstuvwxyz",
+      time: "2026-01-22T00:00:00.000Z",
+      _meta: { logLevelName: "INFO", name: JSON.stringify({ module: "test" }) },
+    })}\n`;
+
+    await fs.writeFile(file, rawLine);
+    setLoggerOverride({ file });
+
+    const result = await readConfiguredParsedLogTail({ limit: "all" });
+
+    expect(result.lines).toHaveLength(1);
+    expect(JSON.stringify(result)).not.toContain(Buffer.from(rawLine).toString("base64"));
+    expect(result.generation).toEqual(
+      expect.objectContaining({
+        prefixHash: expect.any(String),
+        boundaryHash: expect.any(String),
+      }),
+    );
+    expect(result.generation).not.toHaveProperty("prefix");
+    expect(result.generation).not.toHaveProperty("boundary");
+  });
+
   it("fills short positional reads before splitting log lines", async () => {
     const { readConfiguredLogTail } = await import("./log-tail.js");
     const tempDir = tempDirs.make("openclaw-log-tail-");
@@ -145,6 +172,69 @@ describe("readConfiguredLogTail", () => {
     });
   });
 
+  it("skips an oversized record at the byte boundary and advances to later records", async () => {
+    const { readConfiguredLogTail } = await import("./log-tail.js");
+    const tempDir = tempDirs.make("openclaw-log-tail-");
+    const file = path.join(tempDir, "openclaw-2026-01-22.log");
+    const maxBytes = 64;
+    const prefix = "before\n";
+    const oversized = "x".repeat(maxBytes * 3 + 17);
+    const suffix = "after\n";
+
+    await fs.writeFile(file, `${prefix}${oversized}\n${suffix}`);
+    setLoggerOverride({ file });
+
+    const firstSkip = await readConfiguredLogTail({
+      cursor: Buffer.byteLength(prefix),
+      maxBytes,
+      filter: (line) => line === oversized || line === suffix.trimEnd(),
+    });
+
+    expect(firstSkip).toMatchObject({
+      lines: [],
+      truncated: true,
+      reset: false,
+      skippedBytes: maxBytes,
+      cursor: Buffer.byteLength(prefix) + maxBytes,
+    });
+
+    const secondSkip = await readConfiguredLogTail({
+      cursor: firstSkip.cursor,
+      maxBytes,
+      filter: (line) => line === oversized || line === suffix.trimEnd(),
+    });
+
+    expect(secondSkip).toMatchObject({
+      lines: [],
+      truncated: true,
+      reset: false,
+      skippedBytes: maxBytes,
+      cursor: Buffer.byteLength(prefix) + maxBytes * 2,
+    });
+
+    const thirdSkip = await readConfiguredLogTail({
+      cursor: secondSkip.cursor,
+      maxBytes,
+      filter: (line) => line === oversized || line === suffix.trimEnd(),
+    });
+
+    expect(thirdSkip).toMatchObject({
+      lines: [],
+      truncated: true,
+      reset: false,
+      skippedBytes: maxBytes,
+      cursor: Buffer.byteLength(prefix) + maxBytes * 3,
+    });
+
+    const continuation = await readConfiguredLogTail({
+      cursor: thirdSkip.cursor,
+      maxBytes,
+      filter: (line) => line === suffix.trimEnd(),
+    });
+    expect(continuation.lines).toEqual([suffix.trimEnd()]);
+    expect(continuation.cursor).toBe(Buffer.byteLength(`${prefix}${oversized}\n${suffix}`));
+  });
+
   it("reports truncation when the line limit omits complete records", async () => {
     const { readConfiguredLogTail } = await import("./log-tail.js");
     const tempDir = tempDirs.make("openclaw-log-tail-");
@@ -165,7 +255,7 @@ describe("readConfiguredLogTail", () => {
     });
   });
 
-  it("distinguishes a byte-budget re-anchor from file shrink", async () => {
+  it("bounds cursor continuation without confusing it with file shrink", async () => {
     const { readConfiguredLogTail } = await import("./log-tail.js");
     const tempDir = tempDirs.make("openclaw-log-tail-");
     const file = path.join(tempDir, "openclaw-2026-01-22.log");
@@ -177,14 +267,143 @@ describe("readConfiguredLogTail", () => {
     await fs.appendFile(file, `${"x".repeat(40)}\n`.repeat(200));
     const byteBudget = await readConfiguredLogTail({ cursor: initial.cursor, maxBytes: 500 });
 
-    expect(byteBudget).toMatchObject({ truncated: true, reset: true });
-    expect(byteBudget.skippedBytes).toBeGreaterThan(0);
+    expect(byteBudget).toMatchObject({ truncated: false, reset: false });
+    expect(byteBudget.skippedBytes).toBeUndefined();
+    expect(byteBudget.cursor).toBeGreaterThan(initial.cursor);
+    expect(byteBudget.cursor).toBeLessThan(byteBudget.size);
 
     await fs.writeFile(file, "fresh\n");
     const fileShrink = await readConfiguredLogTail({ cursor: byteBudget.cursor, maxBytes: 500 });
 
     expect(fileShrink).toMatchObject({ reset: true });
     expect(fileShrink.skippedBytes).toBeUndefined();
+  });
+
+  it("keeps a shrink re-anchored when a replacement grows during the retry", async () => {
+    const { readConfiguredLogTail } = await import("./log-tail.js");
+    const tempDir = tempDirs.make("openclaw-log-tail-");
+    const file = path.join(tempDir, "openclaw-2026-01-22.log");
+    const oldContent = `${"old".repeat(333)}\n`;
+    await fs.writeFile(file, oldContent);
+    setLoggerOverride({ file });
+    const initial = await readConfiguredLogTail();
+
+    const replacement = "new-first\nnew-second\n";
+    const appended = `${"new-third".repeat(120)}\n`;
+    await fs.writeFile(file, replacement);
+    const realOpen = fs.open.bind(fs);
+    let mutated = false;
+    vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      const handle = await realOpen(...args);
+      const realRead = handle.read.bind(handle);
+      vi.spyOn(handle, "read").mockImplementation(async (...readArgs) => {
+        const result = await realRead(...readArgs);
+        if (!mutated) {
+          mutated = true;
+          await fs.appendFile(file, appended);
+        }
+        return result;
+      });
+      return handle;
+    });
+
+    const result = await readConfiguredLogTail({ cursor: initial.cursor });
+
+    expect(result.reset).toBe(true);
+    expect(result.lines).toEqual(["new-first", "new-second", appended.trimEnd()]);
+  });
+
+  it("accepts append-only growth while validating a tail snapshot", async () => {
+    const { readConfiguredParsedLogTail } = await import("./log-tail.js");
+    const tempDir = tempDirs.make("openclaw-log-tail-");
+    const file = path.join(tempDir, "openclaw-2026-01-22.log");
+    await fs.writeFile(
+      file,
+      `${JSON.stringify({
+        0: "before",
+        time: "2026-01-22T00:00:00.000Z",
+        _meta: { logLevelName: "INFO", name: JSON.stringify({ module: "test" }) },
+      })}\n`,
+    );
+    setLoggerOverride({ file });
+
+    const realOpen = fs.open.bind(fs);
+    let statCalls = 0;
+    vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      const handle = await realOpen(...args);
+      const realStat = handle.stat.bind(handle);
+      vi.spyOn(handle, "stat").mockImplementation(async (...statArgs) => {
+        statCalls += 1;
+        if (statCalls % 2 === 0 && statCalls <= 6) {
+          await fs.appendFile(file, `append-${statCalls / 2}\n`);
+        }
+        return realStat(...statArgs);
+      });
+      return handle;
+    });
+
+    const result = await readConfiguredParsedLogTail({ limit: "all" });
+
+    expect(result.generationStable).not.toBe(false);
+    expect(result.lines.map((line) => line.message)).toEqual(["before"]);
+  });
+
+  it("retries when a same-size rewrite races the returned buffer", async () => {
+    const { readConfiguredParsedLogTail } = await import("./log-tail.js");
+    const tempDir = tempDirs.make("openclaw-log-tail-");
+    const file = path.join(tempDir, "openclaw-2026-01-22.log");
+    const makeLine = (message: string) =>
+      `${JSON.stringify({
+        0: message,
+        time: "2026-01-22T00:00:00.000Z",
+        _meta: { logLevelName: "INFO", name: JSON.stringify({ module: "test" }) },
+      })}\n`;
+    const oldLine = makeLine("old");
+    const newLine = makeLine("new");
+    expect(Buffer.byteLength(newLine)).toBe(Buffer.byteLength(oldLine));
+    await fs.writeFile(file, oldLine);
+    setLoggerOverride({ file });
+
+    const realOpen = fs.open.bind(fs);
+    let readCalls = 0;
+    let rewritten = false;
+    vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      const handle = await realOpen(...args);
+      const realRead = handle.read.bind(handle);
+      vi.spyOn(handle, "read").mockImplementation(async (...readArgs) => {
+        const result = await realRead(...readArgs);
+        readCalls += 1;
+        if (!rewritten && readCalls === 3) {
+          rewritten = true;
+          await fs.writeFile(file, newLine);
+        }
+        return result;
+      });
+      return handle;
+    });
+
+    const result = await readConfiguredParsedLogTail({ limit: "all" });
+
+    expect(rewritten).toBe(true);
+    expect(result.lines.map((line) => line.message)).toEqual(["new"]);
+  });
+
+  it("keeps generation coverage for a partial record beyond the byte window", async () => {
+    const { readConfiguredParsedLogTail } = await import("./log-tail.js");
+    const tempDir = tempDirs.make("openclaw-log-tail-");
+    const file = path.join(tempDir, "openclaw-2026-01-22.log");
+    const complete = `${JSON.stringify({
+      0: "complete",
+      time: "2026-01-22T00:00:00.000Z",
+      _meta: { logLevelName: "INFO", name: JSON.stringify({ module: "test" }) },
+    })}\n`;
+    await fs.writeFile(file, `${"x".repeat(1_000_000)}\n${complete}partial`);
+    setLoggerOverride({ file });
+
+    const result = await readConfiguredParsedLogTail({ limit: "all" });
+
+    expect(result.generation).toBeDefined();
+    expect(result.lines.map((entry) => entry.message)).toEqual(["complete"]);
   });
 
   it("keeps the first line when the byte window starts exactly after a newline", async () => {
@@ -234,6 +453,13 @@ describe("readConfiguredLogTail", () => {
             throw error;
           }
           return realStat(...args);
+        });
+      } else if (boundary === "final stat") {
+        const realOpen = fs.open.bind(fs);
+        vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+          const handle = await realOpen(...args);
+          vi.spyOn(handle, "stat").mockRejectedValueOnce(error);
+          return handle;
         });
       } else {
         vi.spyOn(fs, "stat")

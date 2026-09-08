@@ -20,8 +20,8 @@ export type RuntimeEnv = {
 };
 
 export type OutputRuntimeEnv = RuntimeEnv & {
-  writeStdout: (value: string) => void;
-  writeJson: (value: unknown, space?: number) => void;
+  writeStdout: (value: string) => boolean | void;
+  writeJson: (value: unknown, space?: number) => boolean | void;
 };
 
 function shouldEmitRuntimeLog(env: NodeJS.ProcessEnv = process.env): boolean {
@@ -61,14 +61,14 @@ function hasRuntimeOutputWriter(
   return typeof (runtime as Partial<OutputRuntimeEnv>).writeStdout === "function";
 }
 
-function writeStdout(value: string): void {
+function writeStdout(value: string): boolean | void {
   if (!shouldEmitRuntimeStdout()) {
     return;
   }
   clearActiveProgressLine();
   const line = value.endsWith("\n") ? value : `${value}\n`;
   try {
-    process.stdout.write(line);
+    return process.stdout.write(line);
   } catch (err) {
     if (isPipeClosedError(err)) {
       return;
@@ -92,7 +92,7 @@ function createRuntimeIo(): Pick<OutputRuntimeEnv, "log" | "error" | "writeStdou
     },
     writeStdout,
     writeJson: (value: unknown, space = 2) => {
-      writeStdout(JSON.stringify(value, null, space > 0 ? space : undefined));
+      return writeStdout(JSON.stringify(value, null, space > 0 ? space : undefined));
     },
   };
 }
@@ -146,18 +146,19 @@ export function writeRuntimeJson(
   runtime: RuntimeEnv | OutputRuntimeEnv,
   value: unknown,
   space = 2,
-): void {
+): boolean | void {
   if (hasRuntimeOutputWriter(runtime)) {
-    runtime.writeJson(value, space);
-    return;
+    return runtime.writeJson(value, space);
   }
   runtime.log(JSON.stringify(value, null, space > 0 ? space : undefined));
 }
 
-export function writeRuntimeStdout(runtime: RuntimeEnv | OutputRuntimeEnv, value: string): void {
+export function writeRuntimeStdout(
+  runtime: RuntimeEnv | OutputRuntimeEnv,
+  value: string,
+): boolean | void {
   if (hasRuntimeOutputWriter(runtime)) {
-    runtime.writeStdout(value);
-    return;
+    return runtime.writeStdout(value);
   }
   runtime.log(value);
 }

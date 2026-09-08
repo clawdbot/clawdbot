@@ -54,5 +54,6 @@ describe("readConfiguredLogTail redaction", () => {
     expect(text).not.toContain(basicSecret);
     expect(text).not.toContain(openClawToken);
     expect(text).not.toContain(pomeriumJwt);
+    expect(payload).not.toHaveProperty("generation");
   });
 });

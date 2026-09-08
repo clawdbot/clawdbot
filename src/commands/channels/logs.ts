@@ -1,4 +1,7 @@
 // Implements channel-scoped tailing of the OpenClaw log file.
+import { createHash } from "node:crypto";
+import fs from "node:fs/promises";
+import { setTimeout as delay } from "node:timers/promises";
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
@@ -6,22 +9,64 @@ import {
   CHAT_CHANNEL_ORDER,
   normalizeChatChannelId as normalizeBundledChannelId,
 } from "../../channels/registry.js";
-import { readConfiguredParsedLogTail } from "../../logging/log-tail.js";
+import { isMissingPathError } from "../../infra/errno.js";
+import { readFileWindowFully } from "../../infra/file-read.js";
+import {
+  LOG_GENERATION_WINDOW_BYTES,
+  readConfiguredParsedLogTail,
+  type LogFileGeneration,
+} from "../../logging/log-tail.js";
 import type { ParsedLogLine } from "../../logging/parse-log-line.js";
 import { loadPluginManifestRegistryForPluginRegistry } from "../../plugins/plugin-registry.js";
-import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
+import {
+  defaultRuntime,
+  type RuntimeEnv,
+  writeRuntimeJson,
+  writeRuntimeStdout,
+} from "../../runtime.js";
 
 export type ChannelsLogsOptions = {
   channel?: string;
   lines?: string | number;
   json?: boolean;
+  follow?: boolean;
+  interval?: string | number;
 };
 
 const DEFAULT_LIMIT = 200;
+const DEFAULT_INTERVAL = 1000;
+// Node clamps setTimeout delays outside the signed 32-bit range to 1 ms.
+const MAX_TIMER_DELAY = 2_147_483_647;
 const MAX_BYTES = 1_000_000;
 
 type ChannelLogFilter = { channel: string; pluginIds: ReadonlySet<string> };
 type ManifestChannel = { id: string; pluginId: string };
+type FileCheckpoint = {
+  file: string;
+  identity: string;
+  size: number;
+  cursor: number;
+  prefixLength: number;
+  prefix: string;
+  boundary: string;
+  contentHash: string;
+  contentWindowStart: number;
+  contentWindowLength: number;
+  validationContentHash: string;
+  validationContentWindowStart: number;
+  validationContentWindowLength: number;
+  validationBoundary: string;
+};
+
+function checkpointPrefixLength(size: number): number {
+  return Math.min(64, Math.max(0, size));
+}
+
+function contentWindowBounds(cursor: number, size: number) {
+  const end = Math.min(Math.max(0, cursor), size);
+  const start = Math.max(0, end - LOG_GENERATION_WINDOW_BYTES);
+  return { start, length: end - start };
+}
 
 function listManifestChannels(): ManifestChannel[] {
   return loadPluginManifestRegistryForPluginRegistry({
@@ -90,6 +135,540 @@ function parseLinesOption(value: unknown): number {
   return parsed;
 }
 
+function parseIntervalOption(value: unknown): number {
+  if (value === undefined || value === null || value === "") {
+    return DEFAULT_INTERVAL;
+  }
+  const parsed = parseStrictPositiveInteger(value);
+  if (parsed === undefined) {
+    throw new Error("--interval must be a positive integer.");
+  }
+  if (parsed > MAX_TIMER_DELAY) {
+    throw new Error(`--interval must be no greater than ${MAX_TIMER_DELAY} milliseconds.`);
+  }
+  return parsed;
+}
+
+function waitForFollowOutputDrain(
+  writeResult: boolean | void,
+  signal: AbortSignal,
+): Promise<void> | undefined {
+  // A pipe can accept less than one follow batch at a time; wait for drain so polling
+  // cannot enqueue unbounded output, while abort/close still lets SIGINT unwind promptly.
+  if (writeResult !== false || signal.aborted) {
+    return undefined;
+  }
+  return new Promise<void>((resolve, reject) => {
+    let settled = false;
+    const cleanup = () => {
+      process.stdout.off("drain", onDrain);
+      process.stdout.off("close", onClose);
+      process.stdout.off("error", onError);
+      signal.removeEventListener("abort", onAbort);
+    };
+    const settle = (error?: unknown) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanup();
+      if (error === undefined) {
+        resolve();
+      } else {
+        reject(error);
+      }
+    };
+    const onDrain = () => settle();
+    const onClose = () => settle();
+    const onError = (error: Error) => {
+      if (isOutputClosedError(error)) {
+        settle();
+      } else {
+        settle(error);
+      }
+    };
+    const onAbort = () => settle();
+
+    process.stdout.once("drain", onDrain);
+    process.stdout.once("close", onClose);
+    process.stdout.once("error", onError);
+    signal.addEventListener("abort", onAbort, { once: true });
+    if (signal.aborted) {
+      settle();
+    }
+  });
+}
+
+function writeFollowStdout(
+  runtime: RuntimeEnv,
+  value: string,
+  signal: AbortSignal,
+): Promise<void> | undefined {
+  return waitForFollowOutputDrain(writeRuntimeStdout(runtime, value), signal);
+}
+
+function writeFollowJson(
+  runtime: RuntimeEnv,
+  value: unknown,
+  signal: AbortSignal,
+): Promise<void> | undefined {
+  return waitForFollowOutputDrain(writeRuntimeJson(runtime, value, 0), signal);
+}
+
+function writeChannelLogLine(
+  runtime: RuntimeEnv,
+  line: ParsedLogLine,
+  json: boolean,
+  follow = false,
+  signal?: AbortSignal,
+): Promise<void> | undefined {
+  if (json) {
+    const writeResult = writeRuntimeJson(runtime, { type: "log", ...line }, 0);
+    if (follow && signal) {
+      return waitForFollowOutputDrain(writeResult, signal);
+    }
+    return;
+  }
+  const ts = line.time ? `${line.time} ` : "";
+  const level = line.level ? `${normalizeLowercaseStringOrEmpty(line.level)} ` : "";
+  const output = `${ts}${level}${line.message}`.trim();
+  if (follow) {
+    const writeResult = writeRuntimeStdout(runtime, output);
+    if (signal) {
+      return waitForFollowOutputDrain(writeResult, signal);
+    }
+    return;
+  }
+  runtime.log(output);
+  return undefined;
+}
+
+function installFollowSignalHandlers(controller: AbortController): () => void {
+  const stop = () => controller.abort();
+  process.once("SIGINT", stop);
+  process.once("SIGTERM", stop);
+  return () => {
+    process.off("SIGINT", stop);
+    process.off("SIGTERM", stop);
+  };
+}
+
+function isOutputClosedError(error: unknown): boolean {
+  const code = (error as { code?: unknown })?.code;
+  return code === "EPIPE" || code === "EIO";
+}
+
+function installFollowOutputHandlers(controller: AbortController): () => void {
+  const stop = () => controller.abort();
+  const handleError = (error: Error) => {
+    if (isOutputClosedError(error)) {
+      stop();
+    }
+  };
+  process.stdout.once("close", stop);
+  process.stdout.once("error", handleError);
+  return () => {
+    process.stdout.off("close", stop);
+    process.stdout.off("error", handleError);
+  };
+}
+
+async function readFileCheckpoint(
+  file: string,
+  cursor: number,
+  prefixLength?: number,
+  validationCursor = cursor,
+): Promise<FileCheckpoint | undefined> {
+  const handle = await fs.open(file, "r").catch((error: unknown) => {
+    if (isMissingPathError(error)) {
+      return undefined;
+    }
+    throw error;
+  });
+  if (!handle) {
+    return undefined;
+  }
+  try {
+    const stat = await handle.stat({ bigint: true });
+    const size = Number(stat.size);
+    const readWindow = async (start: number, length: number) => {
+      const buffer = Buffer.alloc(Math.max(0, Math.min(length, size - start)));
+      const bytesRead = await readFileWindowFully(handle, buffer, start);
+      return buffer.toString("base64", 0, bytesRead);
+    };
+    const readContentHash = async (contentCursor: number) => {
+      const window = contentWindowBounds(contentCursor, size);
+      const buffer = Buffer.alloc(window.length);
+      const bytesRead = await readFileWindowFully(handle, buffer, window.start);
+      return {
+        hash: createHash("sha256").update(buffer.subarray(0, bytesRead)).digest("hex"),
+        start: window.start,
+        length: bytesRead,
+      };
+    };
+    const boundedCursor = Math.min(Math.max(0, cursor), size);
+    const boundedValidationCursor = Math.min(Math.max(0, validationCursor), size);
+    const boundedPrefixLength = Math.min(64, Math.max(0, prefixLength ?? size), size);
+    const boundaryStart = Math.max(0, boundedCursor - 64);
+    const validationBoundaryStart = Math.max(0, boundedValidationCursor - 64);
+    const boundary = await readWindow(boundaryStart, boundedCursor - boundaryStart);
+    const content = await readContentHash(boundedCursor);
+    const validationContent =
+      boundedValidationCursor === boundedCursor
+        ? content
+        : await readContentHash(boundedValidationCursor);
+    return {
+      file,
+      identity: `${stat.dev}:${stat.ino}`,
+      size,
+      cursor: boundedCursor,
+      prefixLength: boundedPrefixLength,
+      prefix: await readWindow(0, boundedPrefixLength),
+      boundary,
+      contentHash: content.hash,
+      contentWindowStart: content.start,
+      contentWindowLength: content.length,
+      validationContentHash: validationContent.hash,
+      validationContentWindowStart: validationContent.start,
+      validationContentWindowLength: validationContent.length,
+      validationBoundary:
+        validationBoundaryStart === boundaryStart && boundedValidationCursor === boundedCursor
+          ? boundary
+          : await readWindow(
+              validationBoundaryStart,
+              boundedValidationCursor - validationBoundaryStart,
+            ),
+    };
+  } finally {
+    await handle.close();
+  }
+}
+
+function isSameFileCheckpoint(
+  previous: FileCheckpoint,
+  current: FileCheckpoint | undefined,
+): boolean {
+  return isSameFileGeneration(previous, current) && current?.boundary === previous.boundary;
+}
+
+function isSameFileGeneration(
+  previous: FileCheckpoint,
+  current: FileCheckpoint | undefined,
+): boolean {
+  const currentPrefix = current ? Buffer.from(current.prefix, "base64") : undefined;
+  const previousPrefix = Buffer.from(previous.prefix, "base64");
+  return (
+    current?.file === previous.file &&
+    current.identity === previous.identity &&
+    current.size >= previous.size &&
+    current.prefixLength >= previous.prefixLength &&
+    currentPrefix?.subarray(0, previous.prefixLength).equals(previousPrefix) === true &&
+    current.validationContentHash === previous.contentHash &&
+    current.validationContentWindowStart === previous.contentWindowStart &&
+    current.validationContentWindowLength === previous.contentWindowLength
+  );
+}
+
+function isSameTailGeneration(
+  file: string,
+  generation: LogFileGeneration | undefined,
+  current: FileCheckpoint | undefined,
+): boolean {
+  if (generation === undefined) {
+    return current === undefined;
+  }
+  const currentPrefix = current ? Buffer.from(current.prefix, "base64") : undefined;
+  const generationBoundary = current ? Buffer.from(current.boundary, "base64") : undefined;
+  return (
+    current?.file === file &&
+    current.identity === generation.identity &&
+    current.size >= generation.size &&
+    current.prefixLength >= generation.prefixLength &&
+    currentPrefix !== undefined &&
+    createHash("sha256")
+      .update(currentPrefix.subarray(0, generation.prefixLength))
+      .digest("hex") === generation.prefixHash &&
+    generationBoundary !== undefined &&
+    createHash("sha256").update(generationBoundary).digest("hex") === generation.boundaryHash &&
+    current.contentHash === generation.contentHash &&
+    current.contentWindowStart === generation.contentWindowStart &&
+    current.contentWindowLength === generation.contentWindowLength
+  );
+}
+
+function isSameFileGenerationAtValidationCursor(
+  previous: FileCheckpoint,
+  current: FileCheckpoint | undefined,
+): boolean {
+  return (
+    isSameFileGeneration(previous, current) && current?.validationBoundary === previous.boundary
+  );
+}
+
+async function followChannelLogs(
+  filter: ChannelLogFilter,
+  channel: string,
+  limit: number,
+  interval: number,
+  json: boolean,
+  runtime: RuntimeEnv,
+): Promise<void> {
+  const controller = new AbortController();
+  const removeSignalHandlers = installFollowSignalHandlers(controller);
+  const removeOutputHandlers = installFollowOutputHandlers(controller);
+  let cursor: number | undefined;
+  let previousFile: string | undefined;
+  let previousCheckpoint: FileCheckpoint | undefined;
+  let firstRead = true;
+
+  try {
+    while (!controller.signal.aborted) {
+      const readLimit = firstRead ? limit : "all";
+      const previousGeneration = previousCheckpoint
+        ? await readFileCheckpoint(
+            previousCheckpoint.file,
+            previousCheckpoint.cursor,
+            previousCheckpoint.prefixLength,
+          )
+        : undefined;
+      let reanchored =
+        previousCheckpoint !== undefined &&
+        !isSameFileCheckpoint(previousCheckpoint, previousGeneration);
+      const readCursor = reanchored ? undefined : cursor;
+      let tail = await readConfiguredParsedLogTail({
+        cursor: readCursor,
+        limit: readLimit,
+        maxBytes: MAX_BYTES,
+        filter: (line) => matchesChannel(line, filter),
+      });
+
+      // A rolling file can change between polls. Re-anchor to the new file so a
+      // coincidentally valid byte offset cannot skip its initial records.
+      if (previousFile !== undefined && tail.file !== previousFile) {
+        tail = await readConfiguredParsedLogTail({
+          limit: readLimit,
+          maxBytes: MAX_BYTES,
+          filter: (line) => matchesChannel(line, filter),
+        });
+        reanchored = true;
+      }
+
+      if (tail.generationStable === false) {
+        try {
+          await delay(interval, undefined, { signal: controller.signal });
+        } catch (error) {
+          if (controller.signal.aborted) {
+            return;
+          }
+          throw error;
+        }
+        continue;
+      }
+
+      if (!reanchored && previousGeneration !== undefined && previousCheckpoint !== undefined) {
+        const postReadGeneration = await readFileCheckpoint(
+          tail.file,
+          previousCheckpoint.cursor,
+          previousCheckpoint.prefixLength,
+        );
+        if (!isSameFileCheckpoint(previousGeneration, postReadGeneration)) {
+          tail = await readConfiguredParsedLogTail({
+            limit: readLimit,
+            maxBytes: MAX_BYTES,
+            filter: (line) => matchesChannel(line, filter),
+          });
+          reanchored = true;
+        }
+      }
+
+      const checkpointPrefix = reanchored ? undefined : checkpointPrefixLength(tail.size);
+      let checkpoint = await readFileCheckpoint(
+        tail.file,
+        tail.cursor,
+        checkpointPrefix,
+        previousCheckpoint?.cursor,
+      );
+      let checkpointValid =
+        tail.generationStable !== false &&
+        isSameTailGeneration(tail.file, tail.generation, checkpoint);
+      if (!checkpointValid) {
+        tail = await readConfiguredParsedLogTail({
+          limit: readLimit,
+          maxBytes: MAX_BYTES,
+          filter: (line) => matchesChannel(line, filter),
+        });
+        reanchored = true;
+        checkpoint = await readFileCheckpoint(
+          tail.file,
+          tail.cursor,
+          checkpointPrefixLength(tail.size),
+        );
+        checkpointValid =
+          tail.generationStable !== false &&
+          isSameTailGeneration(tail.file, tail.generation, checkpoint);
+      }
+      if (
+        checkpointValid &&
+        !reanchored &&
+        previousGeneration !== undefined &&
+        previousCheckpoint !== undefined &&
+        !isSameFileGenerationAtValidationCursor(previousGeneration, checkpoint)
+      ) {
+        tail = await readConfiguredParsedLogTail({
+          limit: readLimit,
+          maxBytes: MAX_BYTES,
+          filter: (line) => matchesChannel(line, filter),
+        });
+        reanchored = true;
+        checkpoint = await readFileCheckpoint(
+          tail.file,
+          tail.cursor,
+          checkpointPrefixLength(tail.size),
+        );
+        checkpointValid =
+          tail.generationStable !== false &&
+          isSameTailGeneration(tail.file, tail.generation, checkpoint);
+      }
+      if (!checkpointValid) {
+        try {
+          await delay(interval, undefined, { signal: controller.signal });
+        } catch (error) {
+          if (controller.signal.aborted) {
+            return;
+          }
+          throw error;
+        }
+        continue;
+      }
+
+      const fileChanged = previousFile !== undefined && tail.file !== previousFile;
+      if (json) {
+        if (firstRead || fileChanged) {
+          const outputWait = writeFollowJson(
+            runtime,
+            { type: "meta", file: tail.file, channel },
+            controller.signal,
+          );
+          if (outputWait) {
+            await outputWait;
+            if (controller.signal.aborted) {
+              return;
+            }
+          }
+        }
+        if (tail.truncated) {
+          const outputWait = writeFollowJson(
+            runtime,
+            { type: "notice", message: "Log tail truncated; earlier entries were omitted." },
+            controller.signal,
+          );
+          if (outputWait) {
+            await outputWait;
+            if (controller.signal.aborted) {
+              return;
+            }
+          }
+        }
+        if (tail.reset || reanchored) {
+          const outputWait = writeFollowJson(
+            runtime,
+            { type: "notice", message: "Log file reset; re-reading the current tail." },
+            controller.signal,
+          );
+          if (outputWait) {
+            await outputWait;
+            if (controller.signal.aborted) {
+              return;
+            }
+          }
+        }
+      } else {
+        if (firstRead || fileChanged) {
+          const outputWait = writeFollowStdout(
+            runtime,
+            theme.info(`Log file: ${tail.file}`),
+            controller.signal,
+          );
+          if (outputWait) {
+            await outputWait;
+            if (controller.signal.aborted) {
+              return;
+            }
+          }
+          if (channel !== "all") {
+            const channelOutputWait = writeFollowStdout(
+              runtime,
+              theme.info(`Channel: ${channel}`),
+              controller.signal,
+            );
+            if (channelOutputWait) {
+              await channelOutputWait;
+              if (controller.signal.aborted) {
+                return;
+              }
+            }
+          }
+        }
+        if (tail.truncated) {
+          const outputWait = writeFollowStdout(
+            runtime,
+            theme.warn("Log tail truncated; earlier entries were omitted."),
+            controller.signal,
+          );
+          if (outputWait) {
+            await outputWait;
+            if (controller.signal.aborted) {
+              return;
+            }
+          }
+        }
+        if (tail.reset || reanchored) {
+          const outputWait = writeFollowStdout(
+            runtime,
+            theme.warn("Log file reset; re-reading the current tail."),
+            controller.signal,
+          );
+          if (outputWait) {
+            await outputWait;
+            if (controller.signal.aborted) {
+              return;
+            }
+          }
+        }
+      }
+
+      for (const line of tail.lines) {
+        if (controller.signal.aborted) {
+          return;
+        }
+        const outputWait = writeChannelLogLine(runtime, line, json, true, controller.signal);
+        if (outputWait) {
+          await outputWait;
+          if (controller.signal.aborted) {
+            return;
+          }
+        }
+      }
+      cursor = checkpoint ? tail.cursor : undefined;
+      previousFile = tail.file;
+      previousCheckpoint = checkpoint;
+      firstRead = false;
+
+      try {
+        await delay(interval, undefined, { signal: controller.signal });
+      } catch (error) {
+        if (controller.signal.aborted) {
+          return;
+        }
+        throw error;
+      }
+    }
+  } finally {
+    removeSignalHandlers();
+    removeOutputHandlers();
+  }
+}
+
 /** Print or serialize recent log lines matching one channel subsystem/module. */
 export async function channelsLogsCommand(
   opts: ChannelsLogsOptions,
@@ -98,6 +677,18 @@ export async function channelsLogsCommand(
   const filter = parseChannelFilter(opts.channel);
   const { channel } = filter;
   const limit = parseLinesOption(opts.lines);
+
+  if (opts.follow) {
+    await followChannelLogs(
+      filter,
+      channel,
+      limit,
+      parseIntervalOption(opts.interval),
+      Boolean(opts.json),
+      runtime,
+    );
+    return;
+  }
 
   const tail = await readConfiguredParsedLogTail({
     limit,
@@ -123,8 +714,6 @@ export async function channelsLogsCommand(
     return;
   }
   for (const line of lines) {
-    const ts = line.time ? `${line.time} ` : "";
-    const level = line.level ? `${normalizeLowercaseStringOrEmpty(line.level)} ` : "";
-    runtime.log(`${ts}${level}${line.message}`.trim());
+    writeChannelLogLine(runtime, line, false);
   }
 }

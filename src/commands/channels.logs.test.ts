@@ -347,4 +347,753 @@ describe("channelsLogsCommand", () => {
     );
     expect(runtime.log).not.toHaveBeenCalled();
   });
+
+  it("follows appended matching records without replaying the initial tail", async () => {
+    vi.useFakeTimers();
+    try {
+      await fs.writeFile(
+        logPath,
+        [
+          logLine({ module: "gateway/channels/slack/send", message: "existing" }),
+          logLine({ module: "gateway/health", message: "unrelated" }),
+        ].join(""),
+      );
+
+      const follow = channelsLogsCommand(
+        { channel: "slack", lines: 1, follow: true, interval: 10, json: true },
+        runtime,
+      );
+      await vi.waitFor(() => expect(runtime.log).toHaveBeenCalledTimes(2));
+
+      await fs.appendFile(
+        logPath,
+        [
+          logLine({ module: "gateway/health", message: "ignored" }),
+          logLine({ module: "gateway/channels/slack/receive", message: "appended" }),
+          logLine({ module: "gateway/channels/slack/receive", message: "appended-second" }),
+        ].join(""),
+      );
+      await vi.advanceTimersByTimeAsync(10);
+      await vi.waitFor(() => expect(runtime.log).toHaveBeenCalledTimes(4));
+
+      process.emit("SIGINT");
+      await follow;
+
+      const records = runtime.log.mock.calls.map(([value]) => JSON.parse(String(value)));
+      expect(
+        records.filter((record) => record.type === "log").map((record) => record.message),
+      ).toEqual(["existing", "appended", "appended-second"]);
+      expect(records.some((record) => record.message === "ignored")).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("advances past an oversized record and keeps filtered follow progress", async () => {
+    vi.useFakeTimers();
+    try {
+      await fs.writeFile(
+        logPath,
+        logLine({ module: "gateway/channels/slack/send", message: "existing" }),
+      );
+
+      const follow = channelsLogsCommand(
+        { channel: "slack", lines: 1, follow: true, interval: 10, json: true },
+        runtime,
+      );
+      await vi.waitFor(() => expect(runtime.log).toHaveBeenCalledTimes(2));
+
+      await fs.appendFile(
+        logPath,
+        [
+          logLine({
+            module: "gateway/channels/slack/send",
+            message: "x".repeat(1_000_100),
+          }),
+          logLine({ module: "gateway/health", message: "ignored-after-oversized" }),
+          logLine({ module: "gateway/channels/slack/receive", message: "after-oversized" }),
+        ].join(""),
+      );
+      await vi.advanceTimersByTimeAsync(10);
+      await vi.waitFor(() => expect(runtime.log).toHaveBeenCalledTimes(3));
+      await vi.advanceTimersByTimeAsync(10);
+      await vi.waitFor(() => expect(runtime.log).toHaveBeenCalledTimes(4));
+
+      process.emit("SIGINT");
+      await follow;
+
+      const records = runtime.log.mock.calls.map(([value]) => JSON.parse(String(value)));
+      expect(
+        records.filter((record) => record.type === "log").map((record) => record.message),
+      ).toEqual(["existing", "after-oversized"]);
+      expect(records.filter((record) => record.type === "notice")).toEqual([
+        { type: "notice", message: "Log tail truncated; earlier entries were omitted." },
+      ]);
+      expect(JSON.stringify(records)).not.toContain("ignored-after-oversized");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("writes text follow output to stdout without re-entering the logger", async () => {
+    vi.useFakeTimers();
+    try {
+      await fs.writeFile(
+        logPath,
+        logLine({ module: "gateway/channels/slack/send", message: "text follow" }),
+      );
+      const writeStdout = vi.fn();
+      const followRuntime = {
+        ...runtime,
+        writeStdout,
+        writeJson: vi.fn(),
+      };
+      const follow = channelsLogsCommand(
+        { channel: "slack", follow: true, interval: 10 },
+        followRuntime,
+      );
+
+      await vi.waitFor(() => expect(writeStdout).toHaveBeenCalledTimes(3));
+      expect(writeStdout.mock.calls.map(([value]) => String(value))).toEqual([
+        expect.stringContaining("Log file:"),
+        expect.stringContaining("Channel: slack"),
+        "2026-04-25T12:00:00.000Z info text follow",
+      ]);
+      expect(runtime.log).not.toHaveBeenCalled();
+
+      process.emit("SIGINT");
+      await follow;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("waits for stdout drain before emitting the next follow record", async () => {
+    vi.useFakeTimers();
+    try {
+      await fs.writeFile(
+        logPath,
+        logLine({ module: "gateway/channels/slack/send", message: "backpressure" }),
+      );
+      let blocked = true;
+      const writeJson = vi.fn(() => {
+        if (blocked) {
+          blocked = false;
+          return false;
+        }
+        return true;
+      });
+      const followRuntime = {
+        ...runtime,
+        writeStdout: vi.fn(),
+        writeJson,
+      };
+      const follow = channelsLogsCommand(
+        { channel: "slack", follow: true, interval: 10, json: true },
+        followRuntime,
+      );
+
+      await vi.waitFor(() => expect(writeJson).toHaveBeenCalledTimes(1));
+      expect(writeJson.mock.calls).toHaveLength(1);
+
+      process.stdout.emit("drain");
+      await vi.waitFor(() => expect(writeJson).toHaveBeenCalledTimes(2));
+
+      process.emit("SIGINT");
+      await follow;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not replay a short file when an append grows its prefix", async () => {
+    vi.useFakeTimers();
+    try {
+      await fs.writeFile(logPath, '{"0":"first"}\n');
+      const follow = channelsLogsCommand(
+        { lines: 1, follow: true, interval: 10, json: true },
+        runtime,
+      );
+      await vi.waitFor(() => expect(runtime.log).toHaveBeenCalledTimes(2));
+
+      await fs.appendFile(logPath, '{"0":"second"}\n');
+      await vi.advanceTimersByTimeAsync(10);
+      await vi.waitFor(() => expect(runtime.log).toHaveBeenCalledTimes(3));
+
+      process.emit("SIGINT");
+      await follow;
+
+      const records = runtime.log.mock.calls.map(([value]) => JSON.parse(String(value)));
+      expect(
+        records.filter((record) => record.type === "log").map((record) => record.message),
+      ).toEqual(["first", "second"]);
+      expect(records.some((record) => record.type === "notice")).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("grows the prefix fingerprint after starting with an empty file", async () => {
+    vi.useFakeTimers();
+    try {
+      await fs.writeFile(logPath, "");
+      const follow = channelsLogsCommand(
+        { lines: 1, follow: true, interval: 10, json: true },
+        runtime,
+      );
+      await vi.waitFor(() => expect(runtime.log).toHaveBeenCalledTimes(1));
+
+      const firstMessage = `aaaaa${"x".repeat(200)}`;
+      await fs.appendFile(logPath, logLine({ message: firstMessage }));
+      await vi.advanceTimersByTimeAsync(10);
+      await vi.waitFor(() => expect(runtime.log).toHaveBeenCalledTimes(2));
+
+      const replacementMessage = `bbbbb${"x".repeat(200)}`;
+      await fs.writeFile(logPath, logLine({ message: replacementMessage }));
+      await vi.advanceTimersByTimeAsync(10);
+      await vi.waitFor(() => expect(runtime.log).toHaveBeenCalledTimes(4));
+
+      process.emit("SIGINT");
+      await follow;
+
+      const records = runtime.log.mock.calls.map(([value]) => JSON.parse(String(value)));
+      expect(
+        records.filter((record) => record.type === "log").map((record) => record.message),
+      ).toEqual([firstMessage, replacementMessage]);
+      expect(records.filter((record) => record.type === "notice")).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("re-anchors after a same-path replacement without replaying the old cursor", async () => {
+    vi.useFakeTimers();
+    try {
+      await fs.writeFile(
+        logPath,
+        logLine({ module: "gateway/channels/slack/send", message: "before" }),
+      );
+      const follow = channelsLogsCommand(
+        { channel: "slack", follow: true, interval: 10, json: true },
+        runtime,
+      );
+      await vi.waitFor(() => expect(runtime.log).toHaveBeenCalledTimes(2));
+
+      await fs.writeFile(
+        logPath,
+        [
+          logLine({ module: "gateway/channels/slack/send", message: "new-first" }),
+          logLine({ module: "gateway/channels/slack/send", message: "new-second" }),
+        ].join(""),
+      );
+      await vi.advanceTimersByTimeAsync(10);
+      await vi.waitFor(() => expect(runtime.log).toHaveBeenCalledTimes(5));
+
+      process.emit("SIGINT");
+      await follow;
+
+      const records = runtime.log.mock.calls.map(([value]) => JSON.parse(String(value)));
+      expect(
+        records.filter((record) => record.type === "log").map((record) => record.message),
+      ).toEqual(["before", "new-first", "new-second"]);
+      expect(records.filter((record) => record.type === "notice")).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps a partial replacement anchored to one generation", async () => {
+    vi.useFakeTimers();
+    try {
+      await fs.writeFile(
+        logPath,
+        logLine({ module: "gateway/channels/slack/send", message: "before" }),
+      );
+      const follow = channelsLogsCommand(
+        { channel: "slack", follow: true, interval: 10, json: true },
+        runtime,
+      );
+      await vi.waitFor(() => expect(runtime.log).toHaveBeenCalledTimes(2));
+
+      await fs.writeFile(
+        logPath,
+        `${logLine({ module: "gateway/channels/slack/send", message: "new-first" })}${logLine({
+          module: "gateway/channels/slack/send",
+          message: "new-partial",
+        }).trimEnd()}`,
+      );
+      await vi.advanceTimersByTimeAsync(10);
+      await vi.waitFor(() => expect(runtime.log).toHaveBeenCalledTimes(4));
+      await vi.advanceTimersByTimeAsync(10);
+
+      const records = runtime.log.mock.calls.map(([value]) => JSON.parse(String(value)));
+      expect(
+        records.filter((record) => record.type === "log").map((record) => record.message),
+      ).toEqual(["before", "new-first"]);
+
+      process.emit("SIGINT");
+      await follow;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("re-anchors after a same-size rewrite between polls", async () => {
+    vi.useFakeTimers();
+    try {
+      const oldMessage = `${"x".repeat(200)}-old`;
+      const newMessage = `${"x".repeat(200)}-new`;
+      await fs.writeFile(
+        logPath,
+        logLine({ module: "gateway/channels/slack/send", message: oldMessage }),
+      );
+      const follow = channelsLogsCommand(
+        { channel: "slack", follow: true, interval: 10, json: true },
+        runtime,
+      );
+      await vi.waitFor(() => expect(runtime.log).toHaveBeenCalledTimes(2));
+
+      await fs.writeFile(
+        logPath,
+        logLine({ module: "gateway/channels/slack/send", message: newMessage }),
+      );
+      await vi.advanceTimersByTimeAsync(10);
+      await vi.waitFor(() => expect(runtime.log).toHaveBeenCalledTimes(4));
+
+      process.emit("SIGINT");
+      await follow;
+
+      const records = runtime.log.mock.calls.map(([value]) => JSON.parse(String(value)));
+      expect(
+        records.filter((record) => record.type === "log").map((record) => record.message),
+      ).toEqual([oldMessage, newMessage]);
+      expect(records.filter((record) => record.type === "notice")).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("re-anchors after same-path truncate/regrow with matching edge samples", async () => {
+    vi.useFakeTimers();
+    try {
+      const oldMessage = `${"x".repeat(200)}-old`;
+      const newMessage = `${"x".repeat(200)}-new`;
+      await fs.writeFile(
+        logPath,
+        logLine({ module: "gateway/channels/slack/send", message: oldMessage }),
+      );
+      const follow = channelsLogsCommand(
+        { channel: "slack", follow: true, interval: 10, json: true },
+        runtime,
+      );
+      await vi.waitFor(() => expect(runtime.log).toHaveBeenCalledTimes(2));
+
+      await fs.writeFile(
+        logPath,
+        [
+          logLine({ module: "gateway/channels/slack/send", message: newMessage }),
+          logLine({ module: "gateway/channels/slack/send", message: "new-second" }),
+        ].join(""),
+      );
+      await vi.advanceTimersByTimeAsync(10);
+      await vi.waitFor(() => expect(runtime.log).toHaveBeenCalledTimes(5));
+
+      process.emit("SIGINT");
+      await follow;
+
+      const records = runtime.log.mock.calls.map(([value]) => JSON.parse(String(value)));
+      expect(
+        records.filter((record) => record.type === "log").map((record) => record.message),
+      ).toEqual([oldMessage, newMessage, "new-second"]);
+      expect(records.filter((record) => record.type === "notice")).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps the cursor stable while a poll observes an append", async () => {
+    vi.useFakeTimers();
+    try {
+      await fs.writeFile(
+        logPath,
+        logLine({ module: "gateway/channels/slack/send", message: "before" }),
+      );
+      const follow = channelsLogsCommand(
+        { channel: "slack", follow: true, interval: 10, json: true },
+        runtime,
+      );
+      await vi.waitFor(() => expect(runtime.log).toHaveBeenCalledTimes(2));
+
+      await fs.appendFile(
+        logPath,
+        logLine({ module: "gateway/channels/slack/send", message: "appended" }),
+      );
+      await vi.advanceTimersByTimeAsync(10);
+      await vi.waitFor(() => expect(runtime.log).toHaveBeenCalledTimes(3));
+
+      process.emit("SIGINT");
+      await follow;
+
+      const records = runtime.log.mock.calls.map(([value]) => JSON.parse(String(value)));
+      expect(
+        records.filter((record) => record.type === "log").map((record) => record.message),
+      ).toEqual(["before", "appended"]);
+      expect(records.filter((record) => record.type === "notice")).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not replay after a metadata-only log update", async () => {
+    vi.useFakeTimers();
+    try {
+      await fs.writeFile(
+        logPath,
+        logLine({ module: "gateway/channels/slack/send", message: "before" }),
+      );
+      const follow = channelsLogsCommand(
+        { channel: "slack", follow: true, interval: 10, json: true },
+        runtime,
+      );
+      await vi.waitFor(() => expect(runtime.log).toHaveBeenCalledTimes(2));
+
+      const timestamp = new Date("2026-01-01T00:00:00.000Z");
+      await fs.utimes(logPath, timestamp, timestamp);
+      await vi.advanceTimersByTimeAsync(10);
+
+      const records = runtime.log.mock.calls.map(([value]) => JSON.parse(String(value)));
+      expect(
+        records.filter((record) => record.type === "log").map((record) => record.message),
+      ).toEqual(["before"]);
+      expect(records.filter((record) => record.type === "notice")).toHaveLength(0);
+
+      process.emit("SIGINT");
+      await follow;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not replay a complete record while a trailing record is incomplete", async () => {
+    vi.useFakeTimers();
+    try {
+      const complete = logLine({ module: "gateway/channels/slack/send", message: "complete" });
+      const partial = logLine({
+        module: "gateway/channels/slack/send",
+        message: "pending",
+      }).trimEnd();
+      await fs.writeFile(logPath, `${complete}${partial}`);
+
+      const follow = channelsLogsCommand(
+        { channel: "slack", follow: true, interval: 10, json: true },
+        runtime,
+      );
+      await vi.waitFor(() => expect(runtime.log).toHaveBeenCalledTimes(2));
+      await vi.advanceTimersByTimeAsync(30);
+
+      const records = runtime.log.mock.calls.map(([value]) => JSON.parse(String(value)));
+      expect(
+        records.filter((record) => record.type === "log").map((record) => record.message),
+      ).toEqual(["complete"]);
+      expect(records.filter((record) => record.type === "notice")).toHaveLength(0);
+
+      process.emit("SIGINT");
+      await follow;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("waits quietly while the configured log file is absent", async () => {
+    vi.useFakeTimers();
+    try {
+      const missingPath = path.join(tempDir, "missing.log");
+      setLoggerOverride({ file: missingPath });
+      const follow = channelsLogsCommand(
+        { channel: "slack", follow: true, interval: 10, json: true },
+        runtime,
+      );
+      await vi.waitFor(() => expect(runtime.log).toHaveBeenCalledTimes(1));
+      await vi.advanceTimersByTimeAsync(30);
+
+      expect(
+        runtime.log.mock.calls
+          .map(([value]) => JSON.parse(String(value)))
+          .filter((record) => record.type === "notice"),
+      ).toHaveLength(0);
+
+      await fs.writeFile(
+        missingPath,
+        logLine({ module: "gateway/channels/slack/send", message: "appeared" }),
+      );
+      await vi.advanceTimersByTimeAsync(10);
+      await vi.waitFor(() => {
+        expect(
+          runtime.log.mock.calls.some(([value]) => {
+            const record = JSON.parse(String(value));
+            return record.type === "log" && record.message === "appeared";
+          }),
+        ).toBe(true);
+      });
+
+      process.emit("SIGINT");
+      await follow;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("re-anchors when a file changes between reading and checkpointing", async () => {
+    vi.useFakeTimers();
+    try {
+      const replacementPath = path.join(tempDir, "replacement.log");
+      const oldPath = path.join(tempDir, "old.log");
+      await fs.writeFile(
+        logPath,
+        logLine({ module: "gateway/channels/slack/send", message: "before" }),
+      );
+      await fs.writeFile(
+        replacementPath,
+        [
+          logLine({ module: "gateway/channels/slack/send", message: "new-first" }),
+          logLine({ module: "gateway/channels/slack/send", message: "new-second" }),
+        ].join(""),
+      );
+
+      const realOpen = fs.open.bind(fs);
+      let armRace = false;
+      let armedOpenCount = 0;
+      vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+        if (armRace) {
+          armedOpenCount += 1;
+        }
+        if (armRace && armedOpenCount === 4) {
+          await fs.rename(logPath, oldPath);
+          await fs.rename(replacementPath, logPath);
+        }
+        return realOpen(...args);
+      });
+
+      const follow = channelsLogsCommand(
+        { channel: "slack", follow: true, interval: 10, json: true },
+        runtime,
+      );
+      await vi.waitFor(() => expect(runtime.log).toHaveBeenCalledTimes(2));
+
+      await fs.appendFile(
+        logPath,
+        logLine({ module: "gateway/channels/slack/send", message: "pending" }),
+      );
+      armRace = true;
+      await vi.advanceTimersByTimeAsync(10);
+      await vi.waitFor(() => expect(runtime.log).toHaveBeenCalledTimes(5));
+      expect(armedOpenCount).toBeGreaterThanOrEqual(4);
+
+      process.emit("SIGINT");
+      await follow;
+
+      const records = runtime.log.mock.calls.map(([value]) => JSON.parse(String(value)));
+      expect(
+        records.filter((record) => record.type === "log").map((record) => record.message),
+      ).toEqual(["before", "new-first", "new-second"]);
+      expect(records.filter((record) => record.type === "notice")).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("re-anchors after a same-path rewrite preserves the file prefix during checkpointing", async () => {
+    vi.useFakeTimers();
+    try {
+      const oldMessage = `${"x".repeat(200)}-old`;
+      const newMessage = `${"x".repeat(200)}-new`;
+      await fs.writeFile(
+        logPath,
+        logLine({ module: "gateway/channels/slack/send", message: oldMessage }),
+      );
+
+      const realOpen = fs.open.bind(fs);
+      let armRace = false;
+      let armedOpenCount = 0;
+      vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+        if (armRace) {
+          armedOpenCount += 1;
+        }
+        if (armRace && armedOpenCount === 4) {
+          await fs.writeFile(
+            logPath,
+            logLine({ module: "gateway/channels/slack/send", message: newMessage }),
+          );
+        }
+        return realOpen(...args);
+      });
+
+      const follow = channelsLogsCommand(
+        { channel: "slack", follow: true, interval: 10, json: true },
+        runtime,
+      );
+      await vi.waitFor(() => expect(runtime.log).toHaveBeenCalledTimes(2));
+
+      await fs.appendFile(
+        logPath,
+        logLine({ module: "gateway/channels/slack/send", message: "pending" }),
+      );
+      armRace = true;
+      await vi.advanceTimersByTimeAsync(10);
+      await vi.waitFor(() => expect(runtime.log.mock.calls.length).toBeGreaterThanOrEqual(4));
+      expect(armedOpenCount).toBeGreaterThanOrEqual(4);
+
+      process.emit("SIGINT");
+      await follow;
+
+      const records = runtime.log.mock.calls.map(([value]) => JSON.parse(String(value)));
+      expect(
+        records.filter((record) => record.type === "log").map((record) => record.message),
+      ).toEqual([oldMessage, newMessage]);
+      expect(records.filter((record) => record.type === "notice")).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("continues following when a file disappears during checkpointing", async () => {
+    vi.useFakeTimers();
+    try {
+      await fs.writeFile(
+        logPath,
+        logLine({ module: "gateway/channels/slack/send", message: "before" }),
+      );
+      const realOpen = fs.open.bind(fs);
+      let openCount = 0;
+      vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+        openCount += 1;
+        if (openCount === 2) {
+          throw Object.assign(new Error("rotated away"), { code: "ENOENT" });
+        }
+        return realOpen(...args);
+      });
+
+      const follow = channelsLogsCommand(
+        { channel: "slack", follow: true, interval: 10, json: true },
+        runtime,
+      );
+      await vi.waitFor(() => expect(runtime.log.mock.calls.length).toBeGreaterThanOrEqual(2));
+      await vi.advanceTimersByTimeAsync(10);
+      await vi.waitFor(() => expect(openCount).toBeGreaterThanOrEqual(4));
+
+      process.emit("SIGINT");
+      await expect(follow).resolves.toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("continues following when the tail open races a file rotation", async () => {
+    vi.useFakeTimers();
+    try {
+      await fs.writeFile(
+        logPath,
+        logLine({ module: "gateway/channels/slack/send", message: "before" }),
+      );
+      const realOpen = fs.open.bind(fs);
+      let openCount = 0;
+      vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+        openCount += 1;
+        if (openCount === 4) {
+          throw Object.assign(new Error("rotated away"), { code: "ENOENT" });
+        }
+        return realOpen(...args);
+      });
+
+      const follow = channelsLogsCommand(
+        { channel: "slack", follow: true, interval: 10, json: true },
+        runtime,
+      );
+      await vi.waitFor(() => expect(runtime.log.mock.calls.length).toBeGreaterThanOrEqual(2));
+      await vi.advanceTimersByTimeAsync(10);
+      await vi.waitFor(() => expect(openCount).toBeGreaterThanOrEqual(4));
+
+      process.emit("SIGINT");
+      await expect(follow).resolves.toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("announces a newly resolved rolling file after a checkpoint disappears", async () => {
+    vi.useFakeTimers();
+    try {
+      const configuredFile = path.join(tempDir, "openclaw-2026-04-26.log");
+      const fallbackFile = path.join(tempDir, "openclaw-2026-04-25.log");
+      setLoggerOverride({ file: configuredFile });
+      await fs.writeFile(
+        fallbackFile,
+        logLine({ module: "gateway/channels/slack/send", message: "before" }),
+      );
+
+      const realOpen = fs.open.bind(fs);
+      let openCount = 0;
+      vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+        openCount += 1;
+        if (openCount === 2) {
+          throw Object.assign(new Error("rotated away"), { code: "ENOENT" });
+        }
+        return realOpen(...args);
+      });
+
+      const follow = channelsLogsCommand(
+        { channel: "slack", follow: true, interval: 10, json: true },
+        runtime,
+      );
+      await vi.waitFor(() => {
+        expect(openCount).toBeGreaterThanOrEqual(2);
+        expect(
+          runtime.log.mock.calls.some(([value]) => {
+            const record = JSON.parse(String(value));
+            return record.type === "log" && record.message === "before";
+          }),
+        ).toBe(true);
+      });
+      expect(
+        runtime.log.mock.calls.some(([value]) => {
+          const record = JSON.parse(String(value));
+          return record.type === "meta" && record.file === fallbackFile;
+        }),
+      ).toBe(true);
+      runtime.log.mockClear();
+
+      await fs.rm(fallbackFile);
+      await fs.writeFile(
+        configuredFile,
+        logLine({ module: "gateway/channels/slack/send", message: "after" }),
+      );
+      await vi.advanceTimersByTimeAsync(10);
+      await vi.waitFor(() => expect(runtime.log).toHaveBeenCalledTimes(3));
+
+      process.emit("SIGINT");
+      await follow;
+
+      const records = runtime.log.mock.calls.map(([value]) => JSON.parse(String(value)));
+      expect(
+        records.filter((record) => record.type === "meta").map((record) => record.file),
+      ).toEqual([configuredFile]);
+      expect(
+        records.filter((record) => record.type === "log").map((record) => record.message),
+      ).toEqual(["after"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("rejects invalid follow intervals", async () => {
+    await expect(
+      channelsLogsCommand({ follow: true, interval: "0", json: true }, runtime),
+    ).rejects.toThrow("--interval must be a positive integer.");
+  });
+
+  it("rejects follow intervals beyond the timer limit", async () => {
+    await expect(
+      channelsLogsCommand({ follow: true, interval: "2147483648", json: true }, runtime),
+    ).rejects.toThrow("--interval must be no greater than 2147483647 milliseconds.");
+  });
 });

@@ -1,4 +1,5 @@
 // Log tail helpers read recent log lines with optional parsing and redaction.
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isMissingPathError } from "../infra/errno.js";
@@ -15,12 +16,36 @@ const DEFAULT_LIMIT = 500;
 const DEFAULT_MAX_BYTES = 250_000;
 const MAX_LIMIT = 5000;
 const MAX_BYTES = 1_000_000;
+// Follow validation fingerprints the entire bounded tail window, not just its edge samples.
+export const LOG_GENERATION_WINDOW_BYTES = MAX_BYTES;
+type LogTailLimit = number | "all";
+type LogFileStat = {
+  dev: bigint;
+  ino: bigint;
+  size: bigint;
+  mtimeNs: bigint;
+  ctimeNs: bigint;
+};
+type LogSliceParams = {
+  file: string;
+  cursor?: number;
+  limit: LogTailLimit;
+  maxBytes: number;
+  filter?: (line: string) => boolean;
+  forceReset?: boolean;
+};
 
 function missingPathToNull(error: unknown): null {
   if (!isMissingPathError(error)) {
     throw error;
   }
   return null;
+}
+
+function getContentWindowBounds(cursor: number, size: number) {
+  const end = Math.min(Math.max(0, cursor), size);
+  const start = Math.max(0, end - LOG_GENERATION_WINDOW_BYTES);
+  return { start, length: end - start };
 }
 
 /** Payload returned to log-tail callers with cursor and truncation metadata. */
@@ -34,9 +59,29 @@ export type LogTailPayload = {
   skippedBytes?: number;
 };
 
+/** File identity and content samples captured by the handle used for a tail read. */
+export type LogFileGeneration = {
+  identity: string;
+  size: number;
+  prefixHash: string;
+  prefixLength: number;
+  boundaryHash: string;
+  contentHash: string;
+  contentWindowStart: number;
+  contentWindowLength: number;
+  mtimeNs: string;
+  ctimeNs: string;
+};
+
 /** Redacted configured log tail with only parseable structured records. */
+type LogTailReadPayload = LogTailPayload & {
+  generation?: LogFileGeneration;
+  generationStable?: boolean;
+};
 type ParsedLogTailPayload = Omit<LogTailPayload, "lines"> & {
   lines: ParsedLogLine[];
+  generation?: LogFileGeneration;
+  generationStable?: boolean;
 };
 
 /** Resolves a rolling daily log path to the newest existing rolling log when needed. */
@@ -70,15 +115,9 @@ async function resolveLogFile(file: string, options?: { rolling?: boolean }): Pr
   return sorted[0]?.path ?? file;
 }
 
-async function readLogSlice(params: {
-  file: string;
-  cursor?: number;
-  limit: number;
-  maxBytes: number;
-  filter?: (line: string) => boolean;
-}): Promise<Omit<LogTailPayload, "file">> {
-  const stat = await fs.stat(params.file).catch(missingPathToNull);
-  if (!stat) {
+async function readLogSlice(params: LogSliceParams): Promise<Omit<LogTailReadPayload, "file">> {
+  const handle = await fs.open(params.file, "r").catch(missingPathToNull);
+  if (!handle) {
     return {
       cursor: 0,
       size: 0,
@@ -87,15 +126,101 @@ async function readLogSlice(params: {
       reset: false,
     };
   }
+  try {
+    let lastResult: Omit<LogTailReadPayload, "file"> | undefined;
+    let retryParams = params;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const stat = (await handle.stat({ bigint: true })) as LogFileStat;
+      const result = await readLogSliceAttempt(retryParams, handle, stat);
+      lastResult = result;
+      const finalStat = (await handle.stat({ bigint: true })) as LogFileStat;
+      if (
+        isSameLogFileStat(stat, finalStat) ||
+        (await isStableLogSlice(handle, stat, finalStat, result, retryParams.forceReset === true))
+      ) {
+        return result;
+      }
+      if (result.reset && result.skippedBytes === undefined) {
+        // Preserve a shrink/rotation re-anchor if the file grows again before the retry.
+        retryParams = { ...params, cursor: undefined, forceReset: true };
+      }
+    }
+    return {
+      ...(lastResult as Omit<LogTailReadPayload, "file">),
+      generationStable: false,
+    };
+  } finally {
+    await handle.close();
+  }
+}
 
-  const size = stat.size;
+function isSameLogFileStat(left: LogFileStat, right: LogFileStat): boolean {
+  return (
+    left.dev === right.dev &&
+    left.ino === right.ino &&
+    left.size === right.size &&
+    left.mtimeNs === right.mtimeNs &&
+    left.ctimeNs === right.ctimeNs
+  );
+}
+
+// An append can race the read without changing consumed bytes; validate that bounded snapshot
+// instead of requiring an idle file, while preserving shrink re-anchors for callers.
+async function isStableLogSlice(
+  handle: Awaited<ReturnType<typeof fs.open>>,
+  initialStat: LogFileStat,
+  finalStat: LogFileStat,
+  result: Omit<LogTailReadPayload, "file">,
+  forcedReset: boolean,
+): Promise<boolean> {
+  if (
+    initialStat.dev !== finalStat.dev ||
+    initialStat.ino !== finalStat.ino ||
+    finalStat.size < initialStat.size ||
+    (!forcedReset && result.reset && result.skippedBytes === undefined) ||
+    result.generation === undefined
+  ) {
+    return false;
+  }
+
+  const generation = result.generation;
+  const readWindow = async (start: number, length: number) => {
+    const buffer = Buffer.alloc(Math.max(0, length));
+    const bytesRead = await readFileWindowFully(handle, buffer, start);
+    return buffer.subarray(0, bytesRead);
+  };
+  const prefix = await readWindow(0, generation.prefixLength);
+  if (createHash("sha256").update(prefix).digest("hex") !== generation.prefixHash) {
+    return false;
+  }
+
+  const content = await readWindow(generation.contentWindowStart, generation.contentWindowLength);
+  if (
+    content.length !== generation.contentWindowLength ||
+    createHash("sha256").update(content).digest("hex") !== generation.contentHash
+  ) {
+    return false;
+  }
+
+  const cursor = generation.contentWindowStart + generation.contentWindowLength;
+  const boundaryStart = Math.max(0, cursor - 64);
+  const boundary = await readWindow(boundaryStart, cursor - boundaryStart);
+  return createHash("sha256").update(boundary).digest("hex") === generation.boundaryHash;
+}
+
+async function readLogSliceAttempt(
+  params: LogSliceParams,
+  handle: Awaited<ReturnType<typeof fs.open>>,
+  stat: LogFileStat,
+): Promise<Omit<LogTailReadPayload, "file">> {
+  const size = Number(stat.size);
   const maxBytes = clamp(params.maxBytes, 1, MAX_BYTES);
-  const limit = clamp(params.limit, 1, MAX_LIMIT);
+  const limit = params.limit === "all" ? undefined : clamp(params.limit, 1, MAX_LIMIT);
   let cursor =
     typeof params.cursor === "number" && Number.isFinite(params.cursor)
       ? Math.max(0, Math.floor(params.cursor))
       : undefined;
-  let reset = false;
+  let reset = params.forceReset === true;
   let skippedBytes: number | undefined;
   let truncated = false;
   let start;
@@ -108,20 +233,72 @@ async function readLogSlice(params: {
       truncated = start > 0;
     } else {
       start = cursor;
-      if (size - start > maxBytes) {
-        // Keep reset as the re-anchor signal for existing clients. The skipped byte count
-        // lets current clients distinguish this valid-cursor fast-forward from file shrink.
-        reset = true;
-        truncated = true;
-        const boundedStart = Math.max(0, size - maxBytes);
-        skippedBytes = boundedStart - start;
-        start = boundedStart;
-      }
     }
   } else {
     start = Math.max(0, size - maxBytes);
     truncated = start > 0;
   }
+
+  const readBytes = async (windowStart: number, length: number) => {
+    const buffer = Buffer.alloc(Math.max(0, Math.min(length, size - windowStart)));
+    const bytesRead = await readFileWindowFully(handle, buffer, windowStart);
+    return buffer.subarray(0, bytesRead);
+  };
+
+  // Capture the generation before reading returned records so a rewrite cannot replace its
+  // fingerprint after the output buffer was produced.
+  const prefixLength = Math.min(64, size);
+  const prefixSnapshot = await readBytes(0, prefixLength);
+  let generationSnapshotStart = Math.max(0, start - LOG_GENERATION_WINDOW_BYTES);
+  let generationSnapshotEnd = Math.min(size, start + maxBytes);
+  let generationSnapshot = await readBytes(
+    generationSnapshotStart,
+    generationSnapshotEnd - generationSnapshotStart,
+  );
+  const buildGeneration = (generationCursor: number): LogFileGeneration | undefined => {
+    if (
+      prefixSnapshot.length !== prefixLength ||
+      generationSnapshot.length !== generationSnapshotEnd - generationSnapshotStart
+    ) {
+      return undefined;
+    }
+    const boundedCursor = Math.min(Math.max(0, generationCursor), size);
+    const boundaryStart = Math.max(0, boundedCursor - 64);
+    const contentWindow = getContentWindowBounds(boundedCursor, size);
+    const sliceSnapshot = (windowStart: number, length: number) => {
+      const offset = windowStart - generationSnapshotStart;
+      if (offset < 0 || offset + length > generationSnapshot.length) {
+        return undefined;
+      }
+      return generationSnapshot.subarray(offset, offset + length);
+    };
+    const contentBuffer = sliceSnapshot(contentWindow.start, contentWindow.length);
+    const boundary = sliceSnapshot(boundaryStart, boundedCursor - boundaryStart);
+    if (contentBuffer === undefined || boundary === undefined) {
+      return undefined;
+    }
+    return {
+      identity: `${stat.dev}:${stat.ino}`,
+      size,
+      prefixHash: createHash("sha256").update(prefixSnapshot).digest("hex"),
+      prefixLength,
+      boundaryHash: createHash("sha256").update(boundary).digest("hex"),
+      contentHash: createHash("sha256").update(contentBuffer).digest("hex"),
+      contentWindowStart: contentWindow.start,
+      contentWindowLength: contentBuffer.length,
+      mtimeNs: stat.mtimeNs.toString(),
+      ctimeNs: stat.ctimeNs.toString(),
+    };
+  };
+
+  const captureGeneration = async (generationCursor: number) => {
+    generationSnapshotStart = Math.max(0, generationCursor - LOG_GENERATION_WINDOW_BYTES);
+    generationSnapshotEnd = generationCursor;
+    generationSnapshot = await readBytes(
+      generationSnapshotStart,
+      generationSnapshotEnd - generationSnapshotStart,
+    );
+  };
 
   if (size === 0 || size <= start) {
     return {
@@ -131,59 +308,79 @@ async function readLogSlice(params: {
       truncated,
       reset,
       skippedBytes,
+      generation: buildGeneration(size),
     };
   }
 
-  const handle = await fs.open(params.file, "r");
-  try {
-    let prefix = "";
-    if (start > 0) {
-      const prefixBuf = Buffer.alloc(1);
-      const prefixRead = await handle.read(prefixBuf, 0, 1, start - 1);
-      prefix = prefixBuf.toString("utf8", 0, prefixRead.bytesRead);
-    }
-
-    const length = Math.max(0, size - start);
-    const buffer = Buffer.alloc(length);
-    const bytesRead = await readFileWindowFully(handle, buffer, start);
-    const text = buffer.toString("utf8", 0, bytesRead);
-    let lines = text.split("\n");
-    lines.pop();
-    if (start > 0 && prefix !== "\n") {
-      // Drop the first partial line when starting in the middle of a file.
-      lines.shift();
-    }
-    if (params.filter) {
-      // Sparse consumers inspect the full byte-bounded window before the shared line cap.
-      lines = lines.filter(params.filter);
-    }
-    if (lines.length > limit) {
-      truncated = true;
-      lines = lines.slice(lines.length - limit);
-    }
-
-    // Keep an unterminated record pending so a later read can emit it whole.
-    const lastNewline = buffer.subarray(0, bytesRead).lastIndexOf(0x0a);
-    cursor = text.endsWith("\n") ? size : start + lastNewline + 1;
-
-    return {
-      cursor,
-      size,
-      lines,
-      truncated,
-      reset,
-      skippedBytes,
-    };
-  } finally {
-    await handle.close();
+  let prefix = "";
+  if (start > 0) {
+    const prefixBuf = Buffer.alloc(1);
+    const prefixRead = await handle.read(prefixBuf, 0, 1, start - 1);
+    prefix = prefixBuf.toString("utf8", 0, prefixRead.bytesRead);
   }
+
+  // Keep cursor continuation bounded instead of re-anchoring and skipping a burst.
+  const length = Math.max(0, Math.min(size - start, maxBytes));
+  const buffer = Buffer.alloc(length);
+  const bytesRead = await readFileWindowFully(handle, buffer, start);
+  const text = buffer.toString("utf8", 0, bytesRead);
+  let lines = text.split("\n");
+  lines.pop();
+  if (start > 0 && prefix !== "\n") {
+    // Drop the first partial line when starting in the middle of a file.
+    lines.shift();
+  }
+  if (params.filter) {
+    // Sparse consumers inspect the full byte-bounded window before the shared line cap.
+    lines = lines.filter(params.filter);
+  }
+  if (limit !== undefined && lines.length > limit) {
+    truncated = true;
+    lines = lines.slice(lines.length - limit);
+  }
+
+  const lastNewline = buffer.subarray(0, bytesRead).lastIndexOf(0x0a);
+  const reachedEnd = start + bytesRead >= size;
+  let skippedOversizedRecord = false;
+  if (lastNewline < 0) {
+    // Keep an unterminated record pending so a later read can emit it whole. If more bytes
+    // exist, discard only this bounded chunk and advance toward its newline without buffering it.
+    lines = [];
+    if (!reachedEnd) {
+      const nextCursor = start + bytesRead;
+      if (nextCursor > start) {
+        truncated = true;
+        skippedBytes = nextCursor - start;
+        cursor = nextCursor;
+        skippedOversizedRecord = true;
+      }
+    }
+    cursor ??= start;
+  } else {
+    cursor = reachedEnd && text.endsWith("\n") ? size : start + lastNewline + 1;
+  }
+
+  if (skippedOversizedRecord) {
+    // The skipped newline can be beyond the initial read window; refresh only this bounded
+    // cursor snapshot so follow checkpoint validation can continue from the new position.
+    await captureGeneration(cursor);
+  }
+
+  return {
+    cursor,
+    size,
+    lines,
+    truncated,
+    reset,
+    skippedBytes,
+    generation: buildGeneration(cursor),
+  };
 }
 
-/** Reads and redacts the configured log tail with bounded bytes and line count. */
-export async function readConfiguredLogTail(
-  params?: { cursor?: number; limit?: number; maxBytes?: number },
+async function readConfiguredLogTailInternal(
+  params?: { cursor?: number; limit?: LogTailLimit; maxBytes?: number },
   filter?: (line: string) => boolean,
-): Promise<LogTailPayload> {
+): Promise<LogTailReadPayload> {
   const target = getResolvedLoggerFileTarget();
   const file = await resolveLogFile(target.file, { rolling: target.rolling });
   const result = await readLogSlice({
@@ -201,14 +398,24 @@ export async function readConfiguredLogTail(
   };
 }
 
+/** Reads and redacts the configured log tail with bounded bytes and line count. */
+export async function readConfiguredLogTail(
+  params?: { cursor?: number; limit?: LogTailLimit; maxBytes?: number },
+  filter?: (line: string) => boolean,
+): Promise<LogTailPayload> {
+  const tail = await readConfiguredLogTailInternal(params, filter);
+  const { generation: _generation, generationStable: _generationStable, ...publicTail } = tail;
+  return publicTail;
+}
+
 /** Reads the canonical configured tail and parses its already-redacted lines. */
 export async function readConfiguredParsedLogTail(params?: {
   cursor?: number;
-  limit?: number;
+  limit?: LogTailLimit;
   maxBytes?: number;
   filter?: (line: Pick<ParsedLogLine, "subsystem" | "module" | "plugin">) => boolean;
 }): Promise<ParsedLogTailPayload> {
-  const tail = await readConfiguredLogTail(params, (raw) => {
+  const tail = await readConfiguredLogTailInternal(params, (raw) => {
     const parsed = parseLogLine(raw);
     return parsed !== null && (params?.filter?.(parsed) ?? true);
   });
