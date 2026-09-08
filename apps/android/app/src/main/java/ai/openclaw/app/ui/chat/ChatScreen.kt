@@ -471,6 +471,44 @@ internal fun ChatScreen(
   val sendInFlight = composerOwner in sendStates
   val pickerActivity = LocalActivity.current
   val pickerView = LocalView.current
+
+  // Admission reads current settings, not the last composed enabled state.
+  fun currentEffortSession() =
+    viewModel.chatSessions.value.firstOrNull {
+      isActiveSessionChoice(it.key, viewModel.chatSessionKey.value, viewModel.mainSessionKey.value)
+    }
+
+  fun currentFastModeProviderSupported() =
+    fastModeProviderSupportedForSelection(
+      selectedModelRef = viewModel.chatSelectedModelRef.value,
+      sessionModelProvider = currentEffortSession()?.modelProvider,
+      catalog = viewModel.chatModelCatalog.value,
+    )
+
+  fun canChangeThinking() =
+    operatorScopesAllowAdmin(viewModel.operatorScopes.value) &&
+      chatThinkingSupported(
+        selection = viewModel.chatThinkingLevelSelection.value,
+        fallbackSupported = thinkingSupportedForSelection(viewModel.chatSelectedModelRef.value, viewModel.chatModelCatalog.value),
+      )
+
+  fun canChangeFastMode(expected: ChatComposerOwner) =
+    chatFastModeControlEnabled(
+      supported =
+        fastModeSupportedForSelection(
+          providerSupported = currentFastModeProviderSupported(),
+          hasConfiguredFastModeOverride = currentEffortSession()?.fastMode != null,
+        ),
+      adminAuthorized = operatorScopesAllowAdmin(viewModel.operatorScopes.value),
+      connected = viewModel.gatewayConnectionDisplay.value.isConnected,
+      gatewayAvailable = viewModel.chatHealthOk.value,
+      loading = viewModel.chatHistoryLoading.value || viewModel.chatSessionCreating.value,
+      sending = expected in composerState.sendStates.value,
+      activeRun = viewModel.pendingRunCount.value > 0,
+      streaming = viewModel.chatStreamingAssistantText.value != null,
+      settingsMutationPending = viewModel.chatSessionKey.value in viewModel.chatPendingSessionSettingsKeys.value,
+    )
+
   val modelPicker =
     remember(viewModel, pickerActivity, pickerView, lifecycleOwner) {
       ChatModelPickerSessionOwner(pickerActivity, pickerView, lifecycleOwner.lifecycle) { expected ->
@@ -479,9 +517,26 @@ internal fun ChatScreen(
           operatorScopesAllowWrite(viewModel.operatorScopes.value)
       }
     }
-  rememberWindowDisplayFeatureState(modelPicker::publishFeatures)
-  SideEffect { modelPicker.refreshTarget() }
-  DisposableEffect(modelPicker) { onDispose { modelPicker.dispose() } }
+  val effortPicker =
+    remember(viewModel, pickerActivity, pickerView, lifecycleOwner) {
+      ChatModelPickerSessionOwner(pickerActivity, pickerView, lifecycleOwner.lifecycle) { expected ->
+        viewModel.isCurrentChatComposerOwner(expected) && (canChangeThinking() || canChangeFastMode(expected))
+      }
+    }
+  rememberWindowDisplayFeatureState { publication ->
+    modelPicker.publishFeatures(publication)
+    effortPicker.publishFeatures(publication)
+  }
+  SideEffect {
+    modelPicker.refreshTarget()
+    effortPicker.refreshTarget()
+  }
+  DisposableEffect(modelPicker, effortPicker) {
+    onDispose {
+      modelPicker.dispose()
+      effortPicker.dispose()
+    }
+  }
   var showBackgroundTasks by rememberSaveable { mutableStateOf(false) }
   var showBranchSwitcher by rememberSaveable { mutableStateOf(false) }
   var detailsExpanded by rememberSaveable { mutableStateOf(false) }
@@ -945,14 +1000,7 @@ internal fun ChatScreen(
         composerState.clearAttachmentOmission(composerOwner)
       },
       commands = chatCommands,
-      onThinkingLevelChange = viewModel::setChatThinkingLevel,
-      onFastModeChange = { enabled ->
-        viewModel.setChatSessionFastMode(
-          sessionKey = sessionKey,
-          enabled = enabled,
-          clearOverride = !fastModeProviderSupported,
-        )
-      },
+      onOpenEffortPicker = { effortPicker.open(composerOwner, sessionKey) },
       onOpenModelPicker = { modelPicker.open(composerOwner, sessionKey) },
       onPickImages = {
         if (!viewModel.isCurrentChatComposerOwner(composerOwner)) return@ChatComposer
@@ -1068,6 +1116,35 @@ internal fun ChatScreen(
         sendCheckpointFull = result == ChatComposerSendStartResult.CheckpointFull
       },
     )
+  }
+
+  effortPicker.visible?.let { opening ->
+    key(opening) {
+      ChatEffortSheet(
+        opening = opening,
+        options = thinkingLevelSelection.options,
+        selectedId = thinkingLevel,
+        thinkingSupported = thinkingSupported,
+        thinkingLevelEnabled = canAdminSessionSettings,
+        fastMode = fastMode,
+        fastModeEnabled = canChangeFastMode(opening.composerOwner),
+        onSelect = { level ->
+          if (effortPicker.admit(opening) && canChangeThinking()) {
+            viewModel.setChatThinkingLevel(level)
+          }
+        },
+        onFastModeChange = { enabled ->
+          if (effortPicker.admit(opening) && canChangeFastMode(opening.composerOwner)) {
+            viewModel.setChatSessionFastMode(
+              sessionKey = opening.sessionKey,
+              enabled = enabled,
+              clearOverride = !currentFastModeProviderSupported(),
+            )
+          }
+        },
+        onDismiss = { if (effortPicker.admit(opening)) effortPicker.retire(opening) },
+      )
+    }
   }
 
   modelPicker.visible?.let { opening ->
@@ -2586,8 +2663,7 @@ private fun ChatComposer(
   modelUnavailableMessage: NativeText?,
   onDismissShareImportNotice: () -> Unit,
   commands: List<ChatCommandEntry>,
-  onThinkingLevelChange: (String) -> Unit,
-  onFastModeChange: (Boolean) -> Unit,
+  onOpenEffortPicker: () -> Unit,
   onOpenModelPicker: () -> Unit,
   onPickImages: () -> Unit,
   onPickAudioOrDocument: () -> Unit,
@@ -2762,8 +2838,7 @@ private fun ChatComposer(
             thinkingLevelEnabled = thinkingLevelEnabled,
             fastMode = fastMode,
             fastModeEnabled = fastModeEnabled,
-            onFastModeChange = onFastModeChange,
-            onThinkingLevelChange = onThinkingLevelChange,
+            onOpenEffortPicker = onOpenEffortPicker,
             contextUsage = contextUsage,
             modifier = Modifier.weight(1f),
           )
@@ -2848,21 +2923,16 @@ private fun ChatThinkingLevelPicker(
   thinkingLevelEnabled: Boolean,
   fastMode: Boolean,
   fastModeEnabled: Boolean,
-  onSelect: (String) -> Unit,
-  onFastModeChange: (Boolean) -> Unit,
+  onOpen: () -> Unit,
 ) {
-  var expanded by rememberSaveable { mutableStateOf(false) }
   val enabled = (thinkingSupported && thinkingLevelEnabled) || fastModeEnabled
-  LaunchedEffect(enabled) {
-    if (!enabled) expanded = false
-  }
   val languageTag = currentAppLanguage().languageTag
   val position = resolveChatEffortPosition(selectedId, options)
   val description = nativeString("Thinking")
   val dialColor = if (enabled) ClawTheme.colors.textMuted else ClawTheme.colors.textSubtle
   val needleColor = if (enabled) ClawTheme.colors.text else ClawTheme.colors.textSubtle
   Surface(
-    onClick = { expanded = true },
+    onClick = onOpen,
     enabled = enabled,
     modifier =
       Modifier.size(ClawTheme.spacing.touchTarget).semantics {
@@ -2910,19 +2980,6 @@ private fun ChatThinkingLevelPicker(
         }
       }
     }
-  }
-  if (expanded) {
-    ChatEffortSheet(
-      options = options,
-      selectedId = selectedId,
-      thinkingSupported = thinkingSupported,
-      thinkingLevelEnabled = thinkingLevelEnabled,
-      fastMode = fastMode,
-      fastModeEnabled = fastModeEnabled,
-      onSelect = onSelect,
-      onFastModeChange = onFastModeChange,
-      onDismiss = { expanded = false },
-    )
   }
 }
 
@@ -3068,6 +3125,7 @@ private fun ChatEffortSliderTrack(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ChatEffortSheet(
+  opening: ChatModelPickerSession,
   options: List<ChatThinkingLevelOption>,
   selectedId: String,
   thinkingSupported: Boolean,
@@ -3080,6 +3138,7 @@ private fun ChatEffortSheet(
 ) {
   val thinkingOptions = if (thinkingSupported) options else emptyList()
   ModalBottomSheet(
+    modifier = Modifier.foldAwareSheet(opening.geometry),
     onDismissRequest = onDismiss,
     sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
     containerColor = ClawTheme.colors.surface,
@@ -3653,8 +3712,7 @@ private fun ChatInputPill(
   thinkingLevelEnabled: Boolean,
   fastMode: Boolean,
   fastModeEnabled: Boolean,
-  onFastModeChange: (Boolean) -> Unit,
-  onThinkingLevelChange: (String) -> Unit,
+  onOpenEffortPicker: () -> Unit,
   contextUsage: ChatContextUsage,
   modifier: Modifier = Modifier,
 ) {
@@ -3755,8 +3813,7 @@ private fun ChatInputPill(
               thinkingLevelEnabled = thinkingLevelEnabled,
               fastMode = fastMode,
               fastModeEnabled = fastModeEnabled,
-              onSelect = onThinkingLevelChange,
-              onFastModeChange = onFastModeChange,
+              onOpen = onOpenEffortPicker,
             )
           }
         }
