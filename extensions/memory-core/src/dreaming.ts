@@ -661,9 +661,11 @@ async function runShortTermDreamingPromotionIfTriggered(params: {
           `memory-core: dreaming applied details [workspace=${workspaceDir}] ${appliedSummary}`,
         );
       }
+      const deepHasContent = candidates.length > 0 || applied.applied > 0;
       await writeDeepDreamingReport({
         workspaceDir,
         bodyLines: reportLines,
+        hasContent: deepHasContent,
         nowMs: sweepNowMs,
         timezone: params.config.timezone,
         storage: params.config.storage ?? { mode: "separate", separateReports: false },

@@ -45,6 +45,7 @@ describe("dreaming markdown storage", () => {
       workspaceDir,
       phase: "light",
       bodyLines: ["- Candidate: remember the API key is fake"],
+      hasContent: true,
       nowMs,
       timezone,
       storage: {
@@ -68,6 +69,7 @@ describe("dreaming markdown storage", () => {
       workspaceDir,
       phase: "light",
       bodyLines: ["- Candidate: bounded fallback"],
+      hasContent: true,
       nowMs: 8_640_000_000_000_001,
       timezone,
       storage: {
@@ -86,6 +88,7 @@ describe("dreaming markdown storage", () => {
       workspaceDir,
       phase: "light",
       bodyLines: ["- Candidate: first block"],
+      hasContent: true,
       nowMs,
       timezone,
       storage: {
@@ -97,6 +100,7 @@ describe("dreaming markdown storage", () => {
       workspaceDir,
       phase: "rem",
       bodyLines: ["- Theme: `focus` kept surfacing."],
+      hasContent: true,
       nowMs,
       timezone,
       storage: {
@@ -122,6 +126,7 @@ describe("dreaming markdown storage", () => {
       workspaceDir,
       phase: "rem",
       bodyLines: ["- Theme: `glacier` kept surfacing."],
+      hasContent: true,
       nowMs,
       timezone,
       storage: {
@@ -144,6 +149,7 @@ describe("dreaming markdown storage", () => {
     const reportPath = await writeDeepDreamingReport({
       workspaceDir,
       bodyLines: ["- Promoted: durable preference"],
+      hasContent: true,
       storage: {
         mode: "separate",
         separateReports: false,
@@ -172,6 +178,7 @@ describe("dreaming markdown storage", () => {
     const reportPath = await writeDeepDreamingReport({
       workspaceDir,
       bodyLines: ["- Ranked 3 candidate(s) for durable promotion."],
+      hasContent: true,
       storage: {
         mode: "inline",
         separateReports: false,
@@ -217,6 +224,7 @@ describe("dreaming markdown storage", () => {
     await writeDeepDreamingReport({
       workspaceDir,
       bodyLines: ["- New summary."],
+      hasContent: true,
       storage: {
         mode: "inline",
         separateReports: false,
@@ -239,6 +247,7 @@ describe("dreaming markdown storage", () => {
     await writeDeepDreamingReport({
       workspaceDir,
       bodyLines: ["- Lowercase target."],
+      hasContent: true,
       storage: {
         mode: "inline",
         separateReports: false,
@@ -261,6 +270,7 @@ describe("dreaming markdown storage", () => {
           workspaceDir,
           phase: "light",
           bodyLines: ["- Candidate: replacement"],
+          hasContent: true,
           nowMs,
           timezone,
           storage: { mode: "inline", separateReports: false },
@@ -274,6 +284,7 @@ describe("dreaming markdown storage", () => {
           workspaceDir,
           phase: "light",
           bodyLines: ["- Candidate: replacement"],
+          hasContent: true,
           nowMs,
           timezone,
           storage: { mode: "separate", separateReports: false },
@@ -286,6 +297,7 @@ describe("dreaming markdown storage", () => {
         await writeDeepDreamingReport({
           workspaceDir,
           bodyLines: ["- Promoted: replacement"],
+          hasContent: true,
           nowMs,
           timezone,
           storage: { mode: "separate", separateReports: false },
@@ -326,6 +338,7 @@ describe("dreaming markdown storage", () => {
       writeDeepDreamingReport({
         workspaceDir,
         bodyLines: ["- Do not escape workspace."],
+        hasContent: true,
         storage: {
           mode: "inline",
           separateReports: false,
@@ -335,5 +348,46 @@ describe("dreaming markdown storage", () => {
       }),
     ).rejects.toThrow("Refusing to write symlinked DREAMS.md");
     await expect(fs.readFile(targetPath, "utf-8")).resolves.toBe("outside\n");
+  });
+
+  it("does not create memory/ when light dreaming has no content (separate mode)", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-empty-light-");
+
+    const result = await writeDailyDreamingPhaseBlock({
+      workspaceDir,
+      phase: "light",
+      bodyLines: ["- No notable updates."],
+      hasContent: false,
+      nowMs,
+      timezone,
+      storage: { mode: "separate", separateReports: false },
+    });
+
+    expect(result.inlinePath).toBeUndefined();
+    expect(result.reportPath).toBeUndefined();
+    await expectPathMissing(path.join(workspaceDir, "memory"));
+  });
+
+  it("does not create memory/ when REM dreaming has no content (inline mode)", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-empty-rem-");
+
+    const result = await writeDailyDreamingPhaseBlock({
+      workspaceDir,
+      phase: "rem",
+      bodyLines: [
+        "### Reflections",
+        "",
+        "### Possible Lasting Truths",
+        "- No strong candidate truths surfaced.",
+      ],
+      hasContent: false,
+      nowMs,
+      timezone,
+      storage: { mode: "inline", separateReports: false },
+    });
+
+    expect(result.inlinePath).toBeUndefined();
+    expect(result.reportPath).toBeUndefined();
+    await expectPathMissing(path.join(workspaceDir, "memory"));
   });
 });

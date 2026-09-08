@@ -101,10 +101,10 @@ export async function updateDreamsFile<T>(params: {
   // cannot write a pre-deletion file snapshot back over the scrubbed contents.
   return await withMemoryWorkspaceLock(params.workspaceDir, async () => {
     const dreamsPath = await resolveDreamsPath(params.workspaceDir);
-    await fs.mkdir(path.dirname(dreamsPath), { recursive: true });
     const existing = await readDreamsFile(dreamsPath);
     const { content, result, shouldWrite = true } = await params.updater(existing, dreamsPath);
     if (shouldWrite) {
+      await fs.mkdir(path.dirname(dreamsPath), { recursive: true });
       await writeDreamsFileAtomic(dreamsPath, content.endsWith("\n") ? content : `${content}\n`);
     }
     return result;
@@ -115,7 +115,8 @@ export async function updateDeepDreamsFile(params: {
   workspaceDir: string;
   bodyLines: string[];
 }): Promise<string> {
-  const body = params.bodyLines.length > 0 ? params.bodyLines.join("\n") : "- No durable changes.";
+  const hasContent = params.bodyLines.length > 0;
+  const body = hasContent ? params.bodyLines.join("\n") : "- No durable changes.";
   return await updateDreamsFile({
     workspaceDir: params.workspaceDir,
     updater: (existing, dreamsPath) => ({
@@ -127,6 +128,7 @@ export async function updateDeepDreamsFile(params: {
         body,
       }),
       result: dreamsPath,
+      shouldWrite: hasContent,
     }),
   });
 }

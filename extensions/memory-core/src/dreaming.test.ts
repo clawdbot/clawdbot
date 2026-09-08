@@ -1,4 +1,6 @@
 // Memory Core tests cover dreaming plugin behavior.
+import fs from "node:fs/promises";
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
@@ -1313,6 +1315,31 @@ describe("dreaming service reconciliation", () => {
       reason: "memory-core: short-term dreaming degraded",
     });
     expectLogContains(logger.warn, "failed=0, degraded=1, narrativesPending=0");
+  });
+
+  it("does not create memory/ or DREAMS.md on an empty workspace sweep", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-empty-sweep-");
+    const { api, harness } = createDreamingTestContext({
+      config: createDreamingConfig(
+        {
+          enabled: true,
+          limit: 5,
+          phases: { light: { enabled: false }, rem: { enabled: false } },
+        },
+        { agents: { defaults: { workspace: workspaceDir } } },
+      ),
+    });
+
+    registerShortTermPromotionDreamingForTest(api);
+    await triggerDreamingServiceStart(api, { config: api.config, getCron: () => harness.cron });
+
+    await getBeforeAgentReplyHandler(api.on)(
+      { cleanedBody: constants.DREAMING_SYSTEM_EVENT_TEXT },
+      { trigger: "cron", agentId: "main", workspaceDir },
+    );
+
+    await expect(fs.access(path.join(workspaceDir, "memory"))).rejects.toThrow();
+    await expect(fs.access(path.join(workspaceDir, "DREAMS.md"))).rejects.toThrow();
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
