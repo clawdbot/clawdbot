@@ -106,8 +106,9 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
     scope.pending ||=
       delivery.emitPartialReply && Boolean(params.onPartialReply) && state.shouldEmitPartialReplies;
     const itemId = eventData?.itemId ?? "";
-    const progressText =
-      eventData?.phase === "commentary" ? eventData.text.replace(/\s+/g, " ").trim() : "";
+    // Commentary keeps its line breaks: the WebChat renders it as Markdown, and
+    // channel compositors normalize their own single-line headlines from it.
+    const progressText = eventData?.phase === "commentary" ? eventData.text.trim() : "";
     const preamblePhase = delivery.finalMessage ? "end" : "update";
     // Completion must survive an identical last delta: first-notification
     // consumers wait for this boundary, not a timer or a repeated text snapshot.

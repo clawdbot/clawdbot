@@ -366,7 +366,7 @@ describe("subscribeEmbeddedAgentSession", () => {
           kind: "preamble",
           title: "Preamble",
           phase: "update",
-          progressText: "First. Second.",
+          progressText: "First.\nSecond.",
         },
       },
       {
@@ -375,10 +375,36 @@ describe("subscribeEmbeddedAgentSession", () => {
           kind: "preamble",
           title: "Preamble",
           phase: "end",
-          progressText: "First. Second.",
+          progressText: "First.\nSecond.",
         },
       },
     ]);
+  });
+
+  it("keeps commentary line breaks so Markdown structure survives the tool boundary", async () => {
+    const onAgentEvent = vi.fn();
+    const { emit, subscription } = createSubscribedSessionHarness({ runId: "run", onAgentEvent });
+    const commentary =
+      "Checking two things first:\n\n- the **config**\n- the logs\n\nThen I'll fix it.";
+    const message = {
+      role: "assistant",
+      api: "anthropic-messages",
+      phase: "commentary",
+      content: [{ type: "text", text: commentary }],
+    } as AssistantMessageWithPhase;
+    emit({ type: "message_start", message });
+    emit({
+      type: "message_update",
+      message,
+      assistantMessageEvent: { type: "toolcall_start", contentIndex: 1, partial: message },
+    });
+    emit({ type: "message_end", message });
+    await subscription.waitForPendingEvents();
+
+    const progressTexts = onAgentEvent.mock.calls.map(
+      ([event]) => (event as { data: { progressText?: string } }).data.progressText,
+    );
+    expect(progressTexts).toEqual([commentary, commentary]);
   });
 
   it("carries a generic commentary signature into preamble delivery", async () => {
