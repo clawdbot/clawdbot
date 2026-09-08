@@ -28,7 +28,11 @@ Managed worktree sessions use the worktree checkout as `sessionRoot`. A nested w
 
 File tools recognize aliases of the session's trusted root and working directory, including absolute paths using those aliases. This does not expand the boundary: unrelated external symlinks pointing inward remain denied, as do symlinks and raw `symlink/..` traversal that escape the root. In `read-only` mode, OpenClaw-managed mutation tools remain omitted.
 
-New sessions, including managed worktree sessions, inherit the configured global or per-agent tool/exec policy when no mode is specified. Creating a worktree pins the working directory without selecting a permission mode. Explicit modes and modes already saved on existing sessions remain unchanged.
+New sessions, including managed worktree sessions, inherit the configured global or per-agent tool/exec policy when no mode is specified. That configured policy is not one setting. `tools.exec.mode` governs `exec` only; file tools are governed separately by `tools.fs.workspaceOnly`, and `apply_patch` is contained by that setting or by `tools.exec.applyPatch.workspaceOnly`. Because `tools.exec.applyPatch.workspaceOnly` defaults to `true`, `apply_patch` stays workspace-contained on a session with no mode even when `tools.exec.mode` is `full`.
+
+Creating a worktree pins the working directory without selecting a permission mode. Explicit modes and modes already saved on existing sessions remain unchanged.
+
+Worker placements do not read those file settings at all: with no permission mode they contain `apply_patch` whenever the tool is available, so only an explicit `full` mode lifts the boundary there.
 
 The Control UI permission picker labels Default with the agent's resolved exec posture when it matches a session mode, for example **Default (Guarded)** for `tools.exec.mode: "ask"` without a stricter host approval policy. Resolution includes global settings, agent overrides, and host approval floors. Without those settings or sandboxing, the default is full access. Allowlist-only policy and non-equivalent `security`/`ask` pairs, including `ask: "always"`, keep the plain **Default** label. Agents whose sandbox configuration could apply to their sessions also keep plain **Default**, because effective policy cannot be stated at agent scope. This is display metadata, not an authorization decision or a filesystem-access guarantee; tool policy still applies. Selecting Default clears the session override; it does not save the displayed mode into the session.
 
