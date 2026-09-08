@@ -22,6 +22,11 @@ export const runtimeProcessEntrypoints = {
     sourceWorkerName: "sqlite-integrity.worker",
     distWorkerPath: "infra/sqlite-integrity.worker.js",
   },
+  preparedModelCatalog: {
+    currentModuleUrl,
+    sourceWorkerName: "../agents/prepared-model-catalog.worker",
+    distWorkerPath: "agents/prepared-model-catalog.worker.js",
+  },
   updateRepair: {
     currentModuleUrl,
     sourceWorkerName: "update-repair.worker",
@@ -66,6 +71,11 @@ export const runtimeProcessEntrypoints = {
     currentModuleUrl,
     sourceWorkerName: "../process/supervisor/service-child-relay",
     distWorkerPath: "process/supervisor/service-child-relay.js",
+  },
+  terminalPty: {
+    currentModuleUrl,
+    sourceWorkerName: "../process/terminal-pty-worker",
+    distWorkerPath: "process/terminal-pty-worker.js",
   },
   serviceChildGroupAnchor: {
     currentModuleUrl,

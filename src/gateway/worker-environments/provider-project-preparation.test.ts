@@ -4,7 +4,11 @@ import { setImmediate } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { requireGit } from "../../agents/worktrees/git.js";
-import type { WorkerProvider } from "../../plugins/types.js";
+import type {
+  WorkerProvider,
+  WorkerNodeRuntimePreparation,
+  WorkerNodeEnrollment,
+} from "../../plugins/types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import * as support from "./service.test-support.js";
 import * as workspaceGitBase from "./workspace-git-base.js";
@@ -42,6 +46,75 @@ function createService(provision: WorkerProvider["provision"], providerCallTimeo
 
 describe("worker provider project preparation ownership", () => {
   support.setupWorkerEnvironmentServiceSuite();
+
+  it.each(["runtime-bootstrap", "runtime-worker", "enrollment-bootstrap"] as const)(
+    "closes changed %s grants without publishing a different prepared runtime identity",
+    async (change) => {
+      const git = await repository(`runtime-${change}`);
+      const changedBootstrap = { ...support.NODE_BOOTSTRAP, sha256: "c".repeat(64) };
+      const runtime: WorkerNodeRuntimePreparation = {
+        nodeBootstrap: change === "runtime-bootstrap" ? changedBootstrap : support.NODE_BOOTSTRAP,
+        workerBundle: {
+          ...support.NODE_BOOTSTRAP,
+          sha256:
+            change === "runtime-worker" ? "d".repeat(64) : support.BUNDLE_ARTIFACT.tarballSha256,
+          packageRelativePath: `worker-artifacts/${support.BUNDLE_ARTIFACT.tarballSha256}.tgz`,
+        },
+      };
+      const enrollment: WorkerNodeEnrollment = {
+        mode: "resume",
+        deviceId: "runtime-node",
+        displayName: "Runtime node",
+        openclawVersion: support.NODE_BOOTSTRAP.openclawVersion,
+        nodeBootstrap: changedBootstrap,
+        waitForDeviceId: async () => "runtime-node",
+      };
+      const closeNodeRuntime = vi.fn();
+      const closeNodeEnrollment = vi.fn();
+      const service = support.createService(
+        support.createProvider({
+          requiresNodeEnrollment: true,
+          provisionBeforeInstallation: true,
+          supportedExecutionModes: ["worker-turn"],
+          supportsProjectPreparation: () => true,
+          provision: async (_profile, _operationId, options) => {
+            expect(options?.nodeRuntimeIdentity).toEqual({
+              nodeBootstrapSha256: support.NODE_BOOTSTRAP.sha256,
+              executionMode: "worker-turn",
+              workerBundleSha256: support.BUNDLE_ARTIFACT.tarballSha256,
+            });
+            if (change === "enrollment-bootstrap") {
+              await options!.beginNodeEnrollment!();
+            } else {
+              await options!.prepareNodeRuntime!();
+            }
+            throw new Error("changed runtime must not reach provider installation");
+          },
+        }),
+        {
+          projectNamespace: "gateway",
+          prepareNodeRuntime: async () => runtime,
+          prepareNodeEnrollment: async () => enrollment,
+          closeNodeRuntime,
+          closeNodeEnrollment,
+        },
+      );
+      await expect(
+        service.create("development", change, undefined, "worker-turn", git.root),
+      ).rejects.toThrow("runtime changed after provisioning preparation");
+      expect(support.testState.store.list()[0]).toMatchObject({
+        state: "provisioning",
+        nodeDeviceId: null,
+      });
+      if (change === "enrollment-bootstrap") {
+        expect(closeNodeEnrollment).toHaveBeenCalledExactlyOnceWith(enrollment);
+        expect(closeNodeRuntime).not.toHaveBeenCalled();
+      } else {
+        expect(closeNodeRuntime).toHaveBeenCalledExactlyOnceWith(runtime);
+        expect(closeNodeEnrollment).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it("cancels project snapshot preparation before creating an allocation intent", async () => {
     const git = await repository("cancelled-project-snapshot");

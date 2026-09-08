@@ -35,12 +35,13 @@ const maxFile = ${MAX_RECONCILIATION_FILE_BYTES};
 const maxTotal = ${MAX_RECONCILIATION_TOTAL_BYTES};
 const maxEntries = ${MAX_RECONCILIATION_ENTRIES};
 const objectPattern = /^[a-f0-9]{40}$/;
+const gitNullPath = process.platform === "win32" ? "NUL" : "/dev/null";
 const env = { ...process.env, GIT_NO_REPLACE_OBJECTS: "1", GIT_ATTR_NOSYSTEM: "1",
-  GIT_CONFIG_GLOBAL: os.devNull, GIT_CONFIG_SYSTEM: os.devNull,
+  GIT_CONFIG_GLOBAL: gitNullPath, GIT_CONFIG_SYSTEM: gitNullPath,
   GIT_CONFIG_COUNT: "0" };
 function git(args, options = {}) {
-  const result = spawnSync("git", ["-c", "core.hooksPath=" + os.devNull, "-c",
-    "core.fsmonitor=false", "-c", "core.attributesFile=" + os.devNull, ...args], {
+  const result = spawnSync("git", ["-c", "core.hooksPath=" + gitNullPath, "-c",
+    "core.fsmonitor=false", "-c", "core.attributesFile=" + gitNullPath, ...args], {
     cwd, env, timeout: 60000, maxBuffer: maxFile + 1, ...options,
   });
   if (result.error || result.status !== 0) throw Error("Publication snapshot Git command failed");

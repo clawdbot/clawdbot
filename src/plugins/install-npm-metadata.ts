@@ -1,16 +1,14 @@
 import {
-  createNpmMetadataEnv,
+  loadNpmPackageVersions,
   resolveNpmSpecMetadata,
   type NpmSpecResolution,
 } from "../infra/install-source-utils.js";
 import {
   compareOpenClawReleaseVersions,
-  isExactSemverVersion,
   isPrereleaseSemverVersion,
   type ParsedRegistryNpmSpec,
 } from "../infra/npm-registry-spec.js";
 import { compareValidSemver } from "../infra/semver.js";
-import { runCommandWithTimeout } from "../process/exec.js";
 import {
   validateOpenClawPackageInstallCompatibility,
   type PluginInstallRuntime,
@@ -43,35 +41,6 @@ type TrustedOfficialPrereleaseResolution =
   | { kind: "prerelease-only"; resolution: NpmSpecResolution }
   | { kind: "allow-prerelease-only" };
 
-async function loadNpmPackageVersions(params: {
-  packageName: string;
-  timeoutMs: number;
-  signal?: AbortSignal;
-}): Promise<string[] | null> {
-  const versions = await runCommandWithTimeout(
-    ["npm", "view", params.packageName, "versions", "--json"],
-    {
-      timeoutMs: Math.max(params.timeoutMs, 60_000),
-      signal: params.signal,
-      killProcessTree: true,
-      env: createNpmMetadataEnv(),
-    },
-  );
-  if (versions.code !== 0) {
-    return null;
-  }
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(versions.stdout.trim());
-  } catch {
-    return null;
-  }
-  return (Array.isArray(parsed) ? parsed : [parsed]).filter(
-    (value): value is string => typeof value === "string" && isExactSemverVersion(value),
-  );
-}
-
 export async function resolveTrustedOfficialPrereleaseResolution(params: {
   spec: ParsedRegistryNpmSpec;
   resolvedPrereleaseVersion: string;
@@ -86,6 +55,7 @@ export async function resolveTrustedOfficialPrereleaseResolution(params: {
     packageName: params.spec.name,
     timeoutMs: params.timeoutMs,
     signal: params.signal,
+    killProcessTree: true,
   });
   if (!semverVersions) {
     return null;
@@ -216,6 +186,7 @@ export async function resolveLatestCompatibleNpmResolution(params: {
     packageName: params.parsedSpec.name,
     timeoutMs: params.timeoutMs,
     signal: params.signal,
+    killProcessTree: true,
   });
   if (!versions) {
     return null;

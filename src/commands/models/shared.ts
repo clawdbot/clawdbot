@@ -1,5 +1,6 @@
 /** Shared helpers for model commands that read or mutate model config. */
 
+import { expectDefined } from "@openclaw/normalization-core";
 import { resolveAmbientOwnerAgentId } from "../../agents/agent-scope-config.js";
 import { listAgentIds, resolveAgentDir, resolveSoleAgentId } from "../../agents/agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../agents/defaults.js";
@@ -13,7 +14,7 @@ import { formatCliCommand } from "../../cli/command-format.js";
 import {
   type OpenClawConfig,
   readConfigFileSnapshot,
-  replaceConfigFile,
+  transformConfigFile,
 } from "../../config/config.js";
 import { formatConfigIssueLines } from "../../config/issue-format.js";
 import { normalizeAgentModelRefForConfig, toAgentModelListLike } from "../../config/model-input.js";
@@ -65,21 +66,20 @@ export async function updateConfig(
     context: UpdateConfigContext,
   ) => OpenClawConfig | Promise<OpenClawConfig>,
 ): Promise<OpenClawConfig> {
-  const snapshot = await readConfigFileSnapshot();
-  if (!snapshot.valid) {
-    const issues = formatConfigIssueLines(snapshot.issues, "-").join("\n");
-    throw new Error(`Invalid config at ${snapshot.path}\n${issues}`);
-  }
-  const sourceConfig = structuredClone(snapshot.sourceConfig ?? snapshot.config);
-  const runtimeConfig = structuredClone(snapshot.runtimeConfig ?? snapshot.config);
-  // Mutate source config so SecretRefs and unresolved placeholders do not get
-  // overwritten by runtime-resolved secret values.
-  const next = await mutator(sourceConfig, { runtimeConfig });
-  await replaceConfigFile({
-    nextConfig: next,
-    baseHash: snapshot.hash,
+  const result = await transformConfigFile({
+    transform: async (currentConfig, { snapshot }) => {
+      if (!snapshot.valid) {
+        const issues = formatConfigIssueLines(snapshot.issues, "-").join("\n");
+        throw new Error(`Invalid config at ${snapshot.path}\n${issues}`);
+      }
+      const nextConfig = await mutator(structuredClone(currentConfig), {
+        runtimeConfig: structuredClone(snapshot.runtimeConfig),
+      });
+      // The public SDK returns the mutator's value; persisted readback may restore env refs.
+      return { nextConfig, result: nextConfig };
+    },
   });
-  return next;
+  return expectDefined(result.result, "model config mutation result");
 }
 
 /** Resolves a CLI model reference through aliases and catalog provider aliases. */

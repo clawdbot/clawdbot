@@ -93,6 +93,28 @@ describe("explicit auth-profile pin lifecycle", () => {
     },
   );
 
+  it.each(["user", "user-link", undefined] as const)(
+    "preserves removed explicit profile intent with source %s instead of selecting another account",
+    async (source) => {
+      const sessionEntry: SessionEntry = {
+        sessionId: "s1",
+        updatedAt: 1,
+        providerOverride: "openai",
+        authProfileOverride: TEST_PRIMARY_PROFILE_ID,
+        ...(source ? { authProfileOverrideSource: source } : {}),
+      };
+      expect(await resolvePinnedSession(sessionEntry, false)).toBe(TEST_PRIMARY_PROFILE_ID);
+      delete authStoreMocks.state.store.profiles[TEST_PRIMARY_PROFILE_ID];
+
+      expect(await resolvePinnedSession(sessionEntry, false)).toBe(TEST_PRIMARY_PROFILE_ID);
+      expect(sessionEntry).toMatchObject({
+        updatedAt: 1,
+        authProfileOverride: TEST_PRIMARY_PROFILE_ID,
+      });
+      expect(sessionEntry.authProfileOverrideSource).toBe(source);
+    },
+  );
+
   it("preserves a legacy source-less user pin on a new session", async () => {
     const sessionEntry: SessionEntry = {
       sessionId: "s1",

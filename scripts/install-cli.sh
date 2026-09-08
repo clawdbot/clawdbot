@@ -72,16 +72,14 @@ PREFIX="${OPENCLAW_PREFIX:-${HOME}/.openclaw}"
 OPENCLAW_VERSION="${OPENCLAW_VERSION:-latest}"
 REQUIRED_COMPATIBLE_VERSION=""
 DEFAULT_NODE_VERSION="24.19.0"
-ARMV7_DEFAULT_NODE_VERSION="22.23.2"
 NODE_VERSION="${OPENCLAW_NODE_VERSION:-${DEFAULT_NODE_VERSION}}"
 NODE_VERSION_REQUESTED=0
 if [[ -n "${OPENCLAW_NODE_VERSION:-}" ]]; then
   NODE_VERSION_REQUESTED=1
 fi
-MIN_NODE_22_VERSION="22.22.3"
-MIN_NODE_24_VERSION="24.15.0"
-MIN_NODE_25_VERSION="25.9.0"
-SUPPORTED_NODE_VERSION_LABEL="Node 22.22.3+, Node 24.15.0+, or Node 25.9.0+"
+MIN_NODE_24_VERSION="24.16.0"
+MIN_NODE_26_VERSION="26.1.0"
+SUPPORTED_NODE_VERSION_LABEL="Node 24.16.0+ or Node 26.1.0+"
 NODE_RELEASE_VERSION_CORE=""
 APK_NODE_BIN_DIR="/usr/bin"
 NPM_LOGLEVEL="${OPENCLAW_NPM_LOGLEVEL:-error}"
@@ -106,7 +104,7 @@ Usage: install-cli.sh [options]
   --git-dir, --dir <path>             Checkout directory (default: ~/openclaw, or \$OPENCLAW_HOME/openclaw)
   --version <ver>                     OpenClaw version (default: latest)
   --compatible-with <ver>             Refuse a CLI that cannot modify config written by <ver>
-  --node-version <ver>                Node version (default: 24.19.0; 22.23.2 on Linux ARMv7)
+  --node-version <ver>                Node version (default: 24.19.0)
   --onboard                           Run "openclaw onboard" after install
   --no-onboard                        Skip onboarding (default)
   --set-npm-prefix                    Force npm prefix to ~/.npm-global if current prefix is not writable (Linux)
@@ -478,11 +476,8 @@ arch_detect() {
 select_node_version_for_platform() {
   local os="$1"
   local arch="$2"
-  if [[ "$NODE_VERSION_REQUESTED" == "0" && "$os" == "linux" && "$arch" == "armv7l" ]]; then
-    NODE_VERSION="$ARMV7_DEFAULT_NODE_VERSION"
-  fi
-  if [[ "$os" == "linux" && "$arch" == "armv7l" && "${NODE_VERSION%%.*}" != "22" ]]; then
-    fail "Linux ARMv7 requires Node 22.22.3+ because official Node 24+ binaries are unavailable; use --node-version 22.23.2."
+  if [[ "$os" == "linux" && "$arch" == "armv7l" ]]; then
+    fail "Linux ARMv7 is unsupported: official Node 24+ binaries are unavailable. Use a 64-bit OS on compatible hardware or another supported host."
   fi
 }
 
@@ -686,19 +681,15 @@ node_version_is_supported() {
     fi
   done
 
-  if ((major == 22)); then
-    semver_at_least "$version" "$MIN_NODE_22_VERSION"
-    return
-  fi
   if ((major == 24)); then
     semver_at_least "$version" "$MIN_NODE_24_VERSION"
     return
   fi
-  if ((major == 25)); then
-    semver_at_least "$version" "$MIN_NODE_25_VERSION"
+  if ((major == 26)); then
+    semver_at_least "$version" "$MIN_NODE_26_VERSION"
     return
   fi
-  ((major > 25))
+  ((major > 26))
 }
 
 required_node_version() {
@@ -706,7 +697,7 @@ required_node_version() {
     printf '%s\n' "$NODE_VERSION"
     return
   fi
-  printf '%s\n' "$MIN_NODE_22_VERSION"
+  printf '%s\n' "$MIN_NODE_24_VERSION"
 }
 
 try_link_usable_node_runtime_from_path() {
@@ -1117,6 +1108,7 @@ install_node() {
   fi
 
   if linked_node_is_usable; then
+    ln -sfn "$dir" "${PREFIX}/tools/node"
     emit_json step name node status skip path "$dir"
     return
   fi
@@ -1151,8 +1143,6 @@ install_node() {
   tar -xzf "$tmp/node.tgz" -C "$dir" --strip-components=1
   rm -rf "$tmp"
 
-  ln -sfn "$dir" "${PREFIX}/tools/node"
-
   if ! linked_node_is_usable; then
     local installed_version
     local required_version
@@ -1162,6 +1152,8 @@ install_node() {
     sqlite_version="$(linked_node_sqlite_version)"
     fail "Installed Node ${NODE_VERSION} must provide Node >= ${required_version} with WAL-reset-safe SQLite; found Node ${installed_version}, SQLite ${sqlite_version}. Re-run with --node-version 24.19.0 (or newer)"
   fi
+  # Existing CLI wrappers use this alias; activate only a runtime that can start.
+  ln -sfn "$dir" "${PREFIX}/tools/node"
   emit_json step name node status ok version "$NODE_VERSION"
 }
 

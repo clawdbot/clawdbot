@@ -3,8 +3,11 @@
 // include/replay is handled separately in stream.ts for every reasoning-capable xAI model.
 import { applyXaiModelCompat } from "./model-compat.js";
 import { isXaiFrontierModelId, isXaiGrok46ModelId } from "./model-id.js";
+import { supportsXaiPromptCacheKey } from "./provider-routing.js";
 
 type XaiRuntimeModelCompat = {
+  api?: unknown;
+  baseUrl?: unknown;
   compat?: unknown;
   id?: unknown;
   reasoning?: unknown;
@@ -47,8 +50,12 @@ export function applyXaiRuntimeModelCompat<T extends XaiRuntimeModelCompat>(
     withCompat.reasoning === true && (isGrok43Model(id) || isXaiFrontierModelId(id));
   const existingCompat =
     withCompat.compat && typeof withCompat.compat === "object"
-      ? (withCompat.compat as Record<string, unknown>)
+      ? { ...(withCompat.compat as Record<string, unknown>) }
       : {};
+  if (supportsXaiPromptCacheKey(withCompat)) {
+    existingCompat.supportsPromptCacheKey ??= true;
+    existingCompat.supportsLongCacheRetention ??= false;
+  }
   return {
     ...withCompat,
     compat: {

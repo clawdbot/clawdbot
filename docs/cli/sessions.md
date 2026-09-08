@@ -247,7 +247,7 @@ openclaw sessions cleanup --json
 ```
 
 `openclaw sessions cleanup` uses `session.maintenance` settings from config
-([Configuration reference](/gateway/config-agents#session)):
+([Configuration reference](/gateway/config-agents/sessions#session)):
 
 - Scope note: `openclaw sessions cleanup` maintains session stores,
   transcripts, trajectory rows, and legacy trajectory sidecars. It does not
@@ -408,7 +408,7 @@ Example truncate response (`--max-lines 200`):
 
 ## Related
 
-- [Session config](/gateway/config-agents#session)
+- [Session config](/gateway/config-agents/sessions#session)
 - [Session management](/concepts/session)
 - [Compaction](/concepts/compaction)
 - [CLI reference](/cli)

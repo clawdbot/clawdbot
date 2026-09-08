@@ -32,6 +32,12 @@ automatically when the Gateway returns. Live controls and slash commands remain 
 offline, except that **Stop** can queue an exact local run ID for replay. A session-only stop
 is not replayed because newer work may start in that session before the connection returns.
 
+Page and sidebar refreshes that fail because the Gateway is suspending, restarting, starting,
+or unreachable show no inline error: the footer connection indicator owns that state. Each panel
+keeps its last data and refreshes automatically once the Gateway accepts work again. Other refresh
+failures remain visible inline with their message and are retried automatically when the Gateway
+becomes available again. These refresh callouts have no manual **Retry** button.
+
 Queued attachments use binary Blobs in the browser's IndexedDB; the outbox keeps only delivery
 metadata and payload references in session storage. Attachment bytes stay with the queued input;
 the captured queue metadata owns its destination, even when configured main-session defaults change. All attachments

@@ -10,6 +10,7 @@ import {
   type ManagedLinuxDesktopStatus,
 } from "./managed-linux.js";
 import { mintDesktopObserverToken } from "./observe-bridge.js";
+import type { DesktopObserveRequester } from "./observe-requester.js";
 import { classifyRfbSecurity, probeRfbServer, type RfbProbeResult } from "./rfb-probe.js";
 import type { DesktopSessionRegistry } from "./session-registry.js";
 
@@ -292,6 +293,7 @@ export function createHostDesktopSource(params: {
 export type HostDesktopService = {
   observe(params: {
     control: boolean;
+    requester?: DesktopObserveRequester;
     credentials?: { username?: string; password?: string };
   }): Promise<{
     transport: "rfb";
@@ -357,6 +359,7 @@ export function createHostDesktopService(params: {
         sourceKey: "host",
         ownerEpoch: 0,
         control: observeParams.control,
+        requester: observeParams.requester,
         attachment: acquired.attachment,
         ...(preauth ? { preauth } : {}),
       });

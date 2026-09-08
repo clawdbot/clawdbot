@@ -21,6 +21,7 @@ import {
   resolveGitHubToolIdentityStatus,
   resolveManagedGitHubAgentKey,
   resolveManagedGitHubProfileDir,
+  resolveSystemGitHubIdentityStatus,
 } from "./github-tool-identity.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -497,6 +498,47 @@ describe("GitHub tool identity", () => {
     });
     expect(gitCall?.[1]).toMatchObject({ cwd: workspace });
   });
+
+  it.each([
+    { surface: "agent", source: "env" },
+    { surface: "agent", source: "store" },
+    { surface: "system", source: "env" },
+    { surface: "system", source: "store" },
+  ] as const)(
+    "reports the native execution account in $surface status when $source owns the preview token",
+    async ({ surface, source }) => {
+      const params = {
+        config: { gateway: { controlUi: { github: { token: "resolved-preview-status" } } } },
+        sourceConfig: {
+          gateway: {
+            controlUi: {
+              github: { token: { source, provider: "default", id: "GH_TOKEN" } },
+            },
+          },
+        },
+        env: {
+          GH_TOKEN: "preview-status-only",
+          GITHUB_TOKEN: `native-status-${surface}-${source}`,
+        },
+      };
+      const identity =
+        surface === "system"
+          ? await resolveSystemGitHubIdentityStatus(params)
+          : (
+              await resolveGitHubToolIdentityStatus({
+                ...params,
+                agentId: "main",
+                selectedScope: "agent",
+              })
+            ).effective;
+
+      expect(identity).toMatchObject({
+        source: "system-detected",
+        credentialState: "available",
+        account: { login: "native-user" },
+      });
+    },
+  );
 
   it("removes ambient tokens from the actual managed publication child environment", async () => {
     const root = tempDirs.make("openclaw-github-publication-env-");

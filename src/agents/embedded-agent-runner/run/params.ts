@@ -83,6 +83,8 @@ type ReasoningStreamPayload = Pick<
 
 export type CurrentInboundPromptContext = {
   text: string;
+  /** Producer-owned fragments for model projection; text remains the legacy rendering. */
+  fragments?: import("../../internal-runtime-context.js").RuntimeContextFragment[];
   resumableText?: string;
   promptJoiner?: "\n\n" | "\n" | " ";
   /** Generated goal blocks owned by inbound-context assembly, never user text. */
@@ -249,6 +251,8 @@ export type RunEmbeddedAgentParams = {
   toolOverrides?: SessionToolOverrides;
   skillsSnapshot?: SkillSnapshot;
   prompt: string;
+  /** Context supplied by internal producers, separate from inbound prompt text. */
+  runtimeContextFragments?: import("../../internal-runtime-context.js").RuntimeContextFragment[];
   /** User-visible prompt body to submit and persist; runtime context travels separately. */
   transcriptPrompt?: string;
   /** Finalizes caller-owned guidance after the submitted tool surface is known. */

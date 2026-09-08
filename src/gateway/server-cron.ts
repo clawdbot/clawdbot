@@ -74,11 +74,9 @@ import {
   resolveHeartbeatForWake,
   resolveHeartbeatTimeoutOverrideSeconds,
 } from "../infra/heartbeat-runner-config.js";
-import { runHeartbeatOnce } from "../infra/heartbeat-runner-run.js";
 import {
   requestHeartbeat,
   requestHeartbeatAndWait,
-  requestHeartbeatRetry,
   type HeartbeatWakeRequest,
 } from "../infra/heartbeat-wake.js";
 import { mergeSsrFPolicies } from "../infra/net/ssrf.js";
@@ -103,7 +101,6 @@ import {
   resolveEventSessionKey,
   toAgentStoreSessionKey,
 } from "../routing/session-key.js";
-import { defaultRuntime } from "../runtime.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import { truncateUtf16WithEllipsis } from "../shared/text-truncate.js";
 import { bumpSkillsSnapshotVersion } from "../skills/runtime/refresh-state.js";
@@ -553,42 +550,22 @@ export function buildGatewayCronService(params: {
     return { runtimeConfig, agentId, sessionKey };
   };
 
-  const resolveCronHeartbeatWake = (
-    opts:
-      | {
-          source?: HeartbeatWakeRequest["source"];
-          intent?: HeartbeatWakeRequest["intent"];
-          reason?: string;
-          agentId?: string;
-          sessionKey?: string;
-          heartbeat?: HeartbeatWakeRequest["heartbeat"];
-          scheduledEveryMs?: number;
-          tasks?: HeartbeatWakeRequest["tasks"];
-        }
-      | undefined,
-    direct = false,
-  ) => {
-    const { runtimeConfig, agentId, sessionKey } = resolveCronTarget({
+  const resolveCronHeartbeatWake = (opts: HeartbeatWakeRequest): HeartbeatWakeRequest => {
+    const { agentId, sessionKey } = resolveCronTarget({
       ...opts,
-      preserveUntargeted: direct || opts?.source !== "manual",
+      preserveUntargeted: opts.source !== "manual",
     });
-    // Untargeted monitor ticks resolve their configured session in the runner;
-    // direct runs and caller-targeted wakes preserve their resolved session.
-    const useConfiguredSession = !direct && opts?.source === "interval" && !opts.sessionKey?.trim();
+    // Untargeted monitor ticks resolve their configured session in the runner.
+    const useConfiguredSession = opts.source === "interval" && !opts.sessionKey?.trim();
     return {
-      runtimeConfig,
-      wake: {
-        source: opts?.source ?? "cron",
-        intent: opts?.intent ?? "event",
-        reason: opts?.reason,
-        agentId,
-        sessionKey: useConfiguredSession ? undefined : sessionKey,
-        heartbeat: sanitizeCronHeartbeatOverride(opts?.heartbeat),
-        ...(opts?.scheduledEveryMs !== undefined
-          ? { scheduledEveryMs: opts.scheduledEveryMs }
-          : {}),
-        ...(opts?.tasks?.length ? { tasks: opts.tasks } : {}),
-      },
+      source: opts.source,
+      intent: opts.intent,
+      reason: opts.reason,
+      agentId,
+      sessionKey: useConfiguredSession ? undefined : sessionKey,
+      heartbeat: sanitizeCronHeartbeatOverride(opts.heartbeat),
+      ...(opts.scheduledEveryMs !== undefined ? { scheduledEveryMs: opts.scheduledEveryMs } : {}),
+      ...(opts.tasks?.length ? { tasks: opts.tasks } : {}),
     };
   };
 
@@ -856,16 +833,9 @@ export function buildGatewayCronService(params: {
             }),
         }
       : {}),
-    requestHeartbeat: (opts, retry) => {
-      const { wake } = resolveCronHeartbeatWake(opts);
-      if (retry) {
-        requestHeartbeatRetry(wake, retry);
-      } else {
-        requestHeartbeat(wake);
-      }
-    },
+    requestHeartbeat: (opts) => requestHeartbeat(resolveCronHeartbeatWake(opts)),
     requestHeartbeatAndWait: (opts, lifecycle) =>
-      requestHeartbeatAndWait(resolveCronHeartbeatWake(opts).wake, lifecycle),
+      requestHeartbeatAndWait(resolveCronHeartbeatWake(opts), lifecycle),
     resolveHeartbeatTimeoutMs: (opts) => {
       const { agentId, cfg: runtimeConfig } = resolveCronAgent(opts.agentId);
       const heartbeat = resolveHeartbeatForWake({
@@ -878,20 +848,6 @@ export function buildGatewayCronService(params: {
         resolveHeartbeatTimeoutOverrideSeconds(runtimeConfig, heartbeat),
       );
       return timeoutMs === 0 ? undefined : timeoutMs;
-    },
-    runHeartbeatOnce: async (opts) => {
-      const { runtimeConfig, wake } = resolveCronHeartbeatWake(opts, true);
-      const { getReplyFromConfig: _getReplyFromConfig, ...heartbeatDeps } = params.deps;
-      return await runHeartbeatOnce({
-        cfg: runtimeConfig,
-        ...wake,
-        // Preserve ownership across this adapter so the wake does not self-block on
-        // the cron run that is awaiting it.
-        owningCronJobMarker: opts?.owningCronJobMarker,
-        owningCronLaneTaskMarker: opts?.owningCronLaneTaskMarker,
-        // Gateway heartbeats acquire reply preparation from their published runtime boundary.
-        deps: { ...heartbeatDeps, runtime: defaultRuntime },
-      });
     },
     runIsolatedAgentJob: async ({
       job,

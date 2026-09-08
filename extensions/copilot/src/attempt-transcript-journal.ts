@@ -188,7 +188,7 @@ export function createAttemptTranscriptJournal(params: {
     options: { singleton?: boolean } = {},
   ): TranscriptMessage | undefined => {
     const message = structuredClone(write.message) as TranscriptMessage;
-    const originalReplayPayload = structuredClone(projectReplayPayload(message));
+    const originalReplayPayload = projectReplayPayload(message);
     const hooked = runAgentHarnessBeforeMessageWriteHook({
       message: structuredClone(message) as TranscriptMessage,
       agentId: target.agentId,

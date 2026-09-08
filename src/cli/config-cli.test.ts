@@ -113,7 +113,7 @@ vi.mock("../config/config.js", () => ({
     },
   ) => mockWriteConfigFile(cfg, options),
   replaceConfigFile: (params: {
-    nextConfig: OpenClawConfig;
+    sourceConfig: OpenClawConfig;
     writeOptions?: {
       auditOrigin?: "cli";
       unsetPaths?: string[][];
@@ -122,7 +122,7 @@ vi.mock("../config/config.js", () => ({
     };
   }) => {
     params.writeOptions?.assertConfigPathForWrite?.();
-    return mockWriteConfigFile(params.nextConfig, params.writeOptions);
+    return mockWriteConfigFile(params.sourceConfig, params.writeOptions);
   },
 }));
 

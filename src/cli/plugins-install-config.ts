@@ -7,7 +7,7 @@ import {
   supportsInstallConfigSingleTopLevelIncludeShape,
   type ConfigMutationPreflight,
   type ConfigSnapshotForInstallPersist,
-} from "../plugins/install-persistence.js";
+} from "../plugins/install-config-mutation.js";
 import { loadInstalledPluginIndexInstallRecords } from "../plugins/installed-plugin-index-records.js";
 import { tracePluginLifecyclePhaseAsync } from "../plugins/plugin-lifecycle-trace.js";
 import { resolveUserPath } from "../utils.js";

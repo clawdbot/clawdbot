@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { contextBudgetStatusFixture } from "../config/sessions/context-budget.test-support.js";
 import {
   buildGatewaySessionEventFields,
   buildGatewaySessionSnapshot,
@@ -245,4 +246,16 @@ it.each([
       },
     }),
   ).toMatchObject({ status, hasActiveRun: true, session: { status, hasActiveRun: true } });
+});
+
+it("publishes prompt budgets and their invalidation to subscribed sessions", () => {
+  const status = contextBudgetStatusFixture();
+  const row = { key: "agent:main:main", kind: "direct" as const, updatedAt: 2 };
+  expect(
+    buildGatewaySessionEventFields({ sessionRow: { ...row, contextBudgetStatus: status } }),
+  ).toHaveProperty("contextBudgetStatus", status);
+  expect(buildGatewaySessionEventFields({ sessionRow: row })).toHaveProperty(
+    "contextBudgetStatus",
+    null,
+  );
 });

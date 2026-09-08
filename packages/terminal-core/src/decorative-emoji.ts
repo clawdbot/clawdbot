@@ -1,4 +1,3 @@
-// Terminal Core module implements decorative emoji behavior.
 import { splitGraphemes } from "./ansi.js";
 
 // Decorative emoji helpers that degrade cleanly on terminals without reliable emoji support.

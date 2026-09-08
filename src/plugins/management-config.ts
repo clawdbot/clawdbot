@@ -9,7 +9,7 @@ import {
   resolveInstallConfigMutationPreflights,
   selectInstallMutationWriteOptions,
   type ConfigSnapshotForInstallPersist,
-} from "./install-persistence.js";
+} from "./install-config-mutation.js";
 import { ManagedPluginLifecycleError } from "./management-lifecycle-error.js";
 
 function assertValidConfigSnapshot(

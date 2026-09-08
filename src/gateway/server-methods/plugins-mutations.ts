@@ -19,8 +19,8 @@ import { ManagedPluginLifecycleError } from "../../plugins/management-lifecycle-
 import {
   installManagedPlugin,
   setManagedPluginEnabled,
-  uninstallManagedPlugin,
 } from "../../plugins/management-mutations.js";
+import { uninstallManagedPlugin } from "../../plugins/management-uninstall.js";
 import { buildGatewayReloadPlan } from "../config-reload-plan.js";
 import { resolveGatewayReloadSettings } from "../config-reload-settings.js";
 import type { GatewayRequestHandlers } from "./types.js";

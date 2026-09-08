@@ -69,6 +69,7 @@ describe("runEmbeddedAttempt cache-ttl tracking after compaction", () => {
       modelId: "claude-sonnet-4-20250514",
       prunedToolResults: [],
       ambiguousToolResultBaseKeys: [],
+      frozenToolResults: [],
     });
   });
 });

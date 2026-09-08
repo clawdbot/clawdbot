@@ -77,6 +77,9 @@ export const terminalPanelUploadStyles = css`
     display: flex;
     gap: 4px;
   }
+  .tp-upload-card__recovery {
+    margin-top: 8px;
+  }
   .tp-upload-card__action {
     margin: -3px 0;
     padding: 3px 5px;

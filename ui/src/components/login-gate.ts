@@ -1,336 +1,43 @@
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 // Control UI component renders the login gate.
-import { html, nothing } from "lit";
+import { html, nothing, type TemplateResult } from "lit";
 import { property } from "lit/decorators.js";
-import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import { normalizeBasePath } from "../app-route-paths.ts";
 import { canReloadControlUiDocument } from "../app/document-reload-guard.ts";
 import { controlUiPublicAssetPath } from "../app/public-assets.ts";
 import { t } from "../i18n/index.ts";
 import "../lib/toast.ts";
 import { registerLoginEnglish } from "../i18n/locales/en-login.ts";
-import {
-  redactLoginFailureError,
-  resolveAuthHintKind,
-  resolvePairingHint,
-  shouldShowInsecureContextHint,
-} from "../lib/connection-hints.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
+import { formatGatewayHost } from "../lib/gateway-host.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import { renderConnectCommand } from "./connect-command.ts";
 import { icons } from "./icons.ts";
+import {
+  type LoginFailureFeedback,
+  type LoginFailureFeedbackParams,
+  type LoginFailureStep,
+  type LoginFailureTone,
+  resolveLoginFailureFeedback,
+} from "./login-gate-feedback.ts";
 
 registerLoginEnglish();
-
-type LoginFailureKind =
-  | "auth-required"
-  | "auth-failed"
-  | "trusted-proxy"
-  | "auth-rate-limited"
-  | "profile-unavailable"
-  | "verified-user-required"
-  | "pairing-required"
-  | "insecure-context"
-  | "origin-not-allowed"
-  | "build-mismatch"
-  | "protocol-mismatch"
-  | "network";
-
-type LoginFailureStep = {
-  text: string;
-  commands: string[];
-};
-
-type LoginFailureStepDefinition =
-  | string
-  | {
-      key: string;
-      commands: string[];
-    };
-
-type LoginFailureFeedback = {
-  kind: LoginFailureKind;
-  title: string;
-  summary: string;
-  refreshAction?: { label: string };
-  steps: LoginFailureStep[];
-  docsHref: string;
-  rawError: string;
-};
 
 type LoginGateProps = LoginFailureFeedbackParams & {
   resourceBasePath: string;
   gatewayUrl: string;
-  token: string;
-  password: string;
-  showGatewayToken: boolean;
-  showGatewayPassword: boolean;
+  secret: string;
+  showGatewaySecret: boolean;
   onGatewayUrlChange: (value: string) => void;
-  onTokenChange: (value: string) => void;
-  onPasswordChange: (value: string) => void;
-  onToggleGatewayToken: () => void;
-  onToggleGatewayPassword: () => void;
+  onSecretChange: (value: string) => void;
+  onToggleGatewaySecret: () => void;
   onConnect: () => void;
 };
 
-type LoginFailureFeedbackParams = Parameters<typeof resolveAuthHintKind>[0];
-
-function buildFeedback(params: {
-  kind: LoginFailureKind;
-  rawError: string;
-  docsHref?: string;
-  titleKey: string;
-  summaryKey?: string;
-  stepKeys: LoginFailureStepDefinition[];
-  stepParams?: Record<string, string>;
-  refreshAction?: { label: string };
-}): LoginFailureFeedback {
-  const docsHref = params.docsHref ?? "https://docs.openclaw.ai/web/dashboard";
-  const rawError = redactLoginFailureError(params.rawError);
-  return {
-    kind: params.kind,
-    title: t(params.titleKey, params.stepParams),
-    summary: params.summaryKey ? t(params.summaryKey, params.stepParams) : rawError,
-    refreshAction: params.refreshAction,
-    steps: params.stepKeys.map((step) =>
-      typeof step === "string"
-        ? { text: t(step, params.stepParams), commands: [] }
-        : { text: t(step.key, params.stepParams), commands: step.commands },
-    ),
-    docsHref,
-    rawError,
-  };
-}
-
-function resolveLoginFailureFeedback(
-  params: LoginFailureFeedbackParams,
-): LoginFailureFeedback | null {
-  if (params.connected || !params.lastError) {
-    return null;
-  }
-
-  const rawError = params.lastError;
-  const lastErrorCode = params.lastErrorCode ?? null;
-  const lower = normalizeLowercaseStringOrEmpty(rawError);
-
-  if (lastErrorCode === ConnectErrorDetailCodes.AUTHENTICATED_PROFILE_UNAVAILABLE) {
-    return buildFeedback({
-      kind: "profile-unavailable",
-      rawError,
-      titleKey: "login.failure.profileUnavailable.title",
-      stepKeys: [
-        "login.failure.profileUnavailable.stepRetry",
-        "login.failure.profileUnavailable.stepAdmin",
-      ],
-      docsHref: "https://docs.openclaw.ai/concepts/user-model#gateway-profile-and-github-credit",
-    });
-  }
-
-  if (lastErrorCode === ConnectErrorDetailCodes.AUTH_VERIFIED_USER_REQUIRED) {
-    return buildFeedback({
-      kind: "verified-user-required",
-      rawError,
-      titleKey: "login.failure.verifiedUserRequired.title",
-      summaryKey: "login.failure.verifiedUserRequired.summary",
-      stepKeys: [
-        "login.failure.verifiedUserRequired.stepIdentity",
-        "login.failure.verifiedUserRequired.stepSharedSecret",
-      ],
-      docsHref: "https://docs.openclaw.ai/gateway/operator-scopes",
-    });
-  }
-
-  if (lastErrorCode === ConnectErrorDetailCodes.CONTROL_UI_BUILD_MISMATCH) {
-    return buildFeedback({
-      kind: "build-mismatch",
-      rawError,
-      titleKey: "chat.sidebar.serverUpdatedTitle",
-      summaryKey: "chat.sidebar.serverUpdatedRefresh",
-      refreshAction: { label: t("login.failure.protocol.refresh") },
-      stepKeys: [],
-      docsHref: "https://docs.openclaw.ai/web/control-ui",
-    });
-  }
-
-  const pairing = resolvePairingHint(false, rawError, lastErrorCode);
-  if (pairing) {
-    const approvalCommand = pairing.requestId
-      ? `openclaw devices approve ${pairing.requestId}`
-      : null;
-    return buildFeedback({
-      kind: "pairing-required",
-      rawError,
-      docsHref: "https://docs.openclaw.ai/web/control-ui#device-pairing-first-connection",
-      titleKey:
-        pairing.kind === "scope-upgrade-pending"
-          ? "login.failure.pairing.scopeTitle"
-          : pairing.kind === "role-upgrade-pending"
-            ? "login.failure.pairing.roleTitle"
-            : pairing.kind === "metadata-upgrade-pending"
-              ? "login.failure.pairing.metadataTitle"
-              : "login.failure.pairing.title",
-      summaryKey:
-        pairing.kind === "pairing-required"
-          ? "login.failure.pairing.summary"
-          : "login.failure.pairing.upgradeSummary",
-      stepKeys: [
-        {
-          key: "login.failure.pairing.stepDashboard",
-          commands: ["openclaw dashboard"],
-        },
-        {
-          key: "login.failure.pairing.stepList",
-          commands: ["openclaw devices list"],
-        },
-        approvalCommand
-          ? { key: "login.failure.pairing.stepApproveId", commands: [approvalCommand] }
-          : "login.failure.pairing.stepApprove",
-        "login.failure.pairing.stepReconnect",
-      ],
-      stepParams: { requestId: pairing.requestId ?? "" },
-    });
-  }
-
-  if (
-    lastErrorCode === ConnectErrorDetailCodes.AUTH_RATE_LIMITED ||
-    lower.includes("too many failed authentication attempts") ||
-    lower.includes("rate limit")
-  ) {
-    return buildFeedback({
-      kind: "auth-rate-limited",
-      rawError,
-      titleKey: "login.failure.rateLimited.title",
-      summaryKey: "login.failure.rateLimited.summary",
-      stepKeys: [
-        "login.failure.rateLimited.stepStop",
-        "login.failure.rateLimited.stepWait",
-        "login.failure.rateLimited.stepCheckClients",
-      ],
-    });
-  }
-
-  if (shouldShowInsecureContextHint(false, rawError, lastErrorCode)) {
-    return buildFeedback({
-      kind: "insecure-context",
-      rawError,
-      docsHref: "https://docs.openclaw.ai/web/control-ui#insecure-http",
-      titleKey: "login.failure.insecure.title",
-      summaryKey: "login.failure.insecure.summary",
-      stepKeys: ["login.failure.insecure.stepHttps", "login.failure.insecure.stepAvoidDisable"],
-    });
-  }
-
-  if (
-    lastErrorCode === ConnectErrorDetailCodes.CONTROL_UI_ORIGIN_NOT_ALLOWED ||
-    lower.includes("origin not allowed")
-  ) {
-    return buildFeedback({
-      kind: "origin-not-allowed",
-      rawError,
-      docsHref:
-        "https://docs.openclaw.ai/web/control-ui#debuggingtesting-dev-server--remote-gateway",
-      titleKey: "login.failure.origin.title",
-      summaryKey: "login.failure.origin.summary",
-      stepKeys: [
-        "login.failure.origin.stepAllowedOrigins",
-        "login.failure.origin.stepFullOrigin",
-        "login.failure.origin.stepRestart",
-      ],
-    });
-  }
-
-  if (lower.includes("protocol mismatch")) {
-    return buildFeedback({
-      kind: "protocol-mismatch",
-      rawError,
-      docsHref:
-        "https://docs.openclaw.ai/web/control-ui#debuggingtesting-dev-server--remote-gateway",
-      titleKey: "login.failure.protocol.title",
-      summaryKey: "login.failure.protocol.summary",
-      refreshAction: { label: t("login.failure.protocol.refresh") },
-      stepKeys: [
-        {
-          key: "login.failure.protocol.stepDashboard",
-          commands: ["openclaw dashboard"],
-        },
-        {
-          key: "login.failure.protocol.stepDevUi",
-          commands: ["pnpm ui:dev"],
-        },
-        "login.failure.protocol.stepRestart",
-      ],
-    });
-  }
-
-  const authHintKind = resolveAuthHintKind(params);
-  if (authHintKind === "trusted-proxy") {
-    return buildFeedback({
-      kind: "trusted-proxy",
-      rawError,
-      titleKey: "login.failure.trustedProxy.title",
-      summaryKey: "login.failure.trustedProxy.summary",
-      stepKeys: [
-        "login.failure.trustedProxy.stepSignIn",
-        "login.failure.trustedProxy.stepHeaders",
-        "login.failure.trustedProxy.stepNoToken",
-      ],
-      docsHref: "https://docs.openclaw.ai/gateway/trusted-proxy-auth",
-    });
-  }
-  if (authHintKind === "required") {
-    return buildFeedback({
-      kind: "auth-required",
-      rawError,
-      titleKey: "login.failure.authRequired.title",
-      summaryKey: "login.failure.authRequired.summary",
-      stepKeys: [
-        {
-          key: "login.failure.authRequired.stepPaste",
-          commands: ["openclaw gateway auth-token --show"],
-        },
-        {
-          key: "login.failure.authRequired.stepGenerate",
-          commands: ["openclaw doctor --generate-gateway-token"],
-        },
-        "login.failure.authRequired.stepConnect",
-      ],
-    });
-  }
-  if (authHintKind === "failed") {
-    return buildFeedback({
-      kind: "auth-failed",
-      rawError,
-      titleKey: "login.failure.authFailed.title",
-      summaryKey: "login.failure.authFailed.summary",
-      stepKeys: [
-        {
-          key: "login.failure.authFailed.stepDashboard",
-          commands: ["openclaw dashboard --no-open", "openclaw gateway auth-token --show"],
-        },
-        "login.failure.authFailed.stepReplace",
-        "login.failure.authFailed.stepMode",
-      ],
-    });
-  }
-
-  return buildFeedback({
-    kind: "network",
-    rawError,
-    titleKey: "login.failure.network.title",
-    summaryKey: "login.failure.network.summary",
-    stepKeys: [
-      {
-        key: "login.failure.network.stepGateway",
-        commands: ["openclaw status", "openclaw gateway run"],
-      },
-      "login.failure.network.stepUrl",
-      {
-        key: "login.failure.network.stepDashboard",
-        commands: ["openclaw dashboard --no-open"],
-      },
-    ],
-  });
-}
+const TONE_ICONS: Record<LoginFailureTone, TemplateResult> = {
+  pending: icons.shieldEllipsis,
+  warn: icons.clock,
+  danger: icons.shieldAlert,
+};
 
 function refreshLoginGatePage() {
   // A terminal reconnect failure can show this gate while startup still owns unsaved input.
@@ -366,32 +73,20 @@ function renderLoginFailureStep({ text, commands }: LoginFailureStep) {
   return segments;
 }
 
-function renderLoginFailure(feedback: LoginFailureFeedback) {
+function renderSteps(feedback: LoginFailureFeedback) {
+  if (feedback.steps.length === 0) {
+    return nothing;
+  }
   return html`
-    <div
-      class="callout danger login-gate__failure"
-      role="alert"
-      aria-live="polite"
-      data-kind=${feedback.kind}
-    >
-      <div class="login-gate__failure-title">${feedback.title}</div>
-      <div class="login-gate__failure-summary">${feedback.summary}</div>
-      ${
-        feedback.refreshAction
-          ? html`
-              <button
-                type="button"
-                class="btn primary login-gate__failure-refresh"
-                @click=${refreshLoginGatePage}
-              >
-                ${feedback.refreshAction.label}
-              </button>
-            `
-          : nothing
-      }
-      <ol class="login-gate__failure-steps">
-        ${feedback.steps.map((step) => html`<li>${renderLoginFailureStep(step)}</li>`)}
-      </ol>
+    <ol class="login-gate__failure-steps">
+      ${feedback.steps.map((step) => html`<li>${renderLoginFailureStep(step)}</li>`)}
+    </ol>
+  `;
+}
+
+function renderFailureFooter(feedback: LoginFailureFeedback) {
+  return html`
+    <footer class="login-gate__foot">
       <details class="login-gate__failure-detail">
         <summary>${t("login.failure.rawError")}</summary>
         <div class="login-gate__failure-raw mono">${feedback.rawError}</div>
@@ -403,138 +98,253 @@ function renderLoginFailure(feedback: LoginFailureFeedback) {
         rel=${buildExternalLinkRel()}
         >${t("common.learnMore")}</a
       >
+    </footer>
+  `;
+}
+
+function renderRefreshAction(feedback: LoginFailureFeedback) {
+  if (!feedback.refreshAction) {
+    return nothing;
+  }
+  return html`
+    <button
+      type="button"
+      class="btn primary login-gate__failure-refresh"
+      @click=${refreshLoginGatePage}
+    >
+      ${feedback.refreshAction.label}
+    </button>
+  `;
+}
+
+function renderSecretToggle(
+  revealed: boolean,
+  labels: [string, string, string],
+  onToggle: () => void,
+) {
+  const [show, hide, toggle] = labels;
+  return html`
+    <openclaw-tooltip .content=${revealed ? hide : show}>
+      <button
+        type="button"
+        class="settings-secret__toggle"
+        aria-label=${toggle}
+        aria-pressed=${revealed}
+        @click=${onToggle}
+      >
+        ${revealed ? icons.eye : icons.eyeOff}
+      </button>
+    </openclaw-tooltip>
+  `;
+}
+
+function renderForm(params: {
+  props: LoginGateProps;
+  feedback: LoginFailureFeedback | null;
+  withSubmit: boolean;
+}) {
+  const { props, feedback } = params;
+  const invalidField = feedback?.placement === "form" ? feedback.field : undefined;
+  const submitOnEnter = (e: KeyboardEvent) => {
+    if (e.key === "Enter") {
+      props.onConnect();
+    }
+  };
+
+  return html`
+    <div class="login-gate__form">
+      <div class="field">
+        <label for="login-gate-url">${t("login.gatewayUrl")}</label>
+        <input
+          id="login-gate-url"
+          inputmode="url"
+          autocapitalize="none"
+          autocorrect="off"
+          autocomplete="off"
+          spellcheck="false"
+          enterkeyhint="go"
+          aria-invalid=${invalidField === "url" ? "true" : nothing}
+          .value=${props.gatewayUrl}
+          @input=${(e: Event) => {
+            props.onGatewayUrlChange((e.target as HTMLInputElement).value);
+          }}
+          @keydown=${submitOnEnter}
+          placeholder="wss://gateway.example:443"
+        />
+      </div>
+      <div class="field">
+        <label for="login-gate-credential">${t("login.secret")}</label>
+        <span class="settings-secret">
+          <input
+            id="login-gate-credential"
+            type=${props.showGatewaySecret ? "text" : "password"}
+            autocomplete="off"
+            spellcheck="false"
+            enterkeyhint="go"
+            aria-invalid=${invalidField === "credential" ? "true" : nothing}
+            .value=${props.secret}
+            @input=${(e: Event) => {
+              props.onSecretChange((e.target as HTMLInputElement).value);
+            }}
+            @keydown=${submitOnEnter}
+            placeholder=${t("login.secretPlaceholder")}
+          />
+          ${renderSecretToggle(
+            props.showGatewaySecret,
+            [t("login.showSecret"), t("login.hideSecret"), t("login.toggleSecretVisibility")],
+            props.onToggleGatewaySecret,
+          )}
+        </span>
+      </div>
+      ${
+        params.withSubmit
+          ? html`
+              <button class="btn primary login-gate__connect" @click=${props.onConnect}>
+                ${t("common.connect")}
+              </button>
+            `
+          : nothing
+      }
     </div>
+  `;
+}
+
+function renderConnectionSummary(props: LoginGateProps) {
+  const host = formatGatewayHost(props.gatewayUrl);
+  const credential = props.secret.trim()
+    ? t("login.connection.secretEntered")
+    : t("login.connection.noSecret");
+  return html`
+    <summary>
+      <span class="login-gate__connection-target">
+        ${icons.server}
+        <span>${t("login.connection.target", { host })}</span>
+      </span>
+      <span class="login-gate__connection-cred">· ${credential}</span>
+      <span class="login-gate__connection-change">${t("login.connection.change")}</span>
+    </summary>
+  `;
+}
+
+function renderStatusBody(params: { props: LoginGateProps; feedback: LoginFailureFeedback }) {
+  const { props, feedback } = params;
+  const waitingForPairing = feedback.kind === "pairing-required" && props.reconnectPending;
+  return html`
+    <section
+      class="login-gate__body login-gate__failure"
+      role="status"
+      aria-live="polite"
+      data-kind=${feedback.kind}
+      data-tone=${feedback.tone}
+    >
+      <div class="login-gate__status-head">
+        <span class="login-gate__status-icon" aria-hidden="true">${TONE_ICONS[feedback.tone]}</span>
+        <div class="login-gate__status-text">
+          <h1 class="login-gate__failure-title">${feedback.title}</h1>
+          <p class="login-gate__failure-summary">${feedback.summary}</p>
+        </div>
+      </div>
+      ${
+        feedback.primaryCommand
+          ? html`
+              <div class="login-gate__hero">
+                <span class="login-gate__hero-label">${t("login.runOnHost")}</span>
+                ${renderConnectCommand(feedback.primaryCommand, "hero")}
+              </div>
+            `
+          : nothing
+      }
+      ${renderSteps(feedback)}
+      ${
+        waitingForPairing
+          ? html`<p class="login-gate__failure-summary">
+              <span class="session-run-spinner" aria-hidden="true"></span>
+              ${t("login.failure.pairing.waiting")}
+            </p>`
+          : nothing
+      }
+      <div class="login-gate__actions">
+        ${renderRefreshAction(feedback)}
+        <button class="btn login-gate__connect" @click=${props.onConnect}>
+          ${waitingForPairing ? t("login.failure.pairing.checkNow") : t("common.connect")}
+        </button>
+      </div>
+      <details class="login-gate__connection">
+        ${renderConnectionSummary(props)} ${renderForm({ ...params, withSubmit: false })}
+      </details>
+      ${renderFailureFooter(feedback)}
+    </section>
+  `;
+}
+
+function renderFormBody(params: { props: LoginGateProps; feedback: LoginFailureFeedback | null }) {
+  const { feedback } = params;
+  return html`
+    <section
+      class=${feedback ? "login-gate__body login-gate__failure" : "login-gate__body"}
+      role=${feedback ? "status" : nothing}
+      aria-live=${feedback ? "polite" : nothing}
+      data-kind=${feedback?.kind ?? nothing}
+      data-tone=${feedback?.tone ?? nothing}
+    >
+      <div class="login-gate__status-text">
+        <h1 class=${feedback ? "login-gate__failure-title" : "login-gate__heading"}>
+          ${feedback?.title ?? t("login.heading")}
+        </h1>
+        <p class=${feedback ? "login-gate__failure-summary" : "login-gate__lede"}>
+          ${feedback?.summary ?? t("login.lede")}
+        </p>
+      </div>
+      ${renderForm({ ...params, withSubmit: true })}
+      ${
+        feedback
+          ? html`${renderSteps(feedback)} ${renderFailureFooter(feedback)}`
+          : html`
+              <details class="login-gate__help">
+                <summary class="login-gate__help-title">${t("connection.help.title")}</summary>
+                <ol class="login-gate__steps">
+                  <li>
+                    ${t("connection.help.step1")}${renderConnectCommand("openclaw gateway run")}
+                  </li>
+                  <li>
+                    ${t("connection.help.step2")} ${renderConnectCommand("openclaw dashboard")}
+                  </li>
+                  <li>${t("connection.help.step3")}</li>
+                </ol>
+                <div class="login-gate__docs">
+                  <a
+                    class="session-link"
+                    href="https://docs.openclaw.ai/web/dashboard"
+                    target=${EXTERNAL_LINK_TARGET}
+                    rel=${buildExternalLinkRel()}
+                    >${t("connection.help.docsLink")}</a
+                  >
+                </div>
+              </details>
+            `
+      }
+    </section>
   `;
 }
 
 function renderLoginGate(props: LoginGateProps) {
   const resourceBasePath = normalizeBasePath(props.resourceBasePath);
   const faviconSrc = controlUiPublicAssetPath("favicon.svg", resourceBasePath);
-  const failure = resolveLoginFailureFeedback(props);
+  const feedback = resolveLoginFailureFeedback(props);
+  const body =
+    feedback?.placement === "status"
+      ? renderStatusBody({ props, feedback })
+      : renderFormBody({ props, feedback });
 
   return html`
     <div class="login-gate">
       <openclaw-toast-host></openclaw-toast-host>
-      <div class="login-gate__card">
-        <div class="login-gate__header">
-          <img class="login-gate__logo" src=${faviconSrc} alt="OpenClaw" />
-          <div class="login-gate__title">OpenClaw</div>
-          <div class="login-gate__sub">${t("login.subtitle")}</div>
-        </div>
-        <div class="login-gate__form">
-          <label class="field">
-            <span>${t("connection.access.wsUrl")}</span>
-            <input
-              inputmode="url"
-              autocapitalize="none"
-              autocorrect="off"
-              autocomplete="off"
-              spellcheck="false"
-              enterkeyhint="go"
-              .value=${props.gatewayUrl}
-              @input=${(e: Event) => {
-                props.onGatewayUrlChange((e.target as HTMLInputElement).value);
-              }}
-              @keydown=${(e: KeyboardEvent) => {
-                if (e.key === "Enter") {
-                  props.onConnect();
-                }
-              }}
-              placeholder="ws://127.0.0.1:18789"
-            />
-          </label>
-          <label class="field">
-            <span>${t("connection.access.token")}</span>
-            <span class="settings-secret">
-              <input
-                type=${props.showGatewayToken ? "text" : "password"}
-                autocomplete="off"
-                spellcheck="false"
-                enterkeyhint="go"
-                .value=${props.token}
-                @input=${(e: Event) => {
-                  props.onTokenChange((e.target as HTMLInputElement).value);
-                }}
-                placeholder="OPENCLAW_GATEWAY_TOKEN (${t("login.passwordPlaceholder")})"
-                @keydown=${(e: KeyboardEvent) => {
-                  if (e.key === "Enter") {
-                    props.onConnect();
-                  }
-                }}
-              />
-              <openclaw-tooltip
-                .content=${props.showGatewayToken ? t("login.hideToken") : t("login.showToken")}
-              >
-                <button
-                  type="button"
-                  class="settings-secret__toggle"
-                  aria-label=${t("login.toggleTokenVisibility")}
-                  aria-pressed=${props.showGatewayToken}
-                  @click=${props.onToggleGatewayToken}
-                >
-                  ${props.showGatewayToken ? icons.eye : icons.eyeOff}
-                </button>
-              </openclaw-tooltip>
-            </span>
-          </label>
-          <label class="field">
-            <span>${t("connection.access.password")}</span>
-            <span class="settings-secret">
-              <input
-                type=${props.showGatewayPassword ? "text" : "password"}
-                autocomplete="off"
-                spellcheck="false"
-                enterkeyhint="go"
-                .value=${props.password}
-                @input=${(e: Event) => {
-                  props.onPasswordChange((e.target as HTMLInputElement).value);
-                }}
-                placeholder="${t("login.passwordPlaceholder")}"
-                @keydown=${(e: KeyboardEvent) => {
-                  if (e.key === "Enter") {
-                    props.onConnect();
-                  }
-                }}
-              />
-              <openclaw-tooltip
-                .content=${
-                  props.showGatewayPassword ? t("login.hidePassword") : t("login.showPassword")
-                }
-              >
-                <button
-                  type="button"
-                  class="settings-secret__toggle"
-                  aria-label=${t("login.togglePasswordVisibility")}
-                  aria-pressed=${props.showGatewayPassword}
-                  @click=${props.onToggleGatewayPassword}
-                >
-                  ${props.showGatewayPassword ? icons.eye : icons.eyeOff}
-                </button>
-              </openclaw-tooltip>
-            </span>
-          </label>
-          <button class="btn primary login-gate__connect" @click=${props.onConnect}>
-            ${t("common.connect")}
-          </button>
-        </div>
-        ${failure ? renderLoginFailure(failure) : ""}
-        <details class="login-gate__help">
-          <summary class="login-gate__help-title">${t("connection.help.title")}</summary>
-          <ol class="login-gate__steps">
-            <li>${t("connection.help.step1")}${renderConnectCommand("openclaw gateway run")}</li>
-            <li>${t("connection.help.step2")} ${renderConnectCommand("openclaw dashboard")}</li>
-            <li>${t("connection.help.step3")}</li>
-          </ol>
-          <div class="login-gate__docs">
-            <a
-              class="session-link"
-              href="https://docs.openclaw.ai/web/dashboard"
-              target="_blank"
-              rel="noreferrer"
-              >${t("connection.help.docsLink")}</a
-            >
-          </div>
-        </details>
+      <div class="login-gate__card" data-mode=${feedback?.placement ?? "form"}>
+        <header class="login-gate__brand">
+          <img class="login-gate__logo" src=${faviconSrc} alt="" />
+          <span class="login-gate__brand-name">OpenClaw</span>
+        </header>
+        ${body}
       </div>
     </div>
   `;

@@ -239,7 +239,7 @@ function createSessionsSpawnToolSchema(params: {
           collect: Type.Optional(
             Type.Boolean({
               description:
-                "Swarm collector child for parallel fan-out; no completion notification.",
+                "Swarm collector child for large parallel fan-out, not one or a few children; no completion notification.",
             }),
           ),
           outputSchema: Type.Optional(
@@ -676,6 +676,7 @@ export function createSessionsSpawnTool(
               inheritedToolAllowlist: opts?.inheritedToolAllowlist,
               inheritedToolDenylist: opts?.inheritedToolDenylist,
               requesterRunId: opts?.requesterRunId,
+              sandboxed: opts?.sandboxed,
               assertActive,
               onSpawnEffectsStart,
             },

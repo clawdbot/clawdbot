@@ -10,6 +10,7 @@ import {
   readErrorName,
   rawDataToString,
   toErrorObject,
+  truncateUtf16Safe,
 } from "openclaw/plugin-sdk/realtime-voice-provider";
 import type { RawData } from "ws";
 import type { OpenAIRealtimeHost } from "./realtime-host.js";
@@ -50,13 +51,6 @@ type OpenAIQuicksilverDelegationControllerOptions = {
   runAgentConsult: RealtimeVoiceAgentConsultRunner;
   signal: AbortSignal;
 };
-
-function shortFailureReason(
-  error: unknown,
-  formatErrorMessage: OpenAIRealtimeHost["formatErrorMessage"],
-): string {
-  return formatErrorMessage(error).replaceAll(/\s+/g, " ").trim().slice(0, 180) || "unknown error";
-}
 
 function projectWireEventType(event: OpenAIQuicksilverInboundEvent): string | undefined {
   switch (event.kind) {
@@ -324,8 +318,9 @@ export class OpenAIQuicksilverDelegationController {
       ) {
         return;
       }
+      const reason = this.formatErrorMessage(error).replaceAll(/\s+/g, " ").trim();
       this.options.logger.warn(
-        `OpenAI GPT-Live delegation consult failed: ${shortFailureReason(error, this.formatErrorMessage)}`,
+        `OpenAI GPT-Live delegation consult failed: ${truncateUtf16Safe(reason, 180) || "unknown error"}`,
       );
       text = CONSULT_FAILURE_TEXT;
     }

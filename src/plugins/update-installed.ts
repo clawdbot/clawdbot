@@ -15,7 +15,10 @@ import {
 } from "./capability-consent.js";
 import { buildClawHubPluginInstallRecordFields } from "./clawhub-install-records.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
-import { NpmChannelResolutionError } from "./install-channel-specs.js";
+import {
+  NpmChannelResolutionError,
+  resolveNpmInstallSpecsForUpdateChannel,
+} from "./install-channel-specs.js";
 import type { InstallSafetyOverrides } from "./install-security-scan.types.js";
 import { copyPluginInstallTransactionRequest } from "./install-transaction.js";
 import { PLUGIN_INSTALL_ERROR_CODE, resolvePluginInstallDir } from "./install.js";
@@ -66,8 +69,7 @@ import {
   isPluginInstallRecordUpdateSource,
   isTrustedSourceLinkedOfficialNpmUpdate,
   resolveClawHubUpdateSpecs,
-  resolveNpmSpecPackageName,
-  resolveNpmUpdateSpecs,
+  resolveNpmUpdateTarget,
   resolveTrustedOfficialPrereleaseFallbackMetadataForUpdate,
   shouldBypassTrustedOfficialUnchangedNpmCheck,
   shouldSkipUnchangedNpmInstall,
@@ -98,6 +100,7 @@ export async function updateNpmInstalledPlugins(params: {
   updateChannel?: UpdateChannel;
   officialPluginUpdateChannel?: UpdateChannel;
   coreVersion?: string;
+  versionBoundPluginIds?: ReadonlySet<string>;
   dangerouslyForceUnsafeInstall?: boolean;
   onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
   specOverrides?: Record<string, string>;
@@ -180,11 +183,6 @@ export async function updateNpmInstalledPlugins(params: {
       continue;
     }
     const trustedOfficialNpmSpec = trustedOfficialNpmInstall?.npmSpec;
-    const npmSpecOverride =
-      params.specOverrides?.[pluginId] ??
-      (replacementPluginId || trustedOfficialNpmInstall?.replaceNpmPackage
-        ? trustedOfficialNpmSpec
-        : undefined);
     const trustedOfficialClawHubInstall = resolveOfficialClawHubInstall({ pluginId, record });
     const recordClawHubPackage = resolveRecordedClawHubPackage(record);
     const officialNpmSpec = params.syncOfficialPluginInstalls ? trustedOfficialNpmSpec : undefined;
@@ -197,6 +195,16 @@ export async function updateNpmInstalledPlugins(params: {
       (trustedOfficialNpmSpec || trustedOfficialClawHubInstall
         ? params.officialPluginUpdateChannel
         : undefined);
+    const { specOverride: npmSpecOverride, target: npmTarget } = resolveNpmUpdateTarget({
+      record,
+      trustedOfficialInstall: trustedOfficialNpmInstall,
+      specOverride: params.specOverrides?.[pluginId],
+      syncOfficialPluginInstalls: params.syncOfficialPluginInstalls,
+      updateChannel,
+      coreVersion: params.coreVersion,
+      versionBoundToCore: params.versionBoundPluginIds?.has(pluginId),
+      timeoutMs: params.timeoutMs,
+    });
     if (normalizedPluginConfig) {
       const enableState = resolveEffectiveEnableState({
         id: pluginId,
@@ -218,19 +226,11 @@ export async function updateNpmInstalledPlugins(params: {
       continue;
     }
 
-    let npmSpecs: Awaited<ReturnType<typeof resolveNpmUpdateSpecs>> | undefined;
+    let npmSpecs: Awaited<ReturnType<typeof resolveNpmInstallSpecsForUpdateChannel>> | undefined;
     try {
       npmSpecs =
-        record.source === "npm"
-          ? await resolveNpmUpdateSpecs({
-              record,
-              specOverride: npmSpecOverride,
-              officialSpecOverride: officialNpmSpec,
-              updateChannel,
-              officialPackageName: resolveNpmSpecPackageName(trustedOfficialNpmSpec),
-              coreVersion: params.coreVersion,
-              timeoutMs: params.timeoutMs,
-            })
+        record.source === "npm" && npmTarget
+          ? await resolveNpmInstallSpecsForUpdateChannel(npmTarget)
           : undefined;
     } catch (error) {
       if (!(error instanceof NpmChannelResolutionError)) {
@@ -248,6 +248,7 @@ export async function updateNpmInstalledPlugins(params: {
             updateChannel,
             officialPackageName: trustedOfficialClawHubInstall ? recordClawHubPackage : undefined,
             coreVersion: params.coreVersion,
+            versionBoundToCore: params.versionBoundPluginIds?.has(pluginId),
           })
         : undefined;
     const effectiveSpec =

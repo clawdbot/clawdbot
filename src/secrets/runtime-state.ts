@@ -309,6 +309,7 @@ function mergeLiveAuthStoreBookkeeping(
       store: {
         ...entry.store,
         order: bookkeeping.order,
+        runtimeLocalOrderProviderIds: bookkeeping.runtimeLocalOrderProviderIds,
         lastGood: bookkeeping.lastGood,
         usageStats: bookkeeping.usageStats,
         runtimeInheritsMainState: bookkeeping.runtimeInheritsMainState,

@@ -120,6 +120,10 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
     const chat = renderChat({
       ...chatProps,
       presented: this.active && this.presented,
+      transcriptVisible:
+        this.presented &&
+        this.visuallyPresented &&
+        isSidebarSlotVisible(sidebarLayout, "conversation"),
       browserTabPreviewsActive: this.active && this.presented,
       historyState: catalog ? undefined : state,
       header: nothing,

@@ -93,7 +93,9 @@ async function createLingeringPluginFixture(): Promise<{
   return { configPath, markerPath, stateDir };
 }
 
-async function createLingeringPreloadFixture(): Promise<{
+async function createRelayPreloadFixture(
+  mode: "linger" | "missing-drain-callbacks" = "linger",
+): Promise<{
   markerPath: string;
   preloadPath: string;
   stateDir: string;
@@ -108,7 +110,14 @@ async function createLingeringPreloadFixture(): Promise<{
     [
       'import fs from "node:fs";',
       'fs.writeFileSync(process.env.LINGER_MARKER, "loaded\\n");',
-      "setInterval(() => {}, 60_000);",
+      ...(mode === "linger"
+        ? ["setInterval(() => {}, 60_000);"]
+        : [
+            "for (const stream of [process.stdout, process.stderr]) {",
+            "  const write = stream.write.bind(stream);",
+            '  stream.write = (chunk, ...args) => chunk === "" ? true : write(chunk, ...args);',
+            "}",
+          ]),
       "",
     ].join("\n"),
   );
@@ -173,20 +182,25 @@ function isProcessAlive(pid: number): boolean {
 async function runHooksCli(params: {
   args: string[];
   completion: "exit" | "output-then-exit";
+  entryPath?: string;
   label: string;
   env?: NodeJS.ProcessEnv;
   stdin?: string;
 }) {
-  const child = spawn(process.execPath, ["--import", "tsx", "src/entry.ts", ...params.args], {
-    cwd: path.resolve("."),
-    env: {
-      ...process.env,
-      NODE_ENV: undefined,
-      VITEST: undefined,
-      ...params.env,
+  const child = spawn(
+    process.execPath,
+    ["--import", "tsx", params.entryPath ?? "src/entry.ts", ...params.args],
+    {
+      cwd: path.resolve("."),
+      env: {
+        ...process.env,
+        NODE_ENV: undefined,
+        VITEST: undefined,
+        ...params.env,
+      },
+      stdio: ["pipe", "pipe", "pipe"],
     },
-    stdio: ["pipe", "pipe", "pipe"],
-  });
+  );
   activeChildren.add(child);
   let stdout = "";
   let stderr = "";
@@ -248,6 +262,62 @@ async function runHooksCli(params: {
 }
 
 describe("hooks CLI process lifecycle", () => {
+  it.each([
+    {
+      name: "invalid JSON",
+      preloadMode: "linger" as const,
+      args: [
+        "hooks",
+        "relay",
+        "--provider",
+        "codex",
+        "--relay-id",
+        "ordinary-input",
+        "--event",
+        "post_tool_use",
+      ],
+      stdin: "{",
+      diagnostic: "failed to read native hook input",
+    },
+    {
+      name: "missing required option",
+      preloadMode: "linger" as const,
+      args: ["hooks", "relay"],
+      stdin: "",
+      diagnostic: "native hook relay failed: Missing required option --provider",
+    },
+    {
+      name: "missing drain callbacks with no lingering handle",
+      preloadMode: "missing-drain-callbacks" as const,
+      args: ["hooks", "relay"],
+      stdin: "",
+      diagnostic: "native hook relay failed: Missing required option --provider",
+    },
+  ])(
+    "preserves a dedicated relay $name failure when exiting",
+    async ({ args, stdin, diagnostic, preloadMode }) => {
+      const fixture = await createRelayPreloadFixture(preloadMode);
+      const result = await runHooksCli({
+        entryPath: "src/cli/native-hook-relay-entry.ts",
+        args,
+        stdin,
+        completion: "exit",
+        label: "dedicated relay error",
+        env: {
+          LINGER_MARKER: fixture.markerPath,
+          NODE_OPTIONS: `--import=${pathToFileURL(fixture.preloadPath).href}`,
+          OPENCLAW_STATE_DIR: fixture.stateDir,
+        },
+      });
+      expect(result, result.stderr).toMatchObject({ code: 1, signal: null });
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toContain(diagnostic);
+      expect(result.stderr.endsWith("\n")).toBe(true);
+      await expect(fs.readFile(fixture.markerPath, "utf8")).resolves.toBe("loaded\n");
+    },
+    90_000,
+  );
+
   it.runIf(process.platform !== "win32")(
     "keeps the relay on the timeout-owned shell PID",
     async () => {
@@ -317,52 +387,57 @@ describe("hooks CLI process lifecycle", () => {
     60_000,
   );
 
-  it("uses the explicit relay database and exits despite a lingering handle", async () => {
-    const relay = registerNativeHookRelay({
-      provider: "codex",
-      relayId: "process-explicit-state-db",
-      sessionId: "session-1",
-      runId: "run-1",
-      allowedEvents: ["post_tool_use"],
-    });
-    await expect
-      .poll(() => nativeHookRelayTesting.getNativeHookRelayBridgeRecordForTests(relay.relayId))
-      .toBeDefined();
+  it.each(["src/entry.ts", "src/cli/native-hook-relay-entry.ts"])(
+    "%s uses the explicit relay database and exits despite a lingering handle",
+    async (entryPath) => {
+      const relay = registerNativeHookRelay({
+        provider: "codex",
+        relayId: "process-explicit-state-db",
+        sessionId: "session-1",
+        runId: "run-1",
+        allowedEvents: ["post_tool_use"],
+      });
+      await expect
+        .poll(() => nativeHookRelayTesting.getNativeHookRelayBridgeRecordForTests(relay.relayId))
+        .toBeDefined();
 
-    const fixture = await createLingeringPreloadFixture();
-    const result = await runHooksCli({
-      args: [
-        "hooks",
-        "relay",
-        "--provider",
-        "codex",
-        "--relay-id",
-        relay.relayId,
-        "--state-db",
-        resolveOpenClawStateSqlitePath(),
-        "--generation",
-        relay.generation,
-        "--event",
-        "post_tool_use",
-        "--timeout",
-        "5000",
-      ],
-      completion: "exit",
-      label: "hooks relay explicit state database",
-      env: {
-        LINGER_MARKER: fixture.markerPath,
-        NODE_OPTIONS: `--import=${pathToFileURL(fixture.preloadPath).href}`,
-        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-        OPENCLAW_STATE_DIR: fixture.stateDir,
-      },
-      stdin: JSON.stringify({ hook_event_name: "PostToolUse" }),
-    });
+      const fixture = await createRelayPreloadFixture();
+      const result = await runHooksCli({
+        entryPath,
+        args: [
+          "hooks",
+          "relay",
+          "--provider",
+          "codex",
+          "--relay-id",
+          relay.relayId,
+          "--state-db",
+          resolveOpenClawStateSqlitePath(),
+          "--generation",
+          relay.generation,
+          "--event",
+          "post_tool_use",
+          "--timeout",
+          "5000",
+        ],
+        completion: "exit",
+        label: "hooks relay explicit state database",
+        env: {
+          LINGER_MARKER: fixture.markerPath,
+          NODE_OPTIONS: `--import=${pathToFileURL(fixture.preloadPath).href}`,
+          OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+          OPENCLAW_STATE_DIR: fixture.stateDir,
+        },
+        stdin: JSON.stringify({ hook_event_name: "PostToolUse" }),
+      });
 
-    expect(result, result.stderr).toMatchObject({ code: 0, signal: null });
-    expect(result.stderr).toBe("");
-    expect(result.stdout).toBe("");
-    await expect(fs.readFile(fixture.markerPath, "utf8")).resolves.toBe("loaded\n");
-  }, 90_000);
+      expect(result, result.stderr).toMatchObject({ code: 0, signal: null });
+      expect(result.stderr).toBe("");
+      expect(result.stdout).toBe("");
+      await expect(fs.readFile(fixture.markerPath, "utf8")).resolves.toBe("loaded\n");
+    },
+    90_000,
+  );
 
   it("exits after hooks list output when plugin registration leaves a ref'd handle", async () => {
     const fixture = await createLingeringPluginFixture();

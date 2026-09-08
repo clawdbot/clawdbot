@@ -315,6 +315,10 @@ export class SessionOrganizerController {
     const position = this.sidebarZoneDropTarget?.position;
     const sessionKey = readSessionDragData(event.dataTransfer);
     const session = sessionKey ? this.host.findSidebarSessionByKey(sessionKey) : undefined;
+    if (session && !session.pinnable) {
+      this.finishSidebarEntryDrag();
+      return;
+    }
     if (session && !session.pinned) {
       // Persist the dropped slot only once the pin lands, and recompute
       // against the then-current order: a failed patch must not leave an
@@ -689,7 +693,7 @@ export class SessionOrganizerController {
           : "before";
       void this.reorderSidebarSection(sourceSectionId, sectionId, position);
     } else if (session && sectionId === "pinned") {
-      if (!session.pinned) {
+      if (session.pinnable && !session.pinned) {
         void this.patchSession(session, { pinned: true });
       }
     } else if (session) {

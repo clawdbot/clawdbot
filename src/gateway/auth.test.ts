@@ -97,6 +97,67 @@ describe("invalid Gateway tokens", () => {
   );
 });
 
+describe.each([
+  ["HTTP", authorizeHttpGatewayConnect],
+  ["Control UI HTTP read", authorizeControlUiReadHttpGatewayConnect],
+  ["WebSocket", authorizeWsControlUiGatewayConnect],
+] as const)("%s shared-secret fields", (_surface, authorize) => {
+  it.each(["token", "password"] as const)(
+    "%s mode accepts either field but only its configured secret",
+    async (mode) => {
+      const auth = {
+        mode,
+        token: "token-secret",
+        password: "password-secret",
+        allowTailscale: false,
+      };
+      const otherField = mode === "token" ? "password" : "token";
+      const limiter = createLimiterSpy();
+      for (const field of [mode, otherField]) {
+        await expect(
+          authorize({ auth, connectAuth: { [field]: auth[mode] }, rateLimiter: limiter }),
+        ).resolves.toEqual({ ok: true, method: mode });
+        await expect(
+          authorize({ auth, connectAuth: { [field]: auth[otherField] }, rateLimiter: limiter }),
+        ).resolves.toEqual({ ok: false, reason: `${mode}_mismatch` });
+      }
+      expect(limiter.reset).toHaveBeenCalledTimes(2);
+      expect(limiter.recordFailure).toHaveBeenCalledTimes(2);
+      await expect(authorize({ auth, connectAuth: {} })).resolves.toEqual({
+        ok: false,
+        reason: `${mode}_missing`,
+      });
+    },
+  );
+
+  it.each(["token", "password"] as const)(
+    "%s mode gives its matching field precedence and preserves deferred failures",
+    async (mode) => {
+      const auth = {
+        mode,
+        token: "token-secret",
+        password: "password-secret",
+        allowTailscale: false,
+      };
+      const otherField = mode === "token" ? "password" : "token";
+      const limiter = createLimiterSpy();
+      await expect(
+        authorize({
+          auth,
+          connectAuth: { [mode]: "wrong", [otherField]: auth[mode] },
+          rateLimiter: limiter,
+          deferRateLimitFailure: true,
+        }),
+      ).resolves.toEqual({ ok: false, reason: `${mode}_mismatch` });
+      expect(limiter.recordFailure).not.toHaveBeenCalled();
+      expect(limiter.reset).not.toHaveBeenCalled();
+      await expect(
+        authorize({ auth, connectAuth: { [mode]: auth[mode], [otherField]: "wrong" } }),
+      ).resolves.toEqual({ ok: true, method: mode });
+    },
+  );
+});
+
 describe("gateway auth", () => {
   async function expectTokenMismatchWithLimiter(params: {
     reqHeaders: Record<string, string>;
@@ -425,9 +486,9 @@ describe("gateway auth", () => {
     expect(mismatch.reason).toBe("password_mismatch");
   });
 
-  it("reports missing password config reason", async () => {
+  it.each([undefined, "secret"])("reports missing password config with token %j", async (token) => {
     const res = await authorizeHttpGatewayConnect({
-      auth: { mode: "password", allowTailscale: false },
+      auth: { mode: "password", token, allowTailscale: false },
       connectAuth: { password: "secret" },
     });
     expect(res.ok).toBe(false);
@@ -1129,31 +1190,37 @@ describe("gateway auth", () => {
     expect(limiter.recordFailure).not.toHaveBeenCalled();
   });
 
-  it("still records rate-limit failure for wrong token (brute-force attempt)", async () => {
-    const limiter = createLimiterSpy();
-    const res = await authorizeHttpGatewayConnect({
-      auth: { mode: "token", token: "secret", allowTailscale: false },
-      connectAuth: { token: "wrong" },
-      rateLimiter: limiter,
-    });
+  it.each(["token", "password"])(
+    "records wrong %s in token mode against the rate limit",
+    async (field) => {
+      const limiter = createLimiterSpy();
+      const res = await authorizeHttpGatewayConnect({
+        auth: { mode: "token", token: "secret", allowTailscale: false },
+        connectAuth: { [field]: "wrong" },
+        rateLimiter: limiter,
+      });
 
-    expect(res.ok).toBe(false);
-    expect(res.reason).toBe("token_mismatch");
-    expect(limiter.recordFailure).toHaveBeenCalled();
-  });
+      expect(res.ok).toBe(false);
+      expect(res.reason).toBe("token_mismatch");
+      expect(limiter.recordFailure).toHaveBeenCalled();
+    },
+  );
 
-  it("still records rate-limit failure for wrong password (brute-force attempt)", async () => {
-    const limiter = createLimiterSpy();
-    const res = await authorizeHttpGatewayConnect({
-      auth: { mode: "password", password: "secret", allowTailscale: false },
-      connectAuth: { password: "wrong" },
-      rateLimiter: limiter,
-    });
+  it.each(["token", "password"])(
+    "records wrong %s in password mode against the rate limit",
+    async (field) => {
+      const limiter = createLimiterSpy();
+      const res = await authorizeHttpGatewayConnect({
+        auth: { mode: "password", password: "secret", allowTailscale: false },
+        connectAuth: { [field]: "wrong" },
+        rateLimiter: limiter,
+      });
 
-    expect(res.ok).toBe(false);
-    expect(res.reason).toBe("password_mismatch");
-    expect(limiter.recordFailure).toHaveBeenCalled();
-  });
+      expect(res.ok).toBe(false);
+      expect(res.reason).toBe("password_mismatch");
+      expect(limiter.recordFailure).toHaveBeenCalled();
+    },
+  );
   it("throws specific error when password is a provider reference object", () => {
     const auth = resolveGatewayAuth({
       authConfig: {

@@ -44,6 +44,9 @@ vi.mock("../config/config.js", () => ({
 
 vi.mock("./install-persistence.js", () => ({
   persistPluginInstall: (...args: unknown[]) => mocks.persistInstall(...args),
+}));
+
+vi.mock("./install-config-mutation.js", () => ({
   resolveInstallConfigMutationPreflights: (...args: unknown[]) => mocks.preflight(...args),
   selectInstallMutationWriteOptions: (writeOptions: unknown) =>
     mocks.selectWriteOptions(writeOptions),
@@ -107,8 +110,8 @@ vi.mock("./recommended-tool-installs.js", () => ({
 const { clearManagedPluginOfficialCatalogCache } = await import("./management-catalog.js");
 const { listManagedPlugins, resolveManagedPluginIconSource, resolveManagedSetupCatalogIconUrl } =
   await import("./management-service.js");
-const { setManagedPluginEnabled, uninstallManagedPlugin } =
-  await import("./management-mutations.js");
+const { setManagedPluginEnabled } = await import("./management-mutations.js");
+const { uninstallManagedPlugin } = await import("./management-uninstall.js");
 
 function mockHostedOfficialCatalog(entries: unknown[]) {
   mocks.officialCatalog.mockResolvedValue({
@@ -535,7 +538,7 @@ describe("plugin management service", () => {
 
     expect(mocks.replaceConfig).toHaveBeenCalledWith(
       expect.objectContaining({
-        nextConfig: {
+        sourceConfig: {
           plugins: {
             allow: ["memory-core", "workboard"],
             entries: { workboard: { enabled: true } },
@@ -581,7 +584,7 @@ describe("plugin management service", () => {
 
     expect(mocks.replaceConfig).toHaveBeenCalledWith(
       expect.objectContaining({
-        nextConfig: {
+        sourceConfig: {
           plugins: {
             allow: [],
             entries: { workboard: { enabled: true } },

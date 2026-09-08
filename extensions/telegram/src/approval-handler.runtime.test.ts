@@ -412,53 +412,78 @@ describe("telegramApprovalNativeRuntime", () => {
     });
   });
 
-  it("renders exact system-agent terminal receipts", async () => {
-    const request = {
-      approvalKind: "system-agent" as const,
-      id: "system-agent:change-3",
-      request: {
-        title: "OpenClaw change",
-        description: "set config gateway.port to 19001",
-        command: "set config gateway.port to 19001",
-        proposalHash: "c".repeat(64),
-        allowedDecisions: ["allow-once", "deny"] as const,
-        sessionId: "delegation-3",
-      },
-      createdAtMs: 0,
-      expiresAtMs: 60_000,
-    };
-    await expect(
-      telegramApprovalNativeRuntime.presentation.buildResolvedResult({
-        cfg: {} as never,
-        accountId: "default",
-        context: { token: "tg-token" },
-        request,
-        resolved: {
-          id: request.id,
-          decision: "allow-once",
-          ts: 1,
-          applicationStatus: "applied",
-        },
-        view: {
-          approvalKind: "system-agent",
-          approvalId: request.id,
-          phase: "resolved",
+  it.each([
+    {
+      name: "applied",
+      decision: "allow-once",
+      applicationStatus: "applied",
+      summary: "set config gateway.port to 19001",
+      expected: "✅ OpenClaw change approved and applied: set config gateway.port to 19001",
+    },
+    {
+      name: "denied and not applied",
+      decision: "deny",
+      applicationStatus: "not-applied",
+      summary: "set config gateway.port to 19001",
+      expected: "❌ OpenClaw change denied. No change was made.",
+    },
+    {
+      name: "applied with a bounded UTF-16 summary",
+      decision: "allow-once",
+      applicationStatus: "applied",
+      summary: ` ${"x".repeat(2798)}😀tail `,
+      expected: `✅ OpenClaw change approved and applied: ${"x".repeat(2798)}…`,
+    },
+  ] as const)(
+    "renders exact system-agent terminal receipts: $name",
+    async ({ decision, applicationStatus, summary, expected }) => {
+      const request = {
+        approvalKind: "system-agent" as const,
+        id: "system-agent:change-3",
+        request: {
           title: "OpenClaw change",
-          metadata: [],
-          commandText: "set config gateway.port to 19001",
-          operationSummary: "set config gateway.port to 19001",
-          decision: "allow-once",
-          applicationStatus: "applied",
+          description: summary,
+          command: summary,
+          proposalHash: "c".repeat(64),
+          allowedDecisions: ["allow-once", "deny"] as const,
+          sessionId: "delegation-3",
         },
-        entry: { chatId: "9", messageId: "m1" },
-      }),
-    ).resolves.toEqual({
-      kind: "update",
-      payload: {
-        text: "✅ OpenClaw change approved and applied: set config gateway.port to 19001",
-      },
-    });
-  });
+        createdAtMs: 0,
+        expiresAtMs: 60_000,
+      };
+      await expect(
+        telegramApprovalNativeRuntime.presentation.buildResolvedResult({
+          cfg: {} as never,
+          accountId: "default",
+          context: { token: "tg-token" },
+          request,
+          resolved: {
+            id: request.id,
+            decision,
+            ts: 1,
+            applicationStatus,
+          },
+          view: {
+            approvalKind: "system-agent",
+            approvalId: request.id,
+            phase: "resolved",
+            title: "OpenClaw change",
+            metadata: [],
+            commandText: summary,
+            operationSummary: summary,
+            decision,
+            applicationStatus,
+          },
+          entry: { chatId: "9", messageId: "m1" },
+        }),
+      ).resolves.toEqual({
+        kind: "update",
+        payload: {
+          text: expected,
+        },
+      });
+    },
+  );
 
   it("updates the pending message and removes actions for terminal events", async () => {
     const editMessage = vi.fn().mockResolvedValue({

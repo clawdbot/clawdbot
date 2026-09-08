@@ -126,6 +126,7 @@ async function dispatch(
       transcriptLeafId: null,
       onFinalPromptText: () => {},
       onSteeringAcknowledged: () => {},
+      persistToolResultProjections: async () => {},
       promptActiveSession: async () => {
         const context = await agent.transformContext!(messages, new AbortController().signal);
         await agent.streamFn(model, { messages: await agent.convertToLlm(context) });

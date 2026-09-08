@@ -1,4 +1,3 @@
-// Memory Host SDK helper module supports batch provider common behavior.
 import type { EmbeddingBatchOutputLine } from "./batch-output.js";
 
 // Common OpenAI-compatible batch shapes shared by remote embedding providers.

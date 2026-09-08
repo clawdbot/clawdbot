@@ -2,7 +2,7 @@
 import { confirm, isCancel } from "@clack/prompts";
 import { stylePromptMessage } from "../../../packages/terminal-core/src/prompt-style.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
-import { readConfigFileSnapshot } from "../../config/config.js";
+import { createConfigIO } from "../../config/config.js";
 import { formatConfigIssueLines } from "../../config/issue-format.js";
 import { disableCurrentOpenClawUpdateLaunchdJob } from "../../daemon/launchd.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -111,50 +111,57 @@ export async function updateCommand(inputOpts: UpdateCommandOptions): Promise<vo
     runId: run.runId,
   };
   recoveryState.triageTarget.root = prepared.discoveredRoot;
-  const presentation = createUpdateProgress(!opts.json, run);
+  let disposePresentation: (() => void) | undefined;
+  let executionStarted = false;
   try {
-    await withUpdateFailureTriage(
-      { ...opts, invocationCwd },
-      recoveryState.triageTarget,
-      async () => {
-        await withUpdateInProgressEnv(invocationCwd, async () => {
-          let failure: { error: unknown } | undefined;
+    const presentation = createUpdateProgress(!opts.json, run);
+    disposePresentation = presentation.dispose;
+    await withUpdateFailureTriage({ ...opts, invocationCwd }, recoveryState.triageTarget, () =>
+      withUpdateInProgressEnv(invocationCwd, async () => {
+        executionStarted = true;
+        let failure: { error: unknown } | undefined;
+        try {
+          await updateCommandInternal(opts, recoveryState, invocationCwd, prepared, presentation);
+        } catch (error) {
+          failure = { error };
+        }
+        try {
+          await recoveryState.windowsTaskAutoStartRecovery?.restore();
+          await recoveryState.windowsTaskAutoStartRecovery?.complete();
+        } catch (restoreError) {
+          let error = restoreError;
           try {
-            await updateCommandInternal(opts, recoveryState, invocationCwd, prepared, presentation);
-          } catch (error) {
-            failure = { error };
+            await recoveryState.windowsTaskAutoStartRecovery?.complete(false);
+          } catch (compensationError) {
+            error = new AggregateError(
+              [error, compensationError],
+              `Windows task autostart recovery failed: ${formatErrorMessage(error)}; ${formatErrorMessage(compensationError)}`,
+              { cause: error },
+            );
           }
-          try {
-            await recoveryState.windowsTaskAutoStartRecovery?.restore();
-            await recoveryState.windowsTaskAutoStartRecovery?.complete();
-          } catch (restoreError) {
-            let error = restoreError;
-            try {
-              await recoveryState.windowsTaskAutoStartRecovery?.complete(false);
-            } catch (compensationError) {
-              error = new AggregateError(
-                [error, compensationError],
-                `Windows task autostart recovery failed: ${formatErrorMessage(error)}; ${formatErrorMessage(compensationError)}`,
-                { cause: error },
-              );
+          failure = mergeWindowsTaskRecoveryFailure(failure, error);
+        }
+        if (failure) {
+          if (!recoveryState.ledgerHandoffOwned) {
+            if (failure.error instanceof UpdateCommandFailure) {
+              completeUpdateCommandRun(failure.error.result, run);
+            } else {
+              failUpdateCommandRun(failure.error, run);
             }
-            failure = mergeWindowsTaskRecoveryFailure(failure, error);
           }
-          if (failure) {
-            if (!recoveryState.ledgerHandoffOwned) {
-              if (failure.error instanceof UpdateCommandFailure) {
-                completeUpdateCommandRun(failure.error.result, run);
-              } else {
-                failUpdateCommandRun(failure.error, run);
-              }
-            }
-            throw failure.error;
-          }
-        });
-      },
+          throw failure.error;
+        }
+      }),
     );
+  } catch (error) {
+    // Execution owns its unwind, including helper-pending rollback and migrated state.
+    // This boundary only terminalizes failures before that owner starts.
+    if (!executionStarted) {
+      failUpdateCommandRun(error, run);
+    }
+    throw error;
   } finally {
-    presentation.dispose();
+    disposePresentation?.();
   }
 }
 
@@ -194,13 +201,15 @@ async function updateCommandInternal(
     return;
   }
 
-  let configSnapshot = await readConfigFileSnapshot({
-    skipPluginValidation: true,
+  const preparedConfig = await createConfigIO({
+    pluginValidation: "skip",
     observe: false,
-  });
+  }).readConfigFileSnapshotForWrite();
+  let configSnapshot = preparedConfig.snapshot;
   if (opts.channel && !opts.dryRun && !configSnapshot.valid) {
     configSnapshot = await maybeRepairLegacyConfigForUpdateChannel({
       configSnapshot,
+      configWriteOptions: preparedConfig.writeOptions,
       jsonMode: Boolean(opts.json),
     });
   }
@@ -269,7 +278,6 @@ async function updateCommandInternal(
   let fallbackToLatest = false;
   let packageInstallSpec: string | null = null;
   let packageInstallEnv: NodeJS.ProcessEnv | undefined;
-  let packageInstallCwd: string | undefined;
   let packageInstallTarget: ResolvedGlobalInstallTarget | undefined;
   let installedPackageName = DEFAULT_PACKAGE_NAME;
   let packageAlreadyCurrent = false;
@@ -328,7 +336,6 @@ async function updateCommandInternal(
     recoveryState.triageTarget.root = root;
     recoveryState.triageTarget.nodeRunner = packageUpdateNodeRunner;
     packageInstallEnv = await createGlobalInstallEnv();
-    packageInstallCwd = invocationCwd;
     if (updateInstallKind === "package") {
       installedPackageName = (await readPackageName(root)) ?? DEFAULT_PACKAGE_NAME;
       const manager = await resolveGlobalManager({
@@ -376,7 +383,7 @@ async function updateCommandInternal(
       targetVersion = await resolveTargetVersion(tag, timeoutMs, {
         spec: explicitSpec,
         command: npmMetadataCommand,
-        cwd: packageInstallCwd,
+        cwd: invocationCwd,
         env: packageInstallEnv,
       });
     } else {
@@ -384,7 +391,7 @@ async function updateCommandInternal(
         channel,
         timeoutMs,
         command: npmMetadataCommand,
-        cwd: packageInstallCwd,
+        cwd: invocationCwd,
         env: packageInstallEnv,
       }).then((resolved) => {
         tag = resolved.tag;
@@ -420,7 +427,7 @@ async function updateCommandInternal(
         }),
         command: npmMetadataCommand,
         timeoutMs,
-        cwd: packageInstallCwd,
+        cwd: invocationCwd,
         env: packageInstallEnv,
       });
       if (targetMetadata.error || targetMetadata.version !== targetVersion) {
@@ -474,6 +481,8 @@ async function updateCommandInternal(
     channel,
     devTarget,
     packageTargetSchemaVersions,
+    packageTargetVersion: targetVersion ?? undefined,
+    packageInstallSpec,
     opts,
     refuseUpdate,
   });
@@ -539,10 +548,7 @@ async function updateCommandInternal(
         { env: run.env },
       );
       defaultRuntime.error(
-        [
-          "Downgrade confirmation required.",
-          "Downgrading can break configuration. Re-run in a TTY to confirm.",
-        ].join("\n"),
+        "Downgrade confirmation required.\nDowngrading can break configuration. Re-run in a TTY to confirm.",
       );
       defaultRuntime.exit(1);
       return;
@@ -654,6 +660,7 @@ async function updateCommandInternal(
     packageInstallEnv,
     packageInstallTarget,
     packageTargetSchemaVersions,
+    packageTargetVersion: targetVersion ?? undefined,
     packageUpdateNodeRunner,
     managedServiceNodeRunner,
     managedServiceRootRedirect,
@@ -668,7 +675,8 @@ async function updateCommandInternal(
   if (!execution) {
     return;
   }
-  const { result, preManagedServiceStop, ownedManagedUpdateContext, recoveryEnv } = execution;
+  const { ownedManagedUpdateContext, recoveryEnv, ...executionState } = execution;
+  const { result } = executionState;
   result.runId = run.runId;
   if (result.status === "skipped" && result.reason === "already-current") {
     stop();
@@ -682,10 +690,8 @@ async function updateCommandInternal(
   const finalizationConfigSnapshot = ownedManagedUpdateContext?.configSnapshot ?? configSnapshot;
   stop();
   const finalization = {
-    mutationStarted: execution.mutationStarted,
+    ...executionState,
     expectedVersion: targetVersion ?? undefined,
-    result,
-    failure: execution.failure,
     root,
     previousInstallRoot: discoveredRoot,
     installKindChanged: switchToGit || switchToPackage,
@@ -696,7 +702,6 @@ async function updateCommandInternal(
     downgradeRisk,
     shouldRestart,
     opts,
-    preManagedServiceStop,
     ownedManagedUpdateEnv: ownedManagedUpdateContext?.env,
     controlPlaneUpdateSentinelMeta,
     preUpdatePluginInstallRecords:
@@ -705,11 +710,6 @@ async function updateCommandInternal(
     packageUpdateNodeRunner,
     updateStepTimeoutMs,
     invocationCwd,
-    packageTransaction: execution.packageTransaction,
-    schemaVersions: execution.schemaVersions,
-    candidateSchemaVersions: execution.candidateSchemaVersions,
-    previousSchemaVersions: execution.previousSchemaVersions,
-    previousVerified: execution.previousVerified,
   };
   const rollbackBlockedReason = await inspectActivatedUpdateState({
     result,

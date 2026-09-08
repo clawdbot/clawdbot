@@ -32,11 +32,11 @@ import {
 } from "./missing-configured-plugin-install.install.js";
 import {
   forceNpmInstallRecordRepair,
-  isTrustedOfficialInstallRecordForCandidate,
   installPathsEqual,
   recordMatchesBundledPackage,
   resolveSafeBrokenOfficialInstallRemovalPath,
 } from "./missing-configured-plugin-install.records.js";
+import { resolveConfiguredPluginCandidateRepair } from "./missing-configured-plugin-install.targets.js";
 import {
   isLegacyPackageUpdateDoctorPass,
   shouldDeferConfiguredPluginInstallRepair,
@@ -359,29 +359,24 @@ async function repairMissingPluginInstallsWithLease(
         ? new Set([...(params.blockedPluginIds ?? []), ...deferredPluginIds])
         : params.blockedPluginIds,
   })) {
-    if (bundledPluginsById.has(candidate.pluginId)) {
+    const repair = resolveConfiguredPluginCandidateRepair({
+      candidate,
+      records: nextRecords,
+      env,
+      context: {
+        bundledPluginsById,
+        officialReplacementPluginIds,
+        knownIds,
+        installedPluginIdsWithStaleVersionBoundRuntimePackages,
+        installedPluginIdsWithRepairablePackageDiagnostics,
+        configuredPluginIdsWithStaleDescriptors,
+      },
+    });
+    if (!repair) {
       continue;
     }
-    const shouldReplaceBrokenOfficialInstall = officialReplacementPluginIds.has(candidate.pluginId);
-    if (shouldReplaceBrokenOfficialInstall && !candidate.trustedSourceLinkedOfficialInstall) {
-      continue;
-    }
+    const { shouldReplaceBrokenOfficialInstall, repairReason } = repair;
     const record = nextRecords[candidate.pluginId];
-    if (
-      shouldReplaceBrokenOfficialInstall &&
-      !isTrustedOfficialInstallRecordForCandidate({ record, candidate })
-    ) {
-      continue;
-    }
-    const hasRecord = Object.hasOwn(nextRecords, candidate.pluginId);
-    const hasUsableRecord =
-      hasRecord && !isPayloadMissing(env, nextRecords[candidate.pluginId]?.installPath);
-    if (
-      !shouldReplaceBrokenOfficialInstall &&
-      (hasUsableRecord || (knownIds.has(candidate.pluginId) && !hasRecord))
-    ) {
-      continue;
-    }
     const removalPath = shouldReplaceBrokenOfficialInstall
       ? resolveSafeBrokenOfficialInstallRemovalPath({
           pluginId: candidate.pluginId,
@@ -399,12 +394,7 @@ async function repairMissingPluginInstallsWithLease(
       updateChannel,
       mode: shouldReplaceBrokenOfficialInstall ? "update" : "install",
       preferNpm: preferNpmInstalls,
-      ...(installedPluginIdsWithStaleVersionBoundRuntimePackages.has(candidate.pluginId) &&
-      !installedPluginIdsWithRepairablePackageDiagnostics.has(candidate.pluginId) &&
-      !configuredPluginIdsWithStaleDescriptors.has(candidate.pluginId) &&
-      hasUsableRecord
-        ? { repairReason: "stale-version-bound-runtime" as const }
-        : {}),
+      repairReason,
       ...(params.onCapabilityConsent ? { onCapabilityConsent: params.onCapabilityConsent } : {}),
       beforePersistentEffect: params.beforePersistentEffect,
     });

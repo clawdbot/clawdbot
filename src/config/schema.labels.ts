@@ -711,6 +711,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "commands.channelAdministrators.*.conversationId": "Administrator Conversation ID",
   "commands.allowFrom": "Command Elevated Access Rules",
   mcp: "MCP",
+  "mcp.sessionIdleTtlMs": "MCP Session Idle TTL (ms)",
   "mcp.servers": "MCP Servers",
   "mcp.servers.*.enabled": "MCP Server Enabled",
   "mcp.servers.*.auth": "MCP Server Auth",

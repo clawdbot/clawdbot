@@ -28,6 +28,20 @@ const REALTIME_VOICE_CONSULT_TRAILING_FRAGMENT_WORDS = new Set([
   "with",
 ]);
 
+// A bounded grammar for ordinary closing components, not general intent detection.
+const REALTIME_VOICE_CLOSING_REMAINDER = new RegExp(
+  String.raw`^(?:(?:${[
+    "ok(?:ay)?|all right|alright|well|so|and",
+    "thanks(?: a lot| so much)?|thank you(?: very much)?|take care",
+    "have a (?:good|nice|great) (?:day|night|evening|weekend)",
+    "guys|everyone|everybody|all|folks|you all",
+    "for now|now|later|soon|tomorrow|tonight|next (?:time|week|month|year|weekend)",
+    "(?:on |next )?(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)",
+    String.raw`in (?:a|a few|few|one|two|three|four|five|six|seven|eight|nine|ten|\d+) (?:second|minute|moment)s?`,
+    "in a bit|in the (?:morning|afternoon|evening)",
+  ].join("|")})\b|[.! ,;:—–-])*$`,
+);
+
 /** Reason a transcript should be ignored before creating a consult request. */
 export type SkippableRealtimeVoiceConsultTranscriptReason =
   | "empty"
@@ -52,13 +66,13 @@ export function classifySkippableRealtimeVoiceConsultTranscript(
   if (lastWord && REALTIME_VOICE_CONSULT_TRAILING_FRAGMENT_WORDS.has(lastWord)) {
     return "trailing-fragment";
   }
-  // Closings are ignored unless they are framed as questions, because they are
-  // common conversational exits rather than work requests.
-  if (
-    !normalized.includes("?") &&
-    (/^(i'?ll|i will) be (right )?back\b/.test(normalized) ||
-      /\b(see you|bye(?:-bye)?|goodbye)\b/.test(normalized))
-  ) {
+  // Once closing phrases are removed, only closing components and separators may
+  // remain. Additional prose, questions, and code must still reach the agent.
+  const remainder = normalized.replace(
+    /\b(?:(?:i['’]?ll|i will) be (?:right )?back|see you|bye(?:[- ]bye)?|good[- ]?bye)\b/g,
+    "",
+  );
+  if (remainder !== normalized && REALTIME_VOICE_CLOSING_REMAINDER.test(remainder)) {
     return "non-actionable-closing";
   }
   return undefined;

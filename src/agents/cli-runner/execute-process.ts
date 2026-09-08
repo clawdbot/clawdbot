@@ -250,6 +250,9 @@ export async function executeCliProcess(params: {
         consumeStdout,
         onOutstandingWorkChange: backendActivity?.setOutstandingWork,
         activeToolCount: params.events.activeParsedToolCount,
+        getActiveLoopbackAskUserDeadline: params.toolTracking.getActiveLoopbackAskUserDeadline,
+        onActiveLoopbackAskUserDeadlineChange:
+          params.toolTracking.onActiveLoopbackAskUserDeadlineChange,
         onNoOutputTimeout: (error) => {
           pluginTimeout.error = error;
         },

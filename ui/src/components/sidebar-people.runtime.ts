@@ -316,23 +316,8 @@ export class SidebarPeopleRuntime {
       return;
     }
     this.lastOpenAt = performance.now();
-    card.addEventListener("pointerenter", () => {
-      this.portal.pointerOverCard = true;
-      this.portal.clearClose();
-    });
     card.addEventListener("pointerleave", () => {
       this.portal.pointerOverCard = false;
-      this.portal.scheduleClose();
-    });
-    card.addEventListener("focusin", () => {
-      this.portal.cardFocusInside = true;
-      this.portal.clearClose();
-    });
-    card.addEventListener("focusout", (event) => {
-      if (event.relatedTarget instanceof Node && card.contains(event.relatedTarget)) {
-        return;
-      }
-      this.portal.cardFocusInside = false;
       this.portal.scheduleClose();
     });
     card.addEventListener("keydown", (event) => {

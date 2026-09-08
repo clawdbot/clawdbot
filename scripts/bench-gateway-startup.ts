@@ -473,11 +473,7 @@ function summarizeCase(benchCase: GatewayBenchCase, samples: GatewaySample[]): C
   };
 }
 
-function collectResultFailures(
-  results: CaseResult[],
-  options: { processMetricsRequired?: boolean } = {},
-): BenchmarkFailure[] {
-  const processMetricsRequired = options.processMetricsRequired ?? true;
+function collectResultFailures(results: CaseResult[]): BenchmarkFailure[] {
   const failures: BenchmarkFailure[] = [];
   for (const result of results) {
     result.samples.forEach((sample, index) => {
@@ -491,13 +487,11 @@ function collectResultFailures(
       if (sample.completionMs == null) {
         missing.push("completion");
       }
-      if (processMetricsRequired) {
-        if (sample.cpuMs == null || sample.cpuCoreRatio == null) {
-          missing.push("cpu");
-        }
-        if (sample.maxRssMb == null) {
-          missing.push("rss");
-        }
+      if (sample.cpuMs == null || sample.cpuCoreRatio == null) {
+        missing.push("cpu");
+      }
+      if (sample.maxRssMb == null) {
+        missing.push("rss");
       }
       if (missing.length > 0) {
         failures.push({
@@ -567,20 +561,6 @@ function formatRatio(value: number | null): string {
     return "n/a";
   }
   return value.toFixed(3);
-}
-
-function formatMemoryStats(stats: SummaryStats | null | undefined): string {
-  if (!stats) {
-    return "n/a";
-  }
-  return `p50=${formatMb(stats.p50)} avg=${formatMb(stats.avg)} min=${formatMb(stats.min)} max=${formatMb(stats.max)}`;
-}
-
-function formatRatioStats(stats: SummaryStats | null): string {
-  if (!stats) {
-    return "n/a";
-  }
-  return `p50=${formatRatio(stats.p50)} avg=${formatRatio(stats.avg)} min=${formatRatio(stats.min)} max=${formatRatio(stats.max)}`;
 }
 
 async function waitForStartupTracePhase(params: {
@@ -1051,20 +1031,20 @@ function printResult(result: CaseResult): void {
   console.log(`  completion:   ${formatStats(result.summary.completionMs)}`);
   console.log(`  first output: ${formatStats(result.summary.firstOutputMs)}`);
   console.log(`  CPU:          ${formatStats(result.summary.cpuMs)}`);
-  console.log(`  CPU core:     ${formatRatioStats(result.summary.cpuCoreRatio)}`);
+  console.log(`  CPU core:     ${formatStats(result.summary.cpuCoreRatio, formatRatio)}`);
   console.log(`  /healthz:     ${formatStats(result.summary.healthzMs)}`);
   console.log(`  http listen:  ${formatStats(result.summary.httpListenLogMs)}`);
   console.log(`  gateway ready: ${formatStats(result.summary.gatewayReadyLogMs)}`);
   console.log(`  /readyz:      ${formatStats(result.summary.readyzMs)}`);
-  console.log(`  max RSS:      ${formatMemoryStats(result.summary.maxRssMb)}`);
+  console.log(`  max RSS:      ${formatStats(result.summary.maxRssMb, formatMb)}`);
   console.log(
-    `  ready memory: rss=${formatMemoryStats(result.summary.startupTrace["memory.ready.rssMb"])} heap=${formatMemoryStats(result.summary.startupTrace["memory.ready.heapUsedMb"])} external=${formatMemoryStats(result.summary.startupTrace["memory.ready.externalMb"])}`,
+    `  ready memory: rss=${formatStats(result.summary.startupTrace["memory.ready.rssMb"], formatMb)} heap=${formatStats(result.summary.startupTrace["memory.ready.heapUsedMb"], formatMb)} external=${formatStats(result.summary.startupTrace["memory.ready.externalMb"], formatMb)}`,
   );
   console.log(
-    `  post-ready memory: rss=${formatMemoryStats(result.summary.startupTrace["memory.post-ready.rssMb"])} heap=${formatMemoryStats(result.summary.startupTrace["memory.post-ready.heapUsedMb"])} external=${formatMemoryStats(result.summary.startupTrace["memory.post-ready.externalMb"])}`,
+    `  post-ready memory: rss=${formatStats(result.summary.startupTrace["memory.post-ready.rssMb"], formatMb)} heap=${formatStats(result.summary.startupTrace["memory.post-ready.heapUsedMb"], formatMb)} external=${formatStats(result.summary.startupTrace["memory.post-ready.externalMb"], formatMb)}`,
   );
   console.log(
-    `  prepared runtime: agents=${formatStats(result.summary.startupTrace["sidecars.model-runtime-build.agentCount"])} workspaces=${formatStats(result.summary.startupTrace["sidecars.model-runtime-build.workspaceGroupCount"])} configuredGroups=${formatStats(result.summary.startupTrace["sidecars.model-runtime-build.configuredFactsGroupCount"])} configuredModels=${formatStats(result.summary.startupTrace["sidecars.model-runtime-build.configuredRuntimeModelCount"])} generatedPlugins=${formatStats(result.summary.startupTrace["sidecars.model-runtime-build.generatedCatalogPluginCount"])} generatedReads=${formatStats(result.summary.startupTrace["sidecars.model-runtime-build.generatedCatalogReadCount"])} sources=${formatStats(result.summary.startupTrace["sidecars.model-runtime-build.catalogSourceCount"])} credentials=${formatStats(result.summary.startupTrace["sidecars.model-runtime-build.credentialGroupCount"])} catalogs=${formatStats(result.summary.startupTrace["sidecars.model-runtime-build.catalogGroupCount"])} registries=${formatStats(result.summary.startupTrace["sidecars.model-runtime-build.runtimeRegistryCount"])} workspaceFacts=${formatStats(result.summary.startupTrace["sidecars.model-runtime-build.workspaceFactsMs"])} runtimePlugins=${formatStats(result.summary.startupTrace["sidecars.model-runtime-build.runtimePluginMs"])} metadata=${formatStats(result.summary.startupTrace["sidecars.model-runtime-build.pluginMetadataMs"])} staticProviders=${formatStats(result.summary.startupTrace["sidecars.model-runtime-build.staticProviderCatalogMs"])} ambientAuth=${formatStats(result.summary.startupTrace["sidecars.model-runtime-build.ambientCredentialsMs"])} agentFacts=${formatStats(result.summary.startupTrace["sidecars.model-runtime-build.agentFactsMs"])} configuredProjection=${formatStats(result.summary.startupTrace["sidecars.model-runtime-build.configuredProjectionMs"])} sourceMs=${formatStats(result.summary.startupTrace["sidecars.model-runtime-build.catalogSourceMs"])} registryMs=${formatStats(result.summary.startupTrace["sidecars.model-runtime-build.registryMs"])} sourceLimit=${formatStats(result.summary.startupTrace["sidecars.model-runtime-build.sourceConcurrencyLimitCount"])} fullCatalogLimit=${formatStats(result.summary.startupTrace["sidecars.model-runtime-build.fullCatalogConcurrencyLimitCount"])} staticCatalog=${formatStats(result.summary.startupTrace["benchmark.preparedRuntimeStaticCatalogCallCount"])} pluginLoader=${formatStats(result.summary.startupTrace["sidecars.plugin-loader.callsCount"])} eventLoopMax=${formatStats(result.summary.startupTrace["sidecars.model-runtime.eventLoopMax"])}`,
+    `  prepared runtime: agents=${formatStats(result.summary.startupTrace["sidecars.model-runtime-build.agentCount"], String)} workspaces=${formatStats(result.summary.startupTrace["sidecars.model-runtime-build.workspaceGroupCount"], String)} configuredGroups=${formatStats(result.summary.startupTrace["sidecars.model-runtime-build.configuredFactsGroupCount"], String)} configuredModels=${formatStats(result.summary.startupTrace["sidecars.model-runtime-build.configuredRuntimeModelCount"], String)} generatedPlugins=${formatStats(result.summary.startupTrace["sidecars.model-runtime-build.generatedCatalogPluginCount"], String)} generatedReads=${formatStats(result.summary.startupTrace["sidecars.model-runtime-build.generatedCatalogReadCount"], String)} sources=${formatStats(result.summary.startupTrace["sidecars.model-runtime-build.catalogSourceCount"], String)} credentials=${formatStats(result.summary.startupTrace["sidecars.model-runtime-build.credentialGroupCount"], String)} catalogs=${formatStats(result.summary.startupTrace["sidecars.model-runtime-build.catalogGroupCount"], String)} registries=${formatStats(result.summary.startupTrace["sidecars.model-runtime-build.runtimeRegistryCount"], String)} workspaceFacts=${formatStats(result.summary.startupTrace["sidecars.model-runtime-build.workspaceFactsMs"])} runtimePlugins=${formatStats(result.summary.startupTrace["sidecars.model-runtime-build.runtimePluginMs"])} metadata=${formatStats(result.summary.startupTrace["sidecars.model-runtime-build.pluginMetadataMs"])} staticProviders=${formatStats(result.summary.startupTrace["sidecars.model-runtime-build.staticProviderCatalogMs"])} ambientAuth=${formatStats(result.summary.startupTrace["sidecars.model-runtime-build.ambientCredentialsMs"])} agentFacts=${formatStats(result.summary.startupTrace["sidecars.model-runtime-build.agentFactsMs"])} configuredProjection=${formatStats(result.summary.startupTrace["sidecars.model-runtime-build.configuredProjectionMs"])} sourceMs=${formatStats(result.summary.startupTrace["sidecars.model-runtime-build.catalogSourceMs"])} registryMs=${formatStats(result.summary.startupTrace["sidecars.model-runtime-build.registryMs"])} sourceLimit=${formatStats(result.summary.startupTrace["sidecars.model-runtime-build.sourceConcurrencyLimitCount"], String)} fullCatalogLimit=${formatStats(result.summary.startupTrace["sidecars.model-runtime-build.fullCatalogConcurrencyLimitCount"], String)} staticCatalog=${formatStats(result.summary.startupTrace["benchmark.preparedRuntimeStaticCatalogCallCount"], String)} pluginLoader=${formatStats(result.summary.startupTrace["sidecars.plugin-loader.callsCount"], String)} eventLoopMax=${formatStats(result.summary.startupTrace["sidecars.model-runtime.eventLoopMax"])}`,
   );
   const trace = selectSlowStartupTraceDurations(result.summary.startupTrace, 8);
   if (trace.length > 0) {
@@ -1129,16 +1109,12 @@ async function main() {
 }
 
 export const testing = {
-  classifyGatewayReadyLog,
-  collectOutputLines,
   collectResultFailures,
   collectStartupTrace,
   listIncidentPackagedPluginArtifacts,
   parseOptions,
   sanitizedEnv,
-  stopChild,
   summarizeCase,
-  waitForProbe,
   waitForStartupTracePhase,
   withGatewayBenchRoot,
   writeIncidentFixture,

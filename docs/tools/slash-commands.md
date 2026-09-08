@@ -231,9 +231,14 @@ command exposes them:
 | Sessions      | List session branches with `sessions.branches.list`.                                                                                                   |
 | Worktrees     | List repository branches with `worktrees.branches`.                                                                                                    |
 
+Enabling an installed plugin includes its capability-consent flow. When consent
+is required, `plugins.setEnabled` returns a review token; a subsequent request can
+supply `acknowledgeCapabilities` with that token to persist consent to the
+plugin's declared capabilities.
+
 Other core operations and plugin-provided RPCs keep their ordinary authorization;
 they do not inherit blanket administrator access. For example, this role does
-not elevate plugin installation, updates, removal, or capability approvals.
+not elevate plugin installation, updates, or removal.
 Session and worktree mutations also retain their ordinary authorization.
 Writes to `$include`-owned configuration files are not supported through this
 role; edit those files from a trusted shell instead.
@@ -271,6 +276,9 @@ plugins.
 
     Explicit `/export-session` paths replace existing files inside the
     workspace. Omit the path to generate a collision-safe filename.
+
+    HTML exports preserve inline Markdown formatting in list items, including
+    bold text, links, and inline code.
 
     HTML conversation cards omit messages marked hidden. The sidebar's **All**
     filter includes these records with a **[hidden]** label for debugging.
@@ -466,7 +474,7 @@ use the Control UI Tools panel or config surfaces.
 
 Use `-s` to change only the current session, `-a` to also update the agent default, or `-g` to also update the shared global default. The long forms are `--session`, `--agent`, and `--global`; an explicit scope overrides `agents.defaults.modelSelectionScope`.
 
-Without a flag or that optional setting, `/model <model>` changes only the current session, including for owners/admins. Set `agents.defaults.modelSelectionScope` to `"agent"` or `"global"` only when you want unqualified selections to update that default. The setting does not grant permission to write configured defaults. See [Model selection scope](/gateway/config-agents#agentsdefaultsmodelselectionscope).
+Without a flag or that optional setting, `/model <model>` changes only the current session, including for owners/admins. Set `agents.defaults.modelSelectionScope` to `"agent"` or `"global"` only when you want unqualified selections to update that default. The setting does not grant permission to write configured defaults. See [Model selection scope](/gateway/config-agents/models#agentsdefaultsmodelselectionscope).
 
 In text commands, select a model by `provider/model` or a configured alias.
 Numeric selections such as `/model 3` are not supported.

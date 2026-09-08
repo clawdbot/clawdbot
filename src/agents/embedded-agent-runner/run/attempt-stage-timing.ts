@@ -1,3 +1,4 @@
+import { isMainThread, threadId } from "node:worker_threads";
 import {
   createStageTimingTracker,
   formatStageTimings,
@@ -91,5 +92,5 @@ export function formatEmbeddedRunStageSummary(
   summary: EmbeddedRunStageSummary,
 ): string {
   const stages = formatStageTimings(summary.stages);
-  return `${prefix} totalMs=${summary.totalMs} stages=${stages}`;
+  return `${prefix} pid=${process.pid} threadId=${threadId} isMainThread=${isMainThread} totalMs=${summary.totalMs} stages=${stages}`;
 }

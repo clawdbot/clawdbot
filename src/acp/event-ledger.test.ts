@@ -1,5 +1,4 @@
 /** Tests ACP event ledger recording, replay, retention, and SQLite persistence. */
-import path from "node:path";
 import { constants } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
@@ -7,17 +6,20 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
-import { withTestDir } from "../test-helpers/temp-dir.js";
-import { createInMemoryAcpEventLedger, createSqliteAcpEventLedger } from "./event-ledger.js";
-import { expectAcpReplayUtf8Accounting } from "./event-ledger.test-support.js";
+import { createSqliteAcpEventLedger } from "./event-ledger.js";
+import {
+  createTestAcpEventLedger,
+  expectAcpReplayUtf8Accounting,
+  withTestAcpEventLedgerDatabase,
+} from "./event-ledger.test-support.js";
 
 describe("ACP event ledger", () => {
   afterEach(() => {
     closeOpenClawStateDatabaseForTest();
   });
 
-  it("records complete in-memory session updates in sequence", async () => {
-    const ledger = createInMemoryAcpEventLedger({ now: () => 123 });
+  it("records complete session updates in sequence", async () => {
+    const ledger = createTestAcpEventLedger({ now: () => 123 });
     await ledger.startSession({
       sessionId: "session-1",
       sessionKey: "agent:main:work",
@@ -55,7 +57,7 @@ describe("ACP event ledger", () => {
   });
 
   it("marks a session incomplete when event retention truncates history", async () => {
-    const ledger = createInMemoryAcpEventLedger({ maxEventsPerSession: 1 });
+    const ledger = createTestAcpEventLedger({ maxEventsPerSession: 1 });
     await ledger.startSession({
       sessionId: "session-1",
       sessionKey: "agent:main:work",
@@ -85,7 +87,7 @@ describe("ACP event ledger", () => {
   });
 
   it("falls back for non-finite event retention options", async () => {
-    const ledger = createInMemoryAcpEventLedger({ maxEventsPerSession: Number.NaN });
+    const ledger = createTestAcpEventLedger({ maxEventsPerSession: Number.NaN });
     await ledger.startSession({
       sessionId: "session-1",
       sessionKey: "agent:main:work",
@@ -118,8 +120,7 @@ describe("ACP event ledger", () => {
   });
 
   it("persists replay without reading old payloads during session writes or rejected replays", async () => {
-    await withTestDir({ prefix: "openclaw-acp-ledger-" }, async (dir) => {
-      const databasePath = path.join(dir, "openclaw.sqlite");
+    await withTestAcpEventLedgerDatabase(async ({ databasePath }) => {
       const first = createSqliteAcpEventLedger({ path: databasePath, now: () => 1000 });
       await first.startSession({
         sessionId: "session-1",
@@ -201,9 +202,9 @@ describe("ACP event ledger", () => {
   });
 
   it("marks SQLite-backed replay incomplete when event retention truncates history", async () => {
-    await withTestDir({ prefix: "openclaw-acp-ledger-" }, async (dir) => {
+    await withTestAcpEventLedgerDatabase(async ({ databasePath }) => {
       const ledger = createSqliteAcpEventLedger({
-        path: path.join(dir, "openclaw.sqlite"),
+        path: databasePath,
         maxEventsPerSession: 1,
       });
       await ledger.startSession({
@@ -238,8 +239,7 @@ describe("ACP event ledger", () => {
   it.each(["UTF-8", "UTF-16le"])(
     "counts UTF-8 fields through metadata changes and resets in %s databases",
     async (encoding) => {
-      await withTestDir({ prefix: "openclaw-acp-ledger-" }, async (dir) => {
-        const databasePath = path.join(dir, "openclaw.sqlite");
+      await withTestAcpEventLedgerDatabase(async ({ databasePath }) => {
         const { DatabaseSync } = requireNodeSqlite();
         const seed = new DatabaseSync(databasePath);
         seed.exec(
@@ -282,9 +282,9 @@ describe("ACP event ledger", () => {
   );
 
   it("marks a Unicode replay incomplete when its UTF-8 content exceeds the byte cap", async () => {
-    await withTestDir({ prefix: "openclaw-acp-ledger-" }, async (dir) => {
+    await withTestAcpEventLedgerDatabase(async ({ databasePath }) => {
       const ledger = createSqliteAcpEventLedger({
-        path: path.join(dir, "state.sqlite"),
+        path: databasePath,
         maxSerializedBytes: 1024,
       });
       const session = { sessionId: "s", sessionKey: "key", cwd: "", complete: true };
@@ -304,8 +304,7 @@ describe("ACP event ledger", () => {
   });
 
   it("keeps footprint aggregates consistent while the byte budget evicts", async () => {
-    await withTestDir({ prefix: "openclaw-acp-ledger-" }, async (dir) => {
-      const databasePath = path.join(dir, "openclaw.sqlite");
+    await withTestAcpEventLedgerDatabase(async ({ databasePath }) => {
       const ledger = createSqliteAcpEventLedger({
         path: databasePath,
         // Small enough that appends force byte-budget eviction repeatedly.
@@ -345,7 +344,7 @@ describe("ACP event ledger", () => {
   });
 
   it("can replay a complete session by Gateway session key", async () => {
-    const ledger = createInMemoryAcpEventLedger({ now: () => 1000 });
+    const ledger = createTestAcpEventLedger({ now: () => 1000 });
     await ledger.startSession({
       sessionId: "acp-session-1",
       sessionKey: "acp:gateway-session-1",
@@ -374,7 +373,7 @@ describe("ACP event ledger", () => {
   });
 
   it("preserves prompt history when a provisional ACP key becomes a canonical Gateway key", async () => {
-    const ledger = createInMemoryAcpEventLedger({ now: () => 1000 });
+    const ledger = createTestAcpEventLedger({ now: () => 1000 });
     await ledger.startSession({
       sessionId: "acp-session-1",
       sessionKey: "acp:gateway-session-1",
@@ -411,7 +410,7 @@ describe("ACP event ledger", () => {
   });
 
   it("can replay multi-block prompt history by ACP session id", async () => {
-    const ledger = createInMemoryAcpEventLedger({ now: () => 1000 });
+    const ledger = createTestAcpEventLedger({ now: () => 1000 });
     await ledger.startSession({
       sessionId: "acp-session-1",
       sessionKey: "acp:gateway-session-1",
@@ -444,7 +443,7 @@ describe("ACP event ledger", () => {
 
   it("evicts the oldest complete session when session retention is exceeded", async () => {
     let now = 1000;
-    const ledger = createInMemoryAcpEventLedger({ maxSessions: 1, now: () => now++ });
+    const ledger = createTestAcpEventLedger({ maxSessions: 1, now: () => now++ });
     await ledger.startSession({
       sessionId: "old-session",
       sessionKey: "acp:old-gateway-session",
@@ -467,7 +466,7 @@ describe("ACP event ledger", () => {
   });
 
   it("resets stale events when a session is restarted with reset", async () => {
-    const ledger = createInMemoryAcpEventLedger();
+    const ledger = createTestAcpEventLedger();
     await ledger.startSession({
       sessionId: "session-1",
       sessionKey: "acp:old-session",
@@ -500,7 +499,7 @@ describe("ACP event ledger", () => {
   });
 
   it("marks replay incomplete when serialized byte retention trims payloads", async () => {
-    const ledger = createInMemoryAcpEventLedger({ maxSerializedBytes: 900 });
+    const ledger = createTestAcpEventLedger({ maxSerializedBytes: 900 });
     await ledger.startSession({
       sessionId: "session-1",
       sessionKey: "agent:main:work",

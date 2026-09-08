@@ -59,6 +59,11 @@ export function releaseChildProcessOutputAfterExit(child: ChildProcess): () => v
 
   child.stdout?.on("data", onData);
   child.stderr?.on("data", onData);
-  child.once("exit", onExit);
+  // A command deadline can transfer output here after the root has already exited.
+  if (child.exitCode != null || child.signalCode != null) {
+    onExit();
+  } else {
+    child.once("exit", onExit);
+  }
   return cleanup;
 }

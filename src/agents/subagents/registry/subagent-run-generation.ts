@@ -30,6 +30,18 @@ export function compareSubagentRunGeneration(
   return left.runId.localeCompare(right.runId);
 }
 
+/** Keeps the newest generation at the grouping key prepared by the caller. */
+export function recordLatestSubagentRun<T extends ComparableSubagentRun>(
+  map: Map<string, T>,
+  key: string,
+  entry: T,
+): void {
+  const existing = map.get(key);
+  if (!existing || compareSubagentRunGeneration(entry, existing) > 0) {
+    map.set(key, entry);
+  }
+}
+
 /** Allocates a durable monotonic generation within one child session. */
 export function nextSubagentRunGeneration(
   runs: Iterable<GenerationalSubagentRun>,

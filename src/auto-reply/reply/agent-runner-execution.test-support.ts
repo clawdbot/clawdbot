@@ -402,6 +402,7 @@ export type EmbeddedAgentParams = {
   sessionKey?: string;
   prompt?: string;
   transcriptPrompt?: string;
+  currentInboundContext?: RunEmbeddedAgentInternalParams["currentInboundContext"];
   lifecycleGeneration?: string;
   onDeferredLifecycleOwner?: (owner: DeferredEmbeddedRunLifecycleOwner) => void;
   onCompactionAccounting?: RunEmbeddedAgentInternalParams["onCompactionAccounting"];

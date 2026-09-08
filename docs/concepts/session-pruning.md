@@ -70,15 +70,21 @@ Amazon Bedrock, Google, Microsoft Foundry, OAuth, proxies, Vertex, and other
 cache-TTL-eligible routes keep client-side pruning. New pruning rounds are gated
 on both a time check and a context-size check:
 
-1. Wait for the cache TTL to expire (default 5 minutes when set manually; see [Smart defaults](#smart-defaults) for the Anthropic auto-default). Before the TTL elapses, no new pruning occurs; existing projections still replay unchanged.
+1. Wait for the cache TTL to expire (default 5 minutes when set manually; see [Smart defaults](#smart-defaults) for the Anthropic auto-default). Each successful model request refreshes the in-memory clock to its request start time, including tool-loop requests before turn settlement. Failed requests do not refresh it. Before the TTL elapses, no new pruning occurs; existing projections still replay unchanged.
 2. Once the TTL has elapsed, estimate total context size against the model's context window. Below roughly 30% usage, pruning is skipped and the TTL clock keeps running.
 3. **Soft-trim** oversized tool results: results over 4,000 characters keep their first and last 1,500 characters with `...` in between.
 4. If context usage is still at or above roughly 50% and at least 50,000 characters of prunable tool content remain, **hard-clear** those results: replace their content with a placeholder (default `[Old tool result content cleared]`, configurable via `agents.defaults.contextPruning.hardClear.placeholder`; set `hardClear.enabled: false` to skip this step).
 5. Record each changed result as a session projection and reset the pruning TTL clock. Follow-up requests reuse the same projected bytes, including tool-loop continuations and later turns.
 
 The TTL gates new pruning rounds, not replay of previous projections. Projections
-survive Gateway restarts through the transcript marker. Compaction drops
-projections for results no longer in the active history; `/new` and session reset
+survive Gateway restarts and eviction from the in-memory session cache through
+the transcript marker. Ordinary tool-result trims and the already-sent boundary
+are also saved before model requests when the projection changes, even with TTL
+pruning off. Unchanged projections add no new marker; restart restores the latest
+marker on the active branch. Old results retain their projected bytes through
+tool loops and restarts. Original
+text and non-text content stay in the transcript. Compaction drops projections
+for results no longer in the active history; `/new` and session reset
 start without the old session's projections. Cache-TTL marker timestamps still
 support the existing cache and heartbeat bookkeeping.
 
@@ -91,6 +97,7 @@ Only `toolResult` messages are eligible; normal conversation text is left alone.
 OpenClaw also builds a separate idempotent replay view for sessions that persist raw image blocks or prompt-hydration media markers in history.
 
 - It preserves the **3 most recent completed turns** byte-for-byte so prompt cache prefixes for recent follow-ups stay stable. This count includes all completed turns, not just image-bearing ones, so text-only turns consume the window too.
+- The window advances only when a new user turn begins, never within a tool loop.
 - In the replay view, older already-processed image blocks from `user` or `toolResult` history are replaced with `[image data removed - already processed by model]`.
 - Older textual media references such as `[media attached: ...]`, `[Image: source: ...]`, and `media://inbound/...` are replaced with `[media reference removed - already processed by model]`. Current-turn attachment markers stay intact so vision models can still hydrate fresh images.
 - The raw session transcript is not rewritten, so history viewers can still render the original message entries and their images.

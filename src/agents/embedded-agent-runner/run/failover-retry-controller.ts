@@ -12,6 +12,7 @@ import {
   resolveFailoverReasonFromError,
   resolveFailoverStatus,
 } from "../../failover-error.js";
+import { hasLongWindowRateLimitEvidence } from "../../failover/retry-evidence.js";
 import { isConfigBackedInlineProviderApiKey, type ResolvedProviderAuth } from "../../model-auth.js";
 import { log } from "../logger.js";
 import type { TraceAttempt } from "../types.js";
@@ -210,6 +211,7 @@ export function createEmbeddedRunFailoverRetryController(input: {
     },
     maybeRetryTransient: async (retry: {
       reason: FailoverReason;
+      message?: string;
       retryAfterMs?: number;
       onRetry?: (status: {
         attempt: number;
@@ -227,6 +229,9 @@ export function createEmbeddedRunFailoverRetryController(input: {
         return false;
       }
       const rateLimit = retry.reason === "rate_limit";
+      if (rateLimit && hasLongWindowRateLimitEvidence(retry.message)) {
+        return false;
+      }
       rateLimitSeen ||= rateLimit;
       const retryCount = transientRetryCount;
       const retryBudget = Math.min(

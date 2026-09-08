@@ -243,6 +243,13 @@ export function createCliLiveSessionCapability(params: {
       }
       return handle;
     },
+    restart: async () => {
+      assertActive();
+      if (params.requiredGeneration) {
+        throw requiredSessionError("cli_live_session_changed");
+      }
+      await restartCliLiveSession(params.context, params.abortSignal);
+    },
     register: (handle) => {
       assertActive();
       if (retiredSessionCleanup.has(ownerKey)) {

@@ -36,7 +36,10 @@ import { resolveClaudeCliBindingSessionId } from "../cli-session-history.js";
 import type { ChatRunState } from "../server-chat-state.js";
 import { getMaxChatHistoryMessagesBytes } from "../server-constants.js";
 import { buildGatewaySessionSnapshot } from "../session-event-payload.js";
-import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
+import {
+  resolveRequestedSessionAgentId,
+  tryResolveSessionCompatibilityOwnerAgentId,
+} from "../session-request-agent.js";
 import { hiddenSessionNotFound } from "../session-sharing-policy.js";
 import { prepareSessionSharing, resolveSessionVisibility } from "../session-sharing.js";
 import { capArrayByJsonBytes } from "../session-transcript-readers.js";
@@ -64,7 +67,7 @@ import {
   shouldReplayOldestChatHistoryRecord,
 } from "./chat-history-pages.js";
 import { handleChatMetadataRequest } from "./chat-metadata-handler.js";
-import { resolveRequestedChatAgentId, validateChatSelectedAgent } from "./chat-origin-routing.js";
+import { validateChatSelectedAgent } from "./chat-origin-routing.js";
 import { readChatPendingInputs } from "./chat-pending-inputs.js";
 import { normalizeOptionalChatText as normalizeOptionalText } from "./chat-text-normalization.js";
 import { resolveVisibleActiveSessionRunState } from "./session-active-runs.js";
@@ -179,11 +182,7 @@ async function handleChatHistoryRequest({
   }
   const requestConfig = context.getRuntimeConfig();
   const agentIdOverride = normalizeOptionalText((params as { agentId?: string }).agentId);
-  const requestedAgent = resolveRequestedChatAgentId({
-    cfg: requestConfig,
-    requestedSessionKey: sessionKey,
-    agentId: agentIdOverride,
-  });
+  const requestedAgent = resolveRequestedSessionAgentId(requestConfig, sessionKey, agentIdOverride);
   if (!requestedAgent.ok) {
     respond(false, undefined, requestedAgent.error);
     return;

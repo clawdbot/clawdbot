@@ -1,4 +1,3 @@
-// Model Catalog Core helper module supports model catalog normalize behavior.
 import {
   asFiniteNumber as normalizeFiniteNumber,
   asNonNegativeFiniteNumber as normalizeNonNegativeNumber,

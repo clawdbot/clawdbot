@@ -407,6 +407,66 @@ describe("export html security hardening", () => {
     expect(code.textContent).toContain("answer = true");
   });
 
+  it.each(["user", "assistant"] as const)(
+    "renders tight-list inline formatting in %s transcript exports",
+    async (role) => {
+      const inline =
+        "**Important**: read [the guide](https://example.test/guide) and use `config.json`.";
+      const literal = "**literal** [not a link](https://example.test/literal)";
+      const session: SessionData = {
+        header: { id: "session-tight-list", timestamp: now() },
+        entries: [
+          {
+            id: "tight-list",
+            parentId: null,
+            timestamp: now(),
+            type: "message",
+            message: {
+              role,
+              content: [
+                `Paragraph control: ${inline}`,
+                "",
+                `- ${inline}`,
+                "- Plain item.",
+                "",
+                "`" + literal + "`",
+              ].join("\n"),
+            },
+          },
+        ],
+        leafId: "tight-list",
+        systemPrompt: "",
+        tools: [],
+      };
+
+      const { document } = await renderTemplate(session);
+      const entry = requireElement(document.getElementById("entry-tight-list"), "entry missing");
+      const paragraph = requireElement(entry.querySelector("p"), "paragraph control missing");
+      expect(paragraph.querySelector("strong")?.textContent).toBe("Important");
+      expect(paragraph.querySelector("a")?.getAttribute("href")).toBe("https://example.test/guide");
+      expect(paragraph.querySelector("code")?.textContent).toBe("config.json");
+
+      const list = requireElement(entry.querySelector("ul"), "tight list missing");
+      expect(list.querySelectorAll("li")).toHaveLength(2);
+      const item = requireElement(list.querySelector("li"), "list item missing");
+      expect(item.querySelector("strong")?.textContent).toBe("Important");
+      const link = requireElement(item.querySelector("a"), "list link missing");
+      expect(link.getAttribute("href")).toBe("https://example.test/guide");
+      expect(link.textContent).toBe("the guide");
+      expect(item.querySelector("code")?.textContent).toBe("config.json");
+      expect(item.textContent?.trim()).toBe("Important: read the guide and use config.json.");
+
+      const literalParagraph = requireElement(
+        Array.from(entry.querySelectorAll("p")).find(
+          (candidate) => candidate.querySelector("code")?.textContent === literal,
+        ) ?? null,
+        "literal code control missing",
+      );
+      expect(literalParagraph.textContent).toBe(literal);
+      expect(literalParagraph.querySelector("a, strong")).toBeNull();
+    },
+  );
+
   it("escapes tree and header metadata fields", async () => {
     const attack = "<img src=x onerror=alert(9)>";
     const baseEntries: SessionEntry[] = [

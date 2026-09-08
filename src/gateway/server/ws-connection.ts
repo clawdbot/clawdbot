@@ -36,7 +36,10 @@ import {
 import type { GatewayRequestContext, GatewayRequestHandlers } from "../server-methods/types.js";
 import { formatError } from "../server-utils.js";
 import { cleanupTalkConnection } from "../talk-session-registry.js";
-import { startWebSocketKeepalive } from "../websocket-keepalive.js";
+import {
+  startWebSocketKeepalive,
+  type WebSocketHeartbeatDiagnostics,
+} from "../websocket-keepalive.js";
 import { formatForLog, logWs } from "../ws-log.js";
 import { refreshClientPresence } from "./client-presence.js";
 import { getHealthVersion, incrementPresenceVersion } from "./health-state.js";
@@ -205,6 +208,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
     let lastHandshakePhase: WsHandshakePhase = "tcp_accepted";
     let holdsPreauthBudget = true;
     let closeCause: string | undefined;
+    let heartbeatDiagnostics: WebSocketHeartbeatDiagnostics | undefined;
     let closeMeta: Record<string, unknown> = {};
     let lastFrameType: string | undefined;
     let lastFrameMethod: string | undefined;
@@ -396,6 +400,8 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
 
     const handleSocketClose = async (code: number, reason: Buffer) => {
       const durationMs = Date.now() - openedAt;
+      // Only the typed heartbeat snapshot is safe for default connected-close logs.
+      const disconnectContext = { cause: closeCause, durationMs, ...heartbeatDiagnostics };
       const logForwardedFor = sanitizeWsLogValue(forwardedFor);
       const logOrigin = sanitizeWsLogValue(requestOrigin);
       const logHost = sanitizeWsLogValue(requestHost);
@@ -403,10 +409,9 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       const logReason = sanitizeWsLogValue(reason?.toString());
       const handshakeIncomplete = lastHandshakePhase !== "ready";
       const closeContext = {
-        cause: closeCause,
+        ...disconnectContext,
         handshake: handshakeState,
         ...(handshakeIncomplete ? { phase: lastHandshakePhase } : {}),
-        durationMs,
         lastFrameType,
         lastFrameMethod,
         lastFrameId,
@@ -463,13 +468,13 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       if (client && isWebchatClient(client.connect.client)) {
         logWsControl.info(
           `webchat disconnected code=${code} reason=${logReason || "n/a"} conn=${connId}`,
-          { cause: closeCause, durationMs },
+          disconnectContext,
         );
       }
       if (client?.authenticatedUserId) {
         logWsControl.info(
           `authenticated user disconnected code=${code} reason=${logReason || "n/a"} conn=${connId} user=${formatForLog(client.authenticatedUserId)}`,
-          { cause: closeCause, durationMs },
+          disconnectContext,
         );
       }
       if (connectionKind === "gateway") {
@@ -547,8 +552,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
         connId,
         code,
         reason: logReason,
-        durationMs,
-        cause: closeCause,
+        ...disconnectContext,
         handshake: handshakeState,
         ...(handshakeIncomplete ? { phase: lastHandshakePhase } : {}),
         lastFrameType,
@@ -613,8 +617,9 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
         next.personPresence = { onlineSince: Date.now() };
         refreshClientPresence(clients, next);
       }
-      stopKeepalive = startWebSocketKeepalive(socket, () => {
+      stopKeepalive = startWebSocketKeepalive(socket, (diagnostics) => {
         // A half-open control connection must release its node and worker owners.
+        heartbeatDiagnostics = diagnostics;
         setCloseCause("heartbeat-timeout");
         try {
           socket.terminate();

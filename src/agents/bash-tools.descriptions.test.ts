@@ -1,13 +1,53 @@
 /** Model-facing description contracts at the public Bash/process tool factory boundary. */
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import * as execApprovals from "../infra/exec-approvals.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
+import { finalizeAgentTools } from "./agent-tools.finalize.js";
 import { createExecTool, createProcessTool } from "./bash-tools.js";
+import { createLazyExecTool } from "./lazy-exec-tool.js";
 
 const execDefaults = { host: "gateway", security: "full", ask: "off" } as const;
 const execTool = createExecTool(execDefaults);
 const processTool = createProcessTool();
 
+afterEach(() => vi.restoreAllMocks());
+
 describe("tool descriptions", () => {
+  it.each(["win32", "linux", "darwin"] as const)(
+    "keeps exec descriptors stable across approval changes on %s",
+    (platform) =>
+      withMockedPlatform(platform, () => {
+        const file: execApprovals.ExecApprovalsFile = {
+          version: 1,
+          agents: { main: { allowlist: [] } },
+        };
+        vi.spyOn(execApprovals, "loadExecApprovals").mockImplementation(() => file);
+        const descriptors = () => {
+          const tools = [
+            createExecTool({ ...execDefaults, agentId: "main" }),
+            createLazyExecTool({ ...execDefaults, agentId: "main" }),
+          ];
+          return JSON.stringify(
+            [
+              ...tools,
+              ...tools.flatMap((tool) =>
+                finalizeAgentTools({
+                  tools: [tool],
+                  hookContext: {},
+                  wrapBeforeToolCallHook: false,
+                }),
+              ),
+            ].map(({ name, description, parameters }) => ({ name, description, parameters })),
+          );
+        };
+        const before = descriptors();
+        file.agents!.main!.allowlist!.push({
+          pattern: "C:\\Tools\\node.exe",
+          argPattern: "--version",
+        });
+        expect(descriptors()).toBe(before);
+      }),
+  );
   it("adds automation follow-up guidance only when the scheduler is available", () => {
     const execWithCron = createExecTool({ ...execDefaults, hasCronTool: true });
     const processWithCron = createProcessTool({ hasCronTool: true });

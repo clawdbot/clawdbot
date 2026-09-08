@@ -219,7 +219,7 @@ export function resolveSessionLifecycleTimestamps(params: {
   };
 }
 
-export function resolveTerminalMainSessionTranscriptRegistryCheck(
+function resolveTerminalMainSessionTranscriptRegistryCheck(
   params: TerminalMainSessionTranscriptRegistryParams,
 ): TerminalMainSessionTranscriptRegistryCheck | undefined {
   if (!params.entry || !params.sessionKey) {

@@ -1509,6 +1509,22 @@ describe("notifications changed events", () => {
     });
   });
 
+  it("compacts notification text without splitting surrogate pairs", async () => {
+    const ctx = buildCtx();
+    await handleNodeEvent(ctx, "node-n1", {
+      event: "notifications.changed",
+      payloadJSON: JSON.stringify({
+        change: "posted",
+        key: "notif-long",
+        title: ` \n${"A".repeat(117)}   🫠 tail `,
+      }),
+    });
+
+    expect(mockCallArg(enqueueSystemEventMock)).toBe(
+      `Notification posted (node=node-n1 key=notif-long): ${"A".repeat(117)} …`,
+    );
+  });
+
   it("enqueues notifications.changed removed events", async () => {
     const ctx = buildCtx();
     await handleNodeEvent(ctx, "node-n2", {

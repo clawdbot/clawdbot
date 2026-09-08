@@ -27,6 +27,7 @@ import {
 import type { PluginLoadOptions } from "./loader-types.js";
 import { createPluginIdScopeSet, normalizePluginIdScope } from "./plugin-scope.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
+import type { PluginRegistryInspectionResources } from "./registry-inspection-resources.js";
 import { pluginLoaderCacheState } from "./registry-lifecycle.js";
 import { getPluginRegistryRuntime } from "./registry-runtime-binding.js";
 import { createPluginRegistry, type PluginRegistry } from "./registry.js";
@@ -68,6 +69,7 @@ export function loadOpenClawPluginsCore(
   options: PluginLoadOptions,
   nativeBindings: NativePluginLoadBindings,
   overrides?: InternalPluginLoadOverrides,
+  inspectionResources?: PluginRegistryInspectionResources,
 ): PluginRegistry {
   const requestedOnlyPluginIds = normalizePluginIdScope(options.onlyPluginIds);
   const requestedOnlyPluginIdSet = createPluginIdScopeSet(requestedOnlyPluginIds);
@@ -163,6 +165,7 @@ export function loadOpenClawPluginsCore(
       activateGlobalSideEffects: context.shouldActivate,
     });
     const { registry } = registryBuilder;
+    inspectionResources?.attach(registry);
     const { manifestRegistry, orderedCandidates, manifestBySource, provenance } =
       resolvePluginLoadDiscovery({
         options,

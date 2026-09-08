@@ -71,6 +71,14 @@ vi.mock("./manifest-registry-installed.js", async (importOriginal) => {
   };
 });
 
+function mockRegistrySnapshot(index: ReturnType<typeof makeIndex>) {
+  loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
+    source: "provided",
+    snapshot: index,
+    diagnostics: [],
+  });
+}
+
 function mockSchemaSnapshotSource(
   index: ReturnType<typeof makeIndex>,
   properties: Record<string, unknown>,
@@ -81,11 +89,7 @@ function mockSchemaSnapshotSource(
     throw new Error("expected manifest plugin fixture");
   }
   plugin.configSchema = { type: "object", properties };
-  loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
-    source: "provided",
-    snapshot: index,
-    diagnostics: [],
-  });
+  mockRegistrySnapshot(index);
   loadPluginManifestRegistryForInstalledIndex.mockReturnValue(registry);
   return registry;
 }
@@ -103,11 +107,7 @@ describe("plugin metadata snapshot", () => {
 
   it("progressively reuses first-access metadata and scopes fresh control-plane loads", () => {
     const index = makeIndex();
-    loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
-      source: "provided",
-      snapshot: index,
-      diagnostics: [],
-    });
+    mockRegistrySnapshot(index);
 
     const first = loadPluginMetadataSnapshot({ config: {}, env: {}, index });
     const second = loadPluginMetadataSnapshot({ config: {}, env: {}, index });
@@ -138,11 +138,7 @@ describe("plugin metadata snapshot", () => {
 
   it("keeps direct manifest readers on the Gateway inventory", () => {
     const config = {};
-    loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
-      source: "provided",
-      snapshot: makeIndex(),
-      diagnostics: [],
-    });
+    mockRegistrySnapshot(makeIndex());
     const snapshot = loadPluginMetadataSnapshot({ config, env: {} });
     setGatewayPluginMetadataSnapshot(snapshot, { config, env: {} });
 
@@ -201,11 +197,7 @@ describe("plugin metadata snapshot", () => {
   it("publishes the complete prepared cache and keeps fresh operations outside boot scopes", () => {
     const config = {};
     const preparedCache = createPluginCache();
-    loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
-      source: "provided",
-      snapshot: makeIndex(),
-      diagnostics: [],
-    });
+    mockRegistrySnapshot(makeIndex());
     const snapshot = withPluginCache(preparedCache, () =>
       loadPluginMetadataSnapshot({ config, env: {} }),
     );
@@ -235,11 +227,7 @@ describe("plugin metadata snapshot", () => {
       const config = {};
       const index = makeIndex();
       index.policyHash = resolveInstalledPluginIndexPolicyHash(config);
-      loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
-        source: "provided",
-        snapshot: index,
-        diagnostics: [],
-      });
+      mockRegistrySnapshot(index);
       const snapshot = loadPluginMetadataSnapshot({ config, env: {}, index });
       loadPluginRegistrySnapshotWithMetadata.mockClear();
       loadPluginManifestRegistryForInstalledIndex.mockClear();
@@ -267,11 +255,7 @@ describe("plugin metadata snapshot", () => {
     const workspaceDir = "/workspace";
     const index = makeIndex();
     index.policyHash = resolveInstalledPluginIndexPolicyHash(config);
-    loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
-      source: "provided",
-      snapshot: index,
-      diagnostics: [],
-    });
+    mockRegistrySnapshot(index);
     const scoped = loadPluginMetadataSnapshot({
       config,
       env: {},
@@ -311,11 +295,7 @@ describe("plugin metadata snapshot", () => {
     const staleIndex = makeIndex("stale");
     staleIndex.policyHash = resolveInstalledPluginIndexPolicyHash(config);
     staleIndex.workspaceDir = sourceWorkspace;
-    loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
-      source: "provided",
-      snapshot: staleIndex,
-      diagnostics: [],
-    });
+    mockRegistrySnapshot(staleIndex);
     loadPluginManifestRegistryForInstalledIndex.mockReturnValue(makeManifestRegistry("stale"));
     const stale = loadPluginMetadataSnapshot({
       config,
@@ -329,11 +309,7 @@ describe("plugin metadata snapshot", () => {
     const freshIndex = makeIndex("fresh");
     freshIndex.policyHash = resolveInstalledPluginIndexPolicyHash(config);
     freshIndex.workspaceDir = targetWorkspace;
-    loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
-      source: "provided",
-      snapshot: freshIndex,
-      diagnostics: [],
-    });
+    mockRegistrySnapshot(freshIndex);
     loadPluginManifestRegistryForInstalledIndex.mockReturnValue(makeManifestRegistry("fresh"));
 
     const resolved = resolvePluginMetadataSnapshot({
@@ -562,11 +538,7 @@ describe("plugin metadata snapshot", () => {
     const config = { plugins: { entries: { demo: { enabled: true } } } };
     const index = makeIndex();
     index.policyHash = resolveInstalledPluginIndexPolicyHash(config);
-    loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
-      source: "provided",
-      snapshot: index,
-      diagnostics: [],
-    });
+    mockRegistrySnapshot(index);
     const snapshot = loadPluginMetadataSnapshot({ config, env: {}, index });
     adoptCurrentPluginMetadataSnapshotIfAbsent(snapshot, { config, env: {} });
     const ignored = { ...snapshot, registrySource: "persisted" as const };
@@ -686,11 +658,7 @@ describe("plugin metadata snapshot", () => {
 
   it("projects scopes from one complete first-access inventory", () => {
     const index = makeIndex();
-    loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
-      source: "provided",
-      snapshot: index,
-      diagnostics: [],
-    });
+    mockRegistrySnapshot(index);
 
     const scoped = loadPluginMetadataSnapshot({
       config: {},
@@ -718,11 +686,7 @@ describe("plugin metadata snapshot", () => {
       const config = {};
       const index = makeIndex();
       index.policyHash = resolveInstalledPluginIndexPolicyHash(config);
-      loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
-        source: "provided",
-        snapshot: index,
-        diagnostics: [],
-      });
+      mockRegistrySnapshot(index);
       const unscoped = loadPluginMetadataSnapshot({ config, env: {}, index });
       setCurrentPluginMetadataSnapshot(unscoped, { config, env: {} });
       loadPluginManifestRegistryForInstalledIndex.mockClear();
@@ -850,8 +814,10 @@ describe("plugin metadata snapshot", () => {
     if (!plugin || !other) {
       throw new Error("expected manifest plugin fixture");
     }
-    plugin.cliBackends = ["DEMO-CLI"];
+    plugin.cliBackends = ["DEMO-CLI", "DEMO-CLI"];
     plugin.setup = { cliBackends: ["Demo-CLI", "Other-CLI"] };
+    plugin.contracts = { tools: [], webSearchProviders: ["demo-search"] };
+    other.cliBackends = ["demo-cli"];
     plugin.providerEndpoints = [
       {
         endpointClass: " openai-public ",
@@ -892,19 +858,16 @@ describe("plugin metadata snapshot", () => {
         },
       },
     };
-    loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
-      source: "provided",
-      snapshot: index,
-      diagnostics: [],
-    });
+    mockRegistrySnapshot(index);
     loadPluginManifestRegistryForInstalledIndex.mockReturnValue(registry);
 
     const snapshot = loadPluginMetadataSnapshot({ config: {}, env: {}, index });
 
     expect([...snapshot.owners.cliBackends]).toEqual([
-      ["demo-cli", ["demo"]],
+      ["demo-cli", ["demo", "other"]],
       ["other-cli", ["demo"]],
     ]);
+    expect([...snapshot.owners.contracts]).toEqual([["webSearchProviders", ["demo"]]]);
     expect(snapshot.owners.providerEndpoints?.slice(0, 4)).toEqual([
       {
         endpointClass: "openai-public",
@@ -983,11 +946,7 @@ describe("plugin metadata snapshot", () => {
     "freezes a cloned index instead of caller-owned records (worker: %s)",
     (worker) => {
       const index = makeIndex();
-      loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
-        source: "provided",
-        snapshot: index,
-        diagnostics: [],
-      });
+      mockRegistrySnapshot(index);
 
       const registry = makeManifestRegistry();
       registry.plugins = registry.plugins.map((plugin) => ({

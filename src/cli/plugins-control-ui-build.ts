@@ -47,7 +47,11 @@ export async function buildPluginControlUi(params: {
     tsconfigRaw: {
       compilerOptions: { experimentalDecorators: true, useDefineForClassFields: false },
     },
-    alias: buildPluginLoaderAliasMap(entry, process.argv[1], import.meta.url),
+    // Browser bundles embed the host SDK and workspace packages, so resolve them
+    // from source whenever a source checkout is present. NODE_ENV=production would
+    // otherwise prefer compiled dist left behind by an earlier build, and stale
+    // bytes change the content hash that openclaw.plugin.json commits.
+    alias: buildPluginLoaderAliasMap(entry, process.argv[1], import.meta.url, "src"),
   });
   if (
     files.some((file) => file.contents.length > CONTROL_UI_PLUGIN_MAX_ASSET_BYTES) ||

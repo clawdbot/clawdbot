@@ -1,4 +1,5 @@
 import type { TriageUpdateFailure } from "../commands/triage-update.js";
+import { managedServiceStateUpdateScript } from "./update-managed-service-handoff-state.test-support.js";
 import { buildUpdateRestartSentinelPayload } from "./update-restart-sentinel-payload.js";
 import type { UpdateRunRecord } from "./update-run-record.js";
 import type { UpdateRunResult } from "./update-runner-types.js";
@@ -238,22 +239,27 @@ export function createManagedServiceManagerFixtureScript(params: {
   return `#!${process.execPath}
 const fs = require("node:fs");
 const args = process.argv.slice(2);
-const statePath = ${JSON.stringify(statePath)};
-const state = fs.existsSync(statePath) ? JSON.parse(fs.readFileSync(statePath, "utf8")) : {};
 const sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 fs.appendFileSync(${JSON.stringify(commandsPath)}, args.join(" ") + "\\n");
 const action = args.find((arg) => ["show", "stop", "reset-failed", "start", "print", "disable", "bootout", "enable", "bootstrap", "kickstart"].includes(arg));
-if (${JSON.stringify(kind)} === "systemd") {
-  if (action === "stop") {
-    state.parked = true;
-    fs.writeFileSync(statePath, JSON.stringify(state));
+void (async () => {
+  if (${JSON.stringify(kind)} === "systemd" && action === "stop") {
+    ${managedServiceStateUpdateScript(statePath, "state.parked = true")};
     for (;;) {
       try { process.kill(${parentPid}, 0); sleep(10); } catch { break; }
     }
     sleep(${options?.systemdStopDelayMs ?? 0});
-    ${options?.revokeOwner ? `fs.writeFileSync(${JSON.stringify(params.configPath)}, JSON.stringify({ commands: { ownerAllowFrom: [] } })); state.ownerRevokedAfterExit = true;` : ""}
-    state.stopCompleted = true;
+    ${managedServiceStateUpdateScript(
+      statePath,
+      `${options?.revokeOwner ? `fs.writeFileSync(${JSON.stringify(params.configPath)}, JSON.stringify({ commands: { ownerAllowFrom: [] } })); state.ownerRevokedAfterExit = true;` : ""}
+      state.stopCompleted = true`,
+    )};
+    return;
   }
+  ${managedServiceStateUpdateScript(
+    statePath,
+    `
+if (${JSON.stringify(kind)} === "systemd") {
   if (action === "reset-failed") state.reset = true;
   if (action === "start" && ${JSON.stringify(options?.systemdFault)} === "start-failed") {
     state.startFailed = true;
@@ -301,11 +307,6 @@ if (${JSON.stringify(kind)} === "systemd") {
     state.loadedPrintsRemaining = ${options?.launchdTeardown?.loadedPrints ?? 0};
     state.pendingBootstrapFailures = ${options?.launchdTeardown?.pendingBootstrapFailures ?? 0};
     state.pendingOperationInProgress = ${options?.launchdTeardown?.pendingOperationInProgress ?? 0};
-    const delay = ${options?.launchdTeardown?.bootoutDelayMs ?? 0};
-    if (delay) setTimeout(() => {
-      state.bootoutCompleted = true;
-      fs.writeFileSync(statePath, JSON.stringify(state));
-    }, delay);
   }
   if (action === "enable") state.disabled = false;
   if (action === "bootstrap" || action === "kickstart") {
@@ -334,8 +335,8 @@ if (${JSON.stringify(kind)} === "systemd") {
       } else {
         state.unloaded = true;
         process.stderr.write("Could not find service\\n");
-        fs.writeFileSync(statePath, JSON.stringify(state));
-        process.exit(113);
+        process.exitCode = 113;
+        return state;
       }
     }
     const fault = ${JSON.stringify(options?.launchdFault)};
@@ -348,7 +349,13 @@ if (${JSON.stringify(kind)} === "systemd") {
     }
   }
 }
-fs.writeFileSync(statePath, JSON.stringify(state));
+  `,
+  )};
+  if (action === "bootout" && ${options?.launchdTeardown?.bootoutDelayMs ?? 0}) {
+    await new Promise((resolve) => setTimeout(resolve, ${options?.launchdTeardown?.bootoutDelayMs ?? 0}));
+    ${managedServiceStateUpdateScript(statePath, "state.bootoutCompleted = true")};
+  }
+})().catch((error) => { console.error(error); process.exitCode = 1; });
 `;
 }
 
@@ -379,13 +386,12 @@ export function createManagedServiceUpdaterFixtureScript(params: {
         })
       : null;
   return [
+    `void (async () => {`,
     `const fs = require("node:fs");`,
     ...(kind === "launchd"
       ? [
-          `const state = JSON.parse(fs.readFileSync(${JSON.stringify(statePath)}, "utf8"));`,
+          `const state = ${managedServiceStateUpdateScript(statePath, "if (state.unloaded) state.updaterObservedUnloaded = true")};`,
           `if (!state.unloaded) process.exit(19);`,
-          `state.updaterObservedUnloaded = true;`,
-          `fs.writeFileSync(${JSON.stringify(statePath)}, JSON.stringify(state));`,
         ]
       : []),
     `fs.writeFileSync(${JSON.stringify(updaterPath)}, "ran");`,
@@ -394,7 +400,7 @@ export function createManagedServiceUpdaterFixtureScript(params: {
           `const notification = ${JSON.stringify(notification)};`,
           `const db = new (require("node:sqlite").DatabaseSync)(${JSON.stringify(stateDatabasePath)});`,
           `db.prepare("INSERT INTO gateway_restart_sentinel (sentinel_key, version, kind, status, ts, stats_json, payload_json, updated_at_ms) VALUES ('current', 1, ?, ?, ?, ?, ?, ?)").run(notification.kind, notification.status, notification.ts, JSON.stringify(notification.stats), JSON.stringify(notification), notification.ts); db.close();`,
-          `{ const state = JSON.parse(fs.readFileSync(${JSON.stringify(statePath)}, "utf8")); state.publishedSentinel = { version: 1, payload: notification, revision: notification.ts }; fs.writeFileSync(${JSON.stringify(statePath)}, JSON.stringify(state)); }`,
+          `${managedServiceStateUpdateScript(statePath, "state.publishedSentinel = { version: 1, payload: notification, revision: notification.ts }")};`,
           ...(options?.updaterNotification === "consumed" &&
           (updaterResult?.status === "ok" ||
             (updaterResult?.recovery?.serviceRestartSafe && updaterResult.recovery.service))
@@ -429,6 +435,7 @@ export function createManagedServiceUpdaterFixtureScript(params: {
         ]
       : []),
     `process.stdout.write(remaining, () => { ${options?.updaterSignal ? 'process.kill(process.pid, "SIGTERM");' : `process.exit(${options?.updaterExitCode ?? 7});`} });`,
+    `})().catch((error) => { console.error(error); process.exitCode = 1; });`,
   ].join("");
 }
 

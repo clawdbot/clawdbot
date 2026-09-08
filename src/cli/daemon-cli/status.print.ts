@@ -13,7 +13,6 @@ import {
 } from "../../daemon/restart-logs.js";
 import { buildGatewayRuntimeRecoveryHints } from "../../daemon/runtime-hints.js";
 import { isSystemdStartLimitHit } from "../../daemon/service-runtime.js";
-import type { GatewayServiceCommandConfig } from "../../daemon/service-types.js";
 import {
   isSystemdUnavailableDetail,
   renderSystemdUnavailableHints,
@@ -28,8 +27,8 @@ import { shortenHomePath } from "../../utils.js";
 import { formatCliCommand } from "../command-format.js";
 import {
   createCliStatusTextStyles,
-  filterDaemonEnv,
   formatRuntimeStatus,
+  projectDaemonServiceForJson,
   resolveDaemonInstallBlockMessage,
   resolveRuntimeStatusColor,
   safeDaemonEnv,
@@ -39,40 +38,6 @@ import {
   renderPortDiagnosticsForCli,
   resolvePortListeningAddresses,
 } from "./status.gather.js";
-
-function sanitizeDaemonStatusForJson(status: DaemonStatus): DaemonStatus {
-  // JSON output can be copied into issues; redact service env before serialization.
-  const command = status.service.command;
-  if (!command) {
-    return status;
-  }
-  const safeEnv = filterDaemonEnv(command.environment);
-  const nextCommand: GatewayServiceCommandConfig = {
-    ...command,
-    environment: Object.keys(safeEnv).length > 0 ? safeEnv : undefined,
-  };
-  delete nextCommand.managedDefinition;
-  delete nextCommand.managedOverrides;
-  delete nextCommand.definitionPaths;
-  return {
-    ...status,
-    service: {
-      ...status.service,
-      command: nextCommand,
-    },
-  };
-}
-
-function formatProbeKindLabel(kind?: "connect" | "read") {
-  return kind === "read" ? "Read probe:" : "Connectivity probe:";
-}
-
-function formatCapabilityLabel(capability?: string) {
-  if (!capability) {
-    return null;
-  }
-  return capability.replaceAll("_", "-");
-}
 
 function formatCliVersionLine(cli: DaemonStatus["cli"]): string | null {
   if (!cli) {
@@ -97,8 +62,10 @@ function formatConnectionLine(
 
 export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; deep?: boolean }) {
   if (opts.json) {
-    const sanitized = sanitizeDaemonStatusForJson(status);
-    defaultRuntime.writeJson(sanitized);
+    defaultRuntime.writeJson({
+      ...status,
+      service: projectDaemonServiceForJson(status.service, { includeDefinitionPaths: false }),
+    });
     return;
   }
 
@@ -112,11 +79,16 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
 
   const { service, rpc, extraServices } = status;
   const serviceTargetsProbe = service.targetRole !== "diagnostic-only";
+  const diagnosticOnlySuffix = serviceTargetsProbe
+    ? ""
+    : ` ${infoText("(diagnostic only, not the probe target)")}`;
   const serviceLoaded = service.loadState.status === "loaded";
   const serviceStatus = serviceLoaded
     ? okText(service.loadedText)
     : warnText(service.loadState.status === "not-loaded" ? service.notLoadedText : "unknown");
-  defaultRuntime.log(`${label("Service:")} ${accent(service.label)} (${serviceStatus})`);
+  defaultRuntime.log(
+    `${label("Service:")} ${accent(service.label)} (${serviceStatus})${diagnosticOnlySuffix}`,
+  );
   if (status.logFile) {
     defaultRuntime.log(`${label("File logs:")} ${infoText(shortenHomePath(status.logFile))}`);
   }
@@ -292,7 +264,9 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
   const runtimeLine = formatRuntimeStatus(service.runtime);
   if (runtimeLine) {
     const runtimeColor = resolveRuntimeStatusColor(service.runtime?.status);
-    defaultRuntime.log(`${label("Runtime:")} ${colorize(rich, runtimeColor, runtimeLine)}`);
+    defaultRuntime.log(
+      `${label("Runtime:")} ${colorize(rich, runtimeColor, runtimeLine)}${diagnosticOnlySuffix}`,
+    );
   }
   if (service.restartHandoff) {
     defaultRuntime.log(infoText(formatGatewayRestartHandoffDiagnostic(service.restartHandoff)));
@@ -331,7 +305,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
     }
   }
   if (rpc) {
-    const probeLabel = formatProbeKindLabel(rpc.kind);
+    const probeLabel = rpc.kind === "read" ? "Read probe:" : "Connectivity probe:";
     if (rpc.ok) {
       defaultRuntime.log(`${label(probeLabel)} ${okText("ok")}`);
     } else {
@@ -350,7 +324,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
         defaultRuntime.error(`${errorText("Last gateway error:")} ${status.lastError}`);
       }
     }
-    const capability = formatCapabilityLabel(rpc.capability);
+    const capability = rpc.capability ? rpc.capability.replaceAll("_", "-") : null;
     if (capability) {
       defaultRuntime.log(`${label("Capability:")} ${infoText(capability)}`);
     }

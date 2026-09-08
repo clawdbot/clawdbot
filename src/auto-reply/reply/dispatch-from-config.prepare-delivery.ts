@@ -65,7 +65,8 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
     !isInternalWebchatTurn &&
     normalizedRouteReplyChannel &&
     replyRoute.to &&
-    normalizedRouteReplyChannel !== normalizedCurrentSurface,
+    normalizedRouteReplyChannel !== normalizedCurrentSurface &&
+    !state.replyOperationRunState.heartbeat,
   );
   const routeReplyRuntime = hasRouteReplyCandidate ? await loadRouteReplyRuntime() : undefined;
   const {
@@ -201,7 +202,8 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
     return result;
   };
 
-  const isRoutedReplyDelivered = (result: { delivered: boolean }) => result.delivered;
+  const isRoutedReplyDelivered = (result: { delivered: boolean; ambiguous?: boolean }) =>
+    result.delivered && result.ambiguous !== true;
 
   /**
    * Helper to send a payload via route-reply (async).

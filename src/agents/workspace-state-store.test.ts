@@ -527,7 +527,9 @@ describe("workspace state store", () => {
       ) VALUES (?, ?, 99, NULL, NULL, 1)`,
     ).run(identity.workspaceKey, identity.workspacePath);
 
-    expect(() => readWorkspaceStateSnapshot(dir)).toThrow(/version requires openclaw doctor/u);
+    expect(() => readWorkspaceStateSnapshot(dir)).toThrow(
+      /unsupported workspace setup version 99/u,
+    );
     expect(() => deleteState(dir)).not.toThrow();
     const row = db
       .prepare("SELECT workspace_key FROM workspace_setup_state WHERE workspace_key = ?")

@@ -166,7 +166,7 @@ export async function recordFailedUpdateGatewayState(
     .readRuntime(env)
     .catch(() => undefined);
   const verified = getUpdateRun(run.runId, { env: run.env })?.verification;
-  // A failed serving turn does not invalidate health/version facts for the same process.
+  // A failed readiness check does not invalidate health/version facts for the same process.
   if (
     runtime?.status === "running" &&
     typeof runtime.pid === "number" &&
@@ -216,7 +216,14 @@ export async function maybeRestartService(params: {
     params.serviceEnv ?? invocationEnv,
     params.invocationCwd,
   );
+  const recordPhase = (phase: "restarting" | "verifying") => {
+    if (params.opts.run) {
+      recordUpdateRunPhase(params.opts.run.runId, phase, undefined, { env: params.opts.run.env });
+    }
+  };
   const failed = async (outcome: "failed" | "restart-health-failed" = "failed") => {
+    // A restart can fail before health verification starts; recovery owns that phase.
+    recordPhase("verifying");
     await recordFailedUpdateGatewayState(params.opts.run, serviceEnv);
     return outcome;
   };
@@ -253,11 +260,6 @@ export async function maybeRestartService(params: {
   }
   let activationAccepted = false;
   let updatedInstallRestartNeedsServiceRootProof = false;
-  const recordPhase = (phase: "restarting" | "verifying") => {
-    if (params.opts.run) {
-      recordUpdateRunPhase(params.opts.run.runId, phase, undefined, { env: params.opts.run.env });
-    }
-  };
   const verifyRestartedGateway = async (
     expectedGatewayVersion: string | undefined,
     expectedGatewayBuildId: string | undefined,
@@ -418,7 +420,7 @@ export async function maybeRestartService(params: {
         }
       }
       // Refresh already started and settled this process. Keep its health snapshot
-      // while completing HTTP readiness and inference without another restart.
+      // while completing HTTP readiness without another restart.
       if (refreshedGatewayHealth) {
         const healthy = await verifyRestartedGateway(
           expectedGatewayVersion,
