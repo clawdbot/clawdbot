@@ -48,7 +48,7 @@ type TrustedExporterInternalDiagnostics = NonNullable<
 };
 
 type ObserveProviderUsage = (params: {
-  config: OpenClawConfig;
+  isActive: () => boolean;
   listener: (snapshot: ProviderUsageMetricsSnapshot) => void;
 }) => Promise<() => void>;
 
@@ -119,7 +119,7 @@ function createServiceContext(params: {
                 observeProviderUsage: async (listener: ProviderUsageMetricsListener) => {
                   params.lease.assertActive("provider usage observer");
                   const release = await observeProviderUsage({
-                    config: params.config,
+                    isActive: params.lease.isActive,
                     listener,
                   });
                   return params.lease.retain(release);

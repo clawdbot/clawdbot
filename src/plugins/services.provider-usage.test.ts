@@ -71,4 +71,32 @@ describe("provider usage diagnostics capability", () => {
     await handle.stop();
     expect(release).toHaveBeenCalledOnce();
   });
+
+  it("carries lease revocation through asynchronous observer acquisition", async () => {
+    const acquired = vi.fn();
+    const gate = Promise.withResolvers<void>();
+    const observeProviderUsage = vi.fn(async ({ isActive }: { isActive: () => boolean }) => {
+      await gate.promise;
+      if (!isActive()) {
+        throw new Error("provider usage observer lease is no longer active");
+      }
+      acquired();
+      return vi.fn();
+    });
+    const contexts: OpenClawPluginServiceContext[] = [];
+    const handle = await startPluginServices({
+      registry: createRegistry(
+        "diagnostics-prometheus",
+        captureContext("diagnostics-prometheus", contexts),
+      ),
+      config: {},
+      observeProviderUsage,
+    });
+    const pending = providerUsageCapability(contexts[0])?.(() => {});
+    await handle.stop();
+    gate.resolve();
+
+    await expect(pending).rejects.toThrow("no longer active");
+    expect(acquired).not.toHaveBeenCalled();
+  });
 });

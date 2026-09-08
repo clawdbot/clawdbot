@@ -1,5 +1,5 @@
 // Lazily binds trusted diagnostics exporters to the Gateway-owned provider-usage cache.
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { loadConfig } from "../config/io.js";
 import type { ProviderUsageMetricsListener } from "../infra/provider-usage-metrics.types.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 
@@ -8,9 +8,15 @@ const loadProviderUsageCache = createLazyRuntimeModule(
 );
 
 export async function observeGatewayProviderUsageMetrics(params: {
-  config: OpenClawConfig;
+  isActive: () => boolean;
   listener: ProviderUsageMetricsListener;
 }): Promise<() => void> {
   const { observeProviderUsageMetrics } = await loadProviderUsageCache();
-  return observeProviderUsageMetrics(params);
+  if (!params.isActive()) {
+    throw new Error("provider usage observer lease is no longer active");
+  }
+  return observeProviderUsageMetrics({
+    getConfig: () => loadConfig(),
+    listener: params.listener,
+  });
 }

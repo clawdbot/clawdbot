@@ -320,19 +320,19 @@ function scheduleProviderUsageRefresh(params: {
       timeoutMs: PROVIDER_USAGE_TIMEOUT_MS,
     })
       .then((freshUsage) => {
-        recordProviderUsageMetricsRefresh({
-          agentId: params.agentId,
-          attemptAt,
-          credentialKey: params.credentialKey,
-          providerIds: params.providerIds,
-          providerKey: params.providerKey,
-          summary: freshUsage,
-        });
         const usage = retainLastGoodOnTimeout(freshUsage, params.lastGood);
         if (
           publishGeneration === cacheGeneration &&
           usageRefreshByAgentId.get(params.agentId) === refresh
         ) {
+          recordProviderUsageMetricsRefresh({
+            agentId: params.agentId,
+            attemptAt,
+            credentialKey: params.credentialKey,
+            providerIds: params.providerIds,
+            providerKey: params.providerKey,
+            summary: freshUsage,
+          });
           usageCacheByAgentId.set(params.agentId, {
             agentDir: params.agentDir,
             configRef: params.configRef,
@@ -346,14 +346,19 @@ function scheduleProviderUsageRefresh(params: {
         return usage;
       })
       .catch((err: unknown) => {
-        recordProviderUsageMetricsRefresh({
-          agentId: params.agentId,
-          attemptAt,
-          credentialKey: params.credentialKey,
-          error: err,
-          providerIds: params.providerIds,
-          providerKey: params.providerKey,
-        });
+        if (
+          publishGeneration === cacheGeneration &&
+          usageRefreshByAgentId.get(params.agentId) === refresh
+        ) {
+          recordProviderUsageMetricsRefresh({
+            agentId: params.agentId,
+            attemptAt,
+            credentialKey: params.credentialKey,
+            error: err,
+            providerIds: params.providerIds,
+            providerKey: params.providerKey,
+          });
+        }
         // Usage is auxiliary and stale data remains valid. A failed refresh
         // publishes nothing, so a capable client keeps seeing the incomplete
         // marker and reports it once its retry budget is spent.
@@ -487,7 +492,7 @@ export async function loadUsageStatusStaleWhileRevalidate(options: {
  * The returned lease schedules refreshes; listeners and Prometheus scrapes never fetch providers.
  */
 export function observeProviderUsageMetrics(params: {
-  config: OpenClawConfig;
+  getConfig: () => OpenClawConfig;
   listener: ProviderUsageMetricsListener;
   refreshIntervalMs?: number;
 }): () => void {
@@ -508,7 +513,7 @@ export function observeProviderUsageMetrics(params: {
 
   const refresh = async () => {
     try {
-      const snapshot = getProviderUsageRuntimeSnapshot({ config: params.config });
+      const snapshot = getProviderUsageRuntimeSnapshot({ config: params.getConfig() });
       if (agentId !== snapshot.agentId) {
         removeListener(agentId);
       }

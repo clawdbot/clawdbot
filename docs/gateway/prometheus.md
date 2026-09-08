@@ -86,7 +86,7 @@ For traces, logs, OTLP push, and OpenTelemetry GenAI semantic attributes, see [O
 </Steps>
 
 <Note>
-`diagnostics.enabled` defaults to `true`; set it to `false` only in tightly constrained environments. When it is `false` at exporter startup, the plugin still registers the HTTP route, but no diagnostic events or runtime identity are recorded, so the response is empty.
+`diagnostics.enabled` defaults to `true`; set it to `false` only in tightly constrained environments. When it is `false`, the plugin still registers the HTTP route, but no diagnostic events, runtime identity, or provider-usage refresh interest are recorded, so the response is empty. Hot changes to this setting replace the exporter service and acquire or release refresh interest accordingly.
 </Note>
 
 ## Metrics exported
@@ -216,10 +216,11 @@ Provider allowance metrics use the same selected credential as the unscoped
 `usage.status` method for the resolved default agent. They never include account
 email, profile IDs, credential IDs, plan names, or billing details.
 
-The exporter acquires refresh interest from the Gateway-owned provider-usage
-cache. Provider network requests run on that cache's bounded background schedule;
+When diagnostics are enabled, the exporter acquires refresh interest from the
+Gateway-owned provider-usage cache. Provider network requests run on that cache's bounded background schedule;
 serving `/api/diagnostics/prometheus` only renders retained facts and never calls
-a provider. A successful refresh replaces the provider's allowance windows. A
+a provider. Each refresh resolves the current runtime configuration, including
+hot changes to profile selection. A successful refresh replaces the provider's allowance windows. A
 transient failure keeps the last successful windows, advances
 `openclaw_provider_usage_last_attempt_timestamp_seconds`, and sets
 `openclaw_provider_usage_refresh_success` to `0`.

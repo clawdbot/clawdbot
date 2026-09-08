@@ -27,6 +27,25 @@ type ProviderUsageListener = (snapshot: {
 }) => void;
 
 describe("diagnostics-prometheus provider usage", () => {
+  it("does not acquire provider usage while diagnostics are disabled", async () => {
+    const exporter = createDiagnosticsPrometheusExporter();
+    const observeProviderUsage = vi.fn();
+    await exporter.service.start({
+      config: { diagnostics: { enabled: false } } as never,
+      stateDir: "/tmp/openclaw-prometheus-test",
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+      internalDiagnostics: {
+        emit: vi.fn(),
+        onEvent: () => vi.fn(),
+        observeProviderUsage,
+        reportExporterHealth: vi.fn(),
+      } as TrustedExporterInternalDiagnostics,
+    });
+
+    expect(observeProviderUsage).not.toHaveBeenCalled();
+    expect(exporter.render()).toBe("");
+  });
+
   it("renders cache-owned provider usage and withdraws stale series", async () => {
     const exporter = createDiagnosticsPrometheusExporter();
     const unsubscribe = vi.fn();
