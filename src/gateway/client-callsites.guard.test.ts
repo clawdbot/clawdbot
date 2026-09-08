@@ -12,6 +12,9 @@ const ALLOWED_GATEWAY_CLIENT_CALLSITES = new Set([
   "extensions/google-meet/src/voice-call-gateway.ts",
   "extensions/qa-lab/src/gateway-rpc-client.ts",
   "src/acp/server.ts",
+  // Recovery retains one authenticated exact-boot connection through terminal CAS.
+  // Its lifecycle-event gaps/closure permanently revoke that serving proof.
+  "src/cli/update-cli/update-command-serving-connection.ts",
   // Account wizards retain one socket so each RPC shares the same admission lifetime.
   "src/commands/models/accounts-gateway.ts",
   "src/gateway/call.ts",

@@ -170,6 +170,9 @@ describe("update global helpers", () => {
 
   it("identifies package targets that support registry version resolution", () => {
     expect(canResolveRegistryVersionForPackageTarget("latest")).toBe(true);
+    expect(canResolveRegistryVersionForPackageTarget("openclaw@1.0.0")).toBe(true);
+    expect(canResolveRegistryVersionForPackageTarget("openclaw@file:/owned/package")).toBe(false);
+    expect(canResolveRegistryVersionForPackageTarget("openclaw@github:owner/repo")).toBe(false);
     expect(canResolveRegistryVersionForPackageTarget("2026.3.22")).toBe(true);
     expect(canResolveRegistryVersionForPackageTarget("main")).toBe(false);
     expect(canResolveRegistryVersionForPackageTarget("github:openclaw/openclaw#main")).toBe(false);

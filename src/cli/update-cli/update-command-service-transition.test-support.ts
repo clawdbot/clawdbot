@@ -506,7 +506,11 @@ export function registerPluginMaintenanceTests(getFixture: () => PluginMaintenan
         updateInstallKind: mode === "git" ? "git" : "package",
         shouldRestart: true,
         jsonMode: true,
-        expectedService: { serviceEnv: state.env, serviceUpdateVerdict: verdict },
+        expectedService: {
+          serviceEnv: state.env,
+          serviceUpdateVerdict: verdict,
+          serviceManagerUid: before.serviceManagerUid,
+        },
         activatedInstall: { packageUpdateNodeRunner: process.execPath },
         timeoutMs: 1000,
       });

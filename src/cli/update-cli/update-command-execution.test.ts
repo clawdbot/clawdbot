@@ -79,7 +79,8 @@ vi.mock("./update-command-managed-context.js", async (importOriginal) => ({
   revalidateUpdateDatabaseContext: mocks.revalidateSchemaContext,
 }));
 
-vi.mock("./update-command-package.js", () => ({
+vi.mock("./update-command-package.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./update-command-package.js")>()),
   runPackageInstallUpdate: mocks.runPackageUpdate,
 }));
 
@@ -211,6 +212,23 @@ beforeEach(() => {
 });
 
 describe("mutable update execution", () => {
+  it("refuses service admission before mutable startup housekeeping", async () => {
+    mocks.maybeStopService.mockImplementation(async ({ phase, handoffFromGateway }) => {
+      if (handoffFromGateway) {
+        throw new UpdatePreMutationError("managed-service-preflight", "service owner changed");
+      }
+      return inspectOrStopService(phase);
+    });
+    const execution = await executeMutableUpdate(executionParams("package"));
+    expect(execution).toMatchObject({
+      mutationStarted: false,
+      result: { status: "error", reason: "managed-service-preflight" },
+    });
+    expect(mocks.prepareMutableUpdate).not.toHaveBeenCalled();
+    expect(mocks.runPackageUpdate).not.toHaveBeenCalled();
+    expect(mocks.serviceStopped).toBe(false);
+  });
+
   it.each(["available", "unavailable", "changed-owner"] as const)(
     "admits local artifacts from the staged version before rehearsal: %s",
     async (outcome) => {
@@ -354,7 +372,7 @@ describe("mutable update execution", () => {
     expect(mocks.runPackageUpdate).not.toHaveBeenCalled();
   });
 
-  it("captures the package target before schema revalidation and binds the latest service environment", async () => {
+  it("captures the package target and admitted service environment before schema awaits", async () => {
     const events: string[] = [];
     mocks.runPackageUpdate.mockImplementation(async () => {
       events.push("install");
@@ -412,7 +430,7 @@ describe("mutable update execution", () => {
     expect(mocks.runPackageUpdate).toHaveBeenCalledWith(
       expect.objectContaining({
         installSpec: "openclaw@1.0.1",
-        managedServiceEnv: { OPENCLAW_PROFILE: "revalidated" },
+        managedServiceEnv: { OPENCLAW_PROFILE: "default" },
       }),
     );
   });

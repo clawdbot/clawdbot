@@ -1,11 +1,16 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { defaultRuntime } from "../../runtime.js";
 
 const mocks = vi.hoisted(() => ({
   events: [] as string[],
   leaseActive: false,
+  databasePath: "",
   readConfig: vi.fn(),
 }));
+
+const dirs = useAutoCleanupTempDirTracker(afterEach);
 
 const validConfigSnapshot = {
   valid: true,
@@ -83,7 +88,7 @@ vi.mock("../../plugins/plugin-lifecycle-lease.js", () => ({
 }));
 
 vi.mock("../../state/openclaw-state-db.paths.js", () => ({
-  resolveOpenClawStateSqlitePath: vi.fn(() => "/tmp/openclaw.sqlite"),
+  resolveOpenClawStateSqlitePath: vi.fn(() => mocks.databasePath),
 }));
 
 vi.mock("../../state/openclaw-state-ownership.js", () => ({
@@ -177,6 +182,9 @@ function expectLifecycleBoundary(preLeaseEvent: string): void {
 
 describe("update plugin lifecycle lease boundaries", () => {
   beforeEach(() => {
+    // Ordering-only fixtures own an absent private state root; never probe a
+    // shared host path while real recovery admission is running.
+    mocks.databasePath = path.join(dirs.make("update-lease-order-"), "state", "openclaw.sqlite");
     vi.clearAllMocks();
     vi.unstubAllEnvs();
     mocks.events = [];
@@ -215,6 +223,35 @@ describe("update plugin lifecycle lease boundaries", () => {
       }
     },
   );
+
+  it("keeps explicitly unset candidate selectors absent and restores the caller on failure", async () => {
+    vi.stubEnv("OPENCLAW_PROFILE", "caller-profile");
+    vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_CONVERGENCE", "1");
+    const failure = new Error("candidate phase failed");
+    let observed: NodeJS.ProcessEnv | undefined;
+    try {
+      await expect(
+        withOwnedManagedUpdateEnv(
+          {
+            ...process.env,
+            OPENCLAW_PROFILE: undefined,
+            OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: undefined,
+          },
+          async () => {
+            await Promise.resolve();
+            observed = { ...process.env };
+            throw failure;
+          },
+        ),
+      ).rejects.toBe(failure);
+      expect(observed).not.toHaveProperty("OPENCLAW_PROFILE");
+      expect(observed).not.toHaveProperty("OPENCLAW_UPDATE_POST_CORE_CONVERGENCE");
+      expect(process.env.OPENCLAW_PROFILE).toBe("caller-profile");
+      expect(process.env.OPENCLAW_UPDATE_POST_CORE_CONVERGENCE).toBe("1");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
 
   it("returns resumed package work without Doctor completion and rereads state under the lease", async () => {
     await resumePostCoreUpdate({

@@ -1,3 +1,4 @@
+import { AsyncResource } from "node:async_hooks";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -533,6 +534,8 @@ describe("historical transcript directive migration", () => {
     `);
     closeOpenClawAgentDatabasesForTest();
 
+    // Capture the competing task before entering maintenance, without inheriting its authority.
+    const claimCompetingLease = AsyncResource.bind(claimOpenClawAgentDatabaseLease);
     let competingLeaseId: string | undefined;
     const agentDatabaseLease = await import("../state/openclaw-agent-db-lease.js");
     const originalAssert = agentDatabaseLease.assertAgentDatabaseMaintenanceAuthorityIfPresent;
@@ -546,7 +549,7 @@ describe("historical transcript directive migration", () => {
             AGENT_DATABASE_MAINTENANCE_LEASE.scope,
             AGENT_DATABASE_MAINTENANCE_LEASE.key,
           );
-        competingLeaseId = claimOpenClawAgentDatabaseLease({
+        competingLeaseId = claimCompetingLease({
           agentId: "competitor",
           path: path.join(stateDir, "competitor.sqlite"),
           env,
@@ -735,6 +738,8 @@ describe("historical transcript directive migration", () => {
     const originalEventJson = readEventJson(opened.path, "session-expired", 0);
     closeOpenClawAgentDatabasesForTest();
 
+    // Capture the competing task before entering maintenance, without inheriting its authority.
+    const claimCompetingLease = AsyncResource.bind(claimOpenClawAgentDatabaseLease);
     let competingLeaseId: string | undefined;
     const originalAssert = assertAgentDatabaseMaintenanceAuthority;
     const agentDatabaseLease = await import("../state/openclaw-agent-db-lease.js");
@@ -752,7 +757,7 @@ describe("historical transcript directive migration", () => {
             AGENT_DATABASE_MAINTENANCE_LEASE.scope,
             AGENT_DATABASE_MAINTENANCE_LEASE.key,
           );
-        competingLeaseId = claimOpenClawAgentDatabaseLease({
+        competingLeaseId = claimCompetingLease({
           agentId: "competitor",
           path: path.join(stateDir, "competitor.sqlite"),
           env,
@@ -839,6 +844,8 @@ describe("historical transcript directive migration", () => {
     fs.writeFileSync(archivePath, archiveBytes);
     closeOpenClawAgentDatabasesForTest();
 
+    // Capture the competing task before entering maintenance, without inheriting its authority.
+    const claimCompetingLease = AsyncResource.bind(claimOpenClawAgentDatabaseLease);
     let competingLeaseId: string | undefined;
     const originalAssert = assertAgentDatabaseMaintenanceAuthority;
     const agentDatabaseLease = await import("../state/openclaw-agent-db-lease.js");
@@ -853,7 +860,7 @@ describe("historical transcript directive migration", () => {
               AGENT_DATABASE_MAINTENANCE_LEASE.scope,
               AGENT_DATABASE_MAINTENANCE_LEASE.key,
             );
-          competingLeaseId = claimOpenClawAgentDatabaseLease({
+          competingLeaseId = claimCompetingLease({
             agentId: "competitor",
             path: path.join(stateDir, "competitor.sqlite"),
             env,
@@ -935,6 +942,8 @@ describe("historical transcript directive migration", () => {
     });
 
     let competingWriterError: unknown;
+    // Capture the competing task before entering maintenance, without inheriting its authority.
+    const claimCompetingLease = AsyncResource.bind(claimOpenClawAgentDatabaseLease);
     let competingLeaseId: string | undefined;
     let cursorAtCompetition: unknown;
     let competedAt = 0;
@@ -944,7 +953,7 @@ describe("historical transcript directive migration", () => {
         cursorAtCompetition = readMigrationCursor(opened.path);
         competedAt = Date.now();
         try {
-          competingLeaseId = claimOpenClawAgentDatabaseLease({
+          competingLeaseId = claimCompetingLease({
             agentId: "competitor",
             path: path.join(stateDir, "competitor.sqlite"),
             env,

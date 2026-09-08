@@ -3,6 +3,10 @@ import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { resolveConfigPath } from "../../config/paths.js";
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
 import { createLowDiskSpaceWarning } from "../../infra/disk-space.js";
+import type {
+  PackageRecoveryHooks,
+  PreparePackageRecovery,
+} from "../../infra/package-update-recovery.js";
 import {
   markPackagePostInstallDoctorAdvisory,
   runGlobalPackageUpdateSteps,
@@ -15,6 +19,7 @@ import {
 } from "../../infra/update-doctor-result.js";
 import { readBuiltGatewayBuildId } from "../../infra/update-git-runtime.js";
 import {
+  canResolveRegistryVersionForPackageTarget,
   createGlobalInstallEnv,
   resolveGlobalInstallSpec,
   resolveGlobalInstallTarget,
@@ -41,6 +46,7 @@ import {
   resolveNodeRunner,
   runUpdateStep,
   UpdatePreMutationError,
+  type UpdateCommandOptions,
 } from "./shared.js";
 import {
   createUpdateConfigSnapshot,
@@ -48,6 +54,48 @@ import {
   type UpdateConfigSnapshot,
 } from "./update-command-config-snapshot.js";
 import { resolveUpdateTargetEnv } from "./update-command-service-env.js";
+import { beginUpdateCommandStartup } from "./update-command-startup.js";
+
+/** Resolve only at the validated staged boundary, after the normal CLI acquires
+ * its executor. Saved capability data alone never grants startup authority. */
+export function selectUpdateCommandStartup(
+  params: {
+    opts: UpdateCommandOptions;
+    root: string;
+    installKind: "git" | "package" | "unknown";
+    updateInstallKind: "git" | "package" | "unknown";
+    shouldRestart: boolean;
+    updateStepTimeoutMs: number;
+    packageUpdateNodeRunner?: string;
+  },
+  context: {
+    env: NodeJS.ProcessEnv;
+    checkpointContinuation: boolean;
+    servingManagedService: boolean;
+  },
+): PreparePackageRecovery | undefined {
+  if (
+    !context.checkpointContinuation ||
+    !context.servingManagedService ||
+    !params.shouldRestart ||
+    params.installKind !== "package" ||
+    params.updateInstallKind !== "package" ||
+    params.opts.recovery ||
+    !params.opts.run?.executorFence
+  ) {
+    return undefined;
+  }
+  return (source) =>
+    beginUpdateCommandStartup({
+      opts: params.opts,
+      root: params.root,
+      env: context.env,
+      source,
+      managedService: true,
+      timeoutMs: params.updateStepTimeoutMs,
+      nodeRunner: params.packageUpdateNodeRunner,
+    }).then(({ hooks }) => hooks);
+}
 
 export async function readPackageUpdateIdentity(root: string) {
   const [version, buildId] = await Promise.all([
@@ -220,6 +268,8 @@ export type PackageInstallUpdateParams = {
   validateCandidate: (root: string) => Promise<UpdateStepResult[]>;
   beforeActivate: () => Promise<void>;
   onTransaction: (transaction: PackageUpdateTransaction) => void;
+  recovery?: PackageRecoveryHooks;
+  prepareRecovery?: PreparePackageRecovery;
   onConfigSnapshot?: PackageDoctorOptions["onConfigSnapshot"];
 };
 
@@ -242,6 +292,7 @@ export async function runPackageInstallUpdate(
       honorPackageRoot: params.honorPackageRoot === true,
     });
   }
+  const durablePackageLayout = installTarget.manager === "npm";
   const pkgRoot = installTarget.packageRoot;
   const packageName =
     (pkgRoot ? await readPackageName(pkgRoot) : await readPackageName(params.root)) ??
@@ -272,11 +323,19 @@ export async function runPackageInstallUpdate(
     validateCandidate: params.validateCandidate,
     beforeActivate: params.beforeActivate,
     onTransaction: params.onTransaction,
+    recovery: params.recovery,
+    // Shared-project pnpm/Bun transactions keep their existing owner. Their
+    // retained-root layout is not the sealed package transaction used here.
+    get prepareRecovery() {
+      return durablePackageLayout ? params.prepareRecovery : undefined;
+    },
     installTarget,
     installSpec,
     packageName,
     packageRoot: pkgRoot,
-    requirePackageReplacement: params.installKind === "git",
+    // Explicit artifacts identify the payload; an equal version is not artifact equality.
+    requirePackageReplacement:
+      params.installKind === "git" || !canResolveRegistryVersionForPackageTarget(installSpec),
     runCommand: runCommandWithTimeout,
     timeoutMs: params.timeoutMs,
     ...(installEnv === undefined ? {} : { env: installEnv }),
@@ -285,7 +344,14 @@ export async function runPackageInstallUpdate(
         ...stepParams,
         progress: params.progress,
       }),
-    postVerifyStep: (root) => runPackageUpdateDoctor({ ...params, root }),
+    // Durable startup captures the original state before activation. Its fresh
+    // candidate owns Doctor and after-image binding; the old process must not
+    // launch a mutation child between package publication and that handoff.
+    get postVerifyStep() {
+      return (durablePackageLayout && params.prepareRecovery) || params.recovery
+        ? undefined
+        : (root: string) => runPackageUpdateDoctor({ ...params, root });
+    },
   });
 
   const afterBuildId = packageUpdate.activePackageRoot

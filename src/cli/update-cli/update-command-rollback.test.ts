@@ -8,6 +8,8 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 
 import { stopChildProcess } from "../../../test/helpers/stop-child-process.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createConfigIO } from "../../config/config.js";
+import { hashConfigRaw } from "../../config/io.read-helpers.js";
+import { FILE_LOCK_TIMEOUT_ERROR_CODE, withFileLock } from "../../infra/file-lock.js";
 import { readUpdateStateSchemaVersions } from "../../infra/update-candidate-state.js";
 import {
   captureUpdateDoctorConfigWrites,
@@ -672,7 +674,6 @@ describe("verified package rollback", () => {
           change === "doctor" ||
           change === "doctor-unchanged" ||
           change === "doctor-include" ||
-          change === "doctor-locked-edit" ||
           change === "doctor-restore-edit" ||
           change === "identity-read-failed" ||
           change === "new-agent"
@@ -727,6 +728,95 @@ describe("verified package rollback", () => {
       }
     },
   );
+
+  it("excludes a competing config writer across package rollback and config restoration", async () => {
+    const stateDir = dirs.make("rollback-config-owner-");
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const configPath = path.join(stateDir, "openclaw.json");
+    const original = '{"gateway":{"mode":"local","port":19101}}\n';
+    const candidate = '{"gateway":{"mode":"local","port":19102}}\n';
+    fs.writeFileSync(configPath, original);
+    const configSnapshot = await readPreviousConfig(env);
+    const config = configSnapshot.sourceConfigBeforeMigrations ?? configSnapshot.sourceConfig;
+    const schemaVersions = await readUpdateStateSchemaVersions({ stateDir, config, env });
+    fs.writeFileSync(configPath, candidate);
+    const lockOptions = {
+      retries: { retries: 0, factor: 1, minTimeout: 1, maxTimeout: 1 },
+      stale: 60_000,
+    };
+    let foreignWrite = false;
+    const outcome = await rollbackFailedUpdate({
+      result: {
+        status: "error",
+        mode: "npm",
+        root: candidateRoot,
+        reason: "readyz-unhealthy",
+        steps: [],
+        durationMs: 1,
+        before: { version: "2026.9.1" },
+        after: { version: "2026.9.3" },
+      },
+      previousRoot,
+      configSnapshot,
+      schemaVersions,
+      timeoutMs: 1000,
+      activationConfig: {
+        path: configPath,
+        raw: original,
+        hash: hashConfigRaw(candidate),
+        doctorOwned: true,
+      },
+      opts: { json: true },
+      preManagedServiceStop: {
+        inspected: true,
+        runtimeInspected: true,
+        running: false,
+        stopped: false,
+        serviceEnv: env,
+      },
+      packageTransaction: {
+        backupRoot: previousRoot,
+        complete: async () => {},
+        rollback: async () => {
+          try {
+            await withFileLock(configPath, lockOptions, async () => {
+              foreignWrite = true;
+              fs.writeFileSync(configPath, '{"gateway":{"mode":"local","port":19103}}\n');
+            });
+          } catch (error) {
+            if (
+              !(
+                error instanceof Error &&
+                "code" in error &&
+                error.code === FILE_LOCK_TIMEOUT_ERROR_CODE
+              )
+            ) {
+              throw error;
+            }
+          }
+          return {
+            name: "package rollback",
+            command: "restore",
+            cwd: previousRoot,
+            durationMs: 1,
+            exitCode: 0,
+            activePackageRoot: previousRoot,
+          };
+        },
+      },
+    });
+    expect(foreignWrite).toBe(false);
+    expect(fs.readFileSync(configPath, "utf8")).toBe(original);
+    expect(outcome.result).toMatchObject({
+      root: previousRoot,
+      recovery: { packageRollbackVerified: true },
+    });
+    expect(mocks.restart).not.toHaveBeenCalled();
+    await withFileLock(configPath, lockOptions, async () => {
+      fs.writeFileSync(configPath, candidate);
+    });
+    expect(fs.readFileSync(configPath, "utf8")).toBe(candidate);
+  });
 
   it("leaves a failed rollback's task recovery with finalization", async () => {
     const complete = vi.fn(async () => {});

@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
+import type { LegacyConfigUpdatePlan } from "../../commands/doctor/legacy-config-repair.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import type { ConfigFileSnapshot } from "../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
@@ -22,6 +23,7 @@ export async function captureOwnedManagedUpdatePreflightContext(params: {
   stopState: PreManagedServiceStop | undefined;
   processEnv: NodeJS.ProcessEnv;
   invocationCwd?: string;
+  legacyConfigPlan?: LegacyConfigUpdatePlan;
 }) {
   const state = params.stopState;
   if (state?.serviceUpdateVerdict?.kind !== "owned" || !state.serviceEnv) {
@@ -36,13 +38,16 @@ export async function captureOwnedManagedUpdatePreflightContext(params: {
         invocationCwd: params.invocationCwd,
       }),
     ),
+    { legacyConfigPlan: params.legacyConfigPlan },
   );
 }
 
 export async function revalidateUpdateDatabaseContext(
   expected: Awaited<ReturnType<typeof captureTargetDatabaseSchemaContext>>,
 ) {
-  const current = await captureTargetDatabaseSchemaContext(expected.readEnv);
+  const current = await captureTargetDatabaseSchemaContext(expected.readEnv, {
+    legacyConfigPlan: expected.legacyConfigPlan,
+  });
   const before = expected.configSnapshot;
   const after = current.configSnapshot;
   if (
@@ -77,7 +82,13 @@ export async function withOwnedManagedUpdateEnv<T>(
     delete process.env[key];
   }
   // A caller may pass process.env itself; clearing it must not erase the supplied scope.
-  Object.assign(process.env, env === process.env ? previousEnv : env);
+  const phaseEnv = env === process.env ? previousEnv : env;
+  for (const [key, value] of Object.entries(phaseEnv)) {
+    // Node stringifies undefined on assignment; unset selectors must remain absent.
+    if (value !== undefined) {
+      process.env[key] = value;
+    }
+  }
   try {
     return await run();
   } finally {

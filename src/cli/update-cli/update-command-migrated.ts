@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { TriageFailureContext } from "../../commands/triage-prompt.js";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -11,22 +11,35 @@ import {
   resolveUpdateStateContentVersion,
   updateStateSchemaVersionsMatch,
 } from "../../infra/update-candidate-state.js";
-import type { UpdateRequesterAuthority } from "../../infra/update-requester-authority.js";
 import type { UpdateRunStep } from "../../infra/update-run-record.js";
-import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { runUtf8CommandWithTimeout } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { CLI_NAME } from "../cli-name.js";
 import { resolveNodeRunner } from "./shared.js";
+import { continueDurableUpdateInFreshProcess } from "./update-command-candidate-process.js";
+import {
+  withUpdateCommandExecutorChild,
+  type UpdateCommandChildGrant,
+} from "./update-command-executor.js";
+import type {
+  MigratedUpdateFinalizationInput,
+  MigratedUpdateFinalizationResult,
+} from "./update-command-migrated-types.js";
 import type { FinishUpdateParams } from "./update-command-post-update.js";
+import { UpdateCommandRecoveryPendingError } from "./update-command-recovery.js";
 import { UpdateCommandFailure } from "./update-command-result.js";
 import {
   resolveUpdatedInstallCommandEnv,
   stripGatewayServiceMarkerEnv,
 } from "./update-command-service-env.js";
 import { createWindowsTaskAutoStartGuard } from "./update-command-service-maintenance.js";
+
+export type {
+  MigratedUpdateFinalizationInput,
+  MigratedUpdateFinalizationResult,
+} from "./update-command-migrated-types.js";
 
 /** Inspect private state copies without reopening migrated state through the previous runtime. */
 export async function inspectActivatedUpdateState(
@@ -92,57 +105,87 @@ export async function inspectActivatedUpdateState(
   }
 }
 
-export type MigratedUpdateFinalizationInput = {
-  params: Omit<FinishUpdateParams, "packageTransaction" | "preManagedServiceStop" | "opts"> & {
-    opts: Omit<FinishUpdateParams["opts"], "run"> & {
-      run?: Omit<NonNullable<FinishUpdateParams["opts"]["run"]>, "requesterAuthority"> & {
-        requesterAuthority?: Pick<UpdateRequesterAuthority, "requester">;
-      };
-    };
-    preManagedServiceStop?: Omit<
-      NonNullable<FinishUpdateParams["preManagedServiceStop"]>,
-      "windowsTaskAutoStartRecovery"
-    >;
-  };
-  bufferedSteps: UpdateRunStep[];
-  windowsTaskAutoStartSuspended?: true;
-  resultPath: string;
-};
-
-export type MigratedUpdateFinalizationResult = {
-  result: UpdateRunResult;
-  exitCode: number;
-  terminalRunId: string;
-  automaticTriage?: TriageFailureContext;
-};
-
 /** After migration, only candidate code may reopen state or finish the run. */
 export async function continueMigratedUpdateInFreshProcess(
   params: FinishUpdateParams,
   bufferedSteps: UpdateRunStep[],
 ): Promise<Omit<MigratedUpdateFinalizationResult, "terminalRunId">> {
+  if (params.opts.recovery) {
+    return await continueDurableUpdateInFreshProcess(params, bufferedSteps);
+  }
   const run = params.opts.run;
   if (!run) {
     throw new Error("Migrated update continuation requires its admitted run.");
   }
   const windowsRecovery = params.preManagedServiceStop?.windowsTaskAutoStartRecovery;
   const result = params.result;
-  if (windowsRecovery && params.preManagedServiceStop) {
-    // The parent retains its original definition-refresh grant for compensation.
-    // Only the fresh finalizer may restore autostart at activation after migration.
-    windowsRecovery.handoff(
-      createWindowsTaskAutoStartGuard({
-        root: result.root ?? params.root,
-        before: params.preManagedServiceStop,
-        timeoutMs: params.updateStepTimeoutMs,
-      }),
-    );
-  }
   const scratchDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-migrated-"));
   try {
     const root = result.root;
     if (!root) {
       throw new Error("The active installation root is unknown; candidate finalization is unsafe.");
+    }
+    const workerCommand = [
+      params.packageUpdateNodeRunner ?? resolveNodeRunner(),
+      path.join(root, "dist", runtimeProcessEntrypoints.updateMigratedFinalize.distWorkerPath),
+    ];
+    const workerEnv = {
+      ...stripGatewayServiceMarkerEnv(
+        resolveUpdatedInstallCommandEnv({
+          processEnv: params.ownedManagedUpdateEnv ?? run.env,
+        }),
+      ),
+      OPENCLAW_UPDATE_IN_PROGRESS: "1",
+      TMPDIR: scratchDir,
+      TMP: scratchDir,
+      TEMP: scratchDir,
+    };
+    if (run.executorFence) {
+      run.executorFence.assertCurrent();
+      // Compatibility only, never authority. An older installed worker ignores
+      // new JSON fields, so refuse before exposing any continuation input.
+      const check = await runUtf8CommandWithTimeout([...workerCommand, "--check"], {
+        cwd: root,
+        baseEnv: {},
+        env: workerEnv,
+        timeoutMs: 30_000,
+        killProcessTree: true,
+        requireProcessTreeExtinction: true,
+        killGraceMs: 500,
+        maxOutputBytes: 64 * 1024,
+      });
+      run.executorFence.assertCurrent();
+      let contract: unknown;
+      try {
+        contract = JSON.parse(check.stdout);
+      } catch (cause) {
+        throw new UpdateCommandRecoveryPendingError(
+          "Candidate live executor delegation capability could not be inspected.",
+          { cause },
+        );
+      }
+      if (
+        check.termination !== "exit" ||
+        check.code !== 0 ||
+        check.cleanup !== "normal" ||
+        !isRecord(contract) ||
+        contract.executorDelegation !== "pid-start-v1"
+      ) {
+        throw new UpdateCommandRecoveryPendingError(
+          "Candidate runtime does not support live executor delegation; recovery remains pending.",
+        );
+      }
+    }
+    if (windowsRecovery && params.preManagedServiceStop) {
+      // The parent retains its original definition-refresh grant for compensation.
+      // Only the fresh finalizer may restore autostart at activation after migration.
+      windowsRecovery.handoff(
+        createWindowsTaskAutoStartGuard({
+          root: result.root ?? params.root,
+          before: params.preManagedServiceStop,
+          timeoutMs: params.updateStepTimeoutMs,
+        }),
+      );
     }
     const { packageTransaction: _transaction, preManagedServiceStop, ...serializable } = params;
     let stopState: MigratedUpdateFinalizationInput["params"]["preManagedServiceStop"];
@@ -151,7 +194,7 @@ export async function continueMigratedUpdateInFreshProcess(
       stopState = serializableStop;
     }
     const resultPath = path.join(scratchDir, "result.json");
-    const { requesterAuthority, ...runIdentity } = run;
+    const { requesterAuthority, executorFence, ...runIdentity } = run;
     const input: MigratedUpdateFinalizationInput = {
       params: {
         ...serializable,
@@ -171,34 +214,24 @@ export async function continueMigratedUpdateInFreshProcess(
       ...(windowsRecovery ? { windowsTaskAutoStartSuspended: true } : {}),
       resultPath,
     };
-    const child = await runUtf8CommandWithTimeout(
-      [
-        params.packageUpdateNodeRunner ?? resolveNodeRunner(),
-        path.join(root, "dist", runtimeProcessEntrypoints.updateMigratedFinalize.distWorkerPath),
-      ],
-      {
+    const runChild = (grant?: UpdateCommandChildGrant, beforeInput?: (pid: number) => void) =>
+      runUtf8CommandWithTimeout(workerCommand, {
         cwd: root,
         baseEnv: {},
-        env: {
-          ...stripGatewayServiceMarkerEnv(
-            resolveUpdatedInstallCommandEnv({
-              processEnv: params.ownedManagedUpdateEnv ?? run.env,
-            }),
-          ),
-          OPENCLAW_UPDATE_IN_PROGRESS: "1",
-          TMPDIR: scratchDir,
-          TMP: scratchDir,
-          TEMP: scratchDir,
-        },
-        input: JSON.stringify(input),
+        env: workerEnv,
+        input: JSON.stringify({ ...input, ...(grant ? { executor: grant } : {}) }),
+        beforeInput,
         // This continuation includes bounded plugin steps as well as service
         // verification; the whole-process bound must exceed one step's budget.
         timeoutMs: Math.max(30 * 60_000, params.updateStepTimeoutMs * 6),
         killProcessTree: true,
+        requireProcessTreeExtinction: true,
         killGraceMs: 500,
         maxOutputBytes: 1024 * 1024,
-      },
-    );
+      });
+    const child = executorFence
+      ? await withUpdateCommandExecutorChild(executorFence, runChild)
+      : await runChild();
     if (child.stdout) {
       process.stdout.write(child.stdout);
     }
@@ -211,6 +244,8 @@ export async function continueMigratedUpdateInFreshProcess(
     if (
       child.termination !== "exit" ||
       child.code !== 0 ||
+      child.cleanup !== "normal" ||
+      (executorFence && response.executorDelegation !== "pid-start-v1") ||
       response.terminalRunId !== run.runId ||
       response.result.runId !== run.runId ||
       !Number.isInteger(response.exitCode)
@@ -244,6 +279,11 @@ export async function continueMigratedUpdateInFreshProcess(
       automaticTriage: response.automaticTriage,
     };
   } catch (error) {
+    if (error instanceof UpdateCommandRecoveryPendingError) {
+      // A refused compatibility/admission check is not delegated completion and
+      // cannot authorize native restoration in the old, migrated runtime.
+      throw error;
+    }
     try {
       await windowsRecovery?.complete(false);
     } catch (cause) {

@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { assertConfigWriteAllowedInCurrentMode } from "../../config/config.js";
 import { disableCurrentOpenClawUpdateLaunchdJob } from "../../daemon/launchd.js";
 import { mergeGatewayServiceEnv } from "../../daemon/service-env-merge.js";
@@ -33,34 +34,58 @@ import { readUpdateRunDriver } from "../../infra/update-run-driver.js";
 import {
   adoptUpdateRun,
   createUpdateRun,
+  finishInterruptedUpdatePreviewInTransaction,
   finishUpdateRun,
   getUpdateRun,
   heartbeatUpdateRun,
   recordUpdateRunPhase,
   recordUpdateRunStep,
 } from "../../infra/update-run-ledger.js";
-import { summarizeUpdateStepFailure, type UpdateRunStep } from "../../infra/update-run-record.js";
+import {
+  summarizeUpdateStepFailure,
+  type UpdateRunRecord,
+  type UpdateRunStep,
+} from "../../infra/update-run-record.js";
+import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
+import { isUpdateRecoveryPending } from "../../infra/update-run-recovery-schema.js";
+import { readRecoveries } from "../../infra/update-run-recovery-store.js";
+import { inspectUpdateRecoveries, loadUpdateRecovery } from "../../infra/update-run-recovery.js";
 import type { UpdateRunResult, UpdateStepProgress } from "../../infra/update-runner.js";
+import { defaultRuntime } from "../../runtime.js";
+import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { assertOpenClawStateWriteAllowedAtPath } from "../../state/openclaw-state-ownership.js";
 import { VERSION } from "../../version.js";
+import { registerSignalExitBarrier, waitForSignalExitBarriers } from "../signal-exit-barrier.js";
 import { parseUpdateTimeoutMs, resolveUpdateRoot, type UpdateCommandOptions } from "./shared.js";
 import { suppressDeprecations } from "./suppress-deprecations.js";
+import {
+  admitMutableUpdateSignalRun,
+  withMutableUpdateSignals,
+} from "./update-command-mutable-signals.js";
 import {
   resolveOwnedManagedUpdateEnv,
   resolveServiceRefreshEnv,
 } from "./update-command-service-env.js";
 import {
+  GatewayServiceUpdateOwnershipError,
   gatewayServiceCommandUsesRoot,
   isGatewayServiceManagementAllowedForUpdate,
   resolveManagedServicePackageUpdatePlan,
 } from "./update-command-service-plan.js";
 
-export async function admitUpdateCommandRun(params: {
+// Identity in this map is minted only for a new local preview, never reconstructed
+// from a run ID, process absence, or another invocation's diagnostic history.
+const previewAdmissions = new WeakMap<
+  object,
+  { record: UpdateRunRecord; env: NodeJS.ProcessEnv }
+>();
+
+export async function resolveUpdateCommandAdmissionEnv(params: {
   opts: UpdateCommandOptions;
   root: string;
   invocationCwd?: string;
-}): Promise<NonNullable<UpdateCommandOptions["run"]>> {
+}): Promise<NodeJS.ProcessEnv> {
   let env = resolveServiceRefreshEnv(process.env, params.invocationCwd);
   // A preview belongs to its explicit state directory. Real updates follow the
   // same owned service selectors as finalization, then freeze them for all writers.
@@ -69,18 +94,50 @@ export async function admitUpdateCommandRun(params: {
     !env[UPDATE_RUN_ID_ENV] &&
     isGatewayServiceManagementAllowedForUpdate(env)
   ) {
+    // Admission must not load native units or turn unavailable ownership into
+    // an absent service and a write to the caller's unrelated profile.
     const command = await resolveGatewayService()
-      .readCommand(env, { requireEffective: true })
-      .catch(() => null);
-    if (command && (await gatewayServiceCommandUsesRoot({ root: params.root, command }))) {
-      env = resolveOwnedManagedUpdateEnv({
-        processEnv: env,
-        serviceEnv: mergeGatewayServiceEnv(env, command),
-        serviceDefinitionEnv: resolveManagedGatewayServiceCommand(command)?.environment,
-        invocationCwd: params.invocationCwd,
+      .readCommand(env, {
+        requireEffective: true,
+        requireLoaded: true,
+      })
+      .catch((cause: unknown) => {
+        throw new GatewayServiceUpdateOwnershipError(
+          "Gateway service inspection is unavailable before update admission. Run `openclaw gateway status --deep` from the service's owning account and retry when service access is restored.",
+          cause,
+        );
       });
+    if (command) {
+      const usesRoot = await gatewayServiceCommandUsesRoot({ root: params.root, command });
+      if (usesRoot === null) {
+        throw new GatewayServiceUpdateOwnershipError(
+          "Gateway service package ownership could not be resolved before update admission; inspect the service from its owning account and retry.",
+          undefined,
+        );
+      }
+      if (usesRoot) {
+        env = resolveOwnedManagedUpdateEnv({
+          processEnv: env,
+          serviceEnv: mergeGatewayServiceEnv(env, command),
+          serviceDefinitionEnv: resolveManagedGatewayServiceCommand(command)?.environment,
+          invocationCwd: params.invocationCwd,
+        });
+      }
     }
   }
+  return env;
+}
+
+export async function admitUpdateCommandRun(params: {
+  opts: UpdateCommandOptions;
+  root: string;
+  invocationCwd?: string;
+}): Promise<NonNullable<UpdateCommandOptions["run"]>> {
+  const env = await resolveUpdateCommandAdmissionEnv(params);
+  // A previous invocation may have died with a sealed restoration plan. Detect
+  // it before any writable owner open or history row creation changes that state.
+  // An inherited diagnostic run ID is not a durable continuation claim.
+  await assertUpdateRecoveryAdmission({ env });
   await assertOpenClawStateWriteAllowedAtPath({
     databasePath: resolveOpenClawStateSqlitePath(env),
     env,
@@ -104,7 +161,85 @@ export async function admitUpdateCommandRun(params: {
   const requesterAuthority = requester
     ? await createManagedUpdateRequesterAuthority(requester, env)
     : undefined;
-  return { runId: record.runId, env, ...(requesterAuthority ? { requesterAuthority } : {}) };
+  const run = { runId: record.runId, env, ...(requesterAuthority ? { requesterAuthority } : {}) };
+  if (
+    !env[UPDATE_RUN_ID_ENV] &&
+    env.OPENCLAW_UPDATE_RUN_HANDOFF !== "1" &&
+    env[POST_CORE_UPDATE_ENV] !== "1"
+  ) {
+    if (params.opts.dryRun === true) {
+      previewAdmissions.set(run, { record, env: { ...env } });
+    } else {
+      admitMutableUpdateSignalRun(run, record);
+    }
+  }
+  return run;
+}
+
+/** Own diagnostics only for this freshly admitted invocation's lexical lifetime. */
+export async function withUpdatePreviewSignals<T>(
+  opts: UpdateCommandOptions,
+  operation: () => Promise<T>,
+): Promise<T> {
+  const admission = opts.dryRun === true && opts.run ? previewAdmissions.get(opts.run) : undefined;
+  if (!admission || !opts.run) {
+    return await withMutableUpdateSignals(opts, operation);
+  }
+  previewAdmissions.delete(opts.run);
+  const { record: expected, env } = admission;
+  let interrupted = false;
+  let shutdown: Promise<void> | undefined;
+  const unregister = registerSignalExitBarrier(async () => {
+    if (
+      !interrupted ||
+      process.env.OPENCLAW_UPDATE_RUN_HANDOFF === "1" ||
+      process.env[POST_CORE_UPDATE_ENV] === "1"
+    ) {
+      return;
+    }
+    // Missing/displaced canonical state, pending recovery, or a changed row is
+    // not permission to open a writable runtime or dispose of another owner.
+    await assertUpdateRecoveryAdmission({ env });
+    if (!isDeepStrictEqual(getUpdateRun(expected.runId, { env }), expected)) {
+      return;
+    }
+    runOpenClawStateWriteTransaction(
+      (database) => {
+        const options = { env, database };
+        if (
+          readRecoveries(database.db).some(
+            (entry) => entry.runId === expected.runId || isUpdateRecoveryPending(entry),
+          )
+        ) {
+          return;
+        }
+        finishInterruptedUpdatePreviewInTransaction(database.db, expected, options);
+      },
+      { env },
+    );
+  });
+  const onSignal = (code: number) => {
+    interrupted = true;
+    shutdown ??= waitForSignalExitBarriers()
+      .catch(() => {
+        defaultRuntime.error(
+          "Preview interruption could not be recorded; history remains pending.",
+        );
+      })
+      .finally(() => process.exit(code));
+  };
+  const onSigint = () => onSignal(130);
+  const onSigterm = () => onSignal(143);
+  process.on("SIGINT", onSigint);
+  process.on("SIGTERM", onSigterm);
+  try {
+    return await operation();
+  } finally {
+    await shutdown;
+    process.off("SIGINT", onSigint);
+    process.off("SIGTERM", onSigterm);
+    unregister();
+  }
 }
 
 export function failUpdateCommandRun(
@@ -112,6 +247,11 @@ export function failUpdateCommandRun(
   run: NonNullable<UpdateCommandOptions["run"]>,
 ): void {
   const options = { env: run.env };
+  // Recovery owns failure/outcome publication; outer unwind must not rewrite a
+  // database whose exact contents may still be needed to reconcile restoration.
+  if (loadUpdateRecovery(run.runId, options)) {
+    return;
+  }
   const active = getUpdateRun(run.runId, options);
   if (active?.status !== "running") {
     return;
@@ -187,6 +327,41 @@ export function completeUpdateCommandRun(
 ): UpdateRunResult {
   if (!run) {
     return result;
+  }
+  // A process-local result cannot complete an operationally pending update or
+  // authorize package retirement. Only the durable finalizer may close it.
+  const inspected = inspectUpdateRecoveries({ env: run.env }).find(
+    (entry) => entry.record.runId === run.runId,
+  );
+  // A matching historical record can only project its saved outcome or remain
+  // pending below. The mutable fallback still uses strict execution admission;
+  // unrelated legacy evidence must not become an absent/clean recovery state.
+  const recovery =
+    inspected?.format === "legacy-serving"
+      ? inspected.record
+      : loadUpdateRecovery(run.runId, { env: run.env });
+  if (
+    recovery?.terminal &&
+    getUpdateRun(run.runId, { env: run.env })?.status === recovery.terminal.status
+  ) {
+    // Read the atomic durable outcome; diagnostics never authorize retention cleanup.
+    return {
+      ...result,
+      status: recovery.terminal.status === "succeeded" ? "ok" : "error",
+      reason:
+        recovery.terminal.status === "succeeded"
+          ? undefined
+          : (recovery.primaryFailure?.code ?? "update-rolled-back"),
+      runId: run.runId,
+    };
+  }
+  if (recovery) {
+    return {
+      ...result,
+      status: "error",
+      reason: result.reason ?? "update-recovery-pending",
+      runId: run.runId,
+    };
   }
   const normalized = normalizeControlPlaneUpdateResult({ ...result, runId: run.runId });
   const recordOptions = { env: run.env, redactPaths: result.root ? [result.root] : [] };

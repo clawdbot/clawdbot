@@ -1,3 +1,4 @@
+import type { LegacyConfigUpdatePlan } from "../../commands/doctor/legacy-config-repair.js";
 import type { UpdateChannel } from "../../infra/update-channels.js";
 import type { DevUpdateTarget } from "../../infra/update-dev-target.js";
 import { canResolveRegistryVersionForPackageTarget } from "../../infra/update-global.js";
@@ -25,6 +26,7 @@ export async function preflightUpdateCommandSchemas(params: {
   shouldRestart: boolean;
   updateStepTimeoutMs: number;
   invocationCwd?: string;
+  legacyConfigPlan?: LegacyConfigUpdatePlan;
   managedServiceRootRedirect: ManagedServiceRootRedirect | null;
   channel: UpdateChannel;
   devTarget?: DevUpdateTarget;
@@ -70,6 +72,7 @@ export async function preflightUpdateCommandSchemas(params: {
         timeoutMs: updateStepTimeoutMs,
         invocationCwd,
         managedServiceRootRedirect,
+        legacyConfigPlan: params.legacyConfigPlan,
       });
       const target =
         updateInstallKind === "git"

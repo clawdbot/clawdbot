@@ -82,7 +82,10 @@ describe("state database permission hardening without chmod support", () => {
 
   it("rethrows EPERM when existing permissions are too broad", () => {
     const stateDir = tempDirs.make("openclaw-state-chmod-");
-    fs.chmodSync(stateDir, 0o755);
+    // The shared database owner hardens state/, not the outer profile directory.
+    const databaseDir = join(stateDir, "state");
+    fs.mkdirSync(databaseDir);
+    fs.chmodSync(databaseDir, 0o755);
     chmodFailHook.error = chmodError("EPERM");
     chmodFailHook.failProbe = false;
 
@@ -115,7 +118,10 @@ describe("state database permission hardening without chmod support", () => {
 
   it("rethrows EROFS when existing permissions are too broad", () => {
     const stateDir = tempDirs.make("openclaw-state-chmod-");
-    fs.chmodSync(stateDir, 0o755);
+    // The shared database owner hardens state/, not the outer profile directory.
+    const databaseDir = join(stateDir, "state");
+    fs.mkdirSync(databaseDir);
+    fs.chmodSync(databaseDir, 0o755);
     chmodFailHook.error = chmodError("EROFS");
 
     expect(() => openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } })).toThrow(
@@ -125,7 +131,10 @@ describe("state database permission hardening without chmod support", () => {
 
   it("opens when the filesystem probe also rejects chmod with EPERM", () => {
     const stateDir = tempDirs.make("openclaw-state-chmod-");
-    fs.chmodSync(stateDir, 0o755);
+    // The shared database owner hardens state/, not the outer profile directory.
+    const databaseDir = join(stateDir, "state");
+    fs.mkdirSync(databaseDir);
+    fs.chmodSync(databaseDir, 0o755);
     chmodFailHook.error = chmodError("EPERM");
 
     const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } });

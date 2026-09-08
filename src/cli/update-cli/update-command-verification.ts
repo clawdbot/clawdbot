@@ -8,6 +8,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { formatCliCommand } from "../command-format.js";
 import { resolveGatewayRestartProbeContext } from "../daemon-cli/restart-health-probe.js";
 import {
+  inspectGatewayRestart,
   renderRestartDiagnostics,
   waitForGatewayHealthyRestart,
   waitForGatewayHttpReadiness,
@@ -15,6 +16,11 @@ import {
 } from "../daemon-cli/restart-health.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import type { PostUpdateLaunchAgentRecoveryResult } from "./update-command-launch-agent-recovery.js";
+import {
+  assertUpdateCommandRecovery,
+  persistUpdateCommandServingReceipt,
+  UpdateCommandRecoveryPendingError,
+} from "./update-command-recovery.js";
 import {
   formatPostUpdateGatewayRecoveryInstructions,
   hasLoadedLaunchdKeepAliveSupervisor,
@@ -64,6 +70,7 @@ export async function verifyUpdatedGateway(params: {
   requireRunningService?: boolean;
   health?: GatewayRestartSnapshot;
   signal?: AbortSignal;
+  assertCurrent?: () => void;
   onVerified?: (verifiedAtMs: number) => void;
   recoverHealth?: (
     health: GatewayRestartSnapshot,
@@ -73,10 +80,36 @@ export async function verifyUpdatedGateway(params: {
     launchAgentRecovery: PostUpdateLaunchAgentRecoveryResult | null;
   }>;
 }): Promise<UpdateRepairValidation> {
-  params.signal?.throwIfAborted();
+  // Proof belongs to the recovery record that began this observation. Reloading
+  // the executor's newest record after an await could bless a reclaimed run.
+  const originalRun = params.opts.run;
+  const originalRecovery = params.opts.recovery;
+  const proofOptions = {
+    ...params.opts,
+    ...(originalRun ? { run: { ...originalRun, env: { ...originalRun.env } } } : {}),
+  };
+  let expectedRecovery = originalRecovery
+    ? structuredClone(originalRecovery.getRecord())
+    : undefined;
+  const assertCurrent = () => {
+    params.signal?.throwIfAborted();
+    params.assertCurrent?.();
+    if (params.opts.run !== originalRun || params.opts.recovery !== originalRecovery) {
+      throw new UpdateCommandRecoveryPendingError("Readiness observation lost its admitted owner.");
+    }
+    if (originalRecovery) {
+      assertUpdateCommandRecovery(proofOptions, expectedRecovery);
+    }
+  };
+  assertCurrent();
   const service = resolveGatewayService();
   const waitForHealthy = async () => {
-    params.signal?.throwIfAborted();
+    assertCurrent();
+    const supervisorKeepsAlive = await hasLoadedLaunchdKeepAliveSupervisor({
+      service,
+      env: params.serviceEnv,
+    });
+    assertCurrent();
     const health = await waitForGatewayHealthyRestart({
       service,
       port: params.gatewayPort,
@@ -86,21 +119,19 @@ export async function verifyUpdatedGateway(params: {
       requireRunningService: params.requireRunningService,
       settle: { probes: 12 },
       ...(params.signal ? { signal: params.signal } : {}),
-      supervisorKeepsAlive: await hasLoadedLaunchdKeepAliveSupervisor({
-        service,
-        env: params.serviceEnv,
-      }),
+      supervisorKeepsAlive,
     });
-    params.signal?.throwIfAborted();
+    assertCurrent();
     return health;
   };
   let health = params.health ?? (await waitForHealthy());
   let launchAgentRecovery: PostUpdateLaunchAgentRecoveryResult | null = null;
   if (params.recoverHealth) {
     ({ health, launchAgentRecovery } = await params.recoverHealth(health, waitForHealthy));
+    assertCurrent();
   }
   const context = await resolveGatewayRestartProbeContext(params.serviceEnv);
-  params.signal?.throwIfAborted();
+  assertCurrent();
   const http = await waitForGatewayHttpReadiness({
     config: context.config,
     port: params.gatewayPort,
@@ -109,17 +140,93 @@ export async function verifyUpdatedGateway(params: {
     delayMs: 500,
     ...(params.signal ? { signal: params.signal } : {}),
   });
-  params.signal?.throwIfAborted();
+  assertCurrent();
   const readyz = http.readyz === 200;
-  recordUpdateGatewayHealth(params.opts.run, health, params.gatewayPort, readyz);
+  if (expectedRecovery && health.healthy && health.runtime.status === "running" && readyz) {
+    const restart = expectedRecovery.effects.at(-1);
+    const identity = restart?.runtime === "previous" ? expectedRecovery.from : expectedRecovery.to;
+    // HTTP has no boot identity. Sandwich it between authenticated health probes
+    // so readiness cannot combine different gateway lifetimes.
+    const finalHealth = await inspectGatewayRestart({
+      service,
+      port: params.gatewayPort,
+      env: params.serviceEnv,
+      expectedVersion: identity.version,
+      ...(identity.buildId ? { expectedBuildId: identity.buildId } : {}),
+      probeContext: context,
+      ...(params.signal ? { signal: params.signal } : {}),
+    });
+    assertCurrent();
+    if (
+      !health.healthy ||
+      health.runtime.status !== "running" ||
+      !health.gatewayBootId ||
+      !finalHealth.healthy ||
+      finalHealth.runtime.status !== "running" ||
+      health.gatewayBootId !== finalHealth.gatewayBootId ||
+      health.gatewayVersion !== finalHealth.gatewayVersion ||
+      health.gatewayBuildId !== finalHealth.gatewayBuildId ||
+      health.activatedPluginErrors?.length ||
+      health.channelProbeErrors?.length ||
+      finalHealth.activatedPluginErrors?.length ||
+      finalHealth.channelProbeErrors?.length
+    ) {
+      throw new UpdateCommandRecoveryPendingError(
+        "Readiness did not remain on the observed running gateway.",
+      );
+    }
+    health = finalHealth;
+  }
   if (launchAgentRecovery?.attempted) {
     defaultRuntime.error(
       launchAgentRecovery.recovered ? launchAgentRecovery.message : launchAgentRecovery.detail,
     );
   }
-  const serviceRunning = !params.requireRunningService || health.runtime.status === "running";
+  const serviceRunning =
+    !(params.requireRunningService || expectedRecovery) || health.runtime.status === "running";
   if (health.healthy && serviceRunning && readyz) {
-    params.onVerified?.(Date.now());
+    assertCurrent();
+    const verifiedAtMs = Date.now();
+    if (expectedRecovery) {
+      const restart = expectedRecovery.effects.at(-1);
+      if (
+        restart?.kind !== "service-restart" ||
+        restart.state !== "observed" ||
+        !health.gatewayBootId ||
+        !health.gatewayVersion ||
+        health.gatewayBuildId === undefined
+      ) {
+        throw new UpdateCommandRecoveryPendingError(
+          "Readiness requires the observed restart identity.",
+        );
+      }
+      expectedRecovery = persistUpdateCommandServingReceipt(proofOptions, {
+        kind: "readiness",
+        runId: expectedRecovery.runId,
+        transactionId: expectedRecovery.transactionId,
+        claimId: expectedRecovery.claimId,
+        revision: expectedRecovery.revision,
+        effectId: restart.effectId,
+        runtime: restart.runtime,
+        gateway: {
+          bootId: health.gatewayBootId,
+          version: health.gatewayVersion,
+          buildId: health.gatewayBuildId,
+        },
+        checks: {
+          serviceRunning: true,
+          pluginsReady: true,
+          channelsReady: true,
+          settled: true,
+          readyz: true,
+        },
+        verifiedAtMs,
+      });
+      assertCurrent();
+    }
+    recordUpdateGatewayHealth(proofOptions.run, health, params.gatewayPort, readyz);
+    params.onVerified?.(verifiedAtMs);
+    assertCurrent();
     if (params.opts.run) {
       recordUpdateRunStep(
         params.opts.run.runId,
@@ -127,6 +234,7 @@ export async function verifyUpdatedGateway(params: {
         { env: params.opts.run.env },
       );
     }
+
     if (!params.opts.json) {
       defaultRuntime.log(theme.success("Gateway: restarted and verified."));
     }
@@ -136,6 +244,7 @@ export async function verifyUpdatedGateway(params: {
       summary: "Gateway service, version, plugins, channels, and readiness verified.",
     };
   }
+  recordUpdateGatewayHealth(proofOptions.run, health, params.gatewayPort, readyz);
   const diagnosticLines: [string, ...string[]] = [
     "Gateway did not become healthy after restart.",
     ...(!readyz ? ["Gateway /readyz did not return HTTP 200."] : []),

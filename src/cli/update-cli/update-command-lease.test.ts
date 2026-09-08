@@ -349,10 +349,24 @@ describe("update orchestration lifecycle ownership", () => {
         }
       });
       void completed.promise.catch(() => {});
+      const beforeDoctor = createDeferred();
+      if (lane === "repair") {
+        // Enter with the old config, then release the foreign writer before the
+        // fixture's zero-retry Doctor acquisition. This still detects a parent
+        // retaining its own lease without racing the deliberately competing one.
+        mocks.entrypoint.mockImplementationOnce(async () => {
+          beforeDoctor.resolve();
+          await completed.promise;
+          return entrypoint;
+        });
+      }
       try {
         await acquired.promise;
         const update = invoke(lane);
         void update.catch(() => {});
+        if (lane === "repair") {
+          await Promise.race([beforeDoctor.promise, update]);
+        }
         child.send("commit");
         await completed.promise;
         await update;

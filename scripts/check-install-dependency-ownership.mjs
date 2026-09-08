@@ -3,7 +3,9 @@ import path from "node:path";
 
 const root = realpathSync(process.cwd());
 const configured =
-  (process.env.PNPM_CONFIG_MODULES_DIR ?? process.env.pnpm_config_modules_dir) || undefined;
+  (process.env.PNPM_CONFIG_MODULES_DIR ?? process.env.pnpm_config_modules_dir) ||
+  process.env.npm_config_modules_dir ||
+  undefined;
 const modules = path.resolve(root, configured || "node_modules");
 const workspaceModules = path.join(root, "node_modules");
 

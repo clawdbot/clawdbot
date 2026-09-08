@@ -3,6 +3,8 @@ import { PLUGIN_CAPABILITY_CONSENT_REQUIRED } from "../../../packages/gateway-pr
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import type { TriageFailureContext } from "../../commands/triage-prompt.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import type { PackageUpdateTransaction } from "../../infra/package-update-steps.js";
+import type { readUpdateStateSchemaVersions } from "../../infra/update-candidate-state.js";
 import {
   markControlPlaneUpdateRestartSentinelFailure,
   resolveManagedServiceUpdateFailureExitCode,
@@ -14,10 +16,60 @@ import { getUpdateRun, recordUpdateRunPhase } from "../../infra/update-run-ledge
 import { readCurrentGitUpdateRecovery } from "../../infra/update-runner-git-recovery.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { defaultRuntime } from "../../runtime.js";
+import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
+import { exitCliAfterOutput } from "../one-shot-exit.js";
 import { printResult } from "./progress.js";
 import type { UpdateCommandOptions } from "./shared.js";
+import type { UpdateConfigSnapshot } from "./update-command-config-snapshot.js";
+import type { OwnedManagedUpdateContext } from "./update-command-managed-context.js";
 import { completeUpdateCommandRun } from "./update-command-run.js";
 import type { PreManagedServiceStop } from "./update-command-service-maintenance.js";
+import { GatewayServiceUpdateOwnershipError } from "./update-command-service-plan.js";
+
+export type MutableUpdateExecutionResult = {
+  mutationStarted: boolean;
+  result: UpdateRunResult;
+  failure?: { cause: unknown; detail: string };
+  preManagedServiceStop: PreManagedServiceStop | undefined;
+  ownedManagedUpdateContext: OwnedManagedUpdateContext | undefined;
+  recoveryEnv: NodeJS.ProcessEnv | undefined;
+  packageTransaction?: PackageUpdateTransaction;
+  schemaVersions?: Awaited<ReturnType<typeof readUpdateStateSchemaVersions>>;
+  candidateSchemaVersions?: OpenClawSchemaVersions;
+  previousSchemaVersions?: OpenClawSchemaVersions;
+  previousVerified?: boolean;
+  activationConfig?: UpdateConfigSnapshot;
+};
+
+/** Report rejected read-only admission without creating a run or recovery diagnostics. */
+export async function withUpdateAdmissionReporting<T>(
+  opts: UpdateCommandOptions,
+  admit: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await admit();
+  } catch (error) {
+    if (!(error instanceof GatewayServiceUpdateOwnershipError)) {
+      throw error;
+    }
+    const message = `${error.message} Run \`openclaw gateway status --deep\` from the service's owning account before retrying.`;
+    if (opts.json) {
+      defaultRuntime.error(message);
+    }
+    printResult(
+      {
+        status: "error",
+        mode: "unknown",
+        reason: "managed-service-preflight",
+        steps: [],
+        durationMs: 0,
+      },
+      opts,
+      { nextAction: message },
+    );
+    return exitCliAfterOutput(defaultRuntime, 1);
+  }
+}
 
 /** Unwind update ownership before diagnostics or an interactive agent can run. */
 export class UpdateCommandFailure extends Error {
@@ -32,6 +84,30 @@ export class UpdateCommandFailure extends Error {
     super(detail ?? result.reason ?? "Update failed", options);
     this.name = "UpdateCommandFailure";
     this.automaticTriage = options?.automaticTriage;
+  }
+}
+
+/** A conservative pending outcome, never a grant of recovery or mutation authority. */
+export class UpdateCommandPendingRecoveryFailure extends UpdateCommandFailure {
+  constructor(result: UpdateRunResult, detail?: string, options?: ErrorOptions) {
+    super(
+      {
+        ...result,
+        status: "error",
+        recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+      },
+      1,
+      detail,
+      options,
+    );
+    this.name = "UpdateCommandPendingRecoveryFailure";
+  }
+}
+
+/** Reporting-only marker: the durable finalizer already committed and printed the outcome. */
+export class UpdateCommandFinalizedRecoveryFailure extends UpdateCommandFailure {
+  constructor(result: UpdateRunResult) {
+    super(result, 1);
   }
 }
 

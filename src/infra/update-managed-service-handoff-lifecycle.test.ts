@@ -126,6 +126,99 @@ describe("managed service update handoff", () => {
 
   registerManagedHandoffOwnerTests(runManagedServiceManagerBoundary, itUnix, expect);
 
+  itUnix("finishes the run when negotiated startup fails before recovery persistence", async () => {
+    const result = await runManagedServiceManagerBoundary("systemd", {
+      controlDisconnect: "transferred",
+      nativePreparation: "fail-preparation",
+      ledger: true,
+      helperExitCode: 18,
+    });
+    expect(result.run?.status).toBe("failed");
+    expect(result.state.parked).toBeUndefined();
+    expect(result.state.restored).toBeUndefined();
+    expect(result.commands.some((command) => /^(stop|start) /.test(command))).toBe(false);
+  });
+
+  itUnix.each(["fail-persistence-ack", "fail-commit-ack"] as const)(
+    "retains recovery ownership when startup fails at %s",
+    async (nativePreparation) => {
+      const result = await runManagedServiceManagerBoundary("systemd", {
+        controlDisconnect: "transferred",
+        nativePreparation,
+        ledger: true,
+        helperExitCode: 18,
+      });
+      expect(result.run?.status).toBe("running");
+      expect(result.state.parked).toBeUndefined();
+      expect(result.state.restored).toBeUndefined();
+      expect(result.sentinel).toBeNull();
+      expect(result.savedFailure).toBeNull();
+      expect(result.commands.some((command) => /^(stop|start) /.test(command))).toBe(false);
+    },
+  );
+
+  itUnix("joins a timed-out native request before releasing its source interval", async () => {
+    const result = await runManagedServiceManagerBoundary("launchd", {
+      controlDisconnect: "transferred",
+      nativePreparation: "timeout-stop",
+      launchdTeardown: { bootoutDelayMs: 2_500 },
+      ledger: true,
+      helperExitCode: 18,
+    });
+    expect(result.state.nativeRelease).toMatchObject({ bootoutCompleted: true });
+    expect(result.state.disabled).toBe(true);
+    expect(result.state.restored).toBeUndefined();
+    expect(result.run?.status).toBe("running");
+    expect(result.sentinel).toBeNull();
+    expect(result.savedFailure).toBeNull();
+  });
+
+  itUnix(
+    "leaves failed durable suppression pending without helper restoration or history writes",
+    async () => {
+      const result = await runManagedServiceManagerBoundary("launchd", {
+        controlDisconnect: "transferred",
+        nativePreparation: "refuse-stop",
+        ledger: true,
+        helperExitCode: 18,
+      });
+      expect(result.state.nativeActions).toEqual([
+        "suppress:intent",
+        "suppress:observed",
+        "stop:intent",
+      ]);
+      expect(result.state.disabled).toBe(true);
+      expect(
+        result.commands.some((command) => /^(bootout|enable|bootstrap|kickstart) /.test(command)),
+      ).toBe(false);
+      expect(result.state.restored).toBeUndefined();
+      expect(result.run?.status).toBe("running");
+      expect(result.sentinel).toBeNull();
+      expect(result.savedFailure).toBeNull();
+    },
+  );
+
+  itUnix.each(["systemd", "launchd"] as const)(
+    "retains durable native preparation around the real %s helper effects",
+    async (kind) => {
+      const result = await runManagedServiceManagerBoundary(kind, {
+        controlDisconnect: "transferred",
+        nativePreparation: "complete",
+        ledger: true,
+        updaterExitCode: 0,
+        updaterResult: { status: "ok", mode: "npm" },
+      });
+      expect(result.state.nativeActions).toEqual(
+        kind === "launchd"
+          ? ["suppress:intent", "suppress:observed", "stop:intent", "stop:observed"]
+          : ["stop:intent", "stop:observed"],
+      );
+      expect(result.state.restored).toBeUndefined();
+      expect(result.run?.status).toBe("running");
+      expect(result.sentinel).toBeNull();
+    },
+  );
+
   itUnix.each(["acknowledged", "stalled", "rejected"] as const)(
     "parks after the transferred pre-park notice is %s, within its bounded attempt",
     async (beforeParkNotice) => {

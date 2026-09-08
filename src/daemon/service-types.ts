@@ -1,5 +1,6 @@
-/** Shared daemon service argument, state, and command config contracts. */
 import type { GatewayServiceRuntime } from "./service-runtime.js";
+/** Shared daemon service argument, state, and command config contracts. */
+import type { GatewayServiceStagedFiles } from "./service-stage.js";
 
 /** Environment map passed to service renderers and platform supervisors. */
 export type GatewayServiceEnv = Record<string, string | undefined>;
@@ -17,6 +18,8 @@ export type GatewayServiceInstallArgs = {
   // Verified before a config rewrite; Windows uses this to bridge a transient
   // listener gap while replacing a Startup-folder fallback.
   startupFallbackTakeoverRuntime?: GatewayServiceRuntime;
+  /** Await durable caller sealing before native load; currently systemd only. */
+  beforeLoad?: (staged: GatewayServiceStagedFiles) => Promise<void>;
 };
 
 export type GatewayServiceStageArgs = GatewayServiceInstallArgs;
@@ -31,6 +34,10 @@ export type GatewayServiceControlArgs = {
   env?: GatewayServiceEnv;
   disable?: boolean;
   preserveDefinition?: boolean;
+  /** Start the captured manager without changing its separately restored enable policy. */
+  preserveAutoStart?: boolean;
+  /** Original live caller fence, rechecked at native mutation boundaries. */
+  assertCurrent?: () => void;
   warn?: (message: string) => void;
   onMutation?: (mutation: GatewayLifecycleMutation) => void;
 };
@@ -80,10 +87,20 @@ export type GatewayServiceEnvArgs = {
   timeoutMs?: number;
 };
 
+/** Live recovery custody, never reconstructed from a saved record alone. Loading
+ * permits native definition inspection, not enablement, start, or readiness. */
+export type GatewayServiceUnitInspection = {
+  managerUid: number;
+  assertCurrent: () => void;
+};
+
 /** Bounded service inspection; strict reads reject unverified commands/environments and return null only for proven absence. */
 export type GatewayServiceReadOptions = {
   timeoutMs?: number;
   requireEffective?: boolean;
+  /** Command inspection must not load an unloaded native unit. */
+  requireLoaded?: boolean;
+  loadForInspection?: GatewayServiceUnitInspection;
 };
 
 export type GatewayServiceEnvironmentValueSource = "inline" | "file" | "inline-and-file";

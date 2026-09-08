@@ -66,12 +66,14 @@ const postInstallAdvisory: NonNullable<DoctorHealthFlowContext["postInstallDocto
   },
 };
 
-const { mocks, registerDoctorConfigReceiptTests } = await import("./doctor-health.test-support.js");
+const support = await import("./doctor-health.test-support.js");
+const { mocks, registerDoctorConfigReceiptTests } = support;
 
 describe("runDoctorHealthFlow", () => {
   afterEach(() => vi.unstubAllEnvs());
 
   beforeEach(() => {
+    vi.stubEnv("OPENCLAW_SERVICE_REPAIR_POLICY", undefined);
     mocks.config.mockReturnValue({});
     mocks.packageRoot.mockReturnValue(undefined);
     mocks.service.mockReset();
@@ -192,6 +194,7 @@ describe("runDoctorHealthFlow", () => {
                 : kind.endsWith("running") && !windows
                   ? "running"
                   : "stopped",
+            systemd: { managerUid: process.getuid?.() ?? 2001 },
             ...(kind.startsWith("absent") ? { missingUnit: true } : {}),
           }),
           isLoaded: async () => {
@@ -429,6 +432,7 @@ describe("runDoctorHealthFlow", () => {
           readCommand: async () => command,
           readRuntime: async () => ({
             status: running ? "running" : "stopped",
+            systemd: { managerUid: process.getuid?.() ?? 2001 },
             ...(outcome === "ancestor-blocked" ? { pid: process.pid } : {}),
           }),
           readLoadState: async () => ({ status: running ? "loaded" : "not-loaded" }),
@@ -691,13 +695,9 @@ describe("runDoctorHealthFlow", () => {
           path: initial.path,
           env: state.env,
         });
-        openOpenClawStateDatabase({ env: state.env }).db.exec(
-          "INSERT INTO gateway_boot_lifecycle (boot_id, pid, started_at_ms, completed_at_ms, outcome, startup_reason) VALUES ('maintenance', 1, 1, 2, 'startup_failed', 'gateway.maintenance_required')",
+        const maintenanceOutcome = support.seedMaintenanceStartupFailure(() =>
+          openOpenClawStateDatabase({ env: state.env }),
         );
-        const maintenanceOutcome = () =>
-          openOpenClawStateDatabase({ env: state.env })
-            .db.prepare("SELECT outcome FROM gateway_boot_lifecycle WHERE boot_id = 'maintenance'")
-            .get();
         const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
         mocks.runContributions.mockImplementation(async (ctx) => {
           const result = await migrateLegacyMediaPersistence();

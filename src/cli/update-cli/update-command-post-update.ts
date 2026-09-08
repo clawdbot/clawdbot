@@ -1,14 +1,9 @@
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import type { TriageFailureContext } from "../../commands/triage-prompt.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
-import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import type { PackageUpdateTransaction } from "../../infra/package-update-steps.js";
-import type { UpdateStateSchemaVersion } from "../../infra/update-candidate-state.js";
-import type { UpdateChannel } from "../../infra/update-channels.js";
 import {
   buildControlPlaneUpdateRestartHealthPendingResult,
-  readControlPlaneUpdateSentinelMeta,
   resolveManagedServiceUpdateFailureExitCode,
 } from "../../infra/update-control-plane-sentinel.js";
 import {
@@ -18,21 +13,18 @@ import {
   recordUpdateRunStep,
 } from "../../infra/update-run-ledger.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
-import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
 import { defaultRuntime } from "../../runtime.js";
 import { classifyUpdateOutcome } from "../../shared/update-outcome.js";
-import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
 import { formatCliCommand } from "../command-format.js";
 import { printResult } from "./progress.js";
-import { tryWriteCompletionCache, type UpdateCommandOptions } from "./shared.js";
+import { tryWriteCompletionCache } from "./shared.js";
 import { convergeUpdatePlugins } from "./update-command-convergence.js";
+import { finishDurableUpdate } from "./update-command-durable-finalize.js";
+import type { FinishUpdateParams } from "./update-command-finish-types.js";
 import { retireStandaloneGitWrapper } from "./update-command-git.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-managed-context.js";
 import { repairUpdateService } from "./update-command-repair-service.js";
-import {
-  prepareUpdateRestart,
-  type UpdateRestartParams,
-} from "./update-command-restart-context.js";
+import { prepareUpdateRestart } from "./update-command-restart-context.js";
 import {
   markControlPlaneUpdateRestartSentinelFailureBestEffort,
   UpdateCommandFailure,
@@ -41,50 +33,29 @@ import {
 } from "./update-command-result.js";
 import { rollbackFailedUpdate } from "./update-command-rollback.js";
 import { completeUpdateCommandRun } from "./update-command-run.js";
+import { UpdateServiceLoadBoundaryError } from "./update-command-service-load.js";
 import { createWindowsTaskAutoStartGuard } from "./update-command-service-maintenance.js";
-import {
-  assertGatewayServiceManagementAllowedForUpdate,
-  GatewayServiceUpdateOwnershipError,
-} from "./update-command-service-plan.js";
+import { GatewayServiceUpdateOwnershipError } from "./update-command-service-plan.js";
 import {
   recordFailedUpdateGatewayState,
   maybeRestartService,
   maybeRestartServiceAfterFailedMutableUpdate,
   maybeResumeWindowsTaskAutoStartAfterPackageUpdate,
-  maybeStopManagedServiceBeforeMutableUpdate,
-  revalidateManagedGatewayServiceAfterUpdate,
-  resolveUpdatedGatewayRestartPort,
   tryInstallShellCompletion,
   type PreManagedServiceStop,
 } from "./update-command-service.js";
 import { resolveUpdateResultNextAction } from "./update-recovery-guidance.js";
 
-export type FinishUpdateParams = UpdateRestartParams & {
-  failure?: { cause: unknown; detail: string };
-  mutationStarted: boolean;
-  expectedVersion?: string;
-  previousInstallRoot?: string;
-  installKindChanged: boolean;
-  configSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>;
-  requestedChannel: UpdateChannel | null;
-  storedChannel: UpdateChannel | null;
-  channel: UpdateChannel;
-  downgradeRisk: boolean;
-  opts: UpdateCommandOptions;
-  controlPlaneUpdateSentinelMeta: Awaited<ReturnType<typeof readControlPlaneUpdateSentinelMeta>>;
-  preUpdatePluginInstallRecords: Awaited<ReturnType<typeof loadInstalledPluginIndexInstallRecords>>;
-  startedAt: number;
-  packageUpdateNodeRunner?: string;
-  packageTransaction?: PackageUpdateTransaction;
-  schemaVersions?: UpdateStateSchemaVersion[];
-  candidateSchemaVersions?: OpenClawSchemaVersions;
-  previousSchemaVersions?: OpenClawSchemaVersions;
-  previousVerified?: boolean;
-  activationConfig?: import("./update-command-config-snapshot.js").UpdateConfigSnapshot;
-  rollbackBlockedReason?: "state-migrated-no-rollback" | "rollback-state-unverified";
-};
+export type { FinishUpdateParams } from "./update-command-finish-types.js";
 
 export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRunResult> {
+  if (params.serviceLoadBoundary && process.platform !== "linux") {
+    throw new Error("Deferred native service loading is not supported on this platform.");
+  }
+  const durableResult = await finishDurableUpdate(params);
+  if (durableResult) {
+    return durableResult;
+  }
   let gateway: TriageFailureContext["gateway"] = "preserve";
   let triageAllowed = true;
   const createFailure = (
@@ -102,7 +73,7 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
   let rollbackAttempted = false;
   let postVerificationRepairAttempted = false;
   let rollbackStopState: PreManagedServiceStop | undefined;
-  // Rollback and later plugin maintenance can replace the suspension owner.
+  // Rollback can replace the suspension owner.
   const currentServiceStop = () => rollbackStopState ?? params.preManagedServiceStop;
   const resumeWindowsAutoStart = async (result: UpdateRunResult) => {
     const stopped = currentServiceStop();
@@ -123,8 +94,8 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
   let pendingRestartAtMs =
     params.preManagedServiceStop?.stoppedAtMs ??
     params.controlPlaneUpdateSentinelMeta?.serviceStoppedAtMs;
-  // Health resets replace ledger verification. Keep completed outages here so
-  // recovery never counts the online plugin work between service stops.
+  // Health resets replace ledger verification. Keep completed outages here
+  // until final reporting, including a separately verified rollback.
   const recordVerifiedDowntime = (verifiedAtMs: number) => {
     if (pendingRestartAtMs !== undefined) {
       completedDowntimeMs =
@@ -328,7 +299,19 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
     if (params.packageTransaction && !retireBackup) {
       const retained = await params.packageTransaction.complete({ activationVerified: false });
       if (retained) {
-        finalResult.steps = [...finalResult.steps, retained];
+        const backupPath = params.packageTransaction.backupRoot;
+        finalResult.steps = [
+          ...finalResult.steps,
+          {
+            ...retained,
+            stderrTail:
+              retained.exitCode === 0 || retained.stderrTail?.includes(backupPath)
+                ? retained.stderrTail
+                : [retained.stderrTail, `Recovery transaction backup path: ${backupPath}`]
+                    .filter(Boolean)
+                    .join("\n"),
+          },
+        ];
       }
     }
     if (finalResult.status === "error" && !rolledBack && params.preManagedServiceStop?.stopped) {
@@ -446,8 +429,8 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
     }
 
     const postUpdateRoot = params.result.root ?? params.root;
-    const convergePlugins = async (beforeDoctor?: () => Promise<void>) => {
-      const convergence = await convergeUpdatePlugins({ ...params, beforeDoctor });
+    const convergePlugins = async () => {
+      const convergence = await convergeUpdatePlugins(params);
       if (convergence.resultWithPostUpdate.status === "error") {
         triageAllowed = !convergence.cancelled;
         const reported = await reportResult(convergence.resultWithPostUpdate);
@@ -459,15 +442,12 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
       }
       return convergence;
     };
-    // Plugin install/sync changes shared payloads, config, and the installed index.
-    // Start the rehearsed core first; a changed plugin snapshot gets one later restart.
-    const deferPluginConvergence =
-      params.shouldRestart && params.preManagedServiceStop?.stopped === true;
-    let resultWithPostUpdate = params.result;
-    let postUpdateConfigSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>> | undefined;
-    if (!deferPluginConvergence) {
-      ({ resultWithPostUpdate, postUpdateConfigSnapshot } = await convergePlugins());
-    }
+    // Convergence needs the installed target, not a serving Gateway. Keep config,
+    // payload/index writes and fresh Doctor in the original stopped interval;
+    // prepare/revalidate the native owner only after those awaited mutations.
+    const convergence = await convergePlugins();
+    let { resultWithPostUpdate } = convergence;
+    const { postUpdateConfigSnapshot } = convergence;
     const restartConfigSnapshot =
       postUpdateConfigSnapshot ??
       (await withOwnedManagedUpdateEnv(params.ownedManagedUpdateEnv, async () =>
@@ -497,16 +477,15 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
         cause: error,
       });
     }
-    let { restartScriptPath, refreshGatewayServiceEnv, gatewayServiceEnv, serviceUpdateVerdict } =
-      restartContext;
+    const { restartScriptPath, refreshGatewayServiceEnv, gatewayServiceEnv } = restartContext;
     const {
       gatewayServiceInstallEnv,
       skipLegacyServiceRestart,
       serviceStateReadEnv,
       serviceMutationAllowed,
       serviceMutationSkipMessage,
+      gatewayPort,
     } = restartContext;
-    let { gatewayPort } = restartContext;
 
     await writeControlPlaneUpdateRestartSentinelBestEffort({
       meta: params.controlPlaneUpdateSentinelMeta,
@@ -523,7 +502,9 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
           result: resultWithPostUpdate,
           opts: params.opts,
           refreshServiceEnv: refreshGatewayServiceEnv,
-          serviceUpdateVerdict,
+          serviceLoadBoundary: params.serviceLoadBoundary,
+          serviceUpdateVerdict: restartContext.serviceUpdateVerdict,
+          serviceManagerUid: restartContext.serviceManagerUid,
           serviceEnv: gatewayServiceEnv,
           serviceInstallEnv: gatewayServiceInstallEnv,
           gatewayPort,
@@ -578,8 +559,9 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
                 timeoutMs: params.updateStepTimeoutMs,
                 invocationCwd: params.invocationCwd,
                 expectedService: rollbackStopState ?? {
+                  serviceManagerUid: restartContext.serviceManagerUid,
                   serviceEnv: gatewayServiceEnv ?? serviceStateReadEnv,
-                  serviceUpdateVerdict,
+                  serviceUpdateVerdict: restartContext.serviceUpdateVerdict,
                 },
                 recoveryStop: currentServiceStop(),
                 onVerified: recordVerifiedDowntime,
@@ -601,63 +583,6 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
       }
     };
     await restart();
-    if (deferPluginConvergence) {
-      ({ resultWithPostUpdate, postUpdateConfigSnapshot } = await convergePlugins(async () => {
-        const before = currentServiceStop();
-        if (!before) {
-          throw new Error("Plugin maintenance lost its update service owner.");
-        }
-        await before.windowsTaskAutoStartRecovery?.complete(true);
-        // Package work finished online. Full Doctor owns state migrations, so
-        // park only now and retain this suspension through verified activation.
-        const stopped = await maybeStopManagedServiceBeforeMutableUpdate({
-          updateRun: params.opts.run,
-          updateInstallKind: resultWithPostUpdate.mode === "git" ? "git" : "package",
-          root: postUpdateRoot,
-          shouldRestart: true,
-          jsonMode: Boolean(params.opts.json),
-          expectedService: { serviceEnv: gatewayServiceEnv, serviceUpdateVerdict },
-          activatedInstall: params,
-          timeoutMs: params.updateStepTimeoutMs,
-        });
-        before.windowsTaskAutoStartRecovery = stopped.windowsTaskAutoStartRecovery;
-        if (stopped.blockMessage || !stopped.stopped) {
-          throw new Error(
-            stopped.blockMessage ?? "Gateway could not be parked for plugin maintenance.",
-          );
-        }
-        stopped.windowsTaskAutoStartRecovery?.beginMutation();
-        pendingRestartAtMs ??= stopped.stoppedAtMs;
-      }));
-      if (resultWithPostUpdate.postUpdate?.plugins?.changed) {
-        // Convergence awaited package managers and plugin hooks. Revalidate the
-        // exact native owner again before a changed plugin snapshot is activated.
-        const state = await readGatewayServiceState(resolveGatewayService(), {
-          env: gatewayServiceEnv ?? serviceStateReadEnv,
-          requireEffective: true,
-          validateEnvBeforeStatusRead: assertGatewayServiceManagementAllowedForUpdate,
-          timeoutMs: params.updateStepTimeoutMs,
-        });
-        serviceUpdateVerdict = await revalidateManagedGatewayServiceAfterUpdate({
-          state,
-          root: postUpdateRoot,
-          preManagedServiceStop: {
-            serviceEnv: gatewayServiceEnv ?? serviceStateReadEnv,
-            serviceUpdateVerdict,
-          },
-        });
-        gatewayServiceEnv = state.env;
-        gatewayPort = await resolveUpdatedGatewayRestartPort({
-          serviceEnv: state.env,
-          serviceCommand: state.command,
-        });
-        pendingRestartAtMs ??= Date.now();
-        restartScriptPath = null;
-        refreshGatewayServiceEnv = false;
-        await restoreWindowsAutoStart(resultWithPostUpdate);
-        await restart();
-      }
-    }
     // Restart and health verification own recovery of the service stopped for this update.
     // Optional completion refresh must run only after that lifecycle boundary settles.
     try {
@@ -704,7 +629,8 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
 
     return await reportResult(resultWithPostUpdate);
   } catch (error) {
-    if (error instanceof UpdateCommandFailure) {
+    if (error instanceof UpdateCommandFailure || error instanceof UpdateServiceLoadBoundaryError) {
+      // Staging may already have changed files. Keep intent/material for fenced reconciliation.
       throw error;
     }
     const message = formatErrorMessage(error);

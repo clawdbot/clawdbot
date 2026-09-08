@@ -79,12 +79,38 @@ export type SqliteWalMaintenanceOptions = {
   databaseLabel?: string;
   databasePath?: string;
   onCheckpointError?: (error: unknown) => void;
+  /** Owner-held synchronous exclusion around maintenance writes, including periodic vacuum. */
+  runMaintenance?: (operation: () => boolean) => boolean;
 };
 
 export type SqliteConnectionPragmaOptions = SqliteWalMaintenanceOptions & {
   foreignKeys?: boolean;
   synchronous?: "NORMAL";
 };
+
+/** Settle a retained WAL using SQLite's own locks on a disposable connection.
+ * The caller must retain physical lifecycle/handle exclusion, revalidate its
+ * owner and database identity at every callback, and close the connection even
+ * on refusal. This does not acquire authority, migrate schema or delete files.
+ */
+export function checkpointRetainedSqliteWal(db: DatabaseSync, assertCurrent: () => void): void {
+  assertCurrent();
+  // Map the existing WAL index in NORMAL mode before taking exclusive SQLite
+  // ownership. Otherwise SQLite can leave an old SHM after closing the WAL.
+  if (db.prepare("PRAGMA journal_mode").get()?.journal_mode !== "wal") {
+    throw new Error("Retained agent sidecars do not belong to a WAL database");
+  }
+  assertCurrent();
+  // Kysely transactions cannot retain SQLite file locks across WAL maintenance.
+  // No data/schema statements execute; a real reader/writer makes this refuse.
+  db.exec("PRAGMA busy_timeout=0; PRAGMA locking_mode=EXCLUSIVE; BEGIN EXCLUSIVE; ROLLBACK;");
+  assertCurrent();
+  const checkpoint = db.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get();
+  if (checkpoint?.busy !== 0) {
+    throw new Error("Replay agent WAL checkpoint is still busy");
+  }
+  assertCurrent();
+}
 
 function configureSqliteBusyTimeout(db: DatabaseSync, busyTimeoutMs: number): number {
   const normalizedTimeoutMs = normalizeSqliteNonNegativeInteger(busyTimeoutMs, "busyTimeoutMs");
@@ -655,7 +681,18 @@ export function configureSqliteWalMaintenance(
     }
   };
 
-  const checkpoint = (): boolean => !invalidated && runCheckpoint(checkpointMode);
+  const runMaintenance = (operation: () => boolean): boolean => {
+    if (invalidated) {
+      return false;
+    }
+    try {
+      return options.runMaintenance ? options.runMaintenance(operation) : operation();
+    } catch (error) {
+      options.onCheckpointError?.(error);
+      return false;
+    }
+  };
+  const checkpoint = (): boolean => runMaintenance(() => runCheckpoint(checkpointMode));
 
   let timer: IntervalHandle | null = null;
   if (timerIntervalMs > 0) {
@@ -686,8 +723,11 @@ export function configureSqliteWalMaintenance(
               terminateForSqliteWalSplitBrain(splitBrain, options.databaseLabel);
             }
           }
-          runCheckpoint(periodicCheckpointMode);
-          runIncrementalVacuum();
+          runMaintenance(() => {
+            const checkpointed = runCheckpoint(periodicCheckpointMode);
+            runIncrementalVacuum();
+            return checkpointed;
+          });
         }, timerIntervalMs) as IntervalHandle,
     );
     timer.unref?.();
@@ -706,7 +746,7 @@ export function configureSqliteWalMaintenance(
       // Cache eviction passes PASSIVE: a TRUNCATE close-checkpoint waits on
       // readers and has starved the event loop for seconds under fleet churn.
       // Orderly dispose/delete keeps TRUNCATE so sidecars are flushed for unlink.
-      return runCheckpoint(closeOptions?.checkpointMode ?? checkpointMode);
+      return runMaintenance(() => runCheckpoint(closeOptions?.checkpointMode ?? checkpointMode));
     },
   };
 }

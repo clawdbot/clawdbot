@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { constants, type BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { ABSOLUTE_DEADLINE_EXPIRED, awaitWithinDeadline } from "../utils/absolute-deadline.js";
 import { hasErrnoCode } from "./errors.js";
@@ -15,11 +16,50 @@ const MAX_SCAN_MS = 30_000;
 const log = createSubsystemLogger("update/package-integrity");
 let readerSequence = 0;
 
-type PackageIntegrityFingerprint = { digest: string; identity: string; version: string };
+export type PackageIntegrityFingerprint = { digest: string; identity: string; version: string };
 
 export type PackageRootIntegrityFingerprint =
   | { kind: "directory"; tree: PackageIntegrityFingerprint }
   | { kind: "link"; metadata: string[]; target: string };
+
+export async function readPackageVersionIfPresent(
+  packageRoot: string | null,
+): Promise<string | null> {
+  return packageRoot ? readPackageVersion(packageRoot) : null;
+}
+
+/** Shared by an in-process rollback and a reopened operational transaction. */
+export async function verifyPackageRecoveryMaterial(params: {
+  root: string;
+  originalRoot: string;
+  previous: PackageIntegrityFingerprint | null;
+  launchers: Array<{ path: string | null; fingerprint: string | null }>;
+  allowAbsentRoot?: boolean;
+  timeoutMs?: number;
+  phase?: "retained" | "restored";
+}): Promise<void> {
+  const reader = createPackageIntegrityReader(params.timeoutMs);
+  await reader.observe(params.phase ?? "retained", async () => {
+    if (params.previous) {
+      if (
+        !isDeepStrictEqual(await reader.tree(params.root, params.originalRoot), params.previous)
+      ) {
+        throw new Error("Package rollback verification failed: retained package tree changed");
+      }
+    } else if (!params.allowAbsentRoot && (await reader.exists(params.root))) {
+      throw new Error("Package rollback verification failed: retained package tree changed");
+    }
+    for (const launcher of params.launchers) {
+      if (
+        launcher.fingerprint !== null
+          ? !launcher.path || (await reader.launcher(launcher.path)) !== launcher.fingerprint
+          : launcher.path && (await reader.exists(launcher.path))
+      ) {
+        throw new Error(`Package rollback verification failed: launcher ${launcher.path} changed`);
+      }
+    }
+  });
+}
 
 function identity(stat: BigIntStats): string {
   return `${stat.dev}:${stat.ino}`;
@@ -70,7 +110,7 @@ export function createPackageIntegrityReader(timeoutMs = MAX_SCAN_MS) {
   }
 
   async function observe<T>(
-    phase: "baseline" | "retained" | "restored",
+    phase: "baseline" | "retained" | "restored" | "transaction",
     operation: () => Promise<T>,
   ): Promise<T> {
     const emit = (event: string, facts?: Record<string, unknown>) => {
@@ -331,5 +371,13 @@ export function createPackageIntegrityReader(timeoutMs = MAX_SCAN_MS) {
     }
   }
 
-  return { tree, rootEntry, launcher, exists, entries, observe };
+  async function directoryIdentity(directory: string): Promise<string> {
+    const stat = await read(() => fs.lstat(directory, { bigint: true }));
+    if (!stat.isDirectory() || stat.isSymbolicLink() || stat.ino === 0n) {
+      throw new Error("Package recovery directory identity is unavailable");
+    }
+    return identity(stat);
+  }
+
+  return { tree, rootEntry, launcher, exists, entries, directoryIdentity, observe };
 }

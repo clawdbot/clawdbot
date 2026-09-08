@@ -1,3 +1,4 @@
+import type { LegacyConfigUpdatePlan } from "../../commands/doctor/legacy-config-repair.js";
 import { createConfigIO } from "../../config/io.js";
 import { normalizeUpdateChannel } from "../../infra/update-channels.js";
 import { recordUpdateRunStep } from "../../infra/update-run-ledger.js";
@@ -7,30 +8,50 @@ import { collectMissingPluginInstallPayloads } from "../../plugins/payload-verif
 import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.js";
 import { printResult } from "./progress.js";
 import type { UpdateCommandOptions } from "./shared.js";
-import { persistRequestedUpdateChannel } from "./update-command-config.js";
+import {
+  maybeRepairLegacyConfigForUpdateChannel,
+  persistRequestedUpdateChannel,
+} from "./update-command-config.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-managed-context.js";
 import { completeUpdateCommandRun } from "./update-command-run.js";
 
-/** A same-version request inspects payloads without running repair or touching the service. */
+/** A same-version request inspects payloads without repairing plugins or touching the service. */
 export async function finishAlreadyCurrentUpdate(params: {
   opts: UpdateCommandOptions;
   result: UpdateRunResult;
   env?: NodeJS.ProcessEnv;
+  legacyConfigPlan?: LegacyConfigUpdatePlan;
 }): Promise<void> {
   const run = params.opts.run!;
   const env = params.env ?? run.env;
   const startedAtMs = Date.now();
-  const snapshot = await createConfigIO({
+  let snapshot = await createConfigIO({
     env,
     observe: false,
     pluginValidation: "skip",
   }).readConfigFileSnapshot();
+  const selectedPlan =
+    params.legacyConfigPlan?.snapshot.path === snapshot.path ? params.legacyConfigPlan : undefined;
+  const requestedChannel = normalizeUpdateChannel(params.opts.channel);
+  const storedChannel = normalizeUpdateChannel(
+    (selectedPlan?.config ?? snapshot.config).update?.channel,
+  );
   if (params.opts.channel) {
     await withOwnedManagedUpdateEnv(env, () =>
       withPluginLifecycleLease({}, async () => {
-        await persistRequestedUpdateChannel({
+        if (selectedPlan) {
+          snapshot = await maybeRepairLegacyConfigForUpdateChannel({
+            configSnapshot: snapshot,
+            plan: selectedPlan,
+            jsonMode: Boolean(params.opts.json),
+          });
+        }
+        if (!snapshot.valid) {
+          throw new Error("Update refused: the selected configuration is still invalid.");
+        }
+        snapshot = await persistRequestedUpdateChannel({
           configSnapshot: snapshot,
-          requestedChannel: normalizeUpdateChannel(params.opts.channel),
+          requestedChannel,
         });
       }),
     );
@@ -55,7 +76,17 @@ export async function finishAlreadyCurrentUpdate(params: {
     },
     { env: run.env },
   );
-  const result = completeUpdateCommandRun(params.result, run, 0);
+  const selectedResult = { ...params.result };
+  if (requestedChannel) {
+    const configurationChanged = requestedChannel !== storedChannel || selectedPlan !== undefined;
+    selectedResult.status = configurationChanged ? "ok" : "skipped";
+    if (configurationChanged) {
+      delete selectedResult.reason;
+    } else {
+      selectedResult.reason = "already-current";
+    }
+  }
+  const result = completeUpdateCommandRun(selectedResult, run, 0);
   printResult(
     result,
     params.opts,

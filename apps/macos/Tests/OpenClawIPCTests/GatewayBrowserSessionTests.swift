@@ -332,7 +332,7 @@ struct MacGatewayBrowserSessionStoreTests {
             cancelled.cancel()
             await #expect(throws: CancellationError.self) { try await cancelled.value }
             release.signal()
-            #expect(await held.value)
+            await held.value
             _ = try await deletion.value
             await #expect(throws: MacGatewayProfileError.profileNotFound) { try await identity.value }
             await #expect(throws: MacGatewayProfileError.profileNotFound) { try await binding.value }
@@ -649,10 +649,12 @@ struct MacGatewayBrowserSessionStoreTests {
 extension GatewayConnection {
     fileprivate func holdForDeletionAdmission(
         entered: AsyncStream<Void>.Continuation,
-        release: DispatchSemaphore) -> Bool
+        release: DispatchSemaphore)
     {
         entered.yield()
-        return release.wait(timeout: .now() + 10) == .success
+        // This is an ownership barrier, not a ten-second scheduling assumption.
+        // The test releases it explicitly and also on every thrown exit via defer.
+        release.wait()
     }
 }
 

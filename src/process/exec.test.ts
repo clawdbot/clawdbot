@@ -71,6 +71,42 @@ describe("runCommandWithTimeout", () => {
     },
   );
 
+  it.skipIf(process.platform === "win32")(
+    "joins owned descendants even when a successful root closes its output",
+    async () => {
+      let descendant: number | undefined;
+      try {
+        const result = await runCommandWithTimeout(
+          [
+            process.execPath,
+            "-e",
+            `const {spawn}=require('node:child_process');
+          const child=spawn(process.execPath,['-e',"process.on('SIGTERM',()=>{});setInterval(()=>{},1000);process.send('ready')"],{stdio:['ignore','ignore','ignore','ipc']});
+          child.once('message',()=>{process.stdout.write(String(child.pid));child.disconnect();child.unref();});`,
+          ],
+          {
+            killProcessTree: true,
+            requireProcessTreeExtinction: true,
+            killGraceMs: 50,
+            timeoutMs: 10_000,
+            onOutputChunk: (chunk) => {
+              descendant = Number(chunk.toString());
+            },
+          },
+        );
+        expect(Number.isSafeInteger(descendant) && descendant! > 0).toBe(true);
+        expect(result.code).toBe(0);
+        expect(result.cleanup).toBe("forced");
+        expect(await waitForPidToExit(descendant!)).toBe(true);
+      } finally {
+        if (descendant && isPidAlive(descendant)) {
+          process.kill(descendant, "SIGKILL");
+          await waitForPidToExit(descendant);
+        }
+      }
+    },
+  );
+
   it("merges custom env with base env and drops undefined values", () => {
     const resolved = resolveCommandEnv({
       argv: ["node", "script.js"],
@@ -874,5 +910,67 @@ describe("attachChildProcessBridge", () => {
     child.emit("exit");
     expect(process.listeners("SIGTERM")).toHaveLength(beforeSigterm.size);
     detach();
+  });
+});
+
+describe("child input admission", () => {
+  it("publishes input only after binding the actual spawned PID", async () => {
+    let admittedPid: number | undefined;
+    const result = await runCommandWithTimeout(
+      [
+        process.execPath,
+        "-e",
+        "let input='';process.stdin.on('data',x=>input+=x);process.stdin.on('end',()=>process.stdout.write(JSON.stringify({pid:process.pid,input})))",
+      ],
+      {
+        input: "owned",
+        timeoutMs: 5_000,
+        beforeInput: (pid) => {
+          admittedPid = pid;
+        },
+      },
+    );
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({ pid: admittedPid, input: "owned" });
+  });
+
+  it("joins the child without delivering input when admission rejects", async () => {
+    let pid: number | undefined;
+    const refusal = new Error("authority lost before input");
+    const work = runCommandWithTimeout(
+      [
+        process.execPath,
+        "-e",
+        "process.stdin.on('data',()=>process.stdout.write('effect'));setInterval(()=>{},1000)",
+      ],
+      {
+        input: "forbidden",
+        timeoutMs: 5_000,
+        killProcessTree: true,
+        beforeInput: (childPid) => {
+          pid = childPid;
+          throw refusal;
+        },
+      },
+    );
+    await expect(work).rejects.toBe(refusal);
+    expect(pid).toBeTypeOf("number");
+    expect(isPidAlive(pid!)).toBe(false);
+  });
+
+  it("rejects asynchronous admission and drains its rejection before returning", async () => {
+    let pid: number | undefined;
+    const options = { input: "forbidden", timeoutMs: 5_000, killProcessTree: true };
+    // Model an untyped JS caller; the typed callback contract forbids a Promise.
+    Reflect.set(options, "beforeInput", async (childPid: number) => {
+      pid = childPid;
+      throw new Error("late refusal");
+    });
+    const work = runCommandWithTimeout(
+      [process.execPath, "-e", "process.stdin.resume();setInterval(()=>{},1000)"],
+      options,
+    );
+    await expect(work).rejects.toThrow("must complete synchronously");
+    expect(isPidAlive(pid!)).toBe(false);
   });
 });

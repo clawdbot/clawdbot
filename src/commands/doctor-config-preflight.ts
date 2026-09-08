@@ -127,7 +127,7 @@ export async function runDoctorConfigPreflight(
       recoverOrphanedSidecars: !gatewayStartupCheckpointRequired,
     });
   }
-  noteStaleUpdateRuns(options);
+  await noteStaleUpdateRuns(options);
   const measurePreflightStep = <T>(name: string, run: () => T | Promise<T>) =>
     measureDoctorConfigPreflightStep(name, run, options.measure);
   const migrationCheckpointRequired =

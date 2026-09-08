@@ -37,6 +37,11 @@ export async function execSystemctl(
   return await execSystemdCommand("systemctl", args, env, timeoutMs);
 }
 
+/** System-manager reads never inherit user-bus routing. */
+export async function execBusctlSystem(args: string[], timeoutMs?: number): Promise<ExecResult> {
+  return await execSystemdCommand("busctl", ["--system", ...args], undefined, timeoutMs);
+}
+
 export function readSystemctlDetail(result: { stdout: string; stderr: string }): string {
   // Unit status can be in stdout while stderr contains a launcher diagnostic.
   return `${result.stderr} ${result.stdout}`.trim();
@@ -249,10 +254,27 @@ async function execSystemdUserCommand(
   env: GatewayServiceEnv,
   args: string[],
   timeoutMs?: number,
+  assertCurrent?: () => void,
 ): Promise<ExecResult> {
   const { machineUser, preferMachineScope } = resolveSystemctlUserScope(env);
-  const run = (scopeArgs: string[]) =>
-    execSystemdCommand(command, [...scopeArgs, ...args], env, timeoutMs);
+  const deadline =
+    timeoutMs !== undefined && Number.isFinite(timeoutMs) && timeoutMs > 0
+      ? performance.now() + timeoutMs
+      : undefined;
+  const run = async (scopeArgs: string[]): Promise<ExecResult> => {
+    const remaining = deadline === undefined ? undefined : Math.ceil(deadline - performance.now());
+    if (remaining !== undefined && remaining <= 0) {
+      return {
+        code: 1,
+        termination: "timeout",
+        stdout: "",
+        stderr: "systemd user manager command deadline expired",
+      };
+    }
+    assertCurrent?.();
+    // The machine fallback is part of this operation, not a fresh timeout budget.
+    return await execSystemdCommand(command, [...scopeArgs, ...args], env, remaining ?? timeoutMs);
+  };
 
   // Under sudo-to-root, prefer the invoking non-root user's scope directly via machine scope.
   if (preferMachineScope && machineUser) {
@@ -288,8 +310,9 @@ export async function execSystemctlUser(
   env: GatewayServiceEnv,
   args: string[],
   timeoutMs?: number,
+  assertCurrent?: () => void,
 ): Promise<ExecResult> {
-  return await execSystemdUserCommand("systemctl", env, args, timeoutMs);
+  return await execSystemdUserCommand("systemctl", env, args, timeoutMs, assertCurrent);
 }
 
 export async function execBusctlUser(
@@ -379,4 +402,70 @@ export async function isSystemctlAvailable(env: GatewayServiceEnv): Promise<bool
   // Cleanup uses false to permit file-only removal. An interrupted status probe
   // must still attempt disable before removing a potentially loaded unit.
   return res.code === 0 || !isSystemctlMissing(res);
+}
+
+/** Authenticate the existing unique manager owner before loading a bound unit.
+ * The caller supplies its deadline- and custody-checked D-Bus query. */
+export async function bindSystemdManagerOwner(
+  query: (args: string[], signatures: string[]) => Promise<unknown[] | null>,
+  managerUid: number,
+  unavailable: () => Error,
+): Promise<{ destination: string; verify: () => Promise<void> }> {
+  const manager = "org.freedesktop.systemd1";
+  const readOwner = async () => {
+    const [value] =
+      (await query(
+        [
+          "call",
+          "org.freedesktop.DBus",
+          "/org/freedesktop/DBus",
+          "org.freedesktop.DBus",
+          "GetNameOwner",
+          "s",
+          manager,
+        ],
+        ["s"],
+      )) ?? [];
+    if (
+      !Array.isArray(value) ||
+      value.length !== 1 ||
+      typeof value[0] !== "string" ||
+      !/^:[0-9]+\.[0-9]+$/.test(value[0])
+    ) {
+      throw unavailable();
+    }
+    return value[0];
+  };
+  const destination = await readOwner();
+  const [uid] =
+    (await query(
+      [
+        "call",
+        "org.freedesktop.DBus",
+        "/org/freedesktop/DBus",
+        "org.freedesktop.DBus",
+        "GetConnectionUnixUser",
+        "s",
+        destination,
+      ],
+      ["u"],
+    )) ?? [];
+  if (
+    !Number.isInteger(managerUid) ||
+    managerUid < 0 ||
+    managerUid >= 0xffffffff ||
+    !Array.isArray(uid) ||
+    uid.length !== 1 ||
+    uid[0] !== managerUid
+  ) {
+    throw unavailable();
+  }
+  return {
+    destination,
+    async verify() {
+      if (destination !== (await readOwner())) {
+        throw unavailable();
+      }
+    },
+  };
 }

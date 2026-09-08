@@ -5,31 +5,6 @@ import {
   createPackageIntegrityReader,
   type PackageRootIntegrityFingerprint,
 } from "./package-update-integrity.js";
-import { movePathWithCopyFallback } from "./replace-file.js";
-
-export async function activateStagedNpmPackageRoot(
-  source: string,
-  destination: string,
-): Promise<void> {
-  const stat = await fs.lstat(source);
-  if (!stat.isSymbolicLink()) {
-    await movePathWithCopyFallback({
-      from: source,
-      sourceHardlinks: "allow",
-      to: destination,
-    });
-    return;
-  }
-
-  // npm represents global local-directory installs as relative symlinks. Moving
-  // one changes its meaning, so activate the same canonical source explicitly.
-  const canonicalSource = await fs.realpath(source);
-  await fs.symlink(
-    canonicalSource,
-    destination,
-    process.platform === "win32" ? "junction" : undefined,
-  );
-}
 
 export function createNpmPackageRootLinkLifecycle(params: {
   liveRoot: string;
@@ -76,4 +51,47 @@ export function createNpmPackageRootLinkLifecycle(params: {
       }
     },
   };
+}
+
+/** Verify the same retained/restored npm root and launcher baseline without inference. */
+export async function verifyNpmRootRecovery(
+  params: {
+    root: string;
+    fromBackup: boolean;
+    hadPackage: boolean;
+    previousRoot: PackageRootIntegrityFingerprint | undefined;
+    targetSwapRoot: string;
+    shims: readonly { destination: string; backup: string | null; fingerprint?: string }[];
+  },
+  timeoutMs?: number,
+): Promise<void> {
+  const { root, fromBackup, hadPackage, previousRoot, targetSwapRoot, shims } = params;
+  const reader = createPackageIntegrityReader(timeoutMs);
+  await reader.observe(fromBackup ? "retained" : "restored", async () => {
+    if (
+      hadPackage
+        ? !previousRoot ||
+          !isDeepStrictEqual(
+            await reader.rootEntry(root, targetSwapRoot, previousRoot.kind),
+            previousRoot,
+          )
+        : !fromBackup && (await reader.exists(root))
+    ) {
+      throw new Error(
+        `Package rollback verification failed: retained package ${previousRoot?.kind === "link" ? "link" : "tree"} changed`,
+      );
+    }
+    for (const shim of shims) {
+      const target = fromBackup ? shim.backup : shim.destination;
+      if (
+        shim.backup
+          ? !target || (await reader.launcher(target)) !== shim.fingerprint
+          : !fromBackup && (await reader.exists(shim.destination))
+      ) {
+        throw new Error(
+          `Package rollback verification failed: launcher ${shim.destination} changed`,
+        );
+      }
+    }
+  });
 }

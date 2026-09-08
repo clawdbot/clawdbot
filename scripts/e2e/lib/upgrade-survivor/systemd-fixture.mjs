@@ -1,6 +1,7 @@
 // The direct survivor lane supports generated user units, not arbitrary systemd configuration.
 // Inspection and launch share this parser so reported argv/environment cannot drift from execution.
 import fs from "node:fs";
+import { constants as osConstants } from "node:os";
 import path from "node:path";
 
 const unitName = "openclaw-gateway.service";
@@ -129,10 +130,11 @@ function parseUnit(content) {
     workingDirectory: workingDirectories[0] || "",
     environment,
     environmentFiles,
+    killMode: single("KillMode") || "control-group",
   };
 }
 
-function readUnit(reload = false) {
+function readUnit(reload = false, requireLoaded = false) {
   for (const directory of [`${unitPath}.d`, path.join(path.dirname(unitPath), "service.d")]) {
     if (fs.existsSync(directory) && fs.readdirSync(directory).length) {
       fail();
@@ -145,16 +147,173 @@ function readUnit(reload = false) {
     if (error.code !== "ENOENT") {
       throw error;
     }
-    fs.rmSync(loadedPath, { force: true });
+    if (!requireLoaded) {
+      fs.rmSync(loadedPath, { force: true });
+    }
     return null;
   }
   parseUnit(content);
+  if (requireLoaded && !fs.existsSync(loadedPath)) {
+    fail(`Call failed: Unit ${unitName} not loaded.`);
+  }
   // Keep the manager's loaded command until daemon-reload; file edits alone do not activate it.
   if (reload || !fs.existsSync(loadedPath)) {
     fs.writeFileSync(loadedPath, content);
   }
   const loaded = fs.readFileSync(loadedPath, "utf8");
   return { ...parseUnit(loaded), reloadPending: loaded !== content };
+}
+
+function runtimePaths() {
+  const file = path.join(path.dirname(import.meta.filename), "systemd-fixture-runtime.json");
+  const stat = fs.statSync(file);
+  return { ...JSON.parse(fs.readFileSync(file, "utf8")), uid: stat.uid, owner: `:1.${stat.ino}` };
+}
+
+function nativeRuntime() {
+  const paths = runtimePaths();
+  let pid;
+  let generation = 0;
+  try {
+    const raw = fs.readFileSync(paths.pidFile, "utf8").trim();
+    if (!/^[1-9][0-9]*$/.test(raw)) {
+      fail();
+    }
+    pid = Number(raw);
+    if (!Number.isSafeInteger(pid) || pid > 0xffffffff) {
+      fail();
+    }
+    process.kill(pid, 0);
+    generation = Math.trunc(fs.statSync(paths.pidFile).mtimeMs * 1000);
+    if (process.platform === "linux") {
+      const state = fs.readFileSync(`/proc/${pid}/stat`, "utf8").split(") ").at(-1);
+      if (state.startsWith("Z ")) {
+        pid = 0;
+      }
+    }
+  } catch (error) {
+    if (!["ENOENT", "ESRCH"].includes(error.code)) {
+      throw error;
+    }
+    pid = 0;
+  }
+  const readOptional = (file) => {
+    try {
+      return JSON.parse(fs.readFileSync(file, "utf8"));
+    } catch (error) {
+      if (error.code === "ENOENT") {
+        return null;
+      }
+      throw error;
+    }
+  };
+  const last = readOptional(`${paths.daemonLog}.exit.json`)?.last;
+  const counts = readOptional(`${paths.daemonLog}.runtime.json`);
+  const successful = !last || last.code === 0;
+  return {
+    pid,
+    active: pid ? "active" : "inactive",
+    sub: pid ? "running" : "dead",
+    generation,
+    restarts: counts?.restarts ?? 0,
+    result: successful ? "success" : "exit-code",
+    exitStatus: Number.isInteger(last?.code) ? last.code : (osConstants.signals[last?.signal] ?? 0),
+    exitCode: last ? (last.signal ? 2 : 1) : 0,
+  };
+}
+
+function inspectLoadedRuntime(args) {
+  const prefix = ["--user", "--auto-start=no", "--json=short"];
+  if (!prefix.every((value, index) => args[index] === value)) {
+    return false;
+  }
+  const request = args.slice(prefix.length);
+  const matches = (expected) =>
+    request.length === expected.length &&
+    request.every((value, index) => value === expected[index]);
+  const paths = runtimePaths();
+  const bus = "org.freedesktop.DBus";
+  if (matches(["call", bus, "/org/freedesktop/DBus", bus, "GetNameOwner", "s", manager])) {
+    writeProperties([["s", [paths.owner]]]);
+    return true;
+  }
+  if (
+    matches(["call", bus, "/org/freedesktop/DBus", bus, "GetConnectionUnixUser", "s", paths.owner])
+  ) {
+    writeProperties([["u", [paths.uid]]]);
+    return true;
+  }
+  // GetUnit observes already loaded state; unlike the legacy LoadUnit fixture
+  // path it never creates a loaded definition or activates a process.
+  if (!fs.existsSync(loadedPath)) {
+    fail("Fixture unit is not already loaded.");
+  }
+  const unit = parseUnit(fs.readFileSync(loadedPath, "utf8"));
+  if (!unit) {
+    fail();
+  }
+  if (matches(["call", paths.owner, root, `${manager}.Manager`, "GetUnit", "s", unitName])) {
+    writeProperties([["o", [object]]]);
+    return true;
+  }
+  const runtime = nativeRuntime();
+  if (
+    matches([
+      "get-property",
+      paths.owner,
+      object,
+      `${manager}.Unit`,
+      "Id",
+      "LoadState",
+      "ActiveState",
+      "SubState",
+      "StartLimitBurst",
+      "ActiveEnterTimestampMonotonic",
+      "InactiveEnterTimestampMonotonic",
+    ])
+  ) {
+    writeProperties([
+      ["s", unitName],
+      ["s", "loaded"],
+      ["s", runtime.active],
+      ["s", runtime.sub],
+      ["u", 5],
+      ["t", runtime.pid ? runtime.generation : 0],
+      ["t", runtime.pid ? 0 : runtime.generation],
+    ]);
+    return true;
+  }
+  if (
+    matches([
+      "get-property",
+      paths.owner,
+      object,
+      `${manager}.Service`,
+      "Result",
+      "NRestarts",
+      "MainPID",
+      "ExecMainStatus",
+      "ExecMainCode",
+      "KillMode",
+      "TasksCurrent",
+      "MemoryCurrent",
+    ])
+  ) {
+    // systemd's unavailable uint64 sentinel stays unknown to the native reader.
+    const unknown = Number(0xffff_ffff_ffff_ffffn);
+    writeProperties([
+      ["s", runtime.result],
+      ["u", runtime.restarts],
+      ["u", runtime.pid],
+      ["i", runtime.exitStatus],
+      ["i", runtime.exitCode],
+      ["s", unit.killMode],
+      ["t", runtime.pid ? unknown : 0],
+      ["t", unknown],
+    ]);
+    return true;
+  }
+  return fail();
 }
 
 function writeProperties(properties) {
@@ -165,6 +324,9 @@ function writeProperties(properties) {
 
 function run() {
   const [operation, ...args] = process.argv.slice(2);
+  if (operation === "busctl" && inspectLoadedRuntime(args)) {
+    return;
+  }
   if (operation === "reload" && !args.length) {
     readUnit(true);
     return;
@@ -222,14 +384,34 @@ function run() {
   }
   const matches = (expected) =>
     args.length === expected.length && args.every((arg, index) => arg === expected[index]);
-  const prefix = ["--user", "--json=short"];
+  const requireLoaded = args[2] === "--auto-start=no";
+  const prefix = ["--user", "--json=short", ...(requireLoaded ? ["--auto-start=no"] : [])];
+  if (
+    requireLoaded &&
+    matches([
+      ...prefix,
+      "call",
+      manager,
+      root,
+      `${manager}.Manager`,
+      "GetUnitFileState",
+      "s",
+      unitName,
+    ])
+  ) {
+    if (!fs.existsSync(unitPath)) {
+      fail(`Call failed: Unit file ${unitName} does not exist.`);
+    }
+    writeProperties([["s", "disabled"]]);
+    return;
+  }
   const load = matches([
     ...prefix,
     "call",
     manager,
     root,
     `${manager}.Manager`,
-    "LoadUnit",
+    requireLoaded ? "GetUnit" : "LoadUnit",
     "s",
     unitName,
   ]);
@@ -259,7 +441,7 @@ function run() {
   if (!load && !unitQuery && !serviceQuery) {
     fail();
   }
-  const unit = readUnit();
+  const unit = readUnit(false, requireLoaded);
   if (!unit) {
     if (load) {
       fail(`Call failed: Unit ${unitName} not found.`);

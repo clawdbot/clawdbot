@@ -197,7 +197,7 @@ export async function resolveManagedServicePackageUpdatePlan(params: {
   // Root and runtime planning share one effective command; mutation and restart
   // revalidate independently so this snapshot cannot grant later service authority.
   const command = await resolveGatewayService()
-    .readCommand(process.env, { requireEffective: true })
+    .readCommand(process.env, { requireEffective: true, requireLoaded: true })
     .catch(() => null);
   const layout = await summarizeGatewayServiceLayout(command);
   const serviceRoot = layout?.packageRoot;
@@ -239,7 +239,7 @@ export async function gatewayServiceCommandUsesRoot(params: {
     params.command === undefined
       ? isGatewayServiceManagementAllowedForUpdate(params.env ?? process.env)
         ? await resolveGatewayService()
-            .readCommand(params.env ?? process.env, { requireEffective: true })
+            .readCommand(params.env ?? process.env, { requireEffective: true, requireLoaded: true })
             .catch(() => null)
         : null
       : params.command;

@@ -333,14 +333,15 @@ function mockSystemdManagerProperties(
   vi.spyOn(systemdExec, "execBusctlUser").mockRestore();
   execFileMock.mockReset();
   execFileMock.mockImplementation((_command, args, _options, callback) => {
-    const propertyOutput = args.includes("LoadUnit")
-      ? JSON.stringify({
-          type: "o",
-          data: ["/org/freedesktop/systemd1/unit/openclaw_2dgateway_2eservice"],
-        })
-      : args.includes("org.freedesktop.systemd1.Unit")
-        ? unitOutput
-        : output;
+    const propertyOutput =
+      args.includes("LoadUnit") || args.includes("GetUnit")
+        ? JSON.stringify({
+            type: "o",
+            data: ["/org/freedesktop/systemd1/unit/openclaw_2dgateway_2eservice"],
+          })
+        : args.includes("org.freedesktop.systemd1.Unit")
+          ? unitOutput
+          : output;
     if (propertyOutput instanceof Error) {
       callback(createExecFileError(propertyOutput.message), "", propertyOutput.message);
       return;
@@ -1576,9 +1577,141 @@ describe("parseSystemdExecStart", () => {
 });
 
 describe("readSystemdServiceExecStart", () => {
+  it.each([
+    "none",
+    "uid",
+    "revoked-before",
+    "revoked-load",
+    "manager-change",
+    "unavailable",
+  ] as const)(
+    "reads a collected definition only with current recovery ownership (%s)",
+    async (fault) => {
+      mockReadGatewayServiceFile(["[Service]", "ExecStart=/usr/bin/openclaw gateway run"]);
+      let loaded = false;
+      let owners = 0;
+      const assertCurrent = vi.fn(() => {
+        if (fault === "revoked-before" || (fault === "revoked-load" && loaded)) {
+          throw new Error("source/executor revoked");
+        }
+      });
+      execFileMock.mockImplementation((_command, args, _options, callback) => {
+        let output: string;
+        if (args.includes("GetUnit") || (fault === "unavailable" && args.includes("LoadUnit"))) {
+          const detail = `Call failed: Unit ${GATEWAY_SERVICE} not loaded.`;
+          callback(createExecFileError(detail), "", detail);
+          return;
+        }
+        if (args.includes("GetNameOwner")) {
+          output = JSON.stringify({
+            type: "s",
+            data: [++owners > 1 && fault === "manager-change" ? ":1.99" : ":1.42"],
+          });
+        } else if (args.includes("GetConnectionUnixUser")) {
+          output = JSON.stringify({ type: "u", data: [2001] });
+        } else if (args.includes("LoadUnit")) {
+          loaded = true;
+          output = JSON.stringify({
+            type: "o",
+            data: ["/org/freedesktop/systemd1/unit/openclaw_2dgateway_2eservice"],
+          });
+        } else if (args.includes("org.freedesktop.systemd1.Unit")) {
+          output = buildSystemdUnitPropertyOutput({});
+        } else {
+          output = buildSystemdManagerPropertyOutput({
+            programArguments: ["/usr/bin/openclaw", "gateway", "run"],
+          });
+        }
+        callback(null, output, "");
+      });
+      const observed = readSystemdServiceExecStart(
+        { HOME: TEST_SERVICE_HOME },
+        {
+          requireEffective: true,
+          requireLoaded: true,
+          loadForInspection: { managerUid: fault === "uid" ? 2002 : 2001, assertCurrent },
+        },
+      );
+      if (fault === "none") {
+        await expect(observed).resolves.toMatchObject({
+          programArguments: ["/usr/bin/openclaw", "gateway", "run"],
+        });
+      } else {
+        await expect(observed).rejects.toThrow();
+      }
+      expect(loaded).toBe(!["uid", "revoked-before", "unavailable"].includes(fault));
+      expect(assertCurrent).toHaveBeenCalled();
+      expect(
+        execFileMock.mock.calls.every(
+          (call) =>
+            (!call[1].includes("--json=short") || call[1].includes("--auto-start=no")) &&
+            !call[1].some((arg) => /^(Start|Restart|Enable|Stop)Unit/.test(arg)),
+        ),
+      ).toBe(true);
+    },
+  );
+
   beforeEach(() => {
     vi.restoreAllMocks();
   });
+
+  it("strict inspection never loads a unit before the update checkpoint boundary", async () => {
+    mockReadGatewayServiceFile(["[Service]", "ExecStart=/usr/bin/openclaw gateway run"]);
+    mockSystemdManagerProperties(
+      buildSystemdManagerPropertyOutput({
+        programArguments: ["/usr/bin/openclaw", "gateway", "run"],
+      }),
+    );
+    await expect(
+      readSystemdServiceExecStart(
+        { HOME: TEST_SERVICE_HOME },
+        { requireEffective: true, requireLoaded: true },
+      ),
+    ).resolves.toMatchObject({ programArguments: ["/usr/bin/openclaw", "gateway", "run"] });
+    expect(execFileMock.mock.calls.some((call) => call[1].includes("LoadUnit"))).toBe(false);
+    expect(execFileMock.mock.calls[0]?.[1]).toContain("GetUnit");
+  });
+
+  it.each(["local", "global", "absent", "unreadable"] as const)(
+    "loaded-only inspection does not activate or adopt an unloaded %s definition",
+    async (scenario) => {
+      execFileMock.mockReset();
+      if (scenario === "local") {
+        mockReadGatewayServiceFile(["[Service]", "ExecStart=/usr/bin/openclaw gateway run"]);
+      } else {
+        vi.spyOn(fs, "readFile").mockRejectedValue(
+          Object.assign(new Error("missing base"), { code: "ENOENT" }),
+        );
+      }
+      execFileMock.mockImplementation((_command, args, _options, callback) => {
+        if (args.includes("GetUnitFileState") && scenario === "global") {
+          callback(null, JSON.stringify({ type: "s", data: ["disabled"] }), "");
+          return;
+        }
+        const message = args.includes("GetUnitFileState")
+          ? scenario === "absent"
+            ? `Call failed: Unit file ${GATEWAY_SERVICE} does not exist.`
+            : "Call failed: Permission denied"
+          : `Call failed: Unit ${GATEWAY_SERVICE} not loaded.`;
+        callback(createExecFileError(message), "", message);
+      });
+      const result = readSystemdServiceExecStart(
+        { HOME: TEST_SERVICE_HOME },
+        { requireEffective: true, requireLoaded: true },
+      );
+      if (scenario === "absent") {
+        await expect(result).resolves.toBeNull();
+      } else {
+        await expect(result).rejects.toThrow("could not be inspected");
+      }
+      expect(
+        execFileMock.mock.calls.every(
+          (call) => call[1].includes("GetUnit") || call[1].includes("GetUnitFileState"),
+        ),
+      ).toBe(true);
+      expect(execFileMock).toHaveBeenCalledTimes(scenario === "local" ? 1 : 2);
+    },
+  );
 
   it("strictly distinguishes a missing base unit from an unreadable existing unit", async () => {
     execFileMock.mockImplementation((_command, _args, _options, callback) => {
@@ -1944,11 +2077,15 @@ describe("readSystemdServiceExecStart", () => {
   it("fairly reserves the shared deadline across all three manager queries", async () => {
     mockReadGatewayServiceFile(["[Service]", "ExecStart=/usr/bin/openclaw gateway run"]);
     mockSystemdManagerSnapshot({ programArguments: ["/usr/bin/openclaw", "gateway", "run"] });
-    vi.spyOn(performance, "now")
-      .mockReturnValueOnce(1_000)
-      .mockReturnValueOnce(1_000)
-      .mockReturnValueOnce(1_100)
-      .mockReturnValueOnce(1_400);
+    let elapsed = 1_000;
+    vi.spyOn(performance, "now").mockImplementation(() => elapsed);
+    const execute = expectDefined(execFileMock.getMockImplementation(), "manager command fixture");
+    let calls = 0;
+    execFileMock.mockImplementation((...args) => {
+      const result = execute(...args);
+      elapsed += [100, 300, 0][calls++] ?? 0;
+      return result;
+    });
 
     await readSystemdServiceExecStart({ HOME: TEST_SERVICE_HOME }, { timeoutMs: 1_200 });
 
@@ -2391,6 +2528,58 @@ describe("stageSystemdService", () => {
       await fs.rm(tempHomeRoot, { recursive: true, force: true });
     }
   }
+
+  it.each(["sealed", "refused", "changed", "touched"] as const)(
+    "loads only the unchanged sealed native definition: %s",
+    async (scenario) => {
+      await withStageFixture(async ({ env, unitPath, envFilePath }) => {
+        execFileMock.mockImplementation(execFileSuccess());
+        const beforeLoad = vi.fn(async (staged: { files: readonly { sourcePath: string }[] }) => {
+          expect(staged.files.map((file) => file.sourcePath)).toContain(unitPath);
+          expect(await fs.readFile(unitPath, "utf8")).toContain("ExecStart=");
+          expect(await fs.readFile(envFilePath, "utf8")).toContain("managed-value");
+          // The writer has completed, but no native activation edge may run
+          // until this awaited checkpoint callback has returned.
+          await Promise.resolve();
+          expect(
+            execFileMock.mock.calls.some(([, args]) =>
+              args.some((arg) => ["daemon-reload", "enable", "restart", "start"].includes(arg)),
+            ),
+          ).toBe(false);
+          if (scenario === "sealed") {
+            return;
+          }
+          if (scenario === "refused") {
+            throw new Error("checkpoint not sealed");
+          }
+          if (scenario === "touched") {
+            await fs.utimes(envFilePath, 1, 1);
+          } else {
+            await fs.appendFile(envFilePath, "# concurrent edit\n");
+          }
+        });
+        const installing = installSystemdService({
+          ...gatewayPortSystemdServiceFixture(env, "18789"),
+          environment: { TEST_SETTING: "managed-value" },
+          environmentValueSources: { TEST_SETTING: "file" },
+          beforeLoad,
+        });
+        if (scenario === "sealed") {
+          await expect(installing).resolves.toMatchObject({ unitPath });
+        } else {
+          await expect(installing).rejects.toThrow(
+            scenario === "refused" ? "checkpoint not sealed" : "changed",
+          );
+        }
+        expect(beforeLoad).toHaveBeenCalledOnce();
+        expect(
+          execFileMock.mock.calls.some(([, args]) =>
+            args.some((arg) => ["daemon-reload", "enable", "restart", "start"].includes(arg)),
+          ),
+        ).toBe(scenario === "sealed");
+      });
+    },
+  );
 
   function mockSystemctlStatusOk(): void {
     execFileMock.mockImplementationOnce(systemctlUserSuccess("status"));

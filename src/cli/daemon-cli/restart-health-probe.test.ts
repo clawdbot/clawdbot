@@ -80,7 +80,7 @@ describe("restart health", () => {
     };
     callGateway.mockImplementation(
       gatewayHealthResponse({
-        server: { version: "2026.8.1", connId: "tls-ready" },
+        server: { version: "2026.8.1", connId: "tls-ready", bootId: "readiness-boot" },
         health: null,
       }),
     );
@@ -92,7 +92,11 @@ describe("restart health", () => {
         configuredProbe,
         config: { gateway: { tls: { enabled: true } } },
       }),
-    ).resolves.toMatchObject({ reachable: true, gatewayVersion: "2026.8.1" });
+    ).resolves.toMatchObject({
+      reachable: true,
+      gatewayVersion: "2026.8.1",
+      gatewayBootId: "readiness-boot",
+    });
     expect(callGateway).toHaveBeenCalledWith(
       expect.objectContaining({
         localPortOverride: 18789,

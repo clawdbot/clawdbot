@@ -26,16 +26,19 @@ the old Gateway serves, then activates and verifies the update.
 openclaw update
 ```
 
-An already-installed package version or Git target SHA finishes as
+An already-installed registry package version or Git target SHA finishes as
 `skipped` / `already-current` without stopping or restarting the Gateway.
+An explicit package artifact (for example, a tarball path or URL) is validated
+and installed even when its version matches; matching versions do not prove
+that two artifacts contain the same code.
 An explicit `--channel` choice still becomes the saved update channel.
 For targets that support candidate validation, Doctor lint, config and plugin planning, and a
-canary boot on copied state finish before the service stops. The first activation
-window contains the swap, required migrations, and service start. Plugin packages
-download and sync while the core Gateway serves. A changed plugin snapshot then
-requires a second measured activation window for full Doctor migrations under
-exclusive maintenance, restart, and verification. Unchanged plugins do not run
-another full Doctor pass. The final report records downtime and verification
+canary boot on copied state finish before the service stops. The stopped interval
+contains the swap, required migrations, plugin downloads and convergence, and
+service start. Plugin work uses the installed target without requiring a serving
+Gateway. A changed plugin snapshot runs fresh Doctor migrations before restart;
+unchanged plugins do not run another full Doctor pass. The final report records
+downtime through convergence and final verification, plus verification
 results. See
 [Validation and activation](/cli/update#validation-and-activation) for the checks.
 
@@ -815,9 +818,39 @@ openclaw doctor --lint --json
 openclaw update cleanup --dry-run
 ```
 
+### Automatic checkpoint recovery
+
+A supported npm package update of an owned, running managed Gateway retains a
+package/checkpoint pair when the validated candidate advertises the checkpoint
+continuation contract. It captures original config and service files before
+suppression, then seals the shared database, affected agent databases,
+config/includes and inventoried plugin resources while stopped under live writer
+exclusion. Workspaces and undeclared external resources are not covered.
+
+Candidate Doctor, config and plugin mutations are owned and their after-images
+are recorded. On failure, recovery can restore both the retained code and matching
+state even after schema migration. It refuses conflicting operator edits, unknown
+or changed native identities, lost ownership, and inconsistent publication
+artifacts instead of overwriting them. Sealed interrupted publication can be
+reconciled by the next `openclaw update` invocation before ordinary update writes.
+Other unresolved recovery remains pending with diagnostics.
+
+Success or rollback requires a fresh running-service observation, runtime/boot-bound
+Gateway handshake, and HTTP 200 readiness, not inference or a saved receipt. A
+successful rollback preserves the original failure and returns a nonzero exit.
+The current pair is retained until a later verified serving update supersedes it.
+Unverifiable or interrupted retirement preserves the remaining material and stays
+pending; do not remove those artifacts to force a clean status.
+
+This serving-recovery path does not apply to `--no-restart`, absent or stopped
+services, Git checkouts, shared-project pnpm/Bun installs, or candidates without
+the continuation contract. These keep their existing behavior and the narrower
+compatibility rules below. Automatic recovery is not a substitute for an independent
+verified backup.
+
 ### Automatic schema-neutral rollback
 
-If a newly activated package fails verification, `openclaw update` compares the
+For update paths outside checkpoint recovery, if a newly activated package fails verification, `openclaw update` compares the
 shared and affected per-agent SQLite `user_version` values with their
 pre-activation values and checks that the config file still matches the content
 reported by the candidate’s activation Doctor writer.
@@ -889,9 +922,10 @@ A refusal before the live swap restarts the unchanged Gateway and preserves the 
 
 ### Before updating: create a verified backup
 
-`openclaw update` preserves an automatic pre-update config copy, but it does not
-create a full state recovery point. Before a significant update, create one
-explicitly:
+`openclaw update` preserves an automatic pre-update config copy. Supported serving
+updates also retain the bounded checkpoint described above, but other update paths
+do not create a state recovery point. Before a significant update, create an
+independent verified backup explicitly:
 
 ```bash
 mkdir -p ~/Backups/openclaw

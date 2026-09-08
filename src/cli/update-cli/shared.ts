@@ -20,6 +20,7 @@ import {
   type GlobalInstallManager,
 } from "../../infra/update-global.js";
 import type { UpdateRequesterAuthority } from "../../infra/update-requester-authority.js";
+import type { UpdateRecoveryFence } from "../../infra/update-run-recovery.js";
 import { runStep } from "../../infra/update-runner-command.js";
 import type { UpdateStepProgress, UpdateStepResult } from "../../infra/update-runner.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
@@ -27,14 +28,19 @@ import { defaultRuntime } from "../../runtime.js";
 import { pathExists } from "../../utils.js";
 import { COMPLETION_SKIP_PLUGIN_COMMANDS_ENV } from "../completion-runtime.js";
 import { isJsonOutputModeActive } from "../json-output-mode.js";
+import type { UpdateCommandRecovery } from "./update-command-recovery-context.js";
 
 export type UpdateCommandOptions = {
+  /** In-process executor only; workers must reacquire authority, never deserialize this. */
+  recovery?: UpdateCommandRecovery;
   /** Internal orchestration context, shared across update phases and child processes. */
   run?: {
     runId: string;
     env: NodeJS.ProcessEnv;
     /** Prepared before replacement; never load the old authority graph after activation. */
     requesterAuthority?: UpdateRequesterAuthority;
+    /** Live local executor only. A child must independently acquire its owner. */
+    executorFence?: UpdateRecoveryFence;
   };
   acceptCapabilities?: boolean;
   json?: boolean;

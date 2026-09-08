@@ -1,4 +1,4 @@
-// Creates compact SQLite snapshots only after verifying both source and output.
+// Creates verified SQLite snapshots, compacting by default.
 import { createHash, randomUUID } from "node:crypto";
 import fsSync, { type Stats } from "node:fs";
 import fs from "node:fs/promises";
@@ -29,7 +29,7 @@ import {
 } from "./node-sqlite.js";
 import { assertSqliteIntegrity } from "./sqlite-integrity.js";
 import { createPrivateSqliteTempDirectory } from "./sqlite-private-directory.js";
-import { withSqliteSnapshotSource } from "./sqlite-readonly-location.js";
+import { withSqliteSnapshotSource } from "./sqlite-snapshot-source.js";
 import { readSqliteUserVersion } from "./sqlite-user-version.js";
 
 export type SqliteSnapshotValidator = (database: DatabaseSync, databaseLabel: string) => void;
@@ -41,6 +41,8 @@ type CreateVerifiedSqliteSnapshotOptions = {
   afterPublish?: (guard: PublishedSqliteFileGuard) => void;
   beforePublish?: () => void | Promise<void>;
   requireNonEmptySource?: boolean;
+  /** Skip compaction/ID rewriting; transforms may still change IDs and free-page data remains. */
+  preserveRowIds?: boolean;
   transform?: (database: DatabaseSync) => void | Promise<void>;
   validate?: SqliteSnapshotValidator;
 };
@@ -621,9 +623,12 @@ export async function createVerifiedSqliteSnapshot(
       if (options.transform) {
         await options.transform(snapshot);
       }
-      // Compact the private copy so the published artifact is single-file and
-      // cannot retain deleted or transformed data in free pages.
-      snapshot.exec("VACUUM;");
+      // Ordinary backups erase deleted/transformed data from free pages. Update
+      // checkpoints opt out because VACUUM can rewrite implicit row IDs. DELETE
+      // journaling above still makes the published artifact single-file.
+      if (!options.preserveRowIds) {
+        snapshot.exec("VACUUM;");
+      }
       assertSqliteIntegrity(snapshot, options.targetPath);
       options.validate?.(snapshot, options.targetPath);
       const userVersion = readSqliteUserVersion(snapshot);

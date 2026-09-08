@@ -397,6 +397,26 @@ describe("runDaemonInstall", () => {
     ).toBe(true);
   });
 
+  it.each(["darwin", "win32"] as const)(
+    "refuses deferred activation on %s before writing configuration or service state",
+    async (platform) => {
+      vi.spyOn(process, "platform", "get").mockReturnValue(platform);
+      await runDaemonInstall({ json: true, force: true, deferActivation: true });
+      expect(actionState.failed.at(-1)?.message).toContain("Deferred service load requires Linux");
+      expect(replaceConfigFileMock).not.toHaveBeenCalled();
+      expect(service.install).not.toHaveBeenCalled();
+      expect(service.isLoaded).not.toHaveBeenCalled();
+    },
+  );
+
+  it("refuses an unparented deferred install before reading or writing the selected profile", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    await runDaemonInstall({ json: true, force: true, deferActivation: true });
+    expect(actionState.failed.at(-1)?.message).toContain("updater IPC channel");
+    expect(readConfigFileSnapshotMock).not.toHaveBeenCalled();
+    expect(service.install).not.toHaveBeenCalled();
+  });
+
   it("passes service environment value sources through to service install", async () => {
     buildGatewayInstallPlanMock.mockResolvedValueOnce({
       programArguments: ["openclaw", "gateway", "run"],

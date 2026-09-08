@@ -73,7 +73,7 @@ it.each(["modules", "virtual-store", "unrelated-config", "empty-uppercase"])(
   },
 );
 
-it.each(["PNPM_CONFIG_MODULES_DIR", "pnpm_config_modules_dir"])(
+it.each(["PNPM_CONFIG_MODULES_DIR", "pnpm_config_modules_dir", "npm_config_modules_dir"])(
   "admits an explicitly provisioned hydrated alias through %s without replacing it",
   (key) => {
     const { checkout, donor } = fixture();
@@ -93,3 +93,22 @@ it("preserves whitespace in an explicit pnpm module-directory path", () => {
   link(directory, path.join(checkout, "node_modules"));
   expect(run(checkout, { PNPM_CONFIG_MODULES_DIR: directory }).status).toBe(0);
 });
+
+it.each(["PNPM_CONFIG_MODULES_DIR", "pnpm_config_modules_dir", "npm_config_modules_dir"])(
+  "refuses a borrowed custom dependency directory selected by %s",
+  (key) => {
+    const { checkout, donor } = fixture();
+    const custom = path.join(checkout, "custom_modules");
+    link(donor, custom);
+    const before = fs.statSync(donor);
+    const result = run(checkout, { [key]: "custom_modules" });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("Refusing to reconcile dependencies");
+    expect(fs.realpathSync(custom)).toBe(donor);
+    expect(fs.statSync(donor).ino).toBe(before.ino);
+    expect(fs.statSync(donor).mtimeMs).toBe(before.mtimeMs);
+    expect(fs.readFileSync(path.join(donor, "sentinel"), "utf8")).toBe(
+      "another task owns these bytes",
+    );
+  },
+);

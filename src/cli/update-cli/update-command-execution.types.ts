@@ -1,0 +1,38 @@
+import type { LegacyConfigUpdatePlan } from "../../commands/doctor/legacy-config-repair.js";
+import type { DevUpdateTarget } from "../../infra/update-dev-target.js";
+import type { ResolvedGlobalInstallTarget } from "../../infra/update-global.js";
+import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
+import type { createUpdateProgress } from "./progress.js";
+import type { UpdateCommandOptions } from "./shared.js";
+import type { ManagedServiceRootRedirect } from "./update-command-service-plan.js";
+import type { UpdateCommandRecoveryState } from "./update-command-service.js";
+
+export type MutableUpdateExecutionParams = {
+  root: string;
+  installKind: "git" | "package" | "unknown";
+  updateInstallKind: "git" | "package" | "unknown";
+  switchToGit: boolean;
+  timeoutMs: number | undefined;
+  updateStepTimeoutMs: number;
+  startedAt: number;
+  progress: ReturnType<typeof createUpdateProgress>["progress"];
+  stop: () => void;
+  channel: "stable" | "extended-stable" | "beta" | "dev";
+  tag: string;
+  opts: UpdateCommandOptions;
+  shouldRestart: boolean;
+  devTarget?: DevUpdateTarget;
+  packageInstallSpec: string | null;
+  packageInstallEnv?: NodeJS.ProcessEnv;
+  packageInstallTarget?: ResolvedGlobalInstallTarget;
+  packageTargetVersion?: string;
+  packageTargetSchemaVersions?: OpenClawSchemaVersions;
+  packageUpdateNodeRunner?: string;
+  managedServiceNodeRunner?: string;
+  managedServiceRootRedirect: ManagedServiceRootRedirect | null;
+  invocationCwd?: string;
+  legacyConfigPlan?: LegacyConfigUpdatePlan;
+  recoveryState: UpdateCommandRecoveryState;
+  prepareMutableUpdate: (env?: NodeJS.ProcessEnv) => Promise<void>;
+  onActivation?: () => void;
+};

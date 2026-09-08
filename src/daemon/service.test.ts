@@ -189,6 +189,35 @@ describe("resolveGatewayService", () => {
 });
 
 describe("readGatewayServiceState", () => {
+  it("passes update loaded-only admission to every native inspection adapter", async () => {
+    const readCommand = vi.fn(async () => null);
+    const readRuntime = vi.fn(async () => ({ status: "stopped" }));
+    const readDefinitionMutationCapability = vi.fn<
+      NonNullable<GatewayService["readDefinitionMutationCapability"]>
+    >(async () => ({ kind: "writable" }));
+    const service = createService({ readCommand, readRuntime, readDefinitionMutationCapability });
+    await readGatewayServiceState(service, {
+      requireEffective: true,
+      requireLoadedCommand: true,
+      timeoutMs: 100,
+    });
+    expect(readCommand).toHaveBeenCalledWith(expect.anything(), {
+      requireEffective: true,
+      requireLoaded: true,
+      timeoutMs: 100,
+    });
+    expect(readRuntime).toHaveBeenCalledWith(expect.anything(), {
+      requireLoaded: true,
+      timeoutMs: 100,
+    });
+    expect(readDefinitionMutationCapability).toHaveBeenCalledWith({
+      env: expect.anything(),
+      environment: expect.anything(),
+      requireLoaded: true,
+      timeoutMs: 100,
+    });
+  });
+
   it.each(managerlessPreflightCases)(
     "handles managerless Linux inspection for $updateInstallKind restart=$shouldRestart ($condition)",
     async ({ updateInstallKind, shouldRestart, condition, portUsage, portSource }) => {

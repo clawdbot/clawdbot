@@ -66,6 +66,7 @@ export function registerGenerationRecoveryTests(
         opts: { json: true, run },
         refreshServiceEnv: false,
         serviceUpdateVerdict: before.serviceUpdateVerdict,
+        serviceManagerUid: before.serviceManagerUid,
         serviceEnv: before.serviceEnv,
         gatewayPort: 19305,
         requireRunningServiceAfterRestart: true,

@@ -1,6 +1,7 @@
 // Prepares consistent private SQLite read-only snapshots.
 import fs, { type BigIntStats } from "node:fs";
 import path from "node:path";
+import type { DatabaseSync } from "node:sqlite";
 import { sameFileIdentity } from "./fs-safe-advanced.js";
 import {
   openNodeSqliteDatabase,
@@ -13,6 +14,11 @@ import {
   resolvePrivateSqliteSnapshotStagingRoot,
 } from "./sqlite-private-directory.js";
 import { runSqliteReadOnlyWorker, runSqliteReadOnlyWorkerSync } from "./sqlite-readonly-worker.js";
+import { withSqliteSourceHandle, withSqliteSourceHandleAsync } from "./sqlite-source-handle.js";
+import {
+  hasStateDatabaseSourceExclusion,
+  prepareStateDatabaseMutationSnapshot,
+} from "./state-database-coordinator.js";
 
 const MAX_SNAPSHOT_ATTEMPTS = 10;
 const COPY_BUFFER_BYTES = 1024 * 1024;
@@ -490,10 +496,10 @@ async function createOnlineReadOnlyBackup(
  * Active rollback and WAL state use SQLite's locking and backup protocol.
  * Crash residue that cannot be opened read-only is copied and recovered
  * privately so inspection never mutates coordination files beside the source.
- * The InProcess exports are child-only: POSIX close() can release every lock
- * the calling process holds on the same source inode.
+ * In-process reads require drained source handles or a separate child: source
+ * close() must not release another live SQLite owner's POSIX locks.
  */
-export async function prepareSqliteReadOnlyLocationInProcess(
+async function prepareReadOnlySourceInProcess(
   pathname: string,
   stagingRoot?: string,
 ): Promise<PreparedSqliteReadOnlyLocation> {
@@ -574,7 +580,7 @@ export async function prepareSqliteReadOnlyLocationInProcess(
   });
 }
 
-export function prepareSqliteReadOnlyLocationSyncInProcess(
+function prepareReadOnlySourceSyncInProcess(
   pathname: string,
   stagingRoot?: string,
 ): PreparedSqliteReadOnlyLocation {
@@ -619,6 +625,29 @@ export async function prepareSqliteReadOnlyLocation(
   let stagingRoot: string | undefined;
   try {
     options.signal?.throwIfAborted();
+    const ownedSnapshot = prepareStateDatabaseMutationSnapshot(pathname);
+    if (ownedSnapshot) {
+      const prepared = await ownedSnapshot;
+      try {
+        options.signal?.throwIfAborted();
+        return prepared;
+      } catch (error) {
+        prepared.cleanup();
+        throw error;
+      }
+    }
+    if (hasStateDatabaseSourceExclusion(pathname)) {
+      const prepared = options.preserveSourceArtifacts
+        ? prepareSqliteReadOnlyLocationSyncInProcess(pathname)
+        : await prepareSqliteReadOnlyLocationInProcess(pathname);
+      try {
+        options.signal?.throwIfAborted();
+        return prepared;
+      } catch (error) {
+        prepared.cleanup();
+        throw error;
+      }
+    }
     // A stopped worker may never publish its random snapshot path. Allocate its
     // private parent first so cancellation can join the child and remove all copies.
     stagingRoot = await createSqliteSnapshotStagingDirectory();
@@ -646,6 +675,9 @@ export async function prepareSqliteReadOnlyLocation(
 export function prepareSqliteReadOnlyLocationSync(
   pathname: string,
 ): PreparedSqliteReadOnlyLocation {
+  if (hasStateDatabaseSourceExclusion(pathname)) {
+    return prepareSqliteReadOnlyLocationSyncInProcess(pathname);
+  }
   const stagingRoot = createPrivateSqliteTempDirectorySync(
     resolvePrivateSqliteSnapshotStagingRoot(),
     SQLITE_SNAPSHOT_STAGING_PREFIX,
@@ -662,45 +694,41 @@ export function prepareSqliteReadOnlyLocationSync(
   }
 }
 
-async function prepareSqliteSnapshotSource(
-  pathname: string,
-): Promise<PreparedSqliteReadOnlyLocation | undefined> {
-  const canonicalPath = fs.realpathSync.native(pathname);
-  const journalPath = `${canonicalPath}-journal`;
-  let journal: BigIntStats;
-  try {
-    journal = fs.lstatSync(journalPath, { bigint: true });
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return undefined;
-    }
-    throw error;
-  }
-  if (!journal.isFile()) {
-    throw new Error(`SQLite rollback journal must be a regular file: ${journalPath}`);
-  }
-  return await prepareSqliteReadOnlyLocation(canonicalPath);
+export function prepareSqliteReadOnlyLocationInProcess(pathname: string, stagingRoot?: string) {
+  return withSqliteSourceHandleAsync(pathname, () =>
+    prepareReadOnlySourceInProcess(pathname, stagingRoot),
+  );
 }
 
-export async function withSqliteSnapshotSource<T>(
-  pathname: string,
-  operation: (sourcePath: string) => Promise<T>,
-): Promise<T> {
-  let prepared = await prepareSqliteSnapshotSource(pathname);
+export function prepareSqliteReadOnlyLocationSyncInProcess(pathname: string, stagingRoot?: string) {
+  return withSqliteSourceHandle(pathname, () =>
+    prepareReadOnlySourceSyncInProcess(pathname, stagingRoot),
+  );
+}
+
+/** Snapshot the lifecycle owner's already-open native connection. Opening or
+ * closing another source descriptor could release its process-wide POSIX locks.
+ * Only the private destination is opened/closed here; the source owner retains it. */
+export async function prepareSqliteReadOnlyLocationFromOwnedDatabase(
+  database: DatabaseSync,
+  assertCurrent: () => void,
+): Promise<PreparedSqliteReadOnlyLocation> {
+  assertCurrent();
+  if (!database.isOpen || database.isTransaction) {
+    throw new Error("SQLite inspection requires an open owner outside a transaction");
+  }
+  const directory = await createSqliteSnapshotStagingDirectory();
   try {
-    try {
-      return await operation(prepared?.location ?? pathname);
-    } catch (error) {
-      if (prepared) {
-        throw error;
-      }
-      prepared = await prepareSqliteSnapshotSource(pathname);
-      if (!prepared) {
-        throw error;
-      }
-      return await operation(prepared.location);
+    assertCurrent();
+    if (!database.isOpen || database.isTransaction) {
+      throw new Error("SQLite inspection requires an open owner outside a transaction");
     }
-  } finally {
-    prepared?.cleanup();
+    const location = path.join(directory, "database.sqlite");
+    await requireNodeSqlite().backup(database, resolveSqliteFilesystemPath(location));
+    assertCurrent();
+    return adoptPreparedLocation(location, directory);
+  } catch (error) {
+    removeTempDirectory(directory);
+    throw error;
   }
 }

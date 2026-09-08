@@ -9,6 +9,7 @@ import { sha256Hex } from "../infra/crypto-digest.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { withFileLock } from "../infra/file-lock.js";
 import { canonicalPathFromExistingAncestor, findExistingAncestor } from "../infra/fs-safe.js";
+import { readServiceFileState, type GatewayServiceStagedFiles } from "./service-stage.js";
 import {
   assertServiceDefinitionWritable,
   type GatewayServiceEnv,
@@ -25,6 +26,8 @@ import { assertNoSystemSystemdOwnership, isSystemSystemdOwnershipError } from ".
 type Snapshot = { contents: Buffer; mode: number } | null;
 type SystemdDefinitionMutation = {
   snapshots: Map<string, Snapshot>;
+  stagedFiles: GatewayServiceStagedFiles["files"];
+  assertCurrent: () => Promise<void>;
   publish: (file: string, contents: string | Buffer, mode: number) => Promise<void>;
   restore: (file: string, snapshot: Snapshot) => Promise<void>;
 };
@@ -79,7 +82,12 @@ async function readStableFile(
   }
 }
 
-async function inspect(env: GatewayServiceEnv, environment: GatewayServiceEnv, timeoutMs?: number) {
+async function inspect(
+  env: GatewayServiceEnv,
+  environment: GatewayServiceEnv,
+  timeoutMs?: number,
+  requireLoaded = false,
+) {
   const { unit, generated } = resolveMutationTargets(env, environment);
   const snapshots = new Map<string, Snapshot>();
   const fingerprint = new Map<string, string>();
@@ -97,6 +105,7 @@ async function inspect(env: GatewayServiceEnv, environment: GatewayServiceEnv, t
     const command = await readSystemdServiceExecStart(env, {
       requireEffective: true,
       timeoutMs,
+      ...(requireLoaded ? { requireLoaded: true } : {}),
     });
     sourcePath = command?.sourcePath;
     const targets = new Set([unit, generated, `${unit}.bak`]);
@@ -174,17 +183,34 @@ async function inspect(env: GatewayServiceEnv, environment: GatewayServiceEnv, t
 
 export async function readSystemdDefinitionMutationCapability(
   env: GatewayServiceEnv,
-  options?: { environment?: GatewayServiceEnv; timeoutMs?: number },
+  options?: { environment?: GatewayServiceEnv; timeoutMs?: number; requireLoaded?: boolean },
 ): Promise<ServiceDefinitionMutationCapability> {
   const selected = path.basename(resolveSystemdUnitPath(env));
   const names =
     selected === "openclaw-gateway.service" ? [selected, "openclaw.service"] : [selected];
-  const deadlineAt = options?.timeoutMs ? performance.now() + options.timeoutMs : undefined;
+  const budget =
+    options?.timeoutMs && Number.isFinite(options.timeoutMs) && options.timeoutMs > 0
+      ? options.timeoutMs
+      : options?.requireLoaded
+        ? 5000
+        : undefined;
+  const deadlineAt = budget === undefined ? undefined : performance.now() + budget;
+  const remaining = () => {
+    if (deadlineAt === undefined) {
+      return undefined;
+    }
+    const value = deadlineAt - performance.now();
+    if (value <= 0) {
+      throw new Error("Definition inspection deadline expired.");
+    }
+    return value;
+  };
   for (const name of names) {
     try {
       await assertNoSystemSystemdOwnership(
         name,
-        deadlineAt === undefined ? undefined : Math.max(1, deadlineAt - performance.now()),
+        remaining(),
+        ...(options?.requireLoaded ? [{ requireLoaded: true }] : []),
       );
     } catch (error) {
       const owned =
@@ -194,7 +220,12 @@ export async function readSystemdDefinitionMutationCapability(
         : { kind: "unknown", reason: "system-ownership-unverified" };
     }
   }
-  return (await inspect(env, options?.environment ?? env, options?.timeoutMs)).capability;
+  try {
+    return (await inspect(env, options?.environment ?? env, remaining(), options?.requireLoaded))
+      .capability;
+  } catch {
+    return { kind: "unknown", reason: "inspection-failed" };
+  }
 }
 
 export async function withSystemdDefinitionMutation<T>(
@@ -245,6 +276,7 @@ export async function withSystemdDefinitionMutation<T>(
     }
     const allowed = new Set([unit, generated, `${unit}.bak`]);
     const publications = new Map<string, string>();
+    const stagedFiles: GatewayServiceStagedFiles["files"] = [];
     const publish = async (
       file: string,
       contents: string | Buffer,
@@ -256,6 +288,8 @@ export async function withSystemdDefinitionMutation<T>(
       }
       await refresh(true);
       const previous = initial.snapshots.get(file) ?? null;
+      const before = await readServiceFileState(file);
+      await refresh(true);
       const directory = await fs.realpath(path.dirname(file));
       const temporary = path.join(directory, `${path.basename(file)}.${randomUUID()}.tmp`);
       try {
@@ -282,6 +316,18 @@ export async function withSystemdDefinitionMutation<T>(
         publications.set(file, published);
         try {
           await refresh(true, file === unit && previous === null);
+          const after = await readServiceFileState(file);
+          if (
+            !after ||
+            after.dev !== written.dev ||
+            after.ino !== written.ino ||
+            after.sha256 !== sha256Hex(Buffer.from(contents)) ||
+            after.mode !== mode
+          ) {
+            throw new Error("Managed service artifact changed after publication.");
+          }
+          await refresh(true);
+          stagedFiles.push({ sourcePath: file, before, after });
         } catch (error) {
           // Roll back only our unchanged publication; a failing rollback must not recurse.
           if (rollback) {
@@ -317,7 +363,21 @@ export async function withSystemdDefinitionMutation<T>(
       }
       publications.delete(file);
     };
-    return await run({ snapshots: initial.snapshots, publish, restore });
+    return await run({
+      snapshots: initial.snapshots,
+      stagedFiles,
+      assertCurrent: async () => {
+        await refresh(true);
+        for (const file of stagedFiles) {
+          if (!isDeepStrictEqual(await readServiceFileState(file.sourcePath), file.after)) {
+            throw new Error("Staged service identity changed before native load.");
+          }
+        }
+        await refresh(true);
+      },
+      publish,
+      restore,
+    });
   };
   const lockOptions = () => {
     const timeoutMs = remainingTimeoutMs();

@@ -23,7 +23,10 @@ export async function repairUpdateService(params: {
   nodeRunner?: string;
   timeoutMs: number;
   invocationCwd?: string;
-  expectedService: Pick<PreManagedServiceStop, "serviceEnv" | "serviceUpdateVerdict">;
+  expectedService: Pick<
+    PreManagedServiceStop,
+    "serviceEnv" | "serviceUpdateVerdict" | "serviceManagerUid"
+  >;
   recoveryStop?: PreManagedServiceStop;
   onVerified?: (verifiedAtMs: number) => void;
 }): Promise<UpdateRunResult> {
@@ -35,6 +38,7 @@ export async function repairUpdateService(params: {
     const state = await readGatewayServiceState(resolveGatewayService(), {
       env: params.env,
       requireEffective: true,
+      requireLoadedCommand: true,
       validateEnvBeforeStatusRead: assertGatewayServiceManagementAllowedForUpdate,
       timeoutMs: params.timeoutMs,
     });
@@ -50,6 +54,7 @@ export async function repairUpdateService(params: {
     // A refreshed definition is observed once before inference. Later turns
     // must retain this exact launcher, rather than inherit refresh authority.
     pinnedService = {
+      serviceManagerUid: params.expectedService.serviceManagerUid,
       serviceEnv: state.env,
       serviceUpdateVerdict:
         verdict.kind === "owned" ? { ...verdict, refreshDefinition: false } : verdict,
@@ -83,6 +88,7 @@ export async function repairUpdateService(params: {
           expectedBuildId: params.result.after?.buildId ?? undefined,
           requireRunningService: true,
           signal,
+          assertCurrent,
           onVerified: params.onVerified,
         });
       let validation = await verify();
@@ -122,7 +128,9 @@ export async function repairUpdateService(params: {
               true,
             );
           } catch (error) {
-            signal.throwIfAborted();
+            // A stale restart error is not permission to append diagnostics or
+            // start a new serving turn under the superseded repair attempt.
+            assertCurrent();
             if (params.opts.run) {
               recordUpdateRunStep(
                 params.opts.run.runId,
@@ -137,7 +145,7 @@ export async function repairUpdateService(params: {
             }
           }
 
-          signal.throwIfAborted();
+          assertCurrent();
           validation = await verify();
           assertCurrent();
         }

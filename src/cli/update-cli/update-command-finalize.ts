@@ -18,6 +18,7 @@ import {
   getUpdateRun,
   reconcileAbandonedUpdateRuns,
 } from "../../infra/update-run-ledger.js";
+import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
 import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
 import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.js";
 import { withCommandProcessScope } from "../../process/exec-spawn.js";
@@ -79,6 +80,9 @@ export async function updateFinalizeCommand(
       const root = await withUpdateInProgressEnv(invocationCwd, () =>
         lifecycle.run("preflight", async () => {
           // Refused invocations cannot create a ledger or write failure-triage artifacts.
+          // A missing canonical path can be an interrupted publication, not a
+          // fresh installation. Only the recovery executor may reconcile it.
+          await assertUpdateRecoveryAdmission({ env: process.env });
           assertConfigWriteAllowedInCurrentMode();
           await assertOpenClawStateWriteAllowedAtPath({
             databasePath: resolveOpenClawStateSqlitePath(process.env),

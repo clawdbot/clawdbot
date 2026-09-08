@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { PreparePackageRecovery } from "../../infra/package-update-recovery.js";
 import type { PackageUpdateTransaction } from "../../infra/package-update-steps.js";
 import { hasNodeErrorCode } from "../../infra/path-guards.js";
 import { mergeProcessEnv } from "../../infra/process-env.js";
@@ -449,6 +450,7 @@ export async function updateGitInstall(params: {
   beforeGitMutation?: BeforeGitMutation;
   validateCandidate?: (root: string) => Promise<void>;
   onTransaction?: (transaction: PackageUpdateTransaction) => void;
+  prepareRecovery?: PreparePackageRecovery;
   onConfigSnapshot?: Parameters<typeof runPackageUpdateDoctor>[0]["onConfigSnapshot"];
   getManagedServiceEnv: () => NodeJS.ProcessEnv | undefined;
   invocationCwd?: string;
@@ -531,15 +533,18 @@ export async function updateGitInstall(params: {
               expectedGitCheckout: { root: candidateRoot, sha: candidateSha },
               activateGitRoot: updateRoot,
               onTransaction: params.onTransaction,
-              postVerifyStep: (root) =>
-                runPackageUpdateDoctor({
-                  ...params,
-                  // Inspection is deferred until the Git target is known; read
-                  // its admitted service profile when backup and Doctor run.
-                  managedServiceEnv: params.getManagedServiceEnv(),
-                  root,
-                  timeoutMs: effectiveTimeout,
-                }),
+              prepareRecovery: params.prepareRecovery,
+              ...(params.prepareRecovery
+                ? {}
+                : {
+                    postVerifyStep: (root: string) =>
+                      runPackageUpdateDoctor({
+                        ...params,
+                        managedServiceEnv: params.getManagedServiceEnv(),
+                        root,
+                        timeoutMs: effectiveTimeout,
+                      }),
+                  }),
             });
           }
         : undefined,

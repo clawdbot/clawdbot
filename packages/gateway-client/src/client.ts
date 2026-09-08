@@ -463,6 +463,12 @@ export class GatewayClient {
     });
   }
 
+  /** Current transport state, including CLOSING before the close callback fires.
+   * This is not authentication or readiness evidence on its own. */
+  get connected(): boolean {
+    return !this.stopped && this.protocol.connected;
+  }
+
   getConnectionMetadata(): GatewayClientConnectionMetadata {
     return {
       clientName: this.opts.clientName,

@@ -143,6 +143,7 @@ it.each([
           signal: null,
           killed: false,
           termination: "exit",
+          cleanup: "normal",
         };
       });
       const runId = "migrated-windows-run";

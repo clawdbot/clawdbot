@@ -1,3 +1,4 @@
+import { AsyncResource } from "node:async_hooks";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
@@ -7,7 +8,12 @@ import {
 } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { commitPluginInstallRecordsOnly } from "./install-record-commit.js";
+import {
+  collectInstalledPluginIndexMutations,
+  prepareInstalledPluginIndexMutation,
+} from "./installed-plugin-index-mutations.js";
 import { writePersistedInstalledPluginIndexInstallRecordsWithLease } from "./installed-plugin-index-records.js";
+import { refreshPersistedInstalledPluginIndexWithLeaseSync } from "./installed-plugin-index-store-write.js";
 import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
@@ -50,6 +56,121 @@ function readRow(databasePath: string) {
 }
 
 describe("installed plugin index mutation receipts", () => {
+  it("collects only committed index writes and their owned compensation", async () => {
+    const env = makeEnv();
+    await withEnvAsync(env, () =>
+      withPluginLifecycleLease({}, async (lease) => {
+        const failure = new Error("source changed after index publication");
+        const collected = await collectInstalledPluginIndexMutations(
+          () => lease.assertOwned(),
+          () =>
+            commitPluginInstallRecordsOnly({
+              nextInstallRecords: {},
+              nextConfig: {},
+              verifyConfigFresh: async () => {
+                throw failure;
+              },
+            }),
+        );
+        expect(collected.outcome).toEqual({ error: failure });
+        expect(collected.mutations).toHaveLength(2);
+        expect(collected.mutations[0]?.before).toBeNull();
+        expect(collected.mutations[0]?.after).toEqual(collected.mutations[1]?.before);
+        expect(collected.mutations[1]?.after).toBeNull();
+        expect(readRow(lease.databasePath)).toBeNull();
+      }),
+    );
+  });
+  it("discards mutation receipts when the actual outer SQLite transaction rolls back", async () => {
+    const env = makeEnv();
+    await withPluginLifecycleLease({ env }, async (lease) => {
+      const failure = new Error("outer transaction rollback");
+      const collected = await collectInstalledPluginIndexMutations(
+        () => lease.assertOwned(),
+        async () => {
+          runOpenClawStateWriteTransaction(
+            () => {
+              refreshPersistedInstalledPluginIndexWithLeaseSync({
+                reason: "source-changed",
+                installRecords: {},
+                candidates: [],
+                env,
+                lease,
+              });
+              throw failure;
+            },
+            { env },
+          );
+        },
+      );
+      expect(collected.outcome).toEqual({ error: failure });
+      expect(collected.mutations).toEqual([]);
+      expect(readRow(lease.databasePath)).toBeNull();
+    });
+  });
+  it("refuses a write through an escaped mutation scope before opening another transaction", async () => {
+    const env = makeEnv();
+    await withPluginLifecycleLease({ env }, async (lease) => {
+      let inherited: AsyncResource | undefined;
+      await collectInstalledPluginIndexMutations(
+        () => lease.assertOwned(),
+        async () => {
+          inherited = new AsyncResource("closed-plugin-mutation");
+        },
+      );
+      try {
+        expect(() =>
+          inherited!.runInAsyncScope(() =>
+            refreshPersistedInstalledPluginIndexWithLeaseSync({
+              reason: "source-changed",
+              installRecords: {},
+              candidates: [],
+              env,
+              lease,
+            }),
+          ),
+        ).toThrow(/ownership has closed/);
+        expect(readRow(lease.databasePath)).toBeNull();
+      } finally {
+        inherited?.emitDestroy();
+      }
+    });
+  });
+
+  it("rolls back a transaction submitted through an already closed receipt callback", async () => {
+    const env = makeEnv();
+    await withPluginLifecycleLease({ env }, async (lease) => {
+      let publish: ReturnType<typeof prepareInstalledPluginIndexMutation>;
+      const collected = await collectInstalledPluginIndexMutations(
+        () => lease.assertOwned(),
+        async () => {
+          publish = prepareInstalledPluginIndexMutation();
+        },
+      );
+      expect(() =>
+        runOpenClawStateWriteTransaction(
+          ({ db, path: databasePath }) => {
+            db.prepare(
+              "INSERT INTO config_machine_state (state_key, value_json, updated_at_ms) VALUES (?, ?, ?)",
+            ).run(stateKey, priorJson, 9007);
+            publish!(db, {
+              databasePath,
+              before: null,
+              after: {
+                state_key: stateKey,
+                value_json: priorJson,
+                updated_at_ms: 9007,
+              },
+            });
+          },
+          { env },
+        ),
+      ).toThrow(/ownership has closed/);
+      expect(readRow(lease.databasePath)).toBeNull();
+      expect(collected.mutations).toEqual([]);
+    });
+  });
+
   it.each([null, priorJson, "true"])(
     "retains exact predecessor and committed row for %s",
     async (valueJson) => {
