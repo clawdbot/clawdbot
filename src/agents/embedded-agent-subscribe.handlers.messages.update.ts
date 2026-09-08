@@ -108,12 +108,55 @@ export function handleMessageUpdate(
   const suppressDeterministicApprovalOutput = shouldSuppressDeterministicApprovalOutput(ctx.state);
   const suppressMessageToolOnlySourceReplyOutput = hasMessageToolOnlySourceDelivery(ctx);
 
+  // Scheme 2 fix: Force reasoning stream control at streaming entry point for reasoning-capable models.
+  // When a model has native reasoning capability (catalog.reasoning=true) and thinkingLevel is not "off",
+  // ensure reasoning stream is properly isolated regardless of whether thinkingLevel was set explicitly
+  // or via implicit fallback. This prevents reasoning leakage into visible message content.
+  // See: issue #134662 - reasoning-capable models fall back to medium thinking without explicit negotiation.
+  // SAFETY: session/catalog shapes are runtime-negotiated; fields are optional at runtime.
+  const params = ctx.params as {
+    session?: {
+      provider?: string;
+      model?: string;
+      thinkingLevel?: string;
+      modelCatalogEntry?: { reasoning?: boolean };
+    };
+    catalog?: { provider: string; id: string; reasoning?: boolean }[];
+  };
+  const session = params.session;
+  const catalog = params.catalog;
+  const modelHasReasoningCapability =
+    session?.modelCatalogEntry?.reasoning === true ||
+    (session?.provider &&
+      session?.model &&
+      catalog?.find((entry) => entry.provider === session!.provider && entry.id === session!.model)
+        ?.reasoning === true);
+  const thinkingEnabled = session?.thinkingLevel && session.thinkingLevel !== "off";
+  // Use ctx.openReasoningStream if available (for test injection), otherwise use the imported function.
+  // SAFETY: openReasoningStream is injected by test fixtures; not in the production type.
+  const ctxOverride = ctx as { openReasoningStream?: typeof openReasoningStream };
+  const overrideFn = ctxOverride.openReasoningStream;
+  const openReasoning: typeof openReasoningStream =
+    typeof overrideFn === "function" ? overrideFn : openReasoningStream;
+  if (
+    evtType === "text_start" &&
+    modelHasReasoningCapability &&
+    thinkingEnabled &&
+    !ctx.state.reasoningStreamOpen
+  ) {
+    // Reasoning-capable model with thinking enabled but stream not yet opened.
+    // This can happen when thinkingLevel falls back implicitly (e.g., to "medium")
+    // without triggering the normal thinking_start event path. Force open the
+    // reasoning stream to ensure proper isolation of reasoning content.
+    openReasoning(ctx);
+  }
+
   if (evtType === "thinking_start" || evtType === "thinking_delta" || evtType === "thinking_end") {
     if (
       !suppressMessageToolOnlySourceReplyOutput &&
       (evtType === "thinking_start" || evtType === "thinking_delta")
     ) {
-      openReasoningStream(ctx);
+      openReasoning(ctx);
     }
     const thinkingDelta = typeof assistantRecord?.delta === "string" ? assistantRecord.delta : "";
     const thinkingContent =
@@ -145,7 +188,7 @@ export function handleMessageUpdate(
       // would fire the lane's end hook (onReasoningEnd) for a lane that never
       // rendered, leaking the boundary signal.
       if (!ctx.state.reasoningStreamOpen) {
-        openReasoningStream(ctx);
+        openReasoning(ctx);
       }
       emitReasoningEnd(ctx);
     }
@@ -392,6 +435,17 @@ export function handleMessageUpdate(
         : recomputedRawText.slice(previousText.length);
       nextRawStreamText = recomputedRawText;
       ctx.state.partialBlockState = recomputeState;
+      // Scheme 2 fix continuation: When reasoning tags are detected in a reasoning-capable model,
+      // ensure reasoning stream is opened even if thinking_start event was not fired.
+      // This handles models that emit reasoning inline without separate thinking_* events.
+      if (
+        modelHasReasoningCapability &&
+        thinkingEnabled &&
+        !ctx.state.reasoningStreamOpen &&
+        recomputeState.thinking
+      ) {
+        openReasoning(ctx);
+      }
     } else {
       visibleDelta =
         chunk || evtType === "text_end"
@@ -451,7 +505,7 @@ export function handleMessageUpdate(
       !wasThinking &&
       ctx.state.partialBlockState.thinking
     ) {
-      openReasoningStream(ctx);
+      openReasoning(ctx);
     }
     // Detect when thinking block ends (</think> tag processed)
     if (
